@@ -40,7 +40,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(
-            "/api/v1/sessions/{session_id}/browser-tabs/{browser_tab_id}/preview",
+            "/api/v1/sessions/{session_id}/preview",
             get(previews::preview),
         )
         .route(

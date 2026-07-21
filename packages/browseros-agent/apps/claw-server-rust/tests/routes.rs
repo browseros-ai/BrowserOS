@@ -680,32 +680,6 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
             .is_some_and(|text| text.starts_with("Your tabs:\n[1] https://example.com"))
     );
 
-    let screencast_task = app
-        .state
-        .previews
-        .clone()
-        .start(app.state.browser.clone(), app.state.tab_activity.clone());
-    let _ = request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
-    for _ in 0..50 {
-        if app
-            .state
-            .previews
-            .frame_for(&session_id, 1, "target-1")
-            .await
-            .is_some()
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        app.state
-            .previews
-            .frame_for(&session_id, 1, "target-1")
-            .await
-            .is_some()
-    );
-
     let wait = json!({
         "jsonrpc": "2.0",
         "id": 12,
@@ -737,13 +711,6 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
             .any(|row| row.tool_name == "tabs" && row.dispatch_id.is_some())
     );
 
-    // The first successful page read persists the already-cached poller frame.
-    assert!(
-        rows.iter().any(|row| row.has_screenshot),
-        "no dispatch had a persisted screenshot"
-    );
-    app.state.previews.stop();
-    screencast_task.await?;
     drop(mock);
     Ok(())
 }
@@ -1094,7 +1061,7 @@ async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow::Result<()> {
+async fn live_projection_filters_external_close() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
@@ -1128,19 +1095,6 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
         session.convo_id().as_str().to_string(),
         1,
     );
-    app.state
-        .previews
-        .cache_frame(
-            session.id().as_str(),
-            1,
-            "target-old",
-            claw_server_rust::services::cockpit::ScreencastFrame {
-                jpeg_base64: "/9g=".to_string(),
-                captured_at: 123,
-            },
-        )
-        .await;
-
     let (status, body) =
         request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
@@ -1167,32 +1121,11 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"][0]["live"]["browserTabs"], json!([]));
 
-    let screencast_task = app
-        .state
-        .previews
-        .clone()
-        .start(app.state.browser.clone(), app.state.tab_activity.clone());
-    for _ in 0..100 {
-        if app
-            .state
-            .previews
-            .frame_for(session.id().as_str(), 1, "target-old")
-            .await
-            .is_none()
-        {
-            app.state.previews.stop();
-            screencast_task.await?;
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    app.state.previews.stop();
-    screencast_task.await?;
-    anyhow::bail!("stale screencast frame was not garbage-collected")
+    Ok(())
 }
 
 #[tokio::test]
-async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -> anyhow::Result<()>
+async fn live_projection_refreshes_metadata_and_preview_uses_current_target() -> anyhow::Result<()>
 {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
@@ -1239,19 +1172,6 @@ async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -
         body["items"][0]["live"]["browserTabs"][0]["title"],
         "After navigation"
     );
-    app.state
-        .previews
-        .cache_frame(
-            session.id().as_str(),
-            1,
-            "target-old",
-            claw_server_rust::services::cockpit::ScreencastFrame {
-                jpeg_base64: "/9g=".to_string(),
-                captured_at: 123,
-            },
-        )
-        .await;
-
     mock.update_tab(
         101,
         "target-new",
@@ -1286,13 +1206,8 @@ async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -
     );
     assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 0);
     assert_eq!(
-        request_status(
-            &app.router,
-            "GET",
-            "/api/v1/sessions/session-live/browser-tabs/101/preview",
-        )
-        .await?,
-        StatusCode::NOT_FOUND
+        request_status(&app.router, "GET", "/api/v1/sessions/session-live/preview",).await?,
+        StatusCode::OK
     );
 
     app.state
@@ -1311,24 +1226,20 @@ async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -
         request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 1);
-    assert_eq!(
-        body["items"][0]["live"]["browserTabs"][0]["previewCapturedAt"],
-        Value::Null
+    assert!(
+        body["items"][0]["live"]["browserTabs"][0]
+            .get("previewCapturedAt")
+            .is_none()
     );
     assert_eq!(
-        request_status(
-            &app.router,
-            "GET",
-            "/api/v1/sessions/session-live/browser-tabs/101/preview",
-        )
-        .await?,
-        StatusCode::NOT_FOUND
+        request_status(&app.router, "GET", "/api/v1/sessions/session-live/preview",).await?,
+        StatusCode::OK
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<()> {
+async fn session_previews_capture_each_sessions_owned_target() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-1", 1).await;
     mock.add_tab(102, "target-2", 2).await;
@@ -1365,54 +1276,23 @@ async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<
         );
     }
 
-    let screencast_task = app
-        .state
-        .previews
-        .clone()
-        .start(app.state.browser.clone(), app.state.tab_activity.clone());
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["items"].as_array().is_some_and(|items| {
+        items.iter().all(|item| {
+            item["live"]["browserTabs"][0]
+                .get("previewCapturedAt")
+                .is_none()
+        })
+    }));
 
-    let mut last_previews: Vec<(String, Option<i64>)> = Vec::new();
-    let mut done = false;
-    for _ in 0..100 {
-        let (status, body) =
-            request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
-        assert_eq!(status, StatusCode::OK);
-        let rows = body["items"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
-        last_previews = rows
-            .iter()
-            .map(|row| {
-                (
-                    row["sessionId"].as_str().unwrap_or_default().to_string(),
-                    row["live"]["browserTabs"][0]["previewCapturedAt"].as_i64(),
-                )
-            })
-            .collect();
-        if last_previews.len() == 2
-            && last_previews
-                .iter()
-                .all(|(_, captured_at)| captured_at.is_some())
-        {
-            done = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        done,
-        "polled frames never reached the live session projection; last: {last_previews:?}"
-    );
-
-    for (_, captured_at) in &last_previews {
-        assert!(captured_at.is_some_and(|at| at > 0));
-    }
-    for (session_id, browser_tab_id) in [("session-target-1", 101), ("session-target-2", 102)] {
+    for session_id in ["session-target-1", "session-target-2"] {
         assert_eq!(
             request_status(
                 &app.router,
                 "GET",
-                &format!("/api/v1/sessions/{session_id}/browser-tabs/{browser_tab_id}/preview"),
+                &format!("/api/v1/sessions/{session_id}/preview"),
             )
             .await?,
             StatusCode::OK
@@ -1436,8 +1316,6 @@ async fn live_session_reads_wake_polled_screenshot_previews() -> anyhow::Result<
         );
     }
 
-    app.state.previews.stop();
-    screencast_task.await?;
     drop(mock);
     Ok(())
 }

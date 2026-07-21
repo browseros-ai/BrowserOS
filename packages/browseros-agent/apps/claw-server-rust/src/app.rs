@@ -6,7 +6,10 @@ use crate::{
     runtime::ShutdownHandle,
     services::{
         browser::{BrowserService, TabRegistry},
-        cockpit::{CockpitQuery, PreviewService, TabActivityRecord, TabActivityService},
+        cockpit::{
+            CockpitQuery, PreviewService, SessionVisualService, TabActivityRecord,
+            TabActivityService,
+        },
         harness::HarnessService,
         profiles::ProfileService,
         recordings::{RecordingIngestService, RecordingStore},
@@ -37,6 +40,7 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     pub browser: Arc<BrowserService>,
     pub previews: Arc<PreviewService>,
+    pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
     pub shutdown: ShutdownHandle,
 }
@@ -87,6 +91,12 @@ impl AppState {
             RecordingIngestService::new(recordings.clone(), browser.clone(), tab_registry.clone());
         let tab_activity = Arc::new(TabActivityService::default());
         let previews = PreviewService::new(50);
+        let visuals = SessionVisualService::new(
+            sessions.clone(),
+            session_tabs.clone(),
+            browser.clone(),
+            tab_activity.clone(),
+        );
         let cockpit = Arc::new(CockpitQuery::new(
             sessions.clone(),
             profiles.clone(),
@@ -94,7 +104,6 @@ impl AppState {
             session_tabs.clone(),
             browser.clone(),
             tab_activity.clone(),
-            previews.clone(),
         ));
         Ok(Self {
             config,
@@ -112,6 +121,7 @@ impl AppState {
             sessions,
             browser,
             previews,
+            visuals,
             cockpit,
             shutdown: ShutdownHandle::new(),
         })

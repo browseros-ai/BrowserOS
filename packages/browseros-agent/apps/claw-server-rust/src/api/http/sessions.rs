@@ -42,7 +42,6 @@ pub(super) async fn list(
 ) -> Result<Json<SessionList>, CanonicalError> {
     let query = parse_query(&request_id, &raw)?;
     if query.status == Some(TaskStatus::Live) {
-        state.previews.note_read();
         let items = state
             .cockpit
             .list(&LiveSessionFilters {
@@ -199,7 +198,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         .map(|profile_id| profile_id.as_str().to_string());
     summary.site = task.site;
     summary.ended_at = task.ended_at;
-    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
+    summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary
 }
 
@@ -230,7 +229,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
     summary.color = Some(color);
     summary.site = task.site;
     summary.ended_at = task.ended_at;
-    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
+    summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.live = Some(Box::new(contract_live_state(live)));
     summary
 }
@@ -264,7 +263,6 @@ fn contract_live_tab(projection: LiveTabProjection) -> SessionBrowserTab {
     tab.first_activity_at = projection.first_activity_at;
     tab.last_activity_at = projection.last_activity_at;
     tab.last_tool_name = projection.last_tool_name;
-    tab.preview_captured_at = projection.preview_captured_at;
     tab
 }
 
@@ -288,8 +286,8 @@ fn contract_dispatch(
         row.agent_label,
         row.session_id,
         row.tool_name,
-        screenshots.contains(&row.id),
     );
+    dispatch.screenshot_id = screenshots.contains(&row.id).then_some(row.id);
     dispatch.profile_id = profile_id.cloned();
     dispatch.page_id = row.page_id;
     dispatch.tab_id = row.tab_id;

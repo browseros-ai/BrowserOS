@@ -1,7 +1,7 @@
 //! Read-side projection for the live-session cockpit.
 //!
 //! Connected sessions drive inclusion. Durable Chrome-tab ownership is then reconciled against
-//! one current browser snapshot, with activity and screencast data joined only as metadata. This
+//! one current browser snapshot, with activity joined only as metadata. This
 //! keeps historical session reads on the audit path and prevents stale page or target identities
 //! from becoming public API.
 
@@ -10,7 +10,7 @@ use crate::{
     error::{AppError, AppResult},
     services::{
         browser::{BrowserService, hex_for_slug},
-        cockpit::{PreviewService, ScreencastFrame, TabActivityService, ToolEvent},
+        cockpit::{TabActivityService, ToolEvent},
         profiles::{ProfileService, StoredAgentProfile},
         sessions::{Session, Sessions},
     },
@@ -48,7 +48,6 @@ pub struct LiveTabProjection {
     pub last_tool_name: Option<String>,
     pub tool_count: i64,
     pub recent_tools: Vec<ToolEvent>,
-    pub preview_captured_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +81,6 @@ pub struct CockpitQuery {
     session_tabs: Arc<SessionTabLedger>,
     browser: Arc<BrowserService>,
     tab_activity: Arc<TabActivityService>,
-    previews: Arc<PreviewService>,
 }
 
 impl CockpitQuery {
@@ -94,7 +92,6 @@ impl CockpitQuery {
         session_tabs: Arc<SessionTabLedger>,
         browser: Arc<BrowserService>,
         tab_activity: Arc<TabActivityService>,
-        previews: Arc<PreviewService>,
     ) -> Self {
         Self {
             sessions,
@@ -103,7 +100,6 @@ impl CockpitQuery {
             session_tabs,
             browser,
             tab_activity,
-            previews,
         }
     }
 
@@ -206,16 +202,6 @@ impl CockpitQuery {
                 recent_tools: record
                     .map(|record| record.recent_tools.clone())
                     .unwrap_or_default(),
-                preview_captured_at: self
-                    .previews
-                    .frame_for(
-                        &ownership.session_id,
-                        page.page_id.0,
-                        page.target_id.as_str(),
-                    )
-                    .await
-                    .filter(|frame| !frame.jpeg_base64.is_empty())
-                    .map(|frame| frame.captured_at),
             };
             tab_candidates.push(ProjectedTab {
                 ownership_id: ownership.id,
@@ -272,61 +258,6 @@ impl CockpitQuery {
                 projected
             })
             .collect())
-    }
-
-    pub async fn preview(
-        &self,
-        session_id: &str,
-        browser_tab_id: i64,
-    ) -> AppResult<Option<ScreencastFrame>> {
-        let live_session_id = crate::ids::SessionId::new(session_id);
-        if !self.sessions.contains(&live_session_id).await {
-            return Ok(None);
-        }
-        self.session_tabs.drain_writes().await;
-        if self
-            .session_tabs
-            .open_session_tab(session_id, browser_tab_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        let Some(pages) = self.current_pages().await else {
-            return Ok(None);
-        };
-        let Some(page) = pages.iter().find(|page| page.tab_id.0 == browser_tab_id) else {
-            return Ok(None);
-        };
-        let page_id = page.page_id.0;
-        let target_id = page.target_id.as_str().to_string();
-        let candidate = self
-            .previews
-            .frame_for(session_id, page_id, &target_id)
-            .await;
-        let Some(current_pages) = self.current_pages().await else {
-            return Ok(None);
-        };
-        if !current_pages.iter().any(|page| {
-            page.tab_id.0 == browser_tab_id
-                && page.page_id.0 == page_id
-                && page.target_id.as_str() == target_id.as_str()
-        }) {
-            return Ok(None);
-        }
-        // Browser and cache reads establish the incarnation first. Durable ownership and connected
-        // liveness are checked afterward so session authority is the return boundary.
-        self.session_tabs.drain_writes().await;
-        let owns_tab = self
-            .session_tabs
-            .open_session_tab(session_id, browser_tab_id)
-            .await?
-            .is_some();
-        let connected = self.sessions.contains(&live_session_id).await;
-        if !connected || !owns_tab {
-            return Ok(None);
-        }
-        Ok(candidate)
     }
 
     async fn connected_session_ids(&self) -> HashSet<String> {
@@ -407,7 +338,6 @@ mod tests {
         session_tabs: Arc<SessionTabLedger>,
         browser: Arc<BrowserService>,
         tab_activity: Arc<TabActivityService>,
-        previews: Arc<PreviewService>,
     ) -> CockpitQuery {
         CockpitQuery::new(
             sessions,
@@ -416,7 +346,6 @@ mod tests {
             session_tabs,
             browser,
             tab_activity,
-            previews,
         )
     }
 
