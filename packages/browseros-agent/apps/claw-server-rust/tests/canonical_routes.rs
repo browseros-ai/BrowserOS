@@ -35,6 +35,10 @@ use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+const BROWSERCLAW_EXTENSION_ORIGIN: &str = "chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc";
+const EXPECTED_ALLOW_METHODS: &str = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
+const EXPECTED_ALLOW_HEADERS: &str = "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap";
+
 struct TestApp {
     router: Router,
     state: AppState,
@@ -294,6 +298,28 @@ fn json_body(bytes: &[u8]) -> anyhow::Result<Value> {
     Ok(serde_json::from_slice(bytes)?)
 }
 
+fn assert_permissive_cors(headers: &HeaderMap) {
+    assert_eq!(
+        headers
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("*")
+    );
+    assert_eq!(
+        headers
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .and_then(|value| value.to_str().ok()),
+        Some(EXPECTED_ALLOW_METHODS)
+    );
+    assert_eq!(
+        headers
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok()),
+        Some(EXPECTED_ALLOW_HEADERS)
+    );
+    assert!(headers.contains_key("x-request-id"));
+}
+
 fn session_item<'a>(body: &'a Value, session_id: &str) -> anyhow::Result<&'a Value> {
     body["items"]
         .as_array()
@@ -311,6 +337,203 @@ fn live_session(session_id: &str) -> Arc<Session> {
         ConversationIdentity::new("codex", "research-browserclaw".to_string()),
         tokio::time::Instant::now(),
     )
+}
+
+#[tokio::test]
+async fn trusted_recording_preflight_returns_cors_headers() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/api/v1/recordings/events",
+        None,
+        &[
+            ("origin", BROWSERCLAW_EXTENSION_ORIGIN),
+            ("access-control-request-method", "POST"),
+            (
+                "access-control-request-headers",
+                "content-type,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap",
+            ),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(bytes.is_empty());
+    assert_permissive_cors(&headers);
+    Ok(())
+}
+
+#[tokio::test]
+async fn originless_preflight_to_exact_route_returns_cors_headers() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/api/v1/system",
+        None,
+        &[
+            ("access-control-request-method", "GET"),
+            ("access-control-request-headers", "content-type"),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(bytes.is_empty());
+    assert_permissive_cors(&headers);
+    Ok(())
+}
+
+#[tokio::test]
+async fn null_origin_native_recording_preflight_is_trusted() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/api/v1/recordings/events",
+        None,
+        &[
+            ("origin", "null"),
+            ("sec-fetch-site", "none"),
+            ("access-control-request-method", "POST"),
+            (
+                "access-control-request-headers",
+                "content-type,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap",
+            ),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(bytes.is_empty());
+    assert_permissive_cors(&headers);
+    Ok(())
+}
+
+#[tokio::test]
+async fn hostile_recording_preflight_remains_forbidden() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/api/v1/recordings/events",
+        None,
+        &[
+            ("origin", "https://attacker.example"),
+            ("access-control-request-method", "POST"),
+            (
+                "access-control-request-headers",
+                "content-type,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap",
+            ),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(&bytes)?["code"], "forbidden");
+    assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    Ok(())
+}
+
+#[tokio::test]
+async fn hostile_recording_post_remains_forbidden() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "POST",
+        "/api/v1/recordings/events",
+        Some("application/x-ndjson"),
+        &[
+            ("origin", "https://attacker.example"),
+            ("x-recording-tab-id", "101"),
+            (
+                "x-recording-document-id",
+                "33D25F3CF060E81B14070BC356FF1871",
+            ),
+            ("x-recording-batch-id", "hostile-test-batch"),
+        ],
+        "{\"ts\":150,\"type\":3,\"data\":{}}\n",
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(&bytes)?["code"], "forbidden");
+    assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_non_options_method_keeps_axum_allow_header() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/system",
+        Some("application/json"),
+        "{}",
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(bytes.is_empty());
+    let allow = headers
+        .get(header::ALLOW)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(allow.split(',').any(|method| method.trim() == "GET"));
+    assert!(allow.split(',').any(|method| method.trim() == "HEAD"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_preflight_remains_no_content() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/mcp",
+        None,
+        &[
+            ("origin", "https://example.com"),
+            ("access-control-request-method", "POST"),
+            ("access-control-request-headers", "content-type"),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(bytes.is_empty());
+    assert_permissive_cors(&headers);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_path_preflight_remains_no_content() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "OPTIONS",
+        "/api/v1/not-a-route",
+        None,
+        &[
+            ("origin", "https://example.com"),
+            ("access-control-request-method", "POST"),
+            ("access-control-request-headers", "content-type"),
+        ],
+        Body::empty(),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(bytes.is_empty());
+    assert_permissive_cors(&headers);
+    Ok(())
 }
 
 async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {

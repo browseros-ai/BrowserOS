@@ -232,6 +232,42 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
+    name: 'recording ingest accepts trusted preflight',
+    async run({ baseUrl }) {
+      const requestedHeaders = [
+        'content-type',
+        'x-recording-batch-id',
+        'x-recording-tab-id',
+        'x-recording-document-id',
+        'x-recording-has-gap',
+      ]
+      const response = await fetch(`${baseUrl}/api/v1/recordings/events`, {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc',
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': requestedHeaders.join(','),
+        },
+      })
+
+      expect(response.status).toBe(204)
+      expect(response.headers.get('access-control-allow-origin')).toBe('*')
+      expect(
+        response.headers
+          .get('access-control-allow-methods')
+          ?.split(',')
+          .map((method) => method.trim()),
+      ).toContain('POST')
+      const allowedHeaders = response.headers
+        .get('access-control-allow-headers')
+        ?.split(',')
+        .map((name) => name.trim().toLowerCase())
+      for (const name of requestedHeaders) {
+        expect(allowedHeaders).toContain(name)
+      }
+    },
+  },
+  {
     name: 'recording ingest rejects web origins',
     async run({ baseUrl }) {
       const path = `${baseUrl}/api/v1/recordings/events`
