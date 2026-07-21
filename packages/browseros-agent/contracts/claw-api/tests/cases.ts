@@ -1,6 +1,6 @@
 /**
  * The behavioral half of the contract: every case runs verbatim against
- * both server implementations through the generated client (raw fetch
+ * both server implementations through a test-local typed client (raw fetch
  * where the client can't express the check), asserting observable wire
  * behavior only — status codes, envelopes, headers — never anything
  * implementation-specific. A case that passes on one server and fails
@@ -16,10 +16,10 @@ import { expect } from 'bun:test'
 import {
   type ApiError,
   Harness,
-  ResponseError,
   SessionStatus,
 } from '../../../packages/claw-api/src'
 import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
+import { ContractHttpError } from './http-client'
 import type { ContractServer } from './server-adapters'
 
 export interface ContractCase {
@@ -494,8 +494,8 @@ async function expectApiError(
   try {
     await request()
   } catch (error) {
-    expect(error).toBeInstanceOf(ResponseError)
-    const response = (error as ResponseError).response
+    expect(error).toBeInstanceOf(ContractHttpError)
+    const response = (error as ContractHttpError).response
     expect(response.status).toBe(status)
     const body = (await response.json()) as ApiError
     expect(body).toMatchObject({ code, message: expect.any(String) })

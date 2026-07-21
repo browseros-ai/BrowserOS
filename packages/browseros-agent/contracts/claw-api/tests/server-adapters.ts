@@ -16,17 +16,14 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { CanonicalApiDependencies } from '../../../apps/claw-server/src/routes/api-v1'
 import { createServer } from '../../../apps/claw-server/src/server'
-import {
-  Configuration,
-  DefaultApi,
-  type Harness,
-} from '../../../packages/claw-api/src'
+import type { Harness } from '../../../packages/claw-api/src'
 import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
+import { ContractHttpClient } from './http-client'
 
 export interface ContractServer {
   name: 'rust' | 'typescript'
   baseUrl: string
-  api: DefaultApi
+  api: ContractHttpClient
   liveSessionId: string
   secondLiveSessionId: string
   zeroTabLiveSessionId: string
@@ -272,7 +269,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
   return {
     name: 'typescript',
     baseUrl,
-    api: new DefaultApi(new Configuration({ basePath: baseUrl })),
+    api: new ContractHttpClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
@@ -335,7 +332,7 @@ export async function startRustServer(): Promise<ContractServer> {
   return {
     name: 'rust',
     baseUrl,
-    api: new DefaultApi(new Configuration({ basePath: baseUrl })),
+    api: new ContractHttpClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
