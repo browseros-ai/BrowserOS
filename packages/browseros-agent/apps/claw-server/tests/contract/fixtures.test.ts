@@ -23,6 +23,7 @@ interface OpenApiSchema {
   allOf?: OpenApiSchema[]
   type?: 'array' | 'boolean' | 'integer' | 'number' | 'object' | 'string'
   enum?: unknown[]
+  format?: string
   minimum?: number
   additionalProperties?: boolean
   required?: string[]
@@ -74,6 +75,17 @@ describe('canonical contract fixtures', () => {
     expect(errors).toContain('$.status is not an allowed enum value')
   })
 
+  test('rejects strings that violate URI formats', async () => {
+    const schemas = await readSchemaDocument('system')
+    const errors = validateSchema(
+      { product: 'BrowserClaw', version: '1.0.0', url: 'not a URI' },
+      schemas.SystemInfo ?? {},
+      schemas,
+    )
+
+    expect(errors).toContain('$.url must be a URI')
+  })
+
   test('canonical errors omit an unavailable request id', () => {
     expect(canonicalApiError('not_found', 'Missing')).toEqual({
       code: 'not_found',
@@ -116,6 +128,9 @@ function validateSchema(
   }
 
   errors.push(...validateTypedValue(value, schema, schemas, path))
+  if (schema.format === 'uri' && !isUri(value)) {
+    errors.push(`${path} must be a URI`)
+  }
   if (
     schema.minimum !== undefined &&
     typeof value === 'number' &&
@@ -124,6 +139,16 @@ function validateSchema(
     errors.push(`${path} must be at least ${schema.minimum.toString()}`)
   }
   return errors
+}
+
+function isUri(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    new URL(value)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function validateTypedValue(
