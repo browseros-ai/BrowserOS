@@ -1240,7 +1240,7 @@ async fn browser_failure_hides_tabs_without_erasing_activity() -> anyhow::Result
     .await?;
     assert_eq!(status, StatusCode::OK);
     let unavailable = json_body(&bytes)?;
-    assert_eq!(unavailable["items"].as_array().map(Vec::len), Some(3));
+    assert_eq!(unavailable["items"].as_array().map(Vec::len), Some(2));
     assert!(unavailable["items"].as_array().is_some_and(|items| {
         items
             .iter()
