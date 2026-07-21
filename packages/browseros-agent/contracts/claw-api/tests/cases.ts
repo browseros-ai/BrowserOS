@@ -484,13 +484,15 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'unknown session',
-    async run({ api }) {
-      await expectApiError(
-        () => api.getSession({ sessionId: 'missing' }),
-        404,
-        'session_not_found',
-      )
+    name: 'unknown and handshake-only session detail',
+    async run({ api, handshakeOnlySessionId }) {
+      for (const sessionId of ['missing', handshakeOnlySessionId]) {
+        await expectApiError(
+          () => api.getSession({ sessionId }),
+          404,
+          'session_not_found',
+        )
+      }
     },
   },
   {

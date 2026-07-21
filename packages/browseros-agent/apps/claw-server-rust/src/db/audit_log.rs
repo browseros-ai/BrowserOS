@@ -413,6 +413,7 @@ impl AuditLog {
     /// Returns a task summary with its ordered events and dispatches.
     pub async fn get_task(&self, session_id: &str) -> AppResult<Option<TaskDetail>> {
         let Some(summary) = Tasks::find_by_id(session_id.to_owned())
+            .filter(tasks::Column::DispatchCount.gt(0))
             .one(self.db.connection())
             .await?
             .map(TaskSummary::from)
@@ -831,6 +832,7 @@ mod tests {
                 .await?
                 .is_some_and(|task| task.dispatch_count == 0)
         );
+        assert!(audit.get_task("handshake-1").await?.is_none());
         Ok(())
     }
 }
