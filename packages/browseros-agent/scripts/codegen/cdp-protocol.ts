@@ -9,11 +9,16 @@ import {
 } from './lib/protocol-api-emitter'
 import { parseProtocol } from './lib/protocol-parser'
 
-const PROTOCOL_PATH = process.env.CDP_PROTOCOL_JSON
-if (!PROTOCOL_PATH) {
-  console.error('Set CDP_PROTOCOL_JSON to the path of browser_protocol.json')
-  process.exit(1)
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    console.error(`Set ${name} to the path of browser_protocol.json`)
+    process.exit(1)
+  }
+  return value
 }
+
+const PROTOCOL_PATH = requireEnv('CDP_PROTOCOL_JSON')
 const OUT_DIR = join(import.meta.dir, '../../packages/cdp-protocol')
 const GEN_DIR = join(OUT_DIR, 'src/generated')
 const DOMAINS_DIR = join(GEN_DIR, 'domains')

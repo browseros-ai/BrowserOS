@@ -23,7 +23,8 @@
     "useUnknownInCatchVariables": false,
     "composite": true,
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "types": ["node", "bun"]
   },
   "references": [
     { "path": "./packages/agent-mcp-manager" },

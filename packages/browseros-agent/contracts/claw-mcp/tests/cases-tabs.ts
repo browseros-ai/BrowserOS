@@ -1,7 +1,8 @@
 /**
  * tabs (6), tab_groups (6) and windows (5) cases. Page/window handles
- * these cases open are cleaned up per case; group effects are observed
- * through the tools themselves (`tab_groups list` is the read-back).
+ * these cases open are cleaned up per case when that is part of the
+ * behavior under test; group effects are observed through the tools
+ * themselves (`tab_groups list` is the read-back).
  */
 
 import type { ContractCase } from './cases'
@@ -58,14 +59,15 @@ export const tabsCases: ContractCase[] = [
     name: 'tabs: active reports the focused page',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
-      const text = expectOk(
-        await ctx.mcp.callTool('tabs', { action: 'active' }),
-        'tabs active',
-      )
-      ctx.record(
-        'tabs:active-reports-page',
-        text.includes('/form.html') || text.includes(`${page}`),
-      )
+      let text = ''
+      await waitUntil(async () => {
+        text = expectOk(
+          await ctx.mcp.callTool('tabs', { action: 'active' }),
+          'tabs active',
+        )
+        return text.includes('/form.html') || text.includes(`${page}`)
+      }, 'active tab to report the focused form page')
+      ctx.record('tabs:active-reports-page', true)
     },
   },
   {
@@ -281,7 +283,10 @@ export const tabsCases: ContractCase[] = [
       )
       const windowId = Number(created.match(/\b(\d+)\b/)?.[1])
       ctx.record('windows:create-returns-id', Number.isFinite(windowId))
-      await ctx.mcp.callTool('windows', { action: 'close', windowId })
+      expectOk(
+        await ctx.mcp.callTool('windows', { action: 'close', windowId }),
+        'windows close hidden',
+      )
     },
   },
   {

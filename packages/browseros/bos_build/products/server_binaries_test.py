@@ -30,10 +30,10 @@ ENTITLEMENTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "entitlem
 
 
 class MacosServerBinariesTest(unittest.TestCase):
-    def test_server_bundles_use_bun_for_browser_builds(self):
+    def test_server_bundles_use_rust_claw_for_browser_builds(self):
         self.assertEqual(
             all_server_bundles(),
-            (BROWSEROS_SERVER_BUNDLE, BROWSEROS_CLAW_SERVER_BUNDLE),
+            (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_RUST_SERVER_BUNDLE),
         )
 
     def test_server_bundles_have_separate_resource_roots(self):
@@ -96,7 +96,7 @@ class MacosServerBinariesTest(unittest.TestCase):
         )
         self.assertEqual(
             server_bundles_for_product("browserclaw"),
-            (BROWSEROS_CLAW_SERVER_BUNDLE,),
+            (BROWSERCLAW_RUST_SERVER_BUNDLE,),
         )
 
     def test_server_ota_bundles_stay_pinned_to_typescript_claw(self):

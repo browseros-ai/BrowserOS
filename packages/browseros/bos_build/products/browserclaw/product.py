@@ -20,6 +20,7 @@ BROWSERCLAW_PRODUCT = ProductDescriptor.define(
         (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
         (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
     ),
+    server_bundle_ids=("browserclaw-server-rust",),
 )
 
 BROWSERCLAW_SERVER_BUNDLE = ServerBundle(
@@ -46,9 +47,9 @@ BROWSERCLAW_SERVER_BUNDLE = ServerBundle(
     unsigned_artifact_base_name="browseros-claw-server-resources",
 )
 
-# Rust release/OTA metadata stays defined for release-claw-server-rust.yml.
-# It is not in SERVER_BUNDLES and ships only when the commented YAML blocks are
-# flipped by hand.
+# Rust browser-build metadata. BrowserClaw launches this through the existing
+# Chromium Claw server resource root with the canonical browseros-claw-server
+# runtime binary name.
 BROWSERCLAW_RUST_SERVER_BUNDLE = ServerBundle(
     id="browserclaw-server-rust",
     name="BrowserOS Claw Server (Rust)",

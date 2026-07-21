@@ -68,7 +68,11 @@ impl BrowserService {
     }
 
     pub async fn session(&self) -> Option<Arc<browseros_core::BrowserSession>> {
-        self.session.read().await.clone()
+        self.session
+            .read()
+            .await
+            .clone()
+            .filter(|session| session.is_connected())
     }
 
     pub async fn wait_for_initial_attempt(&self) {
@@ -221,5 +225,108 @@ impl BrowserService {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use browseros_cdp::{CdpError, CdpEvent, SessionId};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
+    use futures_util::future::BoxFuture;
+    use serde_json::Value;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+
+    struct TestConnection {
+        connected: AtomicBool,
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl TestConnection {
+        fn new(connected: bool) -> Arc<Self> {
+            let (events, _) = broadcast::channel(1);
+            Arc::new(Self {
+                connected: AtomicBool::new(connected),
+                events,
+            })
+        }
+    }
+
+    impl CdpConnection for TestConnection {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    async fn service() -> anyhow::Result<(Arc<BrowserService>, TempDir)> {
+        let root = tempfile::tempdir()?;
+        let audit = Arc::new(
+            crate::capture::audit::AuditService::open(root.path().join("audit.sqlite")).await?,
+        );
+        let sessions = crate::sessions::Sessions::new(
+            audit.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
+        Ok((
+            BrowserService::new(0, sessions.ownership(), TabTargetMap::new(audit)),
+            root,
+        ))
+    }
+
+    #[tokio::test]
+    async fn session_filters_stored_disconnected_browser_session() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+        let connection = TestConnection::new(false);
+        let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
+
+        service.set_session_for_testing(browser).await;
+
+        assert!(service.session().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_returns_stored_connected_browser_session() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+        let connection = TestConnection::new(true);
+        let browser = BrowserSession::new(connection, BrowserSessionHooks::default());
+
+        service.set_session_for_testing(browser).await;
+
+        assert!(service.session().await.is_some());
+        Ok(())
     }
 }

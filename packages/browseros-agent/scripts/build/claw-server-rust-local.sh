@@ -20,13 +20,25 @@ while [ "$#" -gt 0 ]; do
       target="${2:?--target requires a value}"
       shift 2
       ;;
+    --target=*)
+      target="${1#*=}"
+      shift
+      ;;
     --agent-root)
       agent_root="${2:?--agent-root requires a value}"
       shift 2
       ;;
+    --agent-root=*)
+      agent_root="${1#*=}"
+      shift
+      ;;
     --browseros-root)
       browseros_root="${2:?--browseros-root requires a value}"
       shift 2
+      ;;
+    --browseros-root=*)
+      browseros_root="${1#*=}"
+      shift
       ;;
     -h|--help)
       usage
@@ -61,6 +73,7 @@ else
 fi
 
 binary_name="browseros-claw-server-rs"
+runtime_binary_name="browseros-claw-server"
 cargo_target_dir="${CARGO_TARGET_DIR:-$agent_root/target}"
 binary_path="$cargo_target_dir/release/$binary_name"
 destination="$browseros_root/resources/binaries/browseros_claw_server_rust/$target"
@@ -78,6 +91,7 @@ export BROWSEROS_AGENT_ROOT="$agent_root"
 export BROWSEROS_ROOT="$browseros_root"
 export BROWSEROS_TARGET="$target"
 export BROWSEROS_RUST_BINARY="$binary_path"
+export BROWSEROS_RUST_RUNTIME_BINARY="$runtime_binary_name"
 
 uv run --project "$browseros_root" python <<'PY'
 import hashlib
@@ -95,12 +109,13 @@ from bos_build.steps.storage.download import extract_artifact_zip
 browseros_root = Path(os.environ["BROWSEROS_ROOT"])
 target = os.environ["BROWSEROS_TARGET"]
 binary_path = Path(os.environ["BROWSEROS_RUST_BINARY"])
+runtime_binary = os.environ["BROWSEROS_RUST_RUNTIME_BINARY"]
 destination = (
     browseros_root
     / "resources/binaries/browseros_claw_server_rust"
     / target
 )
-stage_binary = destination / "resources/bin/browseros-claw-server-rs"
+stage_binary = destination / "resources/bin" / runtime_binary
 
 if destination.exists():
     shutil.rmtree(destination)
@@ -146,7 +161,7 @@ with tempfile.TemporaryDirectory() as tmp:
     extracted_rel = sorted(
         path.relative_to(validate_destination).as_posix() for path in extracted
     )
-    expected = ["resources/bin/browseros-claw-server-rs"]
+    expected = [f"resources/bin/{runtime_binary}"]
     if extracted_rel != expected:
         raise SystemExit(
             f"Expected extracted files {expected}, got {extracted_rel}"

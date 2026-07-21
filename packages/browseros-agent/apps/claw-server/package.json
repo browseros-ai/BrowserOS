@@ -38,13 +38,12 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "commander": "^14.0.3",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.3",
+    "hono": "^4.12.30",
     "posthog-node": "^4.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.5",
-    "drizzle-kit": "^0.31.10",
-    "typescript": "^5.9.2"
+    "drizzle-kit": "^0.31.10"
   }
 }
