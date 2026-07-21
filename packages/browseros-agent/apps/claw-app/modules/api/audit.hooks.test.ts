@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { SessionList, SessionScreenshotList } from '@browseros/claw-api'
 import * as _client from './client'
 
@@ -8,10 +8,15 @@ const screenshotResponse: SessionScreenshotList = {
 }
 const listSessions = mock(async () => response)
 const listSessionScreenshots = mock(async () => screenshotResponse)
+const actualApiClient = _client.apiClient
 
 mock.module('./client', () => ({
   ..._client,
-  apiClient: async () => ({ listSessions, listSessionScreenshots }),
+  apiClient: async () =>
+    Object.assign(await actualApiClient(), {
+      listSessions,
+      listSessionScreenshots,
+    }),
 }))
 
 const {
@@ -20,6 +25,8 @@ const {
   useLiveSessions,
   useSessionScreenshots,
 } = await import('./audit.hooks')
+
+afterAll(() => mock.restore())
 
 beforeEach(() => {
   listSessions.mockClear()

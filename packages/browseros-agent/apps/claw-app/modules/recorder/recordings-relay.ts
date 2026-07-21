@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { ApiResponseError, ClawApiClient } from '@browseros/claw-api-client'
 import {
   RECORDING_INGEST_FALLBACK_MAX_BYTES,
   RECORDING_INGEST_MAX_BYTES,
 } from '@browseros/shared/constants/limits'
-import { ApiResponseError, ClawApiClient } from '../api/client'
 import {
   createIndexedDbRecordingOutbox,
   type NewRecordingBatch,

@@ -9,9 +9,9 @@
  */
 
 import type { RecordingMetadata } from '@browseros/claw-api'
+import { ApiResponseError } from '@browseros/claw-api-client'
 import { createQuery } from 'react-query-kit'
-import { apiClient, resolveApiBaseUrl } from './client'
-import { parseResponse } from './parseResponse'
+import { apiClient } from './client'
 
 export type ReplayVerb =
   | 'navigate'
@@ -137,21 +137,20 @@ function isReplayEvent(value: unknown): value is ReplayEvent {
 
 /**
  * Fetches and parses one session's tab-attributed, document-keyed NDJSON stream.
- * This streaming read stays raw so malformed lines can be skipped and a 404
- * can map to an empty bundle instead of the typed client's error path.
+ * Parsing stays here so malformed recorder lines remain isolated from the
+ * transport client and a missing recording still maps to an empty bundle.
  */
 export async function fetchReplayEvents({
   sessionId,
 }: UseReplayEventsVariables): Promise<ReplayEventsBundle> {
-  const baseUrl = await resolveApiBaseUrl()
-  const res = await fetch(
-    `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/recording/events`,
-  )
-  if (!res.ok) {
-    if (res.status === 404) {
+  let ndjson: string
+  try {
+    ndjson = await (await apiClient()).downloadRecordingEvents({ sessionId })
+  } catch (error) {
+    if (error instanceof ApiResponseError && error.response.status === 404) {
       return { events: [], tabIds: [], documentIds: [] }
     }
-    return parseResponse<ReplayEventsBundle>(res)
+    throw error
   }
 
   const events: ReplayEvent[] = []
@@ -159,7 +158,7 @@ export async function fetchReplayEvents({
   const documentIds: string[] = []
   const seenTabs = new Set<number>()
   const seenDocuments = new Set<string>()
-  for (const line of (await res.text()).split('\n')) {
+  for (const line of ndjson.split('\n')) {
     if (line.length === 0) continue
     try {
       const event: unknown = JSON.parse(line)

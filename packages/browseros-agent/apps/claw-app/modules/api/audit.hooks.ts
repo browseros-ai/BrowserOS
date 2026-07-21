@@ -22,6 +22,10 @@ import {
   SessionStatus,
   type SessionSummary,
 } from '@browseros/claw-api'
+import {
+  buildSessionPreviewUrl,
+  buildSessionScreenshotUrl,
+} from '@browseros/claw-api-client'
 import { useEffect, useState } from 'react'
 import { createInfiniteQuery, createQuery } from 'react-query-kit'
 import { apiBaseUrl, apiClient, resolveApiBaseUrl } from './client'
@@ -99,7 +103,7 @@ export function taskScreenshotUrl(
   screenshotId: number,
   baseUrl = apiBaseUrl(),
 ): string {
-  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/screenshots/${screenshotId.toString()}`
+  return buildSessionScreenshotUrl(baseUrl, { sessionId, screenshotId })
 }
 
 /** Absolute URL for a fresh live-session JPEG; `refresh` only busts browser caches. */
@@ -108,7 +112,7 @@ export function sessionPreviewUrl(
   refresh: number,
   baseUrl = apiBaseUrl(),
 ): string {
-  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview?refresh=${refresh.toString()}`
+  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh })
 }
 
 /**

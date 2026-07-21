@@ -1,12 +1,36 @@
-import { afterEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import type { RecordingMetadata } from '@browseros/claw-api'
+import { ApiResponseError } from '@browseros/claw-api-client'
+import * as _client from './client'
+
+let metadataResponse: RecordingMetadata = {
+  hasData: false,
+  complete: true,
+  sizeBytes: 0,
+  tabs: [],
+}
+let eventsResponse = ''
+const getRecording = mock(async () => metadataResponse)
+const downloadRecordingEvents = mock(async () => eventsResponse)
+const actualApiClient = _client.apiClient
+
+mock.module('./client', () => ({
+  ..._client,
+  apiClient: async () =>
+    Object.assign(await actualApiClient(), {
+      getRecording,
+      downloadRecordingEvents,
+    }),
+}))
 
 const { fetchReplayEvents, fetchReplayMetadata, replayEventsRevision } =
   await import('./replay.hooks')
 
-const originalFetch = globalThis.fetch
+afterAll(() => mock.restore())
 
-afterEach(() => {
-  globalThis.fetch = originalFetch
+beforeEach(() => {
+  getRecording.mockClear()
+  downloadRecordingEvents.mockClear()
 })
 
 describe('replay queries', () => {
@@ -47,7 +71,7 @@ describe('replay queries', () => {
   })
 
   it('fetches canonical recording metadata', async () => {
-    const metadata = {
+    metadataResponse = {
       hasData: true,
       complete: true,
       firstEventAt: 1_000,
@@ -55,31 +79,30 @@ describe('replay queries', () => {
       sizeBytes: 512,
       tabs: [],
     }
-    const request = mock(async () => Response.json(metadata))
-    globalThis.fetch = request as unknown as typeof fetch
 
     await expect(
       fetchReplayMetadata({ sessionId: 'session/with slash' }),
-    ).resolves.toEqual(metadata)
-    expect(request).toHaveBeenCalledWith(
-      'http://127.0.0.1:9200/api/v1/sessions/session%2Fwith%20slash/recording',
-      expect.objectContaining({ method: 'GET' }),
-    )
+    ).resolves.toBe(metadataResponse)
+    expect(getRecording).toHaveBeenCalledWith({
+      sessionId: 'session/with slash',
+    })
   })
 
   it('preserves the empty metadata shape when no replay exists', async () => {
-    const metadata = { hasData: false, complete: true, sizeBytes: 0, tabs: [] }
-    globalThis.fetch = mock(async () =>
-      Response.json(metadata),
-    ) as unknown as typeof fetch
+    metadataResponse = {
+      hasData: false,
+      complete: true,
+      sizeBytes: 0,
+      tabs: [],
+    }
 
-    await expect(
-      fetchReplayMetadata({ sessionId: 'session-1' }),
-    ).resolves.toEqual(metadata)
+    await expect(fetchReplayMetadata({ sessionId: 'session-1' })).resolves.toBe(
+      metadataResponse,
+    )
   })
 
   it('parses valid replay lines and skips malformed lines', async () => {
-    const body = [
+    eventsResponse = [
       JSON.stringify({
         sessionId: 'session-1',
         documentId: 'document-b',
@@ -108,8 +131,6 @@ describe('replay queries', () => {
         data: {},
       }),
     ].join('\n')
-    const request = mock(async () => new Response(body))
-    globalThis.fetch = request as unknown as typeof fetch
 
     await expect(
       fetchReplayEvents({ sessionId: 'session-1' }),
@@ -137,8 +158,25 @@ describe('replay queries', () => {
       tabIds: [9, 3],
       documentIds: ['document-b', 'document-a'],
     })
-    expect(request).toHaveBeenCalledWith(
-      'http://127.0.0.1:9200/api/v1/sessions/session-1/recording/events',
-    )
+    expect(downloadRecordingEvents).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+    })
+  })
+
+  it('maps a missing recording event stream to an empty bundle', async () => {
+    downloadRecordingEvents.mockImplementationOnce(async () => {
+      throw new ApiResponseError(
+        Response.json(
+          { code: 'recording_not_found', message: 'recording not found' },
+          { status: 404 },
+        ),
+      )
+    })
+
+    await expect(fetchReplayEvents({ sessionId: 'missing' })).resolves.toEqual({
+      events: [],
+      tabIds: [],
+      documentIds: [],
+    })
   })
 })
