@@ -577,7 +577,13 @@ mod tests {
             .await;
 
         assert!(registry.remove(&session_id, "closed", None).await?);
-        let retained_at = Instant::now();
+        let retained_at = registry
+            .retained
+            .read()
+            .await
+            .get(&key)
+            .map(|retained| retained.ended_at)
+            .ok_or_else(|| anyhow::anyhow!("retained session missing"))?;
         assert_eq!(registry.retained.read().await.len(), 1);
         assert_eq!(
             actions
