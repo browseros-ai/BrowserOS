@@ -90,7 +90,7 @@ const _: ToolEffect = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::audit::entities::{prelude::SessionTabs, session_tabs};
+    use crate::db::entities::{prelude::SessionTabs, session_tabs};
     use browseros_cdp::{CdpError, CdpEvent, SessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use browseros_mcp::ToolResult;

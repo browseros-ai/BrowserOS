@@ -5,7 +5,7 @@ use crate::{
         audit::AuditService,
         recordings::{RecordedEvent, RecordingStore, legacy_document_id},
     },
-    db::audit::entities::{
+    db::entities::{
         prelude::{TabClaims, TabRecordings},
         tab_claims,
     },
@@ -370,7 +370,7 @@ mod tests {
     use super::*;
     use crate::{
         capture::recordings::RecordingEventInput,
-        db::audit::entities::{prelude::SessionTabs, session_tabs},
+        db::entities::{prelude::SessionTabs, session_tabs},
     };
     use sea_orm::ActiveValue::{NotSet, Set};
     use serde_json::json;

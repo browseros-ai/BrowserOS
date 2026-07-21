@@ -358,7 +358,7 @@ mod tests {
     use super::{RetainedGroupAction, Session, Sessions};
     use crate::{
         capture::audit::AuditService,
-        db::audit::entities::prelude::TabClaims,
+        db::entities::prelude::TabClaims,
         identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
         ids::{ConvoId, SessionId},
     };

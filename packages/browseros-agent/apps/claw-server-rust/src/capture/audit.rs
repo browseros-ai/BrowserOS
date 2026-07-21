@@ -1,7 +1,7 @@
 use crate::{
     clock::now_epoch_ms,
-    db::audit::{
-        AuditDb,
+    db::{
+        Database,
         entities::{
             agent_session_ends, agent_session_starts,
             prelude::{
@@ -26,13 +26,13 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 use url::Url;
 
-pub use crate::db::audit::entities::tool_dispatches::Model as ToolDispatchRow;
+pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
 
 const ARGS_JSON_MAX: usize = 4096;
 
 #[derive(Clone)]
 pub struct AuditService {
-    db: AuditDb,
+    db: Database,
     claim_writes: mpsc::UnboundedSender<ClaimWrite>,
 }
 
@@ -257,7 +257,7 @@ pub struct ListTasksQuery {
 impl AuditService {
     /// Opens the audit store and applies its migrations.
     pub async fn open(path: impl AsRef<Path>) -> AppResult<Self> {
-        let db = AuditDb::open(path).await?;
+        let db = Database::open(path).await?;
         let (claim_writes, receiver) = mpsc::unbounded_channel();
         tokio::spawn(run_claim_writes(db.clone(), receiver));
         Ok(Self { db, claim_writes })
@@ -659,7 +659,7 @@ impl AuditService {
     }
 }
 
-async fn run_claim_writes(db: AuditDb, mut receiver: mpsc::UnboundedReceiver<ClaimWrite>) {
+async fn run_claim_writes(db: Database, mut receiver: mpsc::UnboundedReceiver<ClaimWrite>) {
     while let Some(write) = receiver.recv().await {
         let write = match write {
             ClaimWrite::Flush(done) => {
@@ -1115,7 +1115,7 @@ mod tests {
         AuditService, ClaimWrite, DispatchResultSummary, ListTasksQuery, RecordToolDispatchInput,
         TaskStatus,
     };
-    use crate::db::audit::entities::prelude::{SessionTabs, TabClaims};
+    use crate::db::entities::prelude::{SessionTabs, TabClaims};
     use sea_orm::EntityTrait;
     use serde_json::json;
     use tempfile::tempdir;

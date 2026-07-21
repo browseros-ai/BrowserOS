@@ -3,7 +3,7 @@
 use crate::{
     capture::audit::AuditService,
     clock::now_epoch_ms,
-    db::audit::entities::{
+    db::entities::{
         prelude::{
             RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs, TabClaims,
             TabRecordings,
@@ -489,7 +489,7 @@ fn sanitize_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::audit::entities::{
+    use crate::db::entities::{
         prelude::{RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs},
         session_tabs,
     };
