@@ -64,6 +64,30 @@ struct RawRecord {
     recent_tools: VecDeque<ToolEvent>,
 }
 
+impl RawRecord {
+    fn new(target_id: String, input: RecordToolInput, now: i64) -> Self {
+        let mut recent_tools = VecDeque::new();
+        recent_tools.push_back(ToolEvent {
+            name: input.tool_name.clone(),
+            at: now,
+        });
+        Self {
+            version: Arc::new(()),
+            target_id,
+            tab_id: input.tab_id,
+            page_id: input.page_id,
+            session_id: input.session_id,
+            agent_id: input.agent_id,
+            slug: input.slug,
+            first_tool_at: now,
+            last_tool_at: now,
+            last_tool_name: input.tool_name,
+            tool_count: 1,
+            recent_tools,
+        }
+    }
+}
+
 enum LivePageState {
     Live {
         target_id: String,
@@ -103,13 +127,14 @@ pub struct RecordToolInput {
 impl TabActivityService {
     pub async fn record_tool(&self, input: RecordToolInput) {
         let now = self.now_ms();
-        let target_key = input.target_id.into_inner();
+        let target_key = input.target_id.as_str().to_string();
         let mut records = self.records.lock().await;
-        if let Some(existing) = records.get_mut(&target_key) {
+        if let Some(existing) = records.get_mut(&target_key)
+            && existing.session_id == input.session_id
+        {
             existing.version = Arc::new(());
             existing.tab_id = input.tab_id;
             existing.page_id = input.page_id;
-            existing.session_id = input.session_id;
             existing.agent_id = input.agent_id;
             existing.slug = input.slug;
             existing.last_tool_at = now;
@@ -124,28 +149,7 @@ impl TabActivityService {
             }
             return;
         }
-        let mut recent_tools = VecDeque::new();
-        recent_tools.push_back(ToolEvent {
-            name: input.tool_name.clone(),
-            at: now,
-        });
-        records.insert(
-            target_key.clone(),
-            RawRecord {
-                version: Arc::new(()),
-                target_id: target_key,
-                tab_id: input.tab_id,
-                page_id: input.page_id,
-                session_id: input.session_id,
-                agent_id: input.agent_id,
-                slug: input.slug,
-                first_tool_at: now,
-                last_tool_at: now,
-                last_tool_name: input.tool_name,
-                tool_count: 1,
-                recent_tools,
-            },
-        );
+        records.insert(target_key.clone(), RawRecord::new(target_key, input, now));
     }
 
     pub async fn remove_incarnation(&self, page_id: u32, target_id: &str) -> bool {
@@ -485,6 +489,7 @@ mod tests {
     #[tokio::test]
     async fn latest_session_and_tab_replace_the_target_association() {
         let service = TabActivityService::default();
+        service.set_now_for_testing(100);
         for (session_id, tab_id, tool_name) in [
             ("session-1", 101, "navigate"),
             ("session-2", 202, "snapshot"),
@@ -500,6 +505,7 @@ mod tests {
                     tool_name: tool_name.to_string(),
                 })
                 .await;
+            service.set_now_for_testing(200);
         }
 
         let records = service
@@ -510,9 +516,41 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session_id, "session-2");
         assert_eq!(records[0].tab_id, 202);
-        assert_eq!(records[0].tool_count, 2);
+        assert_eq!(records[0].first_tool_at, 200);
+        assert_eq!(records[0].last_tool_at, 200);
+        assert_eq!(records[0].last_tool_name, "snapshot");
+        assert_eq!(records[0].tool_count, 1);
+        assert_eq!(records[0].recent_tools.len(), 1);
+        assert_eq!(records[0].recent_tools[0].name, "snapshot");
         assert_eq!(records[0].url, "https://example.com/current");
         assert_eq!(records[0].title, "Current");
+    }
+
+    #[tokio::test]
+    async fn same_session_target_activity_accumulates() {
+        let service = TabActivityService::default();
+        service.set_now_for_testing(100);
+        record(&service, "target-1", 1, "session-1", "navigate").await;
+        service.set_now_for_testing(200);
+        record(&service, "target-1", 1, "session-1", "snapshot").await;
+
+        let records = service
+            .snapshot_with(|_| async {
+                live("target-1", 101, "https://example.com/current", "Current")
+            })
+            .await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].first_tool_at, 100);
+        assert_eq!(records[0].last_tool_at, 200);
+        assert_eq!(records[0].tool_count, 2);
+        assert_eq!(
+            records[0]
+                .recent_tools
+                .iter()
+                .map(|event| event.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["navigate", "snapshot"]
+        );
     }
 
     #[tokio::test]
@@ -690,7 +728,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session_id, "session-2");
         assert_eq!(records[0].last_tool_name, "snapshot");
-        assert_eq!(records[0].tool_count, 2);
+        assert_eq!(records[0].tool_count, 1);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

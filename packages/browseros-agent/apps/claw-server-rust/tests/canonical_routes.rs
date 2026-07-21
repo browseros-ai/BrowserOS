@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -45,6 +45,7 @@ struct FixtureConnection {
     events: broadcast::Sender<CdpEvent>,
     tabs: tokio::sync::Mutex<Vec<Value>>,
     get_tabs_calls: AtomicUsize,
+    fail_next_get_tabs: AtomicBool,
     next_get_tabs_gate: tokio::sync::Mutex<Option<Arc<GetTabsGate>>>,
 }
 
@@ -70,6 +71,7 @@ impl FixtureConnection {
             events,
             tabs: tokio::sync::Mutex::new((1..=8).map(fixture_tab).collect()),
             get_tabs_calls: AtomicUsize::new(0),
+            fail_next_get_tabs: AtomicBool::new(false),
             next_get_tabs_gate: tokio::sync::Mutex::new(None),
         })
     }
@@ -80,6 +82,10 @@ impl FixtureConnection {
 
     fn get_tabs_calls(&self) -> usize {
         self.get_tabs_calls.load(Ordering::SeqCst)
+    }
+
+    fn fail_next_get_tabs(&self) {
+        self.fail_next_get_tabs.store(true, Ordering::SeqCst);
     }
 
     async fn gate_next_get_tabs(&self) -> Arc<GetTabsGate> {
@@ -126,6 +132,12 @@ impl CdpConnection for FixtureConnection {
                     if let Some(gate) = self.next_get_tabs_gate.lock().await.take() {
                         gate.entered.notify_one();
                         gate.release.notified().await;
+                    }
+                    if self.fail_next_get_tabs.swap(false, Ordering::SeqCst) {
+                        return Err(CdpError::Protocol {
+                            code: -32000,
+                            message: "get tabs failed".to_string(),
+                        });
                     }
                     Ok(json!({ "tabs": self.tabs.lock().await.clone() }))
                 }
@@ -274,6 +286,13 @@ async fn request_with_headers(
 
 fn json_body(bytes: &[u8]) -> anyhow::Result<Value> {
     Ok(serde_json::from_slice(bytes)?)
+}
+
+fn session_item<'a>(body: &'a Value, session_id: &str) -> anyhow::Result<&'a Value> {
+    body["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["sessionId"] == session_id))
+        .ok_or_else(|| anyhow::anyhow!("session {session_id} missing"))
 }
 
 fn live_session(session_id: &str) -> Arc<Session> {
@@ -763,6 +782,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
     app.state
         .screencast
         .cache_frame(
+            primary.id().as_str(),
             7,
             "target-7",
             ScreencastFrame {
@@ -981,6 +1001,7 @@ async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<
         let body = json_body(&bytes)?;
         let shape = (body["code"].clone(), body["message"].clone());
         assert_eq!(shape.0, "preview_not_found");
+        assert_eq!(shape.1, "browser tab preview not found");
         assert_eq!(failure_shape.get_or_insert_with(|| shape.clone()), &shape);
     }
 
@@ -1145,5 +1166,237 @@ async fn preview_rejects_ownership_transfer_during_frame_lookup() -> anyhow::Res
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json_body(&bytes)?["code"], "preview_not_found");
     assert_ne!(bytes, vec![0xff, 0xd8]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn transferred_session_cannot_read_prior_owner_frame() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.second.id().as_str().to_string(),
+        fixture.second.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=live",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    let second = session_item(&body, fixture.second.id().as_str())?;
+    assert_eq!(second["live"]["browserTabs"][0]["browserTabId"], 101);
+    assert!(
+        second["live"]["browserTabs"][0]
+            .get("previewCapturedAt")
+            .is_none()
+    );
+
+    let preview_path = format!(
+        "/api/v1/sessions/{}/browser-tabs/101/preview",
+        fixture.second.id().as_str()
+    );
+    let (status, _, bytes) =
+        request(&app.router, "GET", &preview_path, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["code"], "preview_not_found");
+    assert_eq!(body["message"], "browser tab preview not found");
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_rejects_target_rebind_during_frame_lookup() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = app.state.screencast.gate_next_frame_read_for_testing();
+    let router = app.router.clone();
+    let preview_path = format!(
+        "/api/v1/sessions/{}/browser-tabs/101/preview",
+        fixture.primary.id().as_str()
+    );
+    let preview =
+        tokio::spawn(
+            async move { request(&router, "GET", &preview_path, None, Body::empty()).await },
+        );
+
+    gate.wait_until_entered().await;
+    assert_eq!(app.connection.get_tabs_calls(), 1);
+    app.connection
+        .update_tab(101, "target-rebound", "https://example.com/new", "New")
+        .await;
+    gate.release();
+
+    let (status, _, bytes) = preview.await??;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["code"], "preview_not_found");
+    assert_eq!(body["message"], "browser tab preview not found");
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_rejects_target_rebind_during_final_authority_read() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let frame_gate = app.state.screencast.gate_next_frame_read_for_testing();
+    let router = app.router.clone();
+    let preview_path = format!(
+        "/api/v1/sessions/{}/browser-tabs/101/preview",
+        fixture.primary.id().as_str()
+    );
+    let preview =
+        tokio::spawn(
+            async move { request(&router, "GET", &preview_path, None, Body::empty()).await },
+        );
+
+    frame_gate.wait_until_entered().await;
+    let ownership_gate = app
+        .state
+        .audit
+        .gate_next_open_session_tab_read_for_testing();
+    frame_gate.release();
+    ownership_gate.wait_until_entered().await;
+    app.connection
+        .update_tab(101, "target-rebound", "https://example.com/new", "New")
+        .await;
+    ownership_gate.release();
+
+    let (status, _, bytes) = preview.await??;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["code"], "preview_not_found");
+    assert_eq!(body["message"], "browser tab preview not found");
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_failure_hides_tabs_without_erasing_activity() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    app.connection.fail_next_get_tabs();
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=live",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let unavailable = json_body(&bytes)?;
+    assert_eq!(unavailable["items"].as_array().map(Vec::len), Some(3));
+    assert!(unavailable["items"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .all(|item| item["live"]["state"] == "idle" && item["live"]["browserTabs"] == json!([]))
+    }));
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=live",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let recovered = json_body(&bytes)?;
+    let primary = session_item(&recovered, fixture.primary.id().as_str())?;
+    assert_eq!(primary["live"]["state"], "active");
+    assert_eq!(primary["live"]["browserTabs"][0]["browserTabId"], 101);
+    assert_eq!(primary["live"]["browserTabs"][0]["toolCount"], 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_projection_revalidates_transfer_after_reconciliation() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = app.connection.gate_next_get_tabs().await;
+    let router = app.router.clone();
+    let list = tokio::spawn(async move {
+        request(
+            &router,
+            "GET",
+            "/api/v1/sessions?status=live",
+            None,
+            Body::empty(),
+        )
+        .await
+    });
+
+    gate.wait_until_entered().await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.second.id().as_str().to_string(),
+        fixture.second.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+    gate.release();
+
+    let (status, _, bytes) = list.await??;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    for session in [&fixture.primary, &fixture.second] {
+        let item = session_item(&body, session.id().as_str())?;
+        assert!(
+            item["live"]["browserTabs"]
+                .as_array()
+                .is_some_and(|tabs| tabs.iter().all(|tab| tab["browserTabId"] != 101))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_projection_drops_disconnect_during_reconciliation() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = app.connection.gate_next_get_tabs().await;
+    let router = app.router.clone();
+    let list = tokio::spawn(async move {
+        request(
+            &router,
+            "GET",
+            "/api/v1/sessions?status=live",
+            None,
+            Body::empty(),
+        )
+        .await
+    });
+
+    gate.wait_until_entered().await;
+    assert!(
+        app.state
+            .sessions
+            .remove(fixture.primary.id(), "closed", Some("test disconnect"))
+            .await?
+    );
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.primary.id().as_str().to_string(),
+        fixture.primary.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+    gate.release();
+
+    let (status, _, bytes) = list.await??;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert!(session_item(&body, fixture.primary.id().as_str()).is_err());
     Ok(())
 }

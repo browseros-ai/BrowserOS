@@ -182,7 +182,7 @@ async fn persist_screenshot(
         Some(target_id) => {
             call.state
                 .screencast
-                .frame_for(page_id, target_id.as_str())
+                .frame_for(call.session_id.as_str(), page_id, target_id.as_str())
                 .await
         }
         None => None,
@@ -307,11 +307,30 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use crate::capture::audit::ListDispatchesQuery;
+    use browseros_core::{TabId, TargetId, pages::PageInfo};
     use serde_json::json;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    fn page_info(target_id: &str) -> PageInfo {
+        PageInfo {
+            page_id: PageId(1),
+            target_id: TargetId::from(target_id.to_string()),
+            tab_id: TabId(101),
+            url: "https://example.com".to_string(),
+            title: "Example".to_string(),
+            is_active: true,
+            is_loading: false,
+            load_progress: 1.0,
+            is_pinned: false,
+            is_hidden: false,
+            window_id: None,
+            index: None,
+            group_id: None,
+        }
+    }
 
     #[tokio::test]
     async fn explicit_image_persists_when_fallback_is_disabled() -> anyhow::Result<()> {
@@ -454,6 +473,49 @@ mod tests {
             assert_eq!(data.as_deref(), Some("captured"));
         }
         assert_eq!(captures.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn audit_fallback_never_uses_another_sessions_cached_frame() -> anyhow::Result<()> {
+        let mut call =
+            crate::mcp::test_support::tool_call("snapshot", json!({ "page": 1 })).await?;
+        call.page_snapshot = Some(page_info("target-1"));
+        call.state
+            .screencast
+            .cache_frame(
+                "prior-session",
+                1,
+                "target-1",
+                ScreencastFrame {
+                    jpeg_base64: "anBlZw==".to_string(),
+                    captured_at: now_epoch_ms(),
+                },
+            )
+            .await;
+        let identity = call
+            .identity
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let result = ToolResult::text("ok", None);
+
+        persist_screenshot(&call, &result, AuditRecord { row_id: 7 }, &identity).await;
+        assert!(call.state.screenshots.read("7").await.is_err());
+
+        call.state
+            .screencast
+            .cache_frame(
+                call.session_id.as_str(),
+                1,
+                "target-1",
+                ScreencastFrame {
+                    jpeg_base64: "anBlZw==".to_string(),
+                    captured_at: now_epoch_ms(),
+                },
+            )
+            .await;
+        persist_screenshot(&call, &result, AuditRecord { row_id: 8 }, &identity).await;
+        assert_eq!(call.state.screenshots.read("8").await?, b"jpeg");
+        Ok(())
     }
 
     #[test]

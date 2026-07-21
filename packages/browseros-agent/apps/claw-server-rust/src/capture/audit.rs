@@ -21,8 +21,11 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::Path;
-use tokio::sync::{mpsc, oneshot};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex as StdMutex},
+};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::warn;
 use url::Url;
 
@@ -34,6 +37,23 @@ const ARGS_JSON_MAX: usize = 4096;
 pub struct AuditService {
     db: AuditDb,
     claim_writes: mpsc::UnboundedSender<ClaimWrite>,
+    open_session_tab_read_gate: Arc<StdMutex<Option<Arc<OpenSessionTabReadGate>>>>,
+}
+
+#[doc(hidden)]
+pub struct OpenSessionTabReadGate {
+    entered: Notify,
+    release: Notify,
+}
+
+impl OpenSessionTabReadGate {
+    pub async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    pub fn release(&self) {
+        self.release.notify_one();
+    }
 }
 
 #[derive(Debug)]
@@ -260,7 +280,11 @@ impl AuditService {
         let db = AuditDb::open(path).await?;
         let (claim_writes, receiver) = mpsc::unbounded_channel();
         tokio::spawn(run_claim_writes(db.clone(), receiver));
-        Ok(Self { db, claim_writes })
+        Ok(Self {
+            db,
+            claim_writes,
+            open_session_tab_read_gate: Arc::new(StdMutex::new(None)),
+        })
     }
 
     pub(crate) fn connection(&self) -> &sea_orm::DatabaseConnection {
@@ -620,12 +644,36 @@ impl AuditService {
         session_id: &str,
         tab_id: i64,
     ) -> AppResult<Option<session_tabs::Model>> {
-        Ok(SessionTabs::find()
+        let ownership = SessionTabs::find()
             .filter(session_tabs::Column::SessionId.eq(session_id))
             .filter(session_tabs::Column::TabId.eq(tab_id))
             .filter(session_tabs::Column::ReleasedAt.is_null())
             .one(self.db.connection())
-            .await?)
+            .await?;
+        let gate = self
+            .open_session_tab_read_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        Ok(ownership)
+    }
+
+    /// Pauses the next ownership read after its database result is fixed.
+    #[doc(hidden)]
+    pub fn gate_next_open_session_tab_read_for_testing(&self) -> Arc<OpenSessionTabReadGate> {
+        let gate = Arc::new(OpenSessionTabReadGate {
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        *self
+            .open_session_tab_read_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(gate.clone());
+        gate
     }
 
     /// Returns a task summary with its ordered events and dispatches.

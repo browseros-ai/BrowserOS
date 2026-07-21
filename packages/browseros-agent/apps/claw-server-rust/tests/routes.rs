@@ -686,7 +686,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
         if app
             .state
             .screencast
-            .frame_for(1, "target-1")
+            .frame_for(&session_id, 1, "target-1")
             .await
             .is_some()
         {
@@ -697,7 +697,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     assert!(
         app.state
             .screencast
-            .frame_for(1, "target-1")
+            .frame_for(&session_id, 1, "target-1")
             .await
             .is_some()
     );
@@ -1115,6 +1115,7 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
     app.state
         .screencast
         .cache_frame(
+            session.id().as_str(),
             1,
             "target-old",
             claw_server_rust::tabs::activity::ScreencastFrame {
@@ -1159,7 +1160,7 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
         if app
             .state
             .screencast
-            .frame_for(1, "target-old")
+            .frame_for(session.id().as_str(), 1, "target-old")
             .await
             .is_none()
         {
@@ -1225,6 +1226,7 @@ async fn live_projection_refreshes_metadata_and_rejects_stale_preview_target() -
     app.state
         .screencast
         .cache_frame(
+            session.id().as_str(),
             1,
             "target-old",
             claw_server_rust::tabs::activity::ScreencastFrame {

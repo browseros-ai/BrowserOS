@@ -65,20 +65,26 @@ struct ScreencastInner {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TabIncarnation {
+    session_id: String,
     page_id: u32,
     target_id: String,
 }
 
 impl TabIncarnation {
-    fn new(page_id: u32, target_id: impl Into<String>) -> Self {
+    fn new(session_id: impl Into<String>, page_id: u32, target_id: impl Into<String>) -> Self {
         Self {
+            session_id: session_id.into(),
             page_id,
             target_id: target_id.into(),
         }
     }
 
     fn from_record(record: &TabActivityRecord) -> Self {
-        Self::new(record.page_id, record.target_id.clone())
+        Self::new(
+            record.session_id.clone(),
+            record.page_id,
+            record.target_id.clone(),
+        )
     }
 }
 
@@ -144,13 +150,18 @@ impl ScreencastService {
         self.cancel.cancel();
     }
 
-    pub async fn frame_for(&self, page_id: u32, target_id: &str) -> Option<ScreencastFrame> {
+    pub async fn frame_for(
+        &self,
+        session_id: &str,
+        page_id: u32,
+        target_id: &str,
+    ) -> Option<ScreencastFrame> {
         let candidate = self
             .inner
             .lock()
             .await
             .frames
-            .get(&TabIncarnation::new(page_id, target_id))
+            .get(&TabIncarnation::new(session_id, page_id, target_id))
             .cloned();
         let gate = self
             .frame_read_gate
@@ -340,9 +351,19 @@ impl ScreencastService {
 
     /// Public so integration tests can seed preview frames; production
     /// frames arrive via `store_capture` from the poller.
-    pub async fn cache_frame(&self, page_id: u32, target_id: &str, frame: ScreencastFrame) {
+    pub async fn cache_frame(
+        &self,
+        session_id: &str,
+        page_id: u32,
+        target_id: &str,
+        frame: ScreencastFrame,
+    ) {
         let mut inner = self.inner.lock().await;
-        self.insert_frame(&mut inner, TabIncarnation::new(page_id, target_id), frame);
+        self.insert_frame(
+            &mut inner,
+            TabIncarnation::new(session_id, page_id, target_id),
+            frame,
+        );
     }
 
     fn insert_frame(
@@ -371,9 +392,9 @@ impl ScreencastService {
         else {
             return;
         };
-        warn!(page_id = incarnation.page_id, target_id = %incarnation.target_id, error, "screencast capture failed");
+        warn!(session_id = %incarnation.session_id, page_id = incarnation.page_id, target_id = %incarnation.target_id, error, "screencast capture failed");
         if in_backoff {
-            warn!(page_id = incarnation.page_id, target_id = %incarnation.target_id, "screencast page enters backoff");
+            warn!(session_id = %incarnation.session_id, page_id = incarnation.page_id, target_id = %incarnation.target_id, "screencast page enters backoff");
         }
     }
 
@@ -481,15 +502,21 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     const NOW: i64 = 1_000_000;
+    const SESSION_ID: &str = "session-1";
 
-    fn record(page_id: u32, status: &'static str, last_tool_at: i64) -> TabActivityRecord {
+    fn record_for_session(
+        session_id: &str,
+        page_id: u32,
+        status: &'static str,
+        last_tool_at: i64,
+    ) -> TabActivityRecord {
         TabActivityRecord {
             target_id: format!("target-{page_id}"),
             tab_id: i64::from(page_id) + 100,
             page_id,
             url: format!("https://example.com/{page_id}"),
             title: format!("Page {page_id}"),
-            session_id: "session-1".to_string(),
+            session_id: session_id.to_string(),
             agent_id: "agent".to_string(),
             slug: "codex".to_string(),
             first_tool_at: last_tool_at,
@@ -501,6 +528,10 @@ mod tests {
         }
     }
 
+    fn record(page_id: u32, status: &'static str, last_tool_at: i64) -> TabActivityRecord {
+        record_for_session(SESSION_ID, page_id, status, last_tool_at)
+    }
+
     fn failure(consecutive: u8, last_failure_at: i64) -> FailureState {
         FailureState {
             consecutive,
@@ -509,11 +540,11 @@ mod tests {
     }
 
     fn key(page_id: u32) -> TabIncarnation {
-        TabIncarnation::new(page_id, format!("target-{page_id}"))
+        TabIncarnation::new(SESSION_ID, page_id, format!("target-{page_id}"))
     }
 
     fn target_key(page_id: u32, target_id: &str) -> TabIncarnation {
-        TabIncarnation::new(page_id, target_id)
+        TabIncarnation::new(SESSION_ID, page_id, target_id)
     }
 
     fn frame(data: &str, captured_at: i64) -> ScreencastFrame {
@@ -613,6 +644,23 @@ mod tests {
     }
 
     #[test]
+    fn planner_collects_prior_session_for_the_same_page_target() {
+        let records = [record_for_session("session-2", 1, "active", NOW)];
+        let prior = TabIncarnation::new(SESSION_ID, 1, "target-1");
+        let current = TabIncarnation::new("session-2", 1, "target-1");
+        let plan = plan_tick(
+            false,
+            &records,
+            &HashMap::new(),
+            &HashSet::new(),
+            std::slice::from_ref(&prior),
+        );
+
+        assert_eq!(plan.capture, vec![current]);
+        assert_eq!(plan.gc, vec![prior]);
+    }
+
+    #[test]
     fn tick_overlap_guard_resets_when_tick_finishes() {
         let service = ScreencastService::new(2);
         let Some(guard) = service.begin_tick() else {
@@ -638,18 +686,26 @@ mod tests {
     #[tokio::test]
     async fn frame_cache_is_lru_capped_and_updates_recency() {
         let service = ScreencastService::new(2);
-        service.cache_frame(1, "target-1", frame("a", 1)).await;
-        service.cache_frame(2, "target-2", frame("b", 2)).await;
-        service.cache_frame(1, "target-1", frame("new-a", 3)).await;
-        service.cache_frame(3, "target-3", frame("c", 4)).await;
+        service
+            .cache_frame(SESSION_ID, 1, "target-1", frame("a", 1))
+            .await;
+        service
+            .cache_frame(SESSION_ID, 2, "target-2", frame("b", 2))
+            .await;
+        service
+            .cache_frame(SESSION_ID, 1, "target-1", frame("new-a", 3))
+            .await;
+        service
+            .cache_frame(SESSION_ID, 3, "target-3", frame("c", 4))
+            .await;
 
-        let Some(refreshed) = service.frame_for(1, "target-1").await else {
+        let Some(refreshed) = service.frame_for(SESSION_ID, 1, "target-1").await else {
             panic!("missing page 1 frame");
         };
         assert_eq!(refreshed.jpeg_base64, "new-a");
         assert_eq!(refreshed.captured_at, 3);
-        assert!(service.frame_for(2, "target-2").await.is_none());
-        let Some(newest) = service.frame_for(3, "target-3").await else {
+        assert!(service.frame_for(SESSION_ID, 2, "target-2").await.is_none());
+        let Some(newest) = service.frame_for(SESSION_ID, 3, "target-3").await else {
             panic!("missing page 3 frame");
         };
         assert_eq!(newest.jpeg_base64, "c");
@@ -660,7 +716,9 @@ mod tests {
     async fn entering_backoff_drops_frame_but_keeps_failure_state() {
         let service = ScreencastService::new(2);
         let incarnation = key(1);
-        service.cache_frame(1, "target-1", frame("stale", 1)).await;
+        service
+            .cache_frame(SESSION_ID, 1, "target-1", frame("stale", 1))
+            .await;
         assert!(!service.record_failure(&incarnation, NOW - 2).await);
         assert!(!service.record_failure(&incarnation, NOW - 1).await);
         assert!(service.record_failure(&incarnation, NOW).await);
@@ -678,7 +736,7 @@ mod tests {
         assert!(!service.record_failure(&incarnation, NOW - 1).await);
         assert!(service.record_failure(&incarnation, NOW).await);
         service
-            .cache_frame(1, "target-1", frame("fresh", NOW + 1))
+            .cache_frame(SESSION_ID, 1, "target-1", frame("fresh", NOW + 1))
             .await;
 
         assert!(
@@ -707,7 +765,9 @@ mod tests {
     async fn garbage_collection_drops_frame_and_failure_state() {
         let service = ScreencastService::new(2);
         let incarnation = key(1);
-        service.cache_frame(1, "target-1", frame("stale", 1)).await;
+        service
+            .cache_frame(SESSION_ID, 1, "target-1", frame("stale", 1))
+            .await;
         service.record_failure(&incarnation, NOW).await;
         service
             .gc_incarnations(std::slice::from_ref(&incarnation))
@@ -723,17 +783,45 @@ mod tests {
     async fn frame_lookup_never_crosses_a_reused_page_id() {
         let service = ScreencastService::new(2);
         service
-            .cache_frame(1, "target-old", frame("old", NOW))
+            .cache_frame(SESSION_ID, 1, "target-old", frame("old", NOW))
             .await;
 
-        assert!(service.frame_for(1, "target-new").await.is_none());
+        assert!(
+            service
+                .frame_for(SESSION_ID, 1, "target-new")
+                .await
+                .is_none()
+        );
         assert_eq!(
             service
-                .frame_for(1, "target-old")
+                .frame_for(SESSION_ID, 1, "target-old")
                 .await
                 .map(|frame| frame.jpeg_base64)
                 .as_deref(),
             Some("old")
+        );
+    }
+
+    #[tokio::test]
+    async fn frame_lookup_never_crosses_session_ownership() {
+        let service = ScreencastService::new(2);
+        service
+            .cache_frame(SESSION_ID, 1, "target-1", frame("prior", NOW))
+            .await;
+
+        assert!(
+            service
+                .frame_for("session-2", 1, "target-1")
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            service
+                .frame_for(SESSION_ID, 1, "target-1")
+                .await
+                .map(|frame| frame.jpeg_base64)
+                .as_deref(),
+            Some("prior")
         );
     }
 }

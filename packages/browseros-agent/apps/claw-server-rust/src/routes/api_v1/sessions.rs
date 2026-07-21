@@ -698,6 +698,6 @@ fn preview_not_found(request_id: &RequestId) -> CanonicalError {
         request_id,
         StatusCode::NOT_FOUND,
         "preview_not_found",
-        "tab preview not found",
+        "browser tab preview not found",
     )
 }

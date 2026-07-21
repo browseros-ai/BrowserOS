@@ -297,6 +297,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
     state
         .screencast
         .cache_frame(
+            "session-live",
             7,
             "target-7",
             ScreencastFrame {
