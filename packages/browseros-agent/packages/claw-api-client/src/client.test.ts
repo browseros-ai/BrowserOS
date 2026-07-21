@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import { Harness } from '@browseros/claw-api'
 import {
   ApiResponseError,
@@ -202,6 +202,19 @@ describe('ClawApiClient', () => {
         requestId: 'request-1',
       })
     }
+  })
+
+  it('does not clone successful response bodies', async () => {
+    const response = Response.json({ items: [] })
+    const originalClone = response.clone.bind(response)
+    const clone = mock(originalClone)
+    response.clone = clone
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async () => response,
+    })
+
+    await expect(client.listSessions()).resolves.toEqual({ items: [] })
+    expect(clone).not.toHaveBeenCalled()
   })
 
   it('exposes all 17 facade operations', () => {

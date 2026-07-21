@@ -71,7 +71,7 @@ export class ClawApiClient {
         ...init,
         credentials: init?.credentials ?? credentials,
       })
-      this.responseClones.set(response, response.clone())
+      if (!response.ok) this.responseClones.set(response, response.clone())
       return response
     }
     this.client = createClient<paths>({
