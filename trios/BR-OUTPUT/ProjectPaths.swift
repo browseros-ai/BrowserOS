@@ -87,9 +87,10 @@ enum ProjectPaths {
         "\(root)/.claude/\(subpath)"
     }
 
-    // MARK: - Singleton Lock Paths
+    // MARK: - Runtime State Paths
 
-    static var singletonLockFile: String { "/tmp/trios_singleton.lock" }
-    static var singletonPIDFile: String { "/tmp/trios_singleton.pid" }
+    static var trinityRun: String { "\(trinity)/run" }
+    static var singletonLockFile: String { "\(trinityRun)/trios_singleton.lock" }
+    static var singletonPIDFile: String { "\(trinityRun)/trios_singleton.pid" }
     static var bundleIdentifier: String { "com.browseros.trios" }
 }

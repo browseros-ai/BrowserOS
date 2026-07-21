@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 class TerminalViewModel: ObservableObject {
-    @Published var output: String = "Trios Terminal — zsh ready\n"
+    @Published var output: String = "Trios Terminal - zsh ready\n"
     @Published var isRunning = false
 
     private var process: Process?

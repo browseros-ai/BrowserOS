@@ -265,7 +265,7 @@ struct ListBlockView: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 HStack(alignment: .top, spacing: 6) {
-                    Text("•")
+                    Text("- ")
                         .font(.body)
                         .foregroundColor(.grokMuted)
                     InlineMarkdownText(text: item, isUser: false)

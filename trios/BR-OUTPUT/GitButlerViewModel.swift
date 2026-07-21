@@ -150,7 +150,7 @@ final class GitButlerViewModel: ObservableObject {
             let output = await runGitAsync(["merge", branch.name])
             consoleOutput = output
             if output.contains("CONFLICT") {
-                consoleOutput += "\n⚠️ Merge conflict detected. Resolve manually."
+                consoleOutput += "\n[WARN] Merge conflict detected. Resolve manually."
             }
             loadBranches()
         }

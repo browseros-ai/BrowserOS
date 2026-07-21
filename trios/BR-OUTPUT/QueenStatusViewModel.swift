@@ -111,8 +111,9 @@ final class QueenStatusViewModel: ObservableObject {
         async let git: Void = checkGitAsync()
         async let build: Void = checkBuildAsync()
         async let improve: Void = checkSelfImprovementAsync()
+        async let mesh: Void = checkMeshAsync()
 
-        _ = await (trios, mcp, agent, cron, a2a, funnel, git, build, improve)
+        _ = await (trios, mcp, agent, cron, a2a, funnel, git, build, improve, mesh)
 
         loadSkills()
         loadAgents()
@@ -136,18 +137,20 @@ final class QueenStatusViewModel: ObservableObject {
         if !apps.isEmpty { return true }
 
         // Method 2: pgrep for both possible binary names
-        let r1 = await shellAsync("pgrep -x trios >/dev/null 2>&1 && echo 1 || echo 0") == "1"
-        let r2 = await shellAsync("pgrep -x trios_app >/dev/null 2>&1 && echo 1 || echo 0") == "1"
+        let r1 = await runAsync("/usr/bin/pgrep", arguments: ["-x", "trios"]).isEmpty == false
+        let r2 = await runAsync("/usr/bin/pgrep", arguments: ["-x", "trios_app"]).isEmpty == false
         return r1 || r2
     }
 
     private func checkMCPAsync() async {
-        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' \(ProjectPaths.browserOSHealthURL) 2>/dev/null || echo 000") == "200"
+        let code = await runAsync("/usr/bin/curl", arguments: ["-s", "-o", "/dev/null", "-w", "%{http_code}", ProjectPaths.browserOSHealthURL])
+        let healthy = code == "200"
         updateComponent(name: "MCP", icon: "server.rack", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
     private func checkAgentAsync() async {
-        let healthy = await shellAsync("curl -s -o /dev/null -w '%{http_code}' \(ProjectPaths.agentHealthURL) 2>/dev/null || echo 000") == "200"
+        let code = await runAsync("/usr/bin/curl", arguments: ["-s", "-o", "/dev/null", "-w", "%{http_code}", ProjectPaths.agentHealthURL])
+        let healthy = code == "200"
         updateComponent(name: "Agent", icon: "cpu", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
     }
 
@@ -171,7 +174,7 @@ final class QueenStatusViewModel: ObservableObject {
                 let detail: String
                 if minutes < 20 {
                     status = health == "ok" ? .healthy : .warning
-                    detail = "\(minutes)m ago · build \(build) · dirty \(dirty)"
+                    detail = "\(minutes)m ago  /  build \(build)  /  dirty \(dirty)"
                 } else {
                     status = .warning
                     detail = "\(minutes)m ago (stale)"
@@ -185,29 +188,39 @@ final class QueenStatusViewModel: ObservableObject {
         }
     }
 
+    private func checkMeshAsync() async {
+        let code = await runAsync("/usr/bin/curl", arguments: ["-s", "-o", "/dev/null", "-w", "%{http_code}", ProjectPaths.meshHealthURL])
+        let healthy = code == "200"
+        updateComponent(name: "Mesh", icon: "antenna.radiowaves.left.and.right", status: healthy ? .healthy : .down, detail: healthy ? "Online" : "Offline", action: healthy ? "Restart" : "Start")
+    }
+
     private func checkA2AAsync() async {
-        let agents = await shellAsync("ls \(ProjectPaths.claude("agents"))/*.md 2>/dev/null | wc -l | tr -d ' '")
-        let count = Int(agents.trimmingCharacters(in: .whitespaces)) ?? 0
+        let fm = FileManager.default
+        let agentsDir = ProjectPaths.claude("agents")
+        var count = 0
+        if let entries = try? fm.contentsOfDirectory(atPath: agentsDir) {
+            count = entries.filter { $0.hasSuffix(".md") }.count
+        }
         let detail = count > 0 ? "\(count) agents" : "No agents"
         updateComponent(name: "A2A", icon: "network", status: count > 0 ? .healthy : .warning, detail: detail, action: nil)
     }
 
     private func checkFunnelAsync() async {
-        let running = await shellAsync("pgrep -x tailscale >/dev/null 2>&1 && echo 1 || echo 0") == "1"
+        let running = await runAsync("/usr/bin/pgrep", arguments: ["-x", "tailscale"]).isEmpty == false
         updateComponent(name: "Funnel", icon: "globe", status: running ? .healthy : .warning, detail: running ? "Tailscale active" : "Not running", action: nil)
     }
 
     private func checkGitAsync() async {
-        let branch = await shellAsync("cd \(projectRoot) && git branch --show-current 2>/dev/null || echo '—'")
-        let dirty = await shellAsync("cd \(projectRoot) && git status --porcelain 2>/dev/null | wc -l | tr -d ' '")
-        let dirtyCount = Int(dirty.trimmingCharacters(in: .whitespaces)) ?? 0
+        let branch = await runAsync("/usr/bin/git", arguments: ["branch", "--show-current"])
+        let dirty = await runAsync("/usr/bin/git", arguments: ["status", "--porcelain"])
+        let dirtyCount = dirty.split(separator: "\n").count
         let status: ComponentStatus = dirtyCount > 0 ? .warning : .healthy
-        let detail = "\(branch.trimmingCharacters(in: .whitespaces)) · \(dirtyCount) dirty"
+        let detail = "\(branch) / \(dirtyCount) dirty"
         updateComponent(name: "Git", icon: "arrow.triangle.branch", status: status, detail: detail, action: nil)
     }
 
     private func checkBuildAsync() async {
-        let result = await shellAsync("cd \(projectRoot) && swiftc -typecheck main.swift rings/**/*.swift BR-OUTPUT/*.swift 2>&1 | head -5")
+        let result = await runAsync("/usr/bin/swiftc", arguments: ["-typecheck", "main.swift", "rings/**/*.swift", "BR-OUTPUT/*.swift"])
         let ok = result.trimmingCharacters(in: .whitespaces).isEmpty
         updateComponent(name: "Build", icon: "hammer", status: ok ? .healthy : .down, detail: ok ? "OK" : "Errors", action: nil)
     }
@@ -234,7 +247,7 @@ final class QueenStatusViewModel: ObservableObject {
         }
 
         let budgetPath = "\(projectRoot)/.trinity/state/safety_budget.json"
-        var budgetText = "—"
+        var budgetText = "-"
         if let data = try? Data(contentsOf: URL(fileURLWithPath: budgetPath)),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let budget = json["budget"] as? Double,
@@ -274,12 +287,13 @@ final class QueenStatusViewModel: ObservableObject {
 
     private func loadLogTailAsync() async {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: logPath) else {
+        guard fm.fileExists(atPath: logPath),
+              let data = fm.contents(atPath: logPath),
+              let text = String(data: data, encoding: .utf8) else {
             lastLogLines = ["No cron log found"]
             return
         }
-        let output = await shellAsync("tail -n 20 \(logPath)")
-        lastLogLines = output.split(separator: "\n").map { String($0) }
+        lastLogLines = text.split(separator: "\n").suffix(20).map { String($0) }
         if lastLogLines.isEmpty {
             lastLogLines = ["Log empty"]
         }
@@ -288,12 +302,17 @@ final class QueenStatusViewModel: ObservableObject {
     // MARK: - Agent Management
 
     func loadAgents() {
-        let agentNames = ["clade-monitor", "clade-dashboard", "cron-queen"]
+        let agentNames = ["clade-monitor", "clade-dashboard", "clade-meshd", "cron-queen"]
         var result: [AgentInfo] = []
         for name in agentNames {
-            let pid = Int(shell("pgrep -x \(name) 2>/dev/null || echo ''").trimmingCharacters(in: .whitespaces)) ?? nil
+            let pid = Int(run("/usr/bin/pgrep", arguments: ["-x", name]))
             let status: ComponentStatus = pid != nil ? .healthy : .down
-            let uptime = pid != nil ? shell("ps -o etime= -p \(pid!) 2>/dev/null || echo 'unknown'").trimmingCharacters(in: .whitespaces) : "—"
+            let uptime: String
+            if let pid = pid {
+                uptime = run("/bin/ps", arguments: ["-o", "etime=", "-p", String(pid)])
+            } else {
+                uptime = "-"
+            }
             result.append(AgentInfo(
                 name: name,
                 status: status,
@@ -309,6 +328,7 @@ final class QueenStatusViewModel: ObservableObject {
         let binMap: [String: (String, [String])] = [
             "clade-monitor": ("/usr/bin/env", ["cargo", "run", "--bin", "clade-monitor"]),
             "clade-dashboard": ("/usr/bin/env", ["cargo", "run", "--bin", "clade-dashboard"]),
+            "clade-meshd": ("/usr/bin/env", ["cargo", "run", "--bin", "clade-meshd"]),
         ]
         guard let (exe, args) = binMap[name] else {
             NSLog("[QueenStatus] BLOCKED: unknown agent: \(name)")
@@ -323,7 +343,7 @@ final class QueenStatusViewModel: ObservableObject {
     }
 
     func stopAgent(_ name: String) {
-        let knownAgents: Set<String> = ["clade-monitor", "clade-dashboard", "cron-queen"]
+        let knownAgents: Set<String> = ["clade-monitor", "clade-dashboard", "clade-meshd", "cron-queen"]
         guard knownAgents.contains(name) else {
             NSLog("[QueenStatus] BLOCKED: unknown agent name: \(name)")
             return
@@ -353,26 +373,34 @@ final class QueenStatusViewModel: ObservableObject {
 
     // MARK: - Shell Helpers
 
-    private func shellAsync(_ command: String) async -> String {
+    // MARK: - Tokenized Process Helpers
+
+    /// Runs an executable with discrete arguments and returns trimmed stdout.
+    /// Never invokes a shell. All arguments are passed literally to the process.
+    private func run(_ executable: String, arguments: [String], workDir: String? = nil) -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = arguments
+        task.currentDirectoryURL = URL(fileURLWithPath: workDir ?? projectRoot)
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return ""
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func runAsync(_ executable: String, arguments: [String], workDir: String? = nil) async -> String {
         await Task.detached {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-c", command]
-            task.currentDirectoryURL = URL(fileURLWithPath: self.projectRoot)
-
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-            } catch {
-                return ""
-            }
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            await self.run(executable, arguments: arguments, workDir: workDir)
         }.value
     }
 
@@ -505,7 +533,8 @@ final class QueenStatusViewModel: ObservableObject {
         "cargo check", "cargo build", "cargo run --bin clade-",
         "curl -s http://127.0.0.1:", "swift --version",
         "cat .trinity/", "ls ", "wc ", "tail ", "head ",
-        "pgrep", "ps aux"
+        "pgrep", "ps aux",
+        "TRIOS_MESH_NODE_ID=", "TRIOS_MESH_PORT="
     ]
 
     func runCommand(_ cmd: String) {
@@ -516,7 +545,7 @@ final class QueenStatusViewModel: ObservableObject {
         // alternations matching the empty string. Literal `contains` matching
         // closes both. Per CWE-78 / OWASP A03 this blocklist over a shell is
         // bypassable (command/argument/wildcard injection), so it is
-        // defense-in-depth only — the robust fix is shell-free `execDirect`.
+        // defense-in-depth only - the robust fix is shell-free `execDirect`.
         let blocked = [";", "&&", "||", "|", "`", "$(", "${", ">", "<", "..", "~", "rm -rf", "\n", "\r"]
         for b in blocked {
             // Literal substring match (no `.regularExpression` options).
@@ -532,8 +561,8 @@ final class QueenStatusViewModel: ObservableObject {
         }
         isRunningAction = true
         // Shell-free execution: tokenise and run via /usr/bin/env, NOT
-        // `/bin/zsh -c`. Shell metacharacters can no longer be interpreted —
-        // at most they become literal argv — which structurally removes the
+        // `/bin/zsh -c`. Shell metacharacters can no longer be interpreted -
+        // at most they become literal argv - which structurally removes the
         // command-injection class (CWE-78 / OWASP A03). The blocklist/allowlist
         // above remain as defense-in-depth. PATH resolution is unchanged (env
         // inherits the same environment the old `zsh -c` did).
@@ -557,30 +586,6 @@ final class QueenStatusViewModel: ObservableObject {
                 self?.isRunningAction = false
             }
         }
-    }
-
-    // MARK: - Shell Helpers
-
-    @discardableResult
-    private func shell(_ command: String) -> String {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        task.arguments = ["-c", command]
-        task.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
-            return ""
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
     }
 
     private func execDirect(_ executable: String, arguments: [String], workDir: String? = nil) {

@@ -9,7 +9,7 @@ struct QueenStatusBadge: View {
             showSheet = true
         }) {
             HStack(spacing: 4) {
-                Text("👑")
+                Text("[Q]")
                     .font(.system(size: 13))
                 Circle()
                     .fill(statusColor)

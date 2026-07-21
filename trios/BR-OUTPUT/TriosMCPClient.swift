@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Actor that communicates with BrowserOS MCP server (port 9105) for reverse integration.
-/// Trios (SwiftUI) → TriosMCPClient → HTTP JSON-RPC → MCP Server → BrowserOS Agent
+/// Trios (SwiftUI) -> TriosMCPClient -> HTTP JSON-RPC -> MCP Server -> BrowserOS Agent
 @MainActor
 final class TriosMCPClient: ObservableObject {
     private let serverURL: URL

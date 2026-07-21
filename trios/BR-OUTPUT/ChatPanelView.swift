@@ -41,7 +41,7 @@ struct ChatPanelView: View {
                         // CRITICAL: snapshot the array once. Indexing the live
                         // `viewModel.messages` by an enumerated index crashes
                         // (EXC_BREAKPOINT) when the array mutates mid-render
-                        // (streaming append, regenerate, conversation switch) —
+                        // (streaming append, regenerate, conversation switch) -
                         // the snapshot index then exceeds the shrunk live array.
                         let localMessages = viewModel.messages
                         ForEach(Array(localMessages.enumerated()), id: \.element.id) { index, message in
@@ -255,7 +255,7 @@ final class ChatInputTextView: NSTextView {
                 super.keyDown(with: event)
                 return
             }
-            NSLog("[ChatInput] Return pressed — triggering onSubmit")
+            NSLog("[ChatInput] Return pressed - triggering onSubmit")
             onSubmit?()
             return
         }

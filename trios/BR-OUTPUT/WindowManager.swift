@@ -35,7 +35,7 @@ final class WindowManager {
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
 
-        // Glassmorphism blur — subview behind everything
+        // Glassmorphism blur - subview behind everything
         let blurView = NSVisualEffectView()
         blurView.material = .fullScreenUI
         blurView.blendingMode = .behindWindow

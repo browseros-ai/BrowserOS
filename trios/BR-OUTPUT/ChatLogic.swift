@@ -40,7 +40,7 @@ enum ChatLogic {
         return isPrefixMatch || isExactMatch || isSlashCommand
     }
 
-    /// Patterns that would recursively launch trios — blocked from shell exec.
+    /// Patterns that would recursively launch trios - blocked from shell exec.
     /// Uses regex matching; literal dots must be escaped.
     static let recursiveLaunchPatterns = [
         "trios_app",
@@ -98,7 +98,7 @@ enum ChatLogic {
             return ("filesystem_bash", ["command": cmd, "description": "User shell command"])
         }
 
-        // No recognized intent — do NOT fall through to shell execution.
+        // No recognized intent - do NOT fall through to shell execution.
         return nil
     }
 

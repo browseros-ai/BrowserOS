@@ -85,9 +85,12 @@ final class RecursionGuard {
 
     /// Acquires an exclusive (write) lock on the lock file, retrying briefly.
     /// The lock persists as long as the file descriptor remains open.
+    /// The lock file is created under the project runtime dir with 0o600
+    /// permissions so only the owning user can open it.
     private func acquireFileLock(retries: Int, delayMicroseconds: UInt32) -> Bool {
+        ensureLockDirectoryExists()
         for attempt in 0...retries {
-            let fd = open(lockFilePath, O_CREAT | O_RDWR, 0o666)
+            let fd = open(lockFilePath, O_CREAT | O_RDWR, 0o600)
             guard fd >= 0 else {
                 NSLog("[RecursionGuard] Failed to open lock file: \(errno)")
                 return false
@@ -112,6 +115,21 @@ final class RecursionGuard {
             }
         }
         return false
+    }
+
+    /// Ensures the project runtime directory for the singleton lock/PID exists.
+    private func ensureLockDirectoryExists() {
+        let runDir = ProjectPaths.trinityRun
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: runDir) {
+            do {
+                try fm.createDirectory(atPath: runDir, withIntermediateDirectories: true, attributes: [
+                    FileAttributeKey.posixPermissions: 0o700
+                ])
+            } catch {
+                NSLog("[RecursionGuard] Failed to create runtime directory \(runDir): \(error)")
+            }
+        }
     }
 
     /// Releases the file lock and closes the descriptor.

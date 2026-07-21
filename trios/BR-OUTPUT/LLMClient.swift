@@ -7,7 +7,7 @@ final class LLMClient {
     private let apiKey: String
     private let baseURL: URL = {
         guard let url = URL(string: "https://openrouter.ai/api/v1/chat/completions") else {
-            fatalError("LLMClient: hardcoded baseURL is invalid — this is a compile-time constant error")
+            fatalError("LLMClient: hardcoded baseURL is invalid - this is a compile-time constant error")
         }
         return url
     }()

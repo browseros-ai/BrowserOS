@@ -8,7 +8,6 @@
     {"name": "agent-E", "file": ".claude/agents/agent-E.md", "domain": "Experience", "skill": "/experience-save", "t27_role": null},
     {"name": "agent-F", "file": ".claude/agents/agent-F.md", "domain": "Conformance", "skill": null, "t27_role": null},
     {"name": "agent-G", "file": ".claude/agents/agent-G.md", "domain": "Graph", "skill": null, "t27_role": null},
-    {"name": "agent-H", "file": ".claude/agents/agent-H.md", "domain": "UI", "skill": null, "t27_role": null},
     {"name": "agent-I", "file": ".claude/agents/agent-I.md", "domain": "ISA", "skill": null, "t27_role": null},
     {"name": "agent-K", "file": ".claude/agents/agent-K.md", "domain": "Kernel", "skill": null, "t27_role": null},
     {"name": "agent-L", "file": ".claude/agents/agent-L.md", "domain": "Language", "skill": null, "t27_role": null},

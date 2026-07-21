@@ -132,11 +132,11 @@ class BrowserOSChatViewModel: ObservableObject {
         isStreaming = true
         let response = """
         BrowserOS Agent ready. Available commands:
-        • open [url] — navigate to page
-        • click — click element
-        • screenshot — capture page
-        • extract — get page content
-        • shell [command] — run shell command
+        - open [url] - navigate to page
+        - click - click element
+        - screenshot - capture page
+        - extract - get page content
+        - shell [command] - run shell command
         """
         let agentMessage = BrowserOSChatMessage(
             role: .assistant,
@@ -223,7 +223,7 @@ class BrowserOSChatViewModel: ObservableObject {
             // `list_pages` returns a human-readable listing, one page per block:
             //   "0. Title (tab 12)\n   https://example.com"
             // (see apps/server/src/tools/navigation.ts). The previous version
-            // JSON-parsed this text, which never matched — page detection always
+            // JSON-parsed this text, which never matched - page detection always
             // silently failed. Parse the leading page id from the text instead.
             let pagesText = try await mcpClient.listPages()
             if let id = ChatLogic.firstPageId(in: pagesText) {
@@ -266,7 +266,7 @@ class BrowserOSChatViewModel: ObservableObject {
     }
     
     var queenStatusText: String {
-        "👑 \(queenStatus.rawValue) \(sessionDuration)"
+        "[Q] \(queenStatus.rawValue) \(sessionDuration)"
     }
 }
 

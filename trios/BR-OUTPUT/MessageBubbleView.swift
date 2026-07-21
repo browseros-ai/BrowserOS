@@ -142,7 +142,7 @@ struct MessageBubbleView: View {
                 TypingIndicatorView()
             }
 
-            // Inline action bar — only after the entire assistant turn is fully complete
+            // Inline action bar - only after the entire assistant turn is fully complete
             if !message.isStreaming && !message.content.isEmpty && isLastInGroup && isConversationIdle {
                 MessageActionBar(
                     content: message.content,
@@ -151,7 +151,7 @@ struct MessageBubbleView: View {
                 )
             }
 
-            // Hover copy bar — any completed assistant message (ChatGPT / Claude pattern)
+            // Hover copy bar - any completed assistant message (ChatGPT / Claude pattern)
             if !isLastInGroup && !message.isStreaming && !message.content.isEmpty {
                 HoverCopyBar(content: message.content)
                     .opacity(isHovered ? 1 : 0)
