@@ -88,7 +88,7 @@
     "@sentry/cli": "^3.6.0",
     "@types/bun": "^1.3.14",
     "@types/node": "^24.13.3",
-    "@typescript/native-preview": "^7.0.0-dev.20260619.1",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "commander": "^14.0.3",
     "fallow": "^2.104.0",
     "lefthook": "^2.1.10",
