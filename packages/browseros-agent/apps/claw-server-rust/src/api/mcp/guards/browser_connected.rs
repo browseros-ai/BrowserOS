@@ -1,4 +1,4 @@
-use crate::mcp::dispatch::{ToolCall, ToolGuard};
+use crate::api::mcp::dispatch::{ToolCall, ToolGuard};
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use tracing::warn;
@@ -31,7 +31,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejection_matches_ts_prompt() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("missing"));

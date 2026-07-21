@@ -1,3 +1,4 @@
+pub mod api;
 pub mod app;
 mod clock;
 pub mod config;
@@ -5,8 +6,6 @@ pub mod db;
 pub mod error;
 pub mod identity;
 pub mod ids;
-pub mod mcp;
-pub mod routes;
 pub mod runtime;
 pub mod services;
 pub mod storage;

@@ -1,4 +1,4 @@
-use crate::mcp::dispatch::{ToolCall, ToolGuard};
+use crate::api::mcp::dispatch::{ToolCall, ToolGuard};
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -41,7 +41,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_trimmed_javascript_scheme_with_ts_text() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call(
+        let call = crate::api::mcp::test_support::tool_call(
             "navigate",
             json!({ "url": "  JaVaScRiPt:alert(1)" }),
         )

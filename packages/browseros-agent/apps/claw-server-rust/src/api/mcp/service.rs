@@ -1,13 +1,13 @@
 use crate::{
     AppState,
-    identity::{ClientIdentity, ClientInfo, ProfileView},
-    ids::SessionId,
-    mcp::{
+    api::mcp::{
         dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
     },
+    identity::{ClientIdentity, ClientInfo, ProfileView},
+    ids::SessionId,
     services::sessions::Session,
 };
 use browseros_mcp::{OutputFileAccess, ToolDef, catalog};
@@ -428,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_info_uses_browserclaw_branding_and_prompt() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let info = service.get_info();
         assert_eq!(info.server_info.name, SERVER_NAME);
@@ -450,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn name_session_schema_and_annotations_are_registered_locally() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let listed = service
             .listed_tools()
@@ -490,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn name_session_validates_and_renames_without_a_browser() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let session = call
             .identity
             .as_ref()

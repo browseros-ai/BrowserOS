@@ -1,4 +1,4 @@
-use crate::mcp::dispatch::{ToolCall, ToolGuard, extract_page_id};
+use crate::api::mcp::dispatch::{ToolCall, ToolGuard, extract_page_id};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
@@ -64,7 +64,8 @@ mod tests {
 
     #[tokio::test]
     async fn denies_different_agent_key_with_ts_message() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
         call.state
             .sessions
             .ownership()
@@ -88,7 +89,8 @@ mod tests {
 
     #[tokio::test]
     async fn denies_user_tab_without_claiming_it() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("missing"));

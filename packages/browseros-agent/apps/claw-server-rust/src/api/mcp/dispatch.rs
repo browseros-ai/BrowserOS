@@ -1,8 +1,8 @@
 use crate::{
     AppState,
+    api::mcp::{effects, guards},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
-    mcp::{effects, guards},
     services::sessions::Session,
 };
 use browseros_core::{BrowserSession, PageId, pages::PageInfo};
@@ -528,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn tabs_flags_default_to_list() -> anyhow::Result<()> {
         let call =
-            crate::mcp::test_support::tool_call("tabs", Value::Object(serde_json::Map::new()))
+            crate::api::mcp::test_support::tool_call("tabs", Value::Object(serde_json::Map::new()))
                 .await?;
         assert_eq!(
             call.flags,
@@ -542,7 +542,8 @@ mod tests {
 
     #[tokio::test]
     async fn effect_failure_keeps_latest_good_result() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -573,7 +574,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -614,7 +616,8 @@ mod tests {
     #[tokio::test]
     async fn guard_rejection_skips_effects() -> anyhow::Result<()> {
         EFFECT_CALLS.store(0, Ordering::SeqCst);
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = dispatch_tool_call_with(
             call,
             &[rejecting_guard],
@@ -632,7 +635,8 @@ mod tests {
 
     #[tokio::test]
     async fn passthrough_guard_returns_no_rejection() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         assert!(run_guards(&call, &[passthrough_guard]).await.is_none());
         Ok(())
     }
@@ -666,7 +670,8 @@ mod tests {
 
     #[tokio::test]
     async fn operator_cancellation_returns_and_audits_operator_result() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -712,7 +717,8 @@ mod tests {
 
     #[tokio::test]
     async fn client_cancellation_skips_effects_and_operator_result() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()

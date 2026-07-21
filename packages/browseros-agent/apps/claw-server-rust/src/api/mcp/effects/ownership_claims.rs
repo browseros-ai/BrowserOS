@@ -1,4 +1,4 @@
-use crate::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id, result_page_id};
+use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id, result_page_id};
 use browseros_core::PageId;
 use futures_util::future::BoxFuture;
 
@@ -166,7 +166,7 @@ mod tests {
     }
 
     async fn wait_for_claim(
-        call: &crate::mcp::dispatch::ToolCall,
+        call: &crate::api::mcp::dispatch::ToolCall,
         released: bool,
     ) -> anyhow::Result<SessionTabSnapshot> {
         for _ in 0..100 {
@@ -186,7 +186,7 @@ mod tests {
             BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 1);
         let mut new_call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         new_call.browser_session = Some(browser.clone());
         new_call.started_at_ms = 123;
         let result = ToolResult::text("new page", Some(json!({ "page": 1 })));
@@ -204,9 +204,11 @@ mod tests {
         assert_eq!(claim.session_id, "s1");
         assert_eq!(claim.claimed_at, 123);
 
-        let mut close_call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
-                .await?;
+        let mut close_call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "close", "page": 1 }),
+        )
+        .await?;
         close_call.page_snapshot = browser.pages.get_info(PageId(1)).await;
         close_call.state.session_tabs.enqueue_claim_tab_for_session(
             11,
@@ -247,9 +249,11 @@ mod tests {
 
     #[tokio::test]
     async fn close_page_removes_owned_page_and_first_capture() -> anyhow::Result<()> {
-        let call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 9 }))
-                .await?;
+        let call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "close", "page": 9 }),
+        )
+        .await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         call.state
             .sessions
@@ -276,9 +280,11 @@ mod tests {
         let browser =
             BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 1);
-        let mut call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
-                .await?;
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "close", "page": 1 }),
+        )
+        .await?;
         call.page_snapshot = browser.pages.get_info(PageId(1)).await;
         call.state
             .tab_activity

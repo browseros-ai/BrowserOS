@@ -1,10 +1,10 @@
 use crate::{
-    ids::ConvoId,
-    mcp::{
+    api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, result_page_id},
         naming::desired_group_title,
         timeouts::TAB_GROUP_OPERATION,
     },
+    ids::ConvoId,
     services::{
         browser::color_for_slug,
         sessions::{PageOwnership, Session},
@@ -856,7 +856,7 @@ mod tests {
         let browser = BrowserSession::new(recorder, BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.browser_session = Some(browser.clone());
         Ok((call, browser))
     }
@@ -1092,7 +1092,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.browser_session = Some(browser);
         let result = ToolResult::text("opened", Some(json!({ "page": 1 })));
 
@@ -1120,7 +1120,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut first_call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         first_call.browser_session = Some(browser);
         let second_call = first_call.clone();
         let (first, second) = tokio::join!(
@@ -1448,7 +1448,8 @@ mod tests {
         recorder.block_group_creation();
         let browser = BrowserSession::new(recorder, BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 2);
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         let dispatch = tokio::spawn(async move {
             dispatch_tab_groups(
                 call.tool_named("tab_groups")

@@ -1,4 +1,4 @@
-use crate::mcp::dispatch::{ToolEffect, ToolEffectContext};
+use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
@@ -162,7 +162,8 @@ mod tests {
     #[tokio::test]
     async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
     -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         let other_session = crate::services::sessions::Session::new(
             crate::ids::SessionId::new("s2"),
@@ -261,7 +262,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_tabs_list_keeps_the_ts_empty_state() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = ToolResult::text("all tabs", Some(json!({ "pages": [] })));
         let annotated = apply(ToolEffectContext {
             call: &call,

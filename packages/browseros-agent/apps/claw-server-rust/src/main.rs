@@ -2,7 +2,7 @@ use anyhow::Context;
 use axum::Router;
 use clap::Parser;
 use claw_server_rust::{
-    AppRuntime, AppState, ShutdownHandle, build_router, config::Cli, mcp::browser_mcp_service,
+    AppRuntime, AppState, ShutdownHandle, api::mcp::browser_mcp_service, build_router, config::Cli,
 };
 use rmcp::{serve_server, transport::stdio};
 use std::{future::Future, io, net::SocketAddr, sync::Arc};

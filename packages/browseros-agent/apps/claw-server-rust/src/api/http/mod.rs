@@ -1,24 +1,75 @@
-mod api_v1;
+//! Canonical BrowserClaw HTTP API and shared request middleware.
 
+use super::mcp::streamable_http_service;
 use crate::{
     AppState,
     error::{AppError, CanonicalError, RequestId},
-    mcp::streamable_http_service,
 };
 use axum::{
     Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
+    routing::{get, post, put},
 };
+use claw_api::RECORDING_INGEST_MAX_BYTES;
 use std::time::Instant;
 use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
+mod connections;
+mod dispatches;
+mod previews;
+mod recordings;
+mod replay;
+mod sessions;
+mod settings;
+mod system;
+
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
-        .merge(api_v1::router())
+        .route("/system/health", get(system::health))
+        .route("/system/shutdown", post(system::shutdown))
+        .route("/api/v1/system", get(system::info))
+        .route(
+            "/api/v1/settings/telemetry",
+            get(settings::telemetry).put(settings::update_telemetry),
+        )
+        .route("/api/v1/sessions", get(sessions::list))
+        .route("/api/v1/sessions/{session_id}", get(sessions::get))
+        .route(
+            "/api/v1/sessions/{session_id}/browser-tabs/{browser_tab_id}/preview",
+            get(previews::preview),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/cancel",
+            post(sessions::cancel),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/recording",
+            get(replay::recording),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/recording/events",
+            get(replay::download_events)
+                .post(recordings::append_legacy_events)
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/recordings/events",
+            post(recordings::append_document_events)
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/dispatches/{dispatch_id}/screenshot",
+            get(dispatches::screenshot),
+        )
+        .route("/api/v1/connections", get(connections::list))
+        .route(
+            "/api/v1/connections/{harness}",
+            put(connections::connect).delete(connections::disconnect),
+        )
         .nest_service(
             "/mcp",
             Router::new()
@@ -26,6 +77,25 @@ pub fn router(state: AppState) -> Router<AppState> {
                 .layer(middleware::from_fn(mcp_request_hygiene)),
         )
         .fallback(route_fallback)
+}
+
+pub(super) fn error(
+    request_id: &RequestId,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+) -> CanonicalError {
+    CanonicalError::new(status, code, message, Some(request_id))
+}
+
+pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalError {
+    tracing::error!(request_id = %request_id.0, error = %source, "canonical route failed");
+    error(
+        request_id,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        "internal server error",
+    )
 }
 
 /// Enforces the header conventions native MCP clients follow (parity with

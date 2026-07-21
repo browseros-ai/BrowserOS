@@ -1,10 +1,10 @@
 use crate::{
-    clock::now_epoch_ms,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
-    mcp::{
+    api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id},
         timeouts::{AUDIT_SCREENSHOT_CAPTURE, SCREENCAST_FRAME_FRESHNESS},
     },
+    clock::now_epoch_ms,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     services::cockpit::ScreencastFrame,
 };
 use base64::Engine;
@@ -66,7 +66,7 @@ async fn record_dispatch(
     result: &ToolResult,
     duration_ms: i64,
     cancelled: bool,
-    identity: &crate::mcp::dispatch::ToolIdentity,
+    identity: &crate::api::mcp::dispatch::ToolIdentity,
 ) -> Option<AuditRecord> {
     let page_id = if call.flags.new_page {
         result_page_id(result)
@@ -126,7 +126,7 @@ async fn persist_screenshot(
     call: &ToolCall,
     result: &ToolResult,
     record: AuditRecord,
-    identity: &crate::mcp::dispatch::ToolIdentity,
+    identity: &crate::api::mcp::dispatch::ToolIdentity,
 ) {
     let screenshot_page_id = if call.flags.new_page {
         result_page_id(result)
@@ -334,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_image_persists_when_fallback_is_disabled() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call_with_fallback(
+        let call = crate::api::mcp::test_support::tool_call_with_fallback(
             "navigate",
             json!({ "page": 1 }),
             false,
@@ -361,7 +361,8 @@ mod tests {
 
     #[tokio::test]
     async fn records_cancellations_but_skips_other_errors() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let failed = ToolResult::error("failed");
         apply(ToolEffectContext {
             call: &call,
@@ -413,7 +414,7 @@ mod tests {
     #[tokio::test]
     async fn success_without_identity_writes_no_row() -> anyhow::Result<()> {
         let mut call =
-            crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         call.identity = None;
         let result = ToolResult::text("ok", Some(json!({ "pages": [] })));
         apply(ToolEffectContext {
@@ -478,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn audit_fallback_never_uses_another_sessions_cached_frame() -> anyhow::Result<()> {
         let mut call =
-            crate::mcp::test_support::tool_call("snapshot", json!({ "page": 1 })).await?;
+            crate::api::mcp::test_support::tool_call("snapshot", json!({ "page": 1 })).await?;
         call.page_snapshot = Some(page_info("target-1"));
         call.state
             .previews

@@ -1,8 +1,8 @@
 use crate::{
+    api::http,
     config::Config,
     db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
     error::AppResult,
-    routes,
     runtime::ShutdownHandle,
     services::{
         browser::{BrowserService, TabRegistry},
@@ -124,7 +124,7 @@ impl AppState {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    routes::router(state.clone())
+    http::router(state.clone())
         .with_state(state)
-        .layer(middleware::from_fn(routes::request_context))
+        .layer(middleware::from_fn(http::request_context))
 }
