@@ -240,6 +240,7 @@
         "@ai-sdk/openai": "^3.0.73",
         "@ai-sdk/openai-compatible": "^2.0.62",
         "@ai-sdk/provider": "^3.0.10",
+        "@browseros/acpx-ai-provider": "workspace:*",
         "@browseros/agent-mcp-manager": "workspace:*",
         "@browseros/browser-core": "workspace:*",
         "@browseros/browser-mcp": "workspace:*",
@@ -252,7 +253,6 @@
         "@sentry/bun": "^10.66.0",
         "acp-probe": "^0.0.2",
         "acpx": "^0.12.0",
-        "acpx-ai-provider": "^0.0.6",
         "ai": "6.0.230",
         "commander": "^14.0.3",
         "core-js": "3.49.0",
@@ -272,6 +272,18 @@
         "drizzle-kit": "^0.31.10",
         "pino-pretty": "^13.1.3",
         "puppeteer": "^25.3.0",
+      },
+    },
+    "packages/acpx-ai-provider": {
+      "name": "@browseros/acpx-ai-provider",
+      "version": "0.0.6",
+      "dependencies": {
+        "@ai-sdk/provider": "^3.0.10",
+        "@ai-sdk/provider-utils": "^4.0.26",
+      },
+      "peerDependencies": {
+        "acpx": ">=0.8.0",
+        "ai": ">=6.0.0",
       },
     },
     "packages/agent-mcp-manager": {
@@ -368,7 +380,7 @@
 
     "@1natsu/wait-element": ["@1natsu/wait-element@4.2.0", "", { "dependencies": { "defu": "^6.1.4", "many-keys-map": "^3.0.0" } }, "sha512-Om0Q+WE9mNrpY4AwMTvkFiYHv8VM7TML3PvOqXy+w6kAjLjKhGYHYX+305+a6J8RVpds9s7IF2Z5aOPYwULFNw=="],
 
-    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.21.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-ZTLH+o9QxcZDLX/9ww+W7C2iExnXFM+vD/uGFVSlR61Kzj9FaxUqBC6Rv/kwgA7qVWYUEI9c5ZNqCuO9PM4rKg=="],
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.2.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-jwYUdOQR7tc+Zfch53VL4JJyUNK/46q03uUTYb+PjECsmnNl94XFXOfYLJ8RBpMNidXd1rpOAVgb0vqD98xImA=="],
 
     "@ai-sdk/amazon-bedrock": ["@ai-sdk/amazon-bedrock@4.0.137", "", { "dependencies": { "@ai-sdk/anthropic": "3.0.98", "@ai-sdk/openai": "3.0.86", "@ai-sdk/provider": "3.0.14", "@ai-sdk/provider-utils": "4.0.40", "@smithy/eventstream-codec": "^4.0.1", "@smithy/util-utf8": "^4.0.0", "aws4fetch": "^1.0.20" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-b3QxXlxQaAynj9IuealFn0Hx8GMucrIWe8YtXRlyiOtiaV09Qs+X8bbUgziIuZUDazV5E2OvQj1Oie3d6a3yvg=="],
 
@@ -547,6 +559,8 @@
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 
     "@braintree/sanitize-url": ["@braintree/sanitize-url@7.1.2", "", {}, "sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA=="],
+
+    "@browseros/acpx-ai-provider": ["@browseros/acpx-ai-provider@workspace:packages/acpx-ai-provider"],
 
     "@browseros/agent-mcp-manager": ["@browseros/agent-mcp-manager@workspace:packages/agent-mcp-manager"],
 
@@ -1881,8 +1895,6 @@
     "acp-probe": ["acp-probe@0.0.2", "", { "dependencies": { "@agentclientprotocol/sdk": "^0.21.0" }, "peerDependencies": { "acpx": ">=0.7.0" }, "optionalPeers": ["acpx"] }, "sha512-xR0mLngodmIxT9u/doxYtHoa3gkhH4/wcujDiXPGGo6VupgxtEgWK9kcPohDQ47ZiSXm5YR9NtGyrGdEELQucQ=="],
 
     "acpx": ["acpx@0.12.0", "", { "dependencies": { "@agentclientprotocol/sdk": "^1.1.0", "commander": "^15.0.0", "skillflag": "^0.2.0", "tsx": "^4.23.0", "zod": "^4.4.3" }, "bin": { "acpx": "dist/cli.js" } }, "sha512-APYpN04XFWrCGuSBvM4HTKWWFH8uSIuzc+qI7aCGeVdP9o4euZeBosFEkmNUHvBOop0XBemg6d8RsNvzXN3Mgw=="],
-
-    "acpx-ai-provider": ["acpx-ai-provider@0.0.6", "", { "peerDependencies": { "acpx": ">=0.8.0", "ai": ">=6.0.0" } }, "sha512-loseYTXj34kVH1ZQlFgIHUzHBK0KfHWJUnSLDerw8aI1/0yver7tEPFWhy5i8opEgjS0kK1fnudha+e2w8Q/WQ=="],
 
     "adm-zip": ["adm-zip@0.5.17", "", {}, "sha512-+Ut8d9LLqwEvHHJl1+PIHqoyDxFgVN847JTVM3Izi3xHDWPE4UtzzXysMZQs64DMcrJfBeS/uoEP4AD3HQHnQQ=="],
 
@@ -4298,7 +4310,7 @@
 
     "accepts/negotiator": ["negotiator@1.0.0", "", {}, "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="],
 
-    "acpx/@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.2.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-jwYUdOQR7tc+Zfch53VL4JJyUNK/46q03uUTYb+PjECsmnNl94XFXOfYLJ8RBpMNidXd1rpOAVgb0vqD98xImA=="],
+    "acp-probe/@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@0.21.1", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-ZTLH+o9QxcZDLX/9ww+W7C2iExnXFM+vD/uGFVSlR61Kzj9FaxUqBC6Rv/kwgA7qVWYUEI9c5ZNqCuO9PM4rKg=="],
 
     "acpx/commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
 
