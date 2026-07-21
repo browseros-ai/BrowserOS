@@ -794,6 +794,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
             .await?;
     }
     let screenshot_dispatch_id = seed_dispatch(app, primary.id().as_str()).await?;
+    seed_dispatch(app, second.id().as_str()).await?;
     app.state
         .audit_log
         .mark_screenshot(screenshot_dispatch_id)
@@ -851,7 +852,8 @@ fn profiled_session(session_id: &str, name: &str) -> Arc<Session> {
 }
 
 #[tokio::test]
-async fn live_projection_includes_zero_tab_and_same_profile_sessions() -> anyhow::Result<()> {
+async fn live_projection_hides_handshakes_and_keeps_dispatch_backed_zero_tab_sessions()
+-> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
 
@@ -870,7 +872,7 @@ async fn live_projection_includes_zero_tab_and_same_profile_sessions() -> anyhow
     let items = snapshot["items"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("live items missing"))?;
-    assert_eq!(items.len(), 3);
+    assert_eq!(items.len(), 2);
     let primary = items
         .iter()
         .find(|item| item["sessionId"] == fixture.primary.id().as_str())
@@ -879,10 +881,6 @@ async fn live_projection_includes_zero_tab_and_same_profile_sessions() -> anyhow
         .iter()
         .find(|item| item["sessionId"] == fixture.second.id().as_str())
         .ok_or_else(|| anyhow::anyhow!("same-profile live session missing"))?;
-    let zero_tab = items
-        .iter()
-        .find(|item| item["sessionId"] == fixture.zero_tab.id().as_str())
-        .ok_or_else(|| anyhow::anyhow!("zero-tab live session missing"))?;
     assert_eq!(primary["profileId"], "profile-shared");
     assert_eq!(second["profileId"], primary["profileId"]);
     assert_ne!(second["sessionId"], primary["sessionId"]);
@@ -900,8 +898,13 @@ async fn live_projection_includes_zero_tab_and_same_profile_sessions() -> anyhow
             .is_none()
     );
     assert_eq!(
-        zero_tab["live"],
+        second["live"],
         json!({ "state": "idle", "browserTabs": [] })
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item["sessionId"] != fixture.zero_tab.id().as_str())
     );
 
     app.state.tab_activity.set_now_for_testing(30_101);

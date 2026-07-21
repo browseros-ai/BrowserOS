@@ -9,8 +9,6 @@ import {
 } from '../../src/services/session-query'
 import type { TaskSummary } from '../../src/services/tasks'
 
-const NOW = 10_000
-
 function identity(
   sessionId: string,
   overrides: Partial<ClientIdentity> = {},
@@ -130,14 +128,13 @@ function setup(overrides: Partial<SessionQueryDependencies> = {}) {
     listOpenSessionTabs: () => ownerships,
     listBrowserPages: async () => pages,
     snapshotTabActivity: () => activities,
-    now: () => NOW,
     ...overrides,
   }
   return { service: createSessionQueryService(deps), deps }
 }
 
 describe('session query service', () => {
-  it('includes every connected identity without pagination or slug grouping', async () => {
+  it('includes only dispatch-backed connected identities without pagination or slug grouping', async () => {
     const identities = [
       identity('session-a'),
       identity('session-b', { label: 'Another run' }),
@@ -152,6 +149,14 @@ describe('session query service', () => {
     const tasks = new Map<string, TaskSummary>([
       ['session-a', task('session-a')],
       ['session-b', task('session-b')],
+      [
+        'session-empty',
+        task('session-empty', {
+          dispatchCount: 0,
+          toolSequence: [],
+          cursorId: 0,
+        }),
+      ],
     ])
     const { service } = setup({
       listConnectedIdentities: () => identities,
@@ -179,7 +184,6 @@ describe('session query service', () => {
     expect(result.items.map((item) => item.sessionId)).toEqual([
       'session-a',
       'session-b',
-      'session-empty',
     ])
     expect(result.items.filter((item) => item.slug === 'codex')).toHaveLength(2)
     expect(result.items[0]).toMatchObject({
@@ -192,22 +196,9 @@ describe('session query service', () => {
       live: { state: 'idle', browserTabs: [] },
     })
     expect(result.items[0]?.color).toBe(result.items[1]?.color)
-    expect(result.items[2]).toEqual({
-      sessionId: 'session-empty',
-      harness: 'Claude Code',
-      color: expect.any(String),
-      slug: 'claude-code',
-      label: 'Claude Code',
-      name: 'Waiting for first tool',
-      startedAt: 2_500,
-      durationMs: NOW - 2_500,
-      dispatchCount: 0,
-      toolSequence: [],
-      status: 'live',
-      errorCount: 0,
-      live: { state: 'idle', browserTabs: [] },
-    })
-    expect(result.items[2]).not.toHaveProperty('profileId')
+    expect(
+      result.items.some((item) => item.sessionId === 'session-empty'),
+    ).toBe(false)
   })
 
   it('applies non-pagination filters to the connected snapshot', async () => {
@@ -237,19 +228,17 @@ describe('session query service', () => {
     expect(
       (await service.listSessions({ status: 'live', slug: 'claude-code' }))
         .items,
-    ).toHaveLength(1)
+    ).toEqual([])
     expect(
       (await service.listSessions({ status: 'live', site: 'example.com' }))
         .items[0]?.sessionId,
     ).toBe('session-a')
     expect(
-      (await service.listSessions({ status: 'live', search: 'waiting' }))
-        .items[0]?.sessionId,
-    ).toBe('session-empty')
+      (await service.listSessions({ status: 'live', search: 'waiting' })).items,
+    ).toEqual([])
     expect(
-      (await service.listSessions({ status: 'live', since: 2_000 })).items[0]
-        ?.sessionId,
-    ).toBe('session-empty')
+      (await service.listSessions({ status: 'live', since: 2_000 })).items,
+    ).toEqual([])
     expect(
       (await service.listSessions({ status: 'live', profileId: 'unknown' }))
         .items,

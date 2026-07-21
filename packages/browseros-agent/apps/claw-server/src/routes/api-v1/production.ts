@@ -82,7 +82,6 @@ const sessionQueryService = createSessionQueryService({
     }
   },
   snapshotTabActivity: () => tabActivityRegistry.snapshot(),
-  now: () => Date.now(),
 })
 
 export const canonicalApiDependencies: CanonicalApiDependencies = {
