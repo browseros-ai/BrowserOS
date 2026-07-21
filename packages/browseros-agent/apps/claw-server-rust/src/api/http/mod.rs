@@ -53,9 +53,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route(
             "/api/v1/sessions/{session_id}/recording/events",
-            get(replay::download_events)
-                .post(recordings::append_legacy_events)
-                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+            get(replay::download_events),
         )
         .route(
             "/api/v1/recordings/events",
@@ -179,7 +177,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
                 HeaderValue::from_static(
-                    "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap,x-recording-page-id,x-recording-target-id",
+                    "accept,content-type,authorization,mcp-session-id,mcp-protocol-version,last-event-id,x-recording-batch-id,x-recording-tab-id,x-recording-document-id,x-recording-has-gap",
                 ),
             );
         }

@@ -599,22 +599,22 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     assert_eq!(metadata["complete"], true);
     assert_eq!(metadata["tabs"].as_array().map(Vec::len), Some(2));
 
-    let stale_headers = [
+    let legacy_headers = [
         ("x-recording-tab-id", "102"),
         ("x-recording-page-id", "8"),
-        ("x-recording-target-id", "target-7"),
+        ("x-recording-target-id", "target-8"),
     ];
     let (status, _, bytes) = request_with_headers(
         &app.router,
         "POST",
         "/api/v1/sessions/session-live/recording/events",
         Some("application/x-ndjson"),
-        &stale_headers,
-        "{\"ts\":175}\n",
+        &legacy_headers,
+        "{\"ts\":175,\"data\":{\"id\":\"legacy-write\"}}\n",
     )
     .await?;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(json_body(&bytes)?["code"], "recording_association_changed");
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(bytes.is_empty());
 
     let (status, headers, bytes) = request(
         &app.router,
@@ -633,6 +633,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     );
     let events = String::from_utf8(bytes)?;
     assert_eq!(events.matches("session-live").count(), 3);
+    assert!(!events.contains("legacy-write"));
     assert!(events.contains("33D25F3CF060E81B14070BC356FF1871"));
     assert!(events.contains("8395FF2EF4A1D8579F1917B3B54ADECE"));
     let seven_a = events
@@ -681,8 +682,8 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
         "{\"ts\":300}\n",
     )
     .await?;
-    assert_eq!(status, StatusCode::GONE);
-    assert_eq!(json_body(&bytes)?["code"], "session_ended");
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(bytes.is_empty());
 
     let (status, _, bytes) = request(
         &app.router,

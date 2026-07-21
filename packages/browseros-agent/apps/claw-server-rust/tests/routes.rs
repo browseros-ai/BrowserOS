@@ -1160,7 +1160,7 @@ async fn live_projection_filters_external_close_and_screencast_frame() -> anyhow
         .header("x-recording-target-id", "target-old")
         .body(Body::from("{\"ts\":1}\n"))?;
     let recording_response = app.router.clone().oneshot(recording_request).await?;
-    assert_eq!(recording_response.status(), StatusCode::CONFLICT);
+    assert_eq!(recording_response.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     let (status, body) =
         request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
