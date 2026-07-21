@@ -38,6 +38,7 @@ describe('release-claw-server-rust workflow', () => {
       'Release version; defaults to apps/claw-server-rust/Cargo.toml at ref',
     )
     expect(workflow).toContain('required: false')
+    expect(workflow).toContain('publish_ota:')
     expect(workflow).toContain(
       'packages/browseros-agent/scripts/release/prepare-claw-server-rust-release.sh',
     )
@@ -80,7 +81,15 @@ describe('release-claw-server-rust workflow', () => {
     )
     expect(workflow).toContain('"artifact-metadata.json"')
     expect(workflow).toContain('extract_artifact_zip')
-    expect(workflow).toContain('resources/bin/browseros-claw-server-rs')
+    expect(workflow).toContain(
+      'binary_name = f"browseros-claw-server-rs{binary_ext}"',
+    )
+    expect(workflow).toContain(
+      'runtime_binary_name = f"browseros-claw-server{binary_ext}"',
+    )
+    expect(workflow).toContain(
+      'expected = f"resources/bin/browseros-claw-server{binary_ext}"',
+    )
   })
 
   it('uses matching artifact actions without unused Python dependencies', () => {
@@ -110,6 +119,28 @@ describe('release-claw-server-rust workflow', () => {
       `gh release upload "$RELEASE_TAG" "${shellAssetsPlaceholder}" --clobber`,
     )
     expect(workflow).toContain('Expected 5 Rust server resource zips')
+  })
+
+  it('publishes OTA from Rust artifacts only when requested', () => {
+    const publishOta = workflow.slice(workflow.indexOf('  publish-ota:'))
+    expect(workflow).toContain(
+      `if: \${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}`,
+    )
+    for (const secret of [
+      'SPARKLE_PRIVATE_KEY',
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET',
+    ]) {
+      expect(publishOta).toContain(`${secret}: \${{ secrets.${secret} }}`)
+    }
+    expect(publishOta).toContain(
+      'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
+    )
+    expect(workflow.indexOf('  publish-ota:')).toBeGreaterThan(
+      workflow.indexOf('  publish:'),
+    )
   })
 
   it('caps generated changelogs before create and edit consume release notes', () => {

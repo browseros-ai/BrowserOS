@@ -255,9 +255,9 @@ BrowserOS/
 │   ├── build/                       # Build CLI and modules
 │   └── resources/                   # Icons, entitlements, signing
 │
-├── packages/browseros-agent/        # Agent platform (TypeScript/Go)
+├── packages/browseros-agent/        # Agent platform (Rust/TypeScript/Go)
 │   ├── apps/
-│   │   ├── claw-server/             # BrowserClaw backend: MCP endpoint + JSON API (Hono)
+│   │   ├── claw-server-rust/        # BrowserClaw backend: MCP endpoint + JSON API (Rust)
 │   │   ├── claw-app/                # BrowserClaw dashboard extension (WXT + React)
 │   │   ├── claw-onboard/            # BrowserClaw onboarding flow
 │   │   ├── server/                  # BrowserOS MCP server + AI agent loop (Bun)
@@ -273,7 +273,7 @@ BrowserOS/
 | Package | What it does |
 |---------|-------------|
 | [`packages/browseros`](packages/browseros/) | Chromium fork: patches, build system, signing |
-| [`apps/claw-server`](packages/browseros-agent/apps/claw-server/) | BrowserClaw backend: MCP endpoint agents connect to, plus the API behind the dashboard |
+| [`apps/claw-server-rust`](packages/browseros-agent/apps/claw-server-rust/) | BrowserClaw backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserClaw new-tab dashboard: watch, replay, and manage agent sessions |
 | [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing 53+ MCP tools and running the BrowserOS AI agent loop |
 | [`apps/app`](packages/browseros-agent/apps/app/) | BrowserOS extension: new tab, side panel chat, onboarding, settings |

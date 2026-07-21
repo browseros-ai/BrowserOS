@@ -128,11 +128,14 @@ mod tests {
     use std::{collections::HashSet, path::Path};
     use tempfile::tempdir;
 
-    const TS_0000: &str = include_str!("../../../claw-server/drizzle/0000_add_tool_dispatches.sql");
+    // Frozen migrations from the retired TypeScript server prove existing
+    // installations still upgrade into the Rust-owned baseline schema.
+    const TS_0000: &str =
+        include_str!("../../tests/fixtures/legacy-drizzle/0000_add_tool_dispatches.sql");
     const TS_0001: &str =
-        include_str!("../../../claw-server/drizzle/0001_add_agent_session_events.sql");
+        include_str!("../../tests/fixtures/legacy-drizzle/0001_add_agent_session_events.sql");
     const TS_0002: &str =
-        include_str!("../../../claw-server/drizzle/0002_default_created_at_in_js.sql");
+        include_str!("../../tests/fixtures/legacy-drizzle/0002_default_created_at_in_js.sql");
 
     #[tokio::test]
     async fn fresh_file_has_the_complete_baseline_schema() -> anyhow::Result<()> {

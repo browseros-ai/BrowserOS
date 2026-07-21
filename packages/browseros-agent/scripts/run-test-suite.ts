@@ -28,15 +28,6 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
-      label: 'claw-server tests',
-      cwd: resolve(projectRoot, 'apps/claw-server'),
-      argv: [bun, 'run', 'test'],
-    },
-    {
-      label: 'claw API contract tests',
-      argv: [bun, 'run', 'test:claw-api-contract'],
-    },
-    {
       label: 'claw MCP suite unit tests',
       argv: [
         bun,

@@ -93,7 +93,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
 /**
  * Spawns a fresh headless BrowserOS with its own profile and CDP port.
  * Every call is a cold start on purpose: each server pass in the
- * cross-server suite gets a browser no other server has touched.
+ * conformance suite gets a browser no other server has touched.
  */
 export async function launchBrowser(): Promise<BrowserHandle> {
   const binary = browserBinary()
@@ -105,10 +105,25 @@ export async function launchBrowser(): Promise<BrowserHandle> {
     cmd: [binary, ...launchArgs(cdpPort, userDataDir)],
     stdout: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
     stderr: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
+    detached: process.platform !== 'win32',
   })
 
+  const signalBrowserTree = (signal: NodeJS.Signals): void => {
+    if (process.platform === 'win32') {
+      child.kill(signal)
+      return
+    }
+    try {
+      // AppImage launchers spawn the actual browser beneath the direct child.
+      // The detached process group lets teardown reach that whole tree.
+      process.kill(-child.pid, signal)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+
   const abandon = (message: string): never => {
-    child.kill(9)
+    signalBrowserTree('SIGKILL')
     rmSync(userDataDir, { recursive: true, force: true })
     throw new Error(message)
   }
@@ -131,9 +146,13 @@ export async function launchBrowser(): Promise<BrowserHandle> {
     kill: async () => {
       if (killed) return
       killed = true
-      child.kill()
-      const forceKill = setTimeout(() => child.kill(9), EXIT_GRACE_MS)
+      signalBrowserTree('SIGTERM')
+      const forceKill = setTimeout(
+        () => signalBrowserTree('SIGKILL'),
+        EXIT_GRACE_MS,
+      )
       await child.exited
+      if (await isBrowserRunning(cdpPort)) signalBrowserTree('SIGKILL')
       clearTimeout(forceKill)
       rmSync(userDataDir, { recursive: true, force: true })
     },

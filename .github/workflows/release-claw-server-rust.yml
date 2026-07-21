@@ -1,5 +1,6 @@
 # Required secrets for resource publishing: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
-# R2_SECRET_ACCESS_KEY, R2_BUCKET.
+# R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
+# publish_ota is true.
 name: "Release: BrowserClaw Server (Rust)"
 
 on:
@@ -18,6 +19,11 @@ on:
         required: false
         type: string
         default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
@@ -30,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
     secrets:
       R2_ACCOUNT_ID:
         required: true
@@ -39,6 +50,8 @@ on:
         required: true
       R2_BUCKET:
         required: true
+      SPARKLE_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: write
@@ -509,3 +522,37 @@ jobs:
               echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/${VERSION}/browseros-claw-server-rust-resources-${target}.zip"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-ota:
+    needs:
+      - release
+      - publish
+    if: ${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Preflight OTA signing key
+        run: |
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is required when publish_ota is true"
+            exit 1
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Publish alpha BrowserClaw server OTA artifacts
+        working-directory: packages/browseros
+        run: uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw

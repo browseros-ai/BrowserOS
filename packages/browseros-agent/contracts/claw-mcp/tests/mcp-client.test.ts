@@ -113,13 +113,15 @@ describe('mcp client', () => {
     expect(session.sessionId).toBe('stub-session-1')
 
     const initialize = recorded.find((r) => r.body?.method === 'initialize')
-    expect(initialize).toBeDefined()
-    expect(initialize?.headers.origin).toBeUndefined()
-    expect(initialize?.headers['sec-fetch-site']).toBeUndefined()
-    expect(initialize?.headers.accept).toContain('text/event-stream')
+    if (!initialize) throw new Error('initialize request was not recorded')
+    expect(initialize.headers.origin).toBeUndefined()
+    expect(initialize.headers['sec-fetch-site']).toBeUndefined()
+    expect(initialize.headers.accept).toContain('text/event-stream')
+    const initializeParams = initialize.body?.params
+    if (!initializeParams)
+      throw new Error('initialize params were not recorded')
     expect(
-      (initialize?.body?.params as { clientInfo: { name: string } }).clientInfo
-        .name,
+      (initializeParams as { clientInfo: { name: string } }).clientInfo.name,
     ).toBe('stub-client')
 
     const initialized = recorded.find(

@@ -28,7 +28,8 @@ RELEASE_WORKFLOW_FILES = (
     Path(".github/workflows/release-extension-feeds.yml"),
     Path(".github/workflows/release-extensions.yml"),
     Path(".github/workflows/release-server.yml"),
-    Path(".github/workflows/release-claw-server.yml"),
+    Path(".github/workflows/release-claw-onboard.yml"),
+    Path(".github/workflows/release-claw-server-rust.yml"),
 )
 
 KEY_RE = re.compile(r"[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=")
@@ -72,7 +73,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-server.yml",
-            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-claw-server-rust.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -84,7 +86,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-server.yml",
-            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-claw-server-rust.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -96,7 +99,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-server.yml",
-            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-claw-server-rust.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -108,7 +112,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-server.yml",
-            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-claw-server-rust.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -121,18 +126,6 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
         "POSTHOG_API_KEY",
         ("release-browseros.yml", "release-server.yml", "release-extensions.yml"),
     ),  # Server and extension release analytics key.
-    SecretSpec(
-        "CLAW_POSTHOG_KEY",
-        (
-            "nightly-browserclaw.yml",
-            "release-browserclaw.yml",
-            "release-claw-server.yml",
-        ),
-    ),  # Required Claw server production analytics key.
-    SecretSpec(
-        "CLAW_POSTHOG_HOST",
-        ("release-claw-server.yml",),
-    ),  # Optional Claw server analytics host.
     SecretSpec(
         "SENTRY_DSN",
         ("release-browseros.yml", "release-server.yml"),
@@ -176,7 +169,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-windows.yml",
             "release-server.yml",
-            "release-claw-server.yml",
+            "release-claw-server-rust.yml",
         ),
     ),  # Sparkle/WinSparkle artifact signatures and optional server OTA.
     SecretSpec(
@@ -260,7 +253,6 @@ KNOWN_EXTERNAL_SECRETS = frozenset(
 )
 KNOWN_OPTIONAL_SECRETS = frozenset(
     {
-        "CLAW_POSTHOG_HOST",
         "ESIGNER_CREDENTIAL_ID",
         "VITE_CLAW_POSTHOG_HOST",
     }

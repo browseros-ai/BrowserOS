@@ -87,7 +87,7 @@ EXPECTED_BROWSERCLAW = ProductDescriptor(
         (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
         (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
     ),
-    server_bundle_ids=("browserclaw-server-rust",),
+    server_bundle_ids=("browserclaw-server",),
     mac=MacProductIdentity(
         bundle_id="com.browseros.BrowserClaw",
         dev_bundle_id="com.browseros.dev.BrowserClaw",

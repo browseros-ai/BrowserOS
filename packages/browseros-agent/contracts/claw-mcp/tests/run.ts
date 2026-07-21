@@ -5,11 +5,11 @@
  *
  * Skips instantly (exit 0) when BROWSEROS_BINARY is unset so it is
  * safe inside `bun run test` anywhere; otherwise pre-builds the rust
- * server (outside test timeouts) and execs the cross-server suite.
+ * server (outside test timeouts) and execs the Rust conformance suite.
  */
 
 import { resolve } from 'node:path'
-import { buildRustServer } from './server-adapters'
+import { buildRustServer } from './rust-server'
 
 const smoke = process.argv.includes('--smoke')
 
@@ -23,7 +23,7 @@ if (!process.env.BROWSEROS_BINARY) {
 buildRustServer()
 
 const result = Bun.spawnSync({
-  cmd: ['bun', 'test', resolve(import.meta.dir, 'cross-server.test.ts')],
+  cmd: ['bun', 'test', resolve(import.meta.dir, 'rust-conformance.test.ts')],
   env: {
     ...process.env,
     ...(smoke ? { CLAW_MCP_SMOKE: '1' } : {}),

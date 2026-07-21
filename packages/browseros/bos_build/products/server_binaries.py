@@ -60,14 +60,8 @@ def server_bundles_for_product(product_id: str) -> Tuple[ServerBundle, ...]:
 
 
 def server_ota_bundles_for_product(product_id: str) -> Tuple[ServerBundle, ...]:
-    """Return server OTA bundles; BrowserClaw OTA stays on TypeScript for now."""
-    from . import SERVER_BUNDLES
-
-    return tuple(
-        bundle
-        for bundle in SERVER_BUNDLES
-        if product_id in bundle.product_ids
-    )
+    """Return the active server bundles eligible for OTA publication."""
+    return server_bundles_for_product(product_id)
 
 
 def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
@@ -105,6 +99,6 @@ def expected_windows_bundle_binary_paths(
 
 def _browser_build_server_bundles() -> Tuple[ServerBundle, ...]:
     from .browseros.product import BROWSEROS_SERVER_BUNDLE
-    from .browserclaw.product import BROWSERCLAW_RUST_SERVER_BUNDLE
+    from .browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
 
-    return (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_RUST_SERVER_BUNDLE)
+    return (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_SERVER_BUNDLE)

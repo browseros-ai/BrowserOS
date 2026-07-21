@@ -22,7 +22,7 @@ jobs:
   test:
     name: Tests / ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.needs_rust && 45 || 20 }}
     defaults:
       run:
         working-directory: packages/browseros-agent
@@ -70,14 +70,25 @@ jobs:
             command: (cd apps/claw-onboard && bun run test)
             junit_path: test-results/claw-onboard.xml
             needs_browser: false
-          - suite: claw-server
-            command: (cd apps/claw-server && bun run test)
-            junit_path: test-results/claw-server.xml
-            needs_browser: false
           - suite: build
             command: bun run ./scripts/run-bun-test.ts ./scripts/build
             junit_path: test-results/build.xml
             needs_browser: false
+          - suite: claw-server-rust
+            command: cargo test --workspace --locked
+            junit_path: test-results/claw-server-rust.xml
+            needs_browser: false
+            needs_rust: true
+          - suite: claw-server-rust-quality
+            command: cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings
+            junit_path: test-results/claw-server-rust-quality.xml
+            needs_browser: false
+            needs_rust: true
+          - suite: claw-mcp
+            command: bun run test:claw-mcp-contract
+            junit_path: test-results/claw-mcp.xml
+            needs_browser: true
+            needs_rust: true
 
     steps:
       - name: Checkout code
@@ -85,6 +96,18 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        if: matrix.needs_rust == true
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust build
+        if: matrix.needs_rust == true
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/browseros-agent
 
       - name: Install dependencies
         run: bun ci
@@ -127,6 +150,11 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           export APPIMAGE_EXTRACT_AND_RUN=1
+          # Chromium's hidden-window APIs require a real X11 platform.
+          if [ "${BROWSEROS_TEST_HEADLESS:-true}" = "false" ]; then
+            export XDG_SESSION_TYPE=x11
+            exec xvfb-run --auto-servernum "$(dirname "$0")/BrowserOS.AppImage" "$@"
+          fi
           exec "$(dirname "$0")/BrowserOS.AppImage" "$@"
           EOF
           chmod +x .ci/bin/browseros
@@ -139,7 +167,7 @@ jobs:
         id: test
         env:
           BROWSEROS_BINARY: ${{ github.workspace }}/packages/browseros-agent/.ci/bin/browseros
-          BROWSEROS_TEST_HEADLESS: "true"
+          BROWSEROS_TEST_HEADLESS: ${{ matrix.suite == 'claw-mcp' && 'false' || 'true' }}
           BROWSEROS_TEST_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage
           BROWSEROS_JUNIT_PATH: ${{ github.workspace }}/packages/browseros-agent/${{ matrix.junit_path }}
         run: |

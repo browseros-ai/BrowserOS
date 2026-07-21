@@ -161,7 +161,6 @@ jobs:
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
-          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
           BROWSEROS_REPO_PATH: ${{ vars.BROWSEROS_REPO_PATH }}
           BROWSEROS_CHROMIUM_SRC: ${{ vars.BROWSEROS_CHROMIUM_SRC }}
@@ -203,10 +202,6 @@ jobs:
             require_value BROWSEROS_CHROMIUM_SRC
           fi
 
-          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            require_value CLAW_POSTHOG_KEY
-          fi
-
           if [ "$INPUT_EXTENSIONS" != "skip" ]; then
             require_value BROWSERCLAW_KEY
             require_value VITE_CLAW_POSTHOG_KEY
@@ -217,21 +212,20 @@ jobs:
             exit 1
           fi
 
-  server_browserclaw:
-    name: BrowserClaw server resources
+  onboard_browserclaw:
+    name: BrowserClaw onboarding resources
     needs: preflight
     if: ${{ inputs.include_servers }}
-    uses: ./.github/workflows/release-claw-server.yml
+    uses: ./.github/workflows/release-claw-onboard.yml
     permissions:
       contents: write
       pull-requests: write
     with:
       ref: ${{ github.ref_name }}
-      publish_ota: false
     secrets: inherit
 
-  server_browserclaw_rust:
-    name: BrowserClaw Rust server resources
+  server_browserclaw:
+    name: BrowserClaw server resources
     needs: preflight
     if: ${{ inputs.include_servers }}
     uses: ./.github/workflows/release-claw-server-rust.yml
@@ -239,18 +233,19 @@ jobs:
       contents: write
     with:
       ref: ${{ github.ref_name }}
+      publish_ota: false
     secrets: inherit
 
   release_linux:
     name: Linux browser builds
-    needs: [preflight, server_browserclaw, server_browserclaw_rust]
+    needs: [preflight, onboard_browserclaw, server_browserclaw]
     if: >-
       ${{
         always() &&
         (inputs.platforms == 'all' || inputs.platforms == 'linux') &&
         needs.preflight.result == 'success' &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw_rust.result == 'success' || needs.server_browserclaw_rust.result == 'skipped')
+        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
+        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
       }}
     uses: ./.github/workflows/release-linux.yml
     permissions:
@@ -263,14 +258,14 @@ jobs:
 
   release_windows:
     name: Windows browser builds
-    needs: [preflight, server_browserclaw, server_browserclaw_rust]
+    needs: [preflight, onboard_browserclaw, server_browserclaw]
     if: >-
       ${{
         always() &&
         (inputs.platforms == 'all' || inputs.platforms == 'windows') &&
         needs.preflight.result == 'success' &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw_rust.result == 'success' || needs.server_browserclaw_rust.result == 'skipped')
+        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
+        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
       }}
     uses: ./.github/workflows/release-windows.yml
     permissions:
@@ -284,14 +279,14 @@ jobs:
 
   release_macos:
     name: macOS browser builds
-    needs: [preflight, server_browserclaw, server_browserclaw_rust]
+    needs: [preflight, onboard_browserclaw, server_browserclaw]
     if: >-
       ${{
         always() &&
         (inputs.platforms == 'all' || inputs.platforms == 'macos') &&
         needs.preflight.result == 'success' &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw_rust.result == 'success' || needs.server_browserclaw_rust.result == 'skipped')
+        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
+        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
       }}
     concurrency:
       group: macos-build
@@ -334,8 +329,8 @@ jobs:
     name: Stage update feeds
     needs:
       - preflight
+      - onboard_browserclaw
       - server_browserclaw
-      - server_browserclaw_rust
       - release_linux
       - release_windows
       - release_macos
@@ -356,8 +351,8 @@ jobs:
       INPUT_EXTENSIONS: ${{ inputs.extensions }}
       INPUT_GITHUB_RELEASE_DRAFT: ${{ inputs.github_release_draft }}
       PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-      SERVER_TS_RESULT: ${{ needs.server_browserclaw.result }}
-      SERVER_RUST_RESULT: ${{ needs.server_browserclaw_rust.result }}
+      ONBOARD_RESULT: ${{ needs.onboard_browserclaw.result }}
+      SERVER_RESULT: ${{ needs.server_browserclaw.result }}
       LINUX_RESULT: ${{ needs.release_linux.result }}
       WINDOWS_RESULT: ${{ needs.release_windows.result }}
       MACOS_RESULT: ${{ needs.release_macos.result }}
@@ -399,13 +394,13 @@ jobs:
             reasons+=("preflight result is $PREFLIGHT_RESULT")
           fi
           if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            if [ "$SERVER_TS_RESULT" != "success" ]; then
+            if [ "$ONBOARD_RESULT" != "success" ]; then
               should_stage=false
-              reasons+=("BrowserClaw TS server result is $SERVER_TS_RESULT")
+              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
             fi
-            if [ "$SERVER_RUST_RESULT" != "success" ]; then
+            if [ "$SERVER_RESULT" != "success" ]; then
               should_stage=false
-              reasons+=("BrowserClaw Rust server result is $SERVER_RUST_RESULT")
+              reasons+=("BrowserClaw server result is $SERVER_RESULT")
             fi
           fi
           while IFS= read -r platform; do
@@ -636,8 +631,8 @@ jobs:
     name: Finalize
     needs:
       - preflight
+      - onboard_browserclaw
       - server_browserclaw
-      - server_browserclaw_rust
       - release_linux
       - release_windows
       - release_macos
@@ -660,8 +655,8 @@ jobs:
       EXTENSIONS_VERSION: ${{ needs.preflight.outputs.extensions_version }}
       INPUT_GITHUB_RELEASE_DRAFT: ${{ inputs.github_release_draft }}
       PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-      SERVER_TS_RESULT: ${{ needs.server_browserclaw.result }}
-      SERVER_RUST_RESULT: ${{ needs.server_browserclaw_rust.result }}
+      ONBOARD_RESULT: ${{ needs.onboard_browserclaw.result }}
+      SERVER_RESULT: ${{ needs.server_browserclaw.result }}
       LINUX_RESULT: ${{ needs.release_linux.result }}
       WINDOWS_RESULT: ${{ needs.release_windows.result }}
       MACOS_RESULT: ${{ needs.release_macos.result }}
@@ -731,8 +726,8 @@ jobs:
             echo "### Server resources"
             echo
             if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-              echo "- BrowserClaw TS server resources: \`$SERVER_TS_RESULT\`"
-              echo "- BrowserClaw Rust server resources: \`$SERVER_RUST_RESULT\`"
+              echo "- BrowserClaw onboarding resources: \`$ONBOARD_RESULT\`"
+              echo "- BrowserClaw server resources: \`$SERVER_RESULT\`"
             else
               echo "- BrowserClaw server resources: \`skipped\`"
             fi
@@ -786,13 +781,13 @@ jobs:
             reasons+=("preflight result is $PREFLIGHT_RESULT")
           fi
           if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            if [ "$SERVER_TS_RESULT" != "success" ]; then
+            if [ "$ONBOARD_RESULT" != "success" ]; then
               should_create=false
-              reasons+=("BrowserClaw TS server result is $SERVER_TS_RESULT")
+              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
             fi
-            if [ "$SERVER_RUST_RESULT" != "success" ]; then
+            if [ "$SERVER_RESULT" != "success" ]; then
               should_create=false
-              reasons+=("BrowserClaw Rust server result is $SERVER_RUST_RESULT")
+              reasons+=("BrowserClaw server result is $SERVER_RESULT")
             fi
           fi
           while IFS= read -r platform; do

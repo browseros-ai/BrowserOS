@@ -3,7 +3,6 @@
   "entry": [
     "apps/server/src/index.ts",
     "apps/server/src/compiled-bootstrap.ts",
-    "apps/claw-server/src/main.ts",
     "apps/claw-onboard/src/main.tsx",
     "apps/app/entrypoints/app/main.tsx",
     "apps/app/entrypoints/sidepanel/main.tsx",

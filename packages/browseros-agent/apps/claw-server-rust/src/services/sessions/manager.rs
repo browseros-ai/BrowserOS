@@ -372,7 +372,7 @@ mod tests {
         ))
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn sweep_removes_idle_sessions_and_writes_end_row() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let (audit_log, session_tabs) = repositories(&dir).await?;
@@ -393,7 +393,10 @@ mod tests {
             Instant::now(),
         );
         registry.insert_for_testing(session).await;
+        // Resume before the sweep writes to SQLite; its worker runs on wall time.
+        tokio::time::pause();
         tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::time::resume();
         assert_eq!(registry.sweep_idle().await?, 1);
         assert_eq!(registry.count().await, 0);
         let detail = audit_log.get_task("s1").await?;
@@ -528,7 +531,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn retained_session_collapses_then_closes_and_forgets_after_expiry() -> anyhow::Result<()>
     {
         let dir = tempdir()?;
@@ -574,6 +577,13 @@ mod tests {
             .await;
 
         assert!(registry.remove(&session_id, "closed", None).await?);
+        let retained_at = registry
+            .retained
+            .read()
+            .await
+            .get(&key)
+            .map(|retained| retained.ended_at)
+            .ok_or_else(|| anyhow::anyhow!("retained session missing"))?;
         assert_eq!(registry.retained.read().await.len(), 1);
         assert_eq!(
             actions
@@ -590,11 +600,19 @@ mod tests {
             Some(key.clone())
         );
 
-        tokio::time::advance(Duration::from_secs(9)).await;
-        assert_eq!(registry.reap_retained(Instant::now()).await, 0);
+        assert_eq!(
+            registry
+                .reap_retained(retained_at + Duration::from_secs(9))
+                .await,
+            0
+        );
         assert_eq!(registry.retained.read().await.len(), 1);
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(registry.reap_retained(Instant::now()).await, 1);
+        assert_eq!(
+            registry
+                .reap_retained(retained_at + Duration::from_secs(10))
+                .await,
+            1
+        );
         assert_eq!(registry.retained.read().await.len(), 0);
         assert_eq!(registry.ownership().tab_group_ref(&key).await, None);
         assert!(!registry.reserved_keys.lock().await.contains(&key));
@@ -612,7 +630,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn failed_or_disconnected_close_retries_without_forgetting_state() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let (audit_log, session_tabs) = repositories(&dir).await?;
@@ -658,9 +676,9 @@ mod tests {
             .set_tab_group_ref(key.clone(), Some("group-7".to_string()))
             .await;
         registry.remove(session.id(), "closed", None).await?;
+        let expired_at = Instant::now() + Duration::from_secs(10);
 
-        tokio::time::advance(Duration::from_secs(10)).await;
-        assert_eq!(registry.reap_retained(Instant::now()).await, 0);
+        assert_eq!(registry.reap_retained(expired_at).await, 0);
         assert_eq!(close_attempts.load(Ordering::SeqCst), 1);
         assert_eq!(registry.retained.read().await.len(), 1);
         assert_eq!(
@@ -672,7 +690,7 @@ mod tests {
         );
 
         close_allowed.store(true, Ordering::SeqCst);
-        assert_eq!(registry.reap_retained(Instant::now()).await, 1);
+        assert_eq!(registry.reap_retained(expired_at).await, 1);
         assert_eq!(close_attempts.load(Ordering::SeqCst), 2);
         assert_eq!(registry.retained.read().await.len(), 0);
         assert_eq!(
@@ -685,7 +703,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn generated_key_stays_reserved_until_retained_cleanup() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let (audit_log, session_tabs) = repositories(&dir).await?;
@@ -707,6 +725,7 @@ mod tests {
         );
         registry.insert_for_testing(session.clone()).await;
         registry.remove(session.id(), "closed", None).await?;
+        let expired_at = Instant::now() + Duration::from_secs(10);
 
         let candidate_while_retained = {
             let reserved = registry.reserved_keys.lock().await;
@@ -717,8 +736,7 @@ mod tests {
         };
         assert_eq!(candidate_while_retained, "agile-alpaca-2");
 
-        tokio::time::advance(Duration::from_secs(10)).await;
-        assert_eq!(registry.reap_retained(Instant::now()).await, 1);
+        assert_eq!(registry.reap_retained(expired_at).await, 1);
         let candidate_after_cleanup = {
             let reserved = registry.reserved_keys.lock().await;
             generate_fun_name(
@@ -730,7 +748,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn overlapping_retained_sweeps_issue_one_close() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let (audit_log, session_tabs) = repositories(&dir).await?;
@@ -771,8 +789,7 @@ mod tests {
         );
         registry.insert_for_testing(session.clone()).await;
         registry.remove(session.id(), "closed", None).await?;
-        tokio::time::advance(Duration::from_secs(10)).await;
-        let now = Instant::now();
+        let now = Instant::now() + Duration::from_secs(10);
         let entered = close_entered.notified();
         let first_registry = registry.clone();
         let first = tokio::spawn(async move { first_registry.reap_retained(now).await });

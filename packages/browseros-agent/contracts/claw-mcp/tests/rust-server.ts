@@ -1,16 +1,7 @@
 /**
- * Boots each claw server for the cross-server MCP suite through its
- * REAL entrypoint — `bun apps/claw-server/src/main.ts` and the
- * `claw-server-rust` binary — attached to the harness browser's CDP
- * port via a temp sidecar JSON. This is deliberately not the seeded
- * `contract-server` example the claw-api suite uses: these tests
- * generate real state by driving `/mcp` against a live browser.
- *
- * Every subprocess runs with HOME (and friends) pointed into a temp
- * dir: the TS server's self-heal loops rewrite agent MCP configs under
- * the real `$HOME` otherwise, and both servers persist audit/session
- * state under `BROWSERCLAW_DIR`. `BROWSEROS_DIR` is pinned too so
- * spill files land somewhere each test can assert on.
+ * Boots the production Rust server against the harness browser's CDP port via
+ * a temporary sidecar. The sandboxed user and BrowserClaw directories keep
+ * audit state, downloads, and spill files isolated from the developer's data.
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -24,10 +15,7 @@ const HEALTH_INTERVAL_MS = 200
 const STOP_GRACE_MS = 6_000
 const LOG_TAIL_LINES = 40
 
-export type ServerName = 'typescript' | 'rust'
-
 export interface ContractServer {
-  name: ServerName
   baseUrl: string
   /** Where this server writes spill files: `<dir>/tool-output/`. */
   toolOutputDir: string
@@ -141,7 +129,6 @@ async function stopServer(spawned: SpawnedServer, root: string): Promise<void> {
 }
 
 async function startServer(
-  name: ServerName,
   cmd: string[],
   cdpPort: number,
   tmpPrefix: string,
@@ -159,29 +146,17 @@ async function startServer(
   const spawned: SpawnedServer = { child, logTail: watchLogs(child) }
   const baseUrl = `http://127.0.0.1:${serverPort}`
   try {
-    await waitUntilHealthy(baseUrl, spawned, `${name} claw server`)
+    await waitUntilHealthy(baseUrl, spawned, 'Rust claw server')
   } catch (error) {
     await stopServer(spawned, root)
     throw error
   }
   return {
-    name,
     baseUrl,
     toolOutputDir: join(root, 'browseros', 'tool-output'),
     homeDir: join(root, 'home'),
     stop: () => stopServer(spawned, root),
   }
-}
-
-export async function startTypeScriptServer(
-  cdpPort: number,
-): Promise<ContractServer> {
-  return await startServer(
-    'typescript',
-    ['bun', 'apps/claw-server/src/main.ts'],
-    cdpPort,
-    'claw-mcp-ts-',
-  )
 }
 
 export const RUST_BINARY = resolve(
@@ -190,8 +165,8 @@ export const RUST_BINARY = resolve(
 )
 
 /**
- * Debug-profile build matching the claw-api suite's choice; `run.ts`
- * pre-builds so test timeouts never absorb a cold cargo build.
+ * `run.ts` pre-builds the debug binary so test timeouts never absorb a cold
+ * Cargo build.
  */
 export function buildRustServer(): void {
   const build = Bun.spawnSync({
@@ -213,14 +188,5 @@ export async function startRustServer(
   if (!(await Bun.file(RUST_BINARY).exists())) {
     buildRustServer()
   }
-  return await startServer('rust', [RUST_BINARY], cdpPort, 'claw-mcp-rust-')
-}
-
-export function startContractServer(
-  name: ServerName,
-  cdpPort: number,
-): Promise<ContractServer> {
-  return name === 'typescript'
-    ? startTypeScriptServer(cdpPort)
-    : startRustServer(cdpPort)
+  return await startServer([RUST_BINARY], cdpPort, 'claw-mcp-rust-')
 }

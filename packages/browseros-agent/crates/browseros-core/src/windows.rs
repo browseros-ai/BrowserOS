@@ -69,7 +69,7 @@ impl WindowManager {
         let result: browser::SetWindowVisibilityResult = root
             .send(
                 "Browser.setWindowVisibility",
-                json!({ "windowId": window_id.0, "visible": visible, "activate": activate }),
+                set_visibility_params(window_id, visible, activate),
             )
             .await?;
         let new_window_id = WindowId(result.window.window_id);
@@ -94,5 +94,46 @@ impl WindowManager {
         } else {
             Err(CoreError::Cdp(browseros_cdp::CdpError::NotConnected))
         }
+    }
+}
+
+fn set_visibility_params(window_id: WindowId, visible: bool, activate: Option<bool>) -> Value {
+    let mut params = serde_json::Map::new();
+    params.insert("windowId".to_string(), Value::from(window_id.0));
+    params.insert("visible".to_string(), Value::Bool(visible));
+    if let Some(activate) = activate {
+        params.insert("activate".to_string(), Value::Bool(activate));
+    }
+    Value::Object(params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_visibility_params;
+    use crate::WindowId;
+
+    #[test]
+    fn set_visibility_omits_absent_activate() {
+        let params = set_visibility_params(WindowId(7), false, None);
+
+        assert_eq!(params.get("activate"), None);
+        assert_eq!(
+            params.get("windowId").and_then(|value| value.as_i64()),
+            Some(7)
+        );
+        assert_eq!(
+            params.get("visible").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn set_visibility_sends_explicit_activate() {
+        let params = set_visibility_params(WindowId(7), true, Some(true));
+
+        assert_eq!(
+            params.get("activate").and_then(|value| value.as_bool()),
+            Some(true)
+        );
     }
 }

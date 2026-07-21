@@ -34,7 +34,6 @@ export const transportCases: ContractCase[] = [
     async run(ctx) {
       const tools = await ctx.mcp.listTools()
       const names = tools.map((tool) => tool.name).sort()
-      ctx.record('transport:tool-names', names)
       if (!Bun.deepEquals(names, EXPECTED_TOOLS)) {
         throw new Error(`unexpected tool catalog: ${names.join(', ')}`)
       }
@@ -68,10 +67,6 @@ export const transportCases: ContractCase[] = [
         },
         body,
       })
-      ctx.record('transport:origin-hygiene', [
-        withOrigin.status,
-        withSecFetch.status,
-      ])
       if (withOrigin.status !== 403 || withSecFetch.status !== 403) {
         throw new Error(
           `expected 403 for browser-shaped requests, got ${withOrigin.status}/${withSecFetch.status}`,
@@ -101,21 +96,20 @@ export const transportCases: ContractCase[] = [
           `expected an unknown session id to be rejected, got ${response.status}`,
         )
       }
-      ctx.record('transport:unknown-session-status', response.status)
     },
   },
   {
     name: 'transport: DELETE /mcp ends the session and audit records it',
     async run(ctx) {
-      // Bare DELETE (no content-type): rust exempts it, TS 415s it.
+      // Bodyless teardown does not require a JSON content type.
       const probe = await ctx.openSession('claw-contract-bare-delete')
       const bare = await fetch(`${ctx.server.baseUrl}/mcp`, {
         method: 'DELETE',
         headers: probe.sessionId ? { 'mcp-session-id': probe.sessionId } : {},
       })
-      ctx.record('transport:bare-delete-status', bare.status, {
-        divergence: 'delete-hygiene-content-type',
-      })
+      if (bare.status >= 400) {
+        throw new Error(`bare DELETE /mcp failed with ${bare.status}`)
+      }
 
       const session = await ctx.openSession('claw-contract-teardown')
       await ctx.openPage(ctx.fixture('/links.html'), session)
@@ -144,7 +138,6 @@ export const transportCases: ContractCase[] = [
         'audit to record the session end',
         { timeoutMs: 20_000 },
       )
-      ctx.record('transport:delete-ends-session', true)
     },
   },
 ]

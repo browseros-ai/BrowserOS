@@ -1,7 +1,5 @@
-//! Deserializes every shared golden fixture from
-//! `contracts/claw-api/fixtures` through the generated `claw_api`
-//! models. The TS suite round-trips the same files, so a fixture that
-//! passes both proves the two type systems agree on the wire shape.
+//! Deserializes every contract fixture through the generated `claw_api` models
+//! so schema and Rust wire types cannot drift independently.
 
 use axum::{http::StatusCode, response::IntoResponse};
 use claw_api::models::{

@@ -31,43 +31,21 @@ func TestWatchModeRejectsManualClawCombination(t *testing.T) {
 	}
 }
 
-func TestWatchModeRejectsRustWithoutClaw(t *testing.T) {
-	oldManual, oldClaw, oldRust := watchManual, watchClaw, watchRust
-	watchManual = false
-	watchClaw = false
-	watchRust = true
-	t.Cleanup(func() {
-		watchManual = oldManual
-		watchClaw = oldClaw
-		watchRust = oldRust
-	})
-
-	_, err := watchMode()
-	if err == nil {
-		t.Fatal("expected incompatible watch flags to return an error")
-	}
-	if !strings.Contains(err.Error(), "--rust can only be combined with --claw") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestWatchModeSelectsBrowserClawRust(t *testing.T) {
-	oldManual, oldClaw, oldRust := watchManual, watchClaw, watchRust
+func TestWatchModeSelectsBrowserClaw(t *testing.T) {
+	oldManual, oldClaw := watchManual, watchClaw
 	watchManual = false
 	watchClaw = true
-	watchRust = true
 	t.Cleanup(func() {
 		watchManual = oldManual
 		watchClaw = oldClaw
-		watchRust = oldRust
 	})
 
 	mode, err := watchMode()
 	if err != nil {
 		t.Fatalf("watchMode returned error: %v", err)
 	}
-	if mode != "BrowserClaw Rust" {
-		t.Fatalf("expected BrowserClaw Rust mode, got %q", mode)
+	if mode != "BrowserClaw" {
+		t.Fatalf("expected BrowserClaw mode, got %q", mode)
 	}
 }
 
@@ -193,7 +171,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 	}
 	env := buildWatchEnv(ports, userDataDir, true)
 	var killedPort int
-	cfg := clawServerProcConfig(root, env, ports, userDataDir, sidecarPath, true, func(port int, _ time.Duration) error {
+	cfg := clawServerProcConfig(root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
 		killedPort = port
 		return nil
 	})
@@ -245,32 +223,10 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 	}
 }
 
-func TestClawServerProcConfigUsesRootDevelopmentEnv(t *testing.T) {
-	root := t.TempDir()
-	userDataDir := t.TempDir()
-	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")
-	ports := proc.Ports{
-		CDP:       9012,
-		Server:    9123,
-		Extension: 9321,
-	}
-	cfg := clawServerProcConfig(root, nil, ports, userDataDir, sidecarPath, false, func(_ int, _ time.Duration) error {
-		return nil
-	})
-
-	wantCmd := []string{"bun", "--watch", "--env-file=../../.env.development", "src/main.ts", "--config", sidecarPath}
-	if !reflect.DeepEqual(cfg.Cmd, wantCmd) {
-		t.Fatalf("expected claw-server command %#v, got %#v", wantCmd, cfg.Cmd)
-	}
-	if cfg.Dir != filepath.Join(root, "apps/claw-server") {
-		t.Fatalf("expected claw-server to run from app dir, got %q", cfg.Dir)
-	}
-}
-
 func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{
-		"apps/claw-server/drizzle",
+		"apps/claw-server-rust/tests/fixtures/legacy-drizzle",
 		"apps/claw-server-rust/src",
 		"crates/browseros-core/src",
 		"crates/browseros-cdp/src",
@@ -296,7 +252,7 @@ func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 	for _, want := range []string{
 		filepath.Join(root, "apps/claw-server-rust/src"),
 		filepath.Join(root, "apps/claw-server-rust/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server/drizzle"),
+		filepath.Join(root, "apps/claw-server-rust/tests/fixtures/legacy-drizzle"),
 		filepath.Join(root, "crates/browseros-cdp/src"),
 		filepath.Join(root, "crates/browseros-cdp/Cargo.toml"),
 		filepath.Join(root, "crates/browseros-cdp/build.rs"),
@@ -395,7 +351,7 @@ func TestEnsureCargoPresentMissingMessage(t *testing.T) {
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "Cargo is required for --claw --rust") {
+	if !strings.Contains(msg, "Cargo is required for --claw") {
 		t.Fatalf("expected missing Cargo message, got %q", msg)
 	}
 	if !strings.Contains(msg, "rustup.rs") {

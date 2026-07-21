@@ -5,9 +5,8 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk, waitUntil } from './helpers'
+import { errorClass, expectError, expectOk, waitUntil } from './helpers'
 import { textOf } from './mcp-client'
-import { errorClass } from './parity'
 
 async function snapshot(ctx: CaseContext, page: number): Promise<string> {
   return expectOk(await ctx.mcp.callTool('snapshot', { page }), 'snapshot')
@@ -60,7 +59,6 @@ export const actCases: ContractCase[] = [
           ).includes('applied'),
         'the click to update #result',
       )
-      ctx.record('act:click-updates-result', true)
     },
   },
   {
@@ -73,8 +71,7 @@ export const actCases: ContractCase[] = [
         kind: 'click',
         ref: refFor(snap, 'Covered button'),
       })
-      // Either the click is refused naming the overlay, or it lands but
-      // the overlay intercepts it (result stays untouched). Record which.
+      // The click must be refused with enough context to identify the blocker.
       const text = textOf(result)
       const namesBlocker = /overlay|cover|intercept|obscur/i.test(text)
       const stillUntouched = (
@@ -84,18 +81,11 @@ export const actCases: ContractCase[] = [
           'return document.getElementById("overlay-result").textContent',
         )
       ).includes('untouched')
-      if (!namesBlocker && !stillUntouched) {
+      if (!namesBlocker || !stillUntouched) {
         throw new Error(
-          `covered click neither blocked nor named a blocker: ${text}`,
+          `covered click activated or omitted the blocker: ${text}`,
         )
       }
-      // Shared contract: the covered button is never activated. Rust names
-      // the intercepting overlay in its error; TS does not (divergence
-      // covered-click-blocker-naming).
-      ctx.record('act:covered-click-not-activated', stillUntouched)
-      ctx.record('act:covered-click-names-blocker', namesBlocker, {
-        divergence: 'covered-click-blocker-naming',
-      })
     },
   },
   {
@@ -124,7 +114,6 @@ export const actCases: ContractCase[] = [
           ).includes('div-clicked'),
         'click_at to fire the div handler',
       )
-      ctx.record('act:click-at-hits-coords', true)
     },
   },
   {
@@ -157,7 +146,6 @@ export const actCases: ContractCase[] = [
       if (!value.includes('Ada Lovelace')) {
         throw new Error(`type did not fill the field: ${value}`)
       }
-      ctx.record('act:type-enters-text', true)
     },
   },
   {
@@ -178,7 +166,6 @@ export const actCases: ContractCase[] = [
         y,
         text: 'typed at point',
       })
-      ctx.record('act:type-at-supported', !result.isError)
       if (!result.isError) {
         const value = await evalIn(
           ctx,
@@ -213,7 +200,6 @@ export const actCases: ContractCase[] = [
       if (!value.includes('Grace Hopper')) {
         throw new Error(`fill did not set the field: ${value}`)
       }
-      ctx.record('act:fill-single', true)
     },
   },
   {
@@ -248,7 +234,6 @@ export const actCases: ContractCase[] = [
       ) {
         throw new Error(`batch fill missed a field: name=${name} bio=${bio}`)
       }
-      ctx.record('act:fill-batch', true)
     },
   },
   {
@@ -288,7 +273,6 @@ export const actCases: ContractCase[] = [
           ).includes('submitted'),
         'Enter to submit the form',
       )
-      ctx.record('act:press-enter-submits', true)
     },
   },
   {
@@ -328,7 +312,6 @@ export const actCases: ContractCase[] = [
       if (value.includes('a') && !value.includes('A')) {
         throw new Error(`Shift+a produced lowercase: ${value}`)
       }
-      ctx.record('act:shift-a-uppercase', true)
     },
   },
   {
@@ -345,7 +328,6 @@ export const actCases: ContractCase[] = [
       if (result.isError) {
         throw new Error(`Cmd+c alias did not resolve: ${textOf(result)}`)
       }
-      ctx.record('act:cmd-c-alias-resolves', true)
     },
   },
   {
@@ -353,7 +335,7 @@ export const actCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      const text = expectError(
+      expectError(
         await ctx.mcp.callTool('act', {
           page,
           kind: 'press',
@@ -362,7 +344,6 @@ export const actCases: ContractCase[] = [
         }),
         'act press invalid key',
       )
-      ctx.record('act:invalid-key-errors', text.length > 0)
     },
   },
   {
@@ -381,34 +362,32 @@ export const actCases: ContractCase[] = [
         page,
         'return getComputedStyle(document.getElementById("tooltip")).display',
       )
-      ctx.record('act:hover-reveals-tooltip', visible.includes('block'))
+      if (!visible.includes('block')) {
+        throw new Error(`hover did not reveal the tooltip: ${visible}`)
+      }
     },
   },
   {
-    name: 'act: focus by ref (shared limitation: errors on both servers)',
+    name: 'act: focus by ref reports the current DOM-domain limitation',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      // VERIFIED SHARED BUG: `act kind=focus` by ref fails identically on
-      // both servers with `CDP error: Document needs to be requested
-      // first` — focusElement() calls DOM.pushNodesByBackendIdsToFrontend
-      // without a prior DOM.getDocument, which a snapshot (Accessibility
-      // domain) never primes. Parity holds; a real click is the working
-      // focus path. Recorded so a one-sided fix trips the parity gate.
-      const result = await ctx.mcp.callTool('act', {
-        page,
-        kind: 'focus',
-        ref: refFor(snap, '"Bio '),
-      })
+      expectError(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'focus',
+          ref: refFor(snap, '"Bio '),
+        }),
+        'act focus by ref',
+      )
       const active = await evalIn(
         ctx,
         page,
         'return document.activeElement && document.activeElement.id',
       )
-      ctx.record('act:focus-by-ref', {
-        errored: result.isError === true,
-        movedActiveElement: active.includes('bio'),
-      })
+      if (active.includes('bio')) {
+        throw new Error('failed focus action unexpectedly moved focus')
+      }
     },
   },
   {
@@ -443,7 +422,6 @@ export const actCases: ContractCase[] = [
       if (!second.includes('false')) {
         throw new Error(`second checkbox click did not uncheck: ${second}`)
       }
-      ctx.record('act:checkbox-toggle-repeatable', true)
     },
   },
   {
@@ -452,27 +430,29 @@ export const actCases: ContractCase[] = [
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
       const ref = refFor(snap, 'Subscribe')
-      const checked = await ctx.mcp.callTool('act', {
-        page,
-        kind: 'check',
-        ref,
-      })
-      const unchecked = await ctx.mcp.callTool('act', {
-        page,
-        kind: 'uncheck',
-        ref,
-      })
-      // Rust's check/uncheck kinds are broken (divergence act-check-kind);
-      // TS applies them.
-      ctx.record(
-        'act:check-uncheck-kinds',
-        { checkOk: !checked.isError, uncheckOk: !unchecked.isError },
-        { divergence: 'act-check-kind' },
+      expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'check', ref }),
+        'act check',
       )
-      if (ctx.server.name === 'typescript') {
-        if (checked.isError || unchecked.isError) {
-          throw new Error('check/uncheck failed on typescript')
-        }
+      const checked = await evalIn(
+        ctx,
+        page,
+        'return document.getElementById("subscribe").checked',
+      )
+      if (!checked.includes('true')) {
+        throw new Error(`check did not set checkbox state: ${checked}`)
+      }
+      expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'uncheck', ref }),
+        'act uncheck',
+      )
+      const unchecked = await evalIn(
+        ctx,
+        page,
+        'return document.getElementById("subscribe").checked',
+      )
+      if (!unchecked.includes('false')) {
+        throw new Error(`uncheck did not clear checkbox state: ${unchecked}`)
       }
     },
   },
@@ -504,12 +484,15 @@ export const actCases: ContractCase[] = [
       ) {
         throw new Error(`select did not apply semantically: ${selectedState}`)
       }
-      const invalid = await ctx.mcp.callTool('act', {
-        page,
-        kind: 'select',
-        ref,
-        value: 'chartreuse',
-      })
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'select',
+          ref,
+          value: 'chartreuse',
+        }),
+        'act select missing option',
+      )
       const missingState = await evalIn(
         ctx,
         page,
@@ -521,12 +504,6 @@ export const actCases: ContractCase[] = [
       ) {
         throw new Error(`missing option changed select state: ${missingState}`)
       }
-      ctx.record('act:styled-select-semantics', {
-        validApplied: true,
-        changeBubbledOnce: true,
-        missingLeftStateUnchanged: true,
-        invalidRejected: invalid.isError === true,
-      })
     },
   },
   {
@@ -540,36 +517,20 @@ export const actCases: ContractCase[] = [
             await evalIn(ctx, page, 'return String(Math.round(window.scrollY))')
           ).match(/\d+/)?.[0] ?? '0',
         )
-      const scroll = await ctx.mcp.callTool('act', {
-        page,
-        kind: 'scroll',
-        direction: 'down',
-        amount: 3,
-      })
-      // TS scrolls ~amount*120px (wheel scroll can settle async); rust's
-      // page scroll is broken today — Input.dispatchMouseEvent times out
-      // (divergence act-scroll). Record actual behavior; assert only on TS.
-      let y = 0
-      if (!scroll.isError) {
-        await waitUntil(
-          async () => {
-            y = await readY()
-            return y > 100
-          },
-          'the viewport to scroll down',
-          { timeoutMs: 5_000 },
-        ).catch(() => {})
-      }
-      ctx.record(
-        'act:scroll-moves-viewport',
-        { scrolled: y > 100, errored: scroll.isError === true },
-        { divergence: 'act-scroll' },
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'scroll',
+          direction: 'down',
+          amount: 3,
+        }),
+        'page-level scroll',
       )
-      if (ctx.server.name === 'typescript' && y <= 100) {
-        throw new Error(
-          `scroll did not move the viewport on typescript: y=${y}`,
-        )
-      }
+      await waitUntil(
+        async () => (await readY()) > 100,
+        'the viewport to scroll down',
+        { timeoutMs: 5_000 },
+      )
     },
   },
   {
@@ -588,15 +549,15 @@ export const actCases: ContractCase[] = [
         ref: refFor(snap, 'item-a'),
         targetRef: refFor(snap, 'item-c'),
       })
+      expectOk(result, 'act drag')
       const after = await evalIn(
         ctx,
         page,
         'return document.getElementById("drag-order").textContent',
       )
-      ctx.record('act:drag-reorders', {
-        accepted: result.isError !== true,
-        orderChanged: before.trim() !== after.trim(),
-      })
+      if (before.trim() === after.trim()) {
+        throw new Error('drag did not reorder the fixture list')
+      }
     },
   },
   {
@@ -607,8 +568,7 @@ export const actCases: ContractCase[] = [
       // A real click on the trigger would wedge for 60s: confirm() blocks
       // the renderer synchronously inside dispatchMouseEvent. Schedule the
       // click off-stack so the dialog opens between CDP calls, then let
-      // the dialog kinds resolve it. TS has no dialog kinds (divergence
-      // act-dialog-kinds), so only rust runs the full flow.
+      // the dialog kinds resolve it.
       const openConfirm = () =>
         ctx.mcp.callTool('evaluate', {
           page,
@@ -621,48 +581,34 @@ export const actCases: ContractCase[] = [
           'return document.getElementById("dialog-result").textContent',
         )
 
-      if (ctx.server.name === 'rust') {
-        await openConfirm()
-        await waitUntil(
-          async () =>
-            !(await ctx.mcp.callTool('act', { page, kind: 'dialog_accept' }))
-              .isError,
-          'dialog_accept to resolve the pending confirm',
-          { timeoutMs: 10_000 },
-        )
-        await waitUntil(
-          async () => (await dialogResult()).includes('confirm:true'),
-          'the accepted confirm to report true',
-        )
-        await openConfirm()
-        await waitUntil(
-          async () =>
-            !(await ctx.mcp.callTool('act', { page, kind: 'dialog_dismiss' }))
-              .isError,
-          'dialog_dismiss to resolve the pending confirm',
-          { timeoutMs: 10_000 },
-        )
-        await waitUntil(
-          async () => (await dialogResult()).includes('confirm:false'),
-          'the dismissed confirm to report false',
-        )
-        ctx.record('act:dialog-kinds-supported', true, {
-          divergence: 'act-dialog-kinds',
-        })
-      } else {
-        // No dialog opened on TS; the kind itself is rejected.
-        const accept = await ctx.mcp.callTool('act', {
-          page,
-          kind: 'dialog_accept',
-        })
-        ctx.record('act:dialog-kinds-supported', !accept.isError, {
-          divergence: 'act-dialog-kinds',
-        })
-      }
+      await openConfirm()
+      await waitUntil(
+        async () =>
+          !(await ctx.mcp.callTool('act', { page, kind: 'dialog_accept' }))
+            .isError,
+        'dialog_accept to resolve the pending confirm',
+        { timeoutMs: 10_000 },
+      )
+      await waitUntil(
+        async () => (await dialogResult()).includes('confirm:true'),
+        'the accepted confirm to report true',
+      )
+      await openConfirm()
+      await waitUntil(
+        async () =>
+          !(await ctx.mcp.callTool('act', { page, kind: 'dialog_dismiss' }))
+            .isError,
+        'dialog_dismiss to resolve the pending confirm',
+        { timeoutMs: 10_000 },
+      )
+      await waitUntil(
+        async () => (await dialogResult()).includes('confirm:false'),
+        'the dismissed confirm to report false',
+      )
     },
   },
   {
-    name: 'act: unknown and stale refs return take-a-new-snapshot errors',
+    name: 'act: unknown and invalidated refs request a new snapshot',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
@@ -670,7 +616,9 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', { page, kind: 'click', ref: 'e999' }),
         'act on unknown ref',
       )
-      ctx.record('act:unknown-ref-class', errorClass(unknown))
+      if (errorClass(unknown) !== 'unknown-ref') {
+        throw new Error(`unexpected unknown-ref error: ${unknown}`)
+      }
 
       const staleRef = refFor(snap, 'Submit')
       // Navigate to invalidate the ref, then reuse it.
@@ -685,7 +633,9 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', { page, kind: 'click', ref: staleRef }),
         'act on stale ref',
       )
-      ctx.record('act:stale-ref-class', errorClass(stale))
+      if (errorClass(stale) !== 'unknown-ref') {
+        throw new Error(`unexpected invalidated-ref error: ${stale}`)
+      }
     },
   },
 ]

@@ -6,12 +6,10 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk, waitUntil } from './helpers'
-import { textOf } from './mcp-client'
-import { axSignature, errorClass } from './parity'
+import { errorClass, expectError, expectOk, waitUntil } from './helpers'
 
 /**
- * Both servers run evaluate code as an async function BODY, so bare
+ * The server runs evaluate code as an async function BODY, so bare
  * expressions come back `undefined` — callers must pass `return …`.
  */
 async function evaluateText(
@@ -58,7 +56,6 @@ export const navigateSnapshotCases: ContractCase[] = [
           `navigate did not embed a ref-carrying snapshot: ${text.slice(0, 400)}`,
         )
       }
-      ctx.record('navigate:embeds-snapshot-with-refs', true)
       const path = await evaluateText(ctx, page, 'return location.pathname')
       if (!path.includes('/form.html')) {
         throw new Error(`navigate did not change the url: ${path}`)
@@ -94,7 +91,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (!afterForward.includes('/form.html')) {
         throw new Error(`forward did not return to form.html: ${afterForward}`)
       }
-      ctx.record('navigate:back-forward-roundtrip', true)
     },
   },
   {
@@ -130,7 +126,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (!marker.includes('fresh-load')) {
         throw new Error(`reload did not reset the marker: ${marker}`)
       }
-      ctx.record('navigate:reload-resets-state', true)
     },
   },
   {
@@ -149,25 +144,25 @@ export const navigateSnapshotCases: ContractCase[] = [
         )
         classes.push(errorClass(text))
       }
-      ctx.record('navigate:blocked-scheme-classes', classes)
-      // Verified current behavior on both servers: the scheme guard
-      // does NOT block chrome:// urls (only javascript:/file:/data:).
+      if (classes.some((error) => error !== 'scheme-refused')) {
+        throw new Error(
+          `scheme guard returned unexpected errors: ${classes.join(', ')}`,
+        )
+      }
+      // chrome:// is intentionally outside this HTTP-scheme guard.
       const chrome = await ctx.mcp.callTool('navigate', {
         page,
         action: 'url',
         url: 'chrome://version',
       })
-      ctx.record(
-        'navigate:chrome-scheme-not-guarded',
-        !textOf(chrome).includes('navigate refuses'),
-      )
+      expectOk(chrome, 'navigate to chrome://version')
     },
   },
   {
     name: 'navigate: garbage url errors',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/links.html'))
-      const text = expectError(
+      expectError(
         await ctx.mcp.callTool('navigate', {
           page,
           action: 'url',
@@ -175,7 +170,6 @@ export const navigateSnapshotCases: ContractCase[] = [
         }),
         'navigate to garbage url',
       )
-      ctx.record('navigate:garbage-url-errors', text.length > 0)
     },
   },
 
@@ -195,7 +189,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       for (const needle of ['Submit', 'Name', 'Color', 'Subscribe']) {
         refFor(text, needle)
       }
-      ctx.record('snapshot:form-ax-signature', axSignature(text))
     },
   },
   {
@@ -208,22 +201,13 @@ export const navigateSnapshotCases: ContractCase[] = [
       )
       const hasParagraphs = /- paragraph/.test(interactive)
       const keepsLinks = interactive.includes('[ref=')
-      // Rust honors mode=interactive; the TS schema has no mode param
-      // and returns the full tree (divergence snapshot-mode-param).
-      ctx.record(
-        'snapshot:interactive-prunes-paragraphs',
-        { droppedParagraphs: !hasParagraphs, keepsRefs: keepsLinks },
-        { divergence: 'snapshot-mode-param' },
-      )
-      if (ctx.server.name === 'rust') {
-        if (hasParagraphs || !keepsLinks) {
-          throw new Error(
-            `interactive mode kept paragraphs or lost refs:\n${interactive.slice(0, 400)}`,
-          )
-        }
-        if (interactive.length >= full.length) {
-          throw new Error('interactive snapshot was not smaller than full')
-        }
+      if (hasParagraphs || !keepsLinks) {
+        throw new Error(
+          `interactive mode kept paragraphs or lost refs:\n${interactive.slice(0, 400)}`,
+        )
+      }
+      if (interactive.length >= full.length) {
+        throw new Error('interactive snapshot was not smaller than full')
       }
     },
   },
@@ -240,13 +224,8 @@ export const navigateSnapshotCases: ContractCase[] = [
       const truncated =
         shallow.split('\n').length < full.split('\n').length &&
         !shallow.includes('option "Red"')
-      ctx.record(
-        'snapshot:depth-truncates',
-        { truncated },
-        { divergence: 'snapshot-depth-param' },
-      )
-      if (ctx.server.name === 'rust' && !truncated) {
-        throw new Error('depth=1 did not prune the option rows on rust')
+      if (!truncated) {
+        throw new Error('depth=1 did not prune the option rows')
       }
     },
   },
@@ -260,7 +239,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (!stable) {
         throw new Error('the Submit button changed refs between snapshots')
       }
-      ctx.record('snapshot:refs-stable-across-snapshots', true)
     },
   },
   {
@@ -275,7 +253,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (!same) {
         throw new Error('interactive mode re-minted refs for the same node')
       }
-      ctx.record('snapshot:modes-share-refs', true)
     },
   },
   {
@@ -283,9 +260,8 @@ export const navigateSnapshotCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const initial = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      // Tick the checkbox via click (rust's check kind is broken — see
-      // divergence act-check-kind) so the checked-rendering probe below
-      // observes a genuinely checked box on both servers.
+      // Use click here so this snapshot case tests rendering independently of
+      // the dedicated check/uncheck action case.
       expectOk(
         await ctx.mcp.callTool('act', {
           page,
@@ -309,14 +285,9 @@ export const navigateSnapshotCases: ContractCase[] = [
           )
         }
       }
-      ctx.record('snapshot:states-rendered', seen)
       // Verified gap on BOTH servers today: a checked box (DOM state
       // true) never renders a [checked] marker from a live CDP AX tree.
       // Parity holds; if either side fixes rendering, this key flags it.
-      ctx.record(
-        'snapshot:checked-state-rendering',
-        /Subscribe[^\n]*\[checked\]/.test(text),
-      )
     },
   },
   {
@@ -339,8 +310,7 @@ export const navigateSnapshotCases: ContractCase[] = [
       const result = await ctx.mcp.callTool('snapshot', { page })
       const text = expectOk(result, 'snapshot of oversized page')
       // Spills surface in the text — `Large snapshot (… tokens, … chars)
-      // saved to: <path>` — not in structuredContent (neither server
-      // plumbs it through the MCP result).
+      // saved to: <path>` — not in structuredContent.
       const path = text.match(/saved to: (\S+)/)?.[1]
       if (!path) {
         throw new Error(
@@ -354,20 +324,15 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (text.length >= spilled.length) {
         throw new Error('inline excerpt is not smaller than the spilled file')
       }
-      ctx.record('snapshot:oversized-spills', {
-        spilled: true,
-        excerptSmaller: true,
-      })
     },
   },
   {
     name: 'snapshot: unknown page errors',
     async run(ctx) {
-      const text = expectError(
+      expectError(
         await ctx.mcp.callTool('snapshot', { page: 99_999 }),
         'snapshot of unknown page',
       )
-      ctx.record('snapshot:unknown-page-class', errorClass(text))
     },
   },
 
@@ -401,7 +366,6 @@ export const navigateSnapshotCases: ContractCase[] = [
           `diff does not report the added node:\n${diff.slice(0, 400)}`,
         )
       }
-      ctx.record('diff:mutation-reports-added-node', true)
     },
   },
   {
@@ -419,7 +383,6 @@ export const navigateSnapshotCases: ContractCase[] = [
       if (!unchanged) {
         throw new Error(`no-op diff reported a change: ${text.slice(0, 300)}`)
       }
-      ctx.record('diff:noop-unchanged', true)
     },
   },
   {
@@ -450,7 +413,6 @@ export const navigateSnapshotCases: ContractCase[] = [
           `diff after navigation did not flag the url change: ${text.slice(0, 300)}`,
         )
       }
-      ctx.record('diff:navigation-flags-url-change', true)
     },
   },
 ]

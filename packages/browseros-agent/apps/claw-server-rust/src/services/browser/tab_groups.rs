@@ -31,13 +31,13 @@ impl TabGroupColor {
     }
 }
 
-/// Hex colour for an agent slug; stable across processes and the TS server.
+/// Hex colour for an agent slug; stable across processes and releases.
 #[must_use]
 pub fn hex_for_slug(slug: &str) -> &'static str {
     color_for_slug(slug).hex()
 }
 
-/// Selects the deterministic tab-group colour shared with the TS Claw server.
+/// Selects the deterministic tab-group colour for an agent slug.
 #[must_use]
 pub fn color_for_slug(slug: &str) -> TabGroupColor {
     let idx = usize::try_from(fnv1a(slug) % u32::try_from(TAB_GROUP_COLORS.len()).unwrap_or(1))

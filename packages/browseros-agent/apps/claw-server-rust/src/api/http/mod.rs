@@ -102,14 +102,11 @@ pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalErr
     )
 }
 
-/// Enforces the header conventions native MCP clients follow (parity with
-/// the TS server's mcp-request-hygiene middleware). A browser-page fetch
-/// against the loopback MCP endpoint always carries `origin` or
-/// `sec-fetch-site`; native MCP clients never do.
+/// Rejects browser-page requests to the loopback MCP endpoint. Browser fetches
+/// carry `origin` or `sec-fetch-site`; native MCP clients do not.
 async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
-    // The nested /mcp service shadows the router's `/{*path}` preflight
-    // route, and the TS server's cors layer answers OPTIONS before its
-    // hygiene runs — mirror both so preflight stays 204 here too.
+    // The nested /mcp service shadows the router's `/{*path}` preflight route,
+    // so answer OPTIONS here to keep loopback preflight behavior consistent.
     if *req.method() == Method::OPTIONS {
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -120,8 +117,7 @@ async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
     let needs_json = match *req.method() {
         Method::POST | Method::PUT | Method::PATCH => true,
         // rmcp's DELETE /mcp session teardown carries no body and no
-        // content-type; the TS server never sees that shape (its clients
-        // always send application/json), so exempt only that case.
+        // content-type, so exempt only that case.
         Method::DELETE => headers.contains_key(header::CONTENT_TYPE),
         _ => false,
     };
