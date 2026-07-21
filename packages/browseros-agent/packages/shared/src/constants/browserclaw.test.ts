@@ -17,7 +17,7 @@ describe('BrowserClaw runtime constants', () => {
   })
 
   test('preserves recording ingest ceilings', () => {
-    expect(RECORDING_INGEST_MAX_BYTES).toBe(4 * 1024 * 1024)
+    expect(RECORDING_INGEST_MAX_BYTES).toBe(16 * 1024 * 1024)
     expect(RECORDING_INGEST_FALLBACK_MAX_BYTES).toBe(2 * 1024 * 1024)
   })
 

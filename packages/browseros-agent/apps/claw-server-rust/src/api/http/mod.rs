@@ -26,7 +26,7 @@ mod sessions;
 mod settings;
 mod system;
 
-pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -55,11 +55,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/sessions/{session_id}/recording/events",
             get(replay::download_events)
                 .post(recordings::append_legacy_events)
-                .layer(DefaultBodyLimit::disable()),
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
         )
         .route(
             "/api/v1/recordings/events",
-            post(recordings::append_document_events).layer(DefaultBodyLimit::disable()),
+            post(recordings::append_document_events)
+                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
         )
         .route(
             "/api/v1/dispatches/{dispatch_id}/screenshot",
