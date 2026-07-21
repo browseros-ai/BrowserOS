@@ -1,29 +1,18 @@
-/**
- * @license
- * Copyright 2026 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
- */
+/** Persists every executed dispatch, then captures its live session best-effort. */
 
 import { logger } from '../../lib/logger'
 import { extractPageId } from '../../lib/tab-activity'
 import { recordToolDispatch } from '../../services/audit-log'
-import { persistScreenshot } from '../../services/screenshots'
+import { writeSessionScreenshot } from '../../services/screenshots'
+import { sessionVisualService } from '../../services/session-visuals'
 import type { ToolEffect } from '../dispatch'
 
-/** Persists cancelled or successful dispatches and their screenshot metadata. */
-export const applyAudit: ToolEffect = ({
+export const applyAudit: ToolEffect = async ({
   call,
   result,
   cancelled,
   durationMs,
 }) => {
-  if (cancelled) {
-    if (call.agent && call.agentLabel) {
-      recordDispatch(call, result, durationMs, call.agentLabel)
-    }
-    return undefined
-  }
-  if (result.isError) return undefined
   if (!call.agent || !call.agentLabel) {
     logger.warn('cockpit dispatch missing identity', {
       tool: call.tool.name,
@@ -55,56 +44,24 @@ export const applyAudit: ToolEffect = ({
     rawArgs: call.args,
     durationMs,
     result: {
-      isError: result.isError ?? false,
+      isError: cancelled || (result.isError ?? false),
       structuredContent: result.structuredContent,
       content: result.content,
     },
   })
   if (dispatchId === null) return undefined
 
-  persistScreenshot({
-    dispatchId,
-    toolName: call.tool.name,
-    sessionId: call.sessionId,
-    pageId,
-    targetId: page?.targetId ?? null,
-    agentId: call.agent.agentId,
-    result: {
-      isError: result.isError ?? false,
-      content: result.content,
-      structuredContent: result.structuredContent,
-    },
-  })
+  try {
+    const bytes = await sessionVisualService.capture(call.sessionId)
+    if (bytes) {
+      await writeSessionScreenshot(call.sessionId, dispatchId, bytes)
+    }
+  } catch (error) {
+    logger.warn('audit screenshot capture failed', {
+      sessionId: call.sessionId,
+      dispatchId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
   return undefined
-}
-
-function recordDispatch(
-  call: Parameters<ToolEffect>[0]['call'],
-  result: Parameters<ToolEffect>[0]['result'],
-  durationMs: number,
-  agentLabel: string,
-): void {
-  if (!call.agent) return
-  const pageId = extractPageId(call.tool.name, call.args)
-  const live = pageId !== null ? call.session?.pages.getInfo(pageId) : null
-  const page = live ?? call.pageSnapshot
-  recordToolDispatch({
-    agentId: call.agent.agentId,
-    slug: call.agent.slug,
-    agentLabel,
-    sessionId: call.sessionId,
-    toolName: call.tool.name,
-    pageId,
-    tabId: page?.tabId ?? null,
-    targetId: page?.targetId ?? null,
-    url: page?.url ?? null,
-    title: page?.title ?? null,
-    rawArgs: call.args,
-    durationMs,
-    result: {
-      isError: true,
-      structuredContent: result.structuredContent,
-      content: result.content,
-    },
-  })
 }

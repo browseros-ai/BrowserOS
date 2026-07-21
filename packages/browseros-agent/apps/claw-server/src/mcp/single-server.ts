@@ -28,7 +28,6 @@ import {
   identityService,
 } from '../lib/mcp-session'
 import { dispatchCancellation } from '../services/dispatch-cancellation'
-import { dropFirstCaptures } from '../services/screenshots'
 import {
   type RecordSessionEndInput,
   recordSessionEnd,
@@ -248,7 +247,6 @@ export async function reapRetainedSessions(now: number): Promise<AgentKey[]> {
           : true
         if (!closed) return null
         ownershipStore.forget(key)
-        dropFirstCaptures(key)
         identityService.forgetRetained(key)
         return key
       } finally {

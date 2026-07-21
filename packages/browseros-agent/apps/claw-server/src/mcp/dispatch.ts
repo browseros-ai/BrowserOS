@@ -81,7 +81,9 @@ export interface ToolEffectContext {
   startedAtMs: number
 }
 
-export type ToolEffect = (context: ToolEffectContext) => ToolResult | undefined
+export type ToolEffect = (
+  context: ToolEffectContext,
+) => ToolResult | undefined | Promise<ToolResult | undefined>
 
 export interface NamedToolEffect {
   name: string
@@ -118,15 +120,15 @@ export function runGuards(
 }
 
 /** Runs effects in order, retaining the latest result when an effect fails. */
-export function runEffects(
+export async function runEffects(
   context: ToolEffectContext,
   effects: readonly NamedToolEffect[] = BASE_EFFECTS,
   warn = logger.warn,
-): ToolResult {
+): Promise<ToolResult> {
   let result = context.result
   for (const effect of effects) {
     try {
-      result = effect.run({ ...context, result }) ?? result
+      result = (await effect.run({ ...context, result })) ?? result
     } catch (error) {
       warn('cockpit tool dispatch effect failed', {
         tool: context.call.tool.name,
@@ -281,7 +283,7 @@ async function dispatchToolCall(call: ToolCall): Promise<ToolResult> {
       error: dispatchErrorText(outcome.result.content),
     })
   }
-  const result = runEffects({ call, ...outcome })
+  const result = await runEffects({ call, ...outcome })
   return wireResult(result)
 }
 

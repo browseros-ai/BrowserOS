@@ -1,534 +1,110 @@
-/**
- * @license
- * Copyright 2025 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Covers both branches of persistScreenshot AND the first-capture
- * policy that guarantees at least one visual anchor per tab.
- *
- *   1. Tool-result branch: image bytes in the tool result get written
- *      regardless of tool name.
- *   2. Screencast-fallback branch: state-mutating page-targeted
- *      dispatches with no image bytes AND a cache frame for the exact
- *      session/page/target AND the env flag on -> cache bytes get written.
- *   3. First-capture override: the FIRST read-only dispatch on a
- *      given (agentId, pageId) pair also writes so an all-read-only
- *      audit still has a visual anchor for each tab. Subsequent
- *      read-only dispatches on the same tab skip.
- * Plus the guard rails: read-only deny-list-after-first, null pageId,
- * empty cache, env flag off, isError true, cross-agent isolation.
- */
-
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
-import { env } from '../../src/env'
-import { screencastCache } from '../../src/services/screencast-cache'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import {
-  clearFirstCapturesForTesting,
-  dropFirstCaptures,
-  type PersistScreenshotInput,
-  persistScreenshot as persistScreenshotService,
-  screenshotPath,
+  getAuditDb,
+  resetAuditDbForTesting,
+  setAuditDbForTesting,
+} from '../../src/modules/db/db'
+import { toolDispatches } from '../../src/modules/db/schema/tool-dispatches.sql'
+import {
+  legacyScreenshotPath,
+  listSessionScreenshots,
+  readSessionScreenshot,
+  screenshotStorageForTesting,
+  sessionScreenshotPath,
+  writeSessionScreenshot,
 } from '../../src/services/screenshots'
 import { withTempBrowserClawDir } from '../_helpers/temp-browserclaw-dir'
 
-const ONE_PX_JPEG_B64 =
-  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAr/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAA//Z'
-
-const AGENT = 'test-agent'
-const SESSION = 'session-a'
-
-function primeCache(
-  pageId: number,
-  b64: string = ONE_PX_JPEG_B64,
-  sessionId = SESSION,
-): void {
-  const raw = Buffer.from(b64, 'base64')
-  screencastCache.set(pageId, {
-    sessionId,
-    targetId: `target-${pageId.toString()}`,
-    jpegBase64: b64,
-    capturedAt: 1_000_000,
-    byteLength: raw.length,
-  })
+function seedDispatch(
+  sessionId: string,
+  createdAt: number,
+  toolName: string,
+): number {
+  return getAuditDb()
+    .insert(toolDispatches)
+    .values({
+      createdAt,
+      agentId: `agent-${sessionId}`,
+      slug: 'codex',
+      agentLabel: 'Codex',
+      sessionId,
+      toolName,
+    })
+    .returning({ id: toolDispatches.id })
+    .get().id
 }
 
-function persistScreenshot(
-  input: Omit<PersistScreenshotInput, 'sessionId' | 'targetId'> &
-    Partial<Pick<PersistScreenshotInput, 'sessionId' | 'targetId'>>,
-): void {
-  persistScreenshotService({
-    sessionId: SESSION,
-    targetId:
-      input.pageId === null ? null : `target-${input.pageId.toString()}`,
-    ...input,
-  })
-}
+describe('session screenshot storage', () => {
+  beforeEach(() => setAuditDbForTesting())
+  afterEach(() => resetAuditDbForTesting())
 
-const ORIGINAL_FALLBACK = env.screencastScreenshotFallback
-
-describe('persistScreenshot', () => {
-  beforeEach(() => {
-    screencastCache.resetForTesting()
-    clearFirstCapturesForTesting()
-    env.screencastScreenshotFallback = true
-  })
-  afterEach(() => {
-    screencastCache.resetForTesting()
-    clearFirstCapturesForTesting()
-    env.screencastScreenshotFallback = ORIGINAL_FALLBACK
+  it('encodes every session id into one path-safe storage segment', () => {
+    for (const sessionId of [
+      'session-live',
+      '../../escape',
+      'slashes/and\\backslashes',
+      '',
+    ]) {
+      const key = screenshotStorageForTesting.safeSessionKey(sessionId)
+      expect(key.startsWith('s-')).toBe(true)
+      expect(key).not.toContain('/')
+      expect(key).not.toContain('\\')
+      expect(key).not.toContain('..')
+    }
   })
 
-  it('writes <dispatchId>.jpg from tool-result image content (explicit screenshot tool)', async () => {
+  it('writes scoped bytes and denies cross-session reads', async () => {
     await withTempBrowserClawDir(async () => {
-      persistScreenshot({
-        dispatchId: 42,
-        toolName: 'screenshot',
-        pageId: 1,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [
-            { type: 'image', data: ONE_PX_JPEG_B64, mimeType: 'image/jpeg' },
-          ],
-          structuredContent: { page: 1, format: 'jpeg', bytes: 0 },
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      const path = screenshotPath(42)
-      expect(existsSync(path)).toBe(true)
-      expect(readFileSync(path).length).toBeGreaterThan(0)
+      const id = seedDispatch('session-a', 100, 'navigate')
+      const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+
+      expect(await writeSessionScreenshot('session-a', id, bytes)).toBe(true)
+      expect(sessionScreenshotPath('session-a', id)).not.toBe(
+        sessionScreenshotPath('session-b', id),
+      )
+      expect(readSessionScreenshot('session-a', id)).toEqual(bytes)
+      expect(readSessionScreenshot('session-b', id)).toBeNull()
+      expect(readSessionScreenshot('session-a', id + 1)).toBeNull()
     })
   })
 
-  it('legacy structured.image field still routes through the tool-result branch', async () => {
+  it('lists existing screenshots oldest-first with id tie-breaking', async () => {
     await withTempBrowserClawDir(async () => {
-      persistScreenshot({
-        dispatchId: 4,
-        toolName: 'screenshot',
-        pageId: 1,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [],
-          structuredContent: { image: ONE_PX_JPEG_B64 },
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(4))).toBe(true)
-    })
-  })
-
-  it('no-op when isError=true even if tool-result carries image bytes AND cache has a frame', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(1)
-      persistScreenshot({
-        dispatchId: 2,
-        toolName: 'screenshot',
-        pageId: 1,
-        agentId: AGENT,
-        result: {
-          isError: true,
-          content: [
-            { type: 'image', data: ONE_PX_JPEG_B64, mimeType: 'image/jpeg' },
-          ],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 30))
-      expect(existsSync(screenshotPath(2))).toBe(false)
-    })
-  })
-
-  it('screencast fallback: state-mutating dispatch with no image bytes + cache frame writes cache bytes', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(7)
-      persistScreenshot({
-        dispatchId: 100,
-        toolName: 'navigate',
-        pageId: 7,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-          structuredContent: { ok: true },
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      const path = screenshotPath(100)
-      expect(existsSync(path)).toBe(true)
-      expect(readFileSync(path).length).toBeGreaterThan(0)
-    })
-  })
-
-  it('does not persist a prior owner frame after an unchanged target transfer', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(8, ONE_PX_JPEG_B64, 'session-a')
-      persistScreenshot({
-        dispatchId: 101,
-        toolName: 'navigate',
-        pageId: 8,
-        agentId: AGENT,
-        sessionId: 'session-b',
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-        },
-      })
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      expect(existsSync(screenshotPath(101))).toBe(false)
-
-      primeCache(8, ONE_PX_JPEG_B64, 'session-b')
-      persistScreenshot({
-        dispatchId: 102,
-        toolName: 'navigate',
-        pageId: 8,
-        agentId: AGENT,
-        sessionId: 'session-b',
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated again' }],
-        },
-      })
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      expect(existsSync(screenshotPath(102))).toBe(true)
-    })
-  })
-
-  it('screencast fallback: `act`, `tabs`, `evaluate` (state-mutating) also get cache bytes', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(3)
-      for (const [dispatchId, toolName] of [
-        [201, 'act'],
-        [202, 'tabs'],
-        [203, 'evaluate'],
-      ] as const) {
-        persistScreenshot({
-          dispatchId,
-          toolName,
-          pageId: 3,
-          agentId: AGENT,
-          result: {
-            isError: false,
-            content: [{ type: 'text', text: 'ok' }],
-            structuredContent: {},
-          },
-        })
+      const laterId = seedDispatch('session-a', 200, 'act')
+      const firstTieId = seedDispatch('session-a', 100, 'navigate')
+      const secondTieId = seedDispatch('session-a', 100, 'snapshot')
+      const foreignId = seedDispatch('session-b', 50, 'read')
+      const missingId = seedDispatch('session-a', 300, 'tabs')
+      const bytes = new Uint8Array([0xff, 0xd8])
+      for (const id of [laterId, firstTieId, secondTieId, foreignId]) {
+        const sessionId = id === foreignId ? 'session-b' : 'session-a'
+        await writeSessionScreenshot(sessionId, id, bytes)
       }
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(201))).toBe(true)
-      expect(existsSync(screenshotPath(202))).toBe(true)
-      expect(existsSync(screenshotPath(203))).toBe(true)
+
+      expect(listSessionScreenshots('session-a')).toEqual([
+        { screenshotId: firstTieId, capturedAt: 100, toolName: 'navigate' },
+        { screenshotId: secondTieId, capturedAt: 100, toolName: 'snapshot' },
+        { screenshotId: laterId, capturedAt: 200, toolName: 'act' },
+      ])
+      expect(listSessionScreenshots('session-a')).not.toContainEqual(
+        expect.objectContaining({ screenshotId: missingId }),
+      )
     })
   })
 
-  it('read-only tools SKIP the fallback once the page has been captured before', async () => {
-    // Simulates the "already got a visual anchor for this tab" case:
-    // pre-mark first-capture-done, then verify snapshot / read / grep
-    // / diff / wait do NOT write.
+  it('reads legacy flat files only after audit ownership succeeds', async () => {
     await withTempBrowserClawDir(async () => {
-      primeCache(9)
-      persistScreenshot({
-        dispatchId: 300,
-        toolName: 'screenshot',
-        pageId: 9,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [
-            { type: 'image', data: ONE_PX_JPEG_B64, mimeType: 'image/jpeg' },
-          ],
-        },
-      })
-      for (const [dispatchId, toolName] of [
-        [301, 'snapshot'],
-        [302, 'read'],
-        [303, 'grep'],
-        [304, 'diff'],
-        [305, 'wait'],
-      ] as const) {
-        persistScreenshot({
-          dispatchId,
-          toolName,
-          pageId: 9,
-          agentId: AGENT,
-          result: {
-            isError: false,
-            content: [{ type: 'text', text: 'read result' }],
-            structuredContent: {},
-          },
-        })
-      }
-      await new Promise((r) => setTimeout(r, 50))
-      for (const dispatchId of [301, 302, 303, 304, 305]) {
-        expect(existsSync(screenshotPath(dispatchId))).toBe(false)
-      }
-    })
-  })
+      const id = seedDispatch('session-a', 100, 'snapshot')
+      const path = legacyScreenshotPath(id)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, new Uint8Array([0xff, 0xd8, 1]))
 
-  it('screencast fallback SKIPS when pageId is null', async () => {
-    await withTempBrowserClawDir(async () => {
-      persistScreenshot({
-        dispatchId: 400,
-        toolName: 'navigate',
-        pageId: null,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 30))
-      expect(existsSync(screenshotPath(400))).toBe(false)
-    })
-  })
-
-  it('screencast fallback SKIPS when the cache has no frame for the pageId', async () => {
-    await withTempBrowserClawDir(async () => {
-      // Cache primed for a DIFFERENT pageId only.
-      primeCache(50)
-      persistScreenshot({
-        dispatchId: 500,
-        toolName: 'navigate',
-        pageId: 51,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 30))
-      expect(existsSync(screenshotPath(500))).toBe(false)
-    })
-  })
-
-  it('screencast fallback SKIPS when env.screencastScreenshotFallback is off (tool-result branch still fires)', async () => {
-    await withTempBrowserClawDir(async () => {
-      env.screencastScreenshotFallback = false
-      primeCache(11)
-      persistScreenshot({
-        dispatchId: 600,
-        toolName: 'navigate',
-        pageId: 11,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 30))
-      expect(existsSync(screenshotPath(600))).toBe(false)
-      // Sanity: tool-result branch STILL fires when flag is off.
-      persistScreenshot({
-        dispatchId: 601,
-        toolName: 'screenshot',
-        pageId: 11,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [
-            { type: 'image', data: ONE_PX_JPEG_B64, mimeType: 'image/jpeg' },
-          ],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(601))).toBe(true)
-    })
-  })
-
-  it('tool-result branch wins over cache when both are available', async () => {
-    await withTempBrowserClawDir(async () => {
-      const CACHE_B64 = ONE_PX_JPEG_B64
-      const TOOL_B64 =
-        '/9j/4AAQSkZJRgABAAEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACv/EABQBAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8Aqp//2Q=='
-      primeCache(1, CACHE_B64)
-      persistScreenshot({
-        dispatchId: 700,
-        toolName: 'screenshot',
-        pageId: 1,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'image', data: TOOL_B64, mimeType: 'image/jpeg' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      const written = readFileSync(screenshotPath(700))
-      expect(written).toEqual(Buffer.from(TOOL_B64, 'base64'))
-      expect(written).not.toEqual(Buffer.from(CACHE_B64, 'base64'))
-    })
-  })
-
-  it('FIRST-CAPTURE: first read on a page writes even though `read` is in the deny-list', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(20)
-      persistScreenshot({
-        dispatchId: 800,
-        toolName: 'read',
-        pageId: 20,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'page content' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(800))).toBe(true)
-    })
-  })
-
-  it('FIRST-CAPTURE: second read on the SAME page does NOT write', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(21)
-      // First read fires the override + marks first-capture-done.
-      persistScreenshot({
-        dispatchId: 900,
-        toolName: 'read',
-        pageId: 21,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'first read' }],
-          structuredContent: {},
-        },
-      })
-      // Second read on the same page hits the deny-list and skips.
-      persistScreenshot({
-        dispatchId: 901,
-        toolName: 'read',
-        pageId: 21,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'second read' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(900))).toBe(true)
-      expect(existsSync(screenshotPath(901))).toBe(false)
-    })
-  })
-
-  it('dropFirstCaptures lets a new session capture the page again', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(23)
-      for (const dispatchId of [950, 951]) {
-        persistScreenshot({
-          dispatchId,
-          toolName: 'read',
-          pageId: 23,
-          agentId: AGENT,
-          result: {
-            isError: false,
-            content: [{ type: 'text', text: 'read' }],
-          },
-        })
-      }
-      dropFirstCaptures(AGENT)
-      persistScreenshot({
-        dispatchId: 952,
-        toolName: 'read',
-        pageId: 23,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'read after reconnect' }],
-        },
-      })
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      expect(existsSync(screenshotPath(950))).toBe(true)
-      expect(existsSync(screenshotPath(951))).toBe(false)
-      expect(existsSync(screenshotPath(952))).toBe(true)
-    })
-  })
-
-  it('FIRST-CAPTURE: state-mutating write also marks; subsequent read on same page skips', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(22)
-      persistScreenshot({
-        dispatchId: 1000,
-        toolName: 'navigate',
-        pageId: 22,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'navigated' }],
-          structuredContent: {},
-        },
-      })
-      // Read on the same page should now skip because the navigate
-      // already marked this page as first-captured.
-      persistScreenshot({
-        dispatchId: 1001,
-        toolName: 'read',
-        pageId: 22,
-        agentId: AGENT,
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'read after navigate' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(1000))).toBe(true)
-      expect(existsSync(screenshotPath(1001))).toBe(false)
-    })
-  })
-
-  it('FIRST-CAPTURE: two agents on the same pageId EACH get their own first-capture write', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(30)
-      persistScreenshot({
-        dispatchId: 1100,
-        toolName: 'read',
-        pageId: 30,
-        agentId: 'agent-a',
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'a reads' }],
-          structuredContent: {},
-        },
-      })
-      persistScreenshot({
-        dispatchId: 1101,
-        toolName: 'read',
-        pageId: 30,
-        agentId: 'agent-b',
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'b reads' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 50))
-      expect(existsSync(screenshotPath(1100))).toBe(true)
-      expect(existsSync(screenshotPath(1101))).toBe(true)
-    })
-  })
-
-  it('FIRST-CAPTURE: cannot override when agentId is null (falls back to strict deny-list)', async () => {
-    await withTempBrowserClawDir(async () => {
-      primeCache(40)
-      persistScreenshot({
-        dispatchId: 1200,
-        toolName: 'read',
-        pageId: 40,
-        agentId: null, // e.g. identity resolution failed
-        result: {
-          isError: false,
-          content: [{ type: 'text', text: 'read' }],
-          structuredContent: {},
-        },
-      })
-      await new Promise((r) => setTimeout(r, 30))
-      expect(existsSync(screenshotPath(1200))).toBe(false)
+      expect(readSessionScreenshot('session-a', id)).toEqual(
+        new Uint8Array([0xff, 0xd8, 1]),
+      )
+      expect(readSessionScreenshot('session-b', id)).toBeNull()
     })
   })
 })

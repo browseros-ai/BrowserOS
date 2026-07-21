@@ -16,6 +16,7 @@ import {
   type RecordingMetadata,
   type SessionDetail,
   type SessionList,
+  type SessionScreenshotList,
   type SystemInfo,
   type TelemetryState,
 } from '@browseros/claw-api'
@@ -89,11 +90,14 @@ export interface CanonicalApiDependencies {
     ndjson: string,
     batchId?: string,
   ): Promise<AppendRecordingEventsResponse | null>
-  getSessionBrowserTabPreview(
+  getSessionPreview(sessionId: string): Awaitable<BinaryAsset | null>
+  listSessionScreenshots(
     sessionId: string,
-    browserTabId: number,
+  ): Awaitable<SessionScreenshotList | null>
+  getSessionScreenshot(
+    sessionId: string,
+    screenshotId: number,
   ): Awaitable<BinaryAsset | null>
-  getDispatchScreenshot(dispatchId: number): BinaryAsset | null
   listConnections(): Promise<ConnectionList>
   connectHarness(harness: Harness): Promise<Connection>
   disconnectHarness(harness: Harness): Promise<Connection>
@@ -241,51 +245,49 @@ export function createCanonicalApiRoute(deps: CanonicalApiDependencies) {
     },
   )
 
+  app.get('/api/v1/sessions/:sessionId/preview', async (c) => {
+    const asset = await deps.getSessionPreview(c.req.param('sessionId'))
+    if (!asset) {
+      return apiError(c, 404, 'preview_not_found', 'session preview not found')
+    }
+    return binaryResponse(asset, 'private, no-store')
+  })
+  app.get('/api/v1/sessions/:sessionId/screenshots', async (c) => {
+    const screenshots = await deps.listSessionScreenshots(
+      c.req.param('sessionId'),
+    )
+    if (!screenshots) {
+      return apiError(c, 404, 'session_not_found', 'session not found')
+    }
+    return c.json(screenshots)
+  })
   app.get(
-    '/api/v1/sessions/:sessionId/browser-tabs/:browserTabId/preview',
+    '/api/v1/sessions/:sessionId/screenshots/:screenshotId',
     async (c) => {
-      const browserTabId = positiveInteger(c.req.param('browserTabId'))
-      if (browserTabId === null) {
+      const screenshotId = positiveInteger(c.req.param('screenshotId'))
+      if (screenshotId === null) {
         return apiError(
           c,
           400,
           'invalid_request',
-          'browserTabId must be positive',
+          'screenshotId must be positive',
         )
       }
-      const asset = await deps.getSessionBrowserTabPreview(
+      const asset = await deps.getSessionScreenshot(
         c.req.param('sessionId'),
-        browserTabId,
+        screenshotId,
       )
       if (!asset) {
         return apiError(
           c,
           404,
-          'preview_not_found',
-          'browser tab preview not found',
+          'screenshot_not_found',
+          'session screenshot not found',
         )
       }
-      // Superseded by the next screencast frame — never serve from cache.
-      return binaryResponse(asset, 'private, max-age=0, must-revalidate')
+      return binaryResponse(asset, 'public, max-age=31536000, immutable')
     },
   )
-  app.get('/api/v1/dispatches/:dispatchId/screenshot', (c) => {
-    const dispatchId = positiveInteger(c.req.param('dispatchId'))
-    if (dispatchId === null) {
-      return apiError(c, 400, 'invalid_request', 'dispatchId must be positive')
-    }
-    const asset = deps.getDispatchScreenshot(dispatchId)
-    if (!asset) {
-      return apiError(
-        c,
-        404,
-        'screenshot_not_found',
-        'dispatch screenshot not found',
-      )
-    }
-    // Written once at capture time — safe to cache hard.
-    return binaryResponse(asset, 'public, max-age=86400, immutable')
-  })
 
   app.get('/api/v1/connections', async (c) =>
     c.json(await deps.listConnections()),

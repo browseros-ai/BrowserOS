@@ -2,7 +2,6 @@ import { describe, expect, it, mock } from 'bun:test'
 import type { ClientIdentity } from '../../src/lib/mcp-session'
 import type { TabActivityRecord } from '../../src/lib/tab-activity'
 import type { SessionTabRow } from '../../src/modules/db/schema/session-tabs.sql'
-import type { ScreencastFrame } from '../../src/services/screencast-cache'
 import {
   type CurrentBrowserPage,
   createSessionQueryService,
@@ -49,7 +48,7 @@ function task(
     toolSequence: ['snapshot'],
     status: 'done',
     errorCount: 0,
-    lastScreenshotDispatchId: null,
+    latestScreenshotId: null,
     cursorId: 1,
     ...overrides,
   }
@@ -110,28 +109,12 @@ function activity(
   }
 }
 
-function frame(
-  pageId: number,
-  targetId: string,
-  jpegBase64 = '/9g=',
-  sessionId = 'session-a',
-): ScreencastFrame {
-  return {
-    sessionId,
-    targetId,
-    jpegBase64,
-    capturedAt: pageId + 5_000,
-    byteLength: jpegBase64.length,
-  }
-}
-
 function setup(overrides: Partial<SessionQueryDependencies> = {}) {
   const identities = [identity('session-a')]
   const tasks = new Map<string, TaskSummary>([['session-a', task('session-a')]])
   const ownerships = [ownership('session-a', 101)]
   const pages = [page(101)]
   const activities = [activity('session-a', 101)]
-  const frames = [frame(1_101, 'target-101')]
   const deps: SessionQueryDependencies = {
     listConnectedIdentities: () => identities,
     getConnectedIdentity: (sessionId) =>
@@ -145,19 +128,8 @@ function setup(overrides: Partial<SessionQueryDependencies> = {}) {
         }),
       ),
     listOpenSessionTabs: () => ownerships,
-    getOpenSessionTab: (sessionId, tabId) =>
-      ownerships.find(
-        (row) => row.sessionId === sessionId && row.tabId === tabId,
-      ) ?? null,
     listBrowserPages: async () => pages,
     snapshotTabActivity: () => activities,
-    getScreencastFrame: (sessionId, pageId, targetId) =>
-      frames.find(
-        (candidate) =>
-          candidate.sessionId === sessionId &&
-          candidate.capturedAt === pageId + 5_000 &&
-          candidate.targetId === targetId,
-      ) ?? null,
     now: () => NOW,
     ...overrides,
   }
@@ -291,18 +263,6 @@ describe('session query service', () => {
       page(104, { targetId: 'target-current' }),
       page(201),
     ])
-    const getScreencastFrame = mock(
-      (
-        sessionId: string,
-        pageId: number,
-        targetId: string,
-      ): ScreencastFrame | null =>
-        sessionId === 'session-a' &&
-        pageId === 1_101 &&
-        targetId === 'target-101'
-          ? frame(pageId, targetId)
-          : null,
-    )
     const identities = [identity('session-a'), identity('session-b')]
     const { service } = setup({
       listConnectedIdentities: () => identities,
@@ -324,7 +284,6 @@ describe('session query service', () => {
         activity('session-a', 104, { targetId: 'target-old' }),
         activity('session-b', 201, { status: 'idle', lastToolAt: 2_500 }),
       ],
-      getScreencastFrame,
     })
 
     const result = await service.listSessions({ status: 'live' })
@@ -344,7 +303,6 @@ describe('session query service', () => {
           lastToolName: 'snapshot',
           toolCount: 2,
           recentTools: [{ name: 'snapshot', at: 2_000 }],
-          previewCapturedAt: 6_101,
         },
         {
           browserTabId: 102,
@@ -367,21 +325,6 @@ describe('session query service', () => {
     ])
     expect(JSON.stringify(first?.live?.browserTabs)).not.toMatch(
       /pageId|targetId|sessionId|profileId|slug|label|harness|color/,
-    )
-    expect(getScreencastFrame).toHaveBeenCalledWith(
-      'session-a',
-      1_101,
-      'target-101',
-    )
-    expect(getScreencastFrame).toHaveBeenCalledWith(
-      'session-a',
-      1_102,
-      'target-102',
-    )
-    expect(getScreencastFrame).toHaveBeenCalledWith(
-      'session-a',
-      1_104,
-      'target-current',
     )
   })
 
@@ -498,57 +441,6 @@ describe('session query service', () => {
     ])
   })
 
-  it('does not transfer an unchanged target frame between session owners', async () => {
-    const identities = [identity('session-a'), identity('session-b')]
-    let ownerships = [ownership('session-a', 101)]
-    let cached = frame(1_101, 'target-101', '/9g=', 'session-a')
-    const { service } = setup({
-      listConnectedIdentities: () => identities,
-      getConnectedIdentity: (sessionId) =>
-        identities.find((record) => record.sessionId === sessionId) ?? null,
-      getTaskSummaries: (sessionIds) =>
-        new Map(sessionIds.map((sessionId) => [sessionId, task(sessionId)])),
-      listOpenSessionTabs: () => ownerships,
-      getOpenSessionTab: (sessionId, tabId) =>
-        ownerships.find(
-          (row) => row.sessionId === sessionId && row.tabId === tabId,
-        ) ?? null,
-      getScreencastFrame: (sessionId, pageId, targetId) =>
-        cached.sessionId === sessionId &&
-        cached.capturedAt === pageId + 5_000 &&
-        cached.targetId === targetId
-          ? cached
-          : null,
-    })
-
-    expect(await service.getSessionBrowserTabPreview('session-a', 101)).toEqual(
-      cached,
-    )
-
-    ownerships = [ownership('session-b', 101)]
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-    expect(
-      await service.getSessionBrowserTabPreview('session-b', 101),
-    ).toBeNull()
-    expect(
-      (await service.listSessions({ status: 'live' })).items.find(
-        (item) => item.sessionId === 'session-b',
-      )?.live?.browserTabs[0],
-    ).not.toHaveProperty('previewCapturedAt')
-
-    cached = frame(1_101, 'target-101', '/9g=', 'session-b')
-    expect(await service.getSessionBrowserTabPreview('session-b', 101)).toEqual(
-      cached,
-    )
-    expect(
-      (await service.listSessions({ status: 'live' })).items.find(
-        (item) => item.sessionId === 'session-b',
-      )?.live?.browserTabs[0],
-    ).toHaveProperty('previewCapturedAt', 6_101)
-  })
-
   it('keeps unfiltered and historical status queries audit-only', async () => {
     const listOpenSessionTabs = mock(() => {
       throw new Error('ownership must not be read')
@@ -559,9 +451,6 @@ describe('session query service', () => {
     const snapshotTabActivity = mock(() => {
       throw new Error('activity must not be read')
     })
-    const getScreencastFrame = mock(() => {
-      throw new Error('cache must not be read')
-    })
     const listTasks = mock(() => ({
       tasks: [task('historical', { status: 'done' })],
       nextCursor: 42,
@@ -571,7 +460,6 @@ describe('session query service', () => {
       listOpenSessionTabs,
       listBrowserPages,
       snapshotTabActivity,
-      getScreencastFrame,
     })
 
     for (const query of [
@@ -587,124 +475,5 @@ describe('session query service', () => {
     expect(listOpenSessionTabs).not.toHaveBeenCalled()
     expect(listBrowserPages).not.toHaveBeenCalled()
     expect(snapshotTabActivity).not.toHaveBeenCalled()
-    expect(getScreencastFrame).not.toHaveBeenCalled()
-  })
-
-  it('serves only a non-empty frame for exact connected ownership and incarnation', async () => {
-    let identities = [identity('session-a')]
-    let ownerships = [ownership('session-a', 101)]
-    let pages = [page(101)]
-    let cached: ScreencastFrame | null = frame(1_101, 'target-101')
-    let reassignDuringBrowserRead = false
-    const calls: string[] = []
-    const { service } = setup({
-      getConnectedIdentity: (sessionId) => {
-        calls.push('identity')
-        return (
-          identities.find((record) => record.sessionId === sessionId) ?? null
-        )
-      },
-      getOpenSessionTab: (sessionId, tabId) => {
-        calls.push('ownership')
-        return (
-          ownerships.find(
-            (row) => row.sessionId === sessionId && row.tabId === tabId,
-          ) ?? null
-        )
-      },
-      listBrowserPages: async () => {
-        calls.push('browser')
-        if (reassignDuringBrowserRead) {
-          ownerships = [ownership('session-b', 101)]
-        }
-        return pages
-      },
-      getScreencastFrame: (sessionId, pageId, targetId) => {
-        calls.push('cache')
-        return cached?.sessionId === sessionId &&
-          cached.targetId === targetId &&
-          pageId === 1_101
-          ? cached
-          : null
-      },
-    })
-
-    expect(await service.getSessionBrowserTabPreview('session-a', 101)).toEqual(
-      cached,
-    )
-    expect(calls).toEqual([
-      'ownership',
-      'identity',
-      'browser',
-      'ownership',
-      'identity',
-      'cache',
-    ])
-
-    for (const missing of [
-      { sessionId: 'missing', tabId: 101, owner: ownerships, current: pages },
-      { sessionId: 'session-a', tabId: 999, owner: ownerships, current: pages },
-      { sessionId: 'session-b', tabId: 101, owner: ownerships, current: pages },
-      { sessionId: 'session-a', tabId: 101, owner: [], current: pages },
-      { sessionId: 'session-a', tabId: 101, owner: ownerships, current: [] },
-    ]) {
-      ownerships = missing.owner
-      pages = missing.current
-      expect(
-        await service.getSessionBrowserTabPreview(
-          missing.sessionId,
-          missing.tabId,
-        ),
-      ).toBeNull()
-    }
-
-    ownerships = [ownership('session-a', 101)]
-    identities = [identity('session-a')]
-    reassignDuringBrowserRead = true
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-    reassignDuringBrowserRead = false
-
-    ownerships = [ownership('session-a', 101)]
-    pages = [page(101, { targetId: 'target-new' })]
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-
-    pages = [page(101)]
-    cached = null
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-    cached = frame(1_101, 'target-101', '')
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-  })
-
-  it('does not read the cache when the session disconnects during browser reconciliation', async () => {
-    let connectedIdentity: ClientIdentity | null = identity('session-a')
-    const openOwnership = ownership('session-a', 101)
-    const currentPage = page(101)
-    const getScreencastFrame = mock(() =>
-      frame(currentPage.pageId, currentPage.targetId),
-    )
-    const { service } = setup({
-      getConnectedIdentity: () => connectedIdentity,
-      getOpenSessionTab: () => openOwnership,
-      listBrowserPages: async () => {
-        connectedIdentity = null
-        return [currentPage]
-      },
-      getScreencastFrame,
-    })
-
-    expect(
-      await service.getSessionBrowserTabPreview('session-a', 101),
-    ).toBeNull()
-    expect(openOwnership.releasedAt).toBeNull()
-    expect(currentPage.targetId).toBe('target-101')
-    expect(getScreencastFrame).not.toHaveBeenCalled()
   })
 })

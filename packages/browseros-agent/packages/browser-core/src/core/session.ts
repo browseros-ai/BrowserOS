@@ -72,6 +72,31 @@ export class BrowserSession {
     })
   }
 
+  /** Captures only while `pageId` still resolves to the expected CDP target. */
+  async screenshotForTarget(
+    pageId: number,
+    targetId: string,
+    options: ScreenshotCaptureOptions = {},
+  ): Promise<ScreenshotCaptureResult | null> {
+    const selected = this.pages.getInfo(pageId)
+    if (!selected || selected.targetId !== targetId) return null
+    let resolved: Awaited<ReturnType<PageManager['getSession']>>
+    try {
+      resolved = await this.pages.getSession(pageId)
+    } catch (error) {
+      const current = this.pages.getInfo(pageId)
+      if (!current || current.targetId !== targetId) return null
+      throw error
+    }
+    const { session, targetId: currentTargetId } = resolved
+    if (currentTargetId !== targetId) return null
+    return captureScreenshotWithAnnotations({
+      pageSession: session,
+      observer: this.observe(pageId),
+      options,
+    })
+  }
+
   /** Raw CDP escape hatch for `run` code, e.g. cdp("Page.navigate", { url }). */
   async cdp(
     method: string,

@@ -5,7 +5,7 @@
  *
  * Production wiring for the canonical API: adapts the server's existing
  * services (audit task store, MCP identity service, replay + recording
- * stores, screencast cache, harness connect) onto the
+ * stores, session visuals, harness connect) onto the
  * implementation-neutral `CanonicalApiDependencies` seam. `createServer`
  * mounts this by default; tests swap in fakes.
  *
@@ -14,7 +14,6 @@
  * *dispatch* is one audited tool call.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
 import type {
   Connection,
   Dispatch,
@@ -48,16 +47,16 @@ import {
   recordingStore,
 } from '../../services/recordings'
 import { replayService } from '../../services/replays'
-import { screencastCache } from '../../services/screencast-cache'
-import { screenshotPath } from '../../services/screenshots'
+import {
+  listSessionScreenshots as listStoredSessionScreenshots,
+  readSessionScreenshot,
+} from '../../services/screenshots'
 import {
   createSessionQueryService,
   sessionSummaryForTask,
 } from '../../services/session-query'
-import {
-  getOpenSessionTab,
-  listOpenSessionTabs,
-} from '../../services/session-tabs'
+import { listOpenSessionTabs } from '../../services/session-tabs'
+import { sessionVisualService } from '../../services/session-visuals'
 import {
   getTask,
   getTaskSummaries,
@@ -73,7 +72,6 @@ const sessionQueryService = createSessionQueryService({
   listTasks,
   getTaskSummaries,
   listOpenSessionTabs,
-  getOpenSessionTab,
   async listBrowserPages() {
     const session = getBrowserSession()
     if (!session) return null
@@ -87,8 +85,6 @@ const sessionQueryService = createSessionQueryService({
     }
   },
   snapshotTabActivity: () => tabActivityRegistry.snapshot(),
-  getScreencastFrame: (sessionId, pageId, targetId) =>
-    screencastCache.getForSessionTarget(sessionId, pageId, targetId),
   now: () => Date.now(),
 })
 
@@ -193,22 +189,18 @@ export const canonicalApiDependencies: CanonicalApiDependencies = {
     )
     return { accepted: appended ? parsed.events.length : 0 }
   },
-  async getSessionBrowserTabPreview(sessionId, browserTabId) {
-    const frame = await sessionQueryService.getSessionBrowserTabPreview(
-      sessionId,
-      browserTabId,
-    )
-    if (!frame) return null
-    const bytes = Buffer.from(frame.jpegBase64, 'base64')
-    return bytes.length === 0
-      ? null
-      : { bytes, etag: frame.capturedAt.toString() }
+  async getSessionPreview(sessionId) {
+    const bytes = await sessionVisualService.capture(sessionId)
+    return bytes ? { bytes } : null
   },
-  getDispatchScreenshot(dispatchId) {
-    const path = screenshotPath(dispatchId)
-    return existsSync(path)
-      ? { bytes: readFileSync(path), etag: dispatchId.toString() }
+  listSessionScreenshots(sessionId) {
+    return knownSession(sessionId)
+      ? { items: listStoredSessionScreenshots(sessionId) }
       : null
+  },
+  getSessionScreenshot(sessionId, screenshotId) {
+    const bytes = readSessionScreenshot(sessionId, screenshotId)
+    return bytes ? { bytes } : null
   },
   async listConnections() {
     return { items: (await listBrowserosConnections()).map(connection) }
@@ -247,7 +239,7 @@ function knownSession(sessionId: string): boolean {
 }
 
 function sessionDetail(task: TaskDetail): SessionDetail {
-  const screenshotIds = new Set(task.screenshotDispatchIds)
+  const screenshotIds = new Set(task.screenshotIds)
   return {
     session: sessionSummaryForTask(
       task,
@@ -269,7 +261,7 @@ function sessionDetail(task: TaskDetail): SessionDetail {
         ...(row.argsJson === null ? {} : { argsJson: row.argsJson }),
         ...(row.resultMeta === null ? {} : { resultMeta: row.resultMeta }),
         ...(row.durationMs === null ? {} : { durationMs: row.durationMs }),
-        hasScreenshot: screenshotIds.has(row.id),
+        ...(screenshotIds.has(row.id) ? { screenshotId: row.id } : {}),
       }
     }),
   }

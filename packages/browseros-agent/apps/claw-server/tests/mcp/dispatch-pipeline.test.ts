@@ -47,7 +47,7 @@ describe('dispatch pipeline', () => {
     })
   })
 
-  it('isolates a throwing effect and returns the tool result', () => {
+  it('isolates a throwing effect and returns the tool result', async () => {
     const result = {
       content: [{ type: 'text' as const, text: 'ok' }],
       structuredContent: { page: 7 },
@@ -57,7 +57,7 @@ describe('dispatch pipeline', () => {
       fields?: Record<string, unknown>
     }> = []
 
-    const returned = runEffects(
+    const returned = await runEffects(
       {
         call: call({}),
         result,

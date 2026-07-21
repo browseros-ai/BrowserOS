@@ -89,11 +89,6 @@ const { getAuditDb, resetAuditDbForTesting, setAuditDbForTesting } =
 const { dispatchCancellation } = await import(
   '../../src/services/dispatch-cancellation'
 )
-const {
-  clearFirstCapturesForTesting,
-  hasFirstCapturesForTesting,
-  markFirstCaptureForTesting,
-} = await import('../../src/services/screenshots')
 const { createServer } = await import('../../src/server')
 const app = createServer()
 
@@ -147,7 +142,6 @@ function seedOwnership(
     title: 'claude/invoice-processing',
     collapsed: false,
   })
-  markFirstCaptureForTesting(key, 7)
 }
 
 const ORIGINAL_IDLE = env.sessionIdleMs
@@ -160,7 +154,6 @@ describe('MCP session lifecycle', () => {
     identityService.clear()
     ownershipStore.clear()
     dispatchCancellation.clear()
-    clearFirstCapturesForTesting()
     groupCalls.length = 0
     nextGroupErrorAction = null
     tabsNewPage = null
@@ -176,7 +169,6 @@ describe('MCP session lifecycle', () => {
     identityService.clear()
     ownershipStore.clear()
     dispatchCancellation.clear()
-    clearFirstCapturesForTesting()
     groupCalls.length = 0
     nextGroupErrorAction = null
     tabsNewPage = null
@@ -222,7 +214,6 @@ describe('MCP session lifecycle', () => {
     ])
     expect(ownershipStore.ownerOf(7)).toBe(identity.key)
     expect(ownershipStore.groupOf(identity.key)?.collapsed).toBe(true)
-    expect(hasFirstCapturesForTesting(identity.key)).toBe(true)
     expect(sweepIdleSessions(Date.now())).toEqual([])
     expect(endRowsFor(sessionId)).toHaveLength(1)
     await client.close()
@@ -391,7 +382,7 @@ describe('MCP session lifecycle', () => {
     await client.close()
   })
 
-  test('expiry closes the group then forgets ownership and captures', async () => {
+  test('expiry closes the group then forgets ownership', async () => {
     const { client, sessionId, identity } = await connect()
     seedOwnership(identity.key)
     setBrowserSession({} as never)
@@ -411,7 +402,6 @@ describe('MCP session lifecycle', () => {
     expect(ownershipStore.ownerOf(7)).toBeNull()
     expect(ownershipStore.ownerOf(8)).toBeNull()
     expect(ownershipStore.groupOf(identity.key)).toBeNull()
-    expect(hasFirstCapturesForTesting(identity.key)).toBe(false)
     expect(identityService.listRetained()).toEqual([])
     expect(await reapRetainedSessions(endedAt + 2_000)).toEqual([])
     await client.close()
@@ -432,12 +422,10 @@ describe('MCP session lifecycle', () => {
     expect(await reapRetainedSessions(endedAt + 1_000)).toEqual([])
     expect(identityService.listRetained()).toHaveLength(1)
     expect(ownershipStore.ownerOf(7)).toBe(identity.key)
-    expect(hasFirstCapturesForTesting(identity.key)).toBe(true)
 
     expect(await reapRetainedSessions(endedAt + 2_000)).toEqual([identity.key])
     expect(identityService.listRetained()).toEqual([])
     expect(ownershipStore.ownerOf(7)).toBeNull()
-    expect(hasFirstCapturesForTesting(identity.key)).toBe(false)
     await client.close()
   })
 

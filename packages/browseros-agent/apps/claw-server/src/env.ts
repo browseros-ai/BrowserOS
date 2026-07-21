@@ -83,15 +83,6 @@ export const env = {
     'CLAW_SESSION_SWEEP_INTERVAL_MS',
     60 * 1000,
   ),
-  // Audit screenshot fallback. When on (default), a successful
-  // state-mutating page-targeted dispatch that did not carry image
-  // bytes in its result grabs the current screencast cache frame for
-  // the tab and persists it as the dispatch's screenshot. Set to
-  // `0`/`false` to revert to the strict behaviour where only the
-  // explicit `screenshot` tool populates the audit's image column.
-  screencastScreenshotFallback: readBoolFlagDefaultTrue(
-    'CLAW_SCREENCAST_SCREENSHOT_FALLBACK',
-  ),
   // Anonymous product analytics (PostHog). Disabled unless a project
   // write key is provided (production builds inject it). `posthogHost`
   // defaults to PostHog US Cloud. `analyticsEnabledByEnv` is an

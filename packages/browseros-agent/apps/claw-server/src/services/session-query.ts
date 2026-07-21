@@ -1,8 +1,7 @@
 /**
  * Session read model for the canonical API. Historical queries stay on the
  * audit store; an explicit live query starts from connected MCP identities and
- * joins durable tab ownership to one reconciled browser snapshot. Preview reads
- * use the same ownership boundary and require an exact current CDP target.
+ * joins durable tab ownership to one reconciled browser snapshot.
  */
 
 import type {
@@ -15,7 +14,6 @@ import type { ClientIdentity } from '../lib/mcp-session'
 import type { TabActivityRecord } from '../lib/tab-activity'
 import type { SessionTabRow } from '../modules/db/schema/session-tabs.sql'
 import { HARNESS_TO_AGENT_ID } from './harnesses'
-import type { ScreencastFrame } from './screencast-cache'
 import type { ListTasksQuery, ListTasksResult, TaskSummary } from './tasks'
 
 export interface SessionQuery {
@@ -45,24 +43,14 @@ export interface SessionQueryDependencies {
     sessionIds: readonly string[],
   ): ReadonlyMap<string, TaskSummary>
   listOpenSessionTabs(): SessionTabRow[]
-  getOpenSessionTab(sessionId: string, tabId: number): SessionTabRow | null
   /** Null means reconciliation was unavailable; an empty array is authoritative. */
   listBrowserPages(): Promise<CurrentBrowserPage[] | null>
   snapshotTabActivity(): TabActivityRecord[]
-  getScreencastFrame(
-    sessionId: string,
-    pageId: number,
-    targetId: string,
-  ): ScreencastFrame | null
   now(): number
 }
 
 export interface SessionQueryService {
   listSessions(query: SessionQuery): Promise<SessionList>
-  getSessionBrowserTabPreview(
-    sessionId: string,
-    browserTabId: number,
-  ): Promise<ScreencastFrame | null>
 }
 
 interface LiveCandidate {
@@ -122,7 +110,6 @@ export function createSessionQueryService(
             ownershipsBySession.get(identity.sessionId) ?? [],
             pagesByTabId,
             activitiesByIncarnation,
-            deps,
           )
           const harness = harnessForIdentity(identity)
           return {
@@ -141,32 +128,6 @@ export function createSessionQueryService(
           }
         }),
       }
-    },
-
-    async getSessionBrowserTabPreview(sessionId, browserTabId) {
-      const ownership = deps.getOpenSessionTab(sessionId, browserTabId)
-      if (!ownership || !deps.getConnectedIdentity(sessionId)) return null
-
-      const pages = await deps.listBrowserPages()
-      if (pages === null) return null
-      const page = pages.find((candidate) => candidate.tabId === browserTabId)
-      if (!page) return null
-
-      // Page reconciliation crosses an async CDP boundary. Re-check ownership
-      // and liveness so a transfer or disconnect during that await cannot
-      // expose the prior session's frame.
-      if (
-        !deps.getOpenSessionTab(sessionId, browserTabId) ||
-        !deps.getConnectedIdentity(sessionId)
-      ) {
-        return null
-      }
-      const frame = deps.getScreencastFrame(
-        sessionId,
-        page.pageId,
-        page.targetId,
-      )
-      return frame?.jpegBase64 ? frame : null
     },
   }
 }
@@ -211,9 +172,9 @@ export function sessionSummaryForTask(
     toolSequence: task.toolSequence,
     status: task.status,
     errorCount: task.errorCount,
-    ...(task.lastScreenshotDispatchId === null
+    ...(task.latestScreenshotId === null
       ? {}
-      : { lastScreenshotDispatchId: task.lastScreenshotDispatchId }),
+      : { latestScreenshotId: task.latestScreenshotId }),
   }
 }
 
@@ -264,18 +225,12 @@ function projectBrowserTabs(
   ownerships: SessionTabRow[],
   pagesByTabId: ReadonlyMap<number, CurrentBrowserPage>,
   activitiesByIncarnation: ReadonlyMap<string, TabActivityRecord>,
-  deps: SessionQueryDependencies,
 ): Array<SessionBrowserTab & { activityState: 'active' | 'idle' | undefined }> {
   const tabs = ownerships.flatMap((ownership) => {
     const page = pagesByTabId.get(ownership.tabId)
     if (!page) return []
     const activity = activitiesByIncarnation.get(
       activityKey(sessionId, page.tabId, page.pageId, page.targetId),
-    )
-    const preview = deps.getScreencastFrame(
-      sessionId,
-      page.pageId,
-      page.targetId,
     )
     const tab: SessionBrowserTab & {
       activityState: 'active' | 'idle' | undefined
@@ -292,7 +247,6 @@ function projectBrowserTabs(
             recentTools: activity.recentTools,
           }
         : { toolCount: 0, recentTools: [] }),
-      ...(preview ? { previewCapturedAt: preview.capturedAt } : {}),
       activityState: activity?.status,
     }
     return [tab]

@@ -76,7 +76,7 @@ const sessionDetail: SessionDetail = {
       label: 'Codex',
       sessionId: 'session-live',
       toolName: 'snapshot',
-      hasScreenshot: true,
+      screenshotId: 1,
     },
   ],
 }
@@ -108,13 +108,14 @@ function dependencies(
     downloadRecordingEvents: async () => '',
     appendRecordingEvents: async () => ({ accepted: 2 }),
     appendLegacyRecordingEvents: async () => ({ accepted: 2 }),
-    getSessionBrowserTabPreview: async () => ({
+    getSessionPreview: async () => ({
       bytes: new Uint8Array([0xff, 0xd8]),
-      etag: '111',
     }),
-    getDispatchScreenshot: () => ({
+    listSessionScreenshots: () => ({
+      items: [{ screenshotId: 1, capturedAt: 100, toolName: 'snapshot' }],
+    }),
+    getSessionScreenshot: () => ({
       bytes: new Uint8Array([0xff, 0xd8]),
-      etag: '1',
     }),
     listConnections: async () => connections,
     connectHarness: async () => connection,
@@ -452,50 +453,50 @@ describe('canonical TypeScript API', () => {
     ).toBeUndefined()
   })
 
-  it('serves session-owned previews and immutable dispatch screenshots', async () => {
+  it('serves fresh previews and session-owned screenshot history', async () => {
     const app = createCanonicalApiRoute(dependencies())
-    const preview = await request(
-      app,
-      '/api/v1/sessions/session-live/browser-tabs/101/preview',
-    )
+    const preview = await request(app, '/api/v1/sessions/session-live/preview')
     expect(preview.status).toBe(200)
     expect(preview.headers.get('content-type')).toBe('image/jpeg')
-    expect(preview.headers.get('cache-control')).toBe(
-      'private, max-age=0, must-revalidate',
-    )
+    expect(preview.headers.get('cache-control')).toBe('private, no-store')
 
-    const screenshot = await request(app, '/api/v1/dispatches/1/screenshot')
+    const list = await request(app, '/api/v1/sessions/session-live/screenshots')
+    expect(list.status).toBe(200)
+    expect(await list.json()).toEqual({
+      items: [{ screenshotId: 1, capturedAt: 100, toolName: 'snapshot' }],
+    })
+
+    const screenshot = await request(
+      app,
+      '/api/v1/sessions/session-live/screenshots/1',
+    )
     expect(screenshot.status).toBe(200)
     expect(screenshot.headers.get('cache-control')).toContain('immutable')
   })
 
-  it('validates browser tab ids before resolving a preview', async () => {
-    const getPreview = mock(async () => null)
+  it('validates screenshot ids before resolving bytes', async () => {
+    const getScreenshot = mock(async () => null)
     const app = createCanonicalApiRoute(
-      dependencies({ getSessionBrowserTabPreview: getPreview }),
+      dependencies({ getSessionScreenshot: getScreenshot }),
     )
 
-    for (const browserTabId of ['0', '-1', '1.5', 'nope']) {
+    for (const screenshotId of ['0', '-1', '1.5', 'nope']) {
       const response = await request(
         app,
-        `/api/v1/sessions/session-live/browser-tabs/${browserTabId}/preview`,
+        `/api/v1/sessions/session-live/screenshots/${screenshotId}`,
       )
       expect(response.status).toBe(400)
       expect(await response.json()).toMatchObject({ code: 'invalid_request' })
     }
-    expect(getPreview).not.toHaveBeenCalled()
+    expect(getScreenshot).not.toHaveBeenCalled()
   })
 
   it('collapses every unresolved preview lookup to the same 404', async () => {
     const app = createCanonicalApiRoute(
-      dependencies({ getSessionBrowserTabPreview: async () => null }),
+      dependencies({ getSessionPreview: async () => null }),
     )
     const bodies = []
-    for (const path of [
-      '/api/v1/sessions/missing/browser-tabs/101/preview',
-      '/api/v1/sessions/session-live/browser-tabs/999/preview',
-      '/api/v1/sessions/session-foreign/browser-tabs/101/preview',
-    ]) {
+    for (const path of ['/api/v1/sessions/missing/preview']) {
       const response = await request(app, path)
       expect(response.status).toBe(404)
       bodies.push(await response.json())
@@ -503,15 +504,7 @@ describe('canonical TypeScript API', () => {
     expect(bodies).toEqual([
       {
         code: 'preview_not_found',
-        message: 'browser tab preview not found',
-      },
-      {
-        code: 'preview_not_found',
-        message: 'browser tab preview not found',
-      },
-      {
-        code: 'preview_not_found',
-        message: 'browser tab preview not found',
+        message: 'session preview not found',
       },
     ])
   })
@@ -521,15 +514,17 @@ describe('canonical TypeScript API', () => {
       dependencies({
         getSession: () => null,
         getRecording: () => null,
-        getSessionBrowserTabPreview: async () => null,
-        getDispatchScreenshot: () => null,
+        getSessionPreview: async () => null,
+        listSessionScreenshots: () => null,
+        getSessionScreenshot: () => null,
       }),
     )
     const cases: Array<[string, number]> = [
       ['/api/v1/sessions/missing', 404],
       ['/api/v1/sessions/missing/recording', 404],
-      ['/api/v1/sessions/missing/browser-tabs/7/preview', 404],
-      ['/api/v1/dispatches/1/screenshot', 404],
+      ['/api/v1/sessions/missing/preview', 404],
+      ['/api/v1/sessions/missing/screenshots', 404],
+      ['/api/v1/sessions/missing/screenshots/1', 404],
       ['/api/v1/connections/Unknown', 404],
     ]
     for (const [path, status] of cases) {
@@ -643,8 +638,8 @@ describe('mounted canonical TypeScript API', () => {
       dispatchId: 1,
       pageId: 7,
       targetId: 'target-7',
-      hasScreenshot: false,
     })
+    expect(body.dispatches[0]).not.toHaveProperty('screenshotId')
     expect(JSON.stringify(body)).not.toContain('agentId')
     expect(JSON.stringify(body)).not.toContain(':null')
   })

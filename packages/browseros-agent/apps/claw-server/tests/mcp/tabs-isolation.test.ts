@@ -111,10 +111,7 @@ const { setAuditDbForTesting, resetAuditDbForTesting } = await import(
   '../../src/modules/db/db'
 )
 const { listDispatches } = await import('../../src/services/audit-log')
-const { screencastCache } = await import('../../src/services/screencast-cache')
-const { clearFirstCapturesForTesting, screenshotPath } = await import(
-  '../../src/services/screenshots'
-)
+const { sessionScreenshotPath } = await import('../../src/services/screenshots')
 const { withTempBrowserClawDir } = await import(
   '../_helpers/temp-browserclaw-dir'
 )
@@ -130,8 +127,16 @@ function stubSessionForPage(
   setBrowserSession({
     pages: {
       getInfo: (id: number) =>
-        id === pageId ? { targetId, url, title } : undefined,
+        id === pageId
+          ? { pageId, tabId: pageId, targetId, url, title }
+          : undefined,
+      list: async () => [{ pageId, tabId: pageId, targetId, url, title }],
     },
+    screenshotForTarget: async () => ({
+      data: Buffer.from('fresh-jpeg').toString('base64'),
+      mimeType: 'image/jpeg',
+      annotations: [],
+    }),
     // biome-ignore lint/suspicious/noExplicitAny: test stub
   } as any)
 }
@@ -176,8 +181,6 @@ describe('per-agent tabs isolation', () => {
     ownershipStore.clear()
     resetTabGroupEffectsForTesting()
     tabActivityRegistry.clear()
-    screencastCache.resetForTesting()
-    clearFirstCapturesForTesting()
     env.sessionIdleMs = 50
   })
   afterEach(() => {
@@ -187,8 +190,6 @@ describe('per-agent tabs isolation', () => {
     ownershipStore.clear()
     resetTabGroupEffectsForTesting()
     tabActivityRegistry.clear()
-    screencastCache.resetForTesting()
-    clearFirstCapturesForTesting()
     setBrowserSession(null)
     env.sessionIdleMs = ORIGINAL_IDLE
     resetAuditDbForTesting()
@@ -197,15 +198,7 @@ describe('per-agent tabs isolation', () => {
   it('strips the wire result after audit, screenshot, ownership, and grouping effects', async () => {
     await withTempBrowserClawDir(async () => {
       stubSessionForPage(7, 'target-7')
-      const jpegBase64 = Buffer.from('cached-jpeg').toString('base64')
       const { client, key, sessionId } = await connect('claude-code')
-      screencastCache.set(7, {
-        sessionId,
-        targetId: 'target-7',
-        jpegBase64,
-        capturedAt: Date.now(),
-        byteLength: Buffer.from(jpegBase64, 'base64').length,
-      })
       queue(
         ok({ page: 7 }),
         ok({ group: { groupId: 'G1', windowId: 42 } }),
@@ -224,8 +217,7 @@ describe('per-agent tabs isolation', () => {
       const row = rows[0]
       if (!row) throw new Error('missing audit row')
       expect(JSON.parse(row.resultMeta).structuredKeys).toEqual(['page'])
-      await waitFor(() => existsSync(screenshotPath(row.id)))
-      expect(existsSync(screenshotPath(row.id))).toBe(true)
+      expect(existsSync(sessionScreenshotPath(sessionId, row.id))).toBe(true)
 
       await client.close()
     })

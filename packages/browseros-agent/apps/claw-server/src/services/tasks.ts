@@ -8,9 +8,9 @@
  * that session. The deriver groups tool_dispatches by session_id at
  * the SQL layer, then walks each group in JS to compute title (first
  * tabs URL), site, status (Live / Done / Failed), and the screenshot
- * dispatch ids in chronological order. The live cockpit uses the separate
- * batched summary projection, which returns grouped rows and never inspects
- * screenshot files or constructs task detail.
+ * ids in chronological order. The live cockpit uses the separate
+ * batched summary projection, which returns grouped rows and only checks
+ * screenshot files needed to expose the latest session-owned visual id.
  *
  * Status semantics:
  *   - Failed: any dispatch with result_meta.isError = 1, or an
@@ -25,7 +25,6 @@
  * same millisecond.
  */
 
-import { existsSync } from 'node:fs'
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 import { getAuditDb } from '../modules/db/db'
 import {
@@ -34,23 +33,17 @@ import {
   type ToolDispatchRow,
   toolDispatches,
 } from '../modules/db/schema/schema'
-import { screenshotPath } from './screenshots'
+import { hasSessionScreenshotFile } from './screenshots'
 
 /**
- * Returns true if this dispatch actually has a screenshot file on
- * disk. Replaces the older `toolName === 'screenshot'` heuristic
- * which predated the screencast fallback + first-capture policy in
- * `persistScreenshot`: many non-screenshot-tool dispatches (navigate,
- * act, tabs new, first read on a page, ...) now produce files too.
- * A tiny `existsSync` per dispatch is cheap for the audit endpoints
- * and correct across every write path.
+ * Screenshot metadata is advertised only after its session-owned file exists.
+ * The legacy flat-file check keeps old captures readable through the new route.
  */
 function dispatchHasScreenshotFile(d: {
   id: number
-  resultMeta: string | null
+  sessionId: string
 }): boolean {
-  if (resultIsError(d.resultMeta)) return false
-  return existsSync(screenshotPath(d.id))
+  return hasSessionScreenshotFile(d.sessionId, d.id)
 }
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000
@@ -71,15 +64,15 @@ export interface TaskSummary {
   toolSequence: string[]
   status: TaskStatus
   errorCount: number
-  lastScreenshotDispatchId: number | null
+  latestScreenshotId: number | null
   /** Highest dispatch id in this session. Used as the list cursor. */
   cursorId: number
 }
 
 export interface TaskDetail extends TaskSummary {
   dispatches: ToolDispatchRow[]
-  /** Dispatch ids of every screenshot in this session, in order. */
-  screenshotDispatchIds: number[]
+  /** Screenshot ids in chronological order. */
+  screenshotIds: number[]
   startEvent: {
     createdAt: number
     clientName: string
@@ -244,9 +237,8 @@ interface TaskSummaryAggregateRow {
 }
 
 /**
- * Reads only summary projections for the requested connected sessions. The
- * grouped SQL returns one row per session and deliberately leaves screenshot
- * discovery to historical/detail reads, where filesystem work is expected.
+ * Reads summary projections for the requested connected sessions and resolves
+ * the newest on-disk screenshot id without constructing task detail.
  */
 export function getTaskSummaries(
   requestedSessionIds: readonly string[],
@@ -297,6 +289,22 @@ export function getTaskSummaries(
     group by session_id
     order by min(id)
   `)
+  const latestScreenshotBySession = new Map<string, number>()
+  const screenshotCandidates = db
+    .select({
+      id: toolDispatches.id,
+      sessionId: toolDispatches.sessionId,
+    })
+    .from(toolDispatches)
+    .where(inArray(toolDispatches.sessionId, sessionIds))
+    .orderBy(desc(toolDispatches.createdAt), desc(toolDispatches.id))
+    .all()
+  for (const candidate of screenshotCandidates) {
+    if (latestScreenshotBySession.has(candidate.sessionId)) continue
+    if (dispatchHasScreenshotFile(candidate)) {
+      latestScreenshotBySession.set(candidate.sessionId, candidate.id)
+    }
+  }
   const ends = db
     .select()
     .from(agentSessionEnds)
@@ -340,7 +348,8 @@ export function getTaskSummaries(
           toolSequence,
           status,
           errorCount: row.errorCount,
-          lastScreenshotDispatchId: null,
+          latestScreenshotId:
+            latestScreenshotBySession.get(row.sessionId) ?? null,
           cursorId: row.cursorId,
         },
       ]
@@ -392,12 +401,7 @@ export function getTask(sessionId: string): TaskDetail | null {
   return {
     ...summary,
     dispatches,
-    screenshotDispatchIds: dispatches
-      // Only include dispatches whose screenshot file actually
-      // exists on disk. Covers the explicit `screenshot` tool, the
-      // screencast fallback path (navigate / act / tabs new / ...),
-      // and the first-capture override for read-only tools. Skipping
-      // missing files avoids broken thumbnails in the UI strip.
+    screenshotIds: dispatches
       .filter(dispatchHasScreenshotFile)
       .map((d) => d.id),
     startEvent: starts[0]
@@ -436,12 +440,7 @@ interface BuildSummaryInput {
 function buildSummary(input: BuildSummaryInput): TaskSummary {
   const ds = input.dispatches
   const first = ds[0]
-  const lastScreenshot = [...ds]
-    .reverse()
-    // Same disk-existence check as getTask's screenshotDispatchIds
-    // filter; picks the most recent dispatch whose JPEG is present
-    // as the hero thumbnail on the TaskCard.
-    .find(dispatchHasScreenshotFile)
+  const latestScreenshot = [...ds].reverse().find(dispatchHasScreenshotFile)
   const site = firstSiteOf(ds)
   const title = site
     ? `Browsed ${site}`
@@ -469,7 +468,7 @@ function buildSummary(input: BuildSummaryInput): TaskSummary {
     toolSequence: ds.map((d) => d.toolName),
     status,
     errorCount: input.errorCount,
-    lastScreenshotDispatchId: lastScreenshot?.id ?? null,
+    latestScreenshotId: latestScreenshot?.id ?? null,
     cursorId: input.cursorId,
   }
 }

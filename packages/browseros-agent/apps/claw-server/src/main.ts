@@ -34,7 +34,6 @@ import { createServer } from './server'
 import { captureEvent, shutdownAnalytics } from './services/analytics'
 import { runIntegrityScan } from './services/integrity-scan'
 import { recordingStore, startRecordingRetention } from './services/recordings'
-import { startScreencastPoller } from './services/screencast-poller'
 import { releaseAllOpenSessionTabs } from './services/session-tabs'
 import { releaseAllOpenClaims } from './services/tab-claims'
 import { publicMcpUrl } from './shared/mcp-url'
@@ -94,15 +93,11 @@ async function start(): Promise<void> {
       cdpPort: env.cdpPort,
     })
   }
-  const screencast = bootstrap
-    ? startScreencastPoller({ session: bootstrap.session })
-    : null
   let exiting = false
   // Stop intake before draining writes so no claim or batch can arrive after closure.
   const cleanup = (): void => {
     if (exiting) return
     exiting = true
-    screencast?.stop()
     const retentionDrain = recordingRetention.stop()
     const killSwitch = setTimeout(() => process.exit(1), 5_000)
     killSwitch.unref()
