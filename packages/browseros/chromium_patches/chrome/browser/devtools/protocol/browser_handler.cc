@@ -704,7 +704,9 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
-+  bwi->GetTabStripModel()->CloseAllTabs();
++  // BrowserWindow::Close owns the full Browser/TabStripModel teardown. Calling
++  // CloseAllTabs() first can synchronously start native-window destruction; a
++  // second close against the same BrowserWindowInterface crashes on macOS.
 +  bwi->GetWindow()->Close();
 +  return Response::Success();
 +}

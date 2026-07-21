@@ -283,9 +283,10 @@ export const tabsCases: ContractCase[] = [
       )
       const windowId = Number(created.match(/\b(\d+)\b/)?.[1])
       ctx.record('windows:create-returns-id', Number.isFinite(windowId))
-      // Closing this hidden window crashes BrowserClaw on the macOS CI runner
-      // (BrowserClaw-2026-07-21-023231/024222.ips fault in -[NSWindow _close]).
-      // This case asserts creation; run teardown owns the hidden-window cleanup.
+      expectOk(
+        await ctx.mcp.callTool('windows', { action: 'close', windowId }),
+        'windows close hidden',
+      )
     },
   },
   {
