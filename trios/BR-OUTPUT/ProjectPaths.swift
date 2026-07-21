@@ -80,4 +80,10 @@ enum ProjectPaths {
     static func claude(_ subpath: String) -> String {
         "\(root)/.claude/\(subpath)"
     }
+
+    // MARK: - Singleton Lock Paths
+
+    static var singletonLockFile: String { "/tmp/trios_singleton.lock" }
+    static var singletonPIDFile: String { "/tmp/trios_singleton.pid" }
+    static var bundleIdentifier: String { "com.browseros.trios" }
 }

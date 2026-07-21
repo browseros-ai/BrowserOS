@@ -2,6 +2,8 @@ import Cocoa
 import Foundation
 
 /// Prevents recursive self-launch of trios by enforcing a single running instance.
+/// Spec source: `.trinity/specs/recursion-guard.md`
+///
 /// Uses three methods in priority order:
 ///   1. POSIX file lock (works for ALL launch paths including ./trios_app)
 ///   2. NSRunningApplication by bundle ID (works for .app bundles)
@@ -14,9 +16,9 @@ import Foundation
 final class RecursionGuard {
     static let shared = RecursionGuard()
 
-    private let lockFilePath = "/tmp/trios_singleton.lock"
-    private let pidFilePath  = "/tmp/trios_singleton.pid"
-    private let bundleID = "com.browseros.trios"
+    private let lockFilePath = ProjectPaths.singletonLockFile
+    private let pidFilePath  = ProjectPaths.singletonPIDFile
+    private let bundleID     = ProjectPaths.bundleIdentifier
 
     /// File descriptor for the POSIX lock. Must stay open for the lock to persist.
     private var lockFD: Int32 = -1
@@ -63,7 +65,7 @@ final class RecursionGuard {
                 activateProcess(pid: pid)
                 return false
             }
-            // Stale PID file — clean it up
+            // Stale PID file - clean it up
             try? FileManager.default.removeItem(atPath: pidFilePath)
         }
 
@@ -171,7 +173,11 @@ final class RecursionGuard {
             let tokens = line.split(separator: " ", omittingEmptySubsequences: true).map { String($0) }
             guard let comm = tokens.first else { return false }
             let isTriosComm = comm == "trios" || comm == "trios_app" || comm.contains("trios")
-            let isTriosArgs = tokens.contains { $0.hasSuffix("/trios.app/Contents/MacOS/trios") || $0 == "./trios_app" || $0 == "trios_app" }
+            let isTriosArgs = tokens.contains {
+                $0.hasSuffix("/trios.app/Contents/MacOS/trios") ||
+                $0 == "./trios_app" ||
+                $0 == "trios_app"
+            }
             return isTriosComm || isTriosArgs
         } catch {
             return false

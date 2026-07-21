@@ -1,21 +1,32 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-fn project_dir() -> String {
-    std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string())
-}
-
-fn worktree_dir() -> String {
-    format!("{}/.worktrees/staging", project_dir())
-}
-
+const DEFAULT_TRIOS_ROOT: &str = "/Users/playra/BrowserOS-full/trios";
 const WORKTREE_BRANCH: &str = "canary";
 const DIRTY_THRESHOLD: usize = 5;
 const SYNC_BEHIND_THRESHOLD: usize = 3;
 
-fn validate_worktree_path() -> bool {
-    let wt = worktree_dir();
-    let proj = project_dir();
+fn project_dir_with(root: Option<&str>) -> String {
+    root.map(|s| s.to_string())
+        .or_else(|| std::env::var("TRIOS_ROOT").ok())
+        .unwrap_or_else(|| DEFAULT_TRIOS_ROOT.to_string())
+}
+
+fn project_dir() -> String {
+    project_dir_with(None)
+}
+
+fn worktree_dir_with(root: Option<&str>) -> String {
+    format!("{}/.worktrees/staging", project_dir_with(root))
+}
+
+fn worktree_dir() -> String {
+    worktree_dir_with(None)
+}
+
+fn validate_worktree_path_with(root: Option<&str>) -> bool {
+    let wt = worktree_dir_with(root);
+    let proj = project_dir_with(root);
 
     let canonical_wt = match std::fs::canonicalize(&wt) {
         Ok(p) => p,
@@ -41,6 +52,10 @@ fn validate_worktree_path() -> bool {
         }
         Err(_) => false,
     }
+}
+
+fn validate_worktree_path() -> bool {
+    validate_worktree_path_with(None)
 }
 
 fn main() {
@@ -346,29 +361,34 @@ mod tests {
 
     #[test]
     fn worktree_dir_contains_staging() {
-        let dir = worktree_dir();
+        let dir = worktree_dir_with(Some(DEFAULT_TRIOS_ROOT));
         assert!(dir.contains(".worktrees/staging"), "worktree_dir should point to .worktrees/staging, got: {}", dir);
     }
 
     #[test]
     fn project_dir_has_fallback() {
-        let dir = project_dir();
+        let dir = project_dir_with(Some(DEFAULT_TRIOS_ROOT));
         assert!(!dir.is_empty());
     }
 
     #[test]
     fn worktree_dir_is_inside_project() {
-        let wt = worktree_dir();
-        let proj = project_dir();
-        assert!(wt.starts_with(&proj), "worktree {} must be under project {}", wt, proj);
+        // Validate against the canonical (resolved) paths so env-var overrides do
+        // not break the assertion when the directory does not exist.
+        let wt = std::fs::canonicalize(worktree_dir_with(Some(DEFAULT_TRIOS_ROOT)))
+            .unwrap_or_else(|_| Path::new(&worktree_dir_with(Some(DEFAULT_TRIOS_ROOT))).to_path_buf());
+        let proj = std::fs::canonicalize(project_dir_with(Some(DEFAULT_TRIOS_ROOT)))
+            .unwrap_or_else(|_| Path::new(&project_dir_with(Some(DEFAULT_TRIOS_ROOT))).to_path_buf());
+        assert!(wt.starts_with(&proj), "worktree {} must be under project {}", wt.display(), proj.display());
     }
 
     #[test]
     fn validate_worktree_rejects_outside_path() {
-        // If worktree doesn't exist, validation should return false
-        std::env::set_var("TRIOS_ROOT", "/tmp/nonexistent-trios-validate-test");
-        let result = validate_worktree_path();
+        // Point validation at a nonexistent project root and ensure it fails
+        // because the worktree path cannot be canonicalized. This test deliberately
+        // does not mutate the process environment so parallel test execution stays
+        // deterministic.
+        let result = validate_worktree_path_with(Some("/tmp/nonexistent-trios-validate-test"));
         assert!(!result);
-        std::env::remove_var("TRIOS_ROOT");
     }
 }
