@@ -55,12 +55,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/sessions/{session_id}/recording/events",
             get(replay::download_events)
                 .post(recordings::append_legacy_events)
-                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+                .layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/recordings/events",
-            post(recordings::append_document_events)
-                .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+            post(recordings::append_document_events).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/v1/dispatches/{dispatch_id}/screenshot",
