@@ -226,19 +226,6 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
         accepted: ndjson.split('\n').filter((line) => line.trim()).length,
       }
     },
-    async appendLegacyRecordingEvents(_sessionId, association, ndjson) {
-      if (
-        association.tabId !== 101 ||
-        association.pageId !== 7 ||
-        association.targetId !== 'target-7'
-      ) {
-        return null
-      }
-      recordingEvents += ndjson
-      return {
-        accepted: ndjson.split('\n').filter((line) => line.trim()).length,
-      }
-    },
     getSessionBrowserTabPreview: (sessionId, browserTabId) =>
       sessionId === primarySession.sessionId && browserTabId === 101
         ? { bytes: new Uint8Array([0xff, 0xd8]) }

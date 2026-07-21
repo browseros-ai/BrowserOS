@@ -172,6 +172,27 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
+    name: 'session recording ingest is unsupported',
+    async run({ baseUrl, liveSessionId }) {
+      const path = `${baseUrl}/api/v1/sessions/${liveSessionId}/recording/events`
+      const before = await fetch(path).then((response) => response.text())
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-ndjson',
+          'x-recording-tab-id': '101',
+          'x-recording-page-id': '7',
+          'x-recording-target-id': 'target-7',
+        },
+        body: '{"ts":175,"data":{"id":"legacy-write"}}\n',
+      })
+      expect([404, 405]).toContain(response.status)
+      const after = await fetch(path).then((download) => download.text())
+      expect(after).toBe(before)
+      expect(after).not.toContain('legacy-write')
+    },
+  },
+  {
     name: 'recording ingest rejects malformed Chrome document IDs',
     async run({ api }) {
       for (const [index, documentId] of [
