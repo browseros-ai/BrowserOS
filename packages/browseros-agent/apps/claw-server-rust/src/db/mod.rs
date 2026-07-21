@@ -1,5 +1,10 @@
+pub mod audit_log;
 pub mod entities;
 mod migration;
+pub mod session_tabs;
+
+pub use audit_log::AuditLog;
+pub use session_tabs::SessionTabLedger;
 
 use crate::error::{AppError, AppResult, IoPath};
 use migration::AuditMigrator;
