@@ -27,9 +27,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
             .map(PageId)
             .collect::<BTreeSet<_>>();
         let ownership = context.call.state.sessions.ownership();
-        for stale_page in ownership.prune_missing_pages(&live_page_ids).await {
-            identity.session.forget_first_capture(&stale_page).await;
-        }
+        ownership.prune_missing_pages(&live_page_ids).await;
         let labels = context
             .call
             .state

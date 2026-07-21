@@ -1,46 +1,31 @@
 use crate::{
     api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id},
-        timeouts::{AUDIT_SCREENSHOT_CAPTURE, SCREENCAST_FRAME_FRESHNESS},
+        timeouts::AUDIT_SCREENSHOT_CAPTURE,
     },
-    clock::now_epoch_ms,
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
-    services::cockpit::ScreencastFrame,
 };
-use base64::Engine;
-use browseros_core::{
-    PageId,
-    screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
-};
+use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
-use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
-use std::future::Future;
 use tokio::time::timeout;
 use tracing::warn;
-
-const READ_ONLY_TOOLS: &[&str] = &["snapshot", "read", "grep", "diff", "wait"];
 
 #[derive(Debug, Clone, Copy)]
 struct AuditRecord {
     row_id: i64,
 }
 
-/// Persists cancelled or successful dispatches and their screenshot metadata.
+/** Persists every executed dispatch, then best-effort captures its session without changing the tool result. */
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if !context.cancelled && context.result.is_error {
-            return Ok(None);
-        }
         let Some(identity) = &context.call.identity else {
-            if !context.cancelled {
-                warn!(
-                    tool = context.call.tool().name,
-                    session_id = %context.call.session_id,
-                    "cockpit dispatch missing identity"
-                );
-            }
+            warn!(
+                tool = context.call.tool().name,
+                session_id = %context.call.session_id,
+                "cockpit dispatch missing identity"
+            );
             return Ok(None);
         };
         let Some(record) = record_dispatch(
@@ -54,9 +39,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         else {
             return Ok(None);
         };
-        if !context.cancelled {
-            persist_screenshot(context.call, context.result, record, identity).await;
-        }
+        persist_screenshot(context.call, record).await;
         Ok(None)
     })
 }
@@ -122,182 +105,35 @@ async fn record_dispatch(
     }
 }
 
-async fn persist_screenshot(
-    call: &ToolCall,
-    result: &ToolResult,
-    record: AuditRecord,
-    identity: &crate::api::mcp::dispatch::ToolIdentity,
-) {
-    let screenshot_page_id = if call.flags.new_page {
-        result_page_id(result)
-    } else {
-        extract_page_id(call)
-    };
-    for image in result.content.iter().filter_map(image_data) {
-        match base64::engine::general_purpose::STANDARD.decode(image.as_bytes()) {
-            Ok(bytes) if !bytes.is_empty() => {
-                if write_screenshot_files(call, record, &bytes).await {
-                    if let Some(page_id) = screenshot_page_id {
-                        identity
-                            .session
-                            .mark_first_capture_done(PageId(page_id))
-                            .await;
-                    }
-                    return;
-                }
-            }
-            Ok(_) => {}
-            Err(error) => warn!(
-                error = %error,
-                dispatch_id = %call.dispatch_id,
-                "tool-result image decode failed"
-            ),
+async fn persist_screenshot(call: &ToolCall, record: AuditRecord) {
+    let capture = timeout(
+        AUDIT_SCREENSHOT_CAPTURE,
+        call.state.visuals.capture(call.session_id.as_str()),
+    )
+    .await;
+    let bytes = match capture {
+        Ok(Ok(Some(bytes))) => bytes,
+        Ok(Ok(None)) => return,
+        Ok(Err(error)) => {
+            warn!(error = %error, dispatch_id = %call.dispatch_id, "audit screenshot capture failed");
+            return;
         }
-    }
-    if !call.state.config.screencast_screenshot_fallback {
-        return;
-    }
-    let Some(page_id) = screenshot_page_id else {
-        return;
-    };
-    let page = PageId(page_id);
-    if READ_ONLY_TOOLS.contains(&call.tool().name)
-        && identity.session.has_first_capture(&page).await
-    {
-        return;
-    }
-    let dispatch_page = call
-        .page_snapshot
-        .clone()
-        .filter(|snapshot| snapshot.page_id == page);
-    let live = match dispatch_page {
-        Some(page) => Some(page),
-        None => match &call.browser_session {
-            Some(browser) => browser.pages.refresh(page.clone()).await.ok().flatten(),
-            None => None,
-        },
-    };
-    let target_id = live.map(|page| page.target_id);
-    let cached = match &target_id {
-        Some(target_id) => {
-            call.state
-                .previews
-                .frame_for(call.session_id.as_str(), page_id, target_id.as_str())
-                .await
+        Err(_) => {
+            warn!(dispatch_id = %call.dispatch_id, "audit screenshot capture timed out");
+            return;
         }
-        None => None,
     };
-    let browser = call.browser_session.clone();
-    let dispatch_id = call.dispatch_id.clone();
-    let Some(jpeg_base64) = fallback_screenshot_data(cached, now_epoch_ms(), move || async move {
-        let browser = browser?;
-        let target_id = target_id?;
-        match timeout(
-            AUDIT_SCREENSHOT_CAPTURE,
-            browser.screenshot_for_target(
-                PageId(page_id),
-                &target_id,
-                fallback_capture_options(),
-            ),
-        )
-        .await
-        {
-            Ok(Ok(Some(capture))) if !capture.data.is_empty() => Some(capture.data),
-            Ok(Ok(Some(_))) | Ok(Ok(None)) => None,
-            Ok(Err(error)) => {
-                warn!(error = %error, dispatch_id = %dispatch_id, "fallback screenshot capture failed");
-                None
-            }
-            Err(_) => {
-                warn!(dispatch_id = %dispatch_id, "fallback screenshot capture timed out");
-                None
-            }
-        }
-    })
-    .await
-    else {
-        return;
-    };
-    match base64::engine::general_purpose::STANDARD.decode(jpeg_base64.as_bytes()) {
-        Ok(bytes) if !bytes.is_empty() => {
-            if write_screenshot_files(call, record, &bytes).await {
-                identity.session.mark_first_capture_done(page).await;
-            }
-        }
-        Ok(_) => {}
-        Err(error) => warn!(
-            error = %error,
-            dispatch_id = %call.dispatch_id,
-            "fallback screenshot decode failed"
-        ),
-    }
-}
-
-async fn write_screenshot_files(call: &ToolCall, record: AuditRecord, bytes: &[u8]) -> bool {
-    let row_key = record.row_id.to_string();
-    if let Err(error) = call.state.screenshots.write(&row_key, bytes).await {
-        warn!(
-            error = %error,
-            dispatch_id = %call.dispatch_id,
-            "screenshot row-id write failed"
-        );
-        return false;
-    }
     if let Err(error) = call
         .state
         .screenshots
-        .write(call.dispatch_id.as_str(), bytes)
+        .write(call.session_id.as_str(), record.row_id, &bytes)
         .await
     {
-        warn!(
-            error = %error,
-            dispatch_id = %call.dispatch_id,
-            "screenshot dispatch-id write failed"
-        );
+        warn!(error = %error, dispatch_id = %call.dispatch_id, "session screenshot write failed");
+        return;
     }
     if let Err(error) = call.state.audit_log.mark_screenshot(record.row_id).await {
-        warn!(
-            error = %error,
-            dispatch_id = %call.dispatch_id,
-            "audit screenshot marker failed"
-        );
-    }
-    true
-}
-
-fn image_data(block: &ContentBlock) -> Option<&str> {
-    match block {
-        ContentBlock::Image(image) => Some(image.data.as_str()),
-        _ => None,
-    }
-}
-
-async fn fallback_screenshot_data<F, Fut>(
-    cached: Option<ScreencastFrame>,
-    now_ms: i64,
-    capture: F,
-) -> Option<String>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Option<String>>,
-{
-    if let Some(frame) = cached
-        && !frame.jpeg_base64.is_empty()
-        && now_ms.abs_diff(frame.captured_at)
-            <= u64::try_from(SCREENCAST_FRAME_FRESHNESS.as_millis()).unwrap_or(u64::MAX)
-    {
-        return Some(frame.jpeg_base64);
-    }
-    capture().await
-}
-
-fn fallback_capture_options() -> ScreenshotCaptureOptions {
-    ScreenshotCaptureOptions {
-        format: Some(ScreenshotFormat::Jpeg),
-        quality: Some(50),
-        full_page: Some(false),
-        annotate: Some(false),
-        clip: None,
+        warn!(error = %error, dispatch_id = %call.dispatch_id, "audit screenshot marker failed");
     }
 }
 
@@ -307,60 +143,11 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use crate::db::audit_log::ListDispatchesQuery;
-    use browseros_core::{TabId, TargetId, pages::PageInfo};
+    use rmcp::model::ContentBlock;
     use serde_json::json;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    fn page_info(target_id: &str) -> PageInfo {
-        PageInfo {
-            page_id: PageId(1),
-            target_id: TargetId::from(target_id.to_string()),
-            tab_id: TabId(101),
-            url: "https://example.com".to_string(),
-            title: "Example".to_string(),
-            is_active: true,
-            is_loading: false,
-            load_progress: 1.0,
-            is_pinned: false,
-            is_hidden: false,
-            window_id: None,
-            index: None,
-            group_id: None,
-        }
-    }
 
     #[tokio::test]
-    async fn explicit_image_persists_when_fallback_is_disabled() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call_with_fallback(
-            "navigate",
-            json!({ "page": 1 }),
-            false,
-        )
-        .await?;
-        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        let result = ToolResult::image("anBlZw==", "image/jpeg", json!({}));
-        persist_screenshot(&call, &result, AuditRecord { row_id: 7 }, identity).await;
-        assert_eq!(
-            call.state.screenshots.read("7").await.unwrap_or_default(),
-            b"jpeg"
-        );
-        assert_eq!(
-            call.state
-                .screenshots
-                .read(call.dispatch_id.as_str())
-                .await
-                .unwrap_or_default(),
-            b"jpeg"
-        );
-        assert!(identity.session.has_first_capture(&PageId(1)).await);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn records_cancellations_but_skips_other_errors() -> anyhow::Result<()> {
+    async fn records_ordinary_errors_and_cancellations() -> anyhow::Result<()> {
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let failed = ToolResult::error("failed");
@@ -371,14 +158,6 @@ mod tests {
             duration_ms: 4,
         })
         .await?;
-        assert!(
-            call.state
-                .audit_log
-                .list_dispatches(ListDispatchesQuery::default())
-                .await?
-                .rows
-                .is_empty()
-        );
 
         let cancelled = ToolResult {
             content: vec![ContentBlock::text("Operation cancelled by the User")],
@@ -395,24 +174,51 @@ mod tests {
             duration_ms: 5,
         })
         .await?;
+
         let rows = call
             .state
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
             .rows;
-        assert_eq!(rows.len(), 1);
-        assert!(
-            rows[0]
-                .result_meta
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| {
+            row.result_meta
                 .as_deref()
-                .is_some_and(|meta| meta.contains("cancellationKind"))
+                .is_some_and(|meta| meta.contains("\"isError\":true"))
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn capture_absence_is_non_fatal_and_keeps_the_dispatch() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let result = ToolResult::text("ok", Some(json!({ "pages": [] })));
+        assert!(
+            apply(ToolEffectContext {
+                call: &call,
+                result: &result,
+                cancelled: false,
+                duration_ms: 1,
+            })
+            .await?
+            .is_none()
+        );
+        assert_eq!(
+            call.state
+                .audit_log
+                .list_dispatches(ListDispatchesQuery::default())
+                .await?
+                .rows
+                .len(),
+            1
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn success_without_identity_writes_no_row() -> anyhow::Result<()> {
+    async fn dispatch_without_identity_writes_no_row() -> anyhow::Result<()> {
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         call.identity = None;
@@ -433,99 +239,5 @@ mod tests {
                 .is_empty()
         );
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn fresh_cache_frame_avoids_a_new_capture() {
-        let captures = Arc::new(AtomicUsize::new(0));
-        let capture_count = captures.clone();
-        let data = fallback_screenshot_data(
-            Some(ScreencastFrame {
-                jpeg_base64: "fresh".to_string(),
-                captured_at: 8_000,
-            }),
-            10_000,
-            move || async move {
-                capture_count.fetch_add(1, Ordering::SeqCst);
-                Some("captured".to_string())
-            },
-        )
-        .await;
-        assert_eq!(data.as_deref(), Some("fresh"));
-        assert_eq!(captures.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn stale_or_missing_cache_frame_takes_a_new_capture() {
-        let captures = Arc::new(AtomicUsize::new(0));
-        for cached in [
-            Some(ScreencastFrame {
-                jpeg_base64: "stale".to_string(),
-                captured_at: 6_999,
-            }),
-            None,
-        ] {
-            let capture_count = captures.clone();
-            let data = fallback_screenshot_data(cached, 10_000, move || async move {
-                capture_count.fetch_add(1, Ordering::SeqCst);
-                Some("captured".to_string())
-            })
-            .await;
-            assert_eq!(data.as_deref(), Some("captured"));
-        }
-        assert_eq!(captures.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn audit_fallback_never_uses_another_sessions_cached_frame() -> anyhow::Result<()> {
-        let mut call =
-            crate::api::mcp::test_support::tool_call("snapshot", json!({ "page": 1 })).await?;
-        call.page_snapshot = Some(page_info("target-1"));
-        call.state
-            .previews
-            .cache_frame(
-                "prior-session",
-                1,
-                "target-1",
-                ScreencastFrame {
-                    jpeg_base64: "anBlZw==".to_string(),
-                    captured_at: now_epoch_ms(),
-                },
-            )
-            .await;
-        let identity = call
-            .identity
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let result = ToolResult::text("ok", None);
-
-        persist_screenshot(&call, &result, AuditRecord { row_id: 7 }, &identity).await;
-        assert!(call.state.screenshots.read("7").await.is_err());
-
-        call.state
-            .previews
-            .cache_frame(
-                call.session_id.as_str(),
-                1,
-                "target-1",
-                ScreencastFrame {
-                    jpeg_base64: "anBlZw==".to_string(),
-                    captured_at: now_epoch_ms(),
-                },
-            )
-            .await;
-        persist_screenshot(&call, &result, AuditRecord { row_id: 8 }, &identity).await;
-        assert_eq!(call.state.screenshots.read("8").await?, b"jpeg");
-        Ok(())
-    }
-
-    #[test]
-    fn fresh_capture_uses_jpeg_quality_fifty_without_clip_or_annotations() {
-        let options = fallback_capture_options();
-        assert_eq!(options.format, Some(ScreenshotFormat::Jpeg));
-        assert_eq!(options.quality, Some(50));
-        assert_eq!(options.full_page, Some(false));
-        assert_eq!(options.annotate, Some(false));
-        assert_eq!(options.clip, None);
     }
 }

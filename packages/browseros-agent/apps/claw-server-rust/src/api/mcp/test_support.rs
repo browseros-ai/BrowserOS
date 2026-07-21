@@ -11,14 +11,6 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolCall> {
-    tool_call_with_fallback(tool_name, raw_args, true).await
-}
-
-pub async fn tool_call_with_fallback(
-    tool_name: &str,
-    raw_args: Value,
-    screencast_screenshot_fallback: bool,
-) -> anyhow::Result<ToolCall> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let home = dir.path().join("home");
@@ -33,7 +25,6 @@ pub async fn tool_call_with_fallback(
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
-        screencast_screenshot_fallback,
         dev_mode: false,
         auth_token: None,
     });

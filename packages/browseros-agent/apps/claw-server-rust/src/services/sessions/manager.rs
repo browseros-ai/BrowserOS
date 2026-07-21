@@ -33,7 +33,6 @@ pub type RetainedGroupHook = Arc<
 >;
 
 struct RetainedSession {
-    session: Arc<Session>,
     ended_at: Instant,
 }
 
@@ -283,7 +282,6 @@ impl Sessions {
         self.retained.write().await.insert(
             key.clone(),
             RetainedSession {
-                session,
                 ended_at: Instant::now(),
             },
         );
@@ -335,16 +333,10 @@ impl Sessions {
                 }
                 None => self.ownership.tab_group_ref(&key).await.is_none(),
             };
-            if closed {
-                let retained = self.retained.write().await.remove(&key);
-                if let Some(retained) = retained {
-                    for page_id in self.ownership.owned_pages(&key).await {
-                        retained.session.forget_first_capture(&page_id).await;
-                    }
-                    self.ownership.forget(&key).await;
-                    self.reserved_keys.lock().await.remove(&key);
-                    reaped += 1;
-                }
+            if closed && self.retained.write().await.remove(&key).is_some() {
+                self.ownership.forget(&key).await;
+                self.reserved_keys.lock().await.remove(&key);
+                reaped += 1;
             }
             self.reaping_keys.lock().await.remove(&key);
         }
@@ -576,9 +568,6 @@ mod tests {
             .ownership()
             .claim_page(key.clone(), browseros_core::PageId(4))
             .await;
-        session
-            .mark_first_capture_done(browseros_core::PageId(4))
-            .await;
         registry
             .ownership()
             .set_tab_group_ref(key.clone(), Some("group-4".to_string()))
@@ -600,7 +589,6 @@ mod tests {
                 .await,
             Some(key.clone())
         );
-        assert!(session.has_first_capture(&browseros_core::PageId(4)).await);
 
         tokio::time::advance(Duration::from_secs(9)).await;
         assert_eq!(registry.reap_retained(Instant::now()).await, 0);
@@ -609,7 +597,6 @@ mod tests {
         assert_eq!(registry.reap_retained(Instant::now()).await, 1);
         assert_eq!(registry.retained.read().await.len(), 0);
         assert_eq!(registry.ownership().tab_group_ref(&key).await, None);
-        assert!(!session.has_first_capture(&browseros_core::PageId(4)).await);
         assert!(!registry.reserved_keys.lock().await.contains(&key));
         assert_eq!(
             actions

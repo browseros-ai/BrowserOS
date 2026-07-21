@@ -1,4 +1,4 @@
-use super::{dispatches::jpeg_response, error, internal};
+use super::{error, internal, screenshots::jpeg_response};
 use crate::{
     AppState,
     error::{CanonicalError, RequestId},

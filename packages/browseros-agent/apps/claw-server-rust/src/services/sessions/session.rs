@@ -2,16 +2,8 @@ use crate::{
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, SessionId},
 };
-use browseros_core::PageId;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    time::Duration,
-};
-use tokio::{
-    sync::{Mutex, RwLock},
-    time::Instant,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use tokio::{sync::Mutex, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 /// Runtime state for one MCP transport session.
@@ -21,7 +13,6 @@ pub struct Session {
     id: SessionId,
     agent: ClientIdentity,
     identity: ConversationIdentity,
-    first_captures: RwLock<BTreeSet<PageId>>,
     active_dispatches: Mutex<BTreeMap<DispatchId, CancellationToken>>,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
@@ -39,7 +30,6 @@ impl Session {
             id,
             agent,
             identity,
-            first_captures: RwLock::new(BTreeSet::new()),
             active_dispatches: Mutex::new(BTreeMap::new()),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
@@ -84,18 +74,6 @@ impl Session {
 
     pub async fn idle_for(&self, now: Instant) -> Duration {
         now.saturating_duration_since(*self.last_activity.lock().await)
-    }
-
-    pub async fn has_first_capture(&self, page_id: &PageId) -> bool {
-        self.first_captures.read().await.contains(page_id)
-    }
-
-    pub async fn mark_first_capture_done(&self, page_id: PageId) {
-        self.first_captures.write().await.insert(page_id);
-    }
-
-    pub async fn forget_first_capture(&self, page_id: &PageId) {
-        self.first_captures.write().await.remove(page_id);
     }
 
     pub fn cancel(&self) {

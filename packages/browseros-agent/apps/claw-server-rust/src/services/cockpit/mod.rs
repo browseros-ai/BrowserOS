@@ -1,12 +1,8 @@
 mod activity;
-mod previews;
 mod query;
 mod visual;
 
-pub use activity::{
-    RecordToolInput, ScreencastFrame, TabActivityRecord, TabActivityService, ToolEvent,
-};
-pub use previews::{FrameReadGate, PreviewService};
+pub use activity::{RecordToolInput, TabActivityRecord, TabActivityService, ToolEvent};
 pub use query::{
     CockpitQuery, LiveActivityState, LiveSessionFilters, LiveSessionProjection,
     LiveStateProjection, LiveTabProjection,

@@ -42,12 +42,6 @@ pub struct TabActivityRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct ScreencastFrame {
-    pub jpeg_base64: String,
-    pub captured_at: i64,
-}
-
-#[derive(Debug, Clone)]
 struct RawRecord {
     /// Replaced on every mutation so reconciliation can detect both updates and remove/reinsert ABA races.
     version: Arc<()>,

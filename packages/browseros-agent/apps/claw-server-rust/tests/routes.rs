@@ -39,14 +39,6 @@ async fn test_app() -> anyhow::Result<TestApp> {
 }
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
-    test_app_with_options(cdp_port, start_browser, true).await
-}
-
-async fn test_app_with_options(
-    cdp_port: u16,
-    start_browser: bool,
-    screencast_screenshot_fallback: bool,
-) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -59,7 +51,6 @@ async fn test_app_with_options(
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
-        screencast_screenshot_fallback,
         dev_mode: false,
         auth_token: None,
     });
@@ -710,6 +701,19 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
         rows.iter()
             .any(|row| row.tool_name == "tabs" && row.dispatch_id.is_some())
     );
+    let screenshot = rows
+        .iter()
+        .find(|row| row.has_screenshot)
+        .ok_or_else(|| anyhow::anyhow!("no dispatch had a session screenshot"))?;
+    assert_eq!(
+        tokio::fs::read(app.state.screenshots.path_for(&session_id, screenshot.id)).await?,
+        b"jpeg"
+    );
+    assert!(
+        tokio::fs::metadata(app.state.screenshots.legacy_path_for(screenshot.id))
+            .await
+            .is_err()
+    );
 
     drop(mock);
     Ok(())
@@ -814,37 +818,6 @@ async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_acces
     )
     .await?;
     assert_eq!(body["result"]["isError"], true);
-    drop(mock);
-    Ok(())
-}
-
-#[tokio::test]
-async fn screencast_fallback_flag_disables_fallback_screenshots() -> anyhow::Result<()> {
-    let mock = MockCdp::start().await?;
-    let app = test_app_with_options(mock.cdp_port, false, false).await?;
-    app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app).await?;
-    let session_id = initialize_mcp(&app).await?;
-
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(tabs_new_request(30)),
-        &[("mcp-session-id", &session_id)],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-
-    let dispatches = app
-        .state
-        .audit_log
-        .list_dispatches(Default::default())
-        .await?;
-    let rows = &dispatches.rows;
-    assert_eq!(rows.len(), 1);
-    assert!(!rows[0].has_screenshot);
     drop(mock);
     Ok(())
 }

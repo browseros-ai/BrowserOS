@@ -13,7 +13,6 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
         if let Some(owner) = call.state.sessions.owner_of_page(&page_id).await {
             if page_missing_after_refresh(call, &page_id).await {
                 ownership.remove_page(&page_id).await;
-                identity.session.forget_first_capture(&page_id).await;
             } else if owner == identity.ownership_key {
                 return None;
             }

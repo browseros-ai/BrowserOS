@@ -238,7 +238,6 @@ async fn test_app() -> anyhow::Result<TestApp> {
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
-        screencast_screenshot_fallback: true,
         dev_mode: false,
         auth_token: None,
     });
@@ -364,6 +363,8 @@ async fn retired_rest_routes_are_unmounted() -> anyhow::Result<()> {
         ("POST", "/recordings/tabs/1/events"),
         ("GET", "/audit/replays/session-1"),
         ("GET", "/audit/replays/session-1/meta"),
+        ("GET", "/api/v1/sessions/session-1/browser-tabs/7/preview"),
+        ("GET", "/api/v1/dispatches/1/screenshot"),
     ] {
         let (status, _, bytes) = request(&app.router, method, path, None, Body::empty()).await?;
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
@@ -735,6 +736,7 @@ struct LiveFixture {
     primary: Arc<Session>,
     second: Arc<Session>,
     zero_tab: Arc<Session>,
+    screenshot_id: i64,
 }
 
 async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
@@ -813,15 +815,20 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
             0,
         );
     }
-    app.state
+    let legacy_screenshot = app
+        .state
         .screenshots
-        .write(&screenshot_dispatch_id.to_string(), &[0xff, 0xd8])
-        .await?;
+        .legacy_path_for(screenshot_dispatch_id);
+    if let Some(parent) = legacy_screenshot.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(legacy_screenshot, [0xff, 0xd8]).await?;
     app.connection.reset_get_tabs_calls();
     Ok(LiveFixture {
         primary,
         second,
         zero_tab,
+        screenshot_id: screenshot_dispatch_id,
     })
 }
 
@@ -1143,6 +1150,76 @@ async fn session_preview_rejects_session_without_open_targets() -> anyhow::Resul
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json_body(&bytes)?["code"], "preview_not_found");
     assert_eq!(app.connection.capture_calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_screenshot_history_is_ordered_owned_and_immutable() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let collection = format!(
+        "/api/v1/sessions/{}/screenshots",
+        fixture.primary.id().as_str()
+    );
+    let (status, _, bytes) = request(&app.router, "GET", &collection, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["items"][0]["screenshotId"], fixture.screenshot_id);
+    assert_eq!(body["items"][0]["toolName"], "snapshot");
+    assert!(body["items"][0]["capturedAt"].is_i64());
+
+    let detail_path = format!("/api/v1/sessions/{}", fixture.primary.id().as_str());
+    let (status, _, bytes) = request(&app.router, "GET", &detail_path, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let detail = json_body(&bytes)?;
+    assert_eq!(
+        detail["session"]["latestScreenshotId"],
+        fixture.screenshot_id
+    );
+    assert_eq!(
+        detail["dispatches"][0]["screenshotId"],
+        fixture.screenshot_id
+    );
+    assert!(detail["session"].get("lastScreenshotDispatchId").is_none());
+    assert!(detail["dispatches"][0].get("hasScreenshot").is_none());
+
+    let item = format!("{collection}/{}", fixture.screenshot_id);
+    let (status, headers, bytes) = request(&app.router, "GET", &item, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/jpeg");
+    assert_eq!(
+        headers[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(bytes, vec![0xff, 0xd8]);
+
+    for path in [
+        format!(
+            "/api/v1/sessions/{}/screenshots/{}",
+            fixture.second.id().as_str(),
+            fixture.screenshot_id
+        ),
+        format!("{collection}/999"),
+    ] {
+        let (status, _, bytes) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "GET {path}");
+        assert_eq!(json_body(&bytes)?["code"], "screenshot_not_found");
+    }
+
+    for path in [format!("{collection}/0"), format!("{collection}/invalid")] {
+        let (status, _, bytes) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "GET {path}");
+        assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+    }
+
+    let missing_file_id = seed_dispatch(&app, fixture.primary.id().as_str()).await?;
+    app.state.audit_log.mark_screenshot(missing_file_id).await?;
+    let missing_file = format!("{collection}/{missing_file_id}");
+    let (status, _, bytes) =
+        request(&app.router, "GET", &missing_file, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json_body(&bytes)?["code"], "screenshot_not_found");
     Ok(())
 }
 

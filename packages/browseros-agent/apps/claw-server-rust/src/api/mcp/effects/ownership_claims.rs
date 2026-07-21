@@ -83,7 +83,6 @@ pub fn apply(
                 .ownership()
                 .remove_page(&page_id)
                 .await;
-            identity.session.forget_first_capture(&page_id).await;
         }
         Ok(None)
     })
@@ -248,7 +247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_page_removes_owned_page_and_first_capture() -> anyhow::Result<()> {
+    async fn close_page_removes_owned_page() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "close", "page": 9 }),
@@ -260,7 +259,6 @@ mod tests {
             .ownership()
             .claim_page(identity.ownership_key.clone(), PageId(9))
             .await;
-        identity.session.mark_first_capture_done(PageId(9)).await;
         let result = ToolResult::text("closed page 9", Some(json!({ "page": 9 })));
         apply(ToolEffectContext {
             call: &call,
@@ -271,7 +269,6 @@ mod tests {
         .await
         .unwrap_or_else(|error| panic!("effect failed: {error}"));
         assert_eq!(call.state.sessions.owner_of_page(&PageId(9)).await, None);
-        assert!(!identity.session.has_first_capture(&PageId(9)).await);
         Ok(())
     }
 

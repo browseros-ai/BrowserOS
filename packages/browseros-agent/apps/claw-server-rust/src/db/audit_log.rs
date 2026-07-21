@@ -70,6 +70,13 @@ pub struct ListDispatchesQuery {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionScreenshotRow {
+    pub screenshot_id: i64,
+    pub captured_at: i64,
+    pub tool_name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
@@ -414,7 +421,7 @@ impl AuditLog {
         let dispatches = query_dispatches_for_session(self.db.connection(), session_id).await?;
         let screenshot_dispatch_ids = dispatches
             .iter()
-            .filter(|row| row.has_screenshot && !result_is_error(row.result_meta.as_deref()))
+            .filter(|row| row.has_screenshot)
             .map(|row| row.id)
             .collect();
         let start_event = query_start(self.db.connection(), session_id)
@@ -430,6 +437,47 @@ impl AuditLog {
             start_event,
             end_event,
         }))
+    }
+
+    pub async fn list_session_screenshots(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<Vec<SessionScreenshotRow>>> {
+        if Tasks::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(|row| SessionScreenshotRow {
+                screenshot_id: row.id,
+                captured_at: row.created_at,
+                tool_name: row.tool_name,
+            })
+            .collect();
+        Ok(Some(rows))
+    }
+
+    pub async fn session_owns_screenshot(
+        &self,
+        session_id: &str,
+        screenshot_id: i64,
+    ) -> AppResult<bool> {
+        Ok(ToolDispatches::find_by_id(screenshot_id)
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .one(self.db.connection())
+            .await?
+            .is_some())
     }
 }
 
@@ -479,7 +527,7 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
     let tool_sequence: Vec<String> = dispatches.iter().map(|row| row.tool_name.clone()).collect();
     let screenshot_ids: Vec<i64> = dispatches
         .iter()
-        .filter(|row| row.has_screenshot && !result_is_error(row.result_meta.as_deref()))
+        .filter(|row| row.has_screenshot)
         .map(|row| row.id)
         .collect();
     let last_screenshot_dispatch_id = screenshot_ids.last().copied();

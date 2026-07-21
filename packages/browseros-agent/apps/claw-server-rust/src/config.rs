@@ -37,7 +37,6 @@ pub struct Config {
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
-    pub screencast_screenshot_fallback: bool,
     pub dev_mode: bool,
     pub auth_token: Option<String>,
 }
@@ -182,10 +181,6 @@ impl Config {
                 .replay
                 .map(|replay| replay.retention_days.get())
                 .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
-            screencast_screenshot_fallback: read_bool_default_true(
-                env,
-                "CLAW_SCREENCAST_SCREENSHOT_FALLBACK",
-            ),
             dev_mode,
             auth_token,
         })
@@ -250,14 +245,6 @@ fn parse_positive_int_prefix(raw: &str) -> Option<u64> {
         .parse::<u64>()
         .ok()
         .filter(|value| *value > 0)
-}
-
-fn read_bool_default_true(env: &ConfigEnv, key: &str) -> bool {
-    let Some(raw) = env.get(key) else {
-        return true;
-    };
-    let normalized = raw.trim().to_ascii_lowercase();
-    normalized != "0" && normalized != "false"
 }
 
 fn clean_string(value: &str) -> Option<String> {
@@ -436,40 +423,6 @@ mod tests {
         assert_eq!(cfg.session_idle, Duration::from_millis(300_000));
         assert_eq!(cfg.session_retention, Duration::from_millis(7_200_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
-        Ok(())
-    }
-
-    #[test]
-    fn screencast_fallback_flag_disables_only_on_zero_or_false() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let config_path = dir.path().join("sidecar.json");
-        fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
-        let home = dir.path().join("home");
-
-        let cases: &[(Option<&str>, bool)] = &[
-            (None, true),
-            (Some("0"), false),
-            (Some("false"), false),
-            (Some(" FALSE "), false),
-            (Some("1"), true),
-            (Some("off"), true),
-            (Some(""), true),
-        ];
-        for (raw, expected) in cases {
-            let mut vars = BTreeMap::new();
-            if let Some(raw) = raw {
-                vars.insert(
-                    "CLAW_SCREENCAST_SCREENSHOT_FALLBACK".to_string(),
-                    (*raw).to_string(),
-                );
-            }
-            let cfg =
-                Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))?;
-            assert_eq!(
-                cfg.screencast_screenshot_fallback, *expected,
-                "flag raw: {raw:?}"
-            );
-        }
         Ok(())
     }
 
