@@ -1,7 +1,6 @@
 telemetry:
   get:
     operationId: getTelemetry
-    tags: [settings]
     responses:
       '200':
         description: Current telemetry state.
@@ -13,7 +12,6 @@ telemetry:
         $ref: ../responses.yaml#/InternalError
   put:
     operationId: updateTelemetry
-    tags: [settings]
     requestBody:
       required: true
       content:

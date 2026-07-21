@@ -5,13 +5,6 @@ info:
   description: Implementation-neutral REST contract shared by BrowserClaw clients and servers.
 servers:
   - url: http://127.0.0.1:9200
-tags:
-  - name: connections
-  - name: dispatches
-  - name: recordings
-  - name: sessions
-  - name: settings
-  - name: system
 paths:
   /system/health:
     $ref: ./paths/system.yaml#/health

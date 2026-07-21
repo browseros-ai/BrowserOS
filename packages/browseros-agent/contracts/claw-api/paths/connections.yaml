@@ -1,7 +1,6 @@
 collection:
   get:
     operationId: listConnections
-    tags: [connections]
     responses:
       '200':
         description: Supported harness connection states.
@@ -14,7 +13,6 @@ collection:
 harness:
   put:
     operationId: connectHarness
-    tags: [connections]
     parameters:
       - $ref: ../parameters.yaml#/Harness
     responses:
@@ -30,7 +28,6 @@ harness:
         $ref: ../responses.yaml#/InternalError
   delete:
     operationId: disconnectHarness
-    tags: [connections]
     parameters:
       - $ref: ../parameters.yaml#/Harness
     responses:

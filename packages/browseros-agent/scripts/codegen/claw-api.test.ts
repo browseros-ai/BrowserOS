@@ -12,7 +12,6 @@ import {
 
 interface OpenApiOperation {
   operationId?: string
-  tags?: string[]
   parameters?: Array<{
     in?: string
     name?: string
@@ -21,7 +20,6 @@ interface OpenApiOperation {
 
 interface OpenApiDocument {
   openapi?: string
-  tags?: Array<{ name?: string }>
   paths?: Record<string, Record<string, OpenApiOperation> & { $ref?: string }>
   components?: {
     schemas?: Record<string, unknown>
@@ -126,8 +124,8 @@ describe('BrowserClaw OpenAPI contract', () => {
     )
 
     const pathItems = await resolvePathItems(document)
-    const operations = pathItems.flatMap((path) =>
-      Object.entries(path).filter(([method]) =>
+    const operations = pathItems.flatMap(({ pathItem }) =>
+      Object.entries(pathItem).filter(([method]) =>
         ['get', 'put', 'post', 'delete', 'patch'].includes(method),
       ),
     )
@@ -147,17 +145,9 @@ describe('BrowserClaw OpenAPI contract', () => {
     expect(sources.join('\n')).not.toMatch(/\b(?:agentId|taskId|runId)\b/)
   })
 
-  test('owns every model and operation through a declared route group', async () => {
+  test('owns every model and operation through its grouped source file', async () => {
     const source = await readFile(contractPath, 'utf8')
     const document = parse(source) as OpenApiDocument
-    expect(document.tags?.map(({ name }) => name).sort()).toEqual([
-      'connections',
-      'dispatches',
-      'recordings',
-      'sessions',
-      'settings',
-      'system',
-    ])
     expect(
       extractModelGroups(source, Object.keys(expectedModelGroups)),
     ).toEqual(expectedModelGroups)
@@ -180,45 +170,42 @@ describe('BrowserClaw OpenAPI contract', () => {
     }
 
     const pathItems = await resolvePathItems(document)
-    const operations = pathItems.flatMap((path) =>
-      Object.entries(path)
+    const operationGroups = pathItems.flatMap(({ group, pathItem }) =>
+      Object.entries(pathItem)
         .filter(([method]) =>
           ['get', 'put', 'post', 'delete', 'patch'].includes(method),
         )
-        .map(([, operation]) => operation),
+        .map(([, operation]) => [operation.operationId, group]),
     )
-    expect(
-      Object.fromEntries(
-        operations.map((operation) => [
-          operation.operationId,
-          operation.tags?.[0],
-        ]),
-      ),
-    ).toEqual(expectedOperationGroups)
-    expect(operations.every((operation) => operation.tags?.length === 1)).toBe(
-      true,
-    )
+    expect(Object.fromEntries(operationGroups)).toEqual(expectedOperationGroups)
   })
 })
 
+interface ResolvedPathItem {
+  group: string
+  pathItem: Record<string, OpenApiOperation>
+}
+
 async function resolvePathItems(
   document: OpenApiDocument,
-): Promise<Array<Record<string, OpenApiOperation>>> {
+): Promise<ResolvedPathItem[]> {
   return Promise.all(
     Object.values(document.paths ?? {}).map(async (pathItem) => {
-      if (!pathItem.$ref) return pathItem
-      const match = pathItem.$ref.match(
-        /^(\.\/paths\/[a-z][a-z0-9_]*\.yaml)#\/([A-Za-z][A-Za-z0-9]*)$/,
+      const match = pathItem.$ref?.match(
+        /^\.\/paths\/([a-z][a-z0-9_]*)\.yaml#\/([A-Za-z][A-Za-z0-9]*)$/,
       )
       if (!match) throw new Error(`Invalid grouped path ref: ${pathItem.$ref}`)
 
       const group = parse(
-        await readFile(resolve(contractDirectory, match[1] as string), 'utf8'),
+        await readFile(
+          resolve(contractDirectory, `./paths/${match[1] as string}.yaml`),
+          'utf8',
+        ),
       ) as Record<string, Record<string, OpenApiOperation>>
       const resolved = group[match[2] as string]
       if (!resolved)
         throw new Error(`Missing grouped path item: ${pathItem.$ref}`)
-      return resolved
+      return { group: match[1] as string, pathItem: resolved }
     }),
   )
 }

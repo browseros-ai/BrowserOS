@@ -1,7 +1,6 @@
 health:
   get:
     operationId: getHealth
-    tags: [system]
     responses:
       '200':
         description: The server is ready.
@@ -14,7 +13,6 @@ health:
 info:
   get:
     operationId: getSystemInfo
-    tags: [system]
     responses:
       '200':
         description: Product and implementation information.
@@ -27,7 +25,6 @@ info:
 shutdown:
   post:
     operationId: shutdown
-    tags: [system]
     responses:
       '200':
         description: Shutdown was accepted.

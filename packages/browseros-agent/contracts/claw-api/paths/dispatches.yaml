@@ -1,7 +1,6 @@
 screenshot:
   get:
     operationId: getDispatchScreenshot
-    tags: [dispatches]
     parameters:
       - $ref: ../parameters.yaml#/DispatchId
     responses:

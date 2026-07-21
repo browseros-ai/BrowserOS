@@ -1,7 +1,6 @@
 collection:
   get:
     operationId: listSessions
-    tags: [sessions]
     description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
     parameters:
       - name: profileId
@@ -61,7 +60,6 @@ collection:
 detail:
   get:
     operationId: getSession
-    tags: [sessions]
     parameters:
       - $ref: ../parameters.yaml#/SessionId
     responses:
@@ -78,7 +76,6 @@ detail:
 cancel:
   post:
     operationId: cancelSession
-    tags: [sessions]
     parameters:
       - $ref: ../parameters.yaml#/SessionId
     responses:
@@ -97,7 +94,6 @@ cancel:
 browserTabPreview:
   get:
     operationId: getSessionBrowserTabPreview
-    tags: [sessions]
     parameters:
       - $ref: ../parameters.yaml#/SessionId
       - $ref: ../parameters.yaml#/BrowserTabId
