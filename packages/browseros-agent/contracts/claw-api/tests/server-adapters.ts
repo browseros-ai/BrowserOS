@@ -6,8 +6,8 @@
  * state to the same shape.
  *
  * The fixtures here — two same-profile live sessions, one zero-tab live
- * session, one ended session, browser tab 101, and dispatch 1 with its
- * screenshot — must stay in lockstep with the Rust example's `seed()`:
+ * session, one ended session, browser tab 101, and two session screenshots
+ * must stay in lockstep with the Rust example's `seed()`:
  * the cases assert the same values against both servers.
  */
 
@@ -28,7 +28,7 @@ export interface ContractServer {
   secondLiveSessionId: string
   zeroTabLiveSessionId: string
   endedSessionId: string
-  screenshotDispatchId: number
+  screenshotIds: readonly [number, number]
   stop(): Promise<void>
 }
 
@@ -42,10 +42,11 @@ const primarySession = {
   color: '#7A5AF8',
   startedAt: 100,
   durationMs: 10,
-  dispatchCount: 1,
-  toolSequence: ['snapshot'],
+  dispatchCount: 2,
+  toolSequence: ['snapshot', 'snapshot'],
   status: 'live' as const,
   errorCount: 0,
+  latestScreenshotId: 2,
 }
 
 const liveSession = {
@@ -62,7 +63,6 @@ const liveSession = {
         lastToolName: 'snapshot',
         toolCount: 1,
         recentTools: [{ name: 'snapshot', at: 110 }],
-        previewCapturedAt: 123,
       },
       {
         browserTabId: 102,
@@ -81,6 +81,7 @@ const secondLiveSession = {
   name: 'Compare release notes',
   dispatchCount: 1,
   toolSequence: ['read'],
+  latestScreenshotId: undefined,
   live: {
     state: 'idle' as const,
     browserTabs: [
@@ -109,6 +110,7 @@ const zeroTabLiveSession = {
   color: undefined,
   dispatchCount: 0,
   toolSequence: [],
+  latestScreenshotId: undefined,
   live: { state: 'idle' as const, browserTabs: [] },
 }
 
@@ -118,6 +120,9 @@ const endedSession = {
   name: 'Completed BrowserClaw research',
   status: 'done' as const,
   endedAt: 120,
+  dispatchCount: 1,
+  toolSequence: ['snapshot'],
+  latestScreenshotId: undefined,
 }
 
 export async function startTypeScriptServer(): Promise<ContractServer> {
@@ -167,7 +172,19 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
                 pageId: 7,
                 tabId: 101,
                 targetId: 'target-7',
-                hasScreenshot: true,
+                screenshotId: 1,
+              },
+              {
+                dispatchId: 2,
+                createdAt: 200,
+                slug: 'codex',
+                label: 'Codex',
+                sessionId,
+                toolName: 'snapshot',
+                pageId: 7,
+                tabId: 101,
+                targetId: 'target-7',
+                screenshotId: 2,
               },
             ],
           }
@@ -239,12 +256,33 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
         accepted: ndjson.split('\n').filter((line) => line.trim()).length,
       }
     },
-    getSessionBrowserTabPreview: (sessionId, browserTabId) =>
-      sessionId === primarySession.sessionId && browserTabId === 101
+    getSessionPreview: (sessionId) =>
+      sessionId === primarySession.sessionId ||
+      sessionId === secondLiveSession.sessionId
         ? { bytes: new Uint8Array([0xff, 0xd8]) }
         : null,
-    getDispatchScreenshot: (dispatchId) =>
-      dispatchId === 1 ? { bytes: new Uint8Array([0xff, 0xd8]) } : null,
+    listSessionScreenshots: (sessionId) => {
+      if (sessionId === primarySession.sessionId) {
+        return {
+          items: [
+            { screenshotId: 1, capturedAt: 100, toolName: 'snapshot' },
+            { screenshotId: 2, capturedAt: 200, toolName: 'snapshot' },
+          ],
+        }
+      }
+      return [
+        secondLiveSession.sessionId,
+        zeroTabLiveSession.sessionId,
+        endedSession.sessionId,
+      ].includes(sessionId)
+        ? { items: [] }
+        : null
+    },
+    getSessionScreenshot: (sessionId, screenshotId) =>
+      sessionId === primarySession.sessionId &&
+      (screenshotId === 1 || screenshotId === 2)
+        ? { bytes: new Uint8Array([0xff, 0xd8]) }
+        : null,
     async listConnections() {
       return {
         items: Array.from(connections, ([harness, installed]) => ({
@@ -274,7 +312,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
     endedSessionId: endedSession.sessionId,
-    screenshotDispatchId: 1,
+    screenshotIds: [1, 2],
     async stop() {
       await server.stop(true)
     },
@@ -337,7 +375,7 @@ export async function startRustServer(): Promise<ContractServer> {
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
     endedSessionId: endedSession.sessionId,
-    screenshotDispatchId: 1,
+    screenshotIds: [1, 2],
     async stop() {
       process.kill()
       await process.exited

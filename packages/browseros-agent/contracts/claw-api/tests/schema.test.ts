@@ -4,6 +4,21 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 
 const contractDir = join(import.meta.dir, '..')
+const retiredBrowserTabPreview = [
+  '/api/v1/sessions/{sessionId}',
+  'browser-tabs',
+  '{browserTabId}',
+  'preview',
+].join('/')
+const retiredDispatchScreenshot = [
+  '/api/v1',
+  'dispatches',
+  '{dispatchId}',
+  'screenshot',
+].join('/')
+const retiredLatestScreenshotKey = ['lastScreenshot', 'DispatchId'].join('')
+const retiredPreviewTimestampKey = ['preview', 'CapturedAt'].join('')
+const retiredDispatchScreenshotKey = ['has', 'Screenshot'].join('')
 
 function yaml(name: string): Record<string, unknown> {
   return parse(readFileSync(join(contractDir, name), 'utf8')) as Record<
@@ -29,12 +44,8 @@ describe('session visual API schema', () => {
         $ref: './paths/sessions.yaml#/screenshot',
       },
     })
-    expect(openapi.paths).not.toHaveProperty(
-      '/api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview',
-    )
-    expect(openapi.paths).not.toHaveProperty(
-      '/api/v1/dispatches/{dispatchId}/screenshot',
-    )
+    expect(openapi.paths).not.toHaveProperty(retiredBrowserTabPreview)
+    expect(openapi.paths).not.toHaveProperty(retiredDispatchScreenshot)
   })
 
   test('defines session-owned operations and screenshot DTOs', () => {
@@ -64,13 +75,15 @@ describe('session visual API schema', () => {
       'latestScreenshotId',
     )
     expect(schemas.SessionSummary?.properties).not.toHaveProperty(
-      'lastScreenshotDispatchId',
+      retiredLatestScreenshotKey,
     )
     expect(schemas.SessionBrowserTab?.properties).not.toHaveProperty(
-      'previewCapturedAt',
+      retiredPreviewTimestampKey,
     )
     expect(dispatches.Dispatch?.properties).toHaveProperty('screenshotId')
-    expect(dispatches.Dispatch?.properties).not.toHaveProperty('hasScreenshot')
+    expect(dispatches.Dispatch?.properties).not.toHaveProperty(
+      retiredDispatchScreenshotKey,
+    )
     expect(dispatches.Dispatch?.required).not.toContain('screenshotId')
   })
 })

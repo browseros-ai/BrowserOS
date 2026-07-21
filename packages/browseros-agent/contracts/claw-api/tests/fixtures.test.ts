@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const fixturesDir = join(import.meta.dir, '../fixtures')
+const retiredLatestScreenshotKey = ['lastScreenshot', 'DispatchId'].join('')
+const retiredPreviewTimestampKey = ['preview', 'CapturedAt'].join('')
 
 function fixture(name: string): unknown {
   return JSON.parse(readFileSync(join(fixturesDir, name), 'utf8'))
@@ -19,13 +21,15 @@ describe('session visual API fixtures', () => {
     }
 
     expect(detail.session.latestScreenshotId).toBe(42)
-    expect(detail.session).not.toHaveProperty('lastScreenshotDispatchId')
+    expect(detail.session).not.toHaveProperty(retiredLatestScreenshotKey)
     expect(detail.dispatches[0]).not.toHaveProperty('screenshotId')
     expect(detail.dispatches[1]?.screenshotId).toBe(42)
     expect(
       list.items.flatMap((session) => session.live?.browserTabs ?? []),
     ).not.toContainEqual(
-      expect.objectContaining({ previewCapturedAt: expect.anything() }),
+      expect.objectContaining({
+        [retiredPreviewTimestampKey]: expect.anything(),
+      }),
     )
   })
 

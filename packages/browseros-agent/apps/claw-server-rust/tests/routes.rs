@@ -1199,11 +1199,6 @@ async fn live_projection_refreshes_metadata_and_preview_uses_current_target() ->
         request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 1);
-    assert!(
-        body["items"][0]["live"]["browserTabs"][0]
-            .get("previewCapturedAt")
-            .is_none()
-    );
     assert_eq!(
         request_status(&app.router, "GET", "/api/v1/sessions/session-live/preview",).await?,
         StatusCode::OK
@@ -1249,17 +1244,10 @@ async fn session_previews_capture_each_sessions_owned_target() -> anyhow::Result
         );
     }
 
-    let (status, body) =
-        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body["items"].as_array().is_some_and(|items| {
-        items.iter().all(|item| {
-            item["live"]["browserTabs"][0]
-                .get("previewCapturedAt")
-                .is_none()
-        })
-    }));
-
+    assert_eq!(
+        request_status(&app.router, "GET", "/api/v1/sessions?status=live").await?,
+        StatusCode::OK
+    );
     for session_id in ["session-target-1", "session-target-2"] {
         assert_eq!(
             request_status(

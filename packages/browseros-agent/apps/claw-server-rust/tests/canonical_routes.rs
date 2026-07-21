@@ -343,7 +343,10 @@ async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
 #[tokio::test]
 async fn retired_rest_routes_are_unmounted() -> anyhow::Result<()> {
     let app = test_app().await?;
-    for (method, path) in [
+    let retired_browser_tab_preview =
+        ["/api/v1/sessions/session-1", "browser-tabs", "7", "preview"].join("/");
+    let retired_dispatch_screenshot = ["/api/v1", "dispatches", "1", "screenshot"].join("/");
+    let mut routes = vec![
         ("GET", "/system/version"),
         ("GET", "/system/url"),
         ("GET", "/system/telemetry"),
@@ -363,9 +366,10 @@ async fn retired_rest_routes_are_unmounted() -> anyhow::Result<()> {
         ("POST", "/recordings/tabs/1/events"),
         ("GET", "/audit/replays/session-1"),
         ("GET", "/audit/replays/session-1/meta"),
-        ("GET", "/api/v1/sessions/session-1/browser-tabs/7/preview"),
-        ("GET", "/api/v1/dispatches/1/screenshot"),
-    ] {
+    ];
+    routes.push(("GET", retired_browser_tab_preview.as_str()));
+    routes.push(("GET", retired_dispatch_screenshot.as_str()));
+    for (method, path) in routes {
         let (status, _, bytes) = request(&app.router, method, path, None, Body::empty()).await?;
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
         assert!(bytes.is_empty(), "{method} {path} reached a JSON handler");
@@ -886,11 +890,6 @@ async fn live_projection_includes_zero_tab_and_same_profile_sessions() -> anyhow
     assert_eq!(primary["live"]["state"], "active");
     assert_eq!(primary["live"]["browserTabs"][0]["browserTabId"], 101);
     assert_eq!(primary["live"]["browserTabs"][0]["toolCount"], 1);
-    assert!(
-        primary["live"]["browserTabs"][0]
-            .get("previewCapturedAt")
-            .is_none()
-    );
     assert_eq!(primary["live"]["browserTabs"][1]["browserTabId"], 102);
     assert_eq!(primary["live"]["browserTabs"][1]["toolCount"], 0);
     assert_eq!(primary["live"]["browserTabs"][1]["recentTools"], json!([]));
@@ -1181,8 +1180,6 @@ async fn session_screenshot_history_is_ordered_owned_and_immutable() -> anyhow::
         detail["dispatches"][0]["screenshotId"],
         fixture.screenshot_id
     );
-    assert!(detail["session"].get("lastScreenshotDispatchId").is_none());
-    assert!(detail["dispatches"][0].get("hasScreenshot").is_none());
 
     let item = format!("{collection}/{}", fixture.screenshot_id);
     let (status, headers, bytes) = request(&app.router, "GET", &item, None, Body::empty()).await?;

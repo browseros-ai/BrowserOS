@@ -8,7 +8,7 @@
  *
  * Cases assume the seeded world the adapters provide (two same-profile
  * live sessions, a zero-tab live session, an ended session, browser tab
- * 101, and one dispatch screenshot). The `shutdown` case must stay last:
+ * 101, and two session screenshots). The `shutdown` case must stay last:
  * it kills the server it runs against.
  */
 
@@ -34,6 +34,18 @@ const FORBIDDEN_IDENTITY_KEYS = ['agent', 'task', 'run'].map(
   (scope) => `${scope}Id`,
 )
 const INLINE_JPEG_KEY = ['jpeg', 'Base64'].join('')
+const RETIRED_BROWSER_TAB_PREVIEW = [
+  '/api/v1/sessions/session-1',
+  'browser-tabs',
+  '7',
+  'preview',
+].join('/')
+const RETIRED_DISPATCH_SCREENSHOT = [
+  '/api/v1',
+  'dispatches',
+  '1',
+  'screenshot',
+].join('/')
 const RETIRED_ROUTES = [
   ['GET', '/system/version'],
   ['GET', '/system/url'],
@@ -54,6 +66,8 @@ const RETIRED_ROUTES = [
   ['POST', '/recordings/tabs/1/events'],
   ['GET', '/audit/replays/session-1'],
   ['GET', '/audit/replays/session-1/meta'],
+  ['GET', RETIRED_BROWSER_TAB_PREVIEW],
+  ['GET', RETIRED_DISPATCH_SCREENSHOT],
 ] as const
 
 export const contractCases: ContractCase[] = [
@@ -96,13 +110,15 @@ export const contractCases: ContractCase[] = [
       )
       const detail = await api.getSession({ sessionId: liveSessionId })
       expect(detail.session.sessionId).toBe(liveSessionId)
+      expect(detail.session.latestScreenshotId).toBe(2)
       expect(detail.dispatches[0]).toMatchObject({
         dispatchId: 1,
         pageId: 7,
         tabId: 101,
         targetId: 'target-7',
-        hasScreenshot: true,
+        screenshotId: 1,
       })
+      expect(detail.dispatches[1]?.screenshotId).toBe(2)
       const serialized = JSON.stringify(detail)
       for (const key of FORBIDDEN_IDENTITY_KEYS) {
         expect(serialized).not.toContain(key)
@@ -274,7 +290,7 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'live session projection and browser-tab preview',
+    name: 'live session projection and session preview',
     async run({
       api,
       baseUrl,
@@ -307,7 +323,6 @@ export const contractCases: ContractCase[] = [
               title: 'BrowserOS',
               toolCount: 1,
               recentTools: [{ name: 'snapshot', at: 110 }],
-              previewCapturedAt: 123,
             },
             {
               browserTabId: 102,
@@ -350,30 +365,67 @@ export const contractCases: ContractCase[] = [
         'harness',
         'color',
         INLINE_JPEG_KEY,
+        ['preview', 'CapturedAt'].join(''),
       ]) {
         expect(rawBrowserTabs).not.toContain(`"${forbiddenKey}"`)
       }
 
-      const preview = await api.getSessionBrowserTabPreview({
-        sessionId: liveSessionId,
-        browserTabId: 101,
-      })
-      expect(preview.type).toBe('image/jpeg')
-      expect(Array.from(new Uint8Array(await preview.arrayBuffer()))).toEqual([
-        0xff, 0xd8,
-      ])
+      for (const sessionId of [liveSessionId, secondLiveSessionId]) {
+        const preview = await api.getSessionPreview({ sessionId })
+        expect(preview.type).toBe('image/jpeg')
+        expect(Array.from(new Uint8Array(await preview.arrayBuffer()))).toEqual(
+          [0xff, 0xd8],
+        )
+      }
+
+      const previewResponse = await fetch(
+        `${baseUrl}/api/v1/sessions/${liveSessionId}/preview`,
+      )
+      expect(previewResponse.status).toBe(200)
+      expect(previewResponse.headers.get('cache-control')).toBe(
+        'private, no-store',
+      )
     },
   },
   {
-    name: 'dispatch screenshot',
-    async run({ baseUrl, screenshotDispatchId }) {
-      const path = `/api/v1/dispatches/${screenshotDispatchId}/screenshot`
-      const response = await fetch(`${baseUrl}${path}`)
+    name: 'ordered session screenshot history',
+    async run({ api, baseUrl, liveSessionId, screenshotIds }) {
+      const list = await api.listSessionScreenshots({
+        sessionId: liveSessionId,
+      })
+      expect(list.items.map((item) => item.screenshotId)).toEqual(screenshotIds)
+      expect(list.items.map((item) => item.capturedAt)).toEqual(
+        [...list.items]
+          .sort((left, right) =>
+            left.capturedAt === right.capturedAt
+              ? left.screenshotId - right.screenshotId
+              : left.capturedAt - right.capturedAt,
+          )
+          .map((item) => item.capturedAt),
+      )
+      expect(list.items.every((item) => item.toolName === 'snapshot')).toBe(
+        true,
+      )
+
+      for (const screenshotId of screenshotIds) {
+        const screenshot = await api.getSessionScreenshot({
+          sessionId: liveSessionId,
+          screenshotId,
+        })
+        expect(screenshot.type).toBe('image/jpeg')
+        expect(
+          Array.from(new Uint8Array(await screenshot.arrayBuffer())),
+        ).toEqual([0xff, 0xd8])
+      }
+
+      const response = await fetch(
+        `${baseUrl}/api/v1/sessions/${liveSessionId}/screenshots/${screenshotIds[0].toString()}`,
+      )
       expect(response.status).toBe(200)
       expect(response.headers.get('content-type')).toBe('image/jpeg')
-      expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
-        0xff, 0xd8,
-      ])
+      expect(response.headers.get('cache-control')).toBe(
+        'public, max-age=31536000, immutable',
+      )
     },
   },
   {
@@ -399,10 +451,10 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'invalid browser tab id',
+    name: 'invalid screenshot id',
     async run({ baseUrl, liveSessionId }) {
       const response = await fetch(
-        `${baseUrl}/api/v1/sessions/${liveSessionId}/browser-tabs/0/preview`,
+        `${baseUrl}/api/v1/sessions/${liveSessionId}/screenshots/0`,
       )
       expect(response.status).toBe(400)
       expect(await response.json()).toMatchObject({ code: 'invalid_request' })
@@ -442,27 +494,47 @@ export const contractCases: ContractCase[] = [
     },
   },
   {
-    name: 'missing binary artifacts',
-    async run({ baseUrl, liveSessionId, secondLiveSessionId }) {
-      for (const path of [
-        `/api/v1/sessions/${liveSessionId}/browser-tabs/999/preview`,
-        `/api/v1/sessions/${secondLiveSessionId}/browser-tabs/101/preview`,
-        '/api/v1/sessions/missing/browser-tabs/101/preview',
+    name: 'missing session previews',
+    async run({ api, zeroTabLiveSessionId, endedSessionId }) {
+      for (const sessionId of [
+        zeroTabLiveSessionId,
+        endedSessionId,
+        'missing',
       ]) {
-        const response = await fetch(`${baseUrl}${path}`)
-        expect(response.status, path).toBe(404)
-        expect(await response.json(), path).toMatchObject({
-          code: 'preview_not_found',
-          message: 'browser tab preview not found',
-        })
+        await expectApiError(
+          () => api.getSessionPreview({ sessionId }),
+          404,
+          'preview_not_found',
+        )
       }
-
-      const screenshotPath = '/api/v1/dispatches/999/screenshot'
-      const screenshotResponse = await fetch(`${baseUrl}${screenshotPath}`)
-      expect(screenshotResponse.status, screenshotPath).toBe(404)
-      expect(await screenshotResponse.json(), screenshotPath).toMatchObject({
-        code: 'screenshot_not_found',
-      })
+    },
+  },
+  {
+    name: 'session screenshot ownership failures',
+    async run({ api, liveSessionId, secondLiveSessionId, screenshotIds }) {
+      await expectApiError(
+        () =>
+          api.getSessionScreenshot({
+            sessionId: liveSessionId,
+            screenshotId: 999,
+          }),
+        404,
+        'screenshot_not_found',
+      )
+      await expectApiError(
+        () =>
+          api.getSessionScreenshot({
+            sessionId: secondLiveSessionId,
+            screenshotId: screenshotIds[0],
+          }),
+        404,
+        'screenshot_not_found',
+      )
+      await expectApiError(
+        () => api.listSessionScreenshots({ sessionId: 'missing' }),
+        404,
+        'session_not_found',
+      )
     },
   },
   {

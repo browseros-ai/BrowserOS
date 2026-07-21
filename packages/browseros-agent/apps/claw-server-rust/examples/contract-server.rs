@@ -218,6 +218,11 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .await?;
     let dispatch_id = seed_dispatch(state, "session-live", 7, "target-7").await?;
     state.audit_log.mark_screenshot(dispatch_id).await?;
+    let second_screenshot_id = seed_dispatch(state, "session-live", 7, "target-7").await?;
+    state
+        .audit_log
+        .mark_screenshot(second_screenshot_id)
+        .await?;
     state
         .audit_log
         .record_session_start(
@@ -296,6 +301,10 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
     state
         .screenshots
         .write("session-live", dispatch_id, &[0xff, 0xd8])
+        .await?;
+    state
+        .screenshots
+        .write("session-live", second_screenshot_id, &[0xff, 0xd8])
         .await?;
     Ok(())
 }

@@ -14,6 +14,7 @@ import type {
   RecordingMetadata,
   SessionDetail,
   SessionList,
+  SessionScreenshotList,
   SessionStatus,
   ShutdownResponse,
   SystemInfo,
@@ -128,12 +129,24 @@ export class ContractHttpClient {
     })
   }
 
-  getSessionBrowserTabPreview(request: {
+  getSessionPreview(request: { sessionId: string }): Promise<Blob> {
+    return this.blob(`/api/v1/sessions/${pathPart(request.sessionId)}/preview`)
+  }
+
+  listSessionScreenshots(request: {
     sessionId: string
-    browserTabId: number
+  }): Promise<SessionScreenshotList> {
+    return this.json(
+      `/api/v1/sessions/${pathPart(request.sessionId)}/screenshots`,
+    )
+  }
+
+  getSessionScreenshot(request: {
+    sessionId: string
+    screenshotId: number
   }): Promise<Blob> {
     return this.blob(
-      `/api/v1/sessions/${pathPart(request.sessionId)}/browser-tabs/${request.browserTabId.toString()}/preview`,
+      `/api/v1/sessions/${pathPart(request.sessionId)}/screenshots/${request.screenshotId.toString()}`,
     )
   }
 
