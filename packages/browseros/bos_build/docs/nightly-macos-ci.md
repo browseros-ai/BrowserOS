@@ -54,21 +54,7 @@ packages/browseros/resources/binaries/browseros_claw_onboard
 ```
 
 BrowserClaw stages the shared BrowserOS server bundle, the product-independent
-onboarding bundle, and the TypeScript/Bun Claw server bundle:
-
-```bash
-bun scripts/build/claw-server.ts --target=darwin-arm64 --ci
-```
-
-and extracts it into
-`resources/binaries/browseros_claw_server/darwin-arm64`. The normal resources
-step then copies this root into Chromium; the bundled binary is already named
-`browseros-claw-server`.
-
-The Rust alternative remains available as a manual comment flip. To ship Rust,
-run this helper in `.github/workflows/nightly-browserclaw.yml` before the Python
-staging heredoc and flip the commented Rust blocks in
-`copy_resources.yaml`/`download_resources.yaml`:
+onboarding bundle, and the Rust Claw server bundle:
 
 ```bash
 packages/browseros-agent/scripts/build/claw-server-rust-local.sh \
@@ -77,10 +63,10 @@ packages/browseros-agent/scripts/build/claw-server-rust-local.sh \
   --browseros-root packages/browseros
 ```
 
-That helper builds the Rust server natively with Cargo and stages
-`resources/binaries/browseros_claw_server_rust/darwin-arm64`; the commented copy
-block renames `browseros-claw-server-rs` to the runtime name
-`browseros-claw-server`.
+The helper builds the Rust server natively with Cargo and stages
+`resources/binaries/browseros_claw_server_rust/darwin-arm64` with the runtime
+binary name `browseros-claw-server`. The normal resources step then copies this
+root into Chromium.
 
 ## Bundled Extensions
 
@@ -106,10 +92,10 @@ uv run browseros build --preset release --product <product> --arch <arch> \
   --chromium-src "$CHROMIUM_SRC"
 ```
 
-For BrowserClaw, `download_resources` fetches the active TypeScript/Bun Claw
-server bundle from `claw-server/prod-resources/latest/`. Rust resources come
-from `claw-server-rust/prod-resources/latest/` only when the commented Rust
-download/copy blocks are flipped intentionally.
+For BrowserClaw, `download_resources` fetches the active Rust Claw server bundle
+from `claw-server-rust/prod-resources/latest/`. The copy step normalizes legacy
+Rust resource zips that still contain `browseros-claw-server-rs` into the
+runtime filename `browseros-claw-server`.
 
 Release runs default to rebuilding the current version files without bumping
 them:

@@ -231,6 +231,7 @@ class VerifyServerResourcesBundleTest(unittest.TestCase):
             op["destination"]
             for op in config["copy_operations"]
             if op["name"].startswith("BrowserOS Claw Server Resources")
+            or op["name"].startswith("BrowserOS Claw Rust Server Resources")
         }
         self.assertEqual(
             claw_destinations,
