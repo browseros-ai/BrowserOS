@@ -96,6 +96,13 @@ preview:
     operationId: getSessionPreview
     parameters:
       - $ref: ../parameters.yaml#/SessionId
+      - name: refresh
+        in: query
+        description: Ignored client cache-busting token for preview URLs.
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
     responses:
       '200':
         description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.

@@ -51,7 +51,16 @@ describe('session visual API schema', () => {
   test('defines session-owned operations and screenshot DTOs', () => {
     const paths = yaml('paths/sessions.yaml') as Record<
       string,
-      { get?: { operationId?: string } }
+      {
+        get?: {
+          operationId?: string
+          parameters?: Array<{
+            name?: string
+            in?: string
+            schema?: Record<string, unknown>
+          }>
+        }
+      }
     >
     const schemas = yaml('schemas/sessions.yaml') as Record<
       string,
@@ -63,6 +72,12 @@ describe('session visual API schema', () => {
     >
 
     expect(paths.preview?.get?.operationId).toBe('getSessionPreview')
+    expect(paths.preview?.get?.parameters).toContainEqual({
+      name: 'refresh',
+      in: 'query',
+      description: 'Ignored client cache-busting token for preview URLs.',
+      schema: { type: 'integer', format: 'int64', minimum: 0 },
+    })
     expect(paths.screenshots?.get?.operationId).toBe('listSessionScreenshots')
     expect(paths.screenshot?.get?.operationId).toBe('getSessionScreenshot')
     expect(schemas.SessionScreenshot?.required).toEqual([
