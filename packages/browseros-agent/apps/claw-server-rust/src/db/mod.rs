@@ -128,6 +128,8 @@ mod tests {
     use std::{collections::HashSet, path::Path};
     use tempfile::tempdir;
 
+    // Frozen migrations from the retired TypeScript server prove existing
+    // installations still upgrade into the Rust-owned baseline schema.
     const TS_0000: &str =
         include_str!("../../tests/fixtures/legacy-drizzle/0000_add_tool_dispatches.sql");
     const TS_0001: &str =

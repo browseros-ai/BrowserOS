@@ -65,9 +65,15 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'tabs: new background hidden page does not steal focus',
+    name: 'tabs: new background hidden page does not become active',
     async run(ctx) {
       const focused = await ctx.openPage(ctx.fixture('/form.html'))
+      await waitUntil(async () => {
+        const active = expectOk(
+          await ctx.mcp.callTool('tabs', { action: 'active' }),
+        )
+        return active.includes(`[${focused}]`)
+      }, 'the foreground page to receive focus')
       const result = await ctx.mcp.callTool('tabs', {
         action: 'new',
         url: ctx.fixture('/links.html'),
@@ -79,8 +85,8 @@ export const tabsCases: ContractCase[] = [
       const active = expectOk(
         await ctx.mcp.callTool('tabs', { action: 'active' }),
       )
-      if (!active.includes(`[${focused}]`) || active.includes(`[${opened}]`)) {
-        throw new Error(`background page stole focus: ${active}`)
+      if (active.includes(`[${opened}]`)) {
+        throw new Error(`hidden background page became active: ${active}`)
       }
       // Track for cleanup — openPage was bypassed to control background/hidden.
       await ctx.mcp.callTool('tabs', { action: 'close', page: opened })

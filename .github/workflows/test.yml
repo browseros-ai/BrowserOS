@@ -22,7 +22,7 @@ jobs:
   test:
     name: Tests / ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.needs_rust && 45 || 20 }}
     defaults:
       run:
         working-directory: packages/browseros-agent
@@ -150,6 +150,11 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           export APPIMAGE_EXTRACT_AND_RUN=1
+          # Chromium's hidden-window APIs require a real X11 platform.
+          if [ "${BROWSEROS_TEST_HEADLESS:-true}" = "false" ]; then
+            export XDG_SESSION_TYPE=x11
+            exec xvfb-run --auto-servernum "$(dirname "$0")/BrowserOS.AppImage" "$@"
+          fi
           exec "$(dirname "$0")/BrowserOS.AppImage" "$@"
           EOF
           chmod +x .ci/bin/browseros
@@ -162,7 +167,7 @@ jobs:
         id: test
         env:
           BROWSEROS_BINARY: ${{ github.workspace }}/packages/browseros-agent/.ci/bin/browseros
-          BROWSEROS_TEST_HEADLESS: "true"
+          BROWSEROS_TEST_HEADLESS: ${{ matrix.suite == 'claw-mcp' && 'false' || 'true' }}
           BROWSEROS_TEST_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage
           BROWSEROS_JUNIT_PATH: ${{ github.workspace }}/packages/browseros-agent/${{ matrix.junit_path }}
         run: |
