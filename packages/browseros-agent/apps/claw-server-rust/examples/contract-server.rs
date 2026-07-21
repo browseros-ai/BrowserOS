@@ -1,5 +1,5 @@
 //! Contract-testable claw-server-rust: the full router over real app
-//! state seeded with three live sessions and one ended session over a scripted browser. The
+//! state seeded with three connected sessions and one ended session over a scripted browser. The
 //! cross-server contract suite
 //! (`contracts/claw-api/tests`) builds and spawns this binary to run
 //! the shared cases against the Rust implementation; it can also be run

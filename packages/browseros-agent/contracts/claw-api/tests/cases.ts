@@ -6,9 +6,9 @@
  * implementation-specific. A case that passes on one server and fails
  * on the other is by definition a contract violation.
  *
- * Cases assume the seeded world the adapters provide (two same-profile
- * live sessions, a zero-tab live session, an ended session, browser tab
- * 101, and two session screenshots). The `shutdown` case must stay last:
+ * Cases assume the seeded world the adapters provide (two dispatch-backed
+ * live sessions, a handshake-only connected session, an ended session,
+ * browser tab 101, and two screenshots). The `shutdown` case must stay last:
  * it kills the server it runs against.
  */
 
@@ -108,6 +108,7 @@ export const contractCases: ContractCase[] = [
       expect(list.items.some((item) => item.sessionId === liveSessionId)).toBe(
         true,
       )
+      expect(list.items.every((item) => item.dispatchCount > 0)).toBe(true)
       const detail = await api.getSession({ sessionId: liveSessionId })
       expect(detail.session.sessionId).toBe(liveSessionId)
       expect(detail.session.latestScreenshotId).toBe(2)
@@ -317,10 +318,11 @@ export const contractCases: ContractCase[] = [
       baseUrl,
       liveSessionId,
       secondLiveSessionId,
-      zeroTabLiveSessionId,
+      handshakeOnlySessionId,
     }) {
       const snapshot = await api.listSessions({ status: SessionStatus.Live })
       expect(snapshot.nextCursor).toBeUndefined()
+      expect(snapshot.items.every((item) => item.dispatchCount > 0)).toBe(true)
 
       const primary = snapshot.items.find(
         (session) => session.sessionId === liveSessionId,
@@ -328,8 +330,8 @@ export const contractCases: ContractCase[] = [
       const second = snapshot.items.find(
         (session) => session.sessionId === secondLiveSessionId,
       )
-      const zeroTab = snapshot.items.find(
-        (session) => session.sessionId === zeroTabLiveSessionId,
+      const handshakeOnly = snapshot.items.find(
+        (session) => session.sessionId === handshakeOnlySessionId,
       )
       expect(primary).toMatchObject({
         profileId: 'profile-shared',
@@ -360,7 +362,7 @@ export const contractCases: ContractCase[] = [
         live: { state: 'idle' },
       })
       expect(second?.sessionId).not.toBe(primary?.sessionId)
-      expect(zeroTab?.live).toEqual({ state: 'idle', browserTabs: [] })
+      expect(handshakeOnly).toBeUndefined()
 
       const rawResponse = await fetch(`${baseUrl}/api/v1/sessions?status=live`)
       expect(rawResponse.status).toBe(200)
@@ -516,9 +518,9 @@ export const contractCases: ContractCase[] = [
   },
   {
     name: 'missing session previews',
-    async run({ api, zeroTabLiveSessionId, endedSessionId }) {
+    async run({ api, handshakeOnlySessionId, endedSessionId }) {
       for (const sessionId of [
-        zeroTabLiveSessionId,
+        handshakeOnlySessionId,
         endedSessionId,
         'missing',
       ]) {

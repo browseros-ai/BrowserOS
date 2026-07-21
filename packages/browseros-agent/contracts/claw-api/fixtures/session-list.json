@@ -67,23 +67,6 @@
           }
         ]
       }
-    },
-    {
-      "sessionId": "session-live-empty",
-      "profileId": "profile-empty",
-      "slug": "claude-code",
-      "label": "Claude Code",
-      "name": "Waiting for first tool",
-      "startedAt": 1784300401000,
-      "durationMs": 200,
-      "dispatchCount": 0,
-      "toolSequence": [],
-      "status": "live",
-      "errorCount": 0,
-      "live": {
-        "state": "idle",
-        "browserTabs": []
-      }
     }
   ]
 }
