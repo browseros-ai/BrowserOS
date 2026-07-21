@@ -1,5 +1,4 @@
-use serde::Serialize;
-use std::fmt;
+pub use crate::services::sessions::TabGroupColor;
 
 const TAB_GROUP_COLORS: [TabGroupColor; 9] = [
     TabGroupColor::Grey,
@@ -13,37 +12,7 @@ const TAB_GROUP_COLORS: [TabGroupColor; 9] = [
     TabGroupColor::Orange,
 ];
 
-/// Chrome tab-group colour names accepted by the BrowserOS tab_groups tool.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TabGroupColor {
-    Grey,
-    Blue,
-    Red,
-    Yellow,
-    Green,
-    Pink,
-    Purple,
-    Cyan,
-    Orange,
-}
-
 impl TabGroupColor {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Grey => "grey",
-            Self::Blue => "blue",
-            Self::Red => "red",
-            Self::Yellow => "yellow",
-            Self::Green => "green",
-            Self::Pink => "pink",
-            Self::Purple => "purple",
-            Self::Cyan => "cyan",
-            Self::Orange => "orange",
-        }
-    }
-
     /// Hex twin of the browser tab-group colour (TS TAB_GROUP_HEX) so the
     /// cockpit card border matches the tab strip.
     #[must_use]
@@ -66,12 +35,6 @@ impl TabGroupColor {
 #[must_use]
 pub fn hex_for_slug(slug: &str) -> &'static str {
     color_for_slug(slug).hex()
-}
-
-impl fmt::Display for TabGroupColor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 /// Selects the deterministic tab-group colour shared with the TS Claw server.

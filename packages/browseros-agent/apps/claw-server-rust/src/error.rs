@@ -29,7 +29,7 @@ pub enum AppError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Db(#[from] sea_orm::DbErr),
+    Db(Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error("{0}")]

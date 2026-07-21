@@ -1,13 +1,52 @@
 use crate::ids::ConvoId;
-use crate::services::browser::TabGroupColor;
 use browseros_core::PageId;
+use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
+    fmt,
     sync::{Arc, Weak},
 };
 use tokio::sync::{Mutex, RwLock};
 
 pub(crate) type GroupOperationLock = Mutex<()>;
+
+/// Chrome tab-group colour names stored with retained conversation state.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabGroupColor {
+    Grey,
+    Blue,
+    Red,
+    Yellow,
+    Green,
+    Pink,
+    Purple,
+    Cyan,
+    Orange,
+}
+
+impl TabGroupColor {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grey => "grey",
+            Self::Blue => "blue",
+            Self::Red => "red",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Pink => "pink",
+            Self::Purple => "purple",
+            Self::Cyan => "cyan",
+            Self::Orange => "orange",
+        }
+    }
+}
+
+impl fmt::Display for TabGroupColor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Conversation-keyed BrowserOS page ownership and browser tab-group state.
 /// Both ownership indexes share this lock so page reassignment cannot expose
@@ -374,7 +413,9 @@ impl Inner {
 #[cfg(test)]
 mod tests {
     use super::PageOwnership;
-    use crate::{ids::ConvoId, services::browser::TabGroupColor};
+    use crate::ids::ConvoId;
+
+    use super::TabGroupColor;
     use browseros_core::PageId;
     use std::collections::BTreeSet;
 

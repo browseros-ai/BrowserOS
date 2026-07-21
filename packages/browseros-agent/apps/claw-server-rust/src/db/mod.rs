@@ -35,8 +35,14 @@ impl Database {
             .map(Self)
     }
 
-    pub(crate) fn connection(&self) -> &DatabaseConnection {
+    pub(in crate::db) fn connection(&self) -> &DatabaseConnection {
         &self.0
+    }
+}
+
+impl From<DbErr> for AppError {
+    fn from(source: DbErr) -> Self {
+        Self::Db(Box::new(source))
     }
 }
 

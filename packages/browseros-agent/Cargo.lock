@@ -422,6 +422,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "serde_json",
+ "syn 2.0.118",
  "tempfile",
  "thiserror",
  "time",
