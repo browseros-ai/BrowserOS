@@ -91,6 +91,7 @@
     "commander": "^14.0.3",
     "fallow": "^2.104.0",
     "lefthook": "^2.1.10",
+    "openapi-typescript": "7.13.0",
     "picocolors": "^1.1.1",
     "typedoc": "^0.28.20",
     "typescript": "^7.0.2",

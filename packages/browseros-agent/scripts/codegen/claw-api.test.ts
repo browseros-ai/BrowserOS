@@ -251,6 +251,24 @@ describe('TypeScript Claw API package boundary', () => {
   })
 })
 
+describe('TypeScript Claw API client generation boundary', () => {
+  test('exports type-only paths, operations, and components', async () => {
+    const generatedPath = resolve(
+      import.meta.dir,
+      '../../packages/claw-api-client/src/generated/openapi.ts',
+    )
+    const source = await readFile(generatedPath, 'utf8')
+
+    expect(source).toStartWith(
+      '// This file is generated from contracts/claw-api/openapi.yaml. Do not edit.\n',
+    )
+    expect(source).toMatch(/export interface paths \{/)
+    expect(source).toMatch(/export interface operations \{/)
+    expect(source).toMatch(/export interface components \{/)
+    expect(source).not.toMatch(/\b(?:DefaultApi|Configuration|runtime)\b/)
+  })
+})
+
 describe('extractModelGroups', () => {
   test('derives model groups from schema ref files', () => {
     const source = `components:
