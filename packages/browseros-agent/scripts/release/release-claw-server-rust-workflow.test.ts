@@ -123,7 +123,7 @@ describe('release-claw-server-rust workflow', () => {
 
   it('publishes OTA from Rust artifacts only when requested', () => {
     expect(workflow).toContain(
-      "if: ${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}",
+      `if: \${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}`,
     )
     expect(workflow).toContain('SPARKLE_PRIVATE_KEY:')
     expect(workflow).toContain(
