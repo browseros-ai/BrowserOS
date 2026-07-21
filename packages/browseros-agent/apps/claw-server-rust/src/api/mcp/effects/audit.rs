@@ -51,7 +51,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
     })
 }
 
-/// Records a Claw-local tool that does not run through browser dispatch.
+/// Records a Claw-local tool without capturing an unrelated browser page.
 pub async fn record_local_tool_dispatch(
     state: &AppState,
     session: &Session,
@@ -78,10 +78,7 @@ pub async fn record_local_tool_dispatch(
         dispatch_id: dispatch_id.clone(),
         result: result_summary(result, false),
     };
-    let Some(record) = write_dispatch(state, input, &dispatch_id).await else {
-        return;
-    };
-    persist_screenshot(state, session.id(), &dispatch_id, record).await;
+    let _ = write_dispatch(state, input, &dispatch_id).await;
 }
 
 async fn record_dispatch(

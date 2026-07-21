@@ -6,27 +6,31 @@
  * Hono application composition for the standalone BrowserClaw server.
  * Mounts the REST surface from the shared OpenAPI contract and the
  * protocol-level MCP endpoint. Callers create an isolated app instance
- * so tests can inject lifecycle hooks and canonical dependencies; the
- * production entry point owns shutdown behavior.
+ * so tests can inject lifecycle hooks and HTTP handlers; the production
+ * entry point owns shutdown behavior.
  */
 
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { canonicalApiError } from './lib/api-error'
-import { logger } from './lib/logger'
+import { createHttpRoute, type HttpHandlerSet } from './api/http'
+import { canonicalApiError } from './api/http/errors'
+import { productionConnectionHandlers } from './api/http/handlers/connections'
+import { productionPreviewHandlers } from './api/http/handlers/previews'
+import { productionRecordingHandlers } from './api/http/handlers/recordings'
+import { productionReplayHandlers } from './api/http/handlers/replay'
+import { productionScreenshotHandlers } from './api/http/handlers/screenshots'
+import { productionSessionHandlers } from './api/http/handlers/sessions'
+import { productionSettingsHandlers } from './api/http/handlers/settings'
+import { createProductionSystemHandlers } from './api/http/handlers/system'
+import { recordingIngestOriginHygiene } from './api/http/middleware/recording-origin'
 import {
   type RequestContextEnv,
   requestIdFor,
   requestIdMiddleware,
-} from './lib/request-id'
-import {
-  type CanonicalApiDependencies,
-  createCanonicalApiRoute,
-} from './routes/api-v1'
-import { canonicalApiDependencies } from './routes/api-v1/production'
-import { mcpRoute } from './routes/mcp'
-import { createSystemRoute } from './routes/system'
+} from './api/http/request-context'
+import { mcpRoute } from './api/mcp'
+import { logger } from './lib/logger'
 
 // Telemetry capture is injectable so the server module stays usable
 // from the bun-test runner without pulling Sentry into the import
@@ -63,7 +67,7 @@ export const requestFailureLog: MiddlewareHandler = async (c, next) => {
 
 interface CreateServerOptions {
   onShutdown?: () => void
-  canonicalApiDependencies?: CanonicalApiDependencies
+  httpHandlers?: HttpHandlerSet
 }
 
 export function createServer(options: CreateServerOptions = {}) {
@@ -125,40 +129,22 @@ export function createServer(options: CreateServerOptions = {}) {
     return c.json({ error: message }, 500)
   })
 
+  const httpHandlers =
+    options.httpHandlers ?? productionHttpHandlers(options.onShutdown)
+
   // The single MCP endpoint mounts at `/mcp`.
-  return app
-    .route('/', createSystemRoute({ onShutdown: options.onShutdown }))
-    .route(
-      '/',
-      createCanonicalApiRoute(
-        options.canonicalApiDependencies ?? canonicalApiDependencies,
-      ),
-    )
-    .route('/', mcpRoute)
+  return app.route('/', createHttpRoute(httpHandlers)).route('/', mcpRoute)
 }
 
-/** Stable origin derived from claw-app's manifest signing key. */
-const BROWSERCLAW_EXTENSION_ORIGIN =
-  'chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc'
-
-/** Blocks browser-page CSRF while preserving native contract clients. */
-export const recordingIngestOriginHygiene: MiddlewareHandler<
-  RequestContextEnv
-> = async (c, next) => {
-  const origin = c.req.header('origin')
-  const trusted =
-    origin === undefined ||
-    origin === BROWSERCLAW_EXTENSION_ORIGIN ||
-    (origin === 'null' && c.req.header('sec-fetch-site') === 'none')
-  if (!trusted) {
-    return c.json(
-      canonicalApiError(
-        'forbidden',
-        'recording ingest is restricted to BrowserClaw',
-        requestIdFor(c),
-      ),
-      403,
-    )
+function productionHttpHandlers(onShutdown?: () => void): HttpHandlerSet {
+  return {
+    system: createProductionSystemHandlers(onShutdown),
+    settings: productionSettingsHandlers,
+    sessions: productionSessionHandlers,
+    recordings: productionRecordingHandlers,
+    replay: productionReplayHandlers,
+    previews: productionPreviewHandlers,
+    screenshots: productionScreenshotHandlers,
+    connections: productionConnectionHandlers,
   }
-  return next()
 }
