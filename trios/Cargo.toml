@@ -27,4 +27,4 @@ license = "MIT"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
-expect_used = "warn"
+expect_used = "deny"

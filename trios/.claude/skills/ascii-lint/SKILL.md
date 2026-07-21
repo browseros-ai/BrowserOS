@@ -43,6 +43,9 @@ A clean run returns no output.
 | U+207B | superscript minus | `^-` |
 | U+00F6 | latin small letter o with diaeresis | `oe` |
 | U+FE0F | variation selector-16 | `` |
+| U+2190 | leftwards arrow | `<-` |
+| U+21D4 | left right double arrow | `<=>` |
+| U+00A7 | section sign | `section` |
 | U+2550 | box drawings double horizontal | `=` |
 | U+2501 | box drawings heavy horizontal | `-` |
 | U+2500 | box drawings light horizontal | `-` |
@@ -99,6 +102,9 @@ PAIRS = [
     (0x207B, "^-"),
     (0x00F6, "oe"),
     (0xFE0F, ""),
+    (0x2190, "<-"),
+    (0x21D4, "<=>"),
+    (0x00A7, "section"),
     (0x2550, "="),
     (0x2501, "-"),
     (0x2500, "-"),

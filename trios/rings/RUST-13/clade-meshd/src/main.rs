@@ -219,16 +219,27 @@ async fn hello_handler(
 ) -> Result<impl warp::Reply, Infallible> {
     let mut state = state.write().await;
     let my_id = state.node.id;
-    let hello = Hello::new(req.peer, req.seq, Hello::now_ms(), req.heard, [0u8; 16]);
+    let hello = match Hello::authenticated(req.peer, req.seq, req.heard, &None) {
+        Ok(h) => h,
+        Err(_) => {
+            return Ok(warp::reply::with_status(
+                json(&serde_json::json!({"error": "hello mac failed"})),
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
+    };
     let heard_us = hello.reports_hearing(my_id);
     // Update ETX as if we heard the peer and the peer does not hear us yet.
     // A real implementation would parse the HELLO MAC and reverse-link quality.
     state.node.etx.record(req.peer, true, heard_us);
-    Ok(json(&serde_json::json!({
-        "ok": true,
-        "peer": req.peer,
-        "heard_us": heard_us
-    })))
+    Ok(warp::reply::with_status(
+        json(&serde_json::json!({
+            "ok": true,
+            "peer": req.peer,
+            "heard_us": heard_us
+        })),
+        warp::http::StatusCode::OK,
+    ))
 }
 
 async fn send_handler(
@@ -313,14 +324,25 @@ async fn seed_peer_handler(
     let peer_bytes = peer_key.to_bytes();
     let my_seed = deterministic_seed(state.node.id);
     let my_key = StaticKey::from_seed(my_seed);
-    let session = my_key.session_with(&peer_key, state.node.id < req.peer);
+    let session = match my_key.session_with(&peer_key, state.node.id < req.peer) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok(warp::reply::with_status(
+                json(&serde_json::json!({"error": "session derivation failed"})),
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
+    };
     state.node.add_session(req.peer, session);
     state.peer_keys.insert(req.peer, peer_bytes.to_vec());
-    Ok(json(&serde_json::json!({
-        "ok": true,
-        "peer": req.peer,
-        "public_key": BASE64.encode(peer_bytes)
-    })))
+    Ok(warp::reply::with_status(
+        json(&serde_json::json!({
+            "ok": true,
+            "peer": req.peer,
+            "public_key": BASE64.encode(peer_bytes)
+        })),
+        warp::http::StatusCode::OK,
+    ))
 }
 
 /// Deterministic 32-byte seed from a node id.

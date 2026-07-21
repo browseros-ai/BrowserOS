@@ -159,3 +159,20 @@
 - **Seal status**: BUILD_PASS, TEST_PASS, CLIPPY_PASS (trios-mesh expect warnings remain as P1 backlog), E2E_NOT_RUN_DUE_SERVER_DOWN
 - **Next wave options**: mesh-panic-hardening, tmp-zero, seal-automation
 
+## 2026-07-21 WAVE-005 (Mesh panic hardening / Runtime-state isolation)
+
+- **Issue**: #T27-EPIC-001
+- **Agents**: t27-creator, t27-verifier, t27-experience
+- **Root cause**: `trios-mesh` production code contained 9 `expect` calls on crypto primitives plus 1 in discovery MAC computation; the unregistered `trios-meshd` binary panicked on bad config, bind failure, and missing files and used world-writable `/tmp/mesh.drop`; the workspace lint `expect_used` was only `warn`, allowing new panic surfaces to land.
+- **Fix pattern**: Add `MeshError::CryptoInternal` and propagate `Result` through `crypto.rs`, `discovery.rs`, and all callers. Rewrite `trios_meshd.rs` with `Result`-based startup, line-numbered config errors, mutex poison recovery, and `.trinity/run/mesh.drop` default with `TRIOS_MESH_DROP` override. Elevate workspace `expect_used`/`unwrap_used` to `deny` and add test-only exemptions. ASCII-clean touched source, specs, and skills.
+- **Files changed**: trios/Cargo.toml, trios/rings/RUST-13/trios-mesh/src/lib.rs, trios/rings/RUST-13/trios-mesh/src/crypto.rs, trios/rings/RUST-13/trios-mesh/src/discovery.rs, trios/rings/RUST-13/trios-mesh/src/router.rs, trios/rings/RUST-13/trios-mesh/src/bin/trios_meshd.rs, trios/rings/RUST-13/clade-meshd/src/main.rs, trios/.trinity/specs/mesh-panic-hardening.md, trios/.trinity/wave-loop-005.md, trios/.claude/skills/ascii-lint/SKILL.md, trios/.claude/skills/panic-hardening/SKILL.md
+- **Tests added**: `trios-mesh` existing 101 tests + `clade-meshd` 2 tests continue to pass; no new tests added.
+- **Lessons**:
+  - Converting `expect`/`unwrap` to `Result` in crypto code requires a single internal-error variant (`CryptoInternal`) so callers treat it as auth-equivalent without over-engineering fallible paths that should never fail.
+  - Cascading `Result` changes force signature updates across the crate boundary; commit the submodule first, then update the parent pointer.
+  - Mutex poison recovery with `unwrap_or_else(|p| p.into_inner())` is the right default for daemon hot paths, but tests should keep `.expect("mutex poison")` under the test exemption.
+  - An unregistered binary with API drift is dead code; document it and defer registration rather than break the build.
+  - ASCII cleanup must resolve all `[U+XXXX]` placeholders before seal; add unseen characters to the skill mapping.
+- **Seal status**: BUILD_PASS, TEST_PASS, CLIPPY_PASS, ASCII_PASS, E2E_NOT_RUN_DUE_SERVER_DOWN
+- **Next wave options**: meshd-revival, tmp-zero, seal-automation
+
