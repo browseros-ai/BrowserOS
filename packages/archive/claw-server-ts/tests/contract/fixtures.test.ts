@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { parse } from 'yaml'
-import { canonicalApiError } from '../../src/lib/api-error'
+import { canonicalApiError } from '../../src/api/http/errors'
 
 const fixturesDirectory = new URL(
   '../../../../contracts/claw-api/fixtures/',

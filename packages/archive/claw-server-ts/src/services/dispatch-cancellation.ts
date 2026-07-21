@@ -5,7 +5,7 @@
  *
  * In-memory registry of in-flight tool dispatch AbortControllers,
  * keyed by `sessionId`. The MCP dispatch path in
- * `apps/claw-server/src/mcp/dispatch.ts` registers a controller at
+ * `apps/claw-server/src/api/mcp/dispatch.ts` registers a controller at
  * the start of every tool call and unregisters it in a finally
  * block when the call resolves. The cockpit's Stop button calls
  * `cancelByAgent(agentId)` which walks the identity service for
