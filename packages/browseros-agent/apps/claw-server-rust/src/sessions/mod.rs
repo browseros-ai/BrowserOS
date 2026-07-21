@@ -3,7 +3,7 @@ mod session;
 pub use session::Session;
 
 use crate::{
-    capture::audit::AuditService,
+    db::{AuditLog, SessionTabLedger},
     error::{AppError, AppResult},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
     ids::{ConvoId, SessionId},
@@ -47,7 +47,8 @@ struct RetainedSession {
 pub struct Sessions {
     sessions: RwLock<HashMap<SessionId, Arc<Session>>>,
     ownership: Arc<PageOwnership>,
-    audit: Arc<AuditService>,
+    audit_log: Arc<AuditLog>,
+    session_tabs: Arc<SessionTabLedger>,
     reserved_keys: Mutex<HashSet<ConvoId>>,
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     reaping_keys: Mutex<HashSet<ConvoId>>,
@@ -60,7 +61,8 @@ pub struct Sessions {
 impl Sessions {
     #[must_use]
     pub fn new(
-        audit: Arc<AuditService>,
+        audit_log: Arc<AuditLog>,
+        session_tabs: Arc<SessionTabLedger>,
         idle_after: Duration,
         retention: Duration,
         sweep_interval: Duration,
@@ -68,7 +70,8 @@ impl Sessions {
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             ownership: Arc::new(PageOwnership::new()),
-            audit,
+            audit_log,
+            session_tabs,
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
@@ -116,7 +119,7 @@ impl Sessions {
         };
         let session = Session::new(id.clone(), agent, identity, Instant::now());
         if let Err(error) = self
-            .audit
+            .audit_log
             .record_session_start(
                 id.as_str(),
                 session.convo_id().as_str(),
@@ -274,10 +277,10 @@ impl Sessions {
     ) -> AppResult<()> {
         session.cancel_active_dispatches().await;
         session.cancel();
-        self.audit
+        self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
         let audit_result = self
-            .audit
+            .audit_log
             .record_session_end(session.id().as_str(), kind, reason)
             .await;
         let key = session.convo_id().clone();
@@ -357,12 +360,10 @@ impl Sessions {
 mod tests {
     use super::{RetainedGroupAction, Session, Sessions};
     use crate::{
-        capture::audit::AuditService,
-        db::entities::prelude::TabClaims,
+        db::{AuditLog, Database, SessionTabLedger},
         identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
         ids::{ConvoId, SessionId},
     };
-    use sea_orm::EntityTrait;
     use std::{
         sync::{
             Arc,
@@ -373,12 +374,23 @@ mod tests {
     use tempfile::tempdir;
     use tokio::time::Instant;
 
+    async fn repositories(
+        dir: &tempfile::TempDir,
+    ) -> anyhow::Result<(Arc<AuditLog>, Arc<SessionTabLedger>)> {
+        let database = Database::open(dir.path().join("audit.sqlite")).await?;
+        Ok((
+            Arc::new(AuditLog::new(database.clone())),
+            Arc::new(SessionTabLedger::new(database)),
+        ))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn sweep_removes_idle_sessions_and_writes_end_row() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit.clone(),
+            audit_log.clone(),
+            session_tabs.clone(),
             Duration::from_secs(5),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -396,7 +408,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(6)).await;
         assert_eq!(registry.sweep_idle().await?, 1);
         assert_eq!(registry.count().await, 0);
-        let detail = audit.get_task("s1").await?;
+        let detail = audit_log.get_task("s1").await?;
         assert!(detail.is_none());
         Ok(())
     }
@@ -404,9 +416,10 @@ mod tests {
     #[tokio::test]
     async fn session_teardown_releases_every_open_target_claim() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit.clone(),
+            audit_log.clone(),
+            session_tabs.clone(),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -421,18 +434,20 @@ mod tests {
             Instant::now(),
         );
         registry.insert_for_testing(session.clone()).await;
-        audit
+        session_tabs
             .claim_target_for_session("target-a", session.id().as_str(), "agent", 1)
             .await?;
-        audit
+        session_tabs
             .claim_target_for_session("target-b", session.id().as_str(), "agent", 2)
             .await?;
 
         assert!(registry.remove(session.id(), "closed", None).await?);
 
         for _ in 0..100 {
-            let claims = TabClaims::find().all(audit.connection()).await?;
-            if claims.iter().all(|claim| claim.released_at.is_some()) {
+            if session_tabs
+                .all_legacy_claims_released_for_session(session.id().as_str())
+                .await?
+            {
                 return Ok(());
             }
             tokio::task::yield_now().await;
@@ -443,9 +458,10 @@ mod tests {
     #[tokio::test]
     async fn mint_registers_live_session() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -470,9 +486,10 @@ mod tests {
     #[tokio::test]
     async fn same_client_sessions_get_distinct_identity_and_ownership() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),
@@ -527,9 +544,10 @@ mod tests {
     async fn retained_session_collapses_then_closes_and_forgets_after_expiry() -> anyhow::Result<()>
     {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
@@ -614,9 +632,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn failed_or_disconnected_close_retries_without_forgetting_state() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
@@ -686,9 +705,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn generated_key_stays_reserved_until_retained_cleanup() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),
@@ -730,9 +750,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn overlapping_retained_sweeps_issue_one_close() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let (audit_log, session_tabs) = repositories(&dir).await?;
         let registry = Sessions::new(
-            audit,
+            audit_log,
+            session_tabs,
             Duration::from_secs(60),
             Duration::from_secs(10),
             Duration::from_secs(1),

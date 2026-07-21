@@ -13,8 +13,8 @@ use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
 use claw_server_rust::{
     AppState, build_router,
-    capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
     config::Config,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
     sessions::Session,
@@ -311,7 +311,7 @@ fn live_session(session_id: &str) -> Arc<Session> {
 async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
     Ok(app
         .state
-        .audit
+        .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
             agent_id: "codex-research-browserclaw".to_string(),
             slug: "codex".to_string(),
@@ -480,7 +480,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         "session-live".to_string(),
@@ -499,14 +499,14 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         102,
         Some("target-8".to_string()),
         "session-live".to_string(),
         session.convo_id().as_str().to_string(),
         0,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
 
     for document_id in [
         "33D25F3CF060E81B14070BC356FF187",
@@ -742,7 +742,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
     for session in [&primary, &second, &zero_tab] {
         app.state.sessions.insert_for_testing(session.clone()).await;
         app.state
-            .audit
+            .audit_log
             .record_session_start(
                 session.id().as_str(),
                 session.convo_id().as_str(),
@@ -755,7 +755,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
     }
     let screenshot_dispatch_id = seed_dispatch(app, primary.id().as_str()).await?;
     app.state
-        .audit
+        .audit_log
         .mark_screenshot(screenshot_dispatch_id)
         .await?;
     app.state.tab_activity.set_now_for_testing(100);
@@ -772,7 +772,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
         })
         .await;
     for (session, tab_id, target_id) in [(&primary, 101, "target-7"), (&primary, 102, "target-8")] {
-        app.state.audit.enqueue_claim_tab_for_session(
+        app.state.session_tabs.enqueue_claim_tab_for_session(
             tab_id,
             Some(target_id.to_string()),
             session.id().as_str().to_string(),
@@ -934,7 +934,7 @@ async fn open_claims_reconcile_closed_and_reassigned_browser_tabs() -> anyhow::R
     );
 
     app.connection.remove_tab(102).await;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
@@ -1006,7 +1006,7 @@ async fn secure_preview_is_owned_fail_closed_and_cache_only() -> anyhow::Result<
         assert_eq!(failure_shape.get_or_insert_with(|| shape.clone()), &shape);
     }
 
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
@@ -1097,18 +1097,18 @@ async fn preview_rejects_disconnected_session_after_browser_reconciliation() -> 
             .remove(fixture.primary.id(), "closed", Some("test disconnect"))
             .await?
     );
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.primary.id().as_str().to_string(),
         fixture.primary.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
     assert!(!app.state.sessions.contains(fixture.primary.id()).await);
     assert!(
         app.state
-            .audit
+            .session_tabs
             .open_session_tab(fixture.primary.id().as_str(), 101)
             .await?
             .is_some()
@@ -1139,24 +1139,24 @@ async fn preview_rejects_ownership_transfer_during_frame_lookup() -> anyhow::Res
 
     gate.wait_until_entered().await;
     assert_eq!(app.connection.get_tabs_calls(), 1);
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
         fixture.second.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
     assert!(
         app.state
-            .audit
+            .session_tabs
             .open_session_tab(fixture.primary.id().as_str(), 101)
             .await?
             .is_none()
     );
     assert!(
         app.state
-            .audit
+            .session_tabs
             .open_session_tab(fixture.second.id().as_str(), 101)
             .await?
             .is_some()
@@ -1174,14 +1174,14 @@ async fn preview_rejects_ownership_transfer_during_frame_lookup() -> anyhow::Res
 async fn transferred_session_cannot_read_prior_owner_frame() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
         fixture.second.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
 
     let (status, _, bytes) = request(
         &app.router,
@@ -1263,24 +1263,24 @@ async fn preview_rejects_transfer_during_final_page_reconciliation() -> anyhow::
     let pages_gate = app.connection.gate_next_get_tabs().await;
     frame_gate.release();
     pages_gate.wait_until_entered().await;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
         fixture.second.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
     assert!(
         app.state
-            .audit
+            .session_tabs
             .open_session_tab(fixture.primary.id().as_str(), 101)
             .await?
             .is_none()
     );
     assert!(
         app.state
-            .audit
+            .session_tabs
             .open_session_tab(fixture.second.id().as_str(), 101)
             .await?
             .is_some()
@@ -1353,14 +1353,14 @@ async fn live_projection_revalidates_transfer_after_reconciliation() -> anyhow::
     });
 
     gate.wait_until_entered().await;
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.second.id().as_str().to_string(),
         fixture.second.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
     gate.release();
 
     let (status, _, bytes) = list.await??;
@@ -1401,14 +1401,14 @@ async fn live_projection_drops_disconnect_during_reconciliation() -> anyhow::Res
             .remove(fixture.primary.id(), "closed", Some("test disconnect"))
             .await?
     );
-    app.state.audit.enqueue_claim_tab_for_session(
+    app.state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         fixture.primary.id().as_str().to_string(),
         fixture.primary.convo_id().as_str().to_string(),
         200,
     );
-    app.state.audit.drain_claim_writes().await;
+    app.state.session_tabs.drain_writes().await;
     gate.release();
 
     let (status, _, bytes) = list.await??;

@@ -437,7 +437,7 @@ pub fn linked_cancel_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::audit::ListDispatchesQuery;
+    use crate::db::audit_log::ListDispatchesQuery;
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -695,7 +695,7 @@ mod tests {
         );
         let rows = call
             .state
-            .audit
+            .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
             .rows;
@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(error.message.as_ref(), CLIENT_CANCELLATION_ERROR);
         assert!(
             call.state
-                .audit
+                .audit_log
                 .list_dispatches(ListDispatchesQuery::default())
                 .await?
                 .rows

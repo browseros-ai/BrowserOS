@@ -111,8 +111,7 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
-    use crate::capture::audit::{AuditService, ListDispatchesQuery};
+    use super::{AuditLog, Database, audit_log::ListDispatchesQuery};
     use sea_orm::{
         ConnectionTrait, DbBackend, Statement,
         sqlx::{
@@ -245,7 +244,7 @@ mod tests {
         .await?;
         conn.close().await?;
 
-        let audit = AuditService::open(&path).await?;
+        let audit = AuditLog::new(Database::open(&path).await?);
         let rows = audit
             .list_dispatches(ListDispatchesQuery {
                 session_id: Some("session-id".to_string()),
@@ -286,7 +285,7 @@ mod tests {
         let backup = path.with_extension("sqlite.bak");
         tokio::fs::write(&path, b"not a sqlite database").await?;
 
-        let audit = AuditService::open(&path).await?;
+        let audit = AuditLog::new(Database::open(&path).await?);
         assert_eq!(tokio::fs::read(&backup).await?, b"not a sqlite database");
         audit
             .record_session_start("session-id", "agent-id", "agent", "Agent", "test", "1")

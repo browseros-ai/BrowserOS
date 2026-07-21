@@ -1,10 +1,8 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    capture::{
-        audit::{ListTasksQuery, TaskDetail, TaskStatus, ToolDispatchRow},
-        recordings::RecordingEventInput,
-    },
+    capture::recordings::RecordingEventInput,
+    db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, ToolDispatchRow},
     error::{CanonicalError, RequestId},
     ids::SessionId,
     live_sessions::{self, LiveSessionFilters},
@@ -60,7 +58,7 @@ pub(super) async fn list(
         return Ok(Json(response));
     }
     let result = state
-        .audit
+        .audit_log
         .list_tasks(ListTasksQuery {
             slug: query.slug,
             status: query.status,
@@ -101,7 +99,7 @@ pub(super) async fn get(
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionDetail>, CanonicalError> {
     let task = state
-        .audit
+        .audit_log
         .get_task(&session_id)
         .await
         .map_err(|source| internal(&request_id, source))?
@@ -160,7 +158,7 @@ pub(super) async fn cancel(
         )));
     }
     let known = state
-        .audit
+        .audit_log
         .get_task(session_id.as_str())
         .await
         .map_err(|source| internal(&request_id, source))?
@@ -317,7 +315,7 @@ pub(super) async fn append_legacy_events(
     let session_key = SessionId::new(session_id.clone());
     if !state.sessions.contains(&session_key).await {
         let known = state
-            .audit
+            .audit_log
             .get_task(&session_id)
             .await
             .map_err(|source| internal(&request_id, source))?
@@ -553,7 +551,7 @@ async fn require_known_session(
         return Ok(());
     }
     if state
-        .audit
+        .audit_log
         .get_task(session_id)
         .await
         .map_err(|source| internal(request_id, source))?

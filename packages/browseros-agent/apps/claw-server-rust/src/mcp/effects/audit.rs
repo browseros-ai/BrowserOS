@@ -1,6 +1,6 @@
 use crate::{
-    capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
     clock::now_epoch_ms,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id},
         timeouts::{AUDIT_SCREENSHOT_CAPTURE, SCREENCAST_FRAME_FRESHNESS},
@@ -85,7 +85,7 @@ async fn record_dispatch(
     let structured_content = result.structured_content.clone().unwrap_or(Value::Null);
     match call
         .state
-        .audit
+        .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
             agent_id: identity.session.convo_id().as_str().to_string(),
             slug: identity.agent.slug().to_string(),
@@ -255,7 +255,7 @@ async fn write_screenshot_files(call: &ToolCall, record: AuditRecord, bytes: &[u
             "screenshot dispatch-id write failed"
         );
     }
-    if let Err(error) = call.state.audit.mark_screenshot(record.row_id).await {
+    if let Err(error) = call.state.audit_log.mark_screenshot(record.row_id).await {
         warn!(
             error = %error,
             dispatch_id = %call.dispatch_id,
@@ -306,7 +306,7 @@ const _: ToolEffect = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::audit::ListDispatchesQuery;
+    use crate::db::audit_log::ListDispatchesQuery;
     use browseros_core::{TabId, TargetId, pages::PageInfo};
     use serde_json::json;
     use std::sync::{
@@ -372,7 +372,7 @@ mod tests {
         .await?;
         assert!(
             call.state
-                .audit
+                .audit_log
                 .list_dispatches(ListDispatchesQuery::default())
                 .await?
                 .rows
@@ -396,7 +396,7 @@ mod tests {
         .await?;
         let rows = call
             .state
-            .audit
+            .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
             .rows;
@@ -425,7 +425,7 @@ mod tests {
         .await?;
         assert!(
             call.state
-                .audit
+                .audit_log
                 .list_dispatches(ListDispatchesQuery::default())
                 .await?
                 .rows

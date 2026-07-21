@@ -1,4 +1,3 @@
-pub mod audit;
 pub mod recordings;
 pub mod replays;
 pub mod screencast;

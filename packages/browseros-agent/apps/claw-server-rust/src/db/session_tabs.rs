@@ -23,6 +23,30 @@ pub struct SessionTabLedger {
     claim_writes: mpsc::UnboundedSender<ClaimWrite>,
 }
 
+#[cfg(test)]
+pub(crate) struct SessionTabSnapshot {
+    pub id: i64,
+    pub session_id: String,
+    pub tab_id: i64,
+    pub opened_target_id: Option<String>,
+    pub claimed_at: i64,
+    pub released_at: Option<i64>,
+}
+
+#[cfg(test)]
+impl From<session_tabs::Model> for SessionTabSnapshot {
+    fn from(row: session_tabs::Model) -> Self {
+        Self {
+            id: row.id,
+            session_id: row.session_id,
+            tab_id: row.tab_id,
+            opened_target_id: row.opened_target_id,
+            claimed_at: row.claimed_at,
+            released_at: row.released_at,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ClaimWrite {
     ClaimTarget {
@@ -73,6 +97,47 @@ impl SessionTabLedger {
     #[cfg(test)]
     pub(crate) fn connection(&self) -> &sea_orm::DatabaseConnection {
         self.db.connection()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn all_legacy_claims_released_for_session(
+        &self,
+        session_id: &str,
+    ) -> AppResult<bool> {
+        Ok(TabClaims::find()
+            .filter(tab_claims::Column::SessionId.eq(session_id))
+            .all(self.db.connection())
+            .await?
+            .iter()
+            .all(|claim| claim.released_at.is_some()))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn first_session_tab(&self) -> AppResult<Option<SessionTabSnapshot>> {
+        Ok(SessionTabs::find()
+            .one(self.db.connection())
+            .await?
+            .map(SessionTabSnapshot::from))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn session_tab_claimed_at(
+        &self,
+        claimed_at: i64,
+    ) -> AppResult<Option<SessionTabSnapshot>> {
+        Ok(SessionTabs::find()
+            .filter(session_tabs::Column::ClaimedAt.eq(claimed_at))
+            .one(self.db.connection())
+            .await?
+            .map(SessionTabSnapshot::from))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn session_tab_by_id(&self, id: i64) -> AppResult<Option<SessionTabSnapshot>> {
+        Ok(SessionTabs::find_by_id(id)
+            .one(self.db.connection())
+            .await?
+            .map(SessionTabSnapshot::from))
     }
 
     /// Closes every open claim when CDP reports that its target was destroyed.

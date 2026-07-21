@@ -490,7 +490,7 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use crate::{
-        capture::audit::AuditService,
+        db::{AuditLog, Database, SessionTabLedger},
         identity::{ClientIdentity, ConversationIdentity},
         ids::SessionId as AppSessionId,
         sessions::{RetainedGroupAction, Sessions},
@@ -904,9 +904,10 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let dir = tempfile::tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let database = Database::open(dir.path().join("audit.sqlite")).await?;
         let sessions = Sessions::new(
-            audit,
+            Arc::new(AuditLog::new(database.clone())),
+            Arc::new(SessionTabLedger::new(database)),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),

@@ -94,7 +94,7 @@ impl AppRuntime {
     pub async fn shutdown(mut self) -> AppResult<()> {
         self.state.shutdown.request();
         let session_result = self.state.sessions.shutdown().await;
-        self.state.audit.drain_claim_writes().await;
+        self.state.session_tabs.drain_writes().await;
         self.state.recordings.close().await;
         self.state.screencast.stop();
         self.state.browser.stop();

@@ -2,12 +2,11 @@ use crate::{
     agents::AgentService,
     browser::BrowserService,
     capture::{
-        audit::AuditService, recordings::RecordingStore,
-        replays::ReplayService as ReplayReadService, screencast::ScreencastService,
-        screenshots::ScreenshotService,
+        recordings::RecordingStore, replays::ReplayService as ReplayReadService,
+        screencast::ScreencastService, screenshots::ScreenshotService,
     },
     config::Config,
-    db::{Database, RecordingIndex},
+    db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
     error::AppResult,
     harness::HarnessService,
     routes,
@@ -26,7 +25,8 @@ use std::{env, path::PathBuf, sync::Arc, time::Duration};
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub audit: Arc<AuditService>,
+    pub audit_log: Arc<AuditLog>,
+    pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub replays: Arc<ReplayReadService>,
     pub screenshots: Arc<ScreenshotService>,
@@ -53,9 +53,10 @@ impl AppState {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
         let database = Database::open(config.browserclaw_dir.join("audit.sqlite")).await?;
-        let audit = Arc::new(AuditService::new(database.clone()));
+        let audit_log = Arc::new(AuditLog::new(database.clone()));
+        let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database));
-        audit.release_all_open_claims().await?;
+        session_tabs.release_all_open().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
             recording_index.clone(),
@@ -73,18 +74,20 @@ impl AppState {
         let telemetry = Arc::new(TelemetryService::new(&config.browserclaw_dir));
         let agents = Arc::new(AgentService::new(store.clone()));
         let sessions = Sessions::new(
-            audit.clone(),
+            audit_log.clone(),
+            session_tabs.clone(),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
         );
-        let tab_targets = TabTargetMap::new(audit.clone());
+        let tab_targets = TabTargetMap::new(session_tabs.clone());
         let browser =
             BrowserService::new(config.cdp_port, sessions.ownership(), tab_targets.clone());
         let tab_activity = Arc::new(TabActivityService::default());
         Ok(Self {
             config,
-            audit,
+            audit_log,
+            session_tabs,
             recordings,
             replays,
             screenshots,

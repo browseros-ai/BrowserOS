@@ -8,7 +8,7 @@
 use crate::{
     AppState,
     agents::StoredAgentProfile,
-    capture::audit::{TaskStatus, TaskSummary},
+    db::audit_log::{TaskStatus, TaskSummary},
     error::{AppError, AppResult},
     sessions::Session,
     tabs::{activity::ScreencastFrame, hex_for_slug},
@@ -50,7 +50,7 @@ pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<S
 
     for session in sessions {
         let task = state
-            .audit
+            .audit_log
             .get_task_summary(session.id().as_str())
             .await?
             .ok_or_else(|| {
@@ -74,12 +74,15 @@ pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<S
         }
     }
 
-    state.audit.drain_claim_writes().await;
+    state.session_tabs.drain_writes().await;
     let session_ids = projected
         .iter()
         .map(|projected| projected.summary.session_id.clone())
         .collect::<Vec<_>>();
-    let ownership = state.audit.list_open_session_tabs(&session_ids).await?;
+    let ownership = state
+        .session_tabs
+        .list_open_session_tabs(&session_ids)
+        .await?;
     let Some(pages) = current_pages(state).await else {
         let connected = state
             .sessions
@@ -173,9 +176,9 @@ pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<S
         });
     }
 
-    state.audit.drain_claim_writes().await;
+    state.session_tabs.drain_writes().await;
     let current_ownership_ids = state
-        .audit
+        .session_tabs
         .list_open_session_tabs(&session_ids)
         .await?
         .into_iter()
@@ -242,9 +245,9 @@ pub async fn preview(
     if !state.sessions.contains(&live_session_id).await {
         return Ok(None);
     }
-    state.audit.drain_claim_writes().await;
+    state.session_tabs.drain_writes().await;
     if state
-        .audit
+        .session_tabs
         .open_session_tab(session_id, browser_tab_id)
         .await?
         .is_none()
@@ -275,9 +278,9 @@ pub async fn preview(
     }
     // Browser and cache reads establish the incarnation first. Durable ownership and connected
     // liveness are checked afterward so session authority is the return boundary.
-    state.audit.drain_claim_writes().await;
+    state.session_tabs.drain_writes().await;
     let owns_tab = state
-        .audit
+        .session_tabs
         .open_session_tab(session_id, browser_tab_id)
         .await?
         .is_some();

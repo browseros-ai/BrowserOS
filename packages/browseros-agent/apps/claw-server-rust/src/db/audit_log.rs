@@ -213,11 +213,6 @@ impl AuditLog {
         Self { db }
     }
 
-    #[cfg(test)]
-    pub(crate) fn connection(&self) -> &sea_orm::DatabaseConnection {
-        self.db.connection()
-    }
-
     /// Records a tool dispatch and refreshes its task summary atomically.
     pub async fn record_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
         let txn = self.db.connection().begin().await?;

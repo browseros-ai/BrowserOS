@@ -38,13 +38,17 @@ pub fn apply(
                 let session_id = context.call.session_id.as_str().to_string();
                 let agent_id = identity.session.convo_id().as_str().to_string();
                 let claimed_at = context.call.started_at_ms;
-                context.call.state.audit.enqueue_claim_tab_for_session(
-                    info.tab_id.0,
-                    Some(target_id),
-                    session_id,
-                    agent_id,
-                    claimed_at,
-                );
+                context
+                    .call
+                    .state
+                    .session_tabs
+                    .enqueue_claim_tab_for_session(
+                        info.tab_id.0,
+                        Some(target_id),
+                        session_id,
+                        agent_id,
+                        claimed_at,
+                    );
             }
             context
                 .call
@@ -69,7 +73,7 @@ pub fn apply(
                 context
                     .call
                     .state
-                    .audit
+                    .session_tabs
                     .enqueue_release_tab_for_session(page.tab_id.0, session_id);
             }
             context
@@ -90,12 +94,11 @@ const _: ToolEffect = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::entities::{prelude::SessionTabs, session_tabs};
+    use crate::db::session_tabs::SessionTabSnapshot;
     use browseros_cdp::{CdpError, CdpEvent, SessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use browseros_mcp::ToolResult;
     use futures_util::future::BoxFuture;
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use serde_json::{Value, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -165,11 +168,9 @@ mod tests {
     async fn wait_for_claim(
         call: &crate::mcp::dispatch::ToolCall,
         released: bool,
-    ) -> anyhow::Result<session_tabs::Model> {
+    ) -> anyhow::Result<SessionTabSnapshot> {
         for _ in 0..100 {
-            if let Some(claim) = SessionTabs::find()
-                .one(call.state.audit.connection())
-                .await?
+            if let Some(claim) = call.state.session_tabs.first_session_tab().await?
                 && claim.released_at.is_some() == released
             {
                 return Ok(claim);
@@ -207,14 +208,14 @@ mod tests {
             crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
                 .await?;
         close_call.page_snapshot = browser.pages.get_info(PageId(1)).await;
-        close_call.state.audit.enqueue_claim_tab_for_session(
+        close_call.state.session_tabs.enqueue_claim_tab_for_session(
             11,
             Some("target-a".to_string()),
             "s1".to_string(),
             "agent".to_string(),
             100,
         );
-        close_call.state.audit.drain_claim_writes().await;
+        close_call.state.session_tabs.drain_writes().await;
         let result = ToolResult::text("closed page", None);
         apply(ToolEffectContext {
             call: &close_call,
@@ -223,14 +224,17 @@ mod tests {
             duration_ms: 1,
         })
         .await?;
-        let released = SessionTabs::find()
-            .filter(session_tabs::Column::ClaimedAt.eq(100))
-            .one(close_call.state.audit.connection())
+        let released = close_call
+            .state
+            .session_tabs
+            .session_tab_claimed_at(100)
             .await?
             .unwrap_or_else(|| panic!("close claim missing"));
         for _ in 0..100 {
-            let current = SessionTabs::find_by_id(released.id)
-                .one(close_call.state.audit.connection())
+            let current = close_call
+                .state
+                .session_tabs
+                .session_tab_by_id(released.id)
                 .await?
                 .unwrap_or_else(|| panic!("close claim missing"));
             if current.released_at.is_some() {

@@ -10,8 +10,8 @@ use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
 use claw_server_rust::{
     AppRuntime, AppState, build_router,
-    capture::audit::{DispatchResultSummary, RecordToolDispatchInput},
     config::Config,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
     sessions::Session,
@@ -207,7 +207,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
     state.sessions.insert_for_testing(empty_live).await;
 
     state
-        .audit
+        .audit_log
         .record_session_start(
             "session-live",
             "codex-research-browserclaw",
@@ -218,9 +218,9 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         )
         .await?;
     let dispatch_id = seed_dispatch(state, "session-live", 7, "target-7").await?;
-    state.audit.mark_screenshot(dispatch_id).await?;
+    state.audit_log.mark_screenshot(dispatch_id).await?;
     state
-        .audit
+        .audit_log
         .record_session_start(
             "session-live-shared-profile",
             "codex-compare-release-notes",
@@ -232,7 +232,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .await?;
     seed_dispatch(state, "session-live-shared-profile", 9, "target-9").await?;
     state
-        .audit
+        .audit_log
         .record_session_start(
             "session-live-empty",
             "claude-code-waiting-for-first-tool",
@@ -243,7 +243,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         )
         .await?;
     state
-        .audit
+        .audit_log
         .record_session_start(
             "session-ended",
             "codex-ended",
@@ -255,7 +255,7 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
         .await?;
     seed_dispatch(state, "session-ended", 8, "target-8").await?;
     state
-        .audit
+        .audit_log
         .record_session_end("session-ended", "closed", Some("fixture"))
         .await?;
 
@@ -272,28 +272,28 @@ async fn seed(state: &AppState) -> anyhow::Result<()> {
             tool_name: "snapshot".to_string(),
         })
         .await;
-    state.audit.enqueue_claim_tab_for_session(
+    state.session_tabs.enqueue_claim_tab_for_session(
         101,
         Some("target-7".to_string()),
         "session-live".to_string(),
         "codex-research-browserclaw".to_string(),
         0,
     );
-    state.audit.enqueue_claim_tab_for_session(
+    state.session_tabs.enqueue_claim_tab_for_session(
         102,
         Some("target-8".to_string()),
         "session-live".to_string(),
         "codex-research-browserclaw".to_string(),
         0,
     );
-    state.audit.enqueue_claim_tab_for_session(
+    state.session_tabs.enqueue_claim_tab_for_session(
         201,
         Some("target-9".to_string()),
         "session-live-shared-profile".to_string(),
         "codex-compare-release-notes".to_string(),
         0,
     );
-    state.audit.drain_claim_writes().await;
+    state.session_tabs.drain_writes().await;
     state
         .screencast
         .cache_frame(
@@ -366,7 +366,7 @@ async fn seed_dispatch(
     target_id: &str,
 ) -> anyhow::Result<i64> {
     Ok(state
-        .audit
+        .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
             agent_id: format!("codex-{session_id}"),
             slug: "codex".to_string(),

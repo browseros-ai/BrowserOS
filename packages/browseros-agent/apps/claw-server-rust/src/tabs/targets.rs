@@ -1,4 +1,4 @@
-use crate::{capture::audit::AuditService, clock::now_epoch_ms, error::AppResult};
+use crate::{clock::now_epoch_ms, db::SessionTabLedger, error::AppResult};
 use browseros_cdp::{CdpEvent, browser};
 use browseros_core::BrowserSession;
 use futures_util::future::BoxFuture;
@@ -64,15 +64,15 @@ pub struct TabTargetMap {
 
 impl TabTargetMap {
     #[must_use]
-    pub fn new(audit: Arc<AuditService>) -> Arc<Self> {
-        let release_audit = audit.clone();
+    pub fn new(session_tabs: Arc<SessionTabLedger>) -> Arc<Self> {
+        let release_session_tabs = session_tabs.clone();
         Self::new_with_callbacks(
             Arc::new(move |target_id| {
-                release_audit.enqueue_release_claims_for_target(target_id);
+                release_session_tabs.enqueue_release_claims_for_target(target_id);
                 Box::pin(async { Ok(()) })
             }),
             Arc::new(move |opener_tab_id, tab_id, target_id| {
-                audit.enqueue_inherit_tab_ownership(
+                session_tabs.enqueue_inherit_tab_ownership(
                     opener_tab_id,
                     tab_id,
                     target_id,

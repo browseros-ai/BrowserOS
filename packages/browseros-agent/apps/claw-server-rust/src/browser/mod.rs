@@ -291,17 +291,18 @@ mod tests {
 
     async fn service() -> anyhow::Result<(Arc<BrowserService>, TempDir)> {
         let root = tempfile::tempdir()?;
-        let audit = Arc::new(
-            crate::capture::audit::AuditService::open(root.path().join("audit.sqlite")).await?,
-        );
+        let database = crate::db::Database::open(root.path().join("audit.sqlite")).await?;
+        let audit_log = Arc::new(crate::db::AuditLog::new(database.clone()));
+        let session_tabs = Arc::new(crate::db::SessionTabLedger::new(database));
         let sessions = crate::sessions::Sessions::new(
-            audit.clone(),
+            audit_log,
+            session_tabs.clone(),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
         );
         Ok((
-            BrowserService::new(0, sessions.ownership(), TabTargetMap::new(audit)),
+            BrowserService::new(0, sessions.ownership(), TabTargetMap::new(session_tabs)),
             root,
         ))
     }
