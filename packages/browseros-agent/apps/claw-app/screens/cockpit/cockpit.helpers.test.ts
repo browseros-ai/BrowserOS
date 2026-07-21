@@ -110,12 +110,12 @@ describe('sessionsToLiveCards', () => {
     ])
   })
 
-  it('keeps a zero-tab live session as an idle card', () => {
+  it('keeps a dispatch-backed zero-tab live session as an idle card', () => {
     const [card] = sessionsToLiveCards([
       liveSession({
         sessionId: 'session-empty',
-        dispatchCount: 0,
-        toolSequence: [],
+        dispatchCount: 1,
+        toolSequence: ['name_session'],
         live: { state: 'idle', browserTabs: [] },
       }),
     ])

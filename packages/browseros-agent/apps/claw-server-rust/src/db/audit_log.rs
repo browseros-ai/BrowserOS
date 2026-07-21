@@ -371,6 +371,7 @@ impl AuditLog {
                 )
         });
         let condition = Condition::all()
+            .add(tasks::Column::DispatchCount.gt(0))
             .add_option(query.agent_id.map(|value| tasks::Column::AgentId.eq(value)))
             .add_option(query.slug.map(|value| tasks::Column::Slug.eq(value)))
             .add_option(
@@ -412,6 +413,7 @@ impl AuditLog {
     /// Returns a task summary with its ordered events and dispatches.
     pub async fn get_task(&self, session_id: &str) -> AppResult<Option<TaskDetail>> {
         let Some(summary) = Tasks::find_by_id(session_id.to_owned())
+            .filter(tasks::Column::DispatchCount.gt(0))
             .one(self.db.connection())
             .await?
             .map(TaskSummary::from)
@@ -790,6 +792,47 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_dispatch_tasks_are_excluded_before_pagination() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        for session_id in ["handshake-1", "handshake-2"] {
+            audit
+                .record_session_start(session_id, "agent", "agent", "Agent", "client", "1")
+                .await?;
+        }
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://alpha.example.com", false))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("b1", "https://beta.example.com", false))
+            .await?;
+
+        let page = audit
+            .list_tasks(ListTasksQuery {
+                limit: Some(2),
+                ..Default::default()
+            })
+            .await?;
+
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|task| task.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b1", "a1"]
+        );
+        assert_eq!(page.next_cursor, None);
+        assert!(
+            audit
+                .get_task_summary("handshake-1")
+                .await?
+                .is_some_and(|task| task.dispatch_count == 0)
+        );
+        assert!(audit.get_task("handshake-1").await?.is_none());
         Ok(())
     }
 }

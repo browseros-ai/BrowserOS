@@ -2,6 +2,7 @@ use crate::{
     AppState,
     api::mcp::{
         dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
+        effects::audit::record_local_tool_dispatch,
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
@@ -10,7 +11,7 @@ use crate::{
     ids::SessionId,
     services::sessions::Session,
 };
-use browseros_mcp::{OutputFileAccess, ToolDef, catalog};
+use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult, catalog};
 use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
@@ -22,9 +23,12 @@ use rmcp::{
     service::{NotificationContext, RequestContext},
 };
 use serde_json::{Value, json};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -89,8 +93,9 @@ impl ClawMcpService {
         tools
     }
 
-    async fn call_name_session(&self, session: Arc<Session>, raw_args: &Value) -> CallToolResult {
-        let rename = match rename_session(Some(session.as_ref()), raw_args).await {
+    async fn call_name_session(&self, started: StartedSession, raw_args: &Value) -> CallToolResult {
+        let started_at = Instant::now();
+        let rename = match rename_session(Some(started.session.as_ref()), raw_args).await {
             Ok(rename) => rename,
             Err(message) => {
                 return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
@@ -100,12 +105,23 @@ impl ClawMcpService {
         apply_agent_tab_group_title(
             browser.as_ref(),
             &self.state.sessions.ownership(),
-            session.convo_id(),
-            session.as_ref(),
-            session.child_token(),
+            started.session.convo_id(),
+            started.session.as_ref(),
+            started.session.child_token(),
         )
         .await;
-        CallToolResult::success(vec![rmcp::model::ContentBlock::text(rename.response)])
+        let result = ToolResult::text(rename.response, None);
+        record_local_tool_dispatch(
+            &self.state,
+            started.session.as_ref(),
+            &started.agent_label,
+            NAME_SESSION_TOOL_NAME,
+            raw_args,
+            &result,
+            i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+        )
+        .await;
+        result.into_call_tool_result()
     }
 
     async fn set_client_info(&self, request: &InitializeRequestParams) {
@@ -302,7 +318,7 @@ impl ServerHandler for ClawMcpService {
         let started = self.learn_session_from_request(&context).await?;
         started.session.touch(tokio::time::Instant::now()).await;
         if is_name_session {
-            return Ok(self.call_name_session(started.session, &raw_args).await);
+            return Ok(self.call_name_session(started, &raw_args).await);
         }
         let Some(tool_index) = tool_index else {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());

@@ -37,7 +37,7 @@ import {
 } from '../../services/dispatch-cancellation'
 import { cancellationErrorResult } from './cancellation-result'
 import { composeAbortSignals, dispatchErrorText } from './dispatch-util'
-import { applyAudit } from './effects/audit'
+import { applyAudit, recordLocalToolDispatch } from './effects/audit'
 import { applyOwnershipClaims } from './effects/ownership-claims'
 import { applySessionNaming } from './effects/session-naming'
 import { applyTabActivity } from './effects/tab-activity'
@@ -176,6 +176,7 @@ export function registerBrowserToolsForSingleServer(
       },
     },
     async (args, extra) => {
+      const startedAtMs = Date.now()
       const identity = resolveIdentity(extra?.sessionId)
       if (!identity) return errorResult('unable to resolve this session')
       const label = normalizeSmallName(args.name as string)
@@ -190,7 +191,23 @@ export function registerBrowserToolsForSingleServer(
         title: newTitle,
         session: getBrowserSession(),
       })
-      return textResult(`renamed to ${newTitle} (was ${oldTitle})`)
+      const result = textResult(`renamed to ${newTitle} (was ${oldTitle})`)
+      const agent = agentIdentityFromClient(identity)
+      recordLocalToolDispatch({
+        agentId: agent.agentId,
+        slug: agent.slug,
+        agentLabel: agentLabelFromIdentity(identity),
+        sessionId: identity.sessionId,
+        toolName: 'name_session',
+        rawArgs: args,
+        durationMs: Date.now() - startedAtMs,
+        result: {
+          isError: result.isError ?? false,
+          structuredContent: result.structuredContent,
+          content: result.content,
+        },
+      })
+      return result
     },
   )
 }
@@ -235,13 +252,7 @@ function buildToolCall(
     identity,
     key,
     agent,
-    agentLabel: identity
-      ? identity.clientTitle && identity.clientTitle.length > 0
-        ? identity.clientTitle
-        : identity.clientName.length > 0
-          ? identity.clientName
-          : (agent?.slug ?? null)
-      : null,
+    agentLabel: identity ? agentLabelFromIdentity(identity) : null,
     session,
     signal: extra?.signal,
     defaultTabGroupId,
@@ -260,6 +271,14 @@ function buildToolCall(
       listTabs: action === 'list',
     },
   }
+}
+
+function agentLabelFromIdentity(identity: ClientIdentity): string {
+  if (identity.clientTitle && identity.clientTitle.length > 0) {
+    return identity.clientTitle
+  }
+  if (identity.clientName.length > 0) return identity.clientName
+  return identity.slug
 }
 
 async function dispatchToolCall(call: ToolCall): Promise<ToolResult> {

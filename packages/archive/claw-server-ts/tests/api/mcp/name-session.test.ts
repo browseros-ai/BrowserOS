@@ -62,6 +62,8 @@ const { resetSingleMcpInstanceForTesting } = await import(
 const { resetAuditDbForTesting, setAuditDbForTesting } = await import(
   '../../../src/modules/db/db'
 )
+const { listDispatches } = await import('../../../src/services/audit-log')
+const { listTasks } = await import('../../../src/services/tasks')
 const { createServer } = await import('../../../src/server')
 const app = createServer()
 
@@ -133,6 +135,7 @@ describe('name_session', () => {
       },
     })
     expect(tool?.description).toContain('small lowercase 2-3 word label')
+    expect(listTasks({}).tasks).toEqual([])
     await client.close()
   })
 
@@ -153,6 +156,31 @@ describe('name_session', () => {
       `renamed to claude/invoice-processing (was ${oldTitle})`,
     )
     expect(frameworkCalls).toEqual([])
+    expect(listTasks({}).tasks).toEqual([
+      expect.objectContaining({
+        sessionId: identity.sessionId,
+        dispatchCount: 1,
+        toolSequence: ['name_session'],
+      }),
+    ])
+    expect(listDispatches({ sessionId: identity.sessionId }).rows).toEqual([
+      expect.objectContaining({
+        toolName: 'name_session',
+        argsJson: JSON.stringify({ name: '  Invoice Processing!!!  ' }),
+      }),
+    ])
+    const live = (await (
+      await app.fetch(
+        new Request('http://localhost/api/v1/sessions?status=live'),
+      )
+    ).json()) as { items: Array<Record<string, unknown>> }
+    expect(live.items).toEqual([
+      expect.objectContaining({
+        sessionId: identity.sessionId,
+        dispatchCount: 1,
+        toolSequence: ['name_session'],
+      }),
+    ])
     await client.close()
   })
 
@@ -166,6 +194,7 @@ describe('name_session', () => {
     expect(result.isError).toBe(true)
     expect(identity.label).toBe(identity.generatedLabel)
     expect(textOf(result)).toContain('usable session name')
+    expect(listTasks({}).tasks).toEqual([])
     await client.close()
   })
 

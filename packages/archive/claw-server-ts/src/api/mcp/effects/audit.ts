@@ -2,7 +2,10 @@
 
 import { logger } from '../../../lib/logger'
 import { extractPageId } from '../../../lib/tab-activity'
-import { recordToolDispatch } from '../../../services/audit-log'
+import {
+  type RecordToolDispatchInput,
+  recordToolDispatch,
+} from '../../../services/audit-log'
 import { writeSessionScreenshot } from '../../../services/screenshots'
 import { sessionVisualService } from '../../../services/session-visuals'
 import type { ToolEffect } from '../dispatch'
@@ -30,7 +33,7 @@ export const applyAudit: ToolEffect = async ({
       : extractPageId(call.tool.name, call.args)
   const live = pageId !== null ? call.session?.pages.getInfo(pageId) : null
   const page = live ?? call.pageSnapshot
-  const dispatchId = recordToolDispatch({
+  await persistAuditDispatch({
     agentId: call.agent.agentId,
     slug: call.agent.slug,
     agentLabel: call.agentLabel,
@@ -49,19 +52,42 @@ export const applyAudit: ToolEffect = async ({
       content: result.content,
     },
   })
+  return undefined
+}
+
+type LocalToolDispatchInput = Omit<
+  RecordToolDispatchInput,
+  'pageId' | 'tabId' | 'targetId' | 'url' | 'title'
+>
+
+/** Records a Claw-local tool without capturing an unrelated browser page. */
+export function recordLocalToolDispatch(input: LocalToolDispatchInput): void {
+  recordToolDispatch({
+    ...input,
+    pageId: null,
+    tabId: null,
+    targetId: null,
+    url: null,
+    title: null,
+  })
+}
+
+async function persistAuditDispatch(
+  input: RecordToolDispatchInput,
+): Promise<void> {
+  const dispatchId = recordToolDispatch(input)
   if (dispatchId === null) return undefined
 
   try {
-    const bytes = await sessionVisualService.capture(call.sessionId)
+    const bytes = await sessionVisualService.capture(input.sessionId)
     if (bytes) {
-      await writeSessionScreenshot(call.sessionId, dispatchId, bytes)
+      await writeSessionScreenshot(input.sessionId, dispatchId, bytes)
     }
   } catch (error) {
     logger.warn('audit screenshot capture failed', {
-      sessionId: call.sessionId,
+      sessionId: input.sessionId,
       dispatchId,
       error: error instanceof Error ? error.message : String(error),
     })
   }
-  return undefined
 }

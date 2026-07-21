@@ -7,7 +7,7 @@
 
 use crate::{
     db::audit_log::TaskSummary,
-    error::{AppError, AppResult},
+    error::AppResult,
     services::{
         browser::{BrowserService, hex_for_slug},
         cockpit::{TabActivityService, ToolEvent},
@@ -112,16 +112,16 @@ impl CockpitQuery {
         let mut projected = Vec::with_capacity(sessions.len());
 
         for session in sessions {
-            let task = self
+            let Some(task) = self
                 .audit_log
                 .get_task_summary(session.id().as_str())
                 .await?
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "live session {} has no audit summary",
-                        session.id().as_str()
-                    ))
-                })?;
+            else {
+                continue;
+            };
+            if task.dispatch_count <= 0 {
+                continue;
+            }
             let profile = matched_profile(&session, &profiles);
             let projection = LiveSessionProjection {
                 label: profile

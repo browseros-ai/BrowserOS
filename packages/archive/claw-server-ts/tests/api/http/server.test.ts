@@ -207,6 +207,21 @@ describe('mounted production HTTP handlers', () => {
       sessionId: 'session-connected',
       clientInfo: { name: 'codex', version: '1.0.0', title: 'Codex CLI' },
     })
+    recordToolDispatch({
+      agentId: 'codex-session-connected',
+      slug: 'codex',
+      agentLabel: 'Codex CLI',
+      sessionId: 'session-connected',
+      toolName: 'name_session',
+      pageId: null,
+      tabId: null,
+      targetId: null,
+      url: null,
+      title: null,
+      rawArgs: { name: 'connected session' },
+      durationMs: 1,
+      result: { isError: false, content: [], structuredContent: {} },
+    })
     setBrowserSession({
       pages: {
         list: async () => {

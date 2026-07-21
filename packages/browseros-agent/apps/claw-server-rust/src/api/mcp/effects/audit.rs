@@ -1,8 +1,11 @@
 use crate::{
+    AppState,
     api::mcp::dispatch::{
         ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id,
     },
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+    ids::{DispatchId, SessionId},
+    services::sessions::Session,
 };
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
@@ -37,9 +40,45 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         else {
             return Ok(None);
         };
-        persist_screenshot(context.call, record).await;
+        persist_screenshot(
+            &context.call.state,
+            &context.call.session_id,
+            &context.call.dispatch_id,
+            record,
+        )
+        .await;
         Ok(None)
     })
+}
+
+/// Records a Claw-local tool without capturing an unrelated browser page.
+pub async fn record_local_tool_dispatch(
+    state: &AppState,
+    session: &Session,
+    agent_label: &str,
+    tool_name: &str,
+    raw_args: &Value,
+    result: &ToolResult,
+    duration_ms: i64,
+) {
+    let dispatch_id = DispatchId::new();
+    let input = RecordToolDispatchInput {
+        agent_id: session.convo_id().as_str().to_string(),
+        slug: session.agent().slug().to_string(),
+        agent_label: agent_label.to_string(),
+        session_id: session.id().as_str().to_string(),
+        tool_name: tool_name.to_string(),
+        page_id: None,
+        tab_id: None,
+        target_id: None,
+        url: None,
+        title: None,
+        raw_args: raw_args.clone(),
+        duration_ms,
+        dispatch_id: dispatch_id.clone(),
+        result: result_summary(result, false),
+    };
+    let _ = write_dispatch(state, input, &dispatch_id).await;
 }
 
 async fn record_dispatch(
@@ -59,15 +98,9 @@ async fn record_dispatch(
         _ => None,
     }
     .or_else(|| call.page_snapshot.clone());
-    let content = serde_json::to_value(&result.content).unwrap_or_else(|error| {
-        warn!(error = %error, "tool content serialization failed");
-        json!([])
-    });
-    let structured_content = result.structured_content.clone().unwrap_or(Value::Null);
-    match call
-        .state
-        .audit_log
-        .record_tool_dispatch(RecordToolDispatchInput {
+    write_dispatch(
+        &call.state,
+        RecordToolDispatchInput {
             agent_id: identity.session.convo_id().as_str().to_string(),
             slug: identity.agent.slug().to_string(),
             agent_label: identity.agent_label.clone(),
@@ -83,19 +116,24 @@ async fn record_dispatch(
             raw_args: call.raw_args.clone(),
             duration_ms,
             dispatch_id: call.dispatch_id.clone(),
-            result: DispatchResultSummary {
-                is_error: cancelled || result.is_error,
-                structured_content,
-                content,
-            },
-        })
-        .await
-    {
+            result: result_summary(result, cancelled),
+        },
+        &call.dispatch_id,
+    )
+    .await
+}
+
+async fn write_dispatch(
+    state: &AppState,
+    input: RecordToolDispatchInput,
+    dispatch_id: &DispatchId,
+) -> Option<AuditRecord> {
+    match state.audit_log.record_tool_dispatch(input).await {
         Ok(row_id) => Some(AuditRecord { row_id }),
         Err(error) => {
             warn!(
                 error = %error,
-                dispatch_id = %call.dispatch_id,
+                dispatch_id = %dispatch_id,
                 "audit writer failed"
             );
             None
@@ -103,26 +141,42 @@ async fn record_dispatch(
     }
 }
 
-async fn persist_screenshot(call: &ToolCall, record: AuditRecord) {
-    let bytes = match call.state.visuals.capture(call.session_id.as_str()).await {
+fn result_summary(result: &ToolResult, cancelled: bool) -> DispatchResultSummary {
+    let content = serde_json::to_value(&result.content).unwrap_or_else(|error| {
+        warn!(error = %error, "tool content serialization failed");
+        json!([])
+    });
+    DispatchResultSummary {
+        is_error: cancelled || result.is_error,
+        structured_content: result.structured_content.clone().unwrap_or(Value::Null),
+        content,
+    }
+}
+
+async fn persist_screenshot(
+    state: &AppState,
+    session_id: &SessionId,
+    dispatch_id: &DispatchId,
+    record: AuditRecord,
+) {
+    let bytes = match state.visuals.capture(session_id.as_str()).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return,
         Err(error) => {
-            warn!(error = %error, dispatch_id = %call.dispatch_id, "audit screenshot capture failed");
+            warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot capture failed");
             return;
         }
     };
-    if let Err(error) = call
-        .state
+    if let Err(error) = state
         .screenshots
-        .write(call.session_id.as_str(), record.row_id, &bytes)
+        .write(session_id.as_str(), record.row_id, &bytes)
         .await
     {
-        warn!(error = %error, dispatch_id = %call.dispatch_id, "session screenshot write failed");
+        warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
         return;
     }
-    if let Err(error) = call.state.audit_log.mark_screenshot(record.row_id).await {
-        warn!(error = %error, dispatch_id = %call.dispatch_id, "audit screenshot marker failed");
+    if let Err(error) = state.audit_log.mark_screenshot(record.row_id).await {
+        warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
     }
 }
 

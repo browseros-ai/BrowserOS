@@ -46,7 +46,6 @@ export interface SessionQueryDependencies {
   /** Null means reconciliation was unavailable; an empty array is authoritative. */
   listBrowserPages(): Promise<CurrentBrowserPage[] | null>
   snapshotTabActivity(): TabActivityRecord[]
-  now(): number
 }
 
 export interface SessionQueryService {
@@ -55,7 +54,7 @@ export interface SessionQueryService {
 
 interface LiveCandidate {
   identity: ClientIdentity
-  task: TaskSummary | null
+  task: TaskSummary
   summary: SessionSummary
 }
 
@@ -72,15 +71,16 @@ export function createSessionQueryService(
         identities.map((identity) => identity.sessionId),
       )
       const candidates = identities
-        .map((identity): LiveCandidate => {
-          const task = tasks.get(identity.sessionId) ?? null
-          return {
-            identity,
-            task,
-            summary: task
-              ? sessionSummaryForTask(task, identity)
-              : synthesizedSessionSummary(identity, deps.now()),
-          }
+        .flatMap((identity): LiveCandidate[] => {
+          const task = tasks.get(identity.sessionId)
+          if (!task || task.dispatchCount <= 0) return []
+          return [
+            {
+              identity,
+              task,
+              summary: sessionSummaryForTask(task, identity),
+            },
+          ]
         })
         .filter((candidate) => matchesLiveQuery(candidate, query))
 
@@ -178,24 +178,6 @@ export function sessionSummaryForTask(
   }
 }
 
-function synthesizedSessionSummary(
-  identity: ClientIdentity,
-  now: number,
-): SessionSummary {
-  return {
-    sessionId: identity.sessionId,
-    slug: identity.slug,
-    label: clientDisplay(identity),
-    name: identity.label,
-    startedAt: identity.firstSeenAt,
-    durationMs: Math.max(0, now - identity.firstSeenAt),
-    dispatchCount: 0,
-    toolSequence: [],
-    status: 'live',
-    errorCount: 0,
-  }
-}
-
 function matchesLiveQuery(
   candidate: LiveCandidate,
   query: SessionQuery,
@@ -210,7 +192,7 @@ function matchesLiveQuery(
 
   const search = query.search.toLowerCase()
   return [
-    candidate.task?.title,
+    candidate.task.title,
     candidate.summary.label,
     candidate.summary.name,
     candidate.summary.site,
@@ -285,10 +267,6 @@ function activityKey(
   targetId: string,
 ): string {
   return `${sessionId}\u0000${tabId.toString()}\u0000${pageId.toString()}\u0000${targetId}`
-}
-
-function clientDisplay(identity: ClientIdentity): string {
-  return identity.clientTitle || identity.clientName || identity.slug
 }
 
 function harnessForIdentity(identity: ClientIdentity): string | undefined {

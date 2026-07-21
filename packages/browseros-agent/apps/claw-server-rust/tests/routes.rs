@@ -7,8 +7,9 @@ use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     identity::{ClientIdentity, ConversationIdentity},
-    ids::{ConvoId, ProfileId, SessionId},
+    ids::{ConvoId, DispatchId, ProfileId, SessionId},
     services::sessions::Session,
     services::{cockpit::RecordToolInput, sessions::PageOwnership},
 };
@@ -482,6 +483,14 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
             "idempotentHint": true
         })
     );
+    assert!(
+        app.state
+            .audit_log
+            .list_tasks(Default::default())
+            .await?
+            .tasks
+            .is_empty()
+    );
 
     let session = app
         .state
@@ -505,6 +514,26 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         format!("renamed to codex/invoice-processing (was codex/{generated})")
     );
     assert_eq!(session.label().await, "invoice-processing");
+    let first_task = app
+        .state
+        .audit_log
+        .get_task(session_id.as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("name_session dispatch missing"))?;
+    assert_eq!(first_task.summary.dispatch_count, 1);
+    assert_eq!(first_task.summary.tool_sequence, ["name_session"]);
+    assert_eq!(first_task.dispatches[0].tool_name, "name_session");
+    assert_eq!(
+        first_task.dispatches[0].args_json.as_deref(),
+        Some(r#"{"name":"  Invoice Processing!!!  "}"#)
+    );
+    let (status, live) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(live["items"][0]["sessionId"], session_id);
+    assert_eq!(live["items"][0]["dispatchCount"], 1);
+    assert_eq!(live["items"][0]["toolSequence"], json!(["name_session"]));
 
     let (_status, _headers, body) = request_json_with_headers(
         &app.router,
@@ -517,6 +546,17 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
     assert_eq!(
         body["result"]["content"][0]["text"],
         "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| (task.dispatch_count, task.tool_sequence)),
+        Some((
+            2,
+            vec!["name_session".to_string(), "name_session".to_string()]
+        ))
     );
 
     for (id, invalid, message) in [
@@ -539,6 +579,14 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         assert_eq!(body["result"]["content"][0]["text"], message);
         assert_eq!(session.label().await, "quarterly-reporting");
     }
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| task.dispatch_count),
+        Some(2)
+    );
     Ok(())
 }
 
@@ -967,8 +1015,8 @@ async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Re
         .sessions
         .insert_for_testing(ephemeral_session.clone())
         .await;
-    record_session_start(&app, &stored_session).await?;
-    record_session_start(&app, &ephemeral_session).await?;
+    record_session_with_dispatch(&app, &stored_session).await?;
+    record_session_with_dispatch(&app, &ephemeral_session).await?;
 
     app.state
         .tab_activity
@@ -1048,7 +1096,7 @@ async fn live_projection_filters_external_close() -> anyhow::Result<()> {
     assert_eq!(browser.pages.list().await?.len(), 1);
     let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
     app.state.sessions.insert_for_testing(session.clone()).await;
-    record_session_start(&app, &session).await?;
+    record_session_with_dispatch(&app, &session).await?;
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -1106,7 +1154,7 @@ async fn live_projection_refreshes_metadata_and_preview_uses_current_target() ->
     app.state.browser.connect_once_for_testing().await?;
     let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
     app.state.sessions.insert_for_testing(session.clone()).await;
-    record_session_start(&app, &session).await?;
+    record_session_with_dispatch(&app, &session).await?;
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
@@ -1222,7 +1270,7 @@ async fn session_previews_capture_each_sessions_owned_target() -> anyhow::Result
             "codex",
         );
         app.state.sessions.insert_for_testing(session.clone()).await;
-        record_session_start(&app, &session).await?;
+        record_session_with_dispatch(&app, &session).await?;
         app.state
             .tab_activity
             .record_tool(RecordToolInput {
@@ -1297,7 +1345,7 @@ fn test_session(session_id: SessionId, agent_id: &str, slug: &str) -> Arc<Sessio
     )
 }
 
-async fn record_session_start(app: &TestApp, session: &Session) -> anyhow::Result<()> {
+async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyhow::Result<()> {
     app.state
         .audit_log
         .record_session_start(
@@ -1308,6 +1356,29 @@ async fn record_session_start(app: &TestApp, session: &Session) -> anyhow::Resul
             session.agent().label(),
             "1.0",
         )
+        .await?;
+    app.state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: session.agent().slug().to_string(),
+            agent_label: session.agent().label().to_string(),
+            session_id: session.id().as_str().to_string(),
+            tool_name: "snapshot".to_string(),
+            page_id: None,
+            tab_id: None,
+            target_id: None,
+            url: None,
+            title: None,
+            raw_args: json!({}),
+            duration_ms: 1,
+            dispatch_id: DispatchId::new(),
+            result: DispatchResultSummary {
+                is_error: false,
+                structured_content: json!({}),
+                content: json!([]),
+            },
+        })
         .await?;
     Ok(())
 }
