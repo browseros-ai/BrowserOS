@@ -70,7 +70,6 @@
     "linkedom": "^0.18.13",
     "serve": "^14.2.6",
     "tailwindcss": "^4.1.17",
-    "typescript": "^5.9.2",
     "wxt": "^0.20.27"
   }
 }

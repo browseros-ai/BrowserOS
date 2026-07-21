@@ -10,9 +10,9 @@
     "build:dev": "bun --env-file=../../.env.development wxt build --mode development",
     "zip": "wxt zip",
     "test": "bun run ../../scripts/run-bun-test.ts ./apps/app",
-    "compile": "bun --env-file=../../.env.development wxt prepare && tsgo --noEmit",
+    "compile": "bun --env-file=../../.env.development wxt prepare && tsc --noEmit",
     "lint": "bunx @biomejs/biome check",
-    "typecheck": "bun --env-file=../../.env.development wxt prepare && tsgo --noEmit",
+    "typecheck": "bun --env-file=../../.env.development wxt prepare && tsc --noEmit",
     "lint:fix": "bunx @biomejs/biome check --write --unsafe",
     "clean:cache": "rm -rf node_modules/.cache && rm -rf .output/ && rm -rf .wxt/",
     "codegen": "bun --env-file=../../.env.development graphql-codegen --config codegen.ts",
@@ -108,7 +108,6 @@
     "@wxt-dev/module-react": "^1.2.2",
     "lefthook": "^2.1.10",
     "tailwindcss": "^4.3.1",
-    "typescript": "^5.9.3",
     "wxt": "^0.20.27"
   },
   "trustedDependencies": [
