@@ -175,7 +175,7 @@ fn recording_body(
                 "recording_payload_too_large",
                 &format!(
                     "recording payload exceeds {} byte limit",
-                    claw_api::RECORDING_INGEST_MAX_BYTES
+                    super::RECORDING_INGEST_MAX_BYTES
                 ),
             )
         } else {

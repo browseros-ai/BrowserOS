@@ -20,8 +20,8 @@ import {
   Configuration,
   DefaultApi,
   type Harness,
-  RECORDING_INGEST_MAX_BYTES,
 } from '../../../packages/claw-api/src'
+import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
 
 export interface ContractServer {
   name: 'rust' | 'typescript'

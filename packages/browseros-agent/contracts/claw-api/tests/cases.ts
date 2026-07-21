@@ -16,10 +16,10 @@ import { expect } from 'bun:test'
 import {
   type ApiError,
   Harness,
-  RECORDING_INGEST_MAX_BYTES,
   ResponseError,
   SessionStatus,
 } from '../../../packages/claw-api/src'
+import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
 import type { ContractServer } from './server-adapters'
 
 export interface ContractCase {

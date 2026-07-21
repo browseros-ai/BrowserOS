@@ -7,9 +7,12 @@
  * in config.ts so it can be validated before serving.
  */
 
+import {
+  CLAW_API_PORT_DEFAULT,
+  CLAW_CDP_PORT_DEFAULT,
+} from '@browseros/shared/constants/ports'
 import type { ClawConfig } from './config'
 import { resolveDefaultResourcesDir } from './config'
-import { CLAW_API_PORT_DEFAULT, CLAW_CDP_PORT_DEFAULT } from './shared/port'
 
 function readBrowserClawDirOverride(): string | undefined {
   // biome-ignore lint/style/noProcessEnv: env.ts is the sanctioned env-reader for the package

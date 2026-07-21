@@ -15,14 +15,14 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import {
-  CLAW_API_PORT_DEFAULT,
-  type Connection,
-  type Dispatch,
-  type Harness,
-  RECORDING_INGEST_MAX_BYTES,
-  type SessionDetail,
+import type {
+  Connection,
+  Dispatch,
+  Harness,
+  SessionDetail,
 } from '@browseros/claw-api'
+import { RECORDING_INGEST_MAX_BYTES } from '@browseros/shared/constants/limits'
+import { CLAW_API_PORT_DEFAULT } from '@browseros/shared/constants/ports'
 import { getBrowserSession } from '../../lib/browser-session'
 import { logger } from '../../lib/logger'
 import { identityService } from '../../lib/mcp-session'

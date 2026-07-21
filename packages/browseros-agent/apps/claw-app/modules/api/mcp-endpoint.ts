@@ -12,7 +12,10 @@
  * standalone builds keep the existing launcher/fallback resolution.
  */
 
-import { BROWSEROS_MCP_SERVER_NAME, MCP_PATH } from '@browseros/claw-api'
+import {
+  BROWSEROS_MCP_SERVER_NAME,
+  MCP_PATH,
+} from '@browseros/shared/constants/urls'
 import {
   apiBaseUrlSourcesFromWindow,
   resolveBrowserOSMcpBaseUrl,

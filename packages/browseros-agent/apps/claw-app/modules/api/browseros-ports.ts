@@ -1,6 +1,6 @@
 /// <reference path="./chrome-browser-os.d.ts" />
 
-import { CLAW_API_PORT_DEFAULT } from '@browseros/claw-api'
+import { CLAW_API_PORT_DEFAULT } from '@browseros/shared/constants/ports'
 import {
   API_URL_STORAGE_KEY,
   type ApiBaseUrlSources,
