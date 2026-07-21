@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test'
 let lastSettings: Record<string, unknown> | null = null
 const fakeProvider = { languageModel: () => ({ kind: 'fake' }) }
 
-mock.module('acpx-ai-provider', () => ({
+mock.module('@browseros/acpx-ai-provider', () => ({
   createAcpxProvider: (settings: Record<string, unknown>) => {
     lastSettings = settings
     return fakeProvider
@@ -55,7 +55,8 @@ describe('buildAcpxProvider — defaults', () => {
     await buildAcpxProvider({ conversationId: 'conv-2', agentId: 'codex' })
     // homedir is platform-dependent but always non-empty and absolute
     expect(typeof lastSettings?.cwd).toBe('string')
-    expect((lastSettings?.cwd as string).length).toBeGreaterThan(0)
+    const cwd = lastSettings?.cwd as string
+    expect(cwd.length).toBeGreaterThan(0)
   })
 
   it('honours workspacePath when provided', async () => {

@@ -14,7 +14,7 @@ import {
   type AcpxPermissionMode,
   type AcpxProvider,
   createAcpxProvider,
-} from 'acpx-ai-provider'
+} from '@browseros/acpx-ai-provider'
 import { getBrowserosDir } from '../../browseros-dir'
 
 /**

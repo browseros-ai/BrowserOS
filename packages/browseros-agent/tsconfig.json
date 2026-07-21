@@ -27,6 +27,7 @@
     "types": ["node", "bun"]
   },
   "references": [
+    { "path": "./packages/acpx-ai-provider" },
     { "path": "./packages/agent-mcp-manager" },
     { "path": "./packages/browser-core" },
     { "path": "./packages/browser-mcp" },
