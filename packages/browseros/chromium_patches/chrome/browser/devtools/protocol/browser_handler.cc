@@ -229,7 +229,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +                                    bool hidden,
 +                                    bool activate) {
 +  if (hidden) {
-+    window->ShowInactive();
++    // Headless Browser windows must stay unshown.
 +    return;
 +  }
 +  if (activate) {
@@ -687,8 +687,9 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  chrome::AddTabAt(browser, navigate_url, -1, true);
 +
-+  browser->window()->Show();
-+
++  if (!want_hidden) {
++    browser->window()->Show();
++  }
 +  BrowserWindowInterface* bwi = GetBrowserWindowInterface(
 +      browser->session_id().id());
 +  if (!bwi) {
