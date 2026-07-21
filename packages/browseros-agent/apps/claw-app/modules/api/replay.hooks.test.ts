@@ -4,8 +4,19 @@ import * as client from './client'
 
 mock.module('./client', () => ({
   ...client,
-  apiClient: async () =>
-    new DefaultApi(new Configuration({ basePath: 'http://127.0.0.1:9200' })),
+  apiClient: async () => {
+    const api = new DefaultApi(
+      new Configuration({ basePath: 'http://127.0.0.1:9200' }),
+    )
+    return {
+      connections: api,
+      dispatches: api,
+      recordings: api,
+      sessions: api,
+      settings: api,
+      system: api,
+    }
+  },
   resolveApiBaseUrl: async () => 'http://127.0.0.1:9200',
 }))
 

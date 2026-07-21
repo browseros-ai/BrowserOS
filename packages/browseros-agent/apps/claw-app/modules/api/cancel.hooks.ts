@@ -22,5 +22,5 @@ export const useCancelSession = createMutation<
   { sessionId: string }
 >({
   mutationFn: async ({ sessionId }) =>
-    (await apiClient()).cancelSession({ sessionId }),
+    (await apiClient()).sessions.cancelSession({ sessionId }),
 })

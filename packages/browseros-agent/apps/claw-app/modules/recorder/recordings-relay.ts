@@ -59,6 +59,11 @@ interface IngestCapability {
   supported: boolean
 }
 
+interface RecordingApiClient {
+  recordings: DefaultApi
+  system: DefaultApi
+}
+
 export const RECORDINGS_QUEUE_MAX_BYTES = 2 * RECORDING_INGEST_MAX_BYTES
 const RETRY_INTERVAL_MS = 5_000
 const WARNING_INTERVAL_MS = 60_000
@@ -208,12 +213,12 @@ export function createRecordingsRelay(
 
   async function discoverCapability(
     baseUrl: string,
-    client: DefaultApi,
+    client: RecordingApiClient,
   ): Promise<IngestCapability | undefined> {
     const cached = capabilities.get(baseUrl)
     if (cached && now() < cached.expiresAt) return cached
     try {
-      const system = await client.getSystemInfo()
+      const system = await client.system.getSystemInfo()
       const advertisedMax = system.capabilities?.recordingIngestMaxBytes
       const capability = {
         supported: system.capabilities?.recordingIngestVersion === 2,
@@ -244,13 +249,15 @@ export function createRecordingsRelay(
   async function sendBatch(batch: StoredRecordingBatch): Promise<SendOutcome> {
     try {
       const baseUrl = await options.resolveServerBaseUrl()
-      const client = new DefaultApi(
-        new Configuration({
-          basePath: baseUrl,
-          credentials: 'omit',
-          fetchApi: fetch,
-        }),
-      )
+      const configuration = new Configuration({
+        basePath: baseUrl,
+        credentials: 'omit',
+        fetchApi: fetch,
+      })
+      const client = {
+        recordings: new DefaultApi(configuration),
+        system: new DefaultApi(configuration),
+      }
       const capability = await discoverCapability(baseUrl, client)
       if (!capability) {
         return {
@@ -269,7 +276,7 @@ export function createRecordingsRelay(
       }
 
       const gap = await outbox.getGap(batch.documentId)
-      await client.appendRecordingEvents({
+      await client.recordings.appendRecordingEvents({
         xRecordingTabId: batch.tabId,
         xRecordingDocumentId: batch.documentId,
         xRecordingBatchId: batch.batchId,

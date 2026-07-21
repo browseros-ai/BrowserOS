@@ -3,9 +3,8 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Generated BrowserClaw API client (`DefaultApi` from
- * `@browseros/claw-api`); calls go over HTTP loopback to whichever
- * port the claw server bound to.
+ * Generated BrowserClaw API clients grouped by route family; calls go
+ * over HTTP loopback to whichever port the claw server bound to.
  *
  * Base URL resolution order:
  *   1. BrowserOS `browseros.server.server_port` pref
@@ -44,16 +43,33 @@ export async function resolveApiBaseUrl(): Promise<string> {
 }
 
 let cachedBase: string | null = null
-let cachedClient: DefaultApi | null = null
+let cachedClient: ClawApiClient | null = null
 
-export function apiClientForBaseUrl(baseUrl: string): DefaultApi {
+export interface ClawApiClient {
+  connections: DefaultApi
+  dispatches: DefaultApi
+  recordings: DefaultApi
+  sessions: DefaultApi
+  settings: DefaultApi
+  system: DefaultApi
+}
+
+export function apiClientForBaseUrl(baseUrl: string): ClawApiClient {
   if (baseUrl !== cachedBase || !cachedClient) {
     cachedBase = baseUrl
-    cachedClient = new DefaultApi(new Configuration({ basePath: baseUrl }))
+    const configuration = new Configuration({ basePath: baseUrl })
+    cachedClient = {
+      connections: new DefaultApi(configuration),
+      dispatches: new DefaultApi(configuration),
+      recordings: new DefaultApi(configuration),
+      sessions: new DefaultApi(configuration),
+      settings: new DefaultApi(configuration),
+      system: new DefaultApi(configuration),
+    }
   }
   return cachedClient
 }
 
-export async function apiClient(): Promise<DefaultApi> {
+export async function apiClient(): Promise<ClawApiClient> {
   return apiClientForBaseUrl(await resolveApiBaseUrl())
 }

@@ -60,13 +60,13 @@ export const contractCases: ContractCase[] = [
   {
     name: 'health',
     async run({ api }) {
-      expect(await api.getHealth()).toEqual({ status: 'ok' })
+      expect(await api.system.getHealth()).toEqual({ status: 'ok' })
     },
   },
   {
     name: 'system info',
     async run({ api }) {
-      const value = await api.getSystemInfo()
+      const value = await api.system.getSystemInfo()
       expect(value.product).toBe('BrowserClaw')
       expect(value.version).toBeString()
       expect(value.url).toStartWith('http://127.0.0.1:')
@@ -79,22 +79,24 @@ export const contractCases: ContractCase[] = [
   {
     name: 'telemetry read and update',
     async run({ api }) {
-      expect((await api.getTelemetry()).distinctId).toBeString()
-      const updated = await api.updateTelemetry({
+      expect((await api.settings.getTelemetry()).distinctId).toBeString()
+      const updated = await api.settings.updateTelemetry({
         updateTelemetryRequest: { consent: false },
       })
       expect(updated.consent).toBe(false)
-      expect((await api.getTelemetry()).consent).toBe(false)
+      expect((await api.settings.getTelemetry()).consent).toBe(false)
     },
   },
   {
     name: 'session list and detail',
     async run({ api, liveSessionId }) {
-      const list = await api.listSessions({ limit: 100 })
+      const list = await api.sessions.listSessions({ limit: 100 })
       expect(list.items.some((item) => item.sessionId === liveSessionId)).toBe(
         true,
       )
-      const detail = await api.getSession({ sessionId: liveSessionId })
+      const detail = await api.sessions.getSession({
+        sessionId: liveSessionId,
+      })
       expect(detail.session.sessionId).toBe(liveSessionId)
       expect(detail.dispatches[0]).toMatchObject({
         dispatchId: 1,
@@ -115,20 +117,17 @@ export const contractCases: ContractCase[] = [
   {
     name: 'idle live cancellation',
     async run({ api, liveSessionId }) {
-      expect(await api.cancelSession({ sessionId: liveSessionId })).toEqual({
-        cancelled: 0,
-      })
+      expect(
+        await api.sessions.cancelSession({ sessionId: liveSessionId }),
+      ).toEqual({ cancelled: 0 })
     },
   },
   {
     name: 'empty recording metadata',
     async run({ api, liveSessionId }) {
-      expect(await api.getRecording({ sessionId: liveSessionId })).toEqual({
-        hasData: false,
-        complete: true,
-        sizeBytes: 0,
-        tabs: [],
-      })
+      expect(
+        await api.recordings.getRecording({ sessionId: liveSessionId }),
+      ).toEqual({ hasData: false, complete: true, sizeBytes: 0, tabs: [] })
     },
   },
   {
@@ -142,10 +141,14 @@ export const contractCases: ContractCase[] = [
         xRecordingBatchId: 'contract-batch-1',
         body,
       }
-      expect(await api.appendRecordingEvents(request)).toEqual({ accepted: 2 })
-      expect(await api.appendRecordingEvents(request)).toEqual({ accepted: 0 })
+      expect(await api.recordings.appendRecordingEvents(request)).toEqual({
+        accepted: 2,
+      })
+      expect(await api.recordings.appendRecordingEvents(request)).toEqual({
+        accepted: 0,
+      })
       expect(
-        await api.getRecording({ sessionId: liveSessionId }),
+        await api.recordings.getRecording({ sessionId: liveSessionId }),
       ).toMatchObject({
         hasData: true,
         complete: true,
@@ -181,7 +184,7 @@ export const contractCases: ContractCase[] = [
       ].entries()) {
         await expectApiError(
           () =>
-            api.appendRecordingEvents({
+            api.recordings.appendRecordingEvents({
               xRecordingTabId: 101,
               xRecordingDocumentId: documentId,
               xRecordingBatchId: `contract-malformed-${index.toString()}`,
@@ -243,7 +246,7 @@ export const contractCases: ContractCase[] = [
     async run({ api }) {
       const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)
       expect(
-        await api.appendRecordingEvents({
+        await api.recordings.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: '9E84CDCAB8762569B5B109D125F60147',
           xRecordingBatchId: 'contract-boundary',
@@ -253,7 +256,7 @@ export const contractCases: ContractCase[] = [
 
       await expectApiError(
         () =>
-          api.appendRecordingEvents({
+          api.recordings.appendRecordingEvents({
             xRecordingTabId: 101,
             xRecordingDocumentId: 'A18F47A71C2B7DEF81230123456789AC',
             xRecordingBatchId: 'contract-over-limit',
@@ -264,7 +267,7 @@ export const contractCases: ContractCase[] = [
       )
 
       expect(
-        await api.appendRecordingEvents({
+        await api.recordings.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: 'B18F47A71C2B7DEF81230123456789AD',
           xRecordingBatchId: 'contract-after-over-limit',
@@ -282,7 +285,9 @@ export const contractCases: ContractCase[] = [
       secondLiveSessionId,
       zeroTabLiveSessionId,
     }) {
-      const snapshot = await api.listSessions({ status: SessionStatus.Live })
+      const snapshot = await api.sessions.listSessions({
+        status: SessionStatus.Live,
+      })
       expect(snapshot.nextCursor).toBeUndefined()
 
       const primary = snapshot.items.find(
@@ -354,7 +359,7 @@ export const contractCases: ContractCase[] = [
         expect(rawBrowserTabs).not.toContain(`"${forbiddenKey}"`)
       }
 
-      const preview = await api.getSessionBrowserTabPreview({
+      const preview = await api.sessions.getSessionBrowserTabPreview({
         sessionId: liveSessionId,
         browserTabId: 101,
       })
@@ -379,12 +384,14 @@ export const contractCases: ContractCase[] = [
   {
     name: 'connection lifecycle',
     async run({ api }) {
-      expect(Array.isArray((await api.listConnections()).items)).toBe(true)
       expect(
-        await api.connectHarness({ harness: Harness.Codex }),
+        Array.isArray((await api.connections.listConnections()).items),
+      ).toBe(true)
+      expect(
+        await api.connections.connectHarness({ harness: Harness.Codex }),
       ).toMatchObject({ harness: Harness.Codex, installed: true })
       expect(
-        await api.disconnectHarness({ harness: Harness.Codex }),
+        await api.connections.disconnectHarness({ harness: Harness.Codex }),
       ).toMatchObject({ harness: Harness.Codex, installed: false })
     },
   },
@@ -392,7 +399,7 @@ export const contractCases: ContractCase[] = [
     name: 'invalid limit',
     async run({ api }) {
       await expectApiError(
-        () => api.listSessions({ limit: 0 }),
+        () => api.sessions.listSessions({ limit: 0 }),
         400,
         'invalid_request',
       )
@@ -412,7 +419,7 @@ export const contractCases: ContractCase[] = [
     name: 'unknown session',
     async run({ api }) {
       await expectApiError(
-        () => api.getSession({ sessionId: 'missing' }),
+        () => api.sessions.getSession({ sessionId: 'missing' }),
         404,
         'session_not_found',
       )
@@ -422,7 +429,7 @@ export const contractCases: ContractCase[] = [
     name: 'recording write is session neutral',
     async run({ api }) {
       expect(
-        await api.appendRecordingEvents({
+        await api.recordings.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: 'C18F47A71C2B7DEF81230123456789AE',
           xRecordingBatchId: 'contract-ended-independent',
@@ -435,7 +442,7 @@ export const contractCases: ContractCase[] = [
     name: 'unknown harness',
     async run({ api }) {
       await expectApiError(
-        () => api.connectHarness({ harness: 'Unknown' as Harness }),
+        () => api.connections.connectHarness({ harness: 'Unknown' as Harness }),
         404,
         'harness_not_found',
       )
@@ -481,7 +488,7 @@ export const contractCases: ContractCase[] = [
   {
     name: 'shutdown',
     async run({ api }) {
-      expect(await api.shutdown()).toEqual({ status: 'ok' })
+      expect(await api.system.shutdown()).toEqual({ status: 'ok' })
     },
   },
 ]

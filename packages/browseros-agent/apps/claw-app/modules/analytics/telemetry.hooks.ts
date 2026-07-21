@@ -17,7 +17,7 @@ export const TELEMETRY_QUERY_KEY = ['system', 'telemetry'] as const
 
 export const useTelemetryState = createQuery<TelemetryState>({
   queryKey: TELEMETRY_QUERY_KEY,
-  fetcher: async () => (await apiClient()).getTelemetry(),
+  fetcher: async () => (await apiClient()).settings.getTelemetry(),
   // Identity + consent change rarely (only via the toggle, which
   // invalidates this query), so don't poll.
   staleTime: Number.POSITIVE_INFINITY,
@@ -28,7 +28,7 @@ export const useSetTelemetryConsent = createMutation<
   { consent: boolean }
 >({
   mutationFn: async ({ consent }) =>
-    (await apiClient()).updateTelemetry({
+    (await apiClient()).settings.updateTelemetry({
       updateTelemetryRequest: { consent },
     }),
 })

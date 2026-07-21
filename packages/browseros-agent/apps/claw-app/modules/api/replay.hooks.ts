@@ -78,7 +78,7 @@ export interface UseReplayMetadataVariables {
 export async function fetchReplayMetadata({
   sessionId,
 }: UseReplayMetadataVariables): Promise<ReplayMetadata> {
-  return (await apiClient()).getRecording({ sessionId })
+  return (await apiClient()).recordings.getRecording({ sessionId })
 }
 
 export const useReplayMetadata = createQuery<

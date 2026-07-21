@@ -7,7 +7,7 @@ const listSessions = mock(async () => response)
 
 mock.module('./client', () => ({
   ..._client,
-  apiClient: async () => ({ listSessions }),
+  apiClient: async () => ({ sessions: { listSessions } }),
 }))
 
 const { useLiveSessions } = await import('./audit.hooks')

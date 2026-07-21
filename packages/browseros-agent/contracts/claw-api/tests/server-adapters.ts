@@ -26,13 +26,34 @@ import {
 export interface ContractServer {
   name: 'rust' | 'typescript'
   baseUrl: string
-  api: DefaultApi
+  api: ContractApiClient
   liveSessionId: string
   secondLiveSessionId: string
   zeroTabLiveSessionId: string
   endedSessionId: string
   screenshotDispatchId: number
   stop(): Promise<void>
+}
+
+export interface ContractApiClient {
+  connections: DefaultApi
+  dispatches: DefaultApi
+  recordings: DefaultApi
+  sessions: DefaultApi
+  settings: DefaultApi
+  system: DefaultApi
+}
+
+function contractApiClient(baseUrl: string): ContractApiClient {
+  const configuration = new Configuration({ basePath: baseUrl })
+  return {
+    connections: new DefaultApi(configuration),
+    dispatches: new DefaultApi(configuration),
+    recordings: new DefaultApi(configuration),
+    sessions: new DefaultApi(configuration),
+    settings: new DefaultApi(configuration),
+    system: new DefaultApi(configuration),
+  }
 }
 
 const primarySession = {
@@ -272,7 +293,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
   return {
     name: 'typescript',
     baseUrl,
-    api: new DefaultApi(new Configuration({ basePath: baseUrl })),
+    api: contractApiClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
@@ -335,7 +356,7 @@ export async function startRustServer(): Promise<ContractServer> {
   return {
     name: 'rust',
     baseUrl,
-    api: new DefaultApi(new Configuration({ basePath: baseUrl })),
+    api: contractApiClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,

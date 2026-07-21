@@ -249,7 +249,7 @@ describe('BrowserOS managed port resolution', () => {
     installBrowserOSPrefs({ 'browseros.server.server_port': 9511 })
     const requests = installFetchRecorder()
 
-    const response = await (await apiClient()).getHealth()
+    const response = await (await apiClient()).system.getHealth()
 
     expect(response).toEqual({ status: 'ok' })
     expect(requests).toEqual(['http://127.0.0.1:9511/system/health'])
@@ -260,7 +260,7 @@ describe('BrowserOS managed port resolution', () => {
     installBrowserOSPrefs({ 'browseros.server.server_port': '9511' })
     const requests = installFetchRecorder()
 
-    const response = await (await apiClient()).getHealth()
+    const response = await (await apiClient()).system.getHealth()
 
     expect(response).toEqual({ status: 'ok' })
     expect(requests).toEqual(['http://127.0.0.1:9432/system/health'])
