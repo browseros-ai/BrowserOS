@@ -18,13 +18,21 @@ interface MiniScreencastProps {
   className?: string
 }
 
+interface DecodedPreviewFrame {
+  sessionId: string
+  browserTabId: number
+  previewCapturedAt: number
+  src: string
+}
+
 /**
  * Renders a live session tab's latest JPEG from the canonical binary route,
  * with a host placeholder when there is no captured frame.
  *
  * Every capture timestamp yields a new URL. An off-screen Image decodes that
- * frame before `displayedSrc` advances, preserving the previous pixels until
- * the replacement is ready and avoiding a flash between polling updates.
+ * frame before the visible frame advances. Previous pixels remain only for a
+ * newer capture of the same session tab; identity changes render the
+ * placeholder immediately so one tab can never be shown as another.
  */
 export function MiniScreencast({
   site,
@@ -39,26 +47,72 @@ export function MiniScreencast({
     browserTabId,
     previewCapturedAt,
   )
-  // The DOM paints displayedSrc until the replacement has decoded.
-  const [displayedSrc, setDisplayedSrc] = useState<string | null>(incomingSrc)
+  const [decodedFrame, setDecodedFrame] = useState<DecodedPreviewFrame | null>(
+    () =>
+      incomingSrc !== null &&
+      browserTabId !== undefined &&
+      previewCapturedAt !== undefined
+        ? { sessionId, browserTabId, previewCapturedAt, src: incomingSrc }
+        : null,
+  )
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const displayedSrc =
+    decodedFrame !== null &&
+    decodedFrame.sessionId === sessionId &&
+    decodedFrame.browserTabId === browserTabId &&
+    previewCapturedAt !== undefined &&
+    decodedFrame.previewCapturedAt <= previewCapturedAt
+      ? decodedFrame.src
+      : null
 
   useEffect(() => {
-    if (incomingSrc === null) {
-      setDisplayedSrc(null)
+    if (
+      incomingSrc === null ||
+      browserTabId === undefined ||
+      previewCapturedAt === undefined
+    ) {
+      setDecodedFrame(null)
+      setFailedSrc(null)
       return
     }
-    if (incomingSrc === displayedSrc) return
-    // A failed fetch never advances displayedSrc, leaving the last good frame.
+    if (failedSrc === incomingSrc) return
+    if (
+      decodedFrame?.sessionId === sessionId &&
+      decodedFrame.browserTabId === browserTabId &&
+      decodedFrame.previewCapturedAt === previewCapturedAt &&
+      decodedFrame.src === incomingSrc
+    ) {
+      return
+    }
     let cancelled = false
     const image = new Image()
     image.onload = () => {
-      if (!cancelled) setDisplayedSrc(incomingSrc)
+      if (cancelled) return
+      setDecodedFrame({
+        sessionId,
+        browserTabId,
+        previewCapturedAt,
+        src: incomingSrc,
+      })
+      setFailedSrc(null)
+    }
+    image.onerror = () => {
+      if (cancelled) return
+      setDecodedFrame(null)
+      setFailedSrc(incomingSrc)
     }
     image.src = incomingSrc
     return () => {
       cancelled = true
     }
-  }, [incomingSrc, displayedSrc])
+  }, [
+    browserTabId,
+    decodedFrame,
+    failedSrc,
+    incomingSrc,
+    previewCapturedAt,
+    sessionId,
+  ])
 
   return (
     <div
@@ -73,8 +127,11 @@ export function MiniScreencast({
           src={displayedSrc}
           alt={`Live view of ${site}`}
           className="h-full w-full object-cover"
-          // Bad bytes on the initial frame fall back to the placeholder.
-          onError={() => setDisplayedSrc(null)}
+          // Bad visible bytes fall back to the placeholder without retrying the same URL.
+          onError={() => {
+            setDecodedFrame(null)
+            setFailedSrc(displayedSrc)
+          }}
         />
       ) : (
         <div className="flex flex-col items-center gap-1.5 text-ink-3">

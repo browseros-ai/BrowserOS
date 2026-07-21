@@ -444,25 +444,25 @@ export const contractCases: ContractCase[] = [
   {
     name: 'missing binary artifacts',
     async run({ baseUrl, liveSessionId, secondLiveSessionId }) {
-      for (const [path, code] of [
-        [
-          `/api/v1/sessions/${liveSessionId}/browser-tabs/999/preview`,
-          'preview_not_found',
-        ],
-        [
-          `/api/v1/sessions/${secondLiveSessionId}/browser-tabs/101/preview`,
-          'preview_not_found',
-        ],
-        [
-          '/api/v1/sessions/missing/browser-tabs/101/preview',
-          'preview_not_found',
-        ],
-        ['/api/v1/dispatches/999/screenshot', 'screenshot_not_found'],
-      ] as const) {
+      for (const path of [
+        `/api/v1/sessions/${liveSessionId}/browser-tabs/999/preview`,
+        `/api/v1/sessions/${secondLiveSessionId}/browser-tabs/101/preview`,
+        '/api/v1/sessions/missing/browser-tabs/101/preview',
+      ]) {
         const response = await fetch(`${baseUrl}${path}`)
         expect(response.status, path).toBe(404)
-        expect(await response.json(), path).toMatchObject({ code })
+        expect(await response.json(), path).toMatchObject({
+          code: 'preview_not_found',
+          message: 'browser tab preview not found',
+        })
       }
+
+      const screenshotPath = '/api/v1/dispatches/999/screenshot'
+      const screenshotResponse = await fetch(`${baseUrl}${screenshotPath}`)
+      expect(screenshotResponse.status, screenshotPath).toBe(404)
+      expect(await screenshotResponse.json(), screenshotPath).toMatchObject({
+        code: 'screenshot_not_found',
+      })
     },
   },
   {

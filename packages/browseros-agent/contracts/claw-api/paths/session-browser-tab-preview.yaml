@@ -21,6 +21,6 @@ get:
             $ref: ../schemas/system.yaml#/ApiError
           example:
             code: preview_not_found
-            message: Browser tab preview was not found.
+            message: browser tab preview not found
     '500':
       $ref: ../responses.yaml#/InternalError
