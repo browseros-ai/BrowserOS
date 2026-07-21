@@ -29,8 +29,8 @@ import {
   requestIdFor,
   requestIdMiddleware,
 } from './api/http/request-context'
+import { mcpRoute } from './api/mcp'
 import { logger } from './lib/logger'
-import { mcpRoute } from './routes/mcp'
 
 // Telemetry capture is injectable so the server module stays usable
 // from the bun-test runner without pulling Sentry into the import
