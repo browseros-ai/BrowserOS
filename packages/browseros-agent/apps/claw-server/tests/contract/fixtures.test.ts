@@ -32,43 +32,68 @@ interface OpenApiSchema {
 }
 
 type SchemaDocument = Record<string, OpenApiSchema>
+type SchemaDocuments = Record<string, SchemaDocument>
+
+interface SchemaContext {
+  documentName: string
+  documents: SchemaDocuments
+}
+
+const schemaDocumentNames = [
+  'common',
+  'connections',
+  'dispatches',
+  'recordings',
+  'sessions',
+  'settings',
+  'system',
+] as const
+const allSchemaDocuments = readSchemaDocuments()
 
 const fixtures = [
   ['health.json', 'system', 'HealthResponse'],
   ['shutdown.json', 'system', 'ShutdownResponse'],
   ['system-info.json', 'system', 'SystemInfo'],
-  ['telemetry-state.json', 'system', 'TelemetryState'],
+  ['telemetry-state.json', 'settings', 'TelemetryState'],
   ['session-list.json', 'sessions', 'SessionList'],
   ['session-detail.json', 'sessions', 'SessionDetail'],
   ['cancel-session.json', 'sessions', 'CancelSessionResponse'],
-  ['recording-metadata.json', 'sessions', 'RecordingMetadata'],
-  ['append-recording-events.json', 'sessions', 'AppendRecordingEventsResponse'],
+  ['recording-metadata.json', 'recordings', 'RecordingMetadata'],
+  [
+    'append-recording-events.json',
+    'recordings',
+    'AppendRecordingEventsResponse',
+  ],
   ['connection.json', 'connections', 'Connection'],
   ['connection-list.json', 'connections', 'ConnectionList'],
-  ['api-error.json', 'system', 'ApiError'],
-  ['api-error-minimal.json', 'system', 'ApiError'],
+  ['api-error.json', 'common', 'ApiError'],
+  ['api-error-minimal.json', 'common', 'ApiError'],
 ] as const
 
 describe('canonical contract fixtures', () => {
   for (const [file, documentName, schemaName] of fixtures) {
     test(`validates ${file} against ${schemaName}`, async () => {
-      const [fixture, schemas] = await Promise.all([
+      const [fixture, documents] = await Promise.all([
         Bun.file(new URL(file, fixturesDirectory)).json(),
-        readSchemaDocument(documentName),
+        allSchemaDocuments,
       ])
+      const schemas = documents[documentName] ?? {}
       const schema = schemas[schemaName]
 
       expect(schema).toBeDefined()
-      expect(validateSchema(fixture, schema ?? {}, schemas)).toEqual([])
+      expect(
+        validateSchema(fixture, schema ?? {}, { documentName, documents }),
+      ).toEqual([])
     })
   }
 
   test('rejects undeclared fields and invalid enum values', async () => {
-    const schemas = await readSchemaDocument('system')
+    const documents = await allSchemaDocuments
+    const schemas = documents.system ?? {}
     const errors = validateSchema(
       { status: 'broken', extra: true },
       schemas.HealthResponse ?? {},
-      schemas,
+      { documentName: 'system', documents },
     )
 
     expect(errors).toContain('$.extra is not declared by the schema')
@@ -76,11 +101,12 @@ describe('canonical contract fixtures', () => {
   })
 
   test('rejects strings that violate URI formats', async () => {
-    const schemas = await readSchemaDocument('system')
+    const documents = await allSchemaDocuments
+    const schemas = documents.system ?? {}
     const errors = validateSchema(
       { product: 'BrowserClaw', version: '1.0.0', url: 'not a URI' },
       schemas.SystemInfo ?? {},
-      schemas,
+      { documentName: 'system', documents },
     )
 
     expect(errors).toContain('$.url must be a URI')
@@ -103,22 +129,38 @@ async function readSchemaDocument(name: string): Promise<SchemaDocument> {
   return parse(await Bun.file(new URL(`${name}.yaml`, schemasDirectory)).text())
 }
 
+async function readSchemaDocuments(): Promise<SchemaDocuments> {
+  return Object.fromEntries(
+    await Promise.all(
+      schemaDocumentNames.map(async (name) => [
+        name,
+        await readSchemaDocument(name),
+      ]),
+    ),
+  )
+}
+
 function validateSchema(
   value: unknown,
   schema: OpenApiSchema,
-  schemas: SchemaDocument,
+  context: SchemaContext,
   path = '$',
 ): string[] {
   if (schema.$ref) {
-    const name = schema.$ref.startsWith('#/') ? schema.$ref.slice(2) : ''
-    const target = schemas[name]
+    const match = schema.$ref.match(
+      /^(?:\.\/([a-z][a-z0-9_]*)\.yaml)?#\/([A-Za-z][A-Za-z0-9]*)$/,
+    )
+    const documentName = match?.[1] ?? context.documentName
+    const target = match
+      ? context.documents[documentName]?.[match[2] as string]
+      : undefined
     return target
-      ? validateSchema(value, target, schemas, path)
+      ? validateSchema(value, target, { ...context, documentName }, path)
       : [`${path} references unknown schema ${schema.$ref}`]
   }
 
   const errors = (schema.allOf ?? []).flatMap((part) =>
-    validateSchema(value, part, schemas, path),
+    validateSchema(value, part, context, path),
   )
   if (
     schema.enum &&
@@ -127,7 +169,7 @@ function validateSchema(
     errors.push(`${path} is not an allowed enum value`)
   }
 
-  errors.push(...validateTypedValue(value, schema, schemas, path))
+  errors.push(...validateTypedValue(value, schema, context, path))
   if (schema.format === 'uri' && !isUri(value)) {
     errors.push(`${path} must be a URI`)
   }
@@ -154,14 +196,14 @@ function isUri(value: unknown): boolean {
 function validateTypedValue(
   value: unknown,
   schema: OpenApiSchema,
-  schemas: SchemaDocument,
+  context: SchemaContext,
   path: string,
 ): string[] {
   switch (schema.type) {
     case 'object':
-      return validateObject(value, schema, schemas, path)
+      return validateObject(value, schema, context, path)
     case 'array':
-      return validateArray(value, schema.items, schemas, path)
+      return validateArray(value, schema.items, context, path)
     case 'integer':
       return Number.isInteger(value) ? [] : [`${path} must be an integer`]
     case 'number':
@@ -180,7 +222,7 @@ function validateTypedValue(
 function validateObject(
   value: unknown,
   schema: OpenApiSchema,
-  schemas: SchemaDocument,
+  context: SchemaContext,
   path: string,
 ): string[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -207,7 +249,7 @@ function validateObject(
         ...validateSchema(
           record[key],
           propertySchema,
-          schemas,
+          context,
           `${path}.${key}`,
         ),
       )
@@ -219,12 +261,12 @@ function validateObject(
 function validateArray(
   value: unknown,
   items: OpenApiSchema | undefined,
-  schemas: SchemaDocument,
+  context: SchemaContext,
   path: string,
 ): string[] {
   if (!Array.isArray(value)) return [`${path} must be an array`]
   if (!items) return []
   return value.flatMap((item, index) =>
-    validateSchema(item, items, schemas, `${path}[${index}]`),
+    validateSchema(item, items, context, `${path}[${index}]`),
   )
 }
