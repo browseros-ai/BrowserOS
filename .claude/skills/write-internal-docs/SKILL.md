@@ -7,16 +7,17 @@ disable-model-invocation: true
 
 # Write Internal Docs
 
-Write a new doc for `.internal-docs/` (private repo `browseros-ai/internal-docs`), as Markdown plus a self-contained HTML sibling, and open a PR. Companion to `ask-internal`: that skill reads internal-docs, this one writes it.
+Write a doc for `.internal-docs/` (private repo `browseros-ai/internal-docs`), as Markdown plus a self-contained HTML sibling, and open a PR. The subject is whatever the user names ("/write-internal-docs nightly signing") or, on a feature branch with no topic, the branch's diff. Companion to `ask-internal`: that skill reads internal-docs, this one writes it. Supersedes the older personal `document-internal` flow.
 
 **Announce at start:** "I'm using the write-internal-docs skill to draft and land an internal doc."
 
 ## Hard rules — never do these
 
-- NEVER write inside the user's `.internal-docs/` checkout. All writes happen in a tmp clone.
+- NEVER write inside the user's `.internal-docs/` checkout. All writes happen in the work clone.
 - NEVER push to internal-docs `main`. Feature branch + PR only.
 - NEVER touch the OSS repo's `.gitmodules` or submodule pointer. The sync workflow moves it after merge.
-- NEVER `git add -A` or `git add .` in the tmp clone. Specific paths only.
+- NEVER `git add -A` or `git add .` in the work clone. Specific paths only.
+- NEVER run a clone-touching command without the guard `[ -d "$CLONE/.git" ]` — a missing clone must fail loudly, not fall through to the OSS repo.
 - NEVER fabricate content for empty template sections. Empty stays empty.
 - NEVER hand-edit an `.html` sibling. The `.md` is the source of truth; regenerate the HTML from it.
 - NEVER cite a file or line number you have not actually read.
@@ -32,6 +33,16 @@ Every sentence of doc output follows these. Step 4 enforces them.
 - No filler intros ("This document describes..."). Start with the substance.
 - Feature notes: body 60 lines max. Architecture and design docs have no cap.
 
+## The work clone
+
+Shell state does not survive between Bash calls, so the clone lives at a deterministic path that every snippet re-derives — never `mktemp`, never a cleanup `trap` (it would fire when the first call exits and delete the clone mid-workflow):
+
+```bash
+CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
+```
+
+Substitute the literal slug. Every later snippet starts with this line plus the guard `[ -d "$CLONE/.git" ] || { echo "work clone missing: $CLONE"; exit 1; }`. Cleanup is an explicit `rm -rf "$CLONE"` in Step 8, never automatic.
+
 ## Workflow
 
 ### Step 0: Pre-flight
@@ -44,17 +55,19 @@ fi
 [ -d .internal-docs ] && [ -n "$(ls -A .internal-docs 2>/dev/null)" ] || {
   echo ".internal-docs/ missing or empty. Submodule not configured?"; exit 0; }
 gh auth status >/dev/null 2>&1 || { echo "gh not authenticated. Run: gh auth login"; exit 0; }
+git ls-remote git@github.com:browseros-ai/internal-docs.git HEAD >/dev/null 2>&1 || {
+  echo "Cannot reach internal-docs over SSH. Check your keys: ssh -T git@github.com"; exit 0; }
 ```
 
-**Done when:** submodule present and `gh` authenticated, or the skill stopped with the fix command.
+**Done when:** submodule present, `gh` authenticated, and SSH reaches internal-docs — or the skill stopped with the fix command.
 
 ### Step 1: Scope the doc
 
 Establish four facts. Take them from the user's invocation; derive what you can before asking.
 
-1. **Subject** — a stated topic, or the current branch's diff (`git diff main...HEAD --stat` plus the PR body) when invoked from a feature branch with no topic.
+1. **Subject** — the specific thing the user named, or the current branch's diff (`git diff main...HEAD --stat` plus the PR body) when invoked from a feature branch with no topic. For a named subject, research it first: grep the codebase and `.internal-docs/`, read the files that own it. If a doc on it already exists, this run updates that doc instead of creating a twin.
 2. **Type and target dir** — `setup/` (runbook), `features/` (shipped feature), `architecture/` (cross-cutting subsystem), `designs/` (decision or RFC). Branch heuristics: `feat/*` → features, `rfc/*`/`design/*` → designs. Unclear → ask one question.
-3. **Slug** — short kebab-case. Features and designs get a date prefix: `YYYY-MM-<slug>.md`.
+3. **Filename** — short kebab-case slug. Features prefix `YYYY-MM-`, designs prefix `YYYY-MM-DD-` (matches the existing tree).
 4. **Owner** — GitHub handle, default `gh api user --jq .login`.
 
 **Done when:** all four are stated and the target path (`<dir>/<file>.md`) is printed.
@@ -85,52 +98,76 @@ Scan the draft against the voice rules: em dashes, banned words, sentence length
 
 ### Step 5: Clone, write, render HTML
 
-Work in a tmp clone so the user's checkout stays clean:
+Create the work clone (user's checkout stays clean):
 
 ```bash
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-git clone -b main git@github.com:browseros-ai/internal-docs.git "$TMP"
-git -C "$TMP" checkout -b "docs/<slug>"
+CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
+rm -rf "$CLONE"
+git clone -b main git@github.com:browseros-ai/internal-docs.git "$CLONE"
+git -C "$CLONE" checkout -b "docs/<slug>"
 ```
 
 Write the approved `.md` into the clone at the Step 1 path. Then render its sibling `<same-path>.html`:
 
 1. Read `reference/html-template.html` from this skill's folder.
-2. Convert the Markdown body to HTML — with `pandoc` if installed (`pandoc -f gfm -t html <doc>.md`), by hand otherwise.
-3. Fill the template's `{{TITLE}}`, `{{SOURCE_MD}}`, and `{{BODY}}` slots. Keep it self-contained: no external URLs, scripts, or fonts.
+2. Convert the Markdown body to HTML — with `pandoc` if installed (`pandoc -f gfm -t html <doc>.md`), by hand otherwise. Either way the YAML frontmatter is stripped from the body; it never renders.
+3. Fill the template's slots: `{{TITLE}}` from the frontmatter `title:`, `{{SOURCE_MD}}` with the md filename, `{{BODY}}` with the converted body. Keep it self-contained: no external URLs, scripts, or fonts.
 
-Update the clone's `README.md` index — one line under the matching section:
+The README index line comes later, in Step 7 — Step 6's tidy commit also touches `README.md`, and the new doc's index line must ride the doc commit, not the tidy commit.
+
+**Done when:** `.md` and `.html` exist in the clone, and the `.html` contains no `http` reference except links that were in the doc body itself.
+
+### Step 6: Tidy pass
+
+Sweep the whole clone for drift — from inside it:
+
+```bash
+CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
+[ -d "$CLONE/.git" ] || { echo "work clone missing: $CLONE"; exit 1; }
+cd "$CLONE"
+# Index entries, with commented-out placeholders stripped first
+sed '/<!--/,/-->/d' README.md | grep -o '([a-z-]*/[^)]*\.md)' | tr -d '()' | sort > /tmp/indexed.txt
+# 1. Dead links: live index entries pointing at files that do not exist
+while read -r f; do [ -f "$f" ] || echo "dead: $f"; done < /tmp/indexed.txt
+# 2. Docs on disk missing from the index
+find setup features architecture designs -name '*.md' 2>/dev/null | sort | comm -13 /tmp/indexed.txt -
+# 3. Misfiled docs: read anything whose filename or frontmatter suggests the wrong dir
+```
+
+Interpret before acting:
+
+- Commented-out index lines are placeholders the maintainers left on purpose — the `sed` excludes them; never delete or uncomment them.
+- A doc whose parent directory's own `README.md` is in the index (e.g. `architecture/rust-port/*`) is subtree-indexed, not drift. Skip it.
+- The doc this run is adding is not yet indexed by design — its line lands in Step 7. Skip it.
+- What remains is real drift: add the missing index line, repoint or remove the dead link, `git mv` the misfiled doc and fix its entry.
+
+Commit tidy changes here, separate from the doc, so the reviewer sees them apart. No findings → no commit:
+
+```bash
+git -C "$CLONE" add <each tidied path> README.md
+git -C "$CLONE" commit -m "chore(docs): tidy structure and index"
+```
+
+**Done when:** all three checks ran from the clone and every finding is fixed in the tidy commit, skipped by the rules above, or listed for the PR body as deliberately left.
+
+### Step 7: Open the PR
+
+Add the new doc's line to the clone's `README.md` index, under the matching section:
 
 ```markdown
 - [<Title>](<dir>/<file>.md) ([html](<dir>/<file>.html)): <one-line hook>
 ```
 
-**Done when:** `.md`, `.html`, and the index line exist in the clone, and the `.html` contains no `http` reference except links that were in the doc body itself.
+The `(html)` link is this skill's addition to the index convention; older entries lack it, and the tidy pass backfills nothing — html siblings appear as docs get touched.
 
-### Step 6: Tidy pass
-
-Now sweep the whole clone for drift. Three checks:
+Then commit the doc (tidy changes were committed in Step 6) and open the PR:
 
 ```bash
-# 1. Index drift: docs on disk missing from the README index
-comm -13 <(grep -o '([a-z-]*/[^)]*\.md)' README.md | tr -d '()' | sort) \
-         <(find setup features architecture designs -name '*.md' 2>/dev/null | sort)
-# 2. Dead links: index entries pointing at files that do not exist
-grep -o '([a-z-]*/[^)]*\.md)' README.md | tr -d '()' | while read -r f; do [ -f "$f" ] || echo "dead: $f"; done
-# 3. Misfiled docs: read anything the filename or frontmatter suggests is in the wrong dir
-```
-
-For each finding, fix it: add the missing index line, delete or repoint the dead link, `git mv` the misfiled doc and update its index entry. No findings → skip the commit. Reorg changes go in their own `chore(docs): tidy structure and index` commit, separate from the new doc, so the reviewer sees doc vs reorg apart.
-
-**Done when:** all three checks ran and every finding is either fixed in the clone or listed for the PR body as deliberately left.
-
-### Step 7: Open the PR
-
-```bash
-git -C "$TMP" add "<dir>/<file>.md" "<dir>/<file>.html" README.md   # plus tidy-pass paths
-git -C "$TMP" commit -m "docs(<type>): <slug>"
-git -C "$TMP" push -u origin "docs/<slug>"
+CLONE="${TMPDIR:-/tmp}/internal-docs-<slug>"
+[ -d "$CLONE/.git" ] || { echo "work clone missing: $CLONE"; exit 1; }
+git -C "$CLONE" add "<dir>/<file>.md" "<dir>/<file>.html" README.md
+git -C "$CLONE" commit -m "docs(<type>): <slug>"
+git -C "$CLONE" push -u origin "docs/<slug>"
 gh pr create -R browseros-ai/internal-docs --base main --head "docs/<slug>" \
   --title "docs(<type>): <slug>" \
   --body "<summary, source branch, related OSS PR, tidy-pass findings if any>"
@@ -138,13 +175,15 @@ gh pr create -R browseros-ai/internal-docs --base main --head "docs/<slug>" \
 
 **Done when:** the PR URL is printed.
 
-### Step 8: Completion status
+### Step 8: Report and clean up
 
-Report one of:
+Remove the work clone (`rm -rf "$CLONE"`), then report exactly one of:
 
 - **DONE** — md + html written, index updated, PR opened. Print the PR URL.
 - **DONE_WITH_CONCERNS** — PR opened, but list concerns (voice check needed 3 passes, tidy findings left unfixed, citations uncertain).
 - **BLOCKED** — pre-flight failed, auth failed, or template missing. State exactly what unblocks.
+
+**Done when:** the clone is gone and exactly one status line is printed.
 
 ## Common Mistakes
 
@@ -158,8 +197,12 @@ Report one of:
 
 **Touching `.internal-docs/` directly**
 - **Problem:** User's submodule HEAD moves; the parent repo shows a dirty state.
-- **Fix:** All writes go through the tmp clone.
+- **Fix:** All writes go through the work clone.
+
+**Trusting the tidy greps raw**
+- **Problem:** Placeholder entries and subtree-indexed docs read as drift; the "fix" mangles the README.
+- **Fix:** Apply Step 6's interpretation rules before touching anything.
 
 **Tidy pass bundled into the doc commit**
 - **Problem:** Reviewer can't separate the new doc from moves and index fixes.
-- **Fix:** Two commits: `docs(<type>): <slug>` and `chore(docs): tidy structure and index`.
+- **Fix:** Two commits: `chore(docs): tidy structure and index` (Step 6), then `docs(<type>): <slug>` (Step 7).
