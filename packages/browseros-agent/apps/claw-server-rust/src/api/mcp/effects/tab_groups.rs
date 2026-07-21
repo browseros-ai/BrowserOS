@@ -1442,7 +1442,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn each_group_dispatch_uses_the_shared_timeout() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.block_group_creation();
@@ -1450,6 +1450,8 @@ mod tests {
         assert_eq!(browser.pages.list().await?.len(), 2);
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        // SQLite setup needs real time; only the dispatch timeout uses the paused clock.
+        tokio::time::pause();
         let dispatch = tokio::spawn(async move {
             dispatch_tab_groups(
                 call.tool_named("tab_groups")
