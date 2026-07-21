@@ -33,6 +33,7 @@ enum Layer {
 enum Target {
     ApiHttp,
     ApiMcp,
+    AppState,
     Service(String),
     Db,
     Identity,
@@ -110,6 +111,16 @@ fn services_cannot_depend_on_api() {
         errors
             .iter()
             .any(|error| error.contains("services/browser"))
+    );
+}
+
+#[test]
+fn services_cannot_depend_on_app_state() {
+    let errors = violations("services/cockpit/example.rs", "use crate::AppState;");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("services/cockpit -> AppState"))
     );
 }
 
@@ -253,8 +264,10 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "db" => Some(Target::Db),
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
-        "clock" | "config" | "error" | "ids" | "storage" | "telemetry" | "AppState"
-        | "AppResult" => Some(Target::Support),
+        "AppState" => Some(Target::AppState),
+        "clock" | "config" | "error" | "ids" | "storage" | "telemetry" | "AppResult" => {
+            Some(Target::Support)
+        }
         _ => None,
     }
 }
@@ -264,17 +277,27 @@ fn edge_allowed(source: &Layer, target: &Target) -> bool {
         Layer::Composition => true,
         Layer::ApiHttp => matches!(
             target,
-            Target::ApiHttp | Target::Service(_) | Target::Db | Target::Identity | Target::Support
+            Target::ApiHttp
+                | Target::AppState
+                | Target::Service(_)
+                | Target::Db
+                | Target::Identity
+                | Target::Support
         ),
         Layer::ApiMcp => matches!(
             target,
-            Target::ApiMcp | Target::Service(_) | Target::Db | Target::Identity | Target::Support
+            Target::ApiMcp
+                | Target::AppState
+                | Target::Service(_)
+                | Target::Db
+                | Target::Identity
+                | Target::Support
         ),
         Layer::Service(source) => match target {
             Target::Service(target) if source == target => true,
             Target::Service(target) => allowed_service_edge(source, target),
             Target::Db | Target::Identity | Target::Support => true,
-            Target::ApiHttp | Target::ApiMcp | Target::Composition => false,
+            Target::ApiHttp | Target::ApiMcp | Target::AppState | Target::Composition => false,
         },
         Layer::Db => matches!(target, Target::Db | Target::Support),
         Layer::Identity | Layer::Support => matches!(target, Target::Identity | Target::Support),
@@ -307,6 +330,7 @@ fn target_name(target: &Target) -> String {
     match target {
         Target::ApiHttp => "api/http".to_string(),
         Target::ApiMcp => "api/mcp".to_string(),
+        Target::AppState => "AppState".to_string(),
         Target::Service(name) => format!("services/{name}"),
         Target::Db => "db".to_string(),
         Target::Identity => "identity".to_string(),
