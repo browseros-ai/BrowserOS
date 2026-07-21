@@ -611,7 +611,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +850,812 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -297,3 +850,813 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
