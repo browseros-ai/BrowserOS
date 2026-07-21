@@ -125,7 +125,11 @@ function makeContext(run: ServerRun): CaseContext {
     fixture: (path) => pair.primary.url(path),
     fixture2: (path) => pair.secondary.url(path),
     async openPage(url, session = run.mcp) {
-      const result = await session.callTool('tabs', { action: 'new', url })
+      const result = await session.callTool('tabs', {
+        action: 'new',
+        url,
+        background: false,
+      })
       if (result.isError) {
         throw new Error(`tabs new failed: ${textOf(result)}`)
       }
