@@ -43,8 +43,6 @@ export function AgentRunningCard({
           site={site}
           live={active}
           sessionId={session.sessionId}
-          browserTabId={selectedTab?.browserTabId}
-          previewCapturedAt={selectedTab?.previewCapturedAt}
           className="h-full w-full"
         />
         {selectedTab && (

@@ -20,7 +20,6 @@ function dispatch(overrides: Partial<ToolDispatchRow> = {}): ToolDispatchRow {
     argsJson: '{"page":1}',
     resultMeta: '{"isError":false}',
     durationMs: 5,
-    hasScreenshot: false,
     ...overrides,
   }
 }
@@ -29,13 +28,11 @@ const startedAt = 1_000_000
 
 function render(
   dispatches: ToolDispatchRow[],
-  screenshotDispatchIds: readonly number[] = [],
   extra: { showSessionEnd?: boolean; endEvent?: TimelineEndEvent } = {},
 ): string {
   return renderToStaticMarkup(
     <Timeline
       dispatches={dispatches}
-      screenshotDispatchIds={screenshotDispatchIds}
       startedAt={startedAt}
       endEvent={extra.endEvent ?? null}
       showSessionEnd={extra.showSessionEnd}
@@ -128,6 +125,7 @@ describe('Timeline', () => {
       dispatch({
         dispatchId: 2,
         toolName: 'screenshot',
+        screenshotId: 9,
         argsJson: '{"page":1}',
         resultMeta: '{"isError":false}',
       }),
@@ -135,8 +133,20 @@ describe('Timeline', () => {
     expect(html).not.toContain('data-testid="timeline-block-copy-screenshot"')
   })
 
-  it('renders the SessionEndRow by default (backward compat)', () => {
-    const html = render([dispatch({ dispatchId: 1 })], [], {
+  it('renders a captured screenshot for an errored dispatch', () => {
+    const html = render([
+      dispatch({
+        dispatchId: 3,
+        toolName: 'act',
+        screenshotId: 10,
+        resultMeta: '{"isError":true}',
+      }),
+    ])
+    expect(html).toContain('>screenshot<')
+  })
+
+  it('renders the SessionEndRow by default', () => {
+    const html = render([dispatch({ dispatchId: 1 })], {
       endEvent: CLOSED_END,
     })
     // SessionEndRow markup includes the literal "session closed" (or
@@ -146,7 +156,7 @@ describe('Timeline', () => {
   })
 
   it('hides the SessionEndRow when showSessionEnd is false (per-tab view)', () => {
-    const html = render([dispatch({ dispatchId: 1 })], [], {
+    const html = render([dispatch({ dispatchId: 1 })], {
       endEvent: CLOSED_END,
       showSessionEnd: false,
     })

@@ -22,7 +22,7 @@ interface AuditHoverPreviewProps {
  * never a grey placeholder.
  */
 export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
-  const screenshotId = task?.lastScreenshotDispatchId ?? null
+  const screenshotId = task?.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   return (
     <div
@@ -35,7 +35,11 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
       <div className="relative aspect-[16/10] w-full overflow-hidden">
         {task && screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
             alt=""
             className="absolute inset-0 h-full w-full object-cover object-top"
           />

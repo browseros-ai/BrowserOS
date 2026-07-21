@@ -13,7 +13,7 @@ const focusCalls: Array<{ browserTabId: number }> = []
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
-  useSessionBrowserTabPreviewUrl: () => null,
+  useSessionPreviewUrl: () => null,
 }))
 
 mock.module('@/modules/api/cancel.hooks', () => ({

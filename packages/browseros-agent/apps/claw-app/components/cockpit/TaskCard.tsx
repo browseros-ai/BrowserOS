@@ -22,7 +22,7 @@ interface TaskCardProps {
 
 export function TaskCard({ task, now }: TaskCardProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
-  const screenshotId = task.lastScreenshotDispatchId ?? null
+  const screenshotId = task.latestScreenshotId ?? null
   return (
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
@@ -57,7 +57,11 @@ export function TaskCard({ task, now }: TaskCardProps) {
             <AspectRatio ratio={16 / 10}>
               {screenshotBaseUrl !== null ? (
                 <img
-                  src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+                  src={taskScreenshotUrl(
+                    task.sessionId,
+                    screenshotId,
+                    screenshotBaseUrl,
+                  )}
                   alt={`Hero from ${task.label}`}
                   className="h-full w-full object-cover"
                   loading="lazy"

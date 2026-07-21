@@ -68,7 +68,7 @@ const sampleTask: TaskSummary = {
   toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
   status: 'done',
   errorCount: 0,
-  lastScreenshotDispatchId: 7,
+  latestScreenshotId: 7,
 }
 
 describe('Audit screen', () => {

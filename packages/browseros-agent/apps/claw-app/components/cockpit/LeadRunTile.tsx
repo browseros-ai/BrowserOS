@@ -34,7 +34,7 @@ interface LeadRunTileProps {
 export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
   const isLive = task.status === 'live'
   const isFailed = task.status === 'failed'
-  const screenshotId = task.lastScreenshotDispatchId ?? null
+  const screenshotId = task.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
   return (
@@ -50,7 +50,11 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
       <div className="relative flex-1 overflow-hidden">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
             alt={`Session hero from ${task.label}`}
             loading="lazy"
             decoding="async"

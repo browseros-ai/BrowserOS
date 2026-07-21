@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import type { SessionScreenshot } from '@browseros/claw-api'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
 import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
 
@@ -22,8 +23,15 @@ function dispatch(
     toolName: 'snapshot',
     ...(pageId === null ? {} : { pageId }),
     durationMs: 5,
-    hasScreenshot: false,
     ...overrides,
+  }
+}
+
+function screenshot(screenshotId: number): SessionScreenshot {
+  return {
+    screenshotId,
+    capturedAt: 1_000_000 + screenshotId,
+    toolName: 'screenshot',
   }
 }
 
@@ -99,13 +107,14 @@ describe('groupDispatchesByTab', () => {
     const rows = [
       dispatch(1, null),
       dispatch(2, 3),
-      dispatch(3, 3),
+      dispatch(3, 3, { screenshotId: 31 }),
       dispatch(4, 7),
-      dispatch(5, 7),
+      dispatch(5, 7, { screenshotId: 51 }),
     ]
-    const groups = groupDispatchesByTab(rows, [1, 3, 5])
+    const screenshots = [screenshot(11), screenshot(31), screenshot(51)]
+    const groups = groupDispatchesByTab(rows, screenshots)
     const session = expectDefined(groups.find((g) => g.id === 'session'))
-    expect(session.screenshotDispatchIds).toEqual([1, 3, 5])
+    expect(session.screenshots).toEqual(screenshots)
   })
 
   it('preserves chronological order inside per-page groups', () => {
@@ -177,19 +186,23 @@ describe('groupDispatchesByTab', () => {
     expect(g.displayTitle).toBe('Only title')
   })
 
-  it('per-page screenshotDispatchIds filters to that page only', () => {
+  it('filters screenshot metadata to the page whose dispatch owns it', () => {
     const rows = [
       dispatch(1, null),
       dispatch(2, 3),
-      dispatch(3, 3),
+      dispatch(3, 3, { screenshotId: 31 }),
       dispatch(4, 7),
-      dispatch(5, 7),
+      dispatch(5, 7, { screenshotId: 51 }),
     ]
-    const groups = groupDispatchesByTab(rows, [1, 3, 5])
+    const groups = groupDispatchesByTab(rows, [
+      screenshot(11),
+      screenshot(31),
+      screenshot(51),
+    ])
     const page3 = expectDefined(groups.find((g) => g.id === 'page-3'))
     const page7 = expectDefined(groups.find((g) => g.id === 'page-7'))
-    expect(page3.screenshotDispatchIds).toEqual([3])
-    expect(page7.screenshotDispatchIds).toEqual([5])
+    expect(page3.screenshots.map((item) => item.screenshotId)).toEqual([31])
+    expect(page7.screenshots.map((item) => item.screenshotId)).toEqual([51])
   })
 })
 

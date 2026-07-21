@@ -363,9 +363,8 @@ describe('BrowserOS managed port resolution', () => {
       },
     })
 
-    const preview = await client.getSessionBrowserTabPreview({
+    const preview = await client.getSessionPreview({
       sessionId: 'session/one',
-      browserTabId: 101,
     })
     expect(preview.type).toBe('image/jpeg')
     expect(Array.from(new Uint8Array(await preview.arrayBuffer()))).toEqual([
@@ -385,5 +384,40 @@ describe('BrowserOS managed port resolution', () => {
         requestId: 'request-1',
       })
     }
+  })
+
+  it('maps session visual calls to session-owned routes', async () => {
+    const requests: string[] = []
+    const client = new ClawApiClient('http://127.0.0.1:9200', {
+      fetch: async (input) => {
+        const url = input instanceof Request ? input.url : String(input)
+        requests.push(url)
+        if (url.endsWith('/screenshots')) {
+          return Response.json({
+            items: [{ screenshotId: 17, capturedAt: 123, toolName: 'act' }],
+          })
+        }
+        return new Response(new Uint8Array([0xff, 0xd8]), {
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      },
+    })
+
+    await client.getSessionPreview({ sessionId: 'session/one' })
+    await expect(
+      client.listSessionScreenshots({ sessionId: 'session/one' }),
+    ).resolves.toEqual({
+      items: [{ screenshotId: 17, capturedAt: 123, toolName: 'act' }],
+    })
+    await client.getSessionScreenshot({
+      sessionId: 'session/one',
+      screenshotId: 17,
+    })
+
+    expect(requests).toEqual([
+      'http://127.0.0.1:9200/api/v1/sessions/session%2Fone/preview',
+      'http://127.0.0.1:9200/api/v1/sessions/session%2Fone/screenshots',
+      'http://127.0.0.1:9200/api/v1/sessions/session%2Fone/screenshots/17',
+    ])
   })
 })

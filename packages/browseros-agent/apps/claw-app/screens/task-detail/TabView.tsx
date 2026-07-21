@@ -15,6 +15,7 @@ import { Timeline } from '@/components/audit/Timeline'
 import type { TabGroup } from './task-detail.helpers'
 
 export interface TabViewProps {
+  sessionId: string
   group: TabGroup
   startedAt: number
   endEvent: {
@@ -22,10 +23,11 @@ export interface TabViewProps {
     kind: 'closed' | 'errored'
     reason: string | null
   } | null
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 export function TabView({
+  sessionId,
   group,
   startedAt,
   endEvent,
@@ -48,14 +50,14 @@ export function TabView({
         </div>
       )}
       <ScreenshotStrip
+        sessionId={sessionId}
         dispatches={group.dispatches}
-        screenshotDispatchIds={group.screenshotDispatchIds}
+        screenshots={group.screenshots}
         startedAt={startedAt}
         onSelect={onScreenshotClick}
       />
       <Timeline
         dispatches={group.dispatches}
-        screenshotDispatchIds={group.screenshotDispatchIds}
         startedAt={startedAt}
         endEvent={isSession ? endEvent : null}
         showSessionEnd={isSession}

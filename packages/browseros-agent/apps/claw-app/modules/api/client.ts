@@ -28,6 +28,7 @@ import type {
   RecordingMetadata,
   SessionDetail,
   SessionList,
+  SessionScreenshotList,
   SessionStatus,
   ShutdownResponse,
   SystemInfo,
@@ -175,18 +176,24 @@ export class ClawApiClient {
     })
   }
 
-  getSessionBrowserTabPreview(request: {
+  getSessionPreview(request: { sessionId: string }): Promise<Blob> {
+    return this.blob(`/api/v1/sessions/${pathPart(request.sessionId)}/preview`)
+  }
+
+  listSessionScreenshots(request: {
     sessionId: string
-    browserTabId: number
-  }): Promise<Blob> {
-    return this.blob(
-      `/api/v1/sessions/${pathPart(request.sessionId)}/browser-tabs/${request.browserTabId.toString()}/preview`,
+  }): Promise<SessionScreenshotList> {
+    return this.json(
+      `/api/v1/sessions/${pathPart(request.sessionId)}/screenshots`,
     )
   }
 
-  getDispatchScreenshot(request: { dispatchId: number }): Promise<Blob> {
+  getSessionScreenshot(request: {
+    sessionId: string
+    screenshotId: number
+  }): Promise<Blob> {
     return this.blob(
-      `/api/v1/dispatches/${request.dispatchId.toString()}/screenshot`,
+      `/api/v1/sessions/${pathPart(request.sessionId)}/screenshots/${request.screenshotId.toString()}`,
     )
   }
 

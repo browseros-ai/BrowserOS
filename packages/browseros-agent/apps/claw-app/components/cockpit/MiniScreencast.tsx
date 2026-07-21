@@ -1,118 +1,83 @@
 import { Globe } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { useSessionBrowserTabPreviewUrl } from '@/modules/api/audit.hooks'
+import { useSessionPreviewUrl } from '@/modules/api/audit.hooks'
+
+const PREVIEW_REFRESH_MS = 1500
 
 interface MiniScreencastProps {
   site: string
   sessionId: string
-  browserTabId?: number
   live?: boolean
-  /**
-   * Timestamp of the tab's newest capture. Its only job here is to make
-   * the preview URL unique per frame; undefined means the tab has never
-   * been captured, which renders the globe placeholder.
-   */
-  previewCapturedAt?: number
   /** AgentRunningCard overrides the compact default to fill its preview zone. */
   className?: string
 }
 
 interface DecodedPreviewFrame {
   sessionId: string
-  browserTabId: number
-  previewCapturedAt: number
   src: string
 }
 
 /**
- * Renders a live session tab's latest JPEG from the canonical binary route,
+ * Renders a live session's latest JPEG from the canonical binary route,
  * with a host placeholder when there is no captured frame.
  *
- * Every capture timestamp yields a new URL. An off-screen Image decodes that
- * frame before the visible frame advances. Previous pixels remain only for a
- * newer capture of the same session tab; identity changes render the
- * placeholder immediately so one tab can never be shown as another.
+ * An off-screen Image decodes each refreshed response before the visible frame
+ * advances. Previous pixels remain while a newer frame for the same session
+ * loads; identity changes render the placeholder immediately so one session
+ * can never be shown as another.
  */
-export function MiniScreencast({
+export function MiniScreencast({ sessionId, ...props }: MiniScreencastProps) {
+  return (
+    <SessionMiniScreencast key={sessionId} sessionId={sessionId} {...props} />
+  )
+}
+
+function SessionMiniScreencast({
   site,
   sessionId,
-  browserTabId,
   live,
-  previewCapturedAt,
   className,
 }: MiniScreencastProps) {
-  const incomingSrc = useSessionBrowserTabPreviewUrl(
-    sessionId,
-    browserTabId,
-    previewCapturedAt,
-  )
+  const [refresh, setRefresh] = useState(Date.now)
+  const incomingSrc = useSessionPreviewUrl(sessionId, refresh)
   const [decodedFrame, setDecodedFrame] = useState<DecodedPreviewFrame | null>(
-    () =>
-      incomingSrc !== null &&
-      browserTabId !== undefined &&
-      previewCapturedAt !== undefined
-        ? { sessionId, browserTabId, previewCapturedAt, src: incomingSrc }
-        : null,
+    null,
   )
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
   const displayedSrc =
-    decodedFrame !== null &&
-    decodedFrame.sessionId === sessionId &&
-    decodedFrame.browserTabId === browserTabId &&
-    previewCapturedAt !== undefined &&
-    decodedFrame.previewCapturedAt <= previewCapturedAt
+    decodedFrame !== null && decodedFrame.sessionId === sessionId
       ? decodedFrame.src
       : null
 
   useEffect(() => {
-    if (
-      incomingSrc === null ||
-      browserTabId === undefined ||
-      previewCapturedAt === undefined
-    ) {
-      setDecodedFrame(null)
-      setFailedSrc(null)
-      return
-    }
+    const timer = window.setInterval(
+      () => setRefresh(Date.now()),
+      PREVIEW_REFRESH_MS,
+    )
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (incomingSrc === null) return
     if (failedSrc === incomingSrc) return
-    if (
-      decodedFrame?.sessionId === sessionId &&
-      decodedFrame.browserTabId === browserTabId &&
-      decodedFrame.previewCapturedAt === previewCapturedAt &&
-      decodedFrame.src === incomingSrc
-    ) {
-      return
-    }
+    if (decodedFrame?.src === incomingSrc) return
     let cancelled = false
     const image = new Image()
     image.onload = () => {
       if (cancelled) return
-      setDecodedFrame({
-        sessionId,
-        browserTabId,
-        previewCapturedAt,
-        src: incomingSrc,
-      })
+      setDecodedFrame({ sessionId, src: incomingSrc })
       setFailedSrc(null)
     }
     image.onerror = () => {
       if (cancelled) return
-      setDecodedFrame(null)
       setFailedSrc(incomingSrc)
     }
     image.src = incomingSrc
     return () => {
       cancelled = true
     }
-  }, [
-    browserTabId,
-    decodedFrame,
-    failedSrc,
-    incomingSrc,
-    previewCapturedAt,
-    sessionId,
-  ])
+  }, [decodedFrame?.src, failedSrc, incomingSrc, sessionId])
 
   return (
     <div

@@ -12,6 +12,7 @@ import type { TaskDetailScreenData } from './task-detail.data'
 
 const baseData: TaskDetailScreenData = {
   detail: undefined,
+  screenshots: [],
   isPending: false,
   isError: false,
   error: null,
@@ -54,7 +55,7 @@ const sampleTask: TaskDetail = {
     toolSequence: ['tabs', 'screenshot'],
     status: 'done',
     errorCount: 0,
-    lastScreenshotDispatchId: 2,
+    latestScreenshotId: 20,
   },
   dispatches: [
     {
@@ -70,7 +71,6 @@ const sampleTask: TaskDetail = {
       argsJson: '{"action":"new"}',
       resultMeta: '{"isError":false}',
       durationMs: 12,
-      hasScreenshot: false,
     },
     {
       dispatchId: 2,
@@ -84,7 +84,7 @@ const sampleTask: TaskDetail = {
       argsJson: '{"page":1}',
       resultMeta: '{"isError":false}',
       durationMs: 80,
-      hasScreenshot: true,
+      screenshotId: 20,
     },
   ],
 }
@@ -103,7 +103,13 @@ describe('TaskDetailPage', () => {
   })
 
   it('renders header + timeline + strip for a real task', () => {
-    dataOverride = { ...baseData, detail: sampleTask }
+    dataOverride = {
+      ...baseData,
+      detail: sampleTask,
+      screenshots: [
+        { screenshotId: 20, capturedAt: Date.now() - 9000, toolName: 'act' },
+      ],
+    }
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
@@ -120,7 +126,7 @@ describe('TaskDetailPage', () => {
       ...baseData,
       detail: {
         ...sampleTask,
-        dispatches: [{ ...first, hasScreenshot: false }],
+        dispatches: [first],
       },
     }
     const html = render()

@@ -18,6 +18,7 @@ import {
   type Dispatch,
   type SessionDetail,
   type SessionList,
+  type SessionScreenshotList,
   SessionStatus,
   type SessionSummary,
 } from '@browseros/claw-api'
@@ -81,22 +82,33 @@ export const useSessionDetail = createQuery<
     query.state.data?.session.status === 'live' ? 3000 : false,
 })
 
-/** Absolute URL for the persisted screenshot of one dispatch. */
+export const useSessionScreenshots = createQuery<
+  SessionScreenshotList,
+  { sessionId: string },
+  Error
+>({
+  queryKey: ['api', 'session', 'screenshots'],
+  fetcher: async ({ sessionId }) =>
+    (await apiClient()).listSessionScreenshots({ sessionId }),
+  refetchInterval: 3000,
+})
+
+/** Absolute URL for one immutable session-owned screenshot. */
 export function taskScreenshotUrl(
-  dispatchId: number,
+  sessionId: string,
+  screenshotId: number,
   baseUrl = apiBaseUrl(),
 ): string {
-  return `${baseUrl}/api/v1/dispatches/${dispatchId}/screenshot`
+  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/screenshots/${screenshotId.toString()}`
 }
 
-/** Absolute URL for the latest JPEG captured from one live session tab. */
-export function sessionBrowserTabPreviewUrl(
+/** Absolute URL for a fresh live-session JPEG; `refresh` only busts browser caches. */
+export function sessionPreviewUrl(
   sessionId: string,
-  browserTabId: number,
-  previewCapturedAt: number,
+  refresh: number,
   baseUrl = apiBaseUrl(),
 ): string {
-  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/browser-tabs/${browserTabId}/preview?capturedAt=${previewCapturedAt}`
+  return `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview?refresh=${refresh.toString()}`
 }
 
 /**
@@ -123,20 +135,12 @@ export function useTaskScreenshotBaseUrl(): string | null {
   return useResolvedApiBaseUrl()
 }
 
-export function useSessionBrowserTabPreviewUrl(
+export function useSessionPreviewUrl(
   sessionId: string,
-  browserTabId?: number,
-  previewCapturedAt?: number,
+  refresh: number,
 ): string | null {
   const baseUrl = useResolvedApiBaseUrl()
-  return baseUrl !== null &&
-    browserTabId !== undefined &&
-    previewCapturedAt !== undefined
-    ? sessionBrowserTabPreviewUrl(
-        sessionId,
-        browserTabId,
-        previewCapturedAt,
-        baseUrl,
-      )
-    : null
+  return baseUrl === null
+    ? null
+    : sessionPreviewUrl(sessionId, refresh, baseUrl)
 }

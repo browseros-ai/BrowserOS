@@ -20,13 +20,6 @@ import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
 interface TimelineProps {
   dispatches: ToolDispatchRow[]
-  /**
-   * Dispatch ids whose canonical `hasScreenshot` flag confirms a
-   * screenshot artifact exists. The screencast fallback and first-capture
-   * policy write screenshots for non-screenshot tools, so tool names are not
-   * sufficient to decide which rows show the preview block.
-   */
-  screenshotDispatchIds: readonly number[]
   startedAt: number
   endEvent: {
     createdAt: number
@@ -40,7 +33,7 @@ interface TimelineProps {
    * scoped to any one tab; it lives on the Session tab only.
    */
   showSessionEnd?: boolean
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
@@ -55,13 +48,11 @@ function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
 
 export function Timeline({
   dispatches,
-  screenshotDispatchIds,
   startedAt,
   endEvent,
   showSessionEnd = true,
   onScreenshotClick,
 }: TimelineProps) {
-  const screenshotIdSet = new Set(screenshotDispatchIds)
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
@@ -125,7 +116,6 @@ export function Timeline({
             dispatch={d}
             offsetMs={Math.max(0, d.createdAt - startedAt)}
             expanded={expanded.has(d.dispatchId)}
-            hasScreenshot={screenshotIdSet.has(d.dispatchId)}
             screenshotBaseUrl={screenshotBaseUrl}
             onToggle={() => toggle(d.dispatchId)}
             onScreenshotClick={onScreenshotClick}
@@ -143,24 +133,15 @@ interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
   expanded: boolean
-  /**
-   * Whether this dispatch has a screenshot file on disk (per the
-   * server's authoritative `screenshotDispatchIds` list). True for
-   * both explicit-screenshot-tool calls AND the many non-screenshot
-   * dispatches (navigate / act / tabs new / first read / ...) that
-   * the screencast fallback + first-capture policy now capture.
-   */
-  hasScreenshot: boolean
   screenshotBaseUrl: string | null
   onToggle: () => void
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 function TimelineRow({
   dispatch,
   offsetMs,
   expanded,
-  hasScreenshot,
   screenshotBaseUrl,
   onToggle,
   onScreenshotClick,
@@ -168,7 +149,8 @@ function TimelineRow({
   const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
-  const isScreenshot = hasScreenshot && !isError
+  const screenshotId = dispatch.screenshotId
+  const isScreenshot = screenshotId !== undefined
   return (
     <li
       className={cn(
@@ -233,13 +215,14 @@ function TimelineRow({
             <Block label="screenshot">
               <button
                 type="button"
-                onClick={() => onScreenshotClick(dispatch.dispatchId)}
+                onClick={() => onScreenshotClick(screenshotId)}
                 className="block w-64 overflow-hidden rounded-md border border-border-2"
               >
                 <AspectRatio ratio={16 / 10}>
                   <img
                     src={taskScreenshotUrl(
-                      dispatch.dispatchId,
+                      dispatch.sessionId,
+                      screenshotId,
                       screenshotBaseUrl,
                     )}
                     alt={`Screenshot at T+${formatOffset(offsetMs)}`}

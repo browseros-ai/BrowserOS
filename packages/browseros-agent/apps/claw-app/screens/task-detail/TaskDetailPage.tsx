@@ -26,21 +26,13 @@ import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
  */
 export function TaskDetailPage() {
   const { sessionId = '' } = useParams()
-  const { detail, isPending, isError, error } =
+  const { detail, screenshots, isPending, isError, error } =
     useTaskDetailScreenData(sessionId)
   const [lightboxId, setLightboxId] = useState<number | null>(null)
 
   const groups = useMemo(
-    () =>
-      detail
-        ? groupDispatchesByTab(
-            detail.dispatches,
-            detail.dispatches
-              .filter((dispatch) => dispatch.hasScreenshot)
-              .map((dispatch) => dispatch.dispatchId),
-          )
-        : [],
-    [detail],
+    () => (detail ? groupDispatchesByTab(detail.dispatches, screenshots) : []),
+    [detail, screenshots],
   )
 
   if (isPending) {
@@ -69,7 +61,11 @@ export function TaskDetailPage() {
 
   const selectedDispatch =
     lightboxId !== null
-      ? (detail.dispatches.find((d) => d.dispatchId === lightboxId) ?? null)
+      ? (detail.dispatches.find((d) => d.screenshotId === lightboxId) ?? null)
+      : null
+  const selectedScreenshot =
+    lightboxId !== null
+      ? (screenshots.find((s) => s.screenshotId === lightboxId) ?? null)
       : null
 
   const { session } = detail
@@ -96,6 +92,7 @@ export function TaskDetailPage() {
     ),
     content: (
       <TabView
+        sessionId={sessionId}
         group={g}
         startedAt={session.startedAt}
         endEvent={endEvent}
@@ -113,11 +110,12 @@ export function TaskDetailPage() {
         listVariant="line"
       />
       <ScreenshotLightbox
-        dispatchId={lightboxId}
+        sessionId={sessionId}
+        screenshotId={lightboxId}
         sourceUrl={selectedDispatch?.url ?? null}
         offsetMs={
-          selectedDispatch
-            ? Math.max(0, selectedDispatch.createdAt - session.startedAt)
+          selectedScreenshot
+            ? Math.max(0, selectedScreenshot.capturedAt - session.startedAt)
             : null
         }
         onClose={() => setLightboxId(null)}

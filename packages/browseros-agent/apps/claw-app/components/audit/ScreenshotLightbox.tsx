@@ -13,7 +13,8 @@ import {
 import { formatOffset, hostOf } from './screenshot.helpers'
 
 interface ScreenshotLightboxProps {
-  dispatchId: number | null
+  sessionId: string
+  screenshotId: number | null
   sourceUrl?: string | null
   offsetMs?: number | null
   onClose: () => void
@@ -30,7 +31,8 @@ interface ScreenshotLightboxProps {
  * silently ignored at every width ≥640px.
  */
 export function ScreenshotLightbox({
-  dispatchId,
+  sessionId,
+  screenshotId,
   sourceUrl = null,
   offsetMs = null,
   onClose,
@@ -43,13 +45,13 @@ export function ScreenshotLightbox({
       .join(' · ') || 'Screenshot'
 
   return (
-    <Dialog open={dispatchId !== null} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={screenshotId !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
         showCloseButton={false}
         className="flex max-h-[92vh] w-auto max-w-[94vw] flex-col gap-2 bg-transparent p-0 shadow-none ring-0 sm:max-w-[94vw]"
       >
         <DialogTitle className="sr-only">Screenshot preview</DialogTitle>
-        {dispatchId !== null && (
+        {screenshotId !== null && (
           <>
             <div className="flex items-center justify-between gap-3 rounded-lg bg-popover/95 px-3 py-2 ring-1 ring-foreground/10 supports-backdrop-filter:backdrop-blur">
               <span className="min-w-0 truncate font-mono text-[12.5px] text-ink-2">
@@ -62,7 +64,11 @@ export function ScreenshotLightbox({
             </div>
             {screenshotBaseUrl !== null ? (
               <img
-                src={taskScreenshotUrl(dispatchId, screenshotBaseUrl)}
+                src={taskScreenshotUrl(
+                  sessionId,
+                  screenshotId,
+                  screenshotBaseUrl,
+                )}
                 alt={host ? `Screenshot of ${host}` : 'Screenshot'}
                 className="max-h-[calc(92vh-3.5rem)] w-auto max-w-[94vw] rounded-xl object-contain shadow-2xl ring-1 ring-foreground/10"
               />

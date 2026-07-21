@@ -26,7 +26,8 @@ mock.module('@/modules/api/audit.hooks', () => ({
     data: { pages: [{ items: [] }] },
     isPending: false,
   }),
-  taskScreenshotUrl: (id: number) => `/api/v1/dispatches/${id}/screenshot`,
+  taskScreenshotUrl: (sessionId: string, id: number) =>
+    `/api/v1/sessions/${sessionId}/screenshots/${id}`,
   useTaskScreenshotBaseUrl: () => null,
 }))
 

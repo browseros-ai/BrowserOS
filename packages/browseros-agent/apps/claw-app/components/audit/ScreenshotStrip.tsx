@@ -1,3 +1,4 @@
+import type { SessionScreenshot } from '@browseros/claw-api'
 import { useMemo } from 'react'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
@@ -9,10 +10,11 @@ import {
 import { formatOffset, hostOf } from './screenshot.helpers'
 
 interface ScreenshotStripProps {
+  sessionId: string
   dispatches: ToolDispatchRow[]
-  screenshotDispatchIds: number[]
+  screenshots: SessionScreenshot[]
   startedAt: number
-  onSelect: (dispatchId: number) => void
+  onSelect: (screenshotId: number) => void
 }
 
 /**
@@ -22,20 +24,30 @@ interface ScreenshotStripProps {
  * zero screenshots.
  */
 export function ScreenshotStrip({
+  sessionId,
   dispatches,
-  screenshotDispatchIds,
+  screenshots,
   startedAt,
   onSelect,
 }: ScreenshotStripProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const meta = useMemo(() => {
-    const byId = new Map(dispatches.map((d) => [d.dispatchId, d]))
-    return screenshotDispatchIds.map((id) => {
-      const d = byId.get(id)
-      const offset = d ? Math.max(0, d.createdAt - startedAt) : 0
-      return { id, offset, url: d?.url ?? null }
+    const byScreenshotId = new Map(
+      dispatches.flatMap((dispatch) =>
+        dispatch.screenshotId === undefined
+          ? []
+          : [[dispatch.screenshotId, dispatch] as const],
+      ),
+    )
+    return screenshots.map((screenshot) => {
+      const dispatch = byScreenshotId.get(screenshot.screenshotId)
+      return {
+        id: screenshot.screenshotId,
+        offset: Math.max(0, screenshot.capturedAt - startedAt),
+        url: dispatch?.url ?? null,
+      }
     })
-  }, [dispatches, screenshotDispatchIds, startedAt])
+  }, [dispatches, screenshots, startedAt])
 
   if (meta.length === 0) {
     return (
@@ -70,7 +82,7 @@ export function ScreenshotStrip({
               >
                 {screenshotBaseUrl !== null ? (
                   <img
-                    src={taskScreenshotUrl(s.id, screenshotBaseUrl)}
+                    src={taskScreenshotUrl(sessionId, s.id, screenshotBaseUrl)}
                     alt={`Screenshot ${idx + 1}`}
                     className="h-full w-full object-cover"
                     loading="lazy"

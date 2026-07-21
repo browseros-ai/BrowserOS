@@ -26,7 +26,7 @@ interface SupportingTileProps {
  */
 export function SupportingTile({ task, now, className }: SupportingTileProps) {
   const isLive = task.status === 'live'
-  const screenshotId = task.lastScreenshotDispatchId ?? null
+  const screenshotId = task.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
   return (
@@ -42,7 +42,11 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
       <div className="relative flex-1 overflow-hidden">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
             alt={`Session preview from ${task.label}`}
             loading="lazy"
             decoding="async"

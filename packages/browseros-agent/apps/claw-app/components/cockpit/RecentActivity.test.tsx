@@ -20,7 +20,8 @@ let queryOverride: MockQueryShape = { isPending: true }
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
   useSessions: () => queryOverride,
-  taskScreenshotUrl: (id: number) => `/api/v1/dispatches/${id}/screenshot`,
+  taskScreenshotUrl: (sessionId: string, id: number) =>
+    `/api/v1/sessions/${sessionId}/screenshots/${id}`,
   useTaskScreenshotBaseUrl: () => null,
 }))
 
@@ -52,7 +53,7 @@ const sampleTask: TaskSummary = {
   toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
   status: 'done',
   errorCount: 0,
-  lastScreenshotDispatchId: 7,
+  latestScreenshotId: 7,
 }
 
 describe('RecentActivity', () => {
