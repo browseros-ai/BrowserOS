@@ -626,6 +626,13 @@ extension NSScreen {
     }
 }
 
+// SAFETY: Enforce single instance before any UI is created or the run loop starts.
+// This catches launches that would otherwise race through AppDelegate initialization.
+guard RecursionGuard.shared.ensureSingleInstance() else {
+    NSLog("[main] Another trios instance is already running — exiting")
+    exit(0)
+}
+
 let delegate = AppDelegate()
 NSApplication.shared.delegate = delegate
 NSApplication.shared.run()

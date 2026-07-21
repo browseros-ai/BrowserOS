@@ -96,15 +96,26 @@ enum ChatLogicTests {
 
         // parseIntent — every recursive-launch pattern must be blocked
         for cmd in [
-            "shell ./trios_app",          // literal trios_app
-            "shell open trios",           // "open trios"
+            "shell ./trios_app",             // literal trios_app
+            "shell open trios",              // "open trios" as a word
+            "shell open trios.app",          // "open trios.app"
+            "shell open trios and click",    // "open trios" followed by more words
             "shell swiftc -o trios x.swift", // "swiftc.*trios"
-            "shell launchd load trios",   // "launchd.*trios"
-            "shell clade-promote --boot", // "clade-promote.*boot"
+            "shell launchd load trios",      // "launchd.*trios"
+            "shell clade-promote --boot",    // "clade-promote.*boot"
         ] {
             let parsed = ChatLogic.parseIntent(cmd, pageId: nil)
             let blocked = ((parsed?.1["command"] as? String) ?? "").hasPrefix("echo 'Blocked")
             check(blocked, "recursive-launch blocked: \(cmd)")
+        }
+
+        // Sanity: an ordinary shell command containing "trios" as a substring
+        // but not as a self-launch pattern should NOT be blocked.
+        if let normal = ChatLogic.parseIntent("shell echo trios is running", pageId: nil) {
+            check((normal.1["command"] as? String) == "echo trios is running",
+                  "innocuous 'trios' substring is not blocked")
+        } else {
+            check(false, "innocuous 'trios' command returned nil unexpectedly")
         }
 
         if failures == 0 {

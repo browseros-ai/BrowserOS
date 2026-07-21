@@ -153,7 +153,7 @@ struct TerminalTabView: View {
     }
 
     private static let blockedPatterns = [
-        "trios_app", "open trios", "swiftc.*trios_app",
+        "trios_app", "open trios\\b", "open trios\\.app", "swiftc.*trios_app",
         "launchd.*trios", "clade-promote.*boot", "./trios"
     ]
 

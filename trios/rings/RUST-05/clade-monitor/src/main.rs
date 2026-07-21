@@ -229,6 +229,7 @@ fn main() {
     let mut last_60m_tablecloth = Instant::now();
     let mut last_24h = Instant::now();
     let mut last_heartbeat = Instant::now();
+    let mut last_app_relaunch: Option<Instant> = None;
 
     // Backoff tracking: consecutive_failures -> multiplier
     let mut failure_counts: HashMap<String, u32> = HashMap::new();
@@ -352,7 +353,9 @@ fn main() {
         // App watchdog (every loop, ~60s): the trios menu-bar app must always be
         // running so its status-bar logo is present. If it died (crash, rebuild
         // without restart, logout) nothing else brings it back — relaunch it.
-        ensure_trios_app_running();
+        // A grace period after relaunch prevents a storm of duplicate launches
+        // while the app is still booting.
+        ensure_trios_app_running(&mut last_app_relaunch);
 
         thread::sleep(Duration::from_secs(60));
     }
@@ -362,14 +365,25 @@ fn main() {
     log_event("monitor_shutdown", "graceful");
 }
 
-/// Whether the trios GUI app is running. Matches the exact process names the
-/// app uses (`trios` from the .app bundle, `trios_app` from the bare binary) so
-/// it never confuses itself with the clade-* rings that merely live under a
-/// path containing "trios".
+/// Whether the trios GUI app is running. Detects both the .app bundle launch
+/// (`trios.app/Contents/MacOS/trios`) and the bare binary (`trios_app`). The
+/// path-based `pgrep -f` check is more reliable than `pgrep -x` because the
+/// kernel process name depends on how the app was launched.
 fn trios_app_running() -> bool {
-    use std::process::Command;
-    for name in ["trios", "trios_app"] {
-        if let Ok(out) = Command::new("pgrep").arg("-x").arg(name).output() {
+    use std::process::{Command, Stdio};
+    let dir = project_dir();
+    let patterns = [
+        format!("{}/trios.app/Contents/MacOS/trios", dir),
+        "trios_app".to_string(),
+    ];
+    for pattern in &patterns {
+        if let Ok(out) = Command::new("pgrep")
+            .arg("-f")
+            .arg(pattern)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
             if out.status.success() && !out.stdout.is_empty() {
                 return true;
             }
@@ -378,15 +392,40 @@ fn trios_app_running() -> bool {
     false
 }
 
+/// Whether the trios sovereign health endpoint is responding. Used as a
+/// secondary signal so we do not relaunch while the app is still booting or
+/// when `pgrep` has temporarily lost the process.
+fn trios_app_healthy() -> bool {
+    match get(trios_config::sovereign_health_url()) {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+const APP_RELAUNCH_GRACE_SECS: u64 = 15;
+
 /// Relaunch the trios app if it is not running. Prefers the `.app` bundle via
 /// `open` so `Bundle.main` resources (the menu-bar logo) resolve; falls back to
-/// the bare binary. trios's own RecursionGuard is the backstop against
-/// duplicate instances, so a benign race here cannot spawn two apps.
-fn ensure_trios_app_running() {
+/// the bare binary. Includes a post-launch grace period and a health probe to
+/// avoid a relaunch storm when the app is slow to start or briefly unresponsive.
+fn ensure_trios_app_running(last_relaunch: &mut Option<Instant>) {
     use std::path::Path;
     use std::process::{Command, Stdio};
 
+    // Respect the grace period after a recent relaunch so a slow boot is not
+    // mistaken for a dead app and repeatedly spawned.
+    if let Some(t) = last_relaunch {
+        if Instant::now().saturating_duration_since(*t) < Duration::from_secs(APP_RELAUNCH_GRACE_SECS) {
+            return;
+        }
+    }
+
     if trios_app_running() {
+        return;
+    }
+
+    // Trust the sovereign health endpoint as a secondary alive signal.
+    if trios_app_healthy() {
         return;
     }
 
@@ -414,6 +453,7 @@ fn ensure_trios_app_running() {
     if launched {
         println!("[CladeMonitor] App watchdog: trios was down — relaunched");
         log_event("trios_relaunch", "relaunched_after_down");
+        *last_relaunch = Some(Instant::now());
     } else {
         eprintln!("[CladeMonitor] App watchdog: relaunch attempt failed");
         log_event("trios_relaunch", "relaunch_failed");

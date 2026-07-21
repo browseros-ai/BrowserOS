@@ -422,9 +422,11 @@ final class QueenStatusViewModel: ObservableObject {
                 return
             }
             isRunningAction = true
-            let appPath = "\(projectRoot)/trios_app"
-            execDirect(appPath, arguments: [])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            // Launch via the .app bundle so macOS single-instance semantics apply
+            // and RecursionGuard/NSRunningApplication can detect duplicates.
+            let bundlePath = "\(projectRoot)/trios.app"
+            execDirect("/usr/bin/open", arguments: [bundlePath])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 self?.refreshAll()
                 self?.isRunningAction = false
             }
@@ -433,6 +435,8 @@ final class QueenStatusViewModel: ObservableObject {
 
     func stopTrios() {
         isRunningAction = true
+        // Kill both the bare binary and the .app bundle binary names.
+        execDirect("/usr/bin/pkill", arguments: ["-9", "-f", "\(projectRoot)/trios.app/Contents/MacOS/trios"])
         execDirect("/usr/bin/pkill", arguments: ["-9", "trios_app"])
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.refreshAll()

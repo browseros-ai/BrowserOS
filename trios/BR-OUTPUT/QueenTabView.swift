@@ -384,7 +384,7 @@ struct QueenTabView: View {
 
         // SAFETY: Block commands that would recursively launch trios
         let lowerCmd = cmd.lowercased()
-        let blockedPatterns = ["./trios_app", "trios_app", "open trios.app", "swiftc.*trios_app", "launchd.*trios"]
+        let blockedPatterns = ["./trios_app", "trios_app", "open trios\\b", "open trios\\.app", "swiftc.*trios_app", "launchd.*trios"]
         for pattern in blockedPatterns {
             if lowerCmd.range(of: pattern, options: .regularExpression) != nil {
                 commandText = ""

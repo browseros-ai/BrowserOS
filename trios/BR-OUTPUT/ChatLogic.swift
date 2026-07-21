@@ -41,8 +41,14 @@ enum ChatLogic {
     }
 
     /// Patterns that would recursively launch trios — blocked from shell exec.
+    /// Uses regex matching; literal dots must be escaped.
     static let recursiveLaunchPatterns = [
-        "trios_app", "open trios", "swiftc.*trios", "launchd.*trios", "clade-promote.*boot",
+        "trios_app",
+        "open trios\\b",      // "open trios" as a word
+        "open trios\\.app",  // "open trios.app"
+        "swiftc.*trios",
+        "launchd.*trios",
+        "clade-promote.*boot",
     ]
 
     /// Map a command string to an MCP tool name + arguments, or nil if no intent
