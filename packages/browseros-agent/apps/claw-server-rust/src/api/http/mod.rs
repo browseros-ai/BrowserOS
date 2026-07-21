@@ -116,8 +116,7 @@ async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
     let needs_json = match *req.method() {
         Method::POST | Method::PUT | Method::PATCH => true,
         // rmcp's DELETE /mcp session teardown carries no body and no
-        // content-type; the TS server never sees that shape (its clients
-        // always send application/json), so exempt only that case.
+        // content-type, so exempt only that case.
         Method::DELETE => headers.contains_key(header::CONTENT_TYPE),
         _ => false,
     };

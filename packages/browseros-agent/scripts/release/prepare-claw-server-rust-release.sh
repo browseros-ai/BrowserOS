@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve a BrowserClaw Rust server GitHub Release. This mirrors the
-# BrowserClaw TypeScript server release policy while reading the Rust crate
-# version from Cargo.toml.
+# Resolve a BrowserClaw server GitHub Release from the Rust crate version while
+# preserving the established claw-server-rust tag identity.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 exec "$script_dir/prepare-server-bundle-release.sh" \

@@ -232,9 +232,8 @@ fn read_positive_ms(env: &ConfigEnv, key: &str, fallback: u64) -> u64 {
     parse_positive_int_prefix(raw).unwrap_or(fallback)
 }
 
-/// Mirrors the TS server's `Number.parseInt(raw, 10)` env semantics: the
-/// leading integer prefix wins and trailing garbage is ignored ("500ms" is
-/// 500), while digit-less or non-positive values fall back.
+/// Accepts the established leading-integer format: trailing text is ignored
+/// ("500ms" is 500), while digit-less or non-positive values fall back.
 fn parse_positive_int_prefix(raw: &str) -> Option<u64> {
     let trimmed = raw.trim_start();
     let unsigned = trimmed.strip_prefix('+').unwrap_or(trimmed);

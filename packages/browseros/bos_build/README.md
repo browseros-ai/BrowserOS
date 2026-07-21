@@ -173,9 +173,9 @@ CRX versions are independent of the browser version.
 
 ### What CI does, and where it stops
 
-A BrowserClaw run can produce TypeScript claw-server resources, Rust
-claw-server resources, browser builds for three platforms, the BrowserClaw
-extension CRX, staged update feeds, and draft GitHub release assets.
+A BrowserClaw run can produce onboarding resources, Rust claw-server resources,
+browser builds for three platforms, the BrowserClaw extension CRX, staged
+update feeds, and draft GitHub release assets.
 
 It **stages**. It does not promote:
 
