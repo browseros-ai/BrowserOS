@@ -29,6 +29,7 @@ axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"

@@ -25,6 +25,7 @@ axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+posthog-rs.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 rmcp.workspace = true

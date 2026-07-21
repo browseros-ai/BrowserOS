@@ -1,4 +1,5 @@
 use crate::{
+    analytics::AnalyticsService,
     api::http,
     config::Config,
     db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
@@ -15,7 +16,6 @@ use crate::{
         sessions::Sessions,
     },
     storage::JsonStore,
-    telemetry::TelemetryService,
 };
 use axum::{Router, middleware};
 use std::{env, path::PathBuf, sync::Arc, time::Duration};
@@ -32,7 +32,7 @@ pub struct AppState {
     pub tab_activity: Arc<TabActivityService>,
     pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
-    pub telemetry: Arc<TelemetryService>,
+    pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub browser: Arc<BrowserService>,
@@ -72,7 +72,7 @@ impl AppState {
             config.browserclaw_dir.join("mcp-manager"),
             home_dir,
         ));
-        let telemetry = Arc::new(TelemetryService::new(&config.browserclaw_dir));
+        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let sessions = Sessions::new(
             audit_log.clone(),
@@ -112,7 +112,7 @@ impl AppState {
             tab_activity,
             tab_registry,
             harness,
-            telemetry,
+            analytics,
             profiles,
             sessions,
             browser,

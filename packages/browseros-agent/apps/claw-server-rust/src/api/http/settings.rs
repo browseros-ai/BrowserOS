@@ -8,7 +8,7 @@ use axum::{
 use claw_api::models::{TelemetryState, UpdateTelemetryRequest};
 
 pub(super) async fn telemetry(State(state): State<AppState>) -> Json<TelemetryState> {
-    Json(to_contract_state(state.telemetry.get_state().await))
+    Json(to_contract_state(state.analytics.get_state().await))
 }
 
 pub(super) async fn update_telemetry(
@@ -25,10 +25,10 @@ pub(super) async fn update_telemetry(
         )
     })?;
     Ok(Json(to_contract_state(
-        state.telemetry.set_consent(payload.consent).await,
+        state.analytics.set_consent(payload.consent).await,
     )))
 }
 
-fn to_contract_state(state: crate::telemetry::TelemetryState) -> TelemetryState {
+fn to_contract_state(state: crate::analytics::TelemetryState) -> TelemetryState {
     TelemetryState::new(state.distinct_id, state.enabled, state.consent)
 }
