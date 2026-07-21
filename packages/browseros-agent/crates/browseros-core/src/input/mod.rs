@@ -445,15 +445,16 @@ impl Input {
             return Ok(());
         }
         let session = self.page_session().await?;
-        let metrics: LayoutMetrics = session.send("Page.getLayoutMetrics", json!({})).await?;
-        dispatch_scroll(
-            &session,
-            metrics.layout_viewport.client_width as f64 / 2.0,
-            metrics.layout_viewport.client_height as f64 / 2.0,
-            delta_x as f64,
-            delta_y as f64,
-        )
-        .await
+        let _: Value = session
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": format!("window.scrollBy({delta_x}, {delta_y})"),
+                    "returnByValue": true
+                }),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
@@ -495,19 +496,6 @@ impl Input {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LayoutMetrics {
-    layout_viewport: LayoutViewport,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LayoutViewport {
-    client_width: i64,
-    client_height: i64,
-}
-
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
     if(this.options[i].value===val||this.options[i].textContent.trim()===val){\
@@ -521,7 +509,7 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOptions, Input};
+    use super::{ClickOptions, Input, ScrollDirection};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
@@ -544,6 +532,7 @@ mod tests {
         hit_test: HitTestResponse,
         hit_test_calls: usize,
         mouse_events: usize,
+        page_scrolls: usize,
         select_calls: usize,
         select_result: Option<&'static str>,
         select_semantics_preserved: bool,
@@ -559,6 +548,13 @@ mod tests {
         fn mouse_events(&self) -> usize {
             match self.state.lock() {
                 Ok(state) => state.mouse_events,
+                Err(_err) => 0,
+            }
+        }
+
+        fn page_scrolls(&self) -> usize {
+            match self.state.lock() {
+                Ok(state) => state.page_scrolls,
                 Err(_err) => 0,
             }
         }
@@ -617,7 +613,17 @@ mod tests {
                     "Accessibility.getFullAXTree" => Ok(json!({
                         "nodes": ax_tree(self.target_role, self.target_name)
                     })),
-                    "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
+                    "Runtime.evaluate" => {
+                        if params
+                            .get("expression")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("window.scrollBy"))
+                            && let Ok(mut state) = self.state.lock()
+                        {
+                            state.page_scrolls += 1;
+                        }
+                        Ok(json!({ "result": { "value": [] } }))
+                    }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
                     "DOM.getContentQuads" => Ok(json!({
                         "quads": [[0.0, 0.0, 100.0, 0.0, 100.0, 50.0, 0.0, 50.0]]
@@ -723,6 +729,7 @@ mod tests {
                 hit_test,
                 hit_test_calls: 0,
                 mouse_events: 0,
+                page_scrolls: 0,
                 select_calls: 0,
                 select_result,
                 select_semantics_preserved: false,
@@ -882,6 +889,17 @@ mod tests {
         assert_eq!(connection.select_calls(), 1);
         assert_eq!(connection.hit_test_calls(), 0);
         assert!(connection.select_semantics_preserved());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn page_scroll_uses_runtime_instead_of_mouse_wheel() -> Result<(), CoreError> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+
+        input.scroll(ScrollDirection::Down, 3, None).await?;
+
+        assert_eq!(connection.page_scrolls(), 1);
+        assert_eq!(connection.mouse_events(), 0);
         Ok(())
     }
 }

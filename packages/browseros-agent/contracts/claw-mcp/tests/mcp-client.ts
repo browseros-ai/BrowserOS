@@ -1,13 +1,12 @@
 /**
  * Minimal streamable-HTTP MCP client over raw fetch. The suite drives
- * both claw servers' `/mcp` with this instead of the SDK client so it
+ * the Rust server's `/mcp` with this instead of the SDK client so it
  * controls the wire exactly: no Origin/Sec-Fetch-Site headers (the
- * servers 403 browser-shaped requests), explicit `mcp-session-id`
+ * the server rejects browser-shaped requests), explicit `mcp-session-id`
  * handling, and raw access for the transport-hygiene cases.
  *
- * Both servers answer POSTs with SSE streams (the TS server always,
- * rmcp by default), so the response reader accepts either SSE frames
- * or a plain JSON body.
+ * rmcp answers POSTs with SSE streams by default, so the response reader also
+ * accepts a plain JSON body when the transport selects that representation.
  */
 
 export interface McpContent {
@@ -209,10 +208,8 @@ export class McpSession {
   }
 
   /**
-   * DELETE teardown; both servers end the session and audit the close.
-   * Sends content-type explicitly — the TS hygiene middleware 415s a
-   * bodyless DELETE without it (rust exempts it; see divergence
-   * `delete-hygiene-content-type`).
+   * DELETE teardown ends the session and audits the close. Send an explicit
+   * content type to keep the wire request consistent with other MCP calls.
    */
   async close(): Promise<Response> {
     return await fetch(`${this.baseUrl}/mcp`, {

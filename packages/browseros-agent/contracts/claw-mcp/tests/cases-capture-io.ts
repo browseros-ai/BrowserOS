@@ -47,12 +47,14 @@ export const captureIoCases: ContractCase[] = [
         await ctx.mcp.callTool('screenshot', { page, format: 'jpeg' }),
         'jpeg screenshot',
       )
+      if (image.mimeType !== 'image/jpeg') {
+        throw new Error(`jpeg screenshot had ${image.mimeType}`)
+      }
       if (!magicHex(image.data, 2).startsWith('ffd8')) {
         throw new Error(
           `jpeg screenshot lacked FFD8: ${magicHex(image.data, 4)}`,
         )
       }
-      ctx.record('screenshot:jpeg-magic', image.mimeType)
     },
   },
   {
@@ -63,12 +65,14 @@ export const captureIoCases: ContractCase[] = [
         await ctx.mcp.callTool('screenshot', { page, format: 'png' }),
         'png screenshot',
       )
+      if (image.mimeType !== 'image/png') {
+        throw new Error(`png screenshot had ${image.mimeType}`)
+      }
       if (!magicHex(image.data, 4).startsWith('89504e47')) {
         throw new Error(
           `png screenshot lacked 8950: ${magicHex(image.data, 4)}`,
         )
       }
-      ctx.record('screenshot:png-magic', image.mimeType)
     },
   },
   {
@@ -85,7 +89,6 @@ export const captureIoCases: ContractCase[] = [
           `webp screenshot lacked RIFF: ${magicHex(image.data, 4)}`,
         )
       }
-      ctx.record('screenshot:webp-magic', image.mimeType)
     },
   },
   {
@@ -117,7 +120,6 @@ export const captureIoCases: ContractCase[] = [
           `size did not scale the capture: small ${JSON.stringify(small)} large ${JSON.stringify(large)}`,
         )
       }
-      ctx.record('screenshot:size-honored', true)
     },
   },
   {
@@ -150,7 +152,6 @@ export const captureIoCases: ContractCase[] = [
           `fullPage (${full.height}) not taller than viewport (${viewport.height})`,
         )
       }
-      ctx.record('screenshot:fullpage-taller', true)
     },
   },
   {
@@ -166,10 +167,9 @@ export const captureIoCases: ContractCase[] = [
         }),
         'annotated screenshot',
       )
-      ctx.record(
-        'screenshot:annotate-returns-image',
-        image.mimeType === 'image/png',
-      )
+      if (image.mimeType !== 'image/png') {
+        throw new Error(`annotated screenshot had ${image.mimeType}`)
+      }
     },
   },
 
@@ -185,7 +185,6 @@ export const captureIoCases: ContractCase[] = [
       if (magic !== '%PDF-') {
         throw new Error(`pdf file lacked the %PDF magic: ${magic}`)
       }
-      ctx.record('pdf:magic', true)
     },
   },
   {
@@ -197,10 +196,9 @@ export const captureIoCases: ContractCase[] = [
         'pdf landscape',
       )
       const bytes = await Bun.file(spillPath(text)).bytes()
-      ctx.record(
-        'pdf:landscape-accepted',
-        Buffer.from(bytes.subarray(0, 5)).toString() === '%PDF-',
-      )
+      if (Buffer.from(bytes.subarray(0, 5)).toString() !== '%PDF-') {
+        throw new Error('landscape PDF lacked the %PDF magic')
+      }
     },
   },
 
@@ -218,7 +216,6 @@ export const captureIoCases: ContractCase[] = [
       if (elapsed < 700) {
         throw new Error(`wait time returned too early: ${elapsed}ms`)
       }
-      ctx.record('wait:time-elapses', true)
     },
   },
   {
@@ -234,7 +231,9 @@ export const captureIoCases: ContractCase[] = [
         }),
         'wait for text',
       )
-      ctx.record('wait:text-appears', /matched/i.test(text))
+      if (!/matched/i.test(text)) {
+        throw new Error(`wait for text did not report a match: ${text}`)
+      }
     },
   },
   {
@@ -250,7 +249,9 @@ export const captureIoCases: ContractCase[] = [
         }),
         'wait for selector',
       )
-      ctx.record('wait:selector-present', /matched/i.test(text))
+      if (!/matched/i.test(text)) {
+        throw new Error(`wait for selector did not report a match: ${text}`)
+      }
     },
   },
   {
@@ -269,7 +270,6 @@ export const captureIoCases: ContractCase[] = [
           `wait timeout did not report a timeout: ${text.slice(0, 120)}`,
         )
       }
-      ctx.record('wait:timeout-shape', /timed out/i.test(text))
     },
   },
 
@@ -302,7 +302,6 @@ export const captureIoCases: ContractCase[] = [
           ).includes('single-fixture.txt'),
         'the page to report the uploaded file name',
       )
-      ctx.record('upload:single-reported', true)
     },
   },
   {
@@ -336,7 +335,6 @@ export const captureIoCases: ContractCase[] = [
           names.includes('multi-one.txt') && names.includes('multi-two.txt')
         )
       }, 'the page to report both uploaded file names')
-      ctx.record('upload:multi-reported', true)
     },
   },
   {
@@ -358,10 +356,9 @@ export const captureIoCases: ContractCase[] = [
         throw new Error(`download did not land a readable file: ${path}`)
       }
       const contents = await Bun.file(path).text()
-      ctx.record(
-        'download:lands-and-reports-path',
-        contents.includes('fixture report'),
-      )
+      if (!contents.includes('fixture report')) {
+        throw new Error(`downloaded file had unexpected contents: ${contents}`)
+      }
     },
   },
   {
@@ -369,11 +366,10 @@ export const captureIoCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/links.html'))
       await ctx.mcp.callTool('snapshot', { page })
-      const text = expectError(
+      expectError(
         await ctx.mcp.callTool('download', { page, ref: 'e999' }),
         'download bad ref',
       )
-      ctx.record('download:bad-ref-errors', text.length > 0)
     },
   },
 ]

@@ -93,7 +93,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
 /**
  * Spawns a fresh headless BrowserOS with its own profile and CDP port.
  * Every call is a cold start on purpose: each server pass in the
- * cross-server suite gets a browser no other server has touched.
+ * conformance suite gets a browser no other server has touched.
  */
 export async function launchBrowser(): Promise<BrowserHandle> {
   const binary = browserBinary()

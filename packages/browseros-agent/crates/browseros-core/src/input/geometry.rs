@@ -245,23 +245,38 @@ pub async fn call_on_element(
     args: Option<Vec<Value>>,
 ) -> Result<Value, CoreError> {
     let object_id = resolve_object_id(session, backend_node_id, None).await?;
-    let arguments = args.map(|args| {
-        args.into_iter()
-            .map(|value| json!({ "value": value }))
-            .collect::<Vec<_>>()
-    });
     let result: CallFunctionResult = session
         .send(
             "Runtime.callFunctionOn",
-            json!({
-                "functionDeclaration": function_declaration,
-                "objectId": object_id,
-                "returnByValue": true,
-                "arguments": arguments
-            }),
+            call_function_params(function_declaration, object_id, args),
         )
         .await?;
     Ok(result.result.value.unwrap_or(Value::Null))
+}
+
+fn call_function_params(
+    function_declaration: &str,
+    object_id: String,
+    args: Option<Vec<Value>>,
+) -> Value {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "functionDeclaration".to_string(),
+        Value::String(function_declaration.to_string()),
+    );
+    params.insert("objectId".to_string(), Value::String(object_id));
+    params.insert("returnByValue".to_string(), Value::Bool(true));
+    if let Some(args) = args {
+        params.insert(
+            "arguments".to_string(),
+            Value::Array(
+                args.into_iter()
+                    .map(|value| json!({ "value": value }))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Object(params)
 }
 
 pub async fn resolve_object_id(
@@ -297,7 +312,7 @@ fn quad_center(quad: &[f64]) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::click_blocker_at_point;
+    use super::{call_function_params, click_blocker_at_point};
     use crate::{CoreError, ProtocolSession, connection::CdpConnection, input::Point};
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -376,6 +391,13 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         (connection.clone(), ProtocolSession::root(connection))
+    }
+
+    #[test]
+    fn call_function_omits_absent_arguments() {
+        let params = call_function_params("function(){return this.checked}", "node-1".into(), None);
+
+        assert_eq!(params.get("arguments"), None);
     }
 
     #[tokio::test]

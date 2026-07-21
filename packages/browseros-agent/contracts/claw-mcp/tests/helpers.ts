@@ -1,7 +1,7 @@
 /** Shared assertions and polling utilities for contract cases. */
 
 import { type McpToolResult, textOf } from './mcp-client'
-import type { ContractServer } from './server-adapters'
+import type { ContractServer } from './rust-server'
 
 /** Returns the result text, failing loudly when the tool errored. */
 export function expectOk(result: McpToolResult, context = 'tool call'): string {
@@ -58,4 +58,23 @@ export async function apiGet(
   return await fetch(`${server.baseUrl}${path}`, {
     signal: AbortSignal.timeout(10_000),
   })
+}
+
+const ERROR_CLASSES: Array<[string, RegExp]> = [
+  ['stale-ref', /stale ref .*take a new snapshot/i],
+  ['unknown-ref', /unknown ref .*take a new snapshot/i],
+  ['gone-element', /not found in dom.*take a new snapshot/i],
+  ['not-owned', /is (not )?owned by .*tabs new/i],
+  [
+    'browser-down',
+    /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired)/is,
+  ],
+  ['scheme-refused', /navigate refuses .* URLs; only http\(s\) is allowed/i],
+]
+
+export function errorClass(text: string): string {
+  for (const [name, pattern] of ERROR_CLASSES) {
+    if (pattern.test(text)) return name
+  }
+  return `other:${text.slice(0, 60).toLowerCase()}`
 }

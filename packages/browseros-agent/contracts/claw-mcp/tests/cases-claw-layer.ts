@@ -10,9 +10,8 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { apiGet, expectOk, waitUntil } from './helpers'
+import { apiGet, errorClass, expectOk, waitUntil } from './helpers'
 import { textOf } from './mcp-client'
-import { errorClass } from './parity'
 
 const FENCE_OPEN = /\[UNTRUSTED_PAGE_CONTENT nonce=([0-9a-f]{16}) origin=/
 
@@ -50,7 +49,6 @@ export const clawLayerCases: ContractCase[] = [
       if (!/renamed to \S+ \(was .+\)/.test(text)) {
         throw new Error(`name_session response shape unexpected: ${text}`)
       }
-      ctx.record('name_session:rename-shape', /renamed to .*\(was /.test(text))
     },
   },
   {
@@ -83,7 +81,6 @@ export const clawLayerCases: ContractCase[] = [
       if (afterRename) {
         throw new Error('rename nudge kept appearing after name_session')
       }
-      ctx.record('name_session:nudge-stops-after-rename', true)
     },
   },
   {
@@ -108,7 +105,6 @@ export const clawLayerCases: ContractCase[] = [
         )
         return /group-label|group label/.test(groups)
       }, 'the tab group title to sync to the session label')
-      ctx.record('name_session:group-title-syncs', true)
     },
   },
 
@@ -146,24 +142,15 @@ export const clawLayerCases: ContractCase[] = [
         action: 'close',
         page: ownPage,
       })
-      ctx.record(
-        'ownership:foreign-read-class',
-        errorClass(textOf(foreignSnapshot)),
-      )
-      ctx.record(
-        'ownership:foreign-close-class',
-        errorClass(textOf(foreignClose)),
-      )
-      // Both servers refuse (same error class above); they differ in the
-      // wording — TS names the owner ("owned by <title>"), Rust does not
-      // ("not owned by this agent"). Recorded raw so the parity gate
-      // actually exercises the `ownership-error-wording` divergence
-      // rather than having errorClass normalize it away.
-      ctx.record(
-        'ownership:foreign-read-names-owner',
-        /page \d+ is owned by \S/.test(textOf(foreignSnapshot)),
-        { divergence: 'ownership-error-wording' },
-      )
+      for (const [operation, result] of [
+        ['snapshot', foreignSnapshot],
+        ['close', foreignClose],
+      ] as const) {
+        const text = textOf(result)
+        if (!result.isError || errorClass(text) !== 'not-owned') {
+          throw new Error(`foreign ${operation} was not refused: ${text}`)
+        }
+      }
       // The owner is unaffected: the page still lists and snapshots.
       const stillOwned = textOf(
         await ctx.mcp.callTool('tabs', { action: 'list' }),
@@ -174,10 +161,6 @@ export const clawLayerCases: ContractCase[] = [
       expectOk(
         await ctx.mcp.callTool('snapshot', { page: ownPage }),
         'owner snapshot after foreign attempt',
-      )
-      ctx.record(
-        'ownership:distinct-convo-ids',
-        ctx.mcp.sessionId !== other.sessionId,
       )
     },
   },
@@ -219,7 +202,6 @@ export const clawLayerCases: ContractCase[] = [
       if (!fenced(hostileIdx) || !fenced(fakeRefIdx) || !fenced(fakeEndIdx)) {
         throw new Error('hostile content escaped the nonce fence')
       }
-      ctx.record('trust-boundary:fenced-and-unique-nonce', true)
     },
   },
 
@@ -244,18 +226,14 @@ export const clawLayerCases: ContractCase[] = [
           url: ctx.fixture('/links.html'),
         }),
       )
-      ctx.record(
-        'auto-context:act-embeds-diff',
-        actText.includes(`[Page ${page} diff]`),
-      )
-      ctx.record(
-        'auto-context:navigate-embeds-snapshot',
-        navText.includes(`[Page ${page} snapshot]`),
-      )
+      if (!actText.includes(`[Page ${page} diff]`)) {
+        throw new Error(`act omitted its settled diff: ${actText}`)
+      }
+      if (!navText.includes(`[Page ${page} snapshot]`)) {
+        throw new Error(`navigate omitted its snapshot: ${navText}`)
+      }
 
-      // An action that logs a page error: Rust appends a `[page N console]`
-      // summary to the act auto-context; TS embeds the diff only. Exercises
-      // the `act-console-summary` divergence against a real logging action.
+      // An action that logs a page error appends its console summary.
       const consolePage = await ctx.openPage(ctx.fixture('/console.html'))
       const consoleSnap = textOf(
         await ctx.mcp.callTool('snapshot', { page: consolePage }),
@@ -272,11 +250,9 @@ export const clawLayerCases: ContractCase[] = [
           ref: throwRef,
         }),
       )
-      ctx.record(
-        'auto-context:act-embeds-console-summary',
-        throwAct.includes(`[page ${consolePage} console]`),
-        { divergence: 'act-console-summary' },
-      )
+      if (!throwAct.includes(`[page ${consolePage} console]`)) {
+        throw new Error(`act omitted its console summary: ${throwAct}`)
+      }
     },
   },
 
@@ -328,11 +304,11 @@ export const clawLayerCases: ContractCase[] = [
         hasLabel: typeof evalDispatch?.label === 'string',
         leaksAgentId: 'agentId' in (evalDispatch ?? {}),
       }
-      ctx.record('audit:dispatch-shape', {
-        recordsEvaluate: true,
-        argsTruncated: true,
-        ...identity,
-      })
+      if (!identity.hasSlug || !identity.hasLabel || identity.leaksAgentId) {
+        throw new Error(
+          `audit identity shape was invalid: ${JSON.stringify(identity)}`,
+        )
+      }
     },
   },
 
@@ -378,15 +354,14 @@ export const clawLayerCases: ContractCase[] = [
           `cancel did not interrupt the run promptly: ${elapsed}ms`,
         )
       }
+      if (!result.isError) {
+        throw new Error('cancelled run returned a successful result')
+      }
       // The session is still usable after a cancellation.
       expectOk(
         await session.callTool('tabs', { action: 'list' }),
         'session after cancellation',
       )
-      ctx.record('cancellation:interrupts-and-survives', {
-        cancelledReported: true,
-        runInterrupted: result.isError === true,
-      })
     },
   },
 
@@ -422,7 +397,6 @@ export const clawLayerCases: ContractCase[] = [
           `browser-down guidance not uniform: ${[...classes].join(', ')}`,
         )
       }
-      ctx.record('browser-down:uniform-guidance', true)
     },
   },
 ]

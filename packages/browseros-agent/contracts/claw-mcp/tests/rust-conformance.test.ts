@@ -1,15 +1,11 @@
 /**
- * Cross-server real-browser MCP contract suite. For each server
- * (typescript first, then rust) it boots a FRESH BrowserOS profile,
- * attaches the server to its CDP port, and runs every contract case
- * sequentially through a raw MCP session; a final parity gate compares
- * the semantic signatures both passes recorded and fails on any
- * difference not registered in divergences.ts.
+ * Rust MCP conformance suite. It boots a fresh BrowserOS profile, attaches the
+ * production Rust server to its CDP port, and runs every behavioral contract
+ * case sequentially through a raw MCP session.
  *
- * Gated: without BROWSEROS_BINARY every describe registers skipped and
- * the file is green anywhere. `CLAW_MCP_SMOKE=1` filters to the smoke
- * tier. Prefer `bun contracts/claw-mcp/tests/run.ts` which pre-builds
- * the rust server outside test timeouts.
+ * Gated: without BROWSEROS_BINARY every test is skipped. `CLAW_MCP_SMOKE=1`
+ * filters to the smoke tier. Prefer `bun contracts/claw-mcp/tests/run.ts`,
+ * which pre-builds the server outside test timeouts.
  */
 
 import { afterAll, describe, test } from 'bun:test'
@@ -22,12 +18,7 @@ import { runCaptureMode } from './capture'
 import { CASE_TIMEOUT_MS, type CaseContext, contractCases } from './cases'
 import { parsePageId, waitUntil } from './helpers'
 import { McpSession, textOf } from './mcp-client'
-import { assertParity, comparedKeyCount, recordSignature } from './parity'
-import {
-  type ContractServer,
-  type ServerName,
-  startContractServer,
-} from './server-adapters'
+import { type ContractServer, startRustServer } from './rust-server'
 
 const gate = isSuiteEnabled() ? describe : describe.skip
 const activeCases =
@@ -45,7 +36,7 @@ interface ServerRun {
 }
 
 let fixtures: FixturePair | undefined
-const runs = new Map<ServerName, ServerRun>()
+let run: ServerRun | undefined
 let captured = false
 
 async function ensureFixtures(): Promise<FixturePair> {
@@ -53,9 +44,8 @@ async function ensureFixtures(): Promise<FixturePair> {
   return fixtures
 }
 
-async function ensureRun(name: ServerName): Promise<ServerRun> {
-  const existing = runs.get(name)
-  if (existing) return existing
+async function ensureRun(): Promise<ServerRun> {
+  if (run) return run
 
   await ensureFixtures()
   const browser = await launchBrowser()
@@ -76,7 +66,7 @@ async function ensureRun(name: ServerName): Promise<ServerRun> {
         process.env.CLAW_MCP_CAPTURE_DIR,
       )
     }
-    server = await startContractServer(name, browser.cdpPort)
+    server = await startRustServer(browser.cdpPort)
     const mcp = await McpSession.connect(server.baseUrl, 'claw-contract')
     // The rust server attaches to the browser asynchronously after
     // /system/health turns ok; wait until tool calls stop reporting a
@@ -89,10 +79,10 @@ async function ensureRun(name: ServerName): Promise<ServerRun> {
           textOf(result).includes('browser session not connected')
         )
       },
-      `${name} server to attach to the browser`,
+      'Rust server to attach to the browser',
       { timeoutMs: 30_000, intervalMs: 500 },
     )
-    const run: ServerRun = {
+    run = {
       server,
       browser,
       mcp,
@@ -100,7 +90,6 @@ async function ensureRun(name: ServerName): Promise<ServerRun> {
       openedPages: [],
       scratchDir: await mkdtemp(join(tmpdir(), 'claw-mcp-scratch-')),
     }
-    runs.set(name, run)
     return run
   } catch (error) {
     await server?.stop().catch(() => {})
@@ -137,9 +126,6 @@ function makeContext(run: ServerRun): CaseContext {
       run.openedPages.push({ session, page })
       return page
     },
-    record(key, value, options) {
-      recordSignature(key, run.server.name, value, options)
-    },
   }
 }
 
@@ -152,50 +138,37 @@ async function cleanupCase(run: ServerRun): Promise<void> {
   }
 }
 
-async function teardownRun(name: ServerName): Promise<void> {
-  const run = runs.get(name)
+async function teardownRun(): Promise<void> {
   if (!run) return
-  runs.delete(name)
-  for (const session of [...run.extraSessions, run.mcp]) {
+  const current = run
+  run = undefined
+  for (const session of [...current.extraSessions, current.mcp]) {
     await session.close().catch(() => {})
   }
-  await run.server.stop().catch(() => {})
-  await run.browser.kill().catch(() => {})
-  await rm(run.scratchDir, { recursive: true, force: true })
+  await current.server.stop().catch(() => {})
+  await current.browser.kill().catch(() => {})
+  await rm(current.scratchDir, { recursive: true, force: true })
 }
 
-for (const name of ['typescript', 'rust'] as const) {
-  gate(`${name} /mcp contract`, () => {
-    afterAll(async () => {
-      await teardownRun(name)
-    })
-
-    for (const contractCase of activeCases) {
-      test(
-        contractCase.name,
-        async () => {
-          const run = await ensureRun(name)
-          try {
-            await contractCase.run(makeContext(run))
-          } finally {
-            await cleanupCase(run)
-          }
-        },
-        CASE_TIMEOUT_MS,
-      )
-    }
+gate('Rust /mcp conformance', () => {
+  afterAll(async () => {
+    await teardownRun()
   })
-}
 
-gate('cross-server parity', () => {
-  test('no unregistered divergences between the servers', () => {
-    if (comparedKeyCount() === 0) {
-      throw new Error(
-        'parity gate ran but no signatures were recorded by both servers',
-      )
-    }
-    assertParity()
-  })
+  for (const contractCase of activeCases) {
+    test(
+      contractCase.name,
+      async () => {
+        const activeRun = await ensureRun()
+        try {
+          await contractCase.run(makeContext(activeRun))
+        } finally {
+          await cleanupCase(activeRun)
+        }
+      },
+      CASE_TIMEOUT_MS,
+    )
+  }
 })
 
 afterAll(async () => {

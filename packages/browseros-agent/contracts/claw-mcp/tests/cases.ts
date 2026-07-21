@@ -1,9 +1,7 @@
 /**
- * The behavioral half of the claw-mcp contract: every case runs
- * verbatim against both servers' `/mcp` over real HTTP with a real
- * BrowserOS attached, asserting observable tool behavior only. A case
- * that passes on one server and fails on the other is a contract
- * violation unless the difference is registered in divergences.ts.
+ * Behavioral contract for the Rust server's `/mcp` surface. Every case drives
+ * the production entrypoint over real HTTP with a real BrowserOS attached and
+ * asserts observable tool behavior only.
  *
  * CASE ORDER IS LOAD-BEARING: cases run sequentially per server in
  * array order against one shared browser profile. State-poisoning
@@ -13,7 +11,7 @@
 
 import type { BrowserHandle } from './browser'
 import type { McpSession } from './mcp-client'
-import type { ContractServer } from './server-adapters'
+import type { ContractServer } from './rust-server'
 
 export const CASE_TIMEOUT_MS = 180_000
 
@@ -30,8 +28,6 @@ export interface CaseContext {
   fixture2(path: string): string
   /** `tabs new` on the given session (default primary); returns the page id and tracks it for post-case cleanup. */
   openPage(url: string, session?: McpSession): Promise<number>
-  /** Parity signature under a stable key; tag a divergence id to exempt it from equality. */
-  record(key: string, value: unknown, options?: { divergence?: string }): void
   scratchDir: string
 }
 
