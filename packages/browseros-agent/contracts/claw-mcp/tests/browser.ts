@@ -97,7 +97,9 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
  */
 export async function launchBrowser(): Promise<BrowserHandle> {
   const binary = browserBinary()
-  const userDataDir = await mkdtemp(join(tmpdir(), 'claw-mcp-browser-'))
+  const userDataDir = await mkdtemp(
+    join(tmpdir(), 'browseros-contract-browser-'),
+  )
   const cdpPort = await findFreePort()
   const child = Bun.spawn({
     cmd: [binary, ...launchArgs(cdpPort, userDataDir)],

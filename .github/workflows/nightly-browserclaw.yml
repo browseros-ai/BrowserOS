@@ -272,10 +272,13 @@ jobs:
           fi
 
           mount_point="$(mktemp -d)"
+          exe=""
           cleanup() {
-            # Reap any test browser the harness spawned before releasing the
-            # mount, so a cancel/timeout cannot orphan a process holding it.
-            pkill -f 'claw-mcp-browser-' 2>/dev/null || true
+            # Reap only the browser launched from this mounted DMG before
+            # releasing the mount, so concurrent contract runs are not killed.
+            if [ -n "$exe" ]; then
+              pkill -f "$exe" 2>/dev/null || true
+            fi
             hdiutil detach "$mount_point" -quiet 2>/dev/null \
               || hdiutil detach "$mount_point" -force -quiet 2>/dev/null || true
           }
