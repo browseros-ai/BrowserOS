@@ -20,6 +20,7 @@ export interface SessionVisualDependencies {
   listOpenSessionTabs(): SessionTabRow[]
   getOpenSessionTab(sessionId: string, tabId: number): SessionTabRow | null
   snapshotTabActivity(): TabActivityRecord[]
+  captureTimeoutMs?: number
 }
 
 export interface SessionVisualService {
@@ -36,6 +37,10 @@ interface CaptureCandidate {
 export function createSessionVisualService(
   deps: SessionVisualDependencies,
 ): SessionVisualService {
+  // Browser-core cannot cancel a screenshot already queued in CDP. Keep the
+  // page guarded until that work actually settles so timed-out HTTP polling
+  // cannot build an unbounded queue behind the per-page screenshot lock.
+  const inFlightPageIds = new Set<number>()
   return {
     async capture(sessionId) {
       if (!deps.isSessionLive(sessionId)) return null
@@ -50,14 +55,20 @@ export function createSessionVisualService(
         deps.snapshotTabActivity(),
       )
       if (!candidate) return null
+      if (inFlightPageIds.has(candidate.pageId)) return null
+      inFlightPageIds.add(candidate.pageId)
 
-      const capture = await withTimeout(
-        browser.screenshotForTarget(candidate.pageId, candidate.targetId, {
+      const capturePromise = browser
+        .screenshotForTarget(candidate.pageId, candidate.targetId, {
           format: 'jpeg',
           quality: 50,
           fullPage: false,
           annotate: false,
-        }),
+        })
+        .finally(() => inFlightPageIds.delete(candidate.pageId))
+      const capture = await withTimeout(
+        capturePromise,
+        deps.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS,
       )
       if (!capture?.data) return null
       if (
@@ -130,12 +141,15 @@ function activityKey(tabId: number, pageId: number, targetId: string): string {
   return `${tabId.toString()}\u0000${pageId.toString()}\u0000${targetId}`
 }
 
-async function withTimeout<T>(promise: Promise<T>): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error('session preview capture timed out')),
-      CAPTURE_TIMEOUT_MS,
+      timeoutMs,
     )
   })
   try {

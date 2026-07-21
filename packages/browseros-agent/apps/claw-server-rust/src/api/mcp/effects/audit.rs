@@ -1,7 +1,6 @@
 use crate::{
-    api::mcp::{
-        dispatch::{ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id},
-        timeouts::AUDIT_SCREENSHOT_CAPTURE,
+    api::mcp::dispatch::{
+        ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id,
     },
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
 };
@@ -9,7 +8,6 @@ use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::time::timeout;
 use tracing::warn;
 
 #[derive(Debug, Clone, Copy)]
@@ -106,20 +104,11 @@ async fn record_dispatch(
 }
 
 async fn persist_screenshot(call: &ToolCall, record: AuditRecord) {
-    let capture = timeout(
-        AUDIT_SCREENSHOT_CAPTURE,
-        call.state.visuals.capture(call.session_id.as_str()),
-    )
-    .await;
-    let bytes = match capture {
-        Ok(Ok(Some(bytes))) => bytes,
-        Ok(Ok(None)) => return,
-        Ok(Err(error)) => {
+    let bytes = match call.state.visuals.capture(call.session_id.as_str()).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return,
+        Err(error) => {
             warn!(error = %error, dispatch_id = %call.dispatch_id, "audit screenshot capture failed");
-            return;
-        }
-        Err(_) => {
-            warn!(dispatch_id = %call.dispatch_id, "audit screenshot capture timed out");
             return;
         }
     };

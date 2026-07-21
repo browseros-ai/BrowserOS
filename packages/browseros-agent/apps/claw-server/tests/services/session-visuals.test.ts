@@ -140,4 +140,34 @@ describe('session visual service', () => {
     await service.capture('session-a')
     expect(capture).toHaveBeenCalledTimes(2)
   })
+
+  it('does not queue another capture while timed-out CDP work is unresolved', async () => {
+    let releaseCapture: (value: {
+      data: string
+      mimeType: string
+      annotations: never[]
+    }) => void = () => undefined
+    const pendingCapture = new Promise<{
+      data: string
+      mimeType: string
+      annotations: never[]
+    }>((resolve) => {
+      releaseCapture = resolve
+    })
+    const { service, capture } = setup({ captureTimeoutMs: 5 })
+    capture.mockImplementation(() => pendingCapture)
+
+    await expect(service.capture('session-a')).rejects.toThrow(
+      'session preview capture timed out',
+    )
+    expect(await service.capture('session-a')).toBeNull()
+    expect(capture).toHaveBeenCalledTimes(1)
+
+    releaseCapture({ data: '/9g=', mimeType: 'image/jpeg', annotations: [] })
+    await pendingCapture
+    expect(await service.capture('session-a')).toEqual(
+      new Uint8Array([0xff, 0xd8]),
+    )
+    expect(capture).toHaveBeenCalledTimes(2)
+  })
 })

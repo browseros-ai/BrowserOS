@@ -1,7 +1,7 @@
 /** Session-owned screenshot storage backed by audited dispatch ownership. */
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { SessionScreenshot } from '@browseros/claw-api'
 import { and, asc, eq } from 'drizzle-orm'
@@ -41,11 +41,16 @@ export async function writeSessionScreenshot(
   bytes: Uint8Array,
 ): Promise<boolean> {
   const path = sessionScreenshotPath(sessionId, screenshotId)
+  const pendingPath = `${path}.${crypto.randomUUID()}.pending`
   try {
     mkdirSync(dirname(path), { recursive: true })
-    await writeFile(path, bytes)
+    // Readers treat final-path existence as screenshot metadata, so publish
+    // only after every byte has reached a sibling file on the same volume.
+    await writeFile(pendingPath, bytes)
+    await rename(pendingPath, path)
     return true
   } catch (error) {
+    await rm(pendingPath, { force: true }).catch(() => undefined)
     logger.warn('session screenshot write failed', {
       sessionId,
       screenshotId,

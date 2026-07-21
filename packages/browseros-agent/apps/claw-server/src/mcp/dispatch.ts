@@ -99,8 +99,8 @@ const GUARDS: readonly ToolGuard[] = [
 const BASE_EFFECTS: readonly NamedToolEffect[] = [
   { name: 'ownership-claims', run: applyOwnershipClaims },
   { name: 'tabs-list-view', run: applyTabsListView },
-  { name: 'audit', run: applyAudit },
   { name: 'tab-activity', run: applyTabActivity },
+  { name: 'audit', run: applyAudit },
   { name: 'tab-groups', run: applyTabGroups },
   // Must stay last: tabs-list-view rewrites result content wholesale, so a
   // nudge appended before it would be clobbered.

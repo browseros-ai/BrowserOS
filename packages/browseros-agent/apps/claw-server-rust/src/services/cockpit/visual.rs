@@ -14,8 +14,12 @@ use browseros_core::{
     pages::PageInfo,
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
 };
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::time::timeout;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{sync::Mutex, time::timeout};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -27,12 +31,30 @@ struct CaptureCandidate {
     last_activity_at: Option<i64>,
 }
 
+#[derive(Default)]
+struct InFlightCaptures {
+    page_ids: Mutex<HashSet<u32>>,
+}
+
+impl InFlightCaptures {
+    async fn begin(&self, page_id: u32) -> bool {
+        self.page_ids.lock().await.insert(page_id)
+    }
+
+    async fn finish(&self, page_id: u32) {
+        self.page_ids.lock().await.remove(&page_id);
+    }
+}
+
 /// Resolves a live session's current owned tab and captures it through browser-core's serialized screenshot path.
 pub struct SessionVisualService {
     sessions: Arc<Sessions>,
     session_tabs: Arc<SessionTabLedger>,
     browser: Arc<BrowserService>,
     tab_activity: Arc<TabActivityService>,
+    /// Page IDs stay present until the underlying CDP task resolves, even when
+    /// its caller times out, so polling cannot queue work behind a stuck capture.
+    in_flight: Arc<InFlightCaptures>,
 }
 
 impl SessionVisualService {
@@ -48,6 +70,7 @@ impl SessionVisualService {
             session_tabs,
             browser,
             tab_activity,
+            in_flight: Arc::new(InFlightCaptures::default()),
         })
     }
 
@@ -74,6 +97,9 @@ impl SessionVisualService {
         let Some(candidate) = select_candidate(session_id, &ownership, &pages, &activity) else {
             return Ok(None);
         };
+        if !self.in_flight.begin(candidate.page_id).await {
+            return Ok(None);
+        }
 
         let page_id = PageId(candidate.page_id);
         let target_id = TargetId::from(candidate.target_id);
@@ -85,10 +111,16 @@ impl SessionVisualService {
                 .await
         });
         let result = match timeout(CAPTURE_TIMEOUT, &mut capture).await {
-            Ok(result) => result.map_err(AppError::from)?,
+            Ok(result) => {
+                self.in_flight.finish(candidate.page_id).await;
+                result.map_err(AppError::from)?
+            }
             Err(_) => {
+                let in_flight = self.in_flight.clone();
+                let page_id = candidate.page_id;
                 tokio::spawn(async move {
                     let _ = capture.await;
+                    in_flight.finish(page_id).await;
                 });
                 return Err(AppError::Internal(
                     "session preview capture timed out".to_string(),
@@ -176,7 +208,7 @@ fn capture_options() -> ScreenshotCaptureOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::capture_options;
+    use super::{InFlightCaptures, capture_options};
     use browseros_core::screenshot::ScreenshotFormat;
 
     #[test]
@@ -187,5 +219,15 @@ mod tests {
         assert_eq!(options.full_page, Some(false));
         assert_eq!(options.annotate, Some(false));
         assert_eq!(options.clip, None);
+    }
+
+    #[tokio::test]
+    async fn page_capture_stays_single_flight_until_the_worker_finishes() {
+        let captures = InFlightCaptures::default();
+        assert!(captures.begin(7).await);
+        assert!(!captures.begin(7).await);
+
+        captures.finish(7).await;
+        assert!(captures.begin(7).await);
     }
 }

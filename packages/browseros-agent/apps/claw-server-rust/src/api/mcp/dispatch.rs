@@ -168,12 +168,12 @@ const EFFECTS: &[NamedToolEffect] = &[
         run: effects::tabs_list_view::apply,
     },
     NamedToolEffect {
-        name: "audit",
-        run: effects::audit::apply,
-    },
-    NamedToolEffect {
         name: "tab-activity",
         run: effects::tab_activity::apply,
+    },
+    NamedToolEffect {
+        name: "audit",
+        run: effects::audit::apply,
     },
     NamedToolEffect {
         name: "tab-groups",
@@ -649,8 +649,8 @@ mod tests {
             [
                 "ownership-claims",
                 "tabs-list-view",
-                "audit",
                 "tab-activity",
+                "audit",
                 "tab-groups",
                 "session-naming",
             ]
