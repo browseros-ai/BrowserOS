@@ -1,8 +1,14 @@
 #!/bin/bash
 set -e
 
-PROJECT_DIR="/Users/playra/BrowserOS-full/trios"
+# Derive project dir from the script location so the build is portable.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${TRIOS_ROOT:-$SCRIPT_DIR}"
 OUTPUT="$PROJECT_DIR/trios_app"
+LOG_DIR="$PROJECT_DIR/.trinity/logs"
+LOG_FILE="$LOG_DIR/build_$(date +%s).log"
+
+mkdir -p "$LOG_DIR"
 
 # Find all Swift files
 SWIFT_FILES=(
@@ -19,10 +25,10 @@ swiftc -O -o "$OUTPUT" \
     -framework AppKit \
     -framework WebKit \
     -framework Combine \
-    "${SWIFT_FILES[@]}" 2>&1 | tee /tmp/trios_build.log
+    "${SWIFT_FILES[@]}" 2>&1 | tee "$LOG_FILE"
 
 if [ ${PIPESTATUS[0]} -eq 0 ]; then
-    echo "✅ Build successful: $OUTPUT"
+    echo "[OK] Build successful: $OUTPUT"
     chmod +x "$OUTPUT"
 
     # Ensure .app bundle structure and a correct Info.plist. A missing or
@@ -46,14 +52,19 @@ if [ ${PIPESTATUS[0]} -eq 0 ]; then
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>TRIOS_MESH_PORT</key><string>9505</string>
+    <key>TRIOS_MCP_PORT</key><string>9105</string>
+    <key>TRIOS_A2A_PORT</key><string>9200</string>
+    <key>TRIOS_CANARY_MCP_PORT</key><string>9205</string>
+    <key>TRIOS_VARIANT</key><string>prod</string>
 </dict>
 </plist>
 EOF
 
     # Copy to .app bundle
     cp "$OUTPUT" "$MACOS_DIR/trios"
-    echo "✅ Copied to .app bundle with Info.plist (bundle ID: com.browseros.trios)"
+    echo "[OK] Copied to .app bundle with Info.plist (bundle ID: com.browseros.trios)"
 else
-    echo "❌ Build failed"
+    echo "[FAIL] Build failed (log: $LOG_FILE)"
     exit 1
 fi

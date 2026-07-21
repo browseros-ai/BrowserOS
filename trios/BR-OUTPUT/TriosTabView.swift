@@ -4,6 +4,7 @@ enum MainTab: String, CaseIterable {
     case chat = "Chat"
     case git = "Git"
     case terminal = "Terminal"
+    case mesh = "Mesh"
     case queen = "Queen"
     case settings = "Settings"
 
@@ -12,6 +13,7 @@ enum MainTab: String, CaseIterable {
         case .chat: return "bubble.left.fill"
         case .git: return "arrow.triangle.branch"
         case .terminal: return "terminal.fill"
+        case .mesh: return "antenna.radiowaves.left.and.right"
         case .queen: return "crown.fill"
         case .settings: return "gear"
         }
@@ -126,6 +128,8 @@ struct TriosTabView: View {
             GitWorkspaceView()
         case .terminal:
             TerminalTabView()
+        case .mesh:
+            MeshTabView()
         case .queen:
             QueenTabView()
         case .settings:

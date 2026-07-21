@@ -1,0 +1,18 @@
+[package]
+name = "clade-meshd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP control daemon for trios-mesh — exposes node status, ETX routing, and crypto diagnostics to the Trios UI."
+
+[dependencies]
+trios-mesh = { path = "../trios-mesh" }
+warp = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[lints]
+workspace = true

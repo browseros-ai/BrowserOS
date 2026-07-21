@@ -245,7 +245,7 @@ struct QueenTabView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.grokText)
                 if let last = skill.lastRun {
-                    Text("· \(timeAgo(last))")
+                    Text(" /  \(timeAgo(last))")
                         .font(.system(size: 9))
                         .foregroundColor(.grokDim)
                 }
@@ -373,6 +373,7 @@ struct QueenTabView: View {
         case "TRIOS": viewModel.startTrios()
         case "MCP": viewModel.restartMCP()
         case "Agent": viewModel.restartAgentServer()
+        case "Mesh": viewModel.restartAgent("clade-meshd")
         case "Cron": viewModel.runCron()
         default: break
         }
