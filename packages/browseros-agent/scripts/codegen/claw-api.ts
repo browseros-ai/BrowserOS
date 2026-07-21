@@ -25,6 +25,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { parse } from 'yaml'
 
 const root = join(import.meta.dir, '../..')
 const image = 'openapitools/openapi-generator-cli:v7.22.0'
@@ -60,6 +61,301 @@ export function flattenRequiredHeaderGuards(source: string): string {
     )
   }
   return normalized
+}
+
+interface OpenApiSchemasDocument {
+  components?: {
+    schemas?: Record<string, { $ref?: unknown }>
+  }
+}
+
+/**
+ * Derives model ownership from the contract's schema file layout and checks
+ * that the generator emitted exactly the contract's model set.
+ */
+export function extractModelGroups(
+  openApiSource: string,
+  generatedModels: Iterable<string>,
+): Record<string, string> {
+  const document = parse(openApiSource) as OpenApiSchemasDocument
+  const schemas = document.components?.schemas ?? {}
+  const groups: Record<string, string> = {}
+
+  for (const model of Object.keys(schemas).toSorted()) {
+    const ref = schemas[model]?.$ref
+    const match =
+      typeof ref === 'string'
+        ? ref.match(
+            /^\.\/schemas\/([a-z][a-z0-9-]*)\.yaml#\/([A-Za-z][A-Za-z0-9]*)$/,
+          )
+        : null
+    if (!match || match[2] !== model) {
+      throw new Error(
+        `${model} schema ref must match ./schemas/<group>.yaml#/<model>`,
+      )
+    }
+    groups[model] = match[1] as string
+  }
+
+  const generated = new Set(generatedModels)
+  for (const model of [...generated].toSorted()) {
+    if (!(model in groups)) {
+      throw new Error(`Generated model ${model} has no schema group`)
+    }
+  }
+  for (const model of Object.keys(groups)) {
+    if (!generated.has(model)) {
+      throw new Error(`OpenAPI schema ${model} has no generated model`)
+    }
+  }
+
+  return groups
+}
+
+interface ParsedRustModel {
+  header: string
+  imports: string[]
+  body: string
+}
+
+export function mergeRustModels(sources: Record<string, string>): string {
+  const models = Object.keys(sources).toSorted()
+  if (models.length === 0) throw new Error('Cannot merge an empty Rust group')
+
+  const parsed = models.map((model) => ({
+    model,
+    source: parseRustModel(model, sources[model] as string),
+  }))
+  const header = parsed[0]?.source.header as string
+  for (const { model, source } of parsed.slice(1)) {
+    if (source.header !== header) {
+      throw new Error(`Rust model ${model} has a different generated header`)
+    }
+  }
+
+  const imports = new Set(parsed.flatMap(({ source }) => source.imports))
+  return `${header}\n\n${[...imports].toSorted().join('\n')}\n\n${parsed
+    .map(({ source }) => source.body)
+    .join('\n\n')}\n`
+}
+
+export function emitRustModuleIndex(groups: Iterable<string>): string {
+  return `${[...new Set(groups)]
+    .toSorted()
+    .map((group) => `pub mod ${group};\npub use self::${group}::*;`)
+    .join('\n')}\n`
+}
+
+interface ParsedTypeScriptImport {
+  typeOnly: boolean
+  specifiers: string[]
+  target: string
+}
+
+interface ParsedTypeScriptModel {
+  preamble: string
+  imports: ParsedTypeScriptImport[]
+  body: string
+}
+
+export function mergeTypeScriptModels(
+  sources: Record<string, string>,
+  modelGroups: Readonly<Record<string, string>>,
+): string {
+  const models = Object.keys(sources).toSorted()
+  if (models.length === 0) {
+    throw new Error('Cannot merge an empty TypeScript group')
+  }
+
+  const sourceGroups = new Set(models.map((model) => modelGroups[model]))
+  if (sourceGroups.has(undefined) || sourceGroups.size !== 1) {
+    throw new Error('TypeScript model sources must belong to one known group')
+  }
+  const sourceGroup = [...sourceGroups][0] as string
+  const parsed = models.map((model) => ({
+    model,
+    source: parseTypeScriptModel(model, sources[model] as string),
+  }))
+  const preamble = parsed[0]?.source.preamble as string
+  for (const { model, source } of parsed.slice(1)) {
+    if (source.preamble !== preamble) {
+      throw new Error(
+        `TypeScript model ${model} has a different generated preamble`,
+      )
+    }
+  }
+
+  const imports = collectTypeScriptImports(parsed, modelGroups, sourceGroup)
+
+  const importBlock = [...imports.entries()]
+    .toSorted(([left], [right]) => compareTypeScriptImportKeys(left, right))
+    .map(([key, specifiers]) => {
+      const [target, kind] = key.split('\0') as [string, 'type' | 'value']
+      return formatTypeScriptImport(
+        target,
+        kind === 'type',
+        [...specifiers].toSorted(),
+      )
+    })
+    .join('\n')
+
+  return `${preamble}\n\n${importBlock}\n\n${parsed
+    .map(({ source }) => source.body)
+    .join('\n\n')}\n`
+}
+
+function collectTypeScriptImports(
+  models: Array<{ model: string; source: ParsedTypeScriptModel }>,
+  modelGroups: Readonly<Record<string, string>>,
+  sourceGroup: string,
+): Map<string, Set<string>> {
+  const imports = new Map<string, Set<string>>()
+  for (const { model, source } of models) {
+    for (const declaration of source.imports) {
+      const target = rewriteTypeScriptImportTarget(
+        model,
+        declaration.target,
+        modelGroups,
+        sourceGroup,
+      )
+      if (!target) continue
+
+      const key = `${target}\0${declaration.typeOnly ? 'type' : 'value'}`
+      const specifiers = imports.get(key) ?? new Set<string>()
+      for (const specifier of declaration.specifiers) specifiers.add(specifier)
+      imports.set(key, specifiers)
+    }
+  }
+  return imports
+}
+
+function rewriteTypeScriptImportTarget(
+  model: string,
+  target: string,
+  modelGroups: Readonly<Record<string, string>>,
+  sourceGroup: string,
+): string | null {
+  if (target === '../runtime.js') return target
+  const importedModel = target.match(/^\.\/([A-Za-z][A-Za-z0-9]*)\.js$/)?.[1]
+  const importedGroup = importedModel ? modelGroups[importedModel] : undefined
+  if (!importedModel || !importedGroup) {
+    throw new Error(
+      `TypeScript model ${model} imports unknown model target ${target}`,
+    )
+  }
+  return importedGroup === sourceGroup ? null : `./${importedGroup}.js`
+}
+
+export function emitTypeScriptModelIndex(groups: Iterable<string>): string {
+  return `/* tslint:disable */\n/* eslint-disable */\n${[...new Set(groups)]
+    .toSorted()
+    .map((group) => `export * from './${group}.js';`)
+    .join('\n')}\n`
+}
+
+function parseRustModel(model: string, source: string): ParsedRustModel {
+  const normalized = source.trimEnd()
+  const header = normalized.match(/^\/\*[\s\S]*?\*\//)?.[0]
+  if (!header) throw new Error(`Rust model ${model} has no generated header`)
+
+  const remainder = normalized.slice(header.length).trimStart()
+  const lines = remainder.split('\n')
+  const imports: string[] = []
+  let bodyStart = 0
+  for (; bodyStart < lines.length; bodyStart += 1) {
+    const line = lines[bodyStart] as string
+    if (line.length === 0) continue
+    if (line.startsWith('use ') && line.endsWith(';')) {
+      imports.push(line)
+      continue
+    }
+    break
+  }
+  if (imports.length === 0) {
+    throw new Error(`Rust model ${model} has no generated imports`)
+  }
+
+  return {
+    header,
+    imports,
+    body: lines.slice(bodyStart).join('\n').trim(),
+  }
+}
+
+function parseTypeScriptModel(
+  model: string,
+  source: string,
+): ParsedTypeScriptModel {
+  const normalized = source.trimEnd()
+  const firstImport = normalized.indexOf('\nimport ')
+  if (firstImport === -1) {
+    throw new Error(`TypeScript model ${model} has no generated imports`)
+  }
+
+  const preamble = normalized.slice(0, firstImport).trimEnd()
+  const imports: ParsedTypeScriptImport[] = []
+  let cursor = firstImport + 1
+  while (normalized.startsWith('import ', cursor)) {
+    const end = normalized.indexOf(';\n', cursor)
+    if (end === -1) {
+      throw new Error(`TypeScript model ${model} has an unrecognized import`)
+    }
+    const statement = normalized.slice(cursor, end + 1)
+    const match = statement.match(
+      /^import( type)? \{([\s\S]*?)\} from '([^']+)';$/,
+    )
+    if (!match) {
+      throw new Error(`TypeScript model ${model} has an unrecognized import`)
+    }
+    const specifiers = (match[2] as string)
+      .split(',')
+      .map((specifier) => specifier.trim())
+      .filter(Boolean)
+    if (specifiers.length === 0) {
+      throw new Error(`TypeScript model ${model} has an empty import`)
+    }
+    imports.push({
+      typeOnly: Boolean(match[1]),
+      specifiers,
+      target: match[3] as string,
+    })
+    cursor = end + 2
+  }
+  if (normalized[cursor] !== '\n') {
+    throw new Error(`TypeScript model ${model} has an unrecognized import`)
+  }
+
+  return {
+    preamble,
+    imports,
+    body: normalized.slice(cursor + 1).trim(),
+  }
+}
+
+function compareTypeScriptImportKeys(left: string, right: string): number {
+  const [leftTarget, leftKind] = left.split('\0')
+  const [rightTarget, rightKind] = right.split('\0')
+  if (leftTarget === '../runtime.js' && rightTarget !== '../runtime.js')
+    return -1
+  if (rightTarget === '../runtime.js' && leftTarget !== '../runtime.js')
+    return 1
+  const targetOrder = (leftTarget as string).localeCompare(
+    rightTarget as string,
+  )
+  if (targetOrder !== 0) return targetOrder
+  return leftKind === rightKind ? 0 : leftKind === 'type' ? -1 : 1
+}
+
+function formatTypeScriptImport(
+  target: string,
+  typeOnly: boolean,
+  specifiers: string[],
+): string {
+  const keyword = typeOnly ? 'import type' : 'import'
+  if (specifiers.length === 1) {
+    return `${keyword} { ${specifiers[0]} } from '${target}';`
+  }
+  return `${keyword} {\n${specifiers.map((specifier) => `    ${specifier},`).join('\n')}\n} from '${target}';`
 }
 
 function runGenerator(outputRoot: string): GeneratedTrees {
