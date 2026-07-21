@@ -10,10 +10,19 @@ Cargo.lock
 
 # Trinity generated state
 .trinity/*.log
+.trinity/logs/
+.trinity/e2e/
+.trinity/dev/
+.trinity/rollback/
+.trinity/run/
 .trinity/snapshots/
 .trinity/experience/
 .trinity/clades/
 .trinity/self-awareness.json
+.trinity/events/
+.trinity/claims/
+.trinity/queue/
+.trinity/*.pid
 
 # Trinity runtime state (auto-generated)
 .trinity/state/

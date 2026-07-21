@@ -5,7 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Launchd — install/uninstall auto-start plists for monitor and dashboard"
+description = "TRIOS Clade Launchd - install/uninstall auto-start plists for monitor and dashboard"
+
+[dependencies]
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true

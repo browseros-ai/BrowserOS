@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB — matches clade-diff
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB - matches clade-diff
 
 /// Cap an HTTP response body so a misbehaving/oversized response can't blow up
 /// the report (consistency with clade-diff's MAX_RESPONSE_BYTES guard).
@@ -27,7 +27,7 @@ struct Variant {
 fn main() {
     let variant_name = env::var("TRIOS_VARIANT").unwrap_or_else(|_| "prod".into());
     let v = resolve_variant(&variant_name);
-    let log_dir = PathBuf::from("/tmp/trios_e2e");
+    let log_dir = PathBuf::from(format!("{}/.trinity/e2e", trios_config::project_dir()));
     fs::create_dir_all(&log_dir).ok();
 
     let ts = Local::now().timestamp();
@@ -35,7 +35,7 @@ fn main() {
     let screenshot_path = log_dir.join(format!("screenshot_{}_{}.png", v.name, ts));
 
     let mut report = format!(
-        "# TRIOS E2E Report {} — Variant: {}\n\n",
+        "# TRIOS E2E Report {} - Variant: {}\n\n",
         Local::now().to_rfc2822(),
         v.name
     );
@@ -53,12 +53,12 @@ fn main() {
             let body = cap_body(resp.text().unwrap_or_default());
             if body.contains("\"status\":\"ok\"") {
                 report.push_str(&format!(
-                    "- ✅ BrowserOS Server ({}): OK ({})\n",
+                    "- [OK] BrowserOS Server ({}): OK ({})\n",
                     v.name, body
                 ));
             } else {
                 report.push_str(&format!(
-                    "- ❌ BrowserOS Server ({}): DOWN ({})\n",
+                    "- [FAIL] BrowserOS Server ({}): DOWN ({})\n",
                     v.name, body
                 ));
                 failures += 1;
@@ -66,7 +66,7 @@ fn main() {
         }
         Err(e) => {
             report.push_str(&format!(
-                "- ❌ BrowserOS Server ({}): DOWN ({})\n",
+                "- [FAIL] BrowserOS Server ({}): DOWN ({})\n",
                 v.name, e
             ));
             failures += 1;
@@ -89,9 +89,9 @@ fn main() {
         });
 
     if let Some(ref p) = pid {
-        report.push_str(&format!("- ✅ Trios App ({}): PID {}\n", v.name, p));
+        report.push_str(&format!("- [OK] Trios App ({}): PID {}\n", v.name, p));
     } else {
-        report.push_str(&format!("- ❌ Trios App ({}): NOT RUNNING\n", v.name));
+        report.push_str(&format!("- [FAIL] Trios App ({}): NOT RUNNING\n", v.name));
         failures += 1;
     }
 
@@ -101,11 +101,11 @@ fn main() {
             "-x",
             screenshot_path
                 .to_str()
-                .unwrap_or("/tmp/trios_screenshot.png"),
+                .unwrap_or("trios_screenshot.png"),
         ])
         .output();
     report.push_str(&format!(
-        "- 📸 Screenshot ({}): {}\n",
+        "- [IMG] Screenshot ({}): {}\n",
         v.name,
         screenshot_path.display()
     ));
@@ -144,11 +144,11 @@ fn main() {
 
     if errors.is_empty() {
         report.push_str(&format!(
-            "- ✅ No critical errors in last 5m ({})\n",
+            "- [OK] No critical errors in last 5m ({})\n",
             v.name
         ));
     } else {
-        report.push_str(&format!("- ⚠️ Recent Errors ({})\n", v.name));
+        report.push_str(&format!("- [U+26A0][U+FE0F] Recent Errors ({})\n", v.name));
         report.push_str("```\n");
         for e in errors {
             report.push_str(&e);
@@ -182,7 +182,7 @@ fn main() {
 }
 
 /// Compile and run the standalone Swift logic tests (ChatLogic). This is the
-/// L7-compliant replacement for a shell test step — invoked from Rust, no .sh.
+/// L7-compliant replacement for a shell test step - invoked from Rust, no .sh.
 /// Returns true on pass; appends a line to the e2e report either way.
 fn run_swift_logic_tests(report: &mut String) -> bool {
     let dir = trios_config::project_dir();
@@ -203,33 +203,33 @@ fn run_swift_logic_tests(report: &mut String) -> bool {
     match compiled {
         Ok(out) if out.status.success() => match Command::new(bin).output() {
             Ok(run) if run.status.success() => {
-                report.push_str("- ✅ Swift logic tests: passed\n");
+                report.push_str("- [OK] Swift logic tests: passed\n");
                 true
             }
             Ok(run) => {
                 let tail = cap_body(String::from_utf8_lossy(&run.stdout).to_string());
                 report.push_str(&format!(
-                    "- ❌ Swift logic tests FAILED\n```\n{}\n```\n",
+                    "- [FAIL] Swift logic tests FAILED\n```\n{}\n```\n",
                     tail
                 ));
                 false
             }
             Err(e) => {
-                report.push_str(&format!("- ❌ Swift logic tests: could not run ({})\n", e));
+                report.push_str(&format!("- [FAIL] Swift logic tests: could not run ({})\n", e));
                 false
             }
         },
         Ok(out) => {
             let tail = cap_body(String::from_utf8_lossy(&out.stderr).to_string());
             report.push_str(&format!(
-                "- ❌ Swift logic tests: compile failed\n```\n{}\n```\n",
+                "- [FAIL] Swift logic tests: compile failed\n```\n{}\n```\n",
                 tail
             ));
             false
         }
         Err(e) => {
             report.push_str(&format!(
-                "- ❌ Swift logic tests: swiftc unavailable ({})\n",
+                "- [FAIL] Swift logic tests: swiftc unavailable ({})\n",
                 e
             ));
             false

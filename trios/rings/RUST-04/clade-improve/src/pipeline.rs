@@ -9,7 +9,7 @@ use crate::sandbox::SandboxedDev;
 use crate::variant::Variant;
 
 /// Full self-improvement pipeline
-/// Production → Staging → Dev → Tests → Oversight → Shadow → Atomic Deploy
+/// Production -> Staging -> Dev -> Tests -> Oversight -> Shadow -> Atomic Deploy
 #[derive(Debug)]
 pub struct ImprovementPipeline {
     pub variant: Variant,
@@ -69,7 +69,7 @@ impl ImprovementPipeline {
             .output();
         match ensure {
             Ok(ref o) if o.status.success() => {
-                println!("   ✅ Worktree ensured");
+                println!("   [OK] Worktree ensured");
             }
             Ok(ref o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
@@ -100,20 +100,20 @@ impl ImprovementPipeline {
             return;
         }
         if !sandbox_exec_available() {
-            info!("[Pipeline][shadow] sandbox-exec unavailable — skipping shadow check");
+            info!("[Pipeline][shadow] sandbox-exec unavailable - skipping shadow check");
             return;
         }
         let home = match std::env::var("HOME") {
             Ok(h) => PathBuf::from(h),
             Err(_) => {
-                warn!("[Pipeline][shadow] HOME unset — skipping shadow check");
+                warn!("[Pipeline][shadow] HOME unset - skipping shadow check");
                 return;
             }
         };
         let profile = match write_seatbelt_profile(&dev.root, &home) {
             Ok(p) => p,
             Err(e) => {
-                warn!("[Pipeline][shadow] profile write failed: {} — skipping", e);
+                warn!("[Pipeline][shadow] profile write failed: {} - skipping", e);
                 return;
             }
         };
@@ -146,7 +146,7 @@ impl ImprovementPipeline {
     /// P4.3: construct the Command for `program args`, honoring the sandbox mode.
     /// In `Enforce` the command is wrapped in `sandbox-exec` with the generated
     /// profile and cwd = dev root. Returns `None` to FAIL CLOSED when enforcement
-    /// is requested but cannot be applied (no `sandbox-exec`/`HOME`/profile) — the
+    /// is requested but cannot be applied (no `sandbox-exec`/`HOME`/profile) - the
     /// caller MUST treat `None` as a failed step. `Off`/`Shadow` run bare.
     fn build_command(
         &self,
@@ -162,7 +162,7 @@ impl ImprovementPipeline {
 
         if mode == SandboxMode::Enforce {
             if !sandbox_exec_available() {
-                warn!("[Pipeline][enforce] sandbox-exec unavailable — failing closed");
+                warn!("[Pipeline][enforce] sandbox-exec unavailable - failing closed");
                 return None;
             }
             let home = std::env::var("HOME").ok()?;
@@ -263,7 +263,7 @@ impl ImprovementPipeline {
         let health_passed = if build_passed {
             let binary = dev.root.join("target/debug/clade-monitor");
             if binary.exists() {
-                // Skip runtime health in dev — just verify binary exists
+                // Skip runtime health in dev - just verify binary exists
                 true
             } else {
                 true
@@ -283,7 +283,7 @@ impl ImprovementPipeline {
             passed: secrets_passed,
         });
 
-        // Test 6: Differential — no regression vs Sovereign
+        // Test 6: Differential - no regression vs Sovereign
         let diff_passed = if self.variant == Variant::Staging {
             println!("   [test] Running clade-diff (Sovereign vs Canary)...");
             let diff = Command::new("cargo")
@@ -294,7 +294,7 @@ impl ImprovementPipeline {
                 .output();
             match diff {
                 Ok(ref o) if o.status.success() => {
-                    println!("   ✅ clade-diff passed");
+                    println!("   [OK] clade-diff passed");
                     true
                 }
                 Ok(ref o) => {
@@ -348,7 +348,7 @@ impl ImprovementPipeline {
                 info!("[Pipeline] Oversight: APPROVE (token={})", &token[..16]);
             }
             Decision::Reject => {
-                warn!("[Pipeline] Oversight: REJECT — {:?}", result.violations);
+                warn!("[Pipeline] Oversight: REJECT - {:?}", result.violations);
             }
         }
         
@@ -367,7 +367,7 @@ impl ImprovementPipeline {
         }
         
         // Save current version for rollback
-        let rollback_dir = PathBuf::from("/tmp/clade-rollback");
+        let rollback_dir = PathBuf::from(format!("{}/.trinity/rollback", trios_config::project_dir()));
         fs::create_dir_all(&rollback_dir)?;
         
         let timestamp = Utc::now().timestamp();

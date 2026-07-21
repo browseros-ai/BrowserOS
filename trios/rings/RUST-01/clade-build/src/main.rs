@@ -4,17 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn project_dir() -> String {
-    std::env::var("TRIOS_ROOT").unwrap_or_else(|_| {
-        match std::env::current_dir() {
-            Ok(p) => p.to_string_lossy().into_owned(),
-            Err(e) => {
-                eprintln!("[FAIL] TRIOS_ROOT not set and current_dir unavailable: {}", e);
-                std::process::exit(1);
-            }
-        }
-    })
-}
+fn project_dir() -> String { trios_config::project_dir() }
 
 struct Variant {
     name: &'static str,

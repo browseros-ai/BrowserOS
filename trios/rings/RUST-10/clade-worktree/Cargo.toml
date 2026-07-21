@@ -5,7 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Worktree Guard — dirty detection, auto-commit, sync"
+description = "TRIOS Clade Worktree Guard - dirty detection, auto-commit, sync"
+
+[dependencies]
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true

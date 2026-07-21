@@ -1,6 +1,6 @@
-# Trinity Experience Log — trios project
+# Trinity Experience Log - trios project
 
-## 2026-05-24 — Queen BrowserOS Awakening
+## 2026-05-24 - Queen BrowserOS Awakening
 - Event: Full agent infrastructure deployed
 - Agents created: queen-browseros.md
 - Skills created: tri, doctor, god-mode, bridge
@@ -9,9 +9,9 @@
 - Access path: BrowserOS-Agent -> Browser -> http://127.0.0.1:9105/mcp -> BrowserOS MCP -> Mac
 
 ## t27 Laws Applied
-1. Skills First — all skills auto-invoke before action
-2. Wrap-up MANDATORY — session memory preservation
-3. Proactive Orchestration — detect, plan, execute, report
+1. Skills First - all skills auto-invoke before action
+2. Wrap-up MANDATORY - session memory preservation
+3. Proactive Orchestration - detect, plan, execute, report
 
 ## Architecture
 - Core: ChatMessage, AgentIdentity, ChatEvents (SR-00)
@@ -23,7 +23,7 @@
 
 ## Critical Learnings (2026-05-28)
 
-### 1. Chat Input Fix — NSTextView + First Responder
+### 1. Chat Input Fix - NSTextView + First Responder
 **Ring:** BR-OUTPUT  **Agents:** T, H, K  **Road:** A
 - **Problem:** SwiftUI TextField in NSPanel completely non-functional (no type, paste, focus)
 - **Root cause:** NSHostingView doesn't retain NSHostingController (weak ref crash). NSTextField wrong for multi-line chat.
@@ -31,35 +31,35 @@
 - **Files:** `ChatPanelView.swift`, `WindowManager.swift`
 - **Episode:** `.trinity/experience/2026-05-28_chat_input_nstextview.json`
 
-### 2. State Machine Retry — Allow .error → .streaming
+### 2. State Machine Retry - Allow .error -> .streaming
 **Ring:** SR-02  **Agents:** T, R, Q  **Road:** A
 - **Problem:** After timeout, all subsequent messages silently dropped
-- **Root cause:** ConversationStateMachine blocked .error → .streaming transition
-- **Fix:** Added .error → .streaming to canTransition()
+- **Root cause:** ConversationStateMachine blocked .error -> .streaming transition
+- **Fix:** Added .error -> .streaming to canTransition()
 - **Episode:** `.trinity/experience/2026-05-28_state_machine_retry.json`
 
-### 3. SSE Manual Buffer — Don't Trust bytes.lines
+### 3. SSE Manual Buffer - Don't Trust bytes.lines
 **Ring:** SR-01  **Agents:** T, X  **Road:** A
 - **Problem:** SSE stream silently hung, "The request timed out"
 - **Root cause:** AsyncSequence.bytes.lines hung on certain chunk boundaries
 - **Fix:** Manual Data buffer + newline parsing
 - **Episode:** `.trinity/experience/2026-05-28_sse_manual_buffer.json`
 
-### 4. Command Injection — Strict Prefix Matching
+### 4. Command Injection - Strict Prefix Matching
 **Ring:** SR-02  **Agents:** T, X, V  **Road:** A
 - **Problem:** Innocent messages like "swift is great" executed as shell commands
 - **Root cause:** isLikelyCommand used fuzzy contains() matching; parseIntent fell through to shell
 - **Fix:** Strict prefix only ("shell ", "run ", "exec ", "/"); return nil for unrecognized
 - **Episode:** `.trinity/experience/2026-05-28_command_injection_fix.json`
 
-### 5. Scroll Geometry — Content Height vs Viewport Height
+### 5. Scroll Geometry - Content Height vs Viewport Height
 **Ring:** BR-OUTPUT  **Agents:** T, H  **Road:** B
 - **Problem:** Auto-scroll never fired for long conversations
 - **Root cause:** Used viewport height instead of scroll content height in isNearBottom math
 - **Fix:** ScrollContentHeightPreferenceKey with GeometryReader inside LazyVStack
 - **Episode:** `.trinity/experience/2026-05-28_scroll_content_height.json`
 
-### 6. Swift 6 Concurrency — Nonisolated Parsers
+### 6. Swift 6 Concurrency - Nonisolated Parsers
 **Ring:** SR-02  **Agents:** T, R, V  **Road:** B
 - **Problem:** A2ARegistryClient data race under strict concurrency
 - **Root cause:** Actor-isolated mutable decoder accessed from AsyncStream Task
@@ -67,14 +67,14 @@
 - **Episode:** `.trinity/experience/2026-05-28_a2a_concurrency_fix.json`
 
 ## Trinity Protocols Ported (2026-05-28)
-- AEL v2.0 loop → `CLAUDE.md`
-- PHI LOOP 9-phase → `.claude/skills/phi-loop/SKILL.md`
-- 7 Invariant Laws (L1-L7) → `CLAUDE.md` + `.trinity/SOUL.md`
-- 27-Agent Alphabet → `AGENTS.md` + `.trinity/agents/registry.json`
-- 3-Roads Planning → `.trinity/state/three-roads.json`
-- Experience Save → `.claude/skills/experience-save/SKILL.md`
-- Mistakes Catalog (MNL) → `.trinity/experience/mistakes-catalog.json`
-- Akashic Log Schema → `.trinity/events/akashic-log-schema.json`
+- AEL v2.0 loop -> `CLAUDE.md`
+- PHI LOOP 9-phase -> `.claude/skills/phi-loop/SKILL.md`
+- 7 Invariant Laws (L1-L7) -> `CLAUDE.md` + `.trinity/SOUL.md`
+- 27-Agent Alphabet -> `AGENTS.md` + `.trinity/agents/registry.json`
+- 3-Roads Planning -> `.trinity/state/three-roads.json`
+- Experience Save -> `.claude/skills/experience-save/SKILL.md`
+- Mistakes Catalog (MNL) -> `.trinity/experience/mistakes-catalog.json`
+- Akashic Log Schema -> `.trinity/events/akashic-log-schema.json`
 
 ## Key Decisions
 - Flat swiftc compilation (no SPM/Xcode)
@@ -142,3 +142,20 @@
   - Agent and skill markdown must be ASCII-only too; a bulk transliterator can preserve meaning while satisfying the lint.
   - Saving skills at the end of a wave turns one-off cleanup into reusable institutional memory.
 - **Seal status**: BUILD_PASS, TEST_PASS, CLIPPY_PASS, E2E_NOT_RUN_DUE_SERVER_DOWN
+
+## 2026-07-21 WAVE-004 (Portable root resolution / Runtime state hardening)
+
+- **Issue**: #T27-EPIC-001
+- **Agents**: t27-creator, t27-verifier, t27-experience
+- **Root cause**: Every Rust ring and `BR-OUTPUT/ProjectPaths.swift` hardcoded `/Users/playra/BrowserOS-full/trios` as `TRIOS_ROOT` fallback, blocking multi-machine/CI deployment and leaking developer identity. Runtime state (e2e logs, rollback snapshots, dev sandboxes) lived in `/tmp`.
+- **Fix pattern**: Centralize root resolution in `trios-config::project_dir()` with `TRIOS_ROOT` override and `current_dir()` fallback. Add `trios-config` dependency to all rings that lacked it and replace local `project_dir()` helpers. Move `clade-e2e` logs/screenshots to `.trinity/e2e/` and `clade-improve` rollback/dev to `.trinity/rollback/` and `.trinity/dev/`. ASCII-clean all touched Rust source and `Cargo.toml` descriptions. Update `.gitignore` for runtime artifacts and untrack `akashic-log.jsonl`.
+- **Files changed**: trios/rings/RUST-00/trios-config/src/lib.rs, trios/rings/RUST-01/clade-build/{Cargo.toml,src/main.rs}, trios/rings/RUST-02/clade-e2e/src/main.rs, trios/rings/RUST-03/clade-rollback/{Cargo.toml,src/main.rs}, trios/rings/RUST-04/clade-improve/src/{main.rs,pipeline.rs,sandbox.rs,variant.rs}, trios/rings/RUST-06/clade-dashboard/{Cargo.toml,src/main.rs}, trios/rings/RUST-07/clade-experience/{Cargo.toml,src/main.rs}, trios/rings/RUST-08/clade-promote/{Cargo.toml,src/main.rs}, trios/rings/RUST-09/clade-launchd/{Cargo.toml,src/main.rs}, trios/rings/RUST-10/clade-worktree/{Cargo.toml,src/main.rs}, trios/rings/RUST-12/clade-audit/{Cargo.toml,src/main.rs}, trios/rings/RUST-14/clade-tablecloth/{Cargo.toml,src/main.rs}, trios/BR-OUTPUT/ProjectPaths.swift, trios/.trinity/specs/portable-root-resolution.md, trios/.trinity/wave-loop-004.md, trios/.gitignore
+- **Tests added**: Existing workspace tests; no new tests in this wave.
+- **Lessons**:
+  - Centralizing environment-derived paths in a RUST-00 config crate and propagating it to all rings is the cleanest way to remove hardcoded fallbacks.
+  - `current_dir()` is a safer fallback than a developer home path; fail clearly if both env and current directory are unavailable.
+  - Rust source files and `Cargo.toml` descriptions must also obey L3 PURITY; bulk transliteration of emoji and em-dashes is safe if reviewed.
+  - `/tmp` is not appropriate for persistent runtime state; project-relative `.trinity/` subdirs with `.gitignore` coverage is the trios pattern.
+- **Seal status**: BUILD_PASS, TEST_PASS, CLIPPY_PASS (trios-mesh expect warnings remain as P1 backlog), E2E_NOT_RUN_DUE_SERVER_DOWN
+- **Next wave options**: mesh-panic-hardening, tmp-zero, seal-automation
+

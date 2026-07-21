@@ -3,11 +3,11 @@ use std::path::PathBuf;
 /// Each variant is a fully isolated environment (Capability Control boxing via filesystem isolation)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Variant {
-    /// Port 9105 — stable production
+    /// Port 9105 - stable production
     Prod,
-    /// Port 9205 — staging for testing
+    /// Port 9205 - staging for testing
     Staging,
-    /// Fixed ephemeral port — one-shot experiment
+    /// Fixed ephemeral port - one-shot experiment
     Dev,
 }
 
@@ -29,12 +29,11 @@ impl Variant {
     }
 
     pub fn working_dir(&self) -> PathBuf {
-        let root = std::env::var("TRIOS_ROOT")
-            .unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string());
+        let root = trios_config::project_dir();
         match self {
             Variant::Prod => PathBuf::from(&root),
             Variant::Staging => PathBuf::from(format!("{}/.worktrees/staging", root)),
-            Variant::Dev => PathBuf::from("/tmp/clade-dev"),
+            Variant::Dev => PathBuf::from(format!("{}/.trinity/dev", root)),
         }
     }
 

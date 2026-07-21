@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use clade_improve::{
     constitution::{ChangeSpec, Decision},
@@ -8,7 +9,7 @@ use clade_improve::{
 use tracing::{info, warn, error};
 
 const HELP: &str = r#"
-clade-improve — Self-improvement safety pipeline for BrowserOS agents
+clade-improve - Self-improvement safety pipeline for BrowserOS agents
 
 USAGE:
     clade-improve improve "description of change"
@@ -64,16 +65,16 @@ fn main() {
 fn run_improve(description: Option<&str>, variant: Variant) {
     let ticket_id = format!("T-{}", chrono::Utc::now().timestamp_millis());
     
-    println!("═══════════════════════════════════════════════════════════");
+    println!("===========================================================");
     println!("  CLADE-IMPROVE: Self-Improvement Pipeline");
     println!("  Ticket: {} | Variant: {:?} | Port: {}", 
         ticket_id, variant, variant.mcp_port());
-    println!("═══════════════════════════════════════════════════════════\n");
+    println!("===========================================================\n");
     
     // PHASE 0: Check variant
     if variant.is_production() {
         error!("REFUSED: Production variant cannot self-modify");
-        println!("❌ REFUSED: Production cannot self-modify directly.");
+        println!("[FAIL] REFUSED: Production cannot self-modify directly.");
         println!("   Set TRIOS_VARIANT=staging or use the Staging agent to propose changes.");
         println!("   SAFETY: This block is hardcoded in Rust source and cannot be overridden by prompts or agents.");
         std::process::exit(1);
@@ -95,29 +96,29 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     let pipeline = ImprovementPipeline::new(variant.clone());
     
     // PHASE 2: Oversight pre-check (fail-fast)
-    println!("[Phase 2] Constitutional Oversight — Fail-Fast Check");
+    println!("[Phase 2] Constitutional Oversight - Fail-Fast Check");
     let (decision, token) = pipeline.oversight_check(&changes);
     
     match decision {
         Decision::Reject => {
-            println!("🔴 REJECTED by Constitution — fail-fast");
+            println!("[REJECT] REJECTED by Constitution - fail-fast");
             println!("   Change violates safety principles. Stopping.");
             std::process::exit(1);
         }
-        _ => println!("🟢 Pre-check passed. Token: {}\n", &token[..16]),
+        _ => println!("[PASS] Pre-check passed. Token: {}\n", &token[..16]),
     }
     
     // PHASE 3: Create sandboxed Dev
     println!("[Phase 3] Creating sandboxed Dev agent");
     let dev = match pipeline.create_dev(&ticket_id) {
         Ok(d) => {
-            println!("   ✅ Dev created: {}", d.root.display());
-            println!("   📁 Filtered copy (no OS-level isolation)\n");
+            println!("   [OK] Dev created: {}", d.root.display());
+            println!("   [DIR] Filtered copy (no OS-level isolation)\n");
             d
         }
         Err(e) => {
             error!("Failed to create dev sandbox: {}", e);
-            println!("🔴 Sandbox creation failed: {}", e);
+            println!("[REJECT] Sandbox creation failed: {}", e);
             std::process::exit(1);
         }
     };
@@ -128,12 +129,12 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     let all_passed = results.iter().all(|r| r.passed);
     
     for r in &results {
-        let icon = if r.passed { "✅" } else { "❌" };
+        let icon = if r.passed { "[OK]" } else { "[FAIL]" };
         println!("   {} {}", icon, r.name);
     }
     
     if !all_passed {
-        println!("\n🔴 Some tests failed. Stopping.");
+        println!("\n[REJECT] Some tests failed. Stopping.");
         if let Err(e) = dev.clean() {
             eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
         }
@@ -147,18 +148,18 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     
     match final_decision {
         Decision::Reject => {
-            println!("🔴 REJECTED by Oversight");
+            println!("[REJECT] REJECTED by Oversight");
             if let Err(e) = dev.clean() {
                 eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
             }
             std::process::exit(1);
         }
         Decision::ShadowMode => {
-            println!("🟡 APPROVED for Shadow Mode only");
+            println!("[WARN] APPROVED for Shadow Mode only");
             println!("   Dev will silently handle requests without modifying production.");
         }
         Decision::Approve => {
-            println!("🟢 APPROVED for deployment");
+            println!("[PASS] APPROVED for deployment");
         }
     }
     println!();
@@ -168,13 +169,13 @@ fn run_improve(description: Option<&str>, variant: Variant) {
         println!("[Phase 6] Atomic Deployment");
         match pipeline.atomic_deploy(&ticket_id, &dev, &sign) {
             Ok(deploy) => {
-                println!("   💾 Rollback preserved: {}", deploy.previous_version.display());
-                println!("   📦 New snapshot: {}", deploy.new_snapshot.display());
-                println!("   🔐 Constitutional signature: {}", deploy.constitutional_token);
+                println!("   [SAVE] Rollback preserved: {}", deploy.previous_version.display());
+                println!("   [PKG] New snapshot: {}", deploy.new_snapshot.display());
+                println!("   [LOCK] Constitutional signature: {}", deploy.constitutional_token);
             }
             Err(e) => {
                 error!("Deploy failed: {}", e);
-                println!("🔴 Deploy failed: {}", e);
+                println!("[REJECT] Deploy failed: {}", e);
                 if let Err(e) = dev.clean() {
                     eprintln!("[clade-improve] Sandbox cleanup failed: {}", e);
                 }
@@ -188,61 +189,62 @@ fn run_improve(description: Option<&str>, variant: Variant) {
     if let Err(e) = dev.clean() {
         warn!("Dev cleanup failed: {}", e);
     } else {
-        println!("   ✅ Dev sandbox cleaned");
+        println!("   [OK] Dev sandbox cleaned");
     }
     
-    println!("\n═══════════════════════════════════════════════════════════");
-    println!("  ✅ PIPELINE COMPLETE — Ticket {}", ticket_id);
-    println!("═══════════════════════════════════════════════════════════");
+    println!("\n===========================================================");
+    println!("  [OK] PIPELINE COMPLETE - Ticket {}", ticket_id);
+    println!("===========================================================");
 }
 
 fn check_status(variant: Variant) {
-    println!("📍 Current Variant: {:?}", variant);
+    println!("[LOC] Current Variant: {:?}", variant);
     println!("   MCP Port: {}", variant.mcp_port());
     println!("   Working Dir: {}", variant.working_dir().display());
     println!("   Self-modify allowed: {}", variant.can_self_modify());
     println!("   Is production: {}", variant.is_production());
     println!();
-    println!("✅ Safety constitution loaded (9 principles)");
+    println!("[OK] Safety constitution loaded (9 principles)");
     println!("   Key rules:");
-    println!("   • Production CANNOT self-modify (P8)");
-    println!("   • Max 5 versions preserved for rollback (P9)");
-    println!("   • Isolated sandbox for Dev (P6)");
+    println!("   - Production CANNOT self-modify (P8)");
+    println!("   - Max 5 versions preserved for rollback (P9)");
+    println!("   - Isolated sandbox for Dev (P6)");
 }
 
 fn emergency_rollback(variant: Variant) {
-    let rollback_dir = PathBuf::from("/tmp/clade-rollback");
-    
-    println!("🚨 EMERGENCY ROLLBACK — Variant: {:?}", variant);
+    let rollback_dir = PathBuf::from(format!("{}/.trinity/rollback", trios_config::project_dir()));
+    fs::create_dir_all(&rollback_dir).ok();
+
+    println!("[ALERT] EMERGENCY ROLLBACK - Variant: {:?}", variant);
     
     if !rollback_dir.exists() {
-        println!("❌ No rollback versions found at {}", rollback_dir.display());
+        println!("[FAIL] No rollback versions found at {}", rollback_dir.display());
         return;
     }
     
     let versions: Vec<_> = match std::fs::read_dir(&rollback_dir) {
         Ok(rd) => rd,
-        Err(e) => { println!("❌ Cannot read rollback dir: {}", e); return; }
+        Err(e) => { println!("[FAIL] Cannot read rollback dir: {}", e); return; }
     }
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with("v_"))
         .collect();
     
     if versions.is_empty() {
-        println!("❌ No saved versions");
+        println!("[FAIL] No saved versions");
         return;
     }
     
     println!("   Found {} saved version(s)", versions.len());
     println!("   Rolling back to latest...");
-    println!("   ✅ Rollback complete. Restart server to apply.");
+    println!("   [OK] Rollback complete. Restart server to apply.");
 }
 
 fn show_constitution() {
     use clade_improve::constitution::Constitution;
 
     let c = Constitution::default();
-    println!("📜 Safety Constitution v{}", c.version);
+    println!("[DOC] Safety Constitution v{}", c.version);
     println!();
     for p in &c.principles {
         let enforced = if p.enforced { "[ENFORCED]" } else { "[ advisory ]" };

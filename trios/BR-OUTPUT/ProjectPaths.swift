@@ -6,15 +6,19 @@ enum ProjectPaths {
     /// The root directory of the Trios project.
     /// Defaults to the bundled project path or falls back to the developer path.
     static var root: String {
-        // Try to find the project relative to the app bundle first
+        // Env override is authoritative.
+        if let envRoot = ProcessInfo.processInfo.environment["TRIOS_ROOT"], !envRoot.isEmpty {
+            return envRoot
+        }
+        // Try to find the project relative to the app bundle first.
         if let bundlePath = Bundle.main.resourcePath {
             let candidate = (bundlePath as NSString).deletingLastPathComponent
             if FileManager.default.fileExists(atPath: "\(candidate)/main.swift") {
                 return candidate
             }
         }
-        // Fallback for development
-        return "/Users/playra/BrowserOS-full/trios"
+        // Fallback for development: current working directory.
+        return FileManager.default.currentDirectoryPath
     }
 
     // MARK: - Subdirectories

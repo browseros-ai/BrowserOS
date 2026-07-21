@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 
 fn is_valid_snapshot(name: &str) -> bool {
     name.starts_with("trios_app-") && !name.ends_with(".sha256")
@@ -23,7 +23,7 @@ fn verify_sha256(binary_path: &Path) -> bool {
     let expected = match fs::read_to_string(&hash_path) {
         Ok(content) => content.trim().to_lowercase(),
         Err(_) => {
-            eprintln!("[rollback] No .sha256 sidecar for {} — skipping verification", binary_path.display());
+            eprintln!("[rollback] No .sha256 sidecar for {} - skipping verification", binary_path.display());
             return true;
         }
     };
@@ -90,7 +90,7 @@ fn main() {
     let newest = match find_newest(&mut entries) {
         Some(n) => n,
         None => {
-            eprintln!("❌ No snapshots found in {}", snapshot_dir.display());
+            eprintln!("[FAIL] No snapshots found in {}", snapshot_dir.display());
             std::process::exit(1);
         }
     };
@@ -98,7 +98,7 @@ fn main() {
     let src = snapshot_dir.join(&newest);
 
     if !verify_sha256(&src) {
-        eprintln!("❌ Snapshot failed integrity check — aborting rollback");
+        eprintln!("[FAIL] Snapshot failed integrity check - aborting rollback");
         std::process::exit(1);
     }
 
@@ -106,7 +106,7 @@ fn main() {
         let dst_path = Path::new(dst);
         if let Some(parent) = dst_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                eprintln!("❌ Failed to create parent dir for {}: {}", dst, e);
+                eprintln!("[FAIL] Failed to create parent dir for {}: {}", dst, e);
                 std::process::exit(1);
             }
         }
@@ -117,7 +117,7 @@ fn main() {
                 match fs::rename(tmp_path, dst_path) {
                     Ok(_) => {}
                     Err(e) => {
-                        eprintln!("❌ Atomic rename failed for {}: {}", dst, e);
+                        eprintln!("[FAIL] Atomic rename failed for {}: {}", dst, e);
                         if let Err(e2) = fs::remove_file(tmp_path) {
                             eprintln!("[rollback] cleanup tmp: {}", e2);
                         }
@@ -126,13 +126,13 @@ fn main() {
                 }
             }
             Err(e) => {
-                eprintln!("❌ Failed to stage rollback to {}: {}", tmp, e);
+                eprintln!("[FAIL] Failed to stage rollback to {}: {}", tmp, e);
                 std::process::exit(1);
             }
         }
     }
 
-    println!("✅ Rolled back to {}", newest);
+    println!("[OK] Rolled back to {}", newest);
     println!("   Source: {}", src.display());
     println!("   Targets: {}", targets.join(", "));
 }

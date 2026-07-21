@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use warp::Filter;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 const DEFAULT_PORT: u16 = 9405;
 
 fn port() -> u16 {
@@ -70,8 +70,8 @@ struct LoopMetrics {
 }
 
 /// Aggregate failure-mode counters from event_log JSONL lines. Pure so it can
-/// be unit-tested. Surfaces the agent loop's *process* — rejects, parse fails,
-/// spawn failures, drift — not just the current health bool (observability /
+/// be unit-tested. Surfaces the agent loop's *process* - rejects, parse fails,
+/// spawn failures, drift - not just the current health bool (observability /
 /// ADLC feedback loop). Malformed lines are skipped, never panic.
 fn compute_loop_metrics(events: &[String]) -> LoopMetrics {
     let mut m = LoopMetrics::default();
@@ -92,7 +92,7 @@ fn compute_loop_metrics(events: &[String]) -> LoopMetrics {
             "verify_reject" => m.verify_reject += 1,
             "budget_depleted" => m.budget_depleted += 1,
             "drift_detected" => m.drift_detected += 1,
-            // P4.2d: sandbox shadow build was TooTight — profile needs tuning.
+            // P4.2d: sandbox shadow build was TooTight - profile needs tuning.
             "sandbox_shadow_verdict" if details.contains("too_tight") => m.sandbox_too_tight += 1,
             _ => {}
         }
@@ -140,13 +140,13 @@ async fn main() {
                     ).await;
                 }
                 Err(e) => {
-                    eprintln!("[CladeDashboard] Failed to convert listener: {} — exiting", e);
+                    eprintln!("[CladeDashboard] Failed to convert listener: {} - exiting", e);
                     std::process::exit(1);
                 }
             }
         }
         Err(e) => {
-            eprintln!("[CladeDashboard] Cannot bind to port {}: {} — exiting cleanly", p, e);
+            eprintln!("[CladeDashboard] Cannot bind to port {}: {} - exiting cleanly", p, e);
             std::process::exit(1);
         }
     }

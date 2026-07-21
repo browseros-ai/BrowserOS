@@ -5,12 +5,13 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Experience Replay — pattern extraction from experience logs"
+description = "TRIOS Clade Experience Replay - pattern extraction from experience logs"
 
 [dependencies]
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 const MONITOR_LABEL: &str = "com.browseros.clade-monitor";
 const DASHBOARD_LABEL: &str = "com.browseros.clade-dashboard";
 
@@ -21,11 +21,11 @@ fn main() {
 fn install() {
     let launch_agents = launch_agents_dir();
     if let Err(e) = fs::create_dir_all(&launch_agents) {
-        println!("   ❌ Failed to create LaunchAgents dir: {}", e);
+        println!("   [FAIL] Failed to create LaunchAgents dir: {}", e);
         return;
     }
     if let Err(e) = fs::create_dir_all(format!("{}/.trinity/logs", &project_dir())) {
-        println!("   ⚠️  Failed to create logs dir: {}", e);
+        println!("   [WARN]  Failed to create logs dir: {}", e);
     }
 
     for (label, bin) in [
@@ -35,24 +35,24 @@ fn install() {
         let path = launch_agents.join(format!("{}.plist", label));
         let xml = plist_xml(label, &format!("{}/target/release/{}", &project_dir(), bin), &project_dir());
         if let Err(e) = fs::write(&path, xml) {
-            println!("   ❌ Failed to write {}: {}", path.display(), e);
+            println!("   [FAIL] Failed to write {}: {}", path.display(), e);
             continue;
         }
         match Command::new("launchctl")
             .args(["unload", &path.to_string_lossy()])
             .status()
         {
-            Ok(s) if !s.success() => {} // not loaded — expected on first install
-            Err(e) => println!("   ⚠️  launchctl unload failed: {}", e),
+            Ok(s) if !s.success() => {} // not loaded - expected on first install
+            Err(e) => println!("   [WARN]  launchctl unload failed: {}", e),
             _ => {}
         }
         let status = Command::new("launchctl")
             .args(["load", &path.to_string_lossy()])
             .status();
         match status {
-            Ok(s) if s.success() => println!("   ✅ Loaded {}", label),
-            Ok(s) => println!("   ⚠️  load exit={:?} for {}", s.code(), label),
-            Err(e) => println!("   ❌ load failed for {}: {}", label, e),
+            Ok(s) if s.success() => println!("   [OK] Loaded {}", label),
+            Ok(s) => println!("   [WARN]  load exit={:?} for {}", s.code(), label),
+            Err(e) => println!("   [FAIL] load failed for {}: {}", label, e),
         }
     }
 }
@@ -65,14 +65,14 @@ fn uninstall() {
             .args(["unload", &path.to_string_lossy()])
             .status()
         {
-            Ok(s) if !s.success() => println!("   ⚠️  {} was not loaded", label),
-            Err(e) => println!("   ⚠️  launchctl unload {}: {}", label, e),
+            Ok(s) if !s.success() => println!("   [WARN]  {} was not loaded", label),
+            Err(e) => println!("   [WARN]  launchctl unload {}: {}", label, e),
             _ => {}
         }
         if let Err(e) = fs::remove_file(&path) {
-            println!("   ⚠️  Failed to remove plist for {}: {}", label, e);
+            println!("   [WARN]  Failed to remove plist for {}: {}", label, e);
         }
-        println!("   🗑  Removed {}", label);
+        println!("   [BIN]  Removed {}", label);
     }
 }
 
@@ -82,8 +82,8 @@ fn status() {
             .args(["list", label])
             .output();
         match output {
-            Ok(o) if o.status.success() => println!("   🟢 {}: loaded", label),
-            _ => println!("   🔴 {}: not loaded", label),
+            Ok(o) if o.status.success() => println!("   [PASS] {}: loaded", label),
+            _ => println!("   [REJECT] {}: not loaded", label),
         }
     }
 }

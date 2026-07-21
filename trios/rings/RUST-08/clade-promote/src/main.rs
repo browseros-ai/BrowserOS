@@ -7,7 +7,7 @@ use std::os::unix::io::AsRawFd;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 const SOVEREIGN_HEALTH: &str = "http://127.0.0.1:9105/health";
 const CANARY_HEALTH: &str = "http://127.0.0.1:9205/health";
 
@@ -72,39 +72,39 @@ fn main() {
     let clade_id = args.first().map(|s| s.as_str()).unwrap_or("clade-1.0.0");
     let dry_run = args.iter().any(|a| a == "--dry-run");
 
-    println!("═══════════════════════════════════════════════════════════");
+    println!("===========================================================");
     println!("  CLADE-PROMOTE: Full Pipeline");
     println!("  Clade: {} | Dry run: {}", clade_id, dry_run);
-    println!("═══════════════════════════════════════════════════════════\n");
+    println!("===========================================================\n");
 
     // Phase 0: Safety gates
-    println!("[Phase 0] Agent V — Safety Gates");
+    println!("[Phase 0] Agent V - Safety Gates");
     let gates_ok = check_safety_gates();
     if !gates_ok {
-        println!("🔴 REJECTED by safety gates — stopping.");
+        println!("[REJECT] REJECTED by safety gates - stopping.");
         std::process::exit(1);
     }
-    println!("🟢 Safety gates passed\n");
+    println!("[PASS] Safety gates passed\n");
 
     // Phase 1: Build Canary
-    println!("[Phase 1] Cell 1 — Build Canary");
+    println!("[Phase 1] Cell 1 - Build Canary");
     let (seal_results, metrics) = run_seal(clade_id, dry_run);
 
     let all_passed = seal_results.iter().all(|r| r.passed);
     if !all_passed {
-        println!("\n🔴 SEAL FAILED — promotion rejected");
+        println!("\n[REJECT] SEAL FAILED - promotion rejected");
         if !dry_run {
             update_budget_on_rejection();
         } else {
             println!("   [DRY-RUN] Would deduct budget");
         }
         for r in seal_results.iter().filter(|r| !r.passed) {
-            println!("   ❌ {}: {}", r.cell, r.detail);
+            println!("   [FAIL] {}: {}", r.cell, r.detail);
         }
         std::process::exit(1);
     }
 
-    println!("\n🟢 SEAL PASSED — all cells green\n");
+    println!("\n[PASS] SEAL PASSED - all cells green\n");
 
     // Phase 2: Snapshot Sovereign before swap
     println!("[Phase 2] Snapshot Sovereign before swap");
@@ -115,7 +115,7 @@ fn main() {
     }
 
     // Phase 3: Atomic swap
-    println!("\n[Phase 3] Atomic swap: Canary → Sovereign");
+    println!("\n[Phase 3] Atomic swap: Canary -> Sovereign");
     if !dry_run {
         atomic_swap();
     } else {
@@ -123,7 +123,7 @@ fn main() {
     }
 
     // Phase 4: Boot probe
-    println!("\n[Phase 4] Boot probe — 10s health check");
+    println!("\n[Phase 4] Boot probe - 10s health check");
     let boot_ok = if !dry_run {
         boot_probe()
     } else {
@@ -132,7 +132,7 @@ fn main() {
     };
 
     if !boot_ok {
-        println!("🔴 Boot probe FAILED — triggering emergency rollback");
+        println!("[REJECT] Boot probe FAILED - triggering emergency rollback");
         if !dry_run {
             emergency_rollback();
         }
@@ -140,7 +140,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    println!("🟢 Boot probe PASSED\n");
+    println!("[PASS] Boot probe PASSED\n");
 
     // Phase 5: Update state
     println!("[Phase 5] Update archive + fitness + budget");
@@ -152,26 +152,26 @@ fn main() {
         println!("   [DRY-RUN] Would update state + record fitness");
     }
 
-    println!("\n═══════════════════════════════════════════════════════════");
-    println!("  ✅ PROMOTION COMPLETE — {}", clade_id);
-    println!("═══════════════════════════════════════════════════════════");
+    println!("\n===========================================================");
+    println!("  [OK] PROMOTION COMPLETE - {}", clade_id);
+    println!("===========================================================");
 }
 
 fn check_safety_gates() -> bool {
     let budget = load_budget();
     if budget.halted || budget.budget <= 0.0 {
-        println!("   ❌ Safety budget halted or depleted: {}/{}", budget.budget, budget.max_budget);
+        println!("   [FAIL] Safety budget halted or depleted: {}/{}", budget.budget, budget.max_budget);
         return false;
     }
-    println!("   ✅ Budget: {}/{}", budget.budget, budget.max_budget);
+    println!("   [OK] Budget: {}/{}", budget.budget, budget.max_budget);
 
     let clade = load_clade_state();
     let e_val = clade.e_value.unwrap_or(1.0);
     if e_val < 5.0 {
-        println!("   ⚠️  E-value {} < 5.0 (recommend waiting)", e_val);
+        println!("   [WARN]  E-value {} < 5.0 (recommend waiting)", e_val);
         // Not a hard gate yet, just warning
     }
-    println!("   ✅ Clade: {} (status={})", clade.id, clade.status);
+    println!("   [OK] Clade: {} (status={})", clade.id, clade.status);
 
     true
 }
@@ -218,21 +218,21 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         passed: build_ok,
         detail: format!("{}ms", build_ms),
     });
-    println!("   {} Build: {}ms", if build_ok { "✅" } else { "❌" }, build_ms);
+    println!("   {} Build: {}ms", if build_ok { "[OK]" } else { "[FAIL]" }, build_ms);
 
     // Cell 2: Health
     println!("   Probing health...");
     // SAFETY: Do not launch Canary if multiple instances already running (recursion guard)
     let pre_instances = count_trios_instances();
     if pre_instances > 1 {
-        println!("   ⚠️  {} trios instances already running — refusing Canary launch to avoid recursion", pre_instances);
+        println!("   [WARN]  {} trios instances already running - refusing Canary launch to avoid recursion", pre_instances);
         metrics.health_passed = false;
         results.push(SealResult {
             cell: "Seal-2 Health",
             passed: false,
             detail: format!("recursion_guard: {} instances", pre_instances),
         });
-        println!("   ❌ Health: blocked by recursion guard");
+        println!("   [FAIL] Health: blocked by recursion guard");
     } else {
         let canary_app = format!("{}/.worktrees/staging/trios_app", &project_dir());
         let launch_start = Instant::now();
@@ -262,7 +262,7 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         passed: health_ok,
         detail: if health_ok { "status=ok".to_string() } else { "no response".to_string() },
     });
-    println!("   {} Health: {}", if health_ok { "✅" } else { "❌" }, if health_ok { "ok" } else { "fail" });
+    println!("   {} Health: {}", if health_ok { "[OK]" } else { "[FAIL]" }, if health_ok { "ok" } else { "fail" });
     }
 
     // Cell 3: Screenshot (skip in headless, check file exists)
@@ -274,7 +274,7 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         passed: screenshot_ok,
         detail: if screenshot_ok { "screencapture available".to_string() } else { "not available".to_string() },
     });
-    println!("   {} Screenshot: {}", if screenshot_ok { "✅" } else { "⚠️" }, if screenshot_ok { "available" } else { "skip" });
+    println!("   {} Screenshot: {}", if screenshot_ok { "[OK]" } else { "[WARN]" }, if screenshot_ok { "available" } else { "skip" });
 
     // Cell 4: E2E
     println!("   Running e2e...");
@@ -292,7 +292,7 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         passed: e2e_ok,
         detail: if e2e_ok { "pass".to_string() } else { "fail".to_string() },
     });
-    println!("   {} E2E: {}", if e2e_ok { "✅" } else { "❌" }, if e2e_ok { "pass" } else { "fail" });
+    println!("   {} E2E: {}", if e2e_ok { "[OK]" } else { "[FAIL]" }, if e2e_ok { "pass" } else { "fail" });
 
     // Cell 5: Log scan (check recent event_log for errors)
     println!("   Scanning logs...");
@@ -313,7 +313,7 @@ fn run_seal(_clade_id: &str, _dry_run: bool) -> (Vec<SealResult>, SealMetrics) {
         passed: log_ok,
         detail: format!("{} errors", metrics.log_error_count),
     });
-    println!("   {} Logs: {}", if log_ok { "✅" } else { "❌" }, if log_ok { "clean" } else { "errors" });
+    println!("   {} Logs: {}", if log_ok { "[OK]" } else { "[FAIL]" }, if log_ok { "clean" } else { "errors" });
 
     (results, metrics)
 }
@@ -329,7 +329,7 @@ fn snapshot_sovereign(clade_id: &str) {
     let src = format!("{}/trios_app", &project_dir());
     let dst = format!("{}/{}", snapshot_dir, name);
     match fs::copy(&src, &dst) {
-        Ok(_) => println!("   💾 Snapshot: {}", dst),
+        Ok(_) => println!("   [SAVE] Snapshot: {}", dst),
         Err(e) => eprintln!("   [snapshot] Failed to copy binary: {}", e),
     }
 }
@@ -351,9 +351,9 @@ fn atomic_swap() {
         match fs::copy(&canary, &tmp) {
             Ok(_) => {
                 match fs::rename(&tmp, dst) {
-                    Ok(_) => println!("   📦 Atomic swap to {}", dst),
+                    Ok(_) => println!("   [PKG] Atomic swap to {}", dst),
                     Err(e) => {
-                        eprintln!("   [atomic_swap] rename failed: {} — aborting swap for {}", e, dst);
+                        eprintln!("   [atomic_swap] rename failed: {} - aborting swap for {}", e, dst);
                         if let Err(e2) = fs::remove_file(&tmp) {
                             eprintln!("   [atomic_swap] cleanup tmp: {}", e2);
                         }
@@ -370,14 +370,14 @@ fn boot_probe() -> bool {
 
     let sovereign_app = format!("{}/trios_app", &project_dir());
     if !std::path::Path::new(&sovereign_app).exists() {
-        eprintln!("   ❌ Sovereign binary missing: {}", sovereign_app);
+        eprintln!("   [FAIL] Sovereign binary missing: {}", sovereign_app);
         return false;
     }
 
     // 0. Recursion safety: detect and stop ALL trios instances (both `trios` and `trios_app`)
     let pre_count = count_trios_instances();
     if pre_count > 1 {
-        println!("   ⚠️  {} trios instances detected before boot — killing all to prevent recursion", pre_count);
+        println!("   [WARN]  {} trios instances detected before boot - killing all to prevent recursion", pre_count);
     }
     println!("   Stopping existing Sovereign...");
     for target in &[vec!["-x", "trios"], vec!["-x", "trios_app"], vec!["-f", &format!("{}/trios_app", &project_dir())]] {
@@ -387,7 +387,7 @@ fn boot_probe() -> bool {
             .stderr(Stdio::null())
             .status()
         {
-            Ok(s) if !s.success() => {} // no matching process — expected
+            Ok(s) if !s.success() => {} // no matching process - expected
             Err(e) => eprintln!("[promote] pkill {:?} spawn failed: {}", target, e),
             _ => {}
         }
@@ -404,14 +404,14 @@ fn boot_probe() -> bool {
         .spawn();
 
     if child.is_err() {
-        eprintln!("   ❌ Failed to start Sovereign: {:?}", child.err());
+        eprintln!("   [FAIL] Failed to start Sovereign: {:?}", child.err());
         return false;
     }
 
     // 2. Recursion safety: verify we did not spawn multiple instances
     let post_count = count_trios_instances();
     if post_count > 1 {
-        eprintln!("   ❌ Recursion detected: {} trios instances after boot — aborting", post_count);
+        eprintln!("   [FAIL] Recursion detected: {} trios instances after boot - aborting", post_count);
         return false;
     }
 
@@ -420,11 +420,11 @@ fn boot_probe() -> bool {
     let start = Instant::now();
     loop {
         if check_health(SOVEREIGN_HEALTH) {
-            println!("   ✅ Health OK after {:?}", start.elapsed());
+            println!("   [OK] Health OK after {:?}", start.elapsed());
             return true;
         }
         if start.elapsed().as_secs() >= 30 {
-            eprintln!("   ❌ Health probe timeout (30s)");
+            eprintln!("   [FAIL] Health probe timeout (30s)");
             return false;
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -457,8 +457,8 @@ fn check_health(url: &str) -> bool {
 fn update_state(_clade_id: &str) {
     let archive_path = format!("{}/.trinity/clades/archive.json", &project_dir());
     let fitness_path = format!("{}/.trinity/clades/fitness.csv", &project_dir());
-    println!("   📝 Updated archive: {}", archive_path);
-    println!("   📝 Updated fitness: {}", fitness_path);
+    println!("   [NOTE] Updated archive: {}", archive_path);
+    println!("   [NOTE] Updated fitness: {}", fitness_path);
 }
 
 fn update_budget(adjust: f64, is_failure: bool) {
@@ -516,10 +516,10 @@ fn update_budget(adjust: f64, is_failure: bool) {
         eprintln!("   [budget] Failed to rename: {}", e);
         return;
     }
-    // lock_file dropped here → flock released automatically
+    // lock_file dropped here -> flock released automatically
 
     let label = if adjust > 0.0 { format!("+{}", adjust) } else { format!("{}", adjust) };
-    println!("   💰 Budget {} → {}/{} (halted={})", label, budget.budget, budget.max_budget, budget.halted);
+    println!("   [COST] Budget {} -> {}/{} (halted={})", label, budget.budget, budget.max_budget, budget.halted);
 }
 
 fn severity_cost(severity: &str) -> f64 {
@@ -596,7 +596,7 @@ fn record_fitness(clade_id: &str, metrics: &SealMetrics) {
         eprintln!("[promote] Failed to write fitness row: {}", e);
     }
     println!(
-        "   📝 Fitness recorded: score={:.4} | build={}ms | size={}KB | errors={}",
+        "   [NOTE] Fitness recorded: score={:.4} | build={}ms | size={}KB | errors={}",
         fitness_score, metrics.build_time_ms, binary_size_kb, metrics.log_error_count
     );
 }
@@ -639,7 +639,7 @@ fn load_clade_state() -> CladeState {
 
 fn print_help() {
     println!(r#"
-clade-promote — Full promotion pipeline for Canary → Sovereign
+clade-promote - Full promotion pipeline for Canary -> Sovereign
 
 USAGE:
     cargo run --bin clade-promote -- [CLADE_ID] [--dry-run]
@@ -648,7 +648,7 @@ PHASES:
     0. Safety gates (budget > 0, not halted)
     1. Seal: build + health + screenshot + e2e + log scan
     2. Snapshot Sovereign before swap
-    3. Atomic swap: Canary binary → Sovereign
+    3. Atomic swap: Canary binary -> Sovereign
     4. Boot probe: 10s health check
     5. Update archive, fitness, budget
 

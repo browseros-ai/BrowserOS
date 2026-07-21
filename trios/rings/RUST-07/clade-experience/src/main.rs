@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ExperienceEpisode {
@@ -44,7 +44,7 @@ fn main() {
             cluster.road_c_count
         );
         if cluster.suggest_child {
-            println!("    🧬 SUGGEST CHILD: Road B/C clade proposed");
+            println!("    [DNA] SUGGEST CHILD: Road B/C clade proposed");
             println!("    Top patterns: {}", cluster.top_patterns.join(", "));
             println!("    Anti-patterns: {}", cluster.top_anti_patterns.join(", "));
         }
@@ -52,7 +52,7 @@ fn main() {
 
     let child_spec = generate_child_spec(&clusters);
     if let Some(spec) = child_spec {
-        println!("\n  🧬 Proposed child clade spec:");
+        println!("\n  [DNA] Proposed child clade spec:");
         println!("{}", serde_json::to_string_pretty(&spec).unwrap_or_default());
     } else {
         println!("\n  No child clade proposed yet. Need >3 episodes with Road A in a cluster.");
@@ -69,7 +69,7 @@ fn load_episodes() -> Vec<ExperienceEpisode> {
             if path.extension().map(|e| e == "json").unwrap_or(false) {
                 let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 if size > 1_000_000 {
-                    eprintln!("[experience] Skipping {} — exceeds 1MB limit ({}KB)", path.display(), size / 1024);
+                    eprintln!("[experience] Skipping {} - exceeds 1MB limit ({}KB)", path.display(), size / 1024);
                     continue;
                 }
                 if let Ok(content) = fs::read_to_string(&path) {
@@ -144,7 +144,7 @@ fn generate_child_spec(clusters: &[Cluster]) -> Option<ChildSpec> {
             return Some(ChildSpec {
                 parent_clade: "clade-1.0.0".to_string(),
                 proposed_id: format!("clade-1.1.0-{}", cluster.tag),
-                reason: format!("Cluster '{}' has {} Road A episodes — propose Road B/C diversification", cluster.tag, cluster.road_a_count),
+                reason: format!("Cluster '{}' has {} Road A episodes - propose Road B/C diversification", cluster.tag, cluster.road_a_count),
                 road: if cluster.road_b_count > cluster.road_c_count { "C".to_string() } else { "B".to_string() },
                 patterns: cluster.top_patterns.clone(),
                 anti_patterns: cluster.top_anti_patterns.clone(),
@@ -261,7 +261,7 @@ mod tests {
         let big_path = format!("{}/big.json", dir);
         let small = serde_json::to_string(&make_episode(&["test"], "A", true, "p")).unwrap_or_default();
         fs::write(format!("{}/small.json", dir), &small).ok();
-        // 1.1MB file — should be skipped
+        // 1.1MB file - should be skipped
         let big = "x".repeat(1_100_000);
         fs::write(&big_path, &big).ok();
 

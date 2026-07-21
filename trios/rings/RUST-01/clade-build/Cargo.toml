@@ -5,10 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Build System — replaces build.sh"
+description = "TRIOS Clade Build System - replaces build.sh"
 
 [dependencies]
 chrono = "0.4"
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true

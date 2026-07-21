@@ -5,11 +5,11 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 use walkdir::WalkDir;
 
-fn project_dir() -> String { std::env::var("TRIOS_ROOT").unwrap_or_else(|_| "/Users/playra/BrowserOS-full/trios".to_string()) }
+fn project_dir() -> String { trios_config::project_dir() }
 
 /// Project-relative path for an audit finding. If the file lies outside the
 /// project root (e.g. reached via a symlink), fall back to the bare file name
-/// instead of leaking the absolute host path (`/Users/...`) into the report —
+/// instead of leaking the absolute host path (`/Users/...`) into the report -
 /// findings flow into externally-visible GitHub issues downstream.
 fn relative_audit_path(path: &std::path::Path) -> String {
     match path.strip_prefix(project_dir()) {
@@ -28,7 +28,7 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 fn read_file_bounded(path: &std::path::Path) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     if meta.len() > MAX_FILE_SIZE {
-        eprintln!("[audit] Skipping {} — exceeds {}MB limit ({}MB)", path.display(), MAX_FILE_SIZE / 1024 / 1024, meta.len() / 1024 / 1024);
+        eprintln!("[audit] Skipping {} - exceeds {}MB limit ({}MB)", path.display(), MAX_FILE_SIZE / 1024 / 1024, meta.len() / 1024 / 1024);
         return None;
     }
     fs::read_to_string(path).ok()
@@ -130,7 +130,7 @@ fn build_check() -> BuildCheckResult {
 /// Content to scan for forbidden patterns, with self-noise removed:
 /// - the auditor's OWN source literally defines the patterns it searches for,
 ///   so scanning it is a guaranteed self-match (e.g. the `rm -rf /` regex
-///   string) — skip it entirely;
+///   string) - skip it entirely;
 /// - test modules (`#[cfg(test)]`) legitimately contain "bad" fixtures
 ///   (`api_key="sk_..."`, `try!`, forbidden-pattern strings), so drop the test
 ///   tail. Truncating at the marker keeps real findings' line numbers intact.
@@ -292,9 +292,9 @@ fn error_handling_check() -> SecurityCheckResult {
     let mut scanned = 0;
 
     let patterns: Vec<(&str, &str, &str)> = vec![
-        (r"try!\s*\(", "warning", "Bare try! — use try? or do-catch"),
-        (r"as!\s*\w+", "warning", "Force cast as! — use as? with guard"),
-        (r"as!\s*\[", "warning", "Force cast as! — use as? with guard"),
+        (r"try!\s*\(", "warning", "Bare try! - use try? or do-catch"),
+        (r"as!\s*\w+", "warning", "Force cast as! - use as? with guard"),
+        (r"as!\s*\[", "warning", "Force cast as! - use as? with guard"),
         (r"try\?\s*\([^)]*\)\s*(?:(?!guard|if\s+let|let\s+_).)*$", "info", "Unhandled try? result"),
     ];
 
@@ -357,11 +357,11 @@ fn concurrency_check() -> SecurityCheckResult {
     let mut scanned = 0;
 
     let patterns: Vec<(&str, &str, &str)> = vec![
-        (r"Timer\.scheduledTimer.*\{\s*_.*in\s*\n?\s*self\.", "warning", "Timer closure captures self strongly — add [weak self]"),
-        (r"Timer\.publish.*\.sink.*\{\s*.*in\s*\n?\s*self\.", "warning", "Timer sink captures self strongly — add [weak self]"),
-        (r"DispatchQueue\.main\.async\s*\{\s*\n?\s*self\.", "warning", "DispatchQueue closure captures self strongly — add [weak self]"),
-        (r"Task\s*\{\s*\n?\s*self\.", "warning", "Task captures self strongly — add [weak self] or capture list"),
-        (r"@Published\s+var\s+\w+.*=.*\[\]", "info", "@Published array default — consider empty init for clarity"),
+        (r"Timer\.scheduledTimer.*\{\s*_.*in\s*\n?\s*self\.", "warning", "Timer closure captures self strongly - add [weak self]"),
+        (r"Timer\.publish.*\.sink.*\{\s*.*in\s*\n?\s*self\.", "warning", "Timer sink captures self strongly - add [weak self]"),
+        (r"DispatchQueue\.main\.async\s*\{\s*\n?\s*self\.", "warning", "DispatchQueue closure captures self strongly - add [weak self]"),
+        (r"Task\s*\{\s*\n?\s*self\.", "warning", "Task captures self strongly - add [weak self] or capture list"),
+        (r"@Published\s+var\s+\w+.*=.*\[\]", "info", "@Published array default - consider empty init for clarity"),
     ];
 
     let compiled: Vec<(Regex, &str, &str)> = patterns
@@ -641,10 +641,10 @@ fn main() {
 
     // Subcommand: generate-awareness
     if args.iter().any(|a| a == "generate-awareness") {
-        println!("═══════════════════════════════════════════════════════════");
+        println!("===========================================================");
         println!("  CLADE-AUDIT: Self-Awareness Generator");
         println!("  Dry run: {}", dry_run);
-        println!("═══════════════════════════════════════════════════════════\n");
+        println!("===========================================================\n");
         generate_self_awareness(dry_run);
         return;
     }
@@ -653,125 +653,125 @@ fn main() {
     // slices from the first `{`, so any banner/progress on stdout corrupts it
     // (root cause of the audit_parse_fail events). Route all human output to
     // stderr when json_mode (CLI convention: results on stdout, progress on
-    // stderr — Heroku/Salesforce/AWS).
+    // stderr - Heroku/Salesforce/AWS).
     macro_rules! note {
         ($($arg:tt)*) => {{
             if json_mode { eprintln!($($arg)*); } else { println!($($arg)*); }
         }};
     }
 
-    note!("═══════════════════════════════════════════════════════════");
+    note!("===========================================================");
     note!("  CLADE-AUDIT: Trinity Self-Critic");
     note!("  Dry run: {} | JSON: {}", dry_run, json_mode);
-    note!("═══════════════════════════════════════════════════════════\n");
+    note!("===========================================================\n");
 
     // Stage 1: Build check
-    note!("[Check 1/8] Build gate — swiftc + cargo check");
+    note!("[Check 1/8] Build gate - swiftc + cargo check");
     let build = build_check();
     note!(
         "   {} Swift: {} errors | Rust: {} errors | {}ms",
-        if build.passed { "✅" } else { "❌" },
+        if build.passed { "[OK]" } else { "[FAIL]" },
         build.swift_errors.len(),
         build.rust_errors.len(),
         build.duration_ms
     );
 
     // Stage 2: Security check
-    note!("[Check 2/8] Security scan — forbidden patterns");
+    note!("[Check 2/8] Security scan - forbidden patterns");
     let security = security_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if security.passed { "✅" } else { "❌" },
+        if security.passed { "[OK]" } else { "[FAIL]" },
         security.scanned_files,
         security.findings.len(),
         security.duration_ms
     );
     for f in &security.findings {
-        note!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+        note!("   [WARN]  {}:{} - {} ({})", f.file, f.line, f.message, f.severity);
     }
 
     // Stage 3: Shell safety check
-    note!("[Check 3/8] Shell safety — Process() allowlist");
+    note!("[Check 3/8] Shell safety - Process() allowlist");
     let shell = shell_safety_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if shell.passed { "✅" } else { "❌" },
+        if shell.passed { "[OK]" } else { "[FAIL]" },
         shell.scanned_files,
         shell.findings.len(),
         shell.duration_ms
     );
     for f in &shell.findings {
-        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   [WARN]  {}:{} - {}", f.file, f.line, f.message);
     }
 
     // Stage 4: Error handling check
-    note!("[Check 4/8] Error handling — try!, as!, unhandled try?");
+    note!("[Check 4/8] Error handling - try!, as!, unhandled try?");
     let err = error_handling_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if err.passed { "✅" } else { "❌" },
+        if err.passed { "[OK]" } else { "[FAIL]" },
         err.scanned_files,
         err.findings.len(),
         err.duration_ms
     );
     for f in &err.findings {
-        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   [WARN]  {}:{} - {}", f.file, f.line, f.message);
     }
 
     // Stage 5: Concurrency check
-    note!("[Check 5/8] Concurrency — Swift 6 actor isolation");
+    note!("[Check 5/8] Concurrency - Swift 6 actor isolation");
     let conc = concurrency_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if conc.passed { "✅" } else { "❌" },
+        if conc.passed { "[OK]" } else { "[FAIL]" },
         conc.scanned_files,
         conc.findings.len(),
         conc.duration_ms
     );
     for f in &conc.findings {
-        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   [WARN]  {}:{} - {}", f.file, f.line, f.message);
     }
 
     // Stage 6: TODO/FIXME inventory
-    note!("[Check 6/8] TODO/FIXME inventory — categorized severity");
+    note!("[Check 6/8] TODO/FIXME inventory - categorized severity");
     let todo = todo_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if todo.passed { "✅" } else { "❌" },
+        if todo.passed { "[OK]" } else { "[FAIL]" },
         todo.scanned_files,
         todo.findings.len(),
         todo.duration_ms
     );
     for f in &todo.findings {
-        note!("   ⚠️  {}:{} — {} ({})", f.file, f.line, f.message, f.severity);
+        note!("   [WARN]  {}:{} - {} ({})", f.file, f.line, f.message, f.severity);
     }
 
     // Stage 7: Unused code check
-    note!("[Check 7/8] Unused code — dead private func/fn heuristic");
+    note!("[Check 7/8] Unused code - dead private func/fn heuristic");
     let unused = unused_code_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if unused.passed { "✅" } else { "❌" },
+        if unused.passed { "[OK]" } else { "[FAIL]" },
         unused.scanned_files,
         unused.findings.len(),
         unused.duration_ms
     );
     for f in &unused.findings {
-        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   [WARN]  {}:{} - {}", f.file, f.line, f.message);
     }
 
     // Stage 8: Retain cycle check
-    note!("[Check 8/8] Retain cycles — missing [weak self] in closures");
+    note!("[Check 8/8] Retain cycles - missing [weak self] in closures");
     let retain = retain_cycle_check();
     note!(
         "   {} Files scanned: {} | Findings: {} | {}ms",
-        if retain.passed { "✅" } else { "❌" },
+        if retain.passed { "[OK]" } else { "[FAIL]" },
         retain.scanned_files,
         retain.findings.len(),
         retain.duration_ms
     );
     for f in &retain.findings {
-        note!("   ⚠️  {}:{} — {}", f.file, f.line, f.message);
+        note!("   [WARN]  {}:{} - {}", f.file, f.line, f.message);
     }
 
     if json_mode {
@@ -808,7 +808,7 @@ struct ComponentInfo {
     description: Option<String>,
 }
 
-/// Generate `.trinity/self-awareness.json` — machine-readable graph of all components.
+/// Generate `.trinity/self-awareness.json` - machine-readable graph of all components.
 fn generate_self_awareness(dry_run: bool) {
     let mut rings: Vec<ComponentInfo> = vec![];
     let mut skills: Vec<ComponentInfo> = vec![];
@@ -966,9 +966,9 @@ fn generate_self_awareness(dry_run: bool) {
             eprintln!("[audit] Failed to create .trinity dir: {}", e);
         }
         match std::fs::write(&out_path, &json) {
-            Ok(_) => println!("✅ Self-awareness written: {} rings, {} skills, {} agents | {}",
+            Ok(_) => println!("[OK] Self-awareness written: {} rings, {} skills, {} agents | {}",
                 awareness.rings.len(), awareness.skills.len(), awareness.agents.len(), out_path),
-            Err(e) => eprintln!("❌ Failed to write self-awareness: {}", e),
+            Err(e) => eprintln!("[FAIL] Failed to write self-awareness: {}", e),
         }
     }
 }
@@ -976,7 +976,7 @@ fn generate_self_awareness(dry_run: bool) {
 fn print_help() {
     println!(
         r#"
-clade-audit — Continuous code critic for Trinity
+clade-audit - Continuous code critic for Trinity
 
 USAGE:
     cargo run --bin clade-audit -- [COMMAND] [--dry-run] [--json]
@@ -985,14 +985,14 @@ COMMANDS:
     generate-awareness   Write .trinity/self-awareness.json
 
 CHECKS (default run):
-    1. Build gate     — swiftc -typecheck + cargo check --workspace
-    2. Security scan  — forbidden patterns, hardcoded secrets
-    3. Shell safety   — Process() allowlist compliance (SOUL.md Article IX)
-    4. Error handling — bare try!, as!, unhandled try?
-    5. Concurrency    — Swift 6 actor isolation anti-patterns
-    6. TODO/FIXME     — categorized severity inventory
-    7. Unused code    — dead function/module detection
-    8. Retain cycles  — missing [weak self] in async closures
+    1. Build gate     - swiftc -typecheck + cargo check --workspace
+    2. Security scan  - forbidden patterns, hardcoded secrets
+    3. Shell safety   - Process() allowlist compliance (SOUL.md Article IX)
+    4. Error handling - bare try!, as!, unhandled try?
+    5. Concurrency    - Swift 6 actor isolation anti-patterns
+    6. TODO/FIXME     - categorized severity inventory
+    7. Unused code    - dead function/module detection
+    8. Retain cycles  - missing [weak self] in async closures
 
 OUTPUT:
     --json   Emit structured report to stdout

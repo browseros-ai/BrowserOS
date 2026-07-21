@@ -2,13 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-/// Filtered dev copy — secret-redacting source clone, NOT yet OS-isolated.
+/// Filtered dev copy - secret-redacting source clone, NOT yet OS-isolated.
 /// Copies source tree excluding secrets/keys, runs in /tmp.
 ///
 /// OS-level isolation is being added incrementally: `generate_seatbelt_profile`
 /// and `sandbox_exec_argv` below produce a deny-by-default macOS Seatbelt policy
 /// for wrapping the build/test exec. They are built and unit-tested but NOT yet
-/// wired into the live pipeline — see `.trinity/docs/p4-sandbox-isolation.md`
+/// wired into the live pipeline - see `.trinity/docs/p4-sandbox-isolation.md`
 /// for the staged rollout (off -> shadow -> enforce). Enforcing blindly is unsafe
 /// because Seatbelt fails *silently* and `sandbox-exec` is deprecated (still
 /// functional on macOS 14+); the profile must be validated against real builds first.
@@ -24,7 +24,7 @@ impl SandboxedDev {
         if !ticket_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
             return Err(format!("invalid ticket_id: must be alphanumeric/dash/underscore, got '{}'", ticket_id).into());
         }
-        let dev_root = PathBuf::from(format!("/tmp/clade-dev/{}", ticket_id));
+        let dev_root = PathBuf::from(format!("{}/.trinity/dev/{}", trios_config::project_dir(), ticket_id));
         
         if dev_root.exists() {
             fs::remove_dir_all(&dev_root)?;
@@ -99,14 +99,14 @@ pub fn copy_tree_filtered(src: &Path, dst: &Path) -> std::io::Result<()> {
                 match fs::read_to_string(&src_path) {
                     Ok(content) => {
                         if content.contains("sk-") || content.contains("api_key") {
-                            fs::write(&dst_path, "# REDACTED — secrets removed by clade-improve\n")?;
+                            fs::write(&dst_path, "# REDACTED - secrets removed by clade-improve\n")?;
                             continue;
                         }
                     }
                     Err(e) => {
                         fs::write(
                             &dst_path,
-                            format!("# REDACTED — unreadable, treated as secret ({e})\n"),
+                            format!("# REDACTED - unreadable, treated as secret ({e})\n"),
                         )?;
                         continue;
                     }
@@ -143,7 +143,7 @@ pub fn generate_seatbelt_profile(dev_root: &Path, home: &Path) -> String {
 (allow file-read*
     ;; root-dir traversal: opening ~/.cargo, ~/.rustup and the dev root requires
     ;; read access to each ancestor directory ENTRY (not its contents). Literals
-    ;; expose only the listing of /, /Users and $HOME, never file contents — the
+    ;; expose only the listing of /, /Users and $HOME, never file contents - the
     ;; credential denies below still override.
     (literal "/")
     (literal "/Users")
@@ -218,18 +218,18 @@ pub fn write_seatbelt_profile(dev_root: &Path, home: &Path) -> std::io::Result<P
 /// wins; this verdict only drives profile tuning before enforcement (P4.3).
 #[derive(Debug, PartialEq, Eq)]
 pub enum ShadowVerdict {
-    /// Both agree — the profile neither over- nor under-restricts this build.
+    /// Both agree - the profile neither over- nor under-restricts this build.
     Match,
-    /// Real build passed but sandboxed failed — profile is TOO TIGHT and would
+    /// Real build passed but sandboxed failed - profile is TOO TIGHT and would
     /// break the build if enforced; needs an allowlist addition before P4.3.
     TooTight,
-    /// Real build failed but sandboxed passed — anomalous; investigate before
+    /// Real build failed but sandboxed passed - anomalous; investigate before
     /// trusting the shadow signal.
     Inconsistent,
 }
 
 /// Whether shadow mode is enabled, from the `TRIOS_SANDBOX` env value. Default
-/// (unset / any other value) is OFF — the live pipeline is unaffected unless a
+/// (unset / any other value) is OFF - the live pipeline is unaffected unless a
 /// caller explicitly opts in with `TRIOS_SANDBOX=shadow`. Extracted as a pure
 /// function so the default-off guarantee is unit-tested.
 pub fn shadow_mode_enabled(env_val: Option<&str>) -> bool {

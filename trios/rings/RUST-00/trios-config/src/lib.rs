@@ -16,15 +16,15 @@ pub fn canary_health_url() -> String {
 }
 
 pub fn project_dir() -> String {
-    let dir = std::env::var("TRIOS_ROOT").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        format!("{}/BrowserOS-full/trios", home)
-    });
-    if let Ok(canonical) = std::path::Path::new(&dir).canonicalize() {
-        canonical.to_string_lossy().to_string()
-    } else {
-        dir
-    }
+    std::env::var("TRIOS_ROOT").unwrap_or_else(|_| {
+        match std::env::current_dir() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => {
+                eprintln!("[FAIL] TRIOS_ROOT not set and current_dir unavailable: {}", e);
+                std::process::exit(1);
+            }
+        }
+    })
 }
 
 pub fn github_api_url(path: &str) -> String {

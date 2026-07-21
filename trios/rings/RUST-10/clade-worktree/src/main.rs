@@ -1,15 +1,13 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const DEFAULT_TRIOS_ROOT: &str = "/Users/playra/BrowserOS-full/trios";
 const WORKTREE_BRANCH: &str = "canary";
 const DIRTY_THRESHOLD: usize = 5;
 const SYNC_BEHIND_THRESHOLD: usize = 3;
 
 fn project_dir_with(root: Option<&str>) -> String {
     root.map(|s| s.to_string())
-        .or_else(|| std::env::var("TRIOS_ROOT").ok())
-        .unwrap_or_else(|| DEFAULT_TRIOS_ROOT.to_string())
+        .unwrap_or_else(trios_config::project_dir)
 }
 
 fn project_dir() -> String {
@@ -115,25 +113,25 @@ fn ensure() {
 
     // 1. Check worktree exists
     if !worktree_exists() {
-        println!("   ⚠️  Worktree missing — creating...");
+        println!("   [WARN]  Worktree missing - creating...");
         let wt = worktree_dir();
         if let Err(e) = git_base(&[
             "worktree", "add", &wt, WORKTREE_BRANCH,
         ]) {
-            println!("   ❌ Failed to create worktree: {}", e);
+            println!("   [FAIL] Failed to create worktree: {}", e);
             std::process::exit(1);
         }
-        println!("   ✅ Created worktree at {} (branch: {})", wt, WORKTREE_BRANCH);
+        println!("   [OK] Created worktree at {} (branch: {})", wt, WORKTREE_BRANCH);
     } else {
-        println!("   ✅ Worktree exists");
+        println!("   [OK] Worktree exists");
     }
 
     // 2. Ensure branch exists
     let branch_check = git_base(&["show-ref", "--verify", &format!("refs/heads/{}", WORKTREE_BRANCH)]);
     if branch_check.is_err() {
-        println!("   ⚠️  Branch '{}' not found — creating from HEAD", WORKTREE_BRANCH);
+        println!("   [WARN]  Branch '{}' not found - creating from HEAD", WORKTREE_BRANCH);
         if let Err(e) = git_base(&["branch", WORKTREE_BRANCH]) {
-            println!("   ❌ Failed to create branch: {}", e);
+            println!("   [FAIL] Failed to create branch: {}", e);
             std::process::exit(1);
         }
     }
@@ -145,7 +143,7 @@ fn ensure() {
     // 4. Verify dirty threshold
     let files = dirty_files();
     if !files.is_empty() {
-        println!("   ⚠️  Worktree dirty ({} files) — auto-committing...", files.len());
+        println!("   [WARN]  Worktree dirty ({} files) - auto-committing...", files.len());
         commit();
     }
 
@@ -162,12 +160,12 @@ fn ensure() {
         .map(|s| s.success())
         .unwrap_or(false);
     if build_ok {
-        println!("   ✅ Cargo check passed");
+        println!("   [OK] Cargo check passed");
     } else {
-        println!("   ⚠️  Cargo check failed — worktree may need manual fix");
+        println!("   [WARN]  Cargo check failed - worktree may need manual fix");
     }
 
-    println!("\n   🟢 Worktree ENSURED: {}", worktree_dir());
+    println!("\n   [PASS] Worktree ENSURED: {}", worktree_dir());
 }
 
 fn reset() {
@@ -180,15 +178,15 @@ fn reset() {
 
     // Fetch latest
     if let Err(e) = git_wt(&["fetch", "origin"]) {
-        println!("   ❌ Fetch failed: {}", e);
+        println!("   [FAIL] Fetch failed: {}", e);
         return;
     }
 
     // Reset hard
     match git_wt(&["reset", "--hard", "origin/feat/zai-provider"]) {
-        Ok(_) => println!("   ✅ Hard-reset to origin/feat/zai-provider"),
+        Ok(_) => println!("   [OK] Hard-reset to origin/feat/zai-provider"),
         Err(e) => {
-            println!("   ❌ Reset failed: {}", e);
+            println!("   [FAIL] Reset failed: {}", e);
             return;
         }
     }
@@ -196,13 +194,13 @@ fn reset() {
     // Validate worktree is inside project before destructive clean
     if validate_worktree_path() {
         if let Err(e) = git_wt(&["clean", "-fd"]) {
-            println!("   ⚠️  Clean untracked failed: {}", e);
+            println!("   [WARN]  Clean untracked failed: {}", e);
         }
     } else {
-        println!("   ❌ Worktree path validation failed — skipping git clean");
+        println!("   [FAIL] Worktree path validation failed - skipping git clean");
     }
 
-    println!("   ✅ Canary reset complete");
+    println!("   [OK] Canary reset complete");
 }
 
 fn sync_claude_artifacts() {
@@ -237,9 +235,9 @@ fn sync_claude_artifacts() {
             .unwrap_or(false);
 
         if status {
-            println!("      ✅ {}", name);
+            println!("      [OK] {}", name);
         } else {
-            println!("      ⚠️  {} (cp failed, may be stale)", name);
+            println!("      [WARN]  {} (cp failed, may be stale)", name);
         }
     }
 }
@@ -262,9 +260,9 @@ fn status() {
     let behind = git_wt(&["rev-list", "--count", "HEAD..@{u}"]).unwrap_or_else(|_| "?".to_string());
 
     let exists = worktree_exists();
-    println!("   Exists: {}", if exists { "✅" } else { "❌" });
+    println!("   Exists: {}", if exists { "[OK]" } else { "[FAIL]" });
     println!("   Branch: {}", branch);
-    println!("   Dirty files: {} {}", files.len(), if files.len() > DIRTY_THRESHOLD { "⚠️  exceeds threshold" } else { "" });
+    println!("   Dirty files: {} {}", files.len(), if files.len() > DIRTY_THRESHOLD { "[WARN]  exceeds threshold" } else { "" });
     println!("   Ahead: {} | Behind: {}", ahead, behind);
     if !files.is_empty() {
         println!("   Files:");
@@ -279,63 +277,63 @@ fn status() {
 
 fn guard() {
     if !worktree_exists() {
-        println!("   ❌ Worktree missing — run 'ensure' first");
+        println!("   [FAIL] Worktree missing - run 'ensure' first");
         std::process::exit(1);
     }
 
     let files = dirty_files();
     if files.len() > DIRTY_THRESHOLD {
-        println!("   ⚠️  Dirty files {} > {} — triggering auto-commit", files.len(), DIRTY_THRESHOLD);
+        println!("   [WARN]  Dirty files {} > {} - triggering auto-commit", files.len(), DIRTY_THRESHOLD);
         commit();
     } else {
-        println!("   ✅ Dirty files {} within threshold", files.len());
+        println!("   [OK] Dirty files {} within threshold", files.len());
     }
 
     let behind = git_wt(&["rev-list", "--count", "HEAD..@{u}"]).unwrap_or_else(|_| "0".to_string());
     if behind.parse::<usize>().unwrap_or(0) > SYNC_BEHIND_THRESHOLD {
-        println!("   ⚠️  Worktree is {} commits behind upstream (> {}) — auto-syncing", behind, SYNC_BEHIND_THRESHOLD);
+        println!("   [WARN]  Worktree is {} commits behind upstream (> {}) - auto-syncing", behind, SYNC_BEHIND_THRESHOLD);
         sync();
     } else if behind != "0" && behind != "?" {
-        println!("   ⚠️  Worktree is {} commits behind upstream — run sync", behind);
+        println!("   [WARN]  Worktree is {} commits behind upstream - run sync", behind);
     }
 }
 
 fn commit() {
     let files = dirty_files();
     if files.is_empty() {
-        println!("   ✅ Nothing to commit");
+        println!("   [OK] Nothing to commit");
         return;
     }
 
     let msg = format!("[clade-worktree] Auto-commit {} dirty files", files.len());
     if let Err(e) = git_wt(&["add", "-A"]) {
-        println!("   ❌ git add failed: {}", e);
+        println!("   [FAIL] git add failed: {}", e);
         return;
     }
     match git_wt(&["commit", "-m", &msg]) {
-        Ok(_) => println!("   ✅ Committed: {}", msg),
-        Err(e) => println!("   ❌ git commit failed: {}", e),
+        Ok(_) => println!("   [OK] Committed: {}", msg),
+        Err(e) => println!("   [FAIL] git commit failed: {}", e),
     }
 }
 
 fn sync() {
     println!("   Fetching origin...");
     match git_wt(&["fetch", "origin"]) {
-        Ok(_) => println!("   ✅ Fetch complete"),
+        Ok(_) => println!("   [OK] Fetch complete"),
         Err(e) => {
-            println!("   ❌ Fetch failed: {}", e);
+            println!("   [FAIL] Fetch failed: {}", e);
             return;
         }
     }
 
     let behind = git_wt(&["rev-list", "--count", "HEAD..@{u}"]).unwrap_or_else(|_| "0".to_string());
     if behind == "0" || behind == "?" {
-        println!("   ✅ Already up to date");
+        println!("   [OK] Already up to date");
     } else {
-        println!("   ⚠️  {} commits behind — fast-forwarding...", behind);
+        println!("   [WARN]  {} commits behind - fast-forwarding...", behind);
         match git_wt(&["merge", "--ff-only", "@{u}"]) {
-            Ok(_) => println!("   ✅ Fast-forwarded"),
-            Err(e) => println!("   ❌ Merge failed (diverged?): {}", e),
+            Ok(_) => println!("   [OK] Fast-forwarded"),
+            Err(e) => println!("   [FAIL] Merge failed (diverged?): {}", e),
         }
     }
 }
@@ -359,15 +357,17 @@ mod tests {
         assert_eq!(SYNC_BEHIND_THRESHOLD, 3);
     }
 
+    const TEST_ROOT: &str = "/tmp/clade-worktree-test-root";
+
     #[test]
     fn worktree_dir_contains_staging() {
-        let dir = worktree_dir_with(Some(DEFAULT_TRIOS_ROOT));
+        let dir = worktree_dir_with(Some(TEST_ROOT));
         assert!(dir.contains(".worktrees/staging"), "worktree_dir should point to .worktrees/staging, got: {}", dir);
     }
 
     #[test]
     fn project_dir_has_fallback() {
-        let dir = project_dir_with(Some(DEFAULT_TRIOS_ROOT));
+        let dir = project_dir_with(Some(TEST_ROOT));
         assert!(!dir.is_empty());
     }
 
@@ -375,10 +375,10 @@ mod tests {
     fn worktree_dir_is_inside_project() {
         // Validate against the canonical (resolved) paths so env-var overrides do
         // not break the assertion when the directory does not exist.
-        let wt = std::fs::canonicalize(worktree_dir_with(Some(DEFAULT_TRIOS_ROOT)))
-            .unwrap_or_else(|_| Path::new(&worktree_dir_with(Some(DEFAULT_TRIOS_ROOT))).to_path_buf());
-        let proj = std::fs::canonicalize(project_dir_with(Some(DEFAULT_TRIOS_ROOT)))
-            .unwrap_or_else(|_| Path::new(&project_dir_with(Some(DEFAULT_TRIOS_ROOT))).to_path_buf());
+        let wt = std::fs::canonicalize(worktree_dir_with(Some(TEST_ROOT)))
+            .unwrap_or_else(|_| Path::new(&worktree_dir_with(Some(TEST_ROOT))).to_path_buf());
+        let proj = std::fs::canonicalize(project_dir_with(Some(TEST_ROOT)))
+            .unwrap_or_else(|_| Path::new(&project_dir_with(Some(TEST_ROOT))).to_path_buf());
         assert!(wt.starts_with(&proj), "worktree {} must be under project {}", wt.display(), proj.display());
     }
 

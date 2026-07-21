@@ -5,11 +5,12 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-description = "TRIOS Clade Emergency Rollback — replaces tools/CladeRollback.swift"
+description = "TRIOS Clade Emergency Rollback - replaces tools/CladeRollback.swift"
 
 [dependencies]
 chrono = "0.4"
 sha2 = "0.10"
+trios-config = { path = "../../RUST-00/trios-config" }
 
 [lints]
 workspace = true
