@@ -129,6 +129,7 @@ impl CdpConnection for FixtureConnection {
             match method {
                 "Browser.getTabs" => {
                     self.get_tabs_calls.fetch_add(1, Ordering::SeqCst);
+                    let tabs = self.tabs.lock().await.clone();
                     if let Some(gate) = self.next_get_tabs_gate.lock().await.take() {
                         gate.entered.notify_one();
                         gate.release.notified().await;
@@ -139,7 +140,7 @@ impl CdpConnection for FixtureConnection {
                             message: "get tabs failed".to_string(),
                         });
                     }
-                    Ok(json!({ "tabs": self.tabs.lock().await.clone() }))
+                    Ok(json!({ "tabs": tabs }))
                 }
                 "Browser.getTabInfo" => {
                     let tab_id = params.get("tabId").and_then(Value::as_i64);
@@ -1244,7 +1245,7 @@ async fn preview_rejects_target_rebind_during_frame_lookup() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn preview_rejects_target_rebind_during_final_authority_read() -> anyhow::Result<()> {
+async fn preview_rejects_transfer_during_final_page_reconciliation() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
     let frame_gate = app.state.screencast.gate_next_frame_read_for_testing();
@@ -1259,16 +1260,32 @@ async fn preview_rejects_target_rebind_during_final_authority_read() -> anyhow::
         );
 
     frame_gate.wait_until_entered().await;
-    let ownership_gate = app
-        .state
-        .audit
-        .gate_next_open_session_tab_read_for_testing();
+    let pages_gate = app.connection.gate_next_get_tabs().await;
     frame_gate.release();
-    ownership_gate.wait_until_entered().await;
-    app.connection
-        .update_tab(101, "target-rebound", "https://example.com/new", "New")
-        .await;
-    ownership_gate.release();
+    pages_gate.wait_until_entered().await;
+    app.state.audit.enqueue_claim_tab_for_session(
+        101,
+        Some("target-7".to_string()),
+        fixture.second.id().as_str().to_string(),
+        fixture.second.convo_id().as_str().to_string(),
+        200,
+    );
+    app.state.audit.drain_claim_writes().await;
+    assert!(
+        app.state
+            .audit
+            .open_session_tab(fixture.primary.id().as_str(), 101)
+            .await?
+            .is_none()
+    );
+    assert!(
+        app.state
+            .audit
+            .open_session_tab(fixture.second.id().as_str(), 101)
+            .await?
+            .is_some()
+    );
+    pages_gate.release();
 
     let (status, _, bytes) = preview.await??;
     assert_eq!(status, StatusCode::NOT_FOUND);

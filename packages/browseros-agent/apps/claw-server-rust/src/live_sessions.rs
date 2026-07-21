@@ -263,6 +263,18 @@ pub async fn preview(
         .screencast
         .frame_for(session_id, page_id, &target_id)
         .await;
+    let Some(current_pages) = current_pages(state).await else {
+        return Ok(None);
+    };
+    if !current_pages.iter().any(|page| {
+        page.tab_id.0 == browser_tab_id
+            && page.page_id.0 == page_id
+            && page.target_id.as_str() == target_id.as_str()
+    }) {
+        return Ok(None);
+    }
+    // Browser and cache reads establish the incarnation first. Durable ownership and connected
+    // liveness are checked afterward so session authority is the return boundary.
     state.audit.drain_claim_writes().await;
     let owns_tab = state
         .audit
@@ -273,20 +285,7 @@ pub async fn preview(
     if !connected || !owns_tab {
         return Ok(None);
     }
-    // Cache and authority reads can suspend while Chrome rebinds a tab. The final browser
-    // snapshot is therefore the last async boundary before accepting this exact incarnation.
-    let Some(current_pages) = current_pages(state).await else {
-        return Ok(None);
-    };
-    Ok(current_pages
-        .iter()
-        .any(|page| {
-            page.tab_id.0 == browser_tab_id
-                && page.page_id.0 == page_id
-                && page.target_id.as_str() == target_id.as_str()
-        })
-        .then_some(candidate)
-        .flatten())
+    Ok(candidate)
 }
 
 pub async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
