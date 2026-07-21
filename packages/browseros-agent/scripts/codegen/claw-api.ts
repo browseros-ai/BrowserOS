@@ -276,7 +276,7 @@ export function rewriteTypeScriptApiModelImports(
       return ''
     },
   )
-  if (rewritten.includes("from '../models/")) {
+  if (/from\s+['"]\.\.\/models\//.test(rewritten)) {
     throw new Error('OpenAPI Generator TypeScript API import shape changed')
   }
 
@@ -398,6 +398,9 @@ function parseTypeScriptModel(
   while (normalized[cursor] === '\n') cursor += 1
   const body = normalized.slice(cursor).trim()
   if (!body) throw new Error(`TypeScript model ${model} has no model body`)
+  if (/^import\b/m.test(body)) {
+    throw new Error(`TypeScript model ${model} has an unrecognized import`)
+  }
 
   return {
     preamble,

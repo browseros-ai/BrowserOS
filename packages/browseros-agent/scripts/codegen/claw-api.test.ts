@@ -427,6 +427,23 @@ export interface Alpha {}
     ).toThrow('TypeScript model Alpha has an unrecognized import')
   })
 
+  test('rejects imports hidden behind generated comments', () => {
+    expect(() =>
+      mergeTypeScriptModels(
+        {
+          Alpha: `${preamble}
+
+// A changed generator template may insert a comment before imports.
+import AlphaValue from './AlphaValue.js';
+
+export interface Alpha {}
+`,
+        },
+        modelGroups,
+      ),
+    ).toThrow('TypeScript model Alpha has an unrecognized import')
+  })
+
   test('merges generated enum models that have no imports', () => {
     expect(
       mergeTypeScriptModels(
@@ -497,6 +514,17 @@ import {
 
 export class SessionsApi extends runtime.BaseAPI {}
 `)
+  })
+
+  test('rejects changed model-import quoting before deleting model files', () => {
+    expect(() =>
+      rewriteTypeScriptApiModelImports(
+        `import * as runtime from '../runtime.js';
+import { type SessionList } from "../models/SessionList.js";
+`,
+        { SessionList: 'sessions' },
+      ),
+    ).toThrow('OpenAPI Generator TypeScript API import shape changed')
   })
 })
 
