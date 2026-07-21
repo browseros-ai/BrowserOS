@@ -14,17 +14,17 @@ import {
   spyOn,
 } from 'bun:test'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import {
-  type Connection,
-  type ConnectionList,
-  RECORDING_INGEST_MAX_BYTES,
-  type RecordingMetadata,
-  type SessionDetail,
-  type SessionList,
-  type SessionSummary,
-  type SystemInfo,
-  type TelemetryState,
+import type {
+  Connection,
+  ConnectionList,
+  RecordingMetadata,
+  SessionDetail,
+  SessionList,
+  SessionSummary,
+  SystemInfo,
+  TelemetryState,
 } from '@browseros/claw-api'
+import { RECORDING_INGEST_MAX_BYTES } from '@browseros/shared/constants/limits'
 import { setBrowserSession } from '../../src/lib/browser-session'
 import { identityService } from '../../src/lib/mcp-session'
 import {

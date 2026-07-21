@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { RECORDING_INGEST_MAX_BYTES } from '@browseros/claw-api'
+import { RECORDING_INGEST_MAX_BYTES } from '@browseros/shared/constants/limits'
 import type { Context, MiddlewareHandler } from 'hono'
 import { canonicalApiError } from '../../lib/api-error'
 import type { RequestContextEnv } from '../../lib/request-id'

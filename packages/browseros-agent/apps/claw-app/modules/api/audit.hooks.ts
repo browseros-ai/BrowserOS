@@ -50,7 +50,7 @@ export const useSessions = createInfiniteQuery<
 >({
   queryKey: ['api', 'sessions'],
   fetcher: async (variables, { pageParam }) =>
-    (await apiClient()).sessions.listSessions({
+    (await apiClient()).listSessions({
       ...variables,
       ...(pageParam === undefined ? {} : { cursor: pageParam }),
     }),
@@ -65,7 +65,7 @@ export const useSessions = createInfiniteQuery<
 export const useLiveSessions = createQuery<SessionList>({
   queryKey: ['api', 'sessions', 'live'],
   fetcher: async () =>
-    (await apiClient()).sessions.listSessions({ status: SessionStatus.Live }),
+    (await apiClient()).listSessions({ status: SessionStatus.Live }),
   refetchInterval: 1500,
 })
 
@@ -76,7 +76,7 @@ export const useSessionDetail = createQuery<
 >({
   queryKey: ['api', 'session'],
   fetcher: async ({ sessionId }) =>
-    (await apiClient()).sessions.getSession({ sessionId }),
+    (await apiClient()).getSession({ sessionId }),
   refetchInterval: (query) =>
     query.state.data?.session.status === 'live' ? 3000 : false,
 })

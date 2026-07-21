@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "version": "0.1.0",
-  "description": "WXT extension surface for BrowserClaw. React + shadcn (base-vega). Uses the generated BrowserClaw API client.",
+  "description": "WXT extension surface for BrowserClaw. React + shadcn (base-vega). Uses generated BrowserClaw API DTOs.",
   "scripts": {
     "dev": "bun --env-file=../../.env.development wxt",
     "dev:web": "serve dist/chrome-mv3-dev -p 5174 --no-clipboard",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@base-ui/react": "^1.5.0",
     "@browseros/claw-api": "workspace:*",
+    "@browseros/shared": "workspace:*",
     "@fontsource-variable/jetbrains-mono": "^5.2.5",
     "@fontsource-variable/schibsted-grotesk": "^5.2.5",
     "@fontsource/newsreader": "^5.2.5",

@@ -6,10 +6,8 @@ import {
   emitRustModuleIndex,
   emitTypeScriptModelIndex,
   extractModelGroups,
-  flattenRequiredHeaderGuards,
   mergeRustModels,
   mergeTypeScriptModels,
-  rewriteTypeScriptApiModelImports,
 } from './claw-api'
 
 interface OpenApiOperation {
@@ -182,33 +180,41 @@ describe('BrowserClaw OpenAPI contract', () => {
   })
 })
 
-describe('flattenRequiredHeaderGuards', () => {
-  test('flattens required header assignments and preserves optional guards', () => {
-    const generated = `        if (requestParameters['required'] == null) {
-            throw new Error('required');
-        }
+describe('TypeScript Claw API package boundary', () => {
+  test('exports generated DTOs and wire enums without a transport client', async () => {
+    const packageDirectory = resolve(import.meta.dir, '../../packages/claw-api')
+    const generatedDirectory = join(packageDirectory, 'src/generated')
+    const files = await treeFiles(generatedDirectory)
+    const modelFiles = files.filter((file) => file.startsWith('models/'))
 
-        if (requestParameters['required'] != null) {
-            headerParameters['Required'] = String(requestParameters['required']);
-        }
-
-        if (requestParameters['optional'] != null) {
-            headerParameters['Optional'] = String(requestParameters['optional']);
-        }
-`
-
+    expect(files).toContain('index.ts')
+    expect(modelFiles).toEqual([
+      'models/common.ts',
+      'models/connections.ts',
+      'models/dispatches.ts',
+      'models/recordings.ts',
+      'models/sessions.ts',
+      'models/settings.ts',
+      'models/system.ts',
+    ])
     expect(
-      flattenRequiredHeaderGuards(generated),
-    ).toBe(`        if (requestParameters['required'] == null) {
-            throw new Error('required');
-        }
+      files.every(
+        (file) =>
+          file === 'index.ts' || /^models\/[A-Za-z0-9]+\.ts$/.test(file),
+      ),
+    ).toBe(true)
 
-        headerParameters['Required'] = String(requestParameters['required']);
-
-        if (requestParameters['optional'] != null) {
-            headerParameters['Optional'] = String(requestParameters['optional']);
-        }
-`)
+    const generatedSource = (
+      await Promise.all(
+        files.map((file) => readFile(join(generatedDirectory, file), 'utf8')),
+      )
+    ).join('\n')
+    expect(generatedSource).not.toMatch(
+      /\b(?:Configuration|DefaultApi|ResponseError|FromJSON|ToJSON|runtime)\b/,
+    )
+    expect(await readFile(join(packageDirectory, 'src/index.ts'), 'utf8')).toBe(
+      "export * from './generated/index.js'\n",
+    )
   })
 })
 
@@ -465,66 +471,11 @@ export const Alpha = { Value: 'value' } as const;
 describe('emitTypeScriptModelIndex', () => {
   test('exports one sorted module per group', () => {
     expect(emitTypeScriptModelIndex(['system', 'common', 'sessions'])).toBe(
-      `/* tslint:disable */
-/* eslint-disable */
-export * from './common.js';
-export * from './sessions.js';
-export * from './system.js';
+      `export * from './models/common.js'
+export * from './models/sessions.js'
+export * from './models/system.js'
 `,
     )
-  })
-})
-
-describe('rewriteTypeScriptApiModelImports', () => {
-  test('repoints and merges API imports into group model modules', () => {
-    const source = `import * as runtime from '../runtime.js';
-import {
-    type ApiError,
-    ApiErrorFromJSON,
-} from '../models/ApiError.js';
-import {
-    type SessionDetail,
-    SessionDetailFromJSON,
-} from '../models/SessionDetail.js';
-import {
-    type SessionList,
-    SessionListFromJSON,
-} from '../models/SessionList.js';
-
-export class SessionsApi extends runtime.BaseAPI {}
-`
-
-    expect(
-      rewriteTypeScriptApiModelImports(source, {
-        ApiError: 'common',
-        SessionDetail: 'sessions',
-        SessionList: 'sessions',
-      }),
-    ).toBe(`import * as runtime from '../runtime.js';
-import {
-    ApiErrorFromJSON,
-    type ApiError,
-} from '../models/common.js';
-import {
-    SessionDetailFromJSON,
-    SessionListFromJSON,
-    type SessionDetail,
-    type SessionList,
-} from '../models/sessions.js';
-
-export class SessionsApi extends runtime.BaseAPI {}
-`)
-  })
-
-  test('rejects changed model-import quoting before deleting model files', () => {
-    expect(() =>
-      rewriteTypeScriptApiModelImports(
-        `import * as runtime from '../runtime.js';
-import { type SessionList } from "../models/SessionList.js";
-`,
-        { SessionList: 'sessions' },
-      ),
-    ).toThrow('OpenAPI Generator TypeScript API import shape changed')
   })
 })
 
@@ -538,4 +489,17 @@ async function yamlFiles(directory: string): Promise<string[]> {
     }),
   )
   return nested.flat()
+}
+
+async function treeFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory()) return [entry.name]
+      return (await treeFiles(join(directory, entry.name))).map((file) =>
+        join(entry.name, file),
+      )
+    }),
+  )
+  return nested.flat().toSorted()
 }

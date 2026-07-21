@@ -123,6 +123,7 @@
       "dependencies": {
         "@base-ui/react": "^1.5.0",
         "@browseros/claw-api": "workspace:*",
+        "@browseros/shared": "workspace:*",
         "@fontsource-variable/jetbrains-mono": "^5.2.5",
         "@fontsource-variable/schibsted-grotesk": "^5.2.5",
         "@fontsource/newsreader": "^5.2.5",
@@ -181,7 +182,7 @@
       "version": "0.0.11",
       "dependencies": {
         "@base-ui/react": "^1.5.0",
-        "@browseros/claw-server": "workspace:*",
+        "@browseros/shared": "workspace:*",
         "@tabler/icons-react": "^3.45.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",

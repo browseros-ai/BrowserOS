@@ -13,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use claw_api::RECORDING_INGEST_MAX_BYTES;
 use std::time::Instant;
 use tracing::{Instrument, info_span};
 use ulid::Ulid;
@@ -26,6 +25,8 @@ mod replay;
 mod sessions;
 mod settings;
 mod system;
+
+pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()

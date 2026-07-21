@@ -40,6 +40,15 @@ export const DEV_PORTS = {
   extension: 9310,
 } as const
 
+/** Default loopback port for the standalone BrowserClaw API. */
+export const CLAW_API_PORT_DEFAULT = 9200
+
+/**
+ * Default CDP port BrowserClaw dials when attaching to BrowserOS Chromium.
+ * The non-round private-range value avoids registered services and common local tools.
+ */
+export const CLAW_CDP_PORT_DEFAULT = 49337
+
 // OAuth callback port — must match the redirect_uri registered with OpenAI's Codex client ID
 export const OAUTH_CALLBACK_PORT = 1455
 

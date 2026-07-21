@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { RECORDING_INGEST_FALLBACK_MAX_BYTES } from '@browseros/claw-api'
+import { RECORDING_INGEST_FALLBACK_MAX_BYTES } from '@browseros/shared/constants/limits'
 
 export interface RecorderEventTarget {
   addEventListener(

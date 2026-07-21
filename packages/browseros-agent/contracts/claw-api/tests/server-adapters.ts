@@ -16,49 +16,20 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { CanonicalApiDependencies } from '../../../apps/claw-server/src/routes/api-v1'
 import { createServer } from '../../../apps/claw-server/src/server'
-import {
-  Configuration,
-  ConnectionsApi,
-  DispatchesApi,
-  type Harness,
-  RECORDING_INGEST_MAX_BYTES,
-  RecordingsApi,
-  SessionsApi,
-  SettingsApi,
-  SystemApi,
-} from '../../../packages/claw-api/src'
+import type { Harness } from '../../../packages/claw-api/src'
+import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
+import { ContractHttpClient } from './http-client'
 
 export interface ContractServer {
   name: 'rust' | 'typescript'
   baseUrl: string
-  api: ContractApiClient
+  api: ContractHttpClient
   liveSessionId: string
   secondLiveSessionId: string
   zeroTabLiveSessionId: string
   endedSessionId: string
   screenshotDispatchId: number
   stop(): Promise<void>
-}
-
-export interface ContractApiClient {
-  connections: ConnectionsApi
-  dispatches: DispatchesApi
-  recordings: RecordingsApi
-  sessions: SessionsApi
-  settings: SettingsApi
-  system: SystemApi
-}
-
-function contractApiClient(baseUrl: string): ContractApiClient {
-  const configuration = new Configuration({ basePath: baseUrl })
-  return {
-    connections: new ConnectionsApi(configuration),
-    dispatches: new DispatchesApi(configuration),
-    recordings: new RecordingsApi(configuration),
-    sessions: new SessionsApi(configuration),
-    settings: new SettingsApi(configuration),
-    system: new SystemApi(configuration),
-  }
 }
 
 const primarySession = {
@@ -298,7 +269,7 @@ export async function startTypeScriptServer(): Promise<ContractServer> {
   return {
     name: 'typescript',
     baseUrl,
-    api: contractApiClient(baseUrl),
+    api: new ContractHttpClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,
@@ -361,7 +332,7 @@ export async function startRustServer(): Promise<ContractServer> {
   return {
     name: 'rust',
     baseUrl,
-    api: contractApiClient(baseUrl),
+    api: new ContractHttpClient(baseUrl),
     liveSessionId: primarySession.sessionId,
     secondLiveSessionId: secondLiveSession.sessionId,
     zeroTabLiveSessionId: zeroTabLiveSession.sessionId,

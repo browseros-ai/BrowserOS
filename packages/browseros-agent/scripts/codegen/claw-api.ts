@@ -1,11 +1,11 @@
 /**
  * Codegen for the canonical BrowserClaw API. Reads the OpenAPI spec at
- * `contracts/claw-api/openapi.yaml` and emits both generated clients:
- * the TypeScript fetch client into `packages/claw-api/src/generated`
- * and the Rust DTOs into `crates/claw-api/src/generated`. Neither tree
- * is ever hand-edited. Operations and models are grouped by their route
- * tags and schema files, then flat-re-exported for consumer compatibility.
- * Change the spec, then regenerate with `bun run codegen:claw-api`.
+ * `contracts/claw-api/openapi.yaml` and emits language-specific DTOs:
+ * TypeScript models into `packages/claw-api/src/generated` and Rust
+ * models into `crates/claw-api/src/generated`. Models are grouped by their
+ * contract schema files and flat-re-exported for consumer compatibility.
+ * Neither tree is ever hand-edited — change the spec, then regenerate with
+ * `bun run codegen:claw-api`.
  *
  * The generator runs in Docker with a pinned image and the output is
  * normalized (trailing whitespace stripped, generated Rust run through
@@ -35,33 +35,6 @@ const check = process.argv.includes('--check')
 interface GeneratedTrees {
   typescript: string
   rust: string
-}
-
-/**
- * OpenAPI Generator 7.22 guards required headers twice: first by throwing,
- * then by conditionally assigning them. Flatten the unreachable second guard
- * so generated clients remain clean under whole-repository static analysis.
- */
-export function flattenRequiredHeaderGuards(source: string): string {
-  const requiredParameters = new Set(
-    [...source.matchAll(/if \(requestParameters\['([^']+)'\] == null\) \{/g)]
-      .map((match) => match[1])
-      .filter((parameter): parameter is string => parameter !== undefined),
-  )
-  let normalized = source
-  for (const parameter of requiredParameters) {
-    const escaped = parameter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const guardedAssignment = new RegExp(
-      `        if \\(requestParameters\\['${escaped}'\\] != null\\) \\{\\n(            headerParameters\\[[^\\n]+\\n)        \\}`,
-      'g',
-    )
-    normalized = normalized.replace(
-      guardedAssignment,
-      (_match, assignment: string) =>
-        assignment.replace(/^ {12}/, '        ').trimEnd(),
-    )
-  }
-  return normalized
 }
 
 interface OpenApiSchemasDocument {
@@ -249,52 +222,10 @@ function rewriteTypeScriptImportTarget(
 }
 
 export function emitTypeScriptModelIndex(groups: Iterable<string>): string {
-  return `/* tslint:disable */\n/* eslint-disable */\n${[...new Set(groups)]
+  return `${[...new Set(groups)]
     .toSorted()
-    .map((group) => `export * from './${group}.js';`)
+    .map((group) => `export * from './models/${group}.js'`)
     .join('\n')}\n`
-}
-
-export function rewriteTypeScriptApiModelImports(
-  source: string,
-  modelGroups: Readonly<Record<string, string>>,
-): string {
-  const imports = new Map<string, Set<string>>()
-  const rewritten = source.replace(
-    /import \{([\s\S]*?)\} from '\.\.\/models\/([A-Za-z][A-Za-z0-9]*)\.js';\n/g,
-    (_statement, rawSpecifiers: string, model: string) => {
-      const group = modelGroups[model]
-      if (!group) throw new Error(`API imports unknown model ${model}`)
-      const specifiers = imports.get(group) ?? new Set<string>()
-      for (const specifier of rawSpecifiers
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean)) {
-        specifiers.add(specifier)
-      }
-      imports.set(group, specifiers)
-      return ''
-    },
-  )
-  if (/from\s+['"]\.\.\/models\//.test(rewritten)) {
-    throw new Error('OpenAPI Generator TypeScript API import shape changed')
-  }
-
-  const runtimeImport = "import * as runtime from '../runtime.js';"
-  if (!rewritten.includes(runtimeImport)) {
-    throw new Error('OpenAPI Generator TypeScript API runtime import changed')
-  }
-  const importBlock = [...imports.entries()]
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([group, specifiers]) =>
-      formatTypeScriptImport(
-        `../models/${group}.js`,
-        false,
-        [...specifiers].toSorted(),
-      ),
-    )
-    .join('\n')
-  return rewritten.replace(runtimeImport, `${runtimeImport}\n${importBlock}`)
 }
 
 function parseRustModel(model: string, source: string): ParsedRustModel {
@@ -458,10 +389,12 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     ...common,
     '-g',
     'typescript-fetch',
+    '-t',
+    '/local/scripts/codegen/templates/claw-api/typescript-fetch',
     '-o',
     '/out/typescript',
     '--global-property',
-    'apiDocs=false,modelDocs=false,apiTests=false,modelTests=false',
+    'models,modelDocs=false,modelTests=false',
     '--additional-properties',
     'supportsES6=true,typescriptThreePlus=true,importFileExtension=.js,disallowAdditionalPropertiesIfNotPresent=false',
   ])
@@ -484,33 +417,20 @@ function runGenerator(outputRoot: string): GeneratedTrees {
     force: true,
   })
   rmSync(join(typescript, '.openapi-generator-ignore'), { force: true })
-  groupGeneratedModels(typescript, rust)
+  const groups = groupGeneratedModels(typescript, rust)
   for (const file of listFiles(typescript).filter((path) =>
     path.endsWith('.ts'),
   )) {
     const path = join(typescript, file)
     const source = readFileSync(path, 'utf8')
-    let normalized = `${source
+    const normalized = `${source
       .split('\n')
       .map((line) => line.trimEnd())
       .join('\n')
       .trimEnd()}\n`
-    normalized = flattenRequiredHeaderGuards(normalized)
-    if (file === 'runtime.ts') {
-      // TypeScript requires `override` for the inherited Error.cause property;
-      // OpenAPI Generator 7.22's FetchError template predates that check.
-      const generatorConstructor =
-        'constructor(public cause: Error, msg?: string)'
-      if (!normalized.includes(generatorConstructor)) {
-        throw new Error('OpenAPI Generator FetchError template changed')
-      }
-      normalized = normalized.replace(
-        generatorConstructor,
-        'constructor(public override cause: Error, msg?: string)',
-      )
-    }
     writeFileSync(path, normalized)
   }
+  writeFileSync(join(typescript, 'index.ts'), emitTypeScriptModelIndex(groups))
   for (const file of listFiles(rust).filter((path) => path.endsWith('.rs'))) {
     const result = spawnSync(
       'rustfmt',
@@ -531,7 +451,7 @@ function runGenerator(outputRoot: string): GeneratedTrees {
   }
 }
 
-function groupGeneratedModels(typescript: string, rust: string): void {
+function groupGeneratedModels(typescript: string, rust: string): string[] {
   const typescriptModels = join(typescript, 'models')
   const typescriptFiles = listFiles(typescriptModels).filter(
     (file) => file.endsWith('.ts') && file !== 'index.ts',
@@ -543,16 +463,6 @@ function groupGeneratedModels(typescript: string, rust: string): void {
   )
   const modelGroups = extractModelGroups(openApiSource, typescriptModelNames)
   const groups = [...new Set(Object.values(modelGroups))].toSorted()
-  const typescriptApis = join(typescript, 'apis')
-  for (const file of listFiles(typescriptApis).filter((file) =>
-    file.endsWith('Api.ts'),
-  )) {
-    const path = join(typescriptApis, file)
-    writeFileSync(
-      path,
-      rewriteTypeScriptApiModelImports(readFileSync(path, 'utf8'), modelGroups),
-    )
-  }
   const typescriptSources = sourcesByGroup(
     typescriptModelNames,
     modelGroups,
@@ -569,7 +479,11 @@ function groupGeneratedModels(typescript: string, rust: string): void {
       readFileSync(join(rust, rustFilesByModel[model] as string), 'utf8'),
   )
 
-  for (const file of typescriptFiles) rmSync(join(typescriptModels, file))
+  for (const file of listFiles(typescriptModels).filter((file) =>
+    file.endsWith('.ts'),
+  )) {
+    rmSync(join(typescriptModels, file))
+  }
   for (const group of groups) {
     writeFileSync(
       join(typescriptModels, `${group}.ts`),
@@ -579,11 +493,6 @@ function groupGeneratedModels(typescript: string, rust: string): void {
       ),
     )
   }
-  writeFileSync(
-    join(typescriptModels, 'index.ts'),
-    emitTypeScriptModelIndex(groups),
-  )
-
   for (const file of listFiles(rust).filter((file) => file.endsWith('.rs'))) {
     rmSync(join(rust, file))
   }
@@ -594,6 +503,7 @@ function groupGeneratedModels(typescript: string, rust: string): void {
     )
   }
   writeFileSync(join(rust, 'mod.rs'), emitRustModuleIndex(groups))
+  return groups
 }
 
 function sourcesByGroup(
@@ -704,7 +614,7 @@ if (import.meta.main) {
       console.log('BrowserClaw API generated output is current.')
     } else {
       installGenerated(trees)
-      console.log('Generated BrowserClaw TypeScript client and Rust DTOs.')
+      console.log('Generated BrowserClaw TypeScript and Rust DTOs.')
     }
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true })

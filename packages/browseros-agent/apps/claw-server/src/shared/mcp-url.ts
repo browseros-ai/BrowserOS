@@ -3,18 +3,18 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Server-side MCP URL helpers. Browser/UI imports must use
- * mcp-url-common so env/config parsing stays out of the WXT bundle.
+ * Server-side MCP URL helpers. Browser/UI imports the shared URL
+ * constants directly so env/config parsing stays out of WXT bundles.
  */
-
-import { env } from '../env'
-import { canonicalMcpUrlForPort } from './mcp-url-common'
 
 export {
   BROWSEROS_MCP_SERVER_NAME,
   canonicalMcpUrlForPort,
   MCP_PATH,
-} from './mcp-url-common'
+} from '@browseros/shared/constants/urls'
+
+import { canonicalMcpUrlForPort } from '@browseros/shared/constants/urls'
+import { env } from '../env'
 
 /** Resolves the public server-side MCP URL from runtime ports. */
 export function publicMcpUrl(): string {

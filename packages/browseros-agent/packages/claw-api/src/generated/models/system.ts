@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
-
 /**
  *
  * @export
@@ -37,44 +35,6 @@ export const HealthResponseStatusEnum = {
 } as const;
 export type HealthResponseStatusEnum = typeof HealthResponseStatusEnum[keyof typeof HealthResponseStatusEnum];
 
-
-/**
- * Check if a given object implements the HealthResponse interface.
- */
-export function instanceOfHealthResponse(value: object): value is HealthResponse {
-    if (!('status' in value) || value['status'] === undefined) return false;
-    return true;
-}
-
-export function HealthResponseFromJSON(json: any): HealthResponse {
-    return HealthResponseFromJSONTyped(json, false);
-}
-
-export function HealthResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): HealthResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'status': json['status'],
-    };
-}
-
-export function HealthResponseToJSON(json: any): HealthResponse {
-    return HealthResponseToJSONTyped(json, false);
-}
-
-export function HealthResponseToJSONTyped(value?: HealthResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'status': value['status'],
-    };
-}
-
 /**
  *
  * @export
@@ -97,44 +57,6 @@ export const ShutdownResponseStatusEnum = {
     Ok: 'ok'
 } as const;
 export type ShutdownResponseStatusEnum = typeof ShutdownResponseStatusEnum[keyof typeof ShutdownResponseStatusEnum];
-
-
-/**
- * Check if a given object implements the ShutdownResponse interface.
- */
-export function instanceOfShutdownResponse(value: object): value is ShutdownResponse {
-    if (!('status' in value) || value['status'] === undefined) return false;
-    return true;
-}
-
-export function ShutdownResponseFromJSON(json: any): ShutdownResponse {
-    return ShutdownResponseFromJSONTyped(json, false);
-}
-
-export function ShutdownResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): ShutdownResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'status': json['status'],
-    };
-}
-
-export function ShutdownResponseToJSON(json: any): ShutdownResponse {
-    return ShutdownResponseToJSONTyped(json, false);
-}
-
-export function ShutdownResponseToJSONTyped(value?: ShutdownResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'status': value['status'],
-    };
-}
 
 /**
  *
@@ -164,45 +86,6 @@ export const SystemCapabilitiesRecordingIngestVersionEnum = {
     NUMBER_2: 2
 } as const;
 export type SystemCapabilitiesRecordingIngestVersionEnum = typeof SystemCapabilitiesRecordingIngestVersionEnum[keyof typeof SystemCapabilitiesRecordingIngestVersionEnum];
-
-
-/**
- * Check if a given object implements the SystemCapabilities interface.
- */
-export function instanceOfSystemCapabilities(value: object): value is SystemCapabilities {
-    return true;
-}
-
-export function SystemCapabilitiesFromJSON(json: any): SystemCapabilities {
-    return SystemCapabilitiesFromJSONTyped(json, false);
-}
-
-export function SystemCapabilitiesFromJSONTyped(json: any, ignoreDiscriminator: boolean): SystemCapabilities {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'recordingIngestVersion': json['recordingIngestVersion'] == null ? undefined : json['recordingIngestVersion'],
-        'recordingIngestMaxBytes': json['recordingIngestMaxBytes'] == null ? undefined : json['recordingIngestMaxBytes'],
-    };
-}
-
-export function SystemCapabilitiesToJSON(json: any): SystemCapabilities {
-    return SystemCapabilitiesToJSONTyped(json, false);
-}
-
-export function SystemCapabilitiesToJSONTyped(value?: SystemCapabilities | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'recordingIngestVersion': value['recordingIngestVersion'],
-        'recordingIngestMaxBytes': value['recordingIngestMaxBytes'],
-    };
-}
 
 /**
  *
@@ -234,49 +117,4 @@ export interface SystemInfo {
      * @memberof SystemInfo
      */
     capabilities?: SystemCapabilities;
-}
-
-/**
- * Check if a given object implements the SystemInfo interface.
- */
-export function instanceOfSystemInfo(value: object): value is SystemInfo {
-    if (!('product' in value) || value['product'] === undefined) return false;
-    if (!('version' in value) || value['version'] === undefined) return false;
-    if (!('url' in value) || value['url'] === undefined) return false;
-    return true;
-}
-
-export function SystemInfoFromJSON(json: any): SystemInfo {
-    return SystemInfoFromJSONTyped(json, false);
-}
-
-export function SystemInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean): SystemInfo {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'product': json['product'],
-        'version': json['version'],
-        'url': json['url'],
-        'capabilities': json['capabilities'] == null ? undefined : SystemCapabilitiesFromJSON(json['capabilities']),
-    };
-}
-
-export function SystemInfoToJSON(json: any): SystemInfo {
-    return SystemInfoToJSONTyped(json, false);
-}
-
-export function SystemInfoToJSONTyped(value?: SystemInfo | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'product': value['product'],
-        'version': value['version'],
-        'url': value['url'],
-        'capabilities': SystemCapabilitiesToJSON(value['capabilities']),
-    };
 }

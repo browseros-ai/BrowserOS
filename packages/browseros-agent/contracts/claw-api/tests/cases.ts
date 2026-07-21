@@ -1,6 +1,6 @@
 /**
  * The behavioral half of the contract: every case runs verbatim against
- * both server implementations through the generated client (raw fetch
+ * both server implementations through a test-local typed client (raw fetch
  * where the client can't express the check), asserting observable wire
  * behavior only — status codes, envelopes, headers — never anything
  * implementation-specific. A case that passes on one server and fails
@@ -16,10 +16,10 @@ import { expect } from 'bun:test'
 import {
   type ApiError,
   Harness,
-  RECORDING_INGEST_MAX_BYTES,
-  ResponseError,
   SessionStatus,
 } from '../../../packages/claw-api/src'
+import { RECORDING_INGEST_MAX_BYTES } from '../../../packages/shared/src/constants/limits'
+import { ContractHttpError } from './http-client'
 import type { ContractServer } from './server-adapters'
 
 export interface ContractCase {
@@ -60,13 +60,13 @@ export const contractCases: ContractCase[] = [
   {
     name: 'health',
     async run({ api }) {
-      expect(await api.system.getHealth()).toEqual({ status: 'ok' })
+      expect(await api.getHealth()).toEqual({ status: 'ok' })
     },
   },
   {
     name: 'system info',
     async run({ api }) {
-      const value = await api.system.getSystemInfo()
+      const value = await api.getSystemInfo()
       expect(value.product).toBe('BrowserClaw')
       expect(value.version).toBeString()
       expect(value.url).toStartWith('http://127.0.0.1:')
@@ -79,24 +79,22 @@ export const contractCases: ContractCase[] = [
   {
     name: 'telemetry read and update',
     async run({ api }) {
-      expect((await api.settings.getTelemetry()).distinctId).toBeString()
-      const updated = await api.settings.updateTelemetry({
+      expect((await api.getTelemetry()).distinctId).toBeString()
+      const updated = await api.updateTelemetry({
         updateTelemetryRequest: { consent: false },
       })
       expect(updated.consent).toBe(false)
-      expect((await api.settings.getTelemetry()).consent).toBe(false)
+      expect((await api.getTelemetry()).consent).toBe(false)
     },
   },
   {
     name: 'session list and detail',
     async run({ api, liveSessionId }) {
-      const list = await api.sessions.listSessions({ limit: 100 })
+      const list = await api.listSessions({ limit: 100 })
       expect(list.items.some((item) => item.sessionId === liveSessionId)).toBe(
         true,
       )
-      const detail = await api.sessions.getSession({
-        sessionId: liveSessionId,
-      })
+      const detail = await api.getSession({ sessionId: liveSessionId })
       expect(detail.session.sessionId).toBe(liveSessionId)
       expect(detail.dispatches[0]).toMatchObject({
         dispatchId: 1,
@@ -117,17 +115,20 @@ export const contractCases: ContractCase[] = [
   {
     name: 'idle live cancellation',
     async run({ api, liveSessionId }) {
-      expect(
-        await api.sessions.cancelSession({ sessionId: liveSessionId }),
-      ).toEqual({ cancelled: 0 })
+      expect(await api.cancelSession({ sessionId: liveSessionId })).toEqual({
+        cancelled: 0,
+      })
     },
   },
   {
     name: 'empty recording metadata',
     async run({ api, liveSessionId }) {
-      expect(
-        await api.recordings.getRecording({ sessionId: liveSessionId }),
-      ).toEqual({ hasData: false, complete: true, sizeBytes: 0, tabs: [] })
+      expect(await api.getRecording({ sessionId: liveSessionId })).toEqual({
+        hasData: false,
+        complete: true,
+        sizeBytes: 0,
+        tabs: [],
+      })
     },
   },
   {
@@ -141,14 +142,10 @@ export const contractCases: ContractCase[] = [
         xRecordingBatchId: 'contract-batch-1',
         body,
       }
-      expect(await api.recordings.appendRecordingEvents(request)).toEqual({
-        accepted: 2,
-      })
-      expect(await api.recordings.appendRecordingEvents(request)).toEqual({
-        accepted: 0,
-      })
+      expect(await api.appendRecordingEvents(request)).toEqual({ accepted: 2 })
+      expect(await api.appendRecordingEvents(request)).toEqual({ accepted: 0 })
       expect(
-        await api.recordings.getRecording({ sessionId: liveSessionId }),
+        await api.getRecording({ sessionId: liveSessionId }),
       ).toMatchObject({
         hasData: true,
         complete: true,
@@ -184,7 +181,7 @@ export const contractCases: ContractCase[] = [
       ].entries()) {
         await expectApiError(
           () =>
-            api.recordings.appendRecordingEvents({
+            api.appendRecordingEvents({
               xRecordingTabId: 101,
               xRecordingDocumentId: documentId,
               xRecordingBatchId: `contract-malformed-${index.toString()}`,
@@ -246,7 +243,7 @@ export const contractCases: ContractCase[] = [
     async run({ api }) {
       const accepted = recordingLineOfBytes(RECORDING_INGEST_MAX_BYTES, 400)
       expect(
-        await api.recordings.appendRecordingEvents({
+        await api.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: '9E84CDCAB8762569B5B109D125F60147',
           xRecordingBatchId: 'contract-boundary',
@@ -256,7 +253,7 @@ export const contractCases: ContractCase[] = [
 
       await expectApiError(
         () =>
-          api.recordings.appendRecordingEvents({
+          api.appendRecordingEvents({
             xRecordingTabId: 101,
             xRecordingDocumentId: 'A18F47A71C2B7DEF81230123456789AC',
             xRecordingBatchId: 'contract-over-limit',
@@ -267,7 +264,7 @@ export const contractCases: ContractCase[] = [
       )
 
       expect(
-        await api.recordings.appendRecordingEvents({
+        await api.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: 'B18F47A71C2B7DEF81230123456789AD',
           xRecordingBatchId: 'contract-after-over-limit',
@@ -285,9 +282,7 @@ export const contractCases: ContractCase[] = [
       secondLiveSessionId,
       zeroTabLiveSessionId,
     }) {
-      const snapshot = await api.sessions.listSessions({
-        status: SessionStatus.Live,
-      })
+      const snapshot = await api.listSessions({ status: SessionStatus.Live })
       expect(snapshot.nextCursor).toBeUndefined()
 
       const primary = snapshot.items.find(
@@ -359,7 +354,7 @@ export const contractCases: ContractCase[] = [
         expect(rawBrowserTabs).not.toContain(`"${forbiddenKey}"`)
       }
 
-      const preview = await api.sessions.getSessionBrowserTabPreview({
+      const preview = await api.getSessionBrowserTabPreview({
         sessionId: liveSessionId,
         browserTabId: 101,
       })
@@ -384,14 +379,12 @@ export const contractCases: ContractCase[] = [
   {
     name: 'connection lifecycle',
     async run({ api }) {
+      expect(Array.isArray((await api.listConnections()).items)).toBe(true)
       expect(
-        Array.isArray((await api.connections.listConnections()).items),
-      ).toBe(true)
-      expect(
-        await api.connections.connectHarness({ harness: Harness.Codex }),
+        await api.connectHarness({ harness: Harness.Codex }),
       ).toMatchObject({ harness: Harness.Codex, installed: true })
       expect(
-        await api.connections.disconnectHarness({ harness: Harness.Codex }),
+        await api.disconnectHarness({ harness: Harness.Codex }),
       ).toMatchObject({ harness: Harness.Codex, installed: false })
     },
   },
@@ -399,7 +392,7 @@ export const contractCases: ContractCase[] = [
     name: 'invalid limit',
     async run({ api }) {
       await expectApiError(
-        () => api.sessions.listSessions({ limit: 0 }),
+        () => api.listSessions({ limit: 0 }),
         400,
         'invalid_request',
       )
@@ -419,7 +412,7 @@ export const contractCases: ContractCase[] = [
     name: 'unknown session',
     async run({ api }) {
       await expectApiError(
-        () => api.sessions.getSession({ sessionId: 'missing' }),
+        () => api.getSession({ sessionId: 'missing' }),
         404,
         'session_not_found',
       )
@@ -429,7 +422,7 @@ export const contractCases: ContractCase[] = [
     name: 'recording write is session neutral',
     async run({ api }) {
       expect(
-        await api.recordings.appendRecordingEvents({
+        await api.appendRecordingEvents({
           xRecordingTabId: 101,
           xRecordingDocumentId: 'C18F47A71C2B7DEF81230123456789AE',
           xRecordingBatchId: 'contract-ended-independent',
@@ -442,7 +435,7 @@ export const contractCases: ContractCase[] = [
     name: 'unknown harness',
     async run({ api }) {
       await expectApiError(
-        () => api.connections.connectHarness({ harness: 'Unknown' as Harness }),
+        () => api.connectHarness({ harness: 'Unknown' as Harness }),
         404,
         'harness_not_found',
       )
@@ -488,7 +481,7 @@ export const contractCases: ContractCase[] = [
   {
     name: 'shutdown',
     async run({ api }) {
-      expect(await api.system.shutdown()).toEqual({ status: 'ok' })
+      expect(await api.shutdown()).toEqual({ status: 'ok' })
     },
   },
 ]
@@ -501,8 +494,8 @@ async function expectApiError(
   try {
     await request()
   } catch (error) {
-    expect(error).toBeInstanceOf(ResponseError)
-    const response = (error as ResponseError).response
+    expect(error).toBeInstanceOf(ContractHttpError)
+    const response = (error as ContractHttpError).response
     expect(response.status).toBe(status)
     const body = (await response.json()) as ApiError
     expect(body).toMatchObject({ code, message: expect.any(String) })

@@ -12,8 +12,6 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
-
 /**
  *
  * @export
@@ -46,53 +44,6 @@ export interface Connection {
     message: string;
 }
 
-
-
-/**
- * Check if a given object implements the Connection interface.
- */
-export function instanceOfConnection(value: object): value is Connection {
-    if (!('harness' in value) || value['harness'] === undefined) return false;
-    if (!('installed' in value) || value['installed'] === undefined) return false;
-    if (!('message' in value) || value['message'] === undefined) return false;
-    return true;
-}
-
-export function ConnectionFromJSON(json: any): Connection {
-    return ConnectionFromJSONTyped(json, false);
-}
-
-export function ConnectionFromJSONTyped(json: any, ignoreDiscriminator: boolean): Connection {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'harness': HarnessFromJSON(json['harness']),
-        'installed': json['installed'],
-        'configPath': json['configPath'] == null ? undefined : json['configPath'],
-        'message': json['message'],
-    };
-}
-
-export function ConnectionToJSON(json: any): Connection {
-    return ConnectionToJSONTyped(json, false);
-}
-
-export function ConnectionToJSONTyped(value?: Connection | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'harness': HarnessToJSON(value['harness']),
-        'installed': value['installed'],
-        'configPath': value['configPath'],
-        'message': value['message'],
-    };
-}
-
 /**
  *
  * @export
@@ -105,43 +56,6 @@ export interface ConnectionList {
      * @memberof ConnectionList
      */
     items: Array<Connection>;
-}
-
-/**
- * Check if a given object implements the ConnectionList interface.
- */
-export function instanceOfConnectionList(value: object): value is ConnectionList {
-    if (!('items' in value) || value['items'] === undefined) return false;
-    return true;
-}
-
-export function ConnectionListFromJSON(json: any): ConnectionList {
-    return ConnectionListFromJSONTyped(json, false);
-}
-
-export function ConnectionListFromJSONTyped(json: any, ignoreDiscriminator: boolean): ConnectionList {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'items': ((json['items'] as Array<any>).map(ConnectionFromJSON)),
-    };
-}
-
-export function ConnectionListToJSON(json: any): ConnectionList {
-    return ConnectionListToJSONTyped(json, false);
-}
-
-export function ConnectionListToJSONTyped(value?: ConnectionList | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'items': ((value['items'] as Array<any>).map(ConnectionToJSON)),
-    };
 }
 
 /**
@@ -158,31 +72,3 @@ export const Harness = {
     Zed: 'Zed'
 } as const;
 export type Harness = typeof Harness[keyof typeof Harness];
-
-
-export function instanceOfHarness(value: any): boolean {
-    for (const key in Harness) {
-        if (Object.prototype.hasOwnProperty.call(Harness, key)) {
-            if (Harness[key as keyof typeof Harness] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function HarnessFromJSON(json: any): Harness {
-    return HarnessFromJSONTyped(json, false);
-}
-
-export function HarnessFromJSONTyped(json: any, ignoreDiscriminator: boolean): Harness {
-    return json as Harness;
-}
-
-export function HarnessToJSON(value?: Harness | null): any {
-    return value as any;
-}
-
-export function HarnessToJSONTyped(value: any, ignoreDiscriminator: boolean): Harness {
-    return value as Harness;
-}

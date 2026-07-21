@@ -27,7 +27,7 @@ pub(super) async fn info(State(state): State<AppState>) -> Json<SystemInfo> {
     let mut capabilities = SystemCapabilities::new();
     capabilities.recording_ingest_version = Some(RecordingIngestVersion::Variant2);
     capabilities.recording_ingest_max_bytes =
-        Some(i64::try_from(claw_api::RECORDING_INGEST_MAX_BYTES).unwrap_or(i64::MAX));
+        Some(i64::try_from(super::RECORDING_INGEST_MAX_BYTES).unwrap_or(i64::MAX));
     info.capabilities = Some(Box::new(capabilities));
     Json(info)
 }

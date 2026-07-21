@@ -12,14 +12,7 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime.js';
 import type { Dispatch } from './dispatches.js';
-import {
-    DispatchFromJSON,
-    DispatchFromJSONTyped,
-    DispatchToJSON,
-    DispatchToJSONTyped,
-} from './dispatches.js';
 
 /**
  *
@@ -36,43 +29,6 @@ export interface CancelSessionResponse {
 }
 
 /**
- * Check if a given object implements the CancelSessionResponse interface.
- */
-export function instanceOfCancelSessionResponse(value: object): value is CancelSessionResponse {
-    if (!('cancelled' in value) || value['cancelled'] === undefined) return false;
-    return true;
-}
-
-export function CancelSessionResponseFromJSON(json: any): CancelSessionResponse {
-    return CancelSessionResponseFromJSONTyped(json, false);
-}
-
-export function CancelSessionResponseFromJSONTyped(json: any, ignoreDiscriminator: boolean): CancelSessionResponse {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'cancelled': json['cancelled'],
-    };
-}
-
-export function CancelSessionResponseToJSON(json: any): CancelSessionResponse {
-    return CancelSessionResponseToJSONTyped(json, false);
-}
-
-export function CancelSessionResponseToJSONTyped(value?: CancelSessionResponse | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'cancelled': value['cancelled'],
-    };
-}
-
-/**
  *
  * @export
  */
@@ -81,34 +37,6 @@ export const LiveSessionActivityState = {
     Idle: 'idle'
 } as const;
 export type LiveSessionActivityState = typeof LiveSessionActivityState[keyof typeof LiveSessionActivityState];
-
-
-export function instanceOfLiveSessionActivityState(value: any): boolean {
-    for (const key in LiveSessionActivityState) {
-        if (Object.prototype.hasOwnProperty.call(LiveSessionActivityState, key)) {
-            if (LiveSessionActivityState[key as keyof typeof LiveSessionActivityState] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function LiveSessionActivityStateFromJSON(json: any): LiveSessionActivityState {
-    return LiveSessionActivityStateFromJSONTyped(json, false);
-}
-
-export function LiveSessionActivityStateFromJSONTyped(json: any, ignoreDiscriminator: boolean): LiveSessionActivityState {
-    return json as LiveSessionActivityState;
-}
-
-export function LiveSessionActivityStateToJSON(value?: LiveSessionActivityState | null): any {
-    return value as any;
-}
-
-export function LiveSessionActivityStateToJSONTyped(value: any, ignoreDiscriminator: boolean): LiveSessionActivityState {
-    return value as LiveSessionActivityState;
-}
 
 /**
  *
@@ -128,48 +56,6 @@ export interface LiveSessionState {
      * @memberof LiveSessionState
      */
     browserTabs: Array<SessionBrowserTab>;
-}
-
-
-
-/**
- * Check if a given object implements the LiveSessionState interface.
- */
-export function instanceOfLiveSessionState(value: object): value is LiveSessionState {
-    if (!('state' in value) || value['state'] === undefined) return false;
-    if (!('browserTabs' in value) || value['browserTabs'] === undefined) return false;
-    return true;
-}
-
-export function LiveSessionStateFromJSON(json: any): LiveSessionState {
-    return LiveSessionStateFromJSONTyped(json, false);
-}
-
-export function LiveSessionStateFromJSONTyped(json: any, ignoreDiscriminator: boolean): LiveSessionState {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'state': LiveSessionActivityStateFromJSON(json['state']),
-        'browserTabs': ((json['browserTabs'] as Array<any>).map(SessionBrowserTabFromJSON)),
-    };
-}
-
-export function LiveSessionStateToJSON(json: any): LiveSessionState {
-    return LiveSessionStateToJSONTyped(json, false);
-}
-
-export function LiveSessionStateToJSONTyped(value?: LiveSessionState | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'state': LiveSessionActivityStateToJSON(value['state']),
-        'browserTabs': ((value['browserTabs'] as Array<any>).map(SessionBrowserTabToJSON)),
-    };
 }
 
 /**
@@ -235,63 +121,6 @@ export interface SessionBrowserTab {
 }
 
 /**
- * Check if a given object implements the SessionBrowserTab interface.
- */
-export function instanceOfSessionBrowserTab(value: object): value is SessionBrowserTab {
-    if (!('browserTabId' in value) || value['browserTabId'] === undefined) return false;
-    if (!('url' in value) || value['url'] === undefined) return false;
-    if (!('title' in value) || value['title'] === undefined) return false;
-    if (!('toolCount' in value) || value['toolCount'] === undefined) return false;
-    if (!('recentTools' in value) || value['recentTools'] === undefined) return false;
-    return true;
-}
-
-export function SessionBrowserTabFromJSON(json: any): SessionBrowserTab {
-    return SessionBrowserTabFromJSONTyped(json, false);
-}
-
-export function SessionBrowserTabFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionBrowserTab {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'browserTabId': json['browserTabId'],
-        'url': json['url'],
-        'title': json['title'],
-        'firstActivityAt': json['firstActivityAt'] == null ? undefined : json['firstActivityAt'],
-        'lastActivityAt': json['lastActivityAt'] == null ? undefined : json['lastActivityAt'],
-        'lastToolName': json['lastToolName'] == null ? undefined : json['lastToolName'],
-        'toolCount': json['toolCount'],
-        'recentTools': ((json['recentTools'] as Array<any>).map(ToolEventFromJSON)),
-        'previewCapturedAt': json['previewCapturedAt'] == null ? undefined : json['previewCapturedAt'],
-    };
-}
-
-export function SessionBrowserTabToJSON(json: any): SessionBrowserTab {
-    return SessionBrowserTabToJSONTyped(json, false);
-}
-
-export function SessionBrowserTabToJSONTyped(value?: SessionBrowserTab | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'browserTabId': value['browserTabId'],
-        'url': value['url'],
-        'title': value['title'],
-        'firstActivityAt': value['firstActivityAt'],
-        'lastActivityAt': value['lastActivityAt'],
-        'lastToolName': value['lastToolName'],
-        'toolCount': value['toolCount'],
-        'recentTools': ((value['recentTools'] as Array<any>).map(ToolEventToJSON)),
-        'previewCapturedAt': value['previewCapturedAt'],
-    };
-}
-
-/**
  *
  * @export
  * @interface SessionDetail
@@ -309,46 +138,6 @@ export interface SessionDetail {
      * @memberof SessionDetail
      */
     dispatches: Array<Dispatch>;
-}
-
-/**
- * Check if a given object implements the SessionDetail interface.
- */
-export function instanceOfSessionDetail(value: object): value is SessionDetail {
-    if (!('session' in value) || value['session'] === undefined) return false;
-    if (!('dispatches' in value) || value['dispatches'] === undefined) return false;
-    return true;
-}
-
-export function SessionDetailFromJSON(json: any): SessionDetail {
-    return SessionDetailFromJSONTyped(json, false);
-}
-
-export function SessionDetailFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionDetail {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'session': SessionSummaryFromJSON(json['session']),
-        'dispatches': ((json['dispatches'] as Array<any>).map(DispatchFromJSON)),
-    };
-}
-
-export function SessionDetailToJSON(json: any): SessionDetail {
-    return SessionDetailToJSONTyped(json, false);
-}
-
-export function SessionDetailToJSONTyped(value?: SessionDetail | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'session': SessionSummaryToJSON(value['session']),
-        'dispatches': ((value['dispatches'] as Array<any>).map(DispatchToJSON)),
-    };
 }
 
 /**
@@ -372,45 +161,6 @@ export interface SessionList {
 }
 
 /**
- * Check if a given object implements the SessionList interface.
- */
-export function instanceOfSessionList(value: object): value is SessionList {
-    if (!('items' in value) || value['items'] === undefined) return false;
-    return true;
-}
-
-export function SessionListFromJSON(json: any): SessionList {
-    return SessionListFromJSONTyped(json, false);
-}
-
-export function SessionListFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionList {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'items': ((json['items'] as Array<any>).map(SessionSummaryFromJSON)),
-        'nextCursor': json['nextCursor'] == null ? undefined : json['nextCursor'],
-    };
-}
-
-export function SessionListToJSON(json: any): SessionList {
-    return SessionListToJSONTyped(json, false);
-}
-
-export function SessionListToJSONTyped(value?: SessionList | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'items': ((value['items'] as Array<any>).map(SessionSummaryToJSON)),
-        'nextCursor': value['nextCursor'],
-    };
-}
-
-/**
  *
  * @export
  */
@@ -420,34 +170,6 @@ export const SessionStatus = {
     Failed: 'failed'
 } as const;
 export type SessionStatus = typeof SessionStatus[keyof typeof SessionStatus];
-
-
-export function instanceOfSessionStatus(value: any): boolean {
-    for (const key in SessionStatus) {
-        if (Object.prototype.hasOwnProperty.call(SessionStatus, key)) {
-            if (SessionStatus[key as keyof typeof SessionStatus] === value) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-export function SessionStatusFromJSON(json: any): SessionStatus {
-    return SessionStatusFromJSONTyped(json, false);
-}
-
-export function SessionStatusFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionStatus {
-    return json as SessionStatus;
-}
-
-export function SessionStatusToJSON(value?: SessionStatus | null): any {
-    return value as any;
-}
-
-export function SessionStatusToJSONTyped(value: any, ignoreDiscriminator: boolean): SessionStatus {
-    return value as SessionStatus;
-}
 
 /**
  *
@@ -559,86 +281,6 @@ export interface SessionSummary {
     live?: LiveSessionState;
 }
 
-
-
-/**
- * Check if a given object implements the SessionSummary interface.
- */
-export function instanceOfSessionSummary(value: object): value is SessionSummary {
-    if (!('sessionId' in value) || value['sessionId'] === undefined) return false;
-    if (!('slug' in value) || value['slug'] === undefined) return false;
-    if (!('label' in value) || value['label'] === undefined) return false;
-    if (!('name' in value) || value['name'] === undefined) return false;
-    if (!('startedAt' in value) || value['startedAt'] === undefined) return false;
-    if (!('durationMs' in value) || value['durationMs'] === undefined) return false;
-    if (!('dispatchCount' in value) || value['dispatchCount'] === undefined) return false;
-    if (!('toolSequence' in value) || value['toolSequence'] === undefined) return false;
-    if (!('status' in value) || value['status'] === undefined) return false;
-    if (!('errorCount' in value) || value['errorCount'] === undefined) return false;
-    return true;
-}
-
-export function SessionSummaryFromJSON(json: any): SessionSummary {
-    return SessionSummaryFromJSONTyped(json, false);
-}
-
-export function SessionSummaryFromJSONTyped(json: any, ignoreDiscriminator: boolean): SessionSummary {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'sessionId': json['sessionId'],
-        'profileId': json['profileId'] == null ? undefined : json['profileId'],
-        'harness': json['harness'] == null ? undefined : json['harness'],
-        'color': json['color'] == null ? undefined : json['color'],
-        'slug': json['slug'],
-        'label': json['label'],
-        'name': json['name'],
-        'site': json['site'] == null ? undefined : json['site'],
-        'startedAt': json['startedAt'],
-        'endedAt': json['endedAt'] == null ? undefined : json['endedAt'],
-        'durationMs': json['durationMs'],
-        'dispatchCount': json['dispatchCount'],
-        'toolSequence': json['toolSequence'],
-        'status': SessionStatusFromJSON(json['status']),
-        'errorCount': json['errorCount'],
-        'lastScreenshotDispatchId': json['lastScreenshotDispatchId'] == null ? undefined : json['lastScreenshotDispatchId'],
-        'live': json['live'] == null ? undefined : LiveSessionStateFromJSON(json['live']),
-    };
-}
-
-export function SessionSummaryToJSON(json: any): SessionSummary {
-    return SessionSummaryToJSONTyped(json, false);
-}
-
-export function SessionSummaryToJSONTyped(value?: SessionSummary | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'sessionId': value['sessionId'],
-        'profileId': value['profileId'],
-        'harness': value['harness'],
-        'color': value['color'],
-        'slug': value['slug'],
-        'label': value['label'],
-        'name': value['name'],
-        'site': value['site'],
-        'startedAt': value['startedAt'],
-        'endedAt': value['endedAt'],
-        'durationMs': value['durationMs'],
-        'dispatchCount': value['dispatchCount'],
-        'toolSequence': value['toolSequence'],
-        'status': SessionStatusToJSON(value['status']),
-        'errorCount': value['errorCount'],
-        'lastScreenshotDispatchId': value['lastScreenshotDispatchId'],
-        'live': LiveSessionStateToJSON(value['live']),
-    };
-}
-
 /**
  *
  * @export
@@ -657,44 +299,4 @@ export interface ToolEvent {
      * @memberof ToolEvent
      */
     at: number;
-}
-
-/**
- * Check if a given object implements the ToolEvent interface.
- */
-export function instanceOfToolEvent(value: object): value is ToolEvent {
-    if (!('name' in value) || value['name'] === undefined) return false;
-    if (!('at' in value) || value['at'] === undefined) return false;
-    return true;
-}
-
-export function ToolEventFromJSON(json: any): ToolEvent {
-    return ToolEventFromJSONTyped(json, false);
-}
-
-export function ToolEventFromJSONTyped(json: any, ignoreDiscriminator: boolean): ToolEvent {
-    if (json == null) {
-        return json;
-    }
-    return {
-
-        'name': json['name'],
-        'at': json['at'],
-    };
-}
-
-export function ToolEventToJSON(json: any): ToolEvent {
-    return ToolEventToJSONTyped(json, false);
-}
-
-export function ToolEventToJSONTyped(value?: ToolEvent | null, ignoreDiscriminator: boolean = false): any {
-    if (value == null) {
-        return value;
-    }
-
-    return {
-
-        'name': value['name'],
-        'at': value['at'],
-    };
 }

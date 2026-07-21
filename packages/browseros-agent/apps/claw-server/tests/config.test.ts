@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { loadClawConfig, resolveDefaultResourcesDir } from '../src/config'
 import {
   CLAW_API_PORT_DEFAULT,
   CLAW_CDP_PORT_DEFAULT,
-} from '../src/shared/port'
+} from '@browseros/shared/constants/ports'
+import { loadClawConfig, resolveDefaultResourcesDir } from '../src/config'
 
 async function writeConfig(contents: unknown): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'claw-config-'))

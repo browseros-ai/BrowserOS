@@ -5,13 +5,10 @@
  */
 
 import {
-  Configuration,
   RECORDING_INGEST_FALLBACK_MAX_BYTES,
   RECORDING_INGEST_MAX_BYTES,
-  RecordingsApi,
-  ResponseError,
-  SystemApi,
-} from '@browseros/claw-api'
+} from '@browseros/shared/constants/limits'
+import { ApiResponseError, ClawApiClient } from '../api/client'
 import {
   createIndexedDbRecordingOutbox,
   type NewRecordingBatch,
@@ -58,11 +55,6 @@ interface IngestCapability {
   maxBytes: number
   expiresAt: number
   supported: boolean
-}
-
-interface RecordingApiClient {
-  recordings: RecordingsApi
-  system: SystemApi
 }
 
 export const RECORDINGS_QUEUE_MAX_BYTES = 2 * RECORDING_INGEST_MAX_BYTES
@@ -214,12 +206,12 @@ export function createRecordingsRelay(
 
   async function discoverCapability(
     baseUrl: string,
-    client: RecordingApiClient,
+    client: ClawApiClient,
   ): Promise<IngestCapability | undefined> {
     const cached = capabilities.get(baseUrl)
     if (cached && now() < cached.expiresAt) return cached
     try {
-      const system = await client.system.getSystemInfo()
+      const system = await client.getSystemInfo()
       const advertisedMax = system.capabilities?.recordingIngestMaxBytes
       const capability = {
         supported: system.capabilities?.recordingIngestVersion === 2,
@@ -234,7 +226,7 @@ export function createRecordingsRelay(
       capabilities.set(baseUrl, capability)
       return capability
     } catch (error) {
-      if (error instanceof ResponseError && error.response.status === 404) {
+      if (error instanceof ApiResponseError && error.response.status === 404) {
         const capability = {
           supported: false,
           maxBytes: RECORDING_INGEST_FALLBACK_MAX_BYTES,
@@ -250,15 +242,7 @@ export function createRecordingsRelay(
   async function sendBatch(batch: StoredRecordingBatch): Promise<SendOutcome> {
     try {
       const baseUrl = await options.resolveServerBaseUrl()
-      const configuration = new Configuration({
-        basePath: baseUrl,
-        credentials: 'omit',
-        fetchApi: fetch,
-      })
-      const client = {
-        recordings: new RecordingsApi(configuration),
-        system: new SystemApi(configuration),
-      }
+      const client = new ClawApiClient(baseUrl, { fetch })
       const capability = await discoverCapability(baseUrl, client)
       if (!capability) {
         return {
@@ -277,7 +261,7 @@ export function createRecordingsRelay(
       }
 
       const gap = await outbox.getGap(batch.documentId)
-      await client.recordings.appendRecordingEvents({
+      await client.appendRecordingEvents({
         xRecordingTabId: batch.tabId,
         xRecordingDocumentId: batch.documentId,
         xRecordingBatchId: batch.batchId,
@@ -286,7 +270,7 @@ export function createRecordingsRelay(
       })
       return { kind: 'success', gapToken: gap?.token }
     } catch (error) {
-      if (error instanceof ResponseError) {
+      if (error instanceof ApiResponseError) {
         if (error.response.status === 413) return { kind: 'oversize', error }
         if (error.response.status === 400) return { kind: 'invalid', error }
       }

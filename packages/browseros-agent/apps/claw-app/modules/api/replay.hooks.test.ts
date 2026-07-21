@@ -1,32 +1,4 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
-import {
-  Configuration,
-  ConnectionsApi,
-  DispatchesApi,
-  RecordingsApi,
-  SessionsApi,
-  SettingsApi,
-  SystemApi,
-} from '@browseros/claw-api'
-import * as client from './client'
-
-mock.module('./client', () => ({
-  ...client,
-  apiClient: async () => {
-    const configuration = new Configuration({
-      basePath: 'http://127.0.0.1:9200',
-    })
-    return {
-      connections: new ConnectionsApi(configuration),
-      dispatches: new DispatchesApi(configuration),
-      recordings: new RecordingsApi(configuration),
-      sessions: new SessionsApi(configuration),
-      settings: new SettingsApi(configuration),
-      system: new SystemApi(configuration),
-    }
-  },
-  resolveApiBaseUrl: async () => 'http://127.0.0.1:9200',
-}))
 
 const { fetchReplayEvents, fetchReplayMetadata, replayEventsRevision } =
   await import('./replay.hooks')

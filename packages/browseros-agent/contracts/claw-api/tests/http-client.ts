@@ -1,21 +1,7 @@
 /**
- * @license
- * Copyright 2025 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Handwritten BrowserClaw HTTP client for the app. OpenAPI owns the wire
- * contract and `@browseros/claw-api` owns its data shapes; this module owns
- * the endpoint-to-shape mapping used by UI hooks and the recorder.
- *
- * Base URL resolution order:
- *   1. BrowserOS `browseros.server.server_port` pref
- *   2. `?apiUrl=…` on window.location (dev launcher publishes this)
- *   3. sessionStorage cache of (2)
- *   4. VITE_BROWSEROS_CLAW_API_URL from the dev watcher
- *   5. standalone BrowserClaw port on 127.0.0.1
- *
- * The BrowserOS pref is callback-based, so `apiClient()` re-resolves on every
- * call and swaps the cached client when the managed port changes.
+ * Typed HTTP driver for cross-server conformance. It deliberately owns its
+ * route mapping so the suite checks both servers against the wire contract
+ * without sharing claw-app transport code.
  */
 
 import type {
@@ -33,22 +19,7 @@ import type {
   SystemInfo,
   TelemetryState,
   UpdateTelemetryRequest,
-} from '@browseros/claw-api'
-import {
-  apiBaseUrlSourcesFromWindow,
-  resolveBrowserOSServerBaseUrl,
-} from './browseros-ports'
-import { resolveApiBaseUrlFromSources } from './client.helpers'
-
-export type ApiFetcher = (
-  input: Parameters<typeof globalThis.fetch>[0],
-  init?: Parameters<typeof globalThis.fetch>[1],
-) => ReturnType<typeof globalThis.fetch>
-
-export interface ClawApiClientOptions {
-  fetch?: ApiFetcher
-  credentials?: RequestCredentials
-}
+} from '../../../packages/claw-api/src'
 
 export interface AppendRecordingEventsRequest {
   xRecordingTabId: number
@@ -69,28 +40,16 @@ export interface ListSessionsRequest {
   limit?: number
 }
 
-/** Non-success HTTP response; callers may parse its body as generated `ApiError`. */
-export class ApiResponseError extends Error {
-  override name = 'ApiResponseError'
+export class ContractHttpError extends Error {
+  override name = 'ContractHttpError'
 
   constructor(public readonly response: Response) {
-    super(
-      `BrowserClaw API request failed with status ${response.status.toString()}`,
-    )
+    super(`contract request failed with status ${response.status.toString()}`)
   }
 }
 
-export class ClawApiClient {
-  private readonly baseUrl: string
-  private readonly fetcher: ApiFetcher
-  private readonly credentials: RequestCredentials
-
-  constructor(baseUrl: string, options: ClawApiClientOptions = {}) {
-    this.baseUrl = baseUrl.replace(/\/$/, '')
-    this.fetcher =
-      options.fetch ?? ((input, init) => globalThis.fetch(input, init))
-    this.credentials = options.credentials ?? 'omit'
-  }
+export class ContractHttpClient {
+  constructor(private readonly baseUrl: string) {}
 
   getHealth(): Promise<HealthResponse> {
     return this.json('/system/health')
@@ -150,12 +109,6 @@ export class ClawApiClient {
     )
   }
 
-  downloadRecordingEvents(request: { sessionId: string }): Promise<string> {
-    return this.text(
-      `/api/v1/sessions/${pathPart(request.sessionId)}/recording/events`,
-    )
-  }
-
   appendRecordingEvents(
     request: AppendRecordingEventsRequest,
   ): Promise<AppendRecordingEventsResponse> {
@@ -184,12 +137,6 @@ export class ClawApiClient {
     )
   }
 
-  getDispatchScreenshot(request: { dispatchId: number }): Promise<Blob> {
-    return this.blob(
-      `/api/v1/dispatches/${request.dispatchId.toString()}/screenshot`,
-    )
-  }
-
   listConnections(): Promise<ConnectionList> {
     return this.json('/api/v1/connections')
   }
@@ -210,10 +157,6 @@ export class ClawApiClient {
     return (await (await this.request(path, init)).json()) as T
   }
 
-  private async text(path: string, init?: RequestInit): Promise<string> {
-    return (await this.request(path, init)).text()
-  }
-
   private async blob(path: string, init?: RequestInit): Promise<Blob> {
     return (await this.request(path, init)).blob()
   }
@@ -222,39 +165,15 @@ export class ClawApiClient {
     path: string,
     init: RequestInit = {},
   ): Promise<Response> {
-    const response = await this.fetcher(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       method: init.method ?? 'GET',
-      credentials: init.credentials ?? this.credentials,
+      credentials: 'omit',
       headers: new Headers(init.headers),
     })
-    if (!response.ok) throw new ApiResponseError(response)
+    if (!response.ok) throw new ContractHttpError(response)
     return response
   }
-}
-
-/** Synchronous resolution for binary URLs that are embedded directly in DOM attributes. */
-export function apiBaseUrl(): string {
-  return resolveApiBaseUrlFromSources(apiBaseUrlSourcesFromWindow())
-}
-
-export async function resolveApiBaseUrl(): Promise<string> {
-  return resolveBrowserOSServerBaseUrl(apiBaseUrlSourcesFromWindow())
-}
-
-let cachedBase: string | null = null
-let cachedClient: ClawApiClient | null = null
-
-export function apiClientForBaseUrl(baseUrl: string): ClawApiClient {
-  if (baseUrl !== cachedBase || !cachedClient) {
-    cachedBase = baseUrl
-    cachedClient = new ClawApiClient(baseUrl)
-  }
-  return cachedClient
-}
-
-export async function apiClient(): Promise<ClawApiClient> {
-  return apiClientForBaseUrl(await resolveApiBaseUrl())
 }
 
 function appendQuery(

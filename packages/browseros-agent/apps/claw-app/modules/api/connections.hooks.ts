@@ -16,7 +16,7 @@ export type ConnectionState = Connection
 
 export const useConnections = createQuery<ConnectionList>({
   queryKey: ['api', 'connections'],
-  fetcher: async () => (await apiClient()).connections.listConnections(),
+  fetcher: async () => (await apiClient()).listConnections(),
   refetchInterval: 5000,
 })
 
@@ -29,7 +29,7 @@ export const useConnectHarness = createMutation<
   ConnectionVariables
 >({
   mutationFn: async ({ harness }) =>
-    (await apiClient()).connections.connectHarness({ harness }),
+    (await apiClient()).connectHarness({ harness }),
 })
 
 export const useDisconnectHarness = createMutation<
@@ -37,5 +37,5 @@ export const useDisconnectHarness = createMutation<
   ConnectionVariables
 >({
   mutationFn: async ({ harness }) =>
-    (await apiClient()).connections.disconnectHarness({ harness }),
+    (await apiClient()).disconnectHarness({ harness }),
 })
