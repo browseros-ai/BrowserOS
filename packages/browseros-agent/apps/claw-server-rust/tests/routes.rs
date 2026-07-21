@@ -482,6 +482,14 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
             "idempotentHint": true
         })
     );
+    assert!(
+        app.state
+            .audit_log
+            .list_tasks(Default::default())
+            .await?
+            .tasks
+            .is_empty()
+    );
 
     let session = app
         .state
@@ -505,6 +513,26 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         format!("renamed to codex/invoice-processing (was codex/{generated})")
     );
     assert_eq!(session.label().await, "invoice-processing");
+    let first_task = app
+        .state
+        .audit_log
+        .get_task(session_id.as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("name_session dispatch missing"))?;
+    assert_eq!(first_task.summary.dispatch_count, 1);
+    assert_eq!(first_task.summary.tool_sequence, ["name_session"]);
+    assert_eq!(first_task.dispatches[0].tool_name, "name_session");
+    assert_eq!(
+        first_task.dispatches[0].args_json.as_deref(),
+        Some(r#"{"name":"  Invoice Processing!!!  "}"#)
+    );
+    let (status, live) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(live["items"][0]["sessionId"], session_id);
+    assert_eq!(live["items"][0]["dispatchCount"], 1);
+    assert_eq!(live["items"][0]["toolSequence"], json!(["name_session"]));
 
     let (_status, _headers, body) = request_json_with_headers(
         &app.router,
@@ -517,6 +545,17 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
     assert_eq!(
         body["result"]["content"][0]["text"],
         "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| (task.dispatch_count, task.tool_sequence)),
+        Some((
+            2,
+            vec!["name_session".to_string(), "name_session".to_string()]
+        ))
     );
 
     for (id, invalid, message) in [
@@ -539,6 +578,14 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         assert_eq!(body["result"]["content"][0]["text"], message);
         assert_eq!(session.label().await, "quarterly-reporting");
     }
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| task.dispatch_count),
+        Some(2)
+    );
     Ok(())
 }
 
