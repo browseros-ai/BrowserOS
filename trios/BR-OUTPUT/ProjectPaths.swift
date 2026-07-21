@@ -56,10 +56,16 @@ enum ProjectPaths {
         Bundle.main.infoDictionary?["TRIOS_CANARY_MCP_PORT"] as? String ?? "9205"
     }
 
+    static var meshPort: String {
+        Bundle.main.infoDictionary?["TRIOS_MESH_PORT"] as? String ?? "9505"
+    }
+
     static var mcpBaseURL: String { "http://127.0.0.1:\(mcpPort)" }
     static var browserOSHealthURL: String { "\(mcpBaseURL)/health" }
     static var agentHealthURL: String { "http://127.0.0.1:\(a2aPort)/health" }
     static var canaryHealthURL: String { "http://127.0.0.1:\(canaryMcpPort)/health" }
+    static var meshHealthURL: String { "http://127.0.0.1:\(meshPort)/health" }
+    static var meshStatusURL: String { "http://127.0.0.1:\(meshPort)/status" }
 
     // MARK: - Trinity State
 

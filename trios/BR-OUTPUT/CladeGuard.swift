@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 /// Monitors Sovereign and Canary health. Triggers binary rollback on corruption.
-/// Modeled on SessionGuard — same actor isolation, timer-based probing.
+/// Modeled on SessionGuard - same actor isolation, timer-based probing.
 ///
 /// SAFETY: Never auto-restarts the app. Rollback replaces the binary on disk;
 /// the user must restart manually. This prevents recursive launch cascades.
@@ -74,22 +74,22 @@ final class CladeGuard: ObservableObject {
         // During boot grace period we only log; we do NOT roll back.
         let elapsed = Date().timeIntervalSince(bootTimestamp)
         guard elapsed > bootGracePeriod else {
-            NSLog("[CladeGuard] Within boot grace period (\(Int(elapsed))s < \(Int(bootGracePeriod))s) — skipping rollback")
+            NSLog("[CladeGuard] Within boot grace period (\(Int(elapsed))s < \(Int(bootGracePeriod))s) - skipping rollback")
             return
         }
 
         guard consecutiveFailures >= maxConsecutiveFailures else {
-            NSLog("[CladeGuard] Failure count \(consecutiveFailures) < threshold \(maxConsecutiveFailures) — waiting")
+            NSLog("[CladeGuard] Failure count \(consecutiveFailures) < threshold \(maxConsecutiveFailures) - waiting")
             return
         }
 
         // Cooldown: do not roll back more than once every N seconds.
         if let last = lastRollbackTime, Date().timeIntervalSince(last) < rollbackCooldown {
-            NSLog("[CladeGuard] Rollback cooldown active — skipping")
+            NSLog("[CladeGuard] Rollback cooldown active - skipping")
             return
         }
 
-        NSLog("[CladeGuard] Sovereign unhealthy — triggering rollback")
+        NSLog("[CladeGuard] Sovereign unhealthy - triggering rollback")
         await triggerRollback()
     }
 
@@ -131,15 +131,19 @@ final class CladeGuard: ObservableObject {
     }
 
     /// Verifies SHA-256 checksum for a snapshot.
+    /// Returns false if the sidecar is missing or does not match.
     func verifyChecksum(_ snapshotPath: String) -> Bool {
         let checksumPath = "\(snapshotPath).sha256"
         let fm = FileManager.default
         guard fm.fileExists(atPath: checksumPath),
               let stored = try? String(contentsOfFile: checksumPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
-            NSLog("[CladeGuard] No checksum file for \(snapshotPath), skipping verification")
-            return true // permissive if no checksum
+            NSLog("[CladeGuard] No checksum file for \(snapshotPath) - rejecting snapshot")
+            return false
         }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: snapshotPath)) else { return false }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: snapshotPath)) else {
+            NSLog("[CladeGuard] Cannot read snapshot \(snapshotPath) for checksum verification")
+            return false
+        }
         let computed = SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined()
         let valid = stored == computed
         if !valid {
@@ -182,26 +186,26 @@ final class CladeGuard: ObservableObject {
         }
 
         guard let files = try? fm.contentsOfDirectory(atPath: snapshotDir) else {
-            NSLog("[CladeGuard] No snapshots available — manual intervention required")
+            NSLog("[CladeGuard] No snapshots available - manual intervention required")
             return
         }
         let snapshots = files
             .filter { $0.hasPrefix("trios_app-") && !$0.hasSuffix(".sha256") }
             .sorted { $0 > $1 }
         guard let newest = snapshots.first else {
-            NSLog("[CladeGuard] Snapshot directory empty — manual intervention required")
+            NSLog("[CladeGuard] Snapshot directory empty - manual intervention required")
             return
         }
         let candidate = "\(snapshotDir)/\(newest)"
         guard verifyChecksum(candidate) else {
-            NSLog("[CladeGuard] Newest snapshot checksum invalid — manual intervention required")
+            NSLog("[CladeGuard] Newest snapshot checksum invalid - manual intervention required")
             return
         }
         await applySnapshot(candidate)
     }
 
-    /// Replaces the on-disk binary with the chosen snapshot.
-    /// Does NOT kill or relaunch the running process — that is the user's decision.
+    /// Replaces the on-disk binary with the chosen snapshot atomically.
+    /// Does NOT kill or relaunch the running process - that is the user's decision.
     private func applySnapshot(_ snapshotPath: String) async {
         let fm = FileManager.default
         let targets = [
@@ -211,36 +215,60 @@ final class CladeGuard: ObservableObject {
 
         for target in targets {
             do {
-                if fm.fileExists(atPath: target) {
-                    try fm.removeItem(atPath: target)
+                guard fm.fileExists(atPath: snapshotPath) else {
+                    NSLog("[CladeGuard] Snapshot vanished before copy: \(snapshotPath)")
+                    continue
                 }
-                try fm.copyItem(atPath: snapshotPath, toPath: target)
+
+                let targetURL = URL(fileURLWithPath: target)
+                let snapshotURL = URL(fileURLWithPath: snapshotPath)
+                let tempURL = targetURL.appendingPathExtension("tmp")
+
+                // Copy snapshot to a temp file next to the target, then atomically swap.
+                if fm.fileExists(atPath: tempURL.path) {
+                    try fm.removeItem(at: tempURL)
+                }
+                try fm.copyItem(at: snapshotURL, to: tempURL)
+
+                let coordinator = NSFileCoordinator(filePresenter: nil)
+                var coordinatorError: NSError?
+                var replacementError: Error?
+                coordinator.coordinate(writingItemAt: targetURL, options: .forReplacing, writingItemAt: tempURL, options: [], error: &coordinatorError) { writeURL, tempWriteURL in
+                    do {
+                        _ = try fm.replaceItemAt(writeURL, withItemAt: tempWriteURL)
+                    } catch {
+                        replacementError = error
+                    }
+                }
+                if let error = replacementError ?? coordinatorError {
+                    throw error
+                }
             } catch {
-                NSLog("[CladeGuard] Failed to copy snapshot to \(target): \(error)")
+                NSLog("[CladeGuard] Failed to atomically replace \(target) with snapshot: \(error)")
             }
         }
 
         NSLog("[CladeGuard] Rolled back to \(snapshotPath)")
-        NSLog("[CladeGuard] ⚠️ The binary on disk has been restored. Please restart trios manually to run the restored version.")
+        NSLog("[CladeGuard] WARNING: The binary on disk has been restored. Please restart trios manually to run the restored version.")
 
         // Boot Probe: verify the restored binary would work (health via current runtime)
         try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
         let healthy = await sovereignCheck.check()
         if healthy {
-            NSLog("[CladeGuard] Boot probe PASSED — Sovereign healthy")
+            NSLog("[CladeGuard] Boot probe PASSED - Sovereign healthy")
         } else {
-            NSLog("[CladeGuard] Boot probe FAILED — Sovereign still unhealthy after rollback. Manual restart recommended.")
+            NSLog("[CladeGuard] Boot probe FAILED - Sovereign still unhealthy after rollback. Manual restart recommended.")
         }
     }
 
-    /// Manual emergency rollback — callable from CLI or skill.
+    /// Manual emergency rollback - callable from CLI or skill.
     func emergencyRollback() async {
         NSLog("[CladeGuard] EMERGENCY rollback invoked")
         await triggerRollback()
     }
 
     /// Boot probe after promotion: verifies Sovereign health within timeout.
-    /// Returns true if healthy; does NOT auto-rollback here —
+    /// Returns true if healthy; does NOT auto-rollback here -
     /// the caller decides whether to revert.
     func bootProbe(timeoutSeconds: UInt64 = 15) async -> Bool {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -252,7 +280,7 @@ final class CladeGuard: ObservableObject {
             }
             try? await Task.sleep(nanoseconds: 1 * 1_000_000_000)
         }
-        NSLog("[CladeGuard] Boot probe FAILED — manual rollback may be needed")
+        NSLog("[CladeGuard] Boot probe FAILED - manual rollback may be needed")
         return false
     }
 }
