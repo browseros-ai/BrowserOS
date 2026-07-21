@@ -5,16 +5,8 @@ SessionId:
   schema:
     type: string
     minLength: 1
-BrowserTabId:
-  name: browserTabId
-  in: path
-  required: true
-  schema:
-    type: integer
-    format: int64
-    minimum: 1
-DispatchId:
-  name: dispatchId
+ScreenshotId:
+  name: screenshotId
   in: path
   required: true
   schema:

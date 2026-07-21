@@ -10,7 +10,7 @@
     "toolSequence": ["navigate", "snapshot"],
     "status": "live",
     "errorCount": 0,
-    "lastScreenshotDispatchId": 42
+    "latestScreenshotId": 42
   },
   "dispatches": [
     {
@@ -25,8 +25,7 @@
       "targetId": "target-7",
       "url": "https://browseros.com",
       "title": "BrowserOS",
-      "durationMs": 800,
-      "hasScreenshot": false
+      "durationMs": 800
     },
     {
       "dispatchId": 42,
@@ -39,7 +38,7 @@
       "tabId": 101,
       "targetId": "target-7",
       "durationMs": 400,
-      "hasScreenshot": true
+      "screenshotId": 42
     }
   ]
 }

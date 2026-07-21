@@ -112,12 +112,6 @@ export interface SessionBrowserTab {
      * @memberof SessionBrowserTab
      */
     recentTools: Array<ToolEvent>;
-    /**
-     *
-     * @type {number}
-     * @memberof SessionBrowserTab
-     */
-    previewCapturedAt?: number;
 }
 
 /**
@@ -158,6 +152,46 @@ export interface SessionList {
      * @memberof SessionList
      */
     nextCursor?: number;
+}
+
+/**
+ *
+ * @export
+ * @interface SessionScreenshot
+ */
+export interface SessionScreenshot {
+    /**
+     *
+     * @type {number}
+     * @memberof SessionScreenshot
+     */
+    screenshotId: number;
+    /**
+     *
+     * @type {number}
+     * @memberof SessionScreenshot
+     */
+    capturedAt: number;
+    /**
+     *
+     * @type {string}
+     * @memberof SessionScreenshot
+     */
+    toolName: string;
+}
+
+/**
+ *
+ * @export
+ * @interface SessionScreenshotList
+ */
+export interface SessionScreenshotList {
+    /**
+     *
+     * @type {Array<SessionScreenshot>}
+     * @memberof SessionScreenshotList
+     */
+    items: Array<SessionScreenshot>;
 }
 
 /**
@@ -272,7 +306,7 @@ export interface SessionSummary {
      * @type {number}
      * @memberof SessionSummary
      */
-    lastScreenshotDispatchId?: number;
+    latestScreenshotId?: number;
     /**
      * Present only on summaries returned by an explicit `status=live` list query.
      * @type {LiveSessionState}

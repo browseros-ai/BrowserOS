@@ -26,10 +26,12 @@ paths:
     $ref: ./paths/recordings.yaml#/events
   /api/v1/recordings/events:
     $ref: ./paths/recordings.yaml#/ingest
-  /api/v1/sessions/{sessionId}/browser-tabs/{browserTabId}/preview:
-    $ref: ./paths/sessions.yaml#/browserTabPreview
-  /api/v1/dispatches/{dispatchId}/screenshot:
-    $ref: ./paths/dispatches.yaml#/screenshot
+  /api/v1/sessions/{sessionId}/preview:
+    $ref: ./paths/sessions.yaml#/preview
+  /api/v1/sessions/{sessionId}/screenshots:
+    $ref: ./paths/sessions.yaml#/screenshots
+  /api/v1/sessions/{sessionId}/screenshots/{screenshotId}:
+    $ref: ./paths/sessions.yaml#/screenshot
   /api/v1/connections:
     $ref: ./paths/connections.yaml#/collection
   /api/v1/connections/{harness}:
@@ -38,10 +40,8 @@ components:
   parameters:
     SessionId:
       $ref: ./parameters.yaml#/SessionId
-    BrowserTabId:
-      $ref: ./parameters.yaml#/BrowserTabId
-    DispatchId:
-      $ref: ./parameters.yaml#/DispatchId
+    ScreenshotId:
+      $ref: ./parameters.yaml#/ScreenshotId
     Harness:
       $ref: ./parameters.yaml#/Harness
     RecordingTabId:
@@ -94,6 +94,10 @@ components:
       $ref: ./schemas/sessions.yaml#/SessionList
     SessionDetail:
       $ref: ./schemas/sessions.yaml#/SessionDetail
+    SessionScreenshot:
+      $ref: ./schemas/sessions.yaml#/SessionScreenshot
+    SessionScreenshotList:
+      $ref: ./schemas/sessions.yaml#/SessionScreenshotList
     Dispatch:
       $ref: ./schemas/dispatches.yaml#/Dispatch
     CancelSessionResponse:

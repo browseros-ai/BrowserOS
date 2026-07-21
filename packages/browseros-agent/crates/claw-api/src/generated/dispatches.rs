@@ -43,8 +43,8 @@ pub struct Dispatch {
     pub result_meta: Option<String>,
     #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
-    #[serde(rename = "hasScreenshot")]
-    pub has_screenshot: bool,
+    #[serde(rename = "screenshotId", skip_serializing_if = "Option::is_none")]
+    pub screenshot_id: Option<i64>,
 }
 
 impl Dispatch {
@@ -55,7 +55,6 @@ impl Dispatch {
         label: String,
         session_id: String,
         tool_name: String,
-        has_screenshot: bool,
     ) -> Dispatch {
         Dispatch {
             dispatch_id,
@@ -73,7 +72,7 @@ impl Dispatch {
             args_json: None,
             result_meta: None,
             duration_ms: None,
-            has_screenshot,
+            screenshot_id: None,
         }
     }
 }

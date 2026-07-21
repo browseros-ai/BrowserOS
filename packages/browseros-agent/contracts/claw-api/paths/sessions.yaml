@@ -91,15 +91,14 @@ cancel:
         $ref: ../responses.yaml#/Conflict
       '500':
         $ref: ../responses.yaml#/InternalError
-browserTabPreview:
+preview:
   get:
-    operationId: getSessionBrowserTabPreview
+    operationId: getSessionPreview
     parameters:
       - $ref: ../parameters.yaml#/SessionId
-      - $ref: ../parameters.yaml#/BrowserTabId
     responses:
       '200':
-        description: Latest cached JPEG frame for a browser tab currently owned by the session.
+        description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.
         content:
           image/jpeg:
             schema:
@@ -108,13 +107,56 @@ browserTabPreview:
       '400':
         $ref: ../responses.yaml#/BadRequest
       '404':
-        description: The session and browser tab do not resolve to a currently owned preview.
+        description: The session does not resolve to a currently owned live browser tab preview.
         content:
           application/json:
             schema:
               $ref: ../schemas/common.yaml#/ApiError
             example:
               code: preview_not_found
-              message: browser tab preview not found
+              message: session preview not found
+      '500':
+        $ref: ../responses.yaml#/InternalError
+screenshots:
+  get:
+    operationId: listSessionScreenshots
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: Screenshot metadata ordered oldest to newest by capture time and screenshot ID.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionScreenshotList
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+screenshot:
+  get:
+    operationId: getSessionScreenshot
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+      - $ref: ../parameters.yaml#/ScreenshotId
+    responses:
+      '200':
+        description: Immutable session-owned screenshot JPEG.
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        description: The screenshot is unknown or is not owned by this session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+            example:
+              code: screenshot_not_found
+              message: session screenshot not found
       '500':
         $ref: ../responses.yaml#/InternalError

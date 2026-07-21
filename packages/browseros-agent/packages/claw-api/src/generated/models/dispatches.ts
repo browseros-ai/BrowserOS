@@ -110,8 +110,8 @@ export interface Dispatch {
     durationMs?: number;
     /**
      *
-     * @type {boolean}
+     * @type {number}
      * @memberof Dispatch
      */
-    hasScreenshot: boolean;
+    screenshotId?: number;
 }

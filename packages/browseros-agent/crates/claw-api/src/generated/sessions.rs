@@ -85,8 +85,6 @@ pub struct SessionBrowserTab {
     pub tool_count: i64,
     #[serde(rename = "recentTools")]
     pub recent_tools: Vec<models::ToolEvent>,
-    #[serde(rename = "previewCapturedAt", skip_serializing_if = "Option::is_none")]
-    pub preview_captured_at: Option<i64>,
 }
 
 impl SessionBrowserTab {
@@ -106,7 +104,6 @@ impl SessionBrowserTab {
             last_tool_name: None,
             tool_count,
             recent_tools,
-            preview_captured_at: None,
         }
     }
 }
@@ -146,6 +143,38 @@ impl SessionList {
             items,
             next_cursor: None,
         }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionScreenshot {
+    #[serde(rename = "screenshotId")]
+    pub screenshot_id: i64,
+    #[serde(rename = "capturedAt")]
+    pub captured_at: i64,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+}
+
+impl SessionScreenshot {
+    pub fn new(screenshot_id: i64, captured_at: i64, tool_name: String) -> SessionScreenshot {
+        SessionScreenshot {
+            screenshot_id,
+            captured_at,
+            tool_name,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionScreenshotList {
+    #[serde(rename = "items")]
+    pub items: Vec<models::SessionScreenshot>,
+}
+
+impl SessionScreenshotList {
+    pub fn new(items: Vec<models::SessionScreenshot>) -> SessionScreenshotList {
+        SessionScreenshotList { items }
     }
 }
 
@@ -208,11 +237,8 @@ pub struct SessionSummary {
     pub status: models::SessionStatus,
     #[serde(rename = "errorCount")]
     pub error_count: i64,
-    #[serde(
-        rename = "lastScreenshotDispatchId",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub last_screenshot_dispatch_id: Option<i64>,
+    #[serde(rename = "latestScreenshotId", skip_serializing_if = "Option::is_none")]
+    pub latest_screenshot_id: Option<i64>,
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
@@ -247,7 +273,7 @@ impl SessionSummary {
             tool_sequence,
             status,
             error_count,
-            last_screenshot_dispatch_id: None,
+            latest_screenshot_id: None,
             live: None,
         }
     }

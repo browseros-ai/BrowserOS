@@ -43,9 +43,6 @@ SessionBrowserTab:
       type: array
       items:
         $ref: '#/ToolEvent'
-    previewCapturedAt:
-      type: integer
-      format: int64
 LiveSessionState:
   type: object
   additionalProperties: false
@@ -112,7 +109,7 @@ SessionSummary:
       type: integer
       format: int64
       minimum: 0
-    lastScreenshotDispatchId:
+    latestScreenshotId:
       type: integer
       format: int64
       minimum: 1
@@ -145,6 +142,29 @@ SessionDetail:
       type: array
       items:
         $ref: ./dispatches.yaml#/Dispatch
+SessionScreenshot:
+  type: object
+  additionalProperties: false
+  required: [screenshotId, capturedAt, toolName]
+  properties:
+    screenshotId:
+      type: integer
+      format: int64
+      minimum: 1
+    capturedAt:
+      type: integer
+      format: int64
+    toolName:
+      type: string
+SessionScreenshotList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/SessionScreenshot'
 CancelSessionResponse:
   type: object
   additionalProperties: false

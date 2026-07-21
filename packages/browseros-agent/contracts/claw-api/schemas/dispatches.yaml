@@ -8,7 +8,6 @@ Dispatch:
     - label
     - sessionId
     - toolName
-    - hasScreenshot
   properties:
     dispatchId:
       type: integer
@@ -47,5 +46,7 @@ Dispatch:
       type: integer
       format: int64
       minimum: 0
-    hasScreenshot:
-      type: boolean
+    screenshotId:
+      type: integer
+      format: int64
+      minimum: 1
