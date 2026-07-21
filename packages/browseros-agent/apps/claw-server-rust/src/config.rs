@@ -10,7 +10,7 @@ use std::{
 
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
-const DEFAULT_SESSION_IDLE_MS: u64 = 5 * 60 * 1000;
+const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 const DEFAULT_SESSION_RETENTION_MS: u64 = 2 * 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
@@ -370,14 +370,14 @@ mod tests {
             (
                 "garbage",
                 "-500",
-                Duration::from_millis(300_000),
+                Duration::from_secs(30 * 60),
                 Duration::from_millis(7_200_000),
                 Duration::from_millis(60_000),
             ),
             (
                 "0",
                 "0x10",
-                Duration::from_millis(300_000),
+                Duration::from_secs(30 * 60),
                 Duration::from_millis(7_200_000),
                 Duration::from_millis(60_000),
             ),
@@ -419,7 +419,7 @@ mod tests {
             &config_path,
             &ConfigEnv::with_vars(BTreeMap::new(), home.clone()),
         )?;
-        assert_eq!(cfg.session_idle, Duration::from_millis(300_000));
+        assert_eq!(cfg.session_idle, Duration::from_secs(30 * 60));
         assert_eq!(cfg.session_retention, Duration::from_millis(7_200_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
         Ok(())
