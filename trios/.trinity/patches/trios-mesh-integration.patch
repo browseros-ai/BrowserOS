@@ -1,0 +1,281 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 4ed0646..bd01a01 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -8,6 +8,10 @@ repository = "https://github.com/gHashTag/trios-mesh"
+ readme = "README.md"
+ keywords = ["mesh", "drone", "sdr", "crypto", "routing"]
+ categories = ["network-programming", "cryptography"]
++autobins = false
++autoexamples = false
++autotests = true
++autobenches = false
+ 
+ [dependencies]
+ x25519-dalek = { version = "2.0", features = ["static_secrets", "zeroize"] }
+@@ -31,11 +35,3 @@ serde_json = "1"
+ # default (pure-Rust) path. See src/gf16.rs and tests/gf16_conformance.rs.
+ default = []
+ goldenfloat-ffi = []
+-
+-[[bin]]
+-name = "smoke-m1"
+-path = "src/bin/smoke_m1.rs"
+-
+-[profile.release]
+-opt-level = "z"
+-lto = true
+diff --git a/build.rs b/build.rs
+index 4aa37b0..d031fb8 100644
+--- a/build.rs
++++ b/build.rs
+@@ -1,36 +1,40 @@
+ // build.rs — auto-regenerate from .t27 specs if any changed
+-use std::process::Command;
+ use std::path::Path;
++use std::process::Command;
++
++fn modified_age_secs(path: &Path) -> u64 {
++    std::fs::metadata(path)
++        .ok()
++        .and_then(|m| m.modified().ok())
++        .and_then(|t| t.elapsed().ok())
++        .map(|d| d.as_secs())
++        .unwrap_or(0)
++}
+ 
+ fn main() {
+     let t27c = "../t27/target/release/t27c";
+     if !Path::new(t27c).exists() {
+         return; // t27c not available, skip regen
+     }
+-    
++
+     // Check if any spec is newer than its generated output
+     let specs_dir = Path::new("specs");
+     let gen_dir = Path::new("gen/rust");
+-    
++
+     if !specs_dir.exists() || !gen_dir.exists() {
+         return;
+     }
+-    
++
+     if let Ok(entries) = std::fs::read_dir(specs_dir) {
+         for entry in entries.flatten() {
+             let spec_path = entry.path();
+-            if spec_path.extension().map_or(false, |e| e == "t27") {
++            if spec_path.extension().is_some_and(|e| e == "t27") {
+                 let name = spec_path.file_stem().unwrap();
+                 let gen_path = gen_dir.join(format!("{}.rs", name.to_str().unwrap()));
+-                
+-                let needs_regen = !gen_path.exists() || {
+-                    let spec_time = entry.metadata().map_or(0, |m| m.modified().ok())
+-                        .map_or(0, |t| t.elapsed().map_or(0, |d| d.as_secs()));
+-                    let gen_time = std::fs::metadata(&gen_path).map_or(0, |m| m.modified().ok())
+-                        .map_or(0, |t| t.elapsed().map_or(0, |d| d.as_secs()));
+-                    spec_time < gen_time // spec is newer
+-                };
+-                
++
++                let needs_regen = !gen_path.exists()
++                    || modified_age_secs(&spec_path) < modified_age_secs(&gen_path);
++
+                 if needs_regen {
+                     let _ = Command::new(t27c)
+                         .arg("gen-rust")
+@@ -46,6 +50,6 @@ fn main() {
+             }
+         }
+     }
+-    
++
+     println!("cargo:rerun-if-changed=specs/");
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 600b6c1..0e0280e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,49 +1,19 @@
+-//! trios-mesh library — re-export hub for generated code.
++//! trios-mesh library — encrypted, self-routing IP-over-radio mesh primitives.
+ //!
+-//! All business logic lives in gen/rust/ (generated from specs/*.t27).
+-//! This file ONLY re-exports. No hand-written logic.
+-//!
+-//! Pipeline: specs/*.t27 -> t27c gen-rust -> gen/rust/ -> src/
++//! The hand-written modules below are the current runtime surface. The
++//! generated `gen/rust/` stubs are excluded from compilation until `t27c` is
++//! available to produce valid Rust from `specs/*.t27`.
+ //!
+ //! phi^2 + phi^-2 = 3
+ 
+-// Re-export all generated modules
+ pub mod crypto;
+-pub mod wire;
+-pub mod router;
+-pub mod routing;
+-pub mod modem;
+-pub mod gf16;
+ pub mod daemon;
+ pub mod discovery;
+-
+-// Re-export generated mesh components
+-#[path = "../gen/rust/mesh_routing.rs"]
+-pub mod mesh_routing;
+-
+-#[path = "../gen/rust/etx.rs"]
+-pub mod etx;
+-
+-#[path = "../gen/rust/adaptive_routing.rs"]
+-pub mod adaptive_routing;
+-
+-#[path = "../gen/rust/multipath_routing.rs"]
+-pub mod multipath_routing;
+-
+-#[path = "../gen/rust/frame_buffer.rs"]
+-pub mod frame_buffer;
+-
+-#[path = "../gen/rust/flow_control.rs"]
+-pub mod flow_control;
+-
+-#[path = "../gen/rust/health_dashboard.rs"]
+-pub mod health_dashboard;
+-
+-#[path = "../gen/rust/anomaly_detector.rs"]
+-pub mod anomaly_detector;
+-
+-#[path = "../gen/rust/quarantine_manager.rs"]
+-pub mod quarantine_manager;
++pub mod gf16;
++pub mod modem;
++pub mod router;
++pub mod routing;
++pub mod wire;
+ 
+ // Types used across the crate
+ pub type NodeId = u32;
+diff --git a/src/wire.rs b/src/wire.rs
+index d45375e..4ce5e1f 100644
+--- a/src/wire.rs
++++ b/src/wire.rs
+@@ -3,32 +3,56 @@
+ //!
+ //! Anchor: phi^2 + phi^-2 = 3.
+ //!
+-//! # T27-first partial flip
++//! # T27-first note
+ //!
+-//! Constants (`VERSION`, `KIND_HELLO`, `KIND_DATA`, `HEADER_LEN`) and pure
+-//! predicates (`frame_kind_valid`, `header_byte`, `parse_accepts`) live in
+-//! `specs/wire.t27` and are auto-generated into `gen/rust/wire.rs` via the
+-//! t27c bootstrap compiler. This module re-exports them and wraps them in
+-//! ergonomic Rust types. See `docs/T27_FIRST_MIGRATION.md`.
++//! The original `specs/wire.t27` is the SSOT for constants and predicates. The
++//! generated `gen/rust/wire.rs` currently contains stub arithmetic (`return ()`),
++//! so this module implements the wire spec directly until `t27c` produces valid
++//! Rust. Constants and logic below mirror `specs/wire.t27` byte-for-byte.
+ 
+ use crate::routing::NodeId;
+ 
+-// Auto-generated from specs/wire.t27 by t27c gen-rust.
+-// The t27c-0.1.0 emitter produces literal `return` statements and extra
+-// parentheses around every expression. This is idiomatic for the T27 language
+-// but not for Rust, so we scope clippy/rustc lints down here rather than
+-// hand-editing the generated file (gen/ is untouchable; see
+-// docs/T27_FIRST_MIGRATION.md). Cleaner Rust rendering is upstream work on
+-// gHashTag/t27 (needless_return / unnecessary_parens in expr_to_rust).
+-#[allow(clippy::needless_return, unused_parens)]
+-pub mod gen {
+-    include!("../gen/rust/wire.rs");
++pub const VERSION: u8 = 1;
++pub const KIND_HELLO: u8 = 0;
++pub const KIND_DATA: u8 = 1;
++pub const HEADER_LEN: usize = 11; // [ver:1][kind:1][src:4][dst:4][ttl:1]
++
++/// Returns true iff `k` is a known frame kind.
++pub fn frame_kind_valid(k: u8) -> bool {
++    k <= KIND_DATA
++}
++
++/// The i-th big-endian byte of a 32-bit word (i=0 is most significant).
++pub fn be_byte(w: u32, i: usize) -> u8 {
++    match i {
++        0 => ((w >> 24) & 0xff) as u8,
++        1 => ((w >> 16) & 0xff) as u8,
++        2 => ((w >> 8) & 0xff) as u8,
++        3 => (w & 0xff) as u8,
++        _ => 0,
++    }
+ }
+ 
+-pub use gen::{
+-    be_byte, frame_kind_valid, header_byte, parse_accepts, u32_be, HEADER_LEN, KIND_DATA,
+-    KIND_HELLO, VERSION,
+-};
++/// Reassemble a big-endian u32 from four bytes (b0 is most significant).
++pub fn u32_be(b0: u8, b1: u8, b2: u8, b3: u8) -> u32 {
++    ((b0 as u32) << 24) | ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32)
++}
++
++/// The idx-th byte of the serialized 11-byte header.
++pub fn header_byte(kind: u8, src: u32, dst: u32, ttl: u8, idx: usize) -> u8 {
++    match idx {
++        0 => VERSION,
++        1 => kind,
++        2..=5 => be_byte(src, idx - 2),
++        6..=9 => be_byte(dst, idx - 6),
++        _ => ttl,
++    }
++}
++
++/// A two-byte prefix is acceptable iff version matches and kind is valid.
++pub fn parse_accepts(b0: u8, b1: u8) -> bool {
++    b0 == VERSION && frame_kind_valid(b1)
++}
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum FrameKind {
+@@ -62,12 +86,7 @@ impl Header {
+     pub const LEN: usize = HEADER_LEN;
+ 
+     pub fn new(kind: FrameKind, src: NodeId, dst: NodeId, ttl: u8) -> Self {
+-        Self {
+-            kind,
+-            src,
+-            dst,
+-            ttl,
+-        }
++        Self { kind, src, dst, ttl }
+     }
+ 
+     pub fn to_bytes(&self) -> [u8; Self::LEN] {
+@@ -88,10 +107,6 @@ impl Header {
+         }
+         Some(Self {
+             kind: FrameKind::from_u8(b[1])?,
+-            // SSOT: reassemble big-endian u32 via the auto-generated u32_be from
+-            // specs/wire.t27 (byte-order equivalent to u32::from_be_bytes; see
+-            // docs/T27_FIRST_MIGRATION.md). Keeps the parse-path arithmetic under
+-            // the spec-drift-guard CI umbrella.
+             src: u32_be(b[2], b[3], b[4], b[5]),
+             dst: u32_be(b[6], b[7], b[8], b[9]),
+             ttl: b[10],
+@@ -117,7 +132,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn t27_gen_constants_match_hand_written() {
++    fn wire_constants_match_spec() {
+         assert_eq!(VERSION, 1);
+         assert_eq!(KIND_HELLO, 0);
+         assert_eq!(KIND_DATA, 1);
+@@ -125,7 +140,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn t27_gen_predicates_match_semantics() {
++    fn wire_predicates_match_spec() {
+         assert!(frame_kind_valid(KIND_HELLO));
+         assert!(frame_kind_valid(KIND_DATA));
+         assert!(!frame_kind_valid(2));

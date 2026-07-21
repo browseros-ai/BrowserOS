@@ -14,6 +14,7 @@ members = [
     "rings/RUST-11/clade-diff",
     "rings/RUST-12/clade-audit",
     "rings/RUST-14/clade-tablecloth",
+    "rings/RUST-13/trios-mesh",
 ]
 resolver = "2"
 

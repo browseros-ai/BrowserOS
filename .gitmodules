@@ -2,3 +2,7 @@
 	path = .internal-docs
 	url = git@github.com:browseros-ai/internal-docs.git
 	branch = main
+[submodule "trios-mesh"]
+	path = trios/rings/RUST-13/trios-mesh
+	url = https://github.com/gHashTag/tri-net.git
+	branch = main

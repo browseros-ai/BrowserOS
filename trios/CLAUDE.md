@@ -79,6 +79,7 @@ When operating as the Trinity Agent (Queen), follow this 6-phase loop:
   menu-bar logo). `./trios_app` works but the bare binary may not resolve bundle assets.
 - **E2E:** `bash e2e/trios_e2e_flow.sh`
 - **Health:** `curl -s http://127.0.0.1:9105/health`
+- **Mesh ring:** `cargo test -p trios-mesh` (RUST-13, submodule from `gHashTag/tri-net`)
 - **Git:** branch `feat/zai-provider`, main branch is `dev`
 - **T27 pipeline:** `/t27-phi-loop` or `/t27-tri-pipeline` for spec-first work on canon files
 
