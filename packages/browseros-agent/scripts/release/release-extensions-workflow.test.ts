@@ -49,13 +49,7 @@ describe('release-extensions workflow', () => {
     const preflight = browserClawWorkflow.slice(start, end)
 
     expect(preflight).toContain(
-      `CLAW_POSTHOG_KEY: ${'$'}{{ secrets.CLAW_POSTHOG_KEY }}`,
-    )
-    expect(preflight).toContain(
       `VITE_CLAW_POSTHOG_KEY: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_KEY }}`,
-    )
-    expect(preflight).toMatch(
-      /INPUT_INCLUDE_SERVERS[\s\S]*require_value CLAW_POSTHOG_KEY/,
     )
     expect(preflight).toMatch(
       /INPUT_EXTENSIONS[\s\S]*require_value VITE_CLAW_POSTHOG_KEY/,

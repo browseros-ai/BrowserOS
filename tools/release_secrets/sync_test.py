@@ -96,14 +96,8 @@ class WorkflowSecretScannerTest(unittest.TestCase):
             consumers,
         )
 
-    def test_claw_posthog_keys_are_required_and_hosts_are_optional(self):
+    def test_browserclaw_build_key_is_required_and_host_is_optional(self):
         expected_consumers = {
-            "CLAW_POSTHOG_KEY": (
-                "nightly-browserclaw.yml",
-                "release-browserclaw.yml",
-                "release-claw-server.yml",
-            ),
-            "CLAW_POSTHOG_HOST": ("release-claw-server.yml",),
             "VITE_CLAW_POSTHOG_KEY": (
                 "build-browseros.yml",
                 "release-browserclaw.yml",
@@ -114,8 +108,8 @@ class WorkflowSecretScannerTest(unittest.TestCase):
                 "release-extensions.yml",
             ),
         }
-        required_keys = {"CLAW_POSTHOG_KEY", "VITE_CLAW_POSTHOG_KEY"}
-        optional_hosts = {"CLAW_POSTHOG_HOST", "VITE_CLAW_POSTHOG_HOST"}
+        required_keys = {"VITE_CLAW_POSTHOG_KEY"}
+        optional_hosts = {"VITE_CLAW_POSTHOG_HOST"}
         referenced = scan_workflow_secret_refs(REPO_ROOT)
         allowlisted = {
             spec.name: spec.consumers
