@@ -1,12 +1,15 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, ToolDispatchRow},
+    db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
     error::{CanonicalError, RequestId},
     ids::SessionId,
     services::recordings::RecordingEventInput,
     services::{
-        cockpit::{self as live_sessions, LiveSessionFilters},
+        cockpit::{
+            LiveActivityState, LiveSessionFilters, LiveSessionProjection, LiveStateProjection,
+            LiveTabProjection,
+        },
         sessions::Session,
     },
 };
@@ -20,7 +23,8 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use claw_api::models::{
     AppendRecordingEventsResponse, CancelSessionResponse, Dispatch, RecordingMetadata,
-    RecordingSegmentMetadata, RecordingTabMetadata, SessionDetail, SessionList,
+    RecordingSegmentMetadata, RecordingTabMetadata, SessionBrowserTab, SessionDetail, SessionList,
+    SessionStatus, SessionSummary,
 };
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
@@ -45,19 +49,21 @@ pub(super) async fn list(
     let query = parse_query(&request_id, &raw)?;
     if query.status == Some(TaskStatus::Live) {
         state.previews.note_read();
-        let response = live_sessions::list(
-            &state,
-            &LiveSessionFilters {
+        let items = state
+            .cockpit
+            .list(&LiveSessionFilters {
                 profile_id: query.profile_id,
                 slug: query.slug,
                 site: query.site,
                 search: query.search,
                 since: query.since,
-            },
-        )
-        .await
-        .map_err(|source| internal(&request_id, source))?;
-        return Ok(Json(response));
+            })
+            .await
+            .map_err(|source| internal(&request_id, source))?
+            .into_iter()
+            .map(contract_live_projection)
+            .collect();
+        return Ok(Json(SessionList::new(items)));
     }
     let result = state
         .audit_log
@@ -81,7 +87,7 @@ pub(super) async fn list(
     let mut items = Vec::with_capacity(result.tasks.len());
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
-        let summary = live_sessions::contract_summary(task, session).await;
+        let summary = contract_summary(task, session).await;
         if query
             .profile_id
             .as_ref()
@@ -123,7 +129,9 @@ pub(super) async fn preview(
     Path((session_id, browser_tab_id)): Path<(String, String)>,
 ) -> Result<Response, CanonicalError> {
     let browser_tab_id = positive_browser_tab_id(&request_id, &browser_tab_id)?;
-    let frame = live_sessions::preview(&state, &session_id, browser_tab_id)
+    let frame = state
+        .cockpit
+        .preview(&session_id, browser_tab_id)
         .await
         .map_err(|source| internal(&request_id, source))?
         .ok_or_else(|| preview_not_found(&request_id))?;
@@ -586,10 +594,106 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
         .into_iter()
         .map(|row| contract_dispatch(row, &screenshots, profile_id.as_ref()))
         .collect();
-    SessionDetail::new(
-        live_sessions::contract_summary(task.summary, live).await,
-        dispatches,
+    SessionDetail::new(contract_summary(task.summary, live).await, dispatches)
+}
+
+async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
+    let name = match live {
+        Some(session) => session.label().await,
+        None => task.title.clone(),
+    };
+    let mut summary = SessionSummary::new(
+        task.session_id,
+        task.slug,
+        task.agent_label,
+        name,
+        task.started_at,
+        task.duration_ms.max(0),
+        task.dispatch_count,
+        task.tool_sequence,
+        contract_status(task.status),
+        task.error_count,
+    );
+    summary.profile_id = live
+        .and_then(|session| session.agent().profile_id())
+        .map(|profile_id| profile_id.as_str().to_string());
+    summary.site = task.site;
+    summary.ended_at = task.ended_at;
+    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
+    summary
+}
+
+fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary {
+    let LiveSessionProjection {
+        task,
+        profile_id,
+        harness,
+        color,
+        label,
+        name,
+        live,
+    } = projection;
+    let mut summary = SessionSummary::new(
+        task.session_id,
+        task.slug,
+        label,
+        name,
+        task.started_at,
+        task.duration_ms.max(0),
+        task.dispatch_count,
+        task.tool_sequence,
+        SessionStatus::Live,
+        task.error_count,
+    );
+    summary.profile_id = profile_id;
+    summary.harness = harness;
+    summary.color = Some(color);
+    summary.site = task.site;
+    summary.ended_at = task.ended_at;
+    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
+    summary.live = Some(Box::new(contract_live_state(live)));
+    summary
+}
+
+fn contract_live_state(projection: LiveStateProjection) -> claw_api::models::LiveSessionState {
+    claw_api::models::LiveSessionState::new(
+        match projection.state {
+            LiveActivityState::Active => claw_api::models::LiveSessionActivityState::Active,
+            LiveActivityState::Idle => claw_api::models::LiveSessionActivityState::Idle,
+        },
+        projection
+            .browser_tabs
+            .into_iter()
+            .map(contract_live_tab)
+            .collect(),
     )
+}
+
+fn contract_live_tab(projection: LiveTabProjection) -> SessionBrowserTab {
+    let mut tab = SessionBrowserTab::new(
+        projection.browser_tab_id,
+        projection.url,
+        projection.title,
+        projection.tool_count,
+        projection
+            .recent_tools
+            .into_iter()
+            .map(|event| claw_api::models::ToolEvent::new(event.name, event.at))
+            .collect(),
+    );
+    tab.first_activity_at = projection.first_activity_at;
+    tab.last_activity_at = projection.last_activity_at;
+    tab.last_tool_name = projection.last_tool_name;
+    tab.preview_captured_at = projection.preview_captured_at;
+    tab
+}
+
+fn contract_status(status: TaskStatus) -> SessionStatus {
+    match status {
+        TaskStatus::Live => SessionStatus::Live,
+        TaskStatus::Done => SessionStatus::Done,
+        TaskStatus::Failed => SessionStatus::Failed,
+    }
 }
 
 fn contract_dispatch(

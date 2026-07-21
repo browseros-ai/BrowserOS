@@ -6,23 +6,22 @@
 //! from becoming public API.
 
 use crate::{
-    AppState,
-    db::audit_log::{TaskStatus, TaskSummary},
+    db::audit_log::TaskSummary,
     error::{AppError, AppResult},
     services::{
-        browser::hex_for_slug, cockpit::ScreencastFrame, profiles::StoredAgentProfile,
-        sessions::Session,
+        browser::{BrowserService, hex_for_slug},
+        cockpit::{PreviewService, ScreencastFrame, TabActivityService, ToolEvent},
+        profiles::{ProfileService, StoredAgentProfile},
+        sessions::{Session, Sessions},
     },
 };
 use browseros_core::pages::PageInfo;
-use claw_api::models::{
-    LiveSessionActivityState, LiveSessionState, SessionBrowserTab, SessionList, SessionStatus,
-    SessionSummary, ToolEvent,
-};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+
+use crate::db::{AuditLog, SessionTabLedger};
 
 #[derive(Debug, Clone, Default)]
 pub struct LiveSessionFilters {
@@ -33,293 +32,325 @@ pub struct LiveSessionFilters {
     pub since: Option<i64>,
 }
 
-struct ProjectedSession {
-    summary: SessionSummary,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveActivityState {
+    Active,
+    Idle,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveTabProjection {
+    pub browser_tab_id: i64,
+    pub url: String,
+    pub title: String,
+    pub first_activity_at: Option<i64>,
+    pub last_activity_at: Option<i64>,
+    pub last_tool_name: Option<String>,
+    pub tool_count: i64,
+    pub recent_tools: Vec<ToolEvent>,
+    pub preview_captured_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveStateProjection {
+    pub state: LiveActivityState,
+    pub browser_tabs: Vec<LiveTabProjection>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveSessionProjection {
+    pub task: TaskSummary,
+    pub profile_id: Option<String>,
+    pub harness: Option<String>,
+    pub color: String,
+    pub label: String,
+    pub name: String,
+    pub live: LiveStateProjection,
 }
 
 struct ProjectedTab {
     ownership_id: i64,
     session_id: String,
     active: bool,
-    tab: SessionBrowserTab,
+    tab: LiveTabProjection,
 }
 
-pub async fn list(state: &AppState, filters: &LiveSessionFilters) -> AppResult<SessionList> {
-    let sessions = state.sessions.snapshot().await;
-    let profiles = state.profiles.list_profiles().await?;
-    let mut projected = Vec::with_capacity(sessions.len());
+pub struct CockpitQuery {
+    sessions: Arc<Sessions>,
+    profiles: Arc<ProfileService>,
+    audit_log: Arc<AuditLog>,
+    session_tabs: Arc<SessionTabLedger>,
+    browser: Arc<BrowserService>,
+    tab_activity: Arc<TabActivityService>,
+    previews: Arc<PreviewService>,
+}
 
-    for session in sessions {
-        let task = state
-            .audit_log
-            .get_task_summary(session.id().as_str())
-            .await?
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "live session {} has no audit summary",
-                    session.id().as_str()
-                ))
-            })?;
-        let task_title = task.title.clone();
-        let profile = matched_profile(&session, &profiles);
-        let mut summary = contract_summary(task, Some(&session)).await;
-        summary.status = SessionStatus::Live;
-        summary.profile_id = profile.map(|profile| profile.id.clone());
-        summary.harness = profile.map(|profile| profile.harness.to_string());
-        summary.color = Some(hex_for_slug(session.agent().slug()).to_string());
-        if let Some(profile) = profile {
-            summary.label.clone_from(&profile.name);
-        }
-        if matches_filters(&summary, &task_title, filters) {
-            projected.push(ProjectedSession { summary });
+impl CockpitQuery {
+    #[must_use]
+    pub fn new(
+        sessions: Arc<Sessions>,
+        profiles: Arc<ProfileService>,
+        audit_log: Arc<AuditLog>,
+        session_tabs: Arc<SessionTabLedger>,
+        browser: Arc<BrowserService>,
+        tab_activity: Arc<TabActivityService>,
+        previews: Arc<PreviewService>,
+    ) -> Self {
+        Self {
+            sessions,
+            profiles,
+            audit_log,
+            session_tabs,
+            browser,
+            tab_activity,
+            previews,
         }
     }
 
-    state.session_tabs.drain_writes().await;
-    let session_ids = projected
-        .iter()
-        .map(|projected| projected.summary.session_id.clone())
-        .collect::<Vec<_>>();
-    let ownership = state
-        .session_tabs
-        .list_open_session_tabs(&session_ids)
-        .await?;
-    let Some(pages) = current_pages(state).await else {
-        let connected = state
-            .sessions
+    pub async fn list(
+        &self,
+        filters: &LiveSessionFilters,
+    ) -> AppResult<Vec<LiveSessionProjection>> {
+        let sessions = self.sessions.snapshot().await;
+        let profiles = self.profiles.list_profiles().await?;
+        let mut projected = Vec::with_capacity(sessions.len());
+
+        for session in sessions {
+            let task = self
+                .audit_log
+                .get_task_summary(session.id().as_str())
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "live session {} has no audit summary",
+                        session.id().as_str()
+                    ))
+                })?;
+            let profile = matched_profile(&session, &profiles);
+            let projection = LiveSessionProjection {
+                label: profile
+                    .map(|profile| profile.name.clone())
+                    .unwrap_or_else(|| task.agent_label.clone()),
+                name: session.label().await,
+                profile_id: profile.map(|profile| profile.id.clone()),
+                harness: profile.map(|profile| profile.harness.to_string()),
+                color: hex_for_slug(session.agent().slug()).to_string(),
+                task,
+                live: LiveStateProjection {
+                    state: LiveActivityState::Idle,
+                    browser_tabs: Vec::new(),
+                },
+            };
+            if matches_filters(&projection, filters) {
+                projected.push(projection);
+            }
+        }
+
+        self.session_tabs.drain_writes().await;
+        let session_ids = projected
+            .iter()
+            .map(|projected| projected.task.session_id.clone())
+            .collect::<Vec<_>>();
+        let ownership = self
+            .session_tabs
+            .list_open_session_tabs(&session_ids)
+            .await?;
+        let Some(pages) = self.current_pages().await else {
+            let connected = self.connected_session_ids().await;
+            return Ok(projected
+                .into_iter()
+                .filter(|projected| connected.contains(&projected.task.session_id))
+                .collect());
+        };
+        let pages_by_tab = pages
+            .iter()
+            .map(|page| (page.tab_id.0, page))
+            .collect::<HashMap<_, _>>();
+        let activity = self.tab_activity.reconcile_pages(&pages).await;
+        let activity_by_incarnation = activity
+            .iter()
+            .map(|record| {
+                (
+                    (
+                        record.session_id.as_str(),
+                        record.tab_id,
+                        record.page_id,
+                        record.target_id.as_str(),
+                    ),
+                    record,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut tab_candidates = Vec::new();
+        for ownership in ownership {
+            let Some(page) = pages_by_tab.get(&ownership.tab_id) else {
+                continue;
+            };
+            let record = activity_by_incarnation.get(&(
+                ownership.session_id.as_str(),
+                ownership.tab_id,
+                page.page_id.0,
+                page.target_id.as_str(),
+            ));
+            let active = record.is_some_and(|record| record.status == "active");
+            let tab = LiveTabProjection {
+                browser_tab_id: ownership.tab_id,
+                url: page.url.clone(),
+                title: page.title.clone(),
+                first_activity_at: record.map(|record| record.first_tool_at),
+                last_activity_at: record.map(|record| record.last_tool_at),
+                last_tool_name: record.map(|record| record.last_tool_name.clone()),
+                tool_count: record
+                    .map(|record| i64::try_from(record.tool_count).unwrap_or(i64::MAX))
+                    .unwrap_or(0),
+                recent_tools: record
+                    .map(|record| record.recent_tools.clone())
+                    .unwrap_or_default(),
+                preview_captured_at: self
+                    .previews
+                    .frame_for(
+                        &ownership.session_id,
+                        page.page_id.0,
+                        page.target_id.as_str(),
+                    )
+                    .await
+                    .filter(|frame| !frame.jpeg_base64.is_empty())
+                    .map(|frame| frame.captured_at),
+            };
+            tab_candidates.push(ProjectedTab {
+                ownership_id: ownership.id,
+                session_id: ownership.session_id,
+                active,
+                tab,
+            });
+        }
+
+        self.session_tabs.drain_writes().await;
+        let current_ownership_ids = self
+            .session_tabs
+            .list_open_session_tabs(&session_ids)
+            .await?
+            .into_iter()
+            .map(|ownership| ownership.id)
+            .collect::<HashSet<_>>();
+        let connected = self.connected_session_ids().await;
+        let mut tabs_by_session = tab_candidates
+            .into_iter()
+            .filter(|candidate| current_ownership_ids.contains(&candidate.ownership_id))
+            .fold(
+                HashMap::<String, Vec<ProjectedTab>>::new(),
+                |mut by_session, candidate| {
+                    by_session
+                        .entry(candidate.session_id.clone())
+                        .or_default()
+                        .push(candidate);
+                    by_session
+                },
+            );
+        Ok(projected
+            .into_iter()
+            .filter(|projected| connected.contains(&projected.task.session_id))
+            .map(|mut projected| {
+                let candidates = tabs_by_session
+                    .remove(&projected.task.session_id)
+                    .unwrap_or_default();
+                projected.live.state = if candidates.iter().any(|candidate| candidate.active) {
+                    LiveActivityState::Active
+                } else {
+                    LiveActivityState::Idle
+                };
+                projected.live.browser_tabs = candidates
+                    .into_iter()
+                    .map(|candidate| candidate.tab)
+                    .collect();
+                projected.live.browser_tabs.sort_by(|left, right| {
+                    right
+                        .last_activity_at
+                        .cmp(&left.last_activity_at)
+                        .then_with(|| left.browser_tab_id.cmp(&right.browser_tab_id))
+                });
+                projected
+            })
+            .collect())
+    }
+
+    pub async fn preview(
+        &self,
+        session_id: &str,
+        browser_tab_id: i64,
+    ) -> AppResult<Option<ScreencastFrame>> {
+        let live_session_id = crate::ids::SessionId::new(session_id);
+        if !self.sessions.contains(&live_session_id).await {
+            return Ok(None);
+        }
+        self.session_tabs.drain_writes().await;
+        if self
+            .session_tabs
+            .open_session_tab(session_id, browser_tab_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let Some(pages) = self.current_pages().await else {
+            return Ok(None);
+        };
+        let Some(page) = pages.iter().find(|page| page.tab_id.0 == browser_tab_id) else {
+            return Ok(None);
+        };
+        let page_id = page.page_id.0;
+        let target_id = page.target_id.as_str().to_string();
+        let candidate = self
+            .previews
+            .frame_for(session_id, page_id, &target_id)
+            .await;
+        let Some(current_pages) = self.current_pages().await else {
+            return Ok(None);
+        };
+        if !current_pages.iter().any(|page| {
+            page.tab_id.0 == browser_tab_id
+                && page.page_id.0 == page_id
+                && page.target_id.as_str() == target_id.as_str()
+        }) {
+            return Ok(None);
+        }
+        // Browser and cache reads establish the incarnation first. Durable ownership and connected
+        // liveness are checked afterward so session authority is the return boundary.
+        self.session_tabs.drain_writes().await;
+        let owns_tab = self
+            .session_tabs
+            .open_session_tab(session_id, browser_tab_id)
+            .await?
+            .is_some();
+        let connected = self.sessions.contains(&live_session_id).await;
+        if !connected || !owns_tab {
+            return Ok(None);
+        }
+        Ok(candidate)
+    }
+
+    async fn connected_session_ids(&self) -> HashSet<String> {
+        self.sessions
             .snapshot()
             .await
             .into_iter()
             .map(|session| session.id().as_str().to_string())
-            .collect::<HashSet<_>>();
-        let items = projected
-            .into_iter()
-            .filter(|projected| connected.contains(&projected.summary.session_id))
-            .map(|mut projected| {
-                projected.summary.live = Some(Box::new(LiveSessionState::new(
-                    LiveSessionActivityState::Idle,
-                    Vec::new(),
-                )));
-                projected.summary
-            })
-            .collect();
-        return Ok(SessionList::new(items));
-    };
-    let pages_by_tab = pages
-        .iter()
-        .map(|page| (page.tab_id.0, page))
-        .collect::<HashMap<_, _>>();
-    let activity = state.tab_activity.reconcile_pages(&pages).await;
-    let activity_by_incarnation = activity
-        .iter()
-        .map(|record| {
-            (
-                (
-                    record.session_id.as_str(),
-                    record.tab_id,
-                    record.page_id,
-                    record.target_id.as_str(),
-                ),
-                record,
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    let mut tab_candidates = Vec::new();
-    for ownership in ownership {
-        let Some(page) = pages_by_tab.get(&ownership.tab_id) else {
-            continue;
-        };
-        let record = activity_by_incarnation.get(&(
-            ownership.session_id.as_str(),
-            ownership.tab_id,
-            page.page_id.0,
-            page.target_id.as_str(),
-        ));
-        let active = record.is_some_and(|record| record.status == "active");
-        let recent_tools = record
-            .map(|record| {
-                record
-                    .recent_tools
-                    .iter()
-                    .map(|event| ToolEvent::new(event.name.clone(), event.at))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut tab = SessionBrowserTab::new(
-            ownership.tab_id,
-            page.url.clone(),
-            page.title.clone(),
-            record
-                .map(|record| i64::try_from(record.tool_count).unwrap_or(i64::MAX))
-                .unwrap_or(0),
-            recent_tools,
-        );
-        if let Some(record) = record {
-            tab.first_activity_at = Some(record.first_tool_at);
-            tab.last_activity_at = Some(record.last_tool_at);
-            tab.last_tool_name = Some(record.last_tool_name.clone());
+            .collect()
+    }
+
+    async fn current_pages(&self) -> Option<Vec<PageInfo>> {
+        let browser = self.browser.session().await?;
+        if !browser.is_connected() {
+            return None;
         }
-        tab.preview_captured_at = state
-            .previews
-            .frame_for(
-                &ownership.session_id,
-                page.page_id.0,
-                page.target_id.as_str(),
-            )
-            .await
-            .filter(|frame| !frame.jpeg_base64.is_empty())
-            .map(|frame| frame.captured_at);
-        tab_candidates.push(ProjectedTab {
-            ownership_id: ownership.id,
-            session_id: ownership.session_id,
-            active,
-            tab,
-        });
+        match browser.pages.list().await {
+            Ok(pages) => Some(pages),
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to reconcile live browser pages");
+                None
+            }
+        }
     }
-
-    state.session_tabs.drain_writes().await;
-    let current_ownership_ids = state
-        .session_tabs
-        .list_open_session_tabs(&session_ids)
-        .await?
-        .into_iter()
-        .map(|ownership| ownership.id)
-        .collect::<HashSet<_>>();
-    let connected = state
-        .sessions
-        .snapshot()
-        .await
-        .into_iter()
-        .map(|session| session.id().as_str().to_string())
-        .collect::<HashSet<_>>();
-    let mut tabs_by_session = tab_candidates
-        .into_iter()
-        .filter(|candidate| current_ownership_ids.contains(&candidate.ownership_id))
-        .fold(
-            HashMap::<String, Vec<ProjectedTab>>::new(),
-            |mut by_session, candidate| {
-                by_session
-                    .entry(candidate.session_id.clone())
-                    .or_default()
-                    .push(candidate);
-                by_session
-            },
-        );
-    let items = projected
-        .into_iter()
-        .filter(|projected| connected.contains(&projected.summary.session_id))
-        .map(|mut projected| {
-            let candidates = tabs_by_session
-                .remove(&projected.summary.session_id)
-                .unwrap_or_default();
-            let active = candidates.iter().any(|candidate| candidate.active);
-            let mut browser_tabs = candidates
-                .into_iter()
-                .map(|candidate| candidate.tab)
-                .collect::<Vec<_>>();
-            browser_tabs.sort_by(|left, right| {
-                right
-                    .last_activity_at
-                    .cmp(&left.last_activity_at)
-                    .then_with(|| left.browser_tab_id.cmp(&right.browser_tab_id))
-            });
-            projected.summary.live = Some(Box::new(LiveSessionState::new(
-                if active {
-                    LiveSessionActivityState::Active
-                } else {
-                    LiveSessionActivityState::Idle
-                },
-                browser_tabs,
-            )));
-            projected.summary
-        })
-        .collect();
-    Ok(SessionList::new(items))
-}
-
-pub async fn preview(
-    state: &AppState,
-    session_id: &str,
-    browser_tab_id: i64,
-) -> AppResult<Option<ScreencastFrame>> {
-    let live_session_id = crate::ids::SessionId::new(session_id);
-    if !state.sessions.contains(&live_session_id).await {
-        return Ok(None);
-    }
-    state.session_tabs.drain_writes().await;
-    if state
-        .session_tabs
-        .open_session_tab(session_id, browser_tab_id)
-        .await?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let Some(pages) = current_pages(state).await else {
-        return Ok(None);
-    };
-    let Some(page) = pages.iter().find(|page| page.tab_id.0 == browser_tab_id) else {
-        return Ok(None);
-    };
-    let page_id = page.page_id.0;
-    let target_id = page.target_id.as_str().to_string();
-    let candidate = state
-        .previews
-        .frame_for(session_id, page_id, &target_id)
-        .await;
-    let Some(current_pages) = current_pages(state).await else {
-        return Ok(None);
-    };
-    if !current_pages.iter().any(|page| {
-        page.tab_id.0 == browser_tab_id
-            && page.page_id.0 == page_id
-            && page.target_id.as_str() == target_id.as_str()
-    }) {
-        return Ok(None);
-    }
-    // Browser and cache reads establish the incarnation first. Durable ownership and connected
-    // liveness are checked afterward so session authority is the return boundary.
-    state.session_tabs.drain_writes().await;
-    let owns_tab = state
-        .session_tabs
-        .open_session_tab(session_id, browser_tab_id)
-        .await?
-        .is_some();
-    let connected = state.sessions.contains(&live_session_id).await;
-    if !connected || !owns_tab {
-        return Ok(None);
-    }
-    Ok(candidate)
-}
-
-pub async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
-    let name = match live {
-        Some(session) => session.label().await,
-        None => task.title.clone(),
-    };
-    let mut summary = SessionSummary::new(
-        task.session_id,
-        task.slug,
-        task.agent_label,
-        name,
-        task.started_at,
-        task.duration_ms.max(0),
-        task.dispatch_count,
-        task.tool_sequence,
-        match task.status {
-            TaskStatus::Live => SessionStatus::Live,
-            TaskStatus::Done => SessionStatus::Done,
-            TaskStatus::Failed => SessionStatus::Failed,
-        },
-        task.error_count,
-    );
-    summary.profile_id = live
-        .and_then(|session| session.agent().profile_id())
-        .map(|profile_id| profile_id.as_str().to_string());
-    summary.site = task.site;
-    summary.ended_at = task.ended_at;
-    summary.last_screenshot_dispatch_id = task.last_screenshot_dispatch_id;
-    summary
 }
 
 fn matched_profile<'a>(
@@ -332,52 +363,53 @@ fn matched_profile<'a>(
         .find(|profile| profile.id == profile_id.as_str())
 }
 
-fn matches_filters(
-    summary: &SessionSummary,
-    task_title: &str,
-    filters: &LiveSessionFilters,
-) -> bool {
+fn matches_filters(projection: &LiveSessionProjection, filters: &LiveSessionFilters) -> bool {
     if filters
         .profile_id
         .as_ref()
-        .is_some_and(|profile_id| summary.profile_id.as_ref() != Some(profile_id))
+        .is_some_and(|profile_id| projection.profile_id.as_ref() != Some(profile_id))
         || filters
             .slug
             .as_ref()
-            .is_some_and(|slug| &summary.slug != slug)
+            .is_some_and(|slug| &projection.task.slug != slug)
         || filters
             .site
             .as_ref()
-            .is_some_and(|site| summary.site.as_ref() != Some(site))
+            .is_some_and(|site| projection.task.site.as_ref() != Some(site))
         || filters
             .since
-            .is_some_and(|since| summary.started_at < since)
+            .is_some_and(|since| projection.task.started_at < since)
     {
         return false;
     }
     filters.search.as_ref().is_none_or(|search| {
         let search = search.to_ascii_lowercase();
-        task_title.to_ascii_lowercase().contains(&search)
-            || summary.name.to_ascii_lowercase().contains(&search)
-            || summary.label.to_ascii_lowercase().contains(&search)
-            || summary.slug.to_ascii_lowercase().contains(&search)
-            || summary
+        projection.task.title.to_ascii_lowercase().contains(&search)
+            || projection.name.to_ascii_lowercase().contains(&search)
+            || projection.label.to_ascii_lowercase().contains(&search)
+            || projection.task.slug.to_ascii_lowercase().contains(&search)
+            || projection
+                .task
                 .site
                 .as_ref()
                 .is_some_and(|site| site.to_ascii_lowercase().contains(&search))
     })
 }
 
-async fn current_pages(state: &AppState) -> Option<Vec<PageInfo>> {
-    let browser = state.browser.session().await?;
-    if !browser.is_connected() {
-        return None;
-    }
-    match browser.pages.list().await {
-        Ok(pages) => Some(pages),
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to reconcile live browser pages");
-            None
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructor_accepts_explicit_dependencies() {
+        let _: fn(
+            Arc<Sessions>,
+            Arc<ProfileService>,
+            Arc<AuditLog>,
+            Arc<SessionTabLedger>,
+            Arc<BrowserService>,
+            Arc<TabActivityService>,
+            Arc<PreviewService>,
+        ) -> CockpitQuery = CockpitQuery::new;
     }
 }
