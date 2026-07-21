@@ -1,9 +1,14 @@
 pub mod audit_log;
 pub mod entities;
 mod migration;
+pub mod recording_index;
 pub mod session_tabs;
 
 pub use audit_log::AuditLog;
+pub use recording_index::{
+    AppendDocumentBatch, LegacyClaimRow, LegacyRecordingRow, RecordingIndex, RecordingStreamRow,
+    SessionTabWindow, StreamMatchRow,
+};
 pub use session_tabs::SessionTabLedger;
 
 use crate::error::{AppError, AppResult, IoPath};

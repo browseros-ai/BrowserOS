@@ -1,21 +1,9 @@
 //! Transactional document-keyed rrweb persistence, independent of MCP attribution.
 
 use crate::{
-    capture::audit::AuditService,
     clock::now_epoch_ms,
-    db::entities::{
-        prelude::{
-            RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs, TabClaims,
-            TabRecordings,
-        },
-        recording_batches, recording_payloads, recording_streams, session_tabs, tab_claims,
-        tab_recordings,
-    },
+    db::{AppendDocumentBatch, RecordingIndex},
     error::{AppError, AppResult},
-};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -65,7 +53,7 @@ pub struct RetentionSweepResult {
 /// Stores each Chrome document stream and its durable batch acceptance ledger.
 pub struct RecordingStore {
     root: PathBuf,
-    audit: Arc<AuditService>,
+    index: Arc<RecordingIndex>,
     document_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
@@ -73,13 +61,13 @@ impl RecordingStore {
     #[must_use]
     pub fn new(
         root: PathBuf,
-        audit: Arc<AuditService>,
+        index: Arc<RecordingIndex>,
         _max_open_handles: usize,
         _idle_handle: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             root,
-            audit,
+            index,
             document_locks: Mutex::new(HashMap::new()),
         })
     }
@@ -149,79 +137,20 @@ impl RecordingStore {
             .unwrap_or_default();
         let size_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
         let event_count = i64::try_from(events.len()).unwrap_or(i64::MAX);
-        let txn = self.audit.connection().begin().await?;
-        async {
-            if RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
-                .one(&txn)
-                .await?
-                .is_some()
-            {
-                return Ok(false);
-            }
-            if events.is_empty() {
-                return Ok(true);
-            }
-            if let Some(existing) = RecordingStreams::find_by_id(document_id.to_string())
-                .one(&txn)
-                .await?
-            {
-                if existing.tab_id != tab_id {
-                    return Err(AppError::Internal(format!(
-                        "recording document {document_id} changed tab identity"
-                    )));
-                }
-                let mut update = existing.into_active_model();
-                if update.target_id.as_ref().is_none() && target_id.is_some() {
-                    update.target_id = Set(target_id.map(str::to_string));
-                }
-                update.first_event_at = Set(update.first_event_at.unwrap().min(first_event_at));
-                update.last_event_at = Set(update.last_event_at.unwrap().max(last_event_at));
-                update.size_bytes = Set(update.size_bytes.unwrap().saturating_add(size_bytes));
-                update.event_count = Set(update.event_count.unwrap().saturating_add(event_count));
-                update.has_gap = Set(update.has_gap.unwrap() || has_gap);
-                update.update(&txn).await?;
-            } else {
-                RecordingStreams::insert(recording_streams::ActiveModel {
-                    document_id: Set(document_id.to_string()),
-                    tab_id: Set(tab_id),
-                    target_id: Set(target_id.map(str::to_string)),
-                    first_event_at: Set(first_event_at),
-                    last_event_at: Set(last_event_at),
-                    size_bytes: Set(size_bytes),
-                    event_count: Set(event_count),
-                    has_gap: Set(has_gap),
-                })
-                .exec(&txn)
-                .await?;
-            }
-            if let Some(existing) = RecordingPayloads::find_by_id(document_id.to_string())
-                .one(&txn)
-                .await?
-            {
-                let mut update = existing.into_active_model();
-                let mut events_ndjson = update.events_ndjson.take().unwrap_or_default();
-                events_ndjson.push_str(&payload);
-                update.events_ndjson = Set(events_ndjson);
-                update.update(&txn).await?;
-            } else {
-                RecordingPayloads::insert(recording_payloads::ActiveModel {
-                    document_id: Set(document_id.to_string()),
-                    events_ndjson: Set(payload),
-                })
-                .exec(&txn)
-                .await?;
-            }
-            RecordingBatches::insert(recording_batches::ActiveModel {
-                document_id: Set(document_id.to_string()),
-                batch_id: Set(batch_id.to_string()),
-                accepted_at: Set(now_epoch_ms()),
+        self.index
+            .append_document_batch(AppendDocumentBatch {
+                document_id,
+                tab_id,
+                target_id,
+                payload,
+                first_event_at,
+                last_event_at,
+                size_bytes,
+                event_count,
+                batch_id,
+                has_gap,
             })
-            .exec(&txn)
-            .await?;
-            txn.commit().await?;
-            Ok::<bool, AppError>(true)
-        }
-        .await
+            .await
     }
 
     pub async fn read_range(
@@ -230,13 +159,10 @@ impl RecordingStore {
         from: i64,
         to: i64,
     ) -> AppResult<Vec<RecordedEvent>> {
-        let Some(payload) = RecordingPayloads::find_by_id(document_id.to_string())
-            .one(self.audit.connection())
-            .await?
-        else {
+        let Some(payload) = self.index.payload(document_id).await? else {
             return Ok(Vec::new());
         };
-        Ok(read_payload_range(&payload.events_ndjson, from, to))
+        Ok(read_payload_range(&payload, from, to))
     }
 
     pub async fn read_legacy_range(
@@ -258,10 +184,7 @@ impl RecordingStore {
             .saturating_mul(DAY_MS);
         let retention_cutoff = now.saturating_sub(retention_ms);
         let orphan_cutoff = now.saturating_sub(RECORDING_ORPHAN_TTL_MS);
-        let claims = SessionTabs::find().all(self.audit.connection()).await?;
-        let streams = RecordingStreams::find()
-            .all(self.audit.connection())
-            .await?;
+        let (claims, streams) = self.index.retention_snapshot().await?;
         let mut recordings_deleted = 0;
         for stream in streams {
             let claimed = claims.iter().any(|claim| {
@@ -279,9 +202,9 @@ impl RecordingStore {
             }
         }
 
-        let legacy = TabRecordings::find()
-            .filter(tab_recordings::Column::LastEventAt.lt(retention_cutoff))
-            .all(self.audit.connection())
+        let legacy = self
+            .index
+            .legacy_recordings_before(retention_cutoff)
             .await?;
         for recording in legacy {
             if self
@@ -292,30 +215,12 @@ impl RecordingStore {
             }
         }
 
-        let old_tab_claims = SessionTabs::find()
-            .filter(session_tabs::Column::ReleasedAt.is_not_null())
-            .filter(session_tabs::Column::ReleasedAt.lt(retention_cutoff))
-            .all(self.audit.connection())
-            .await?;
-        let old_target_claims = TabClaims::find()
-            .filter(tab_claims::Column::ReleasedAt.is_not_null())
-            .filter(tab_claims::Column::ReleasedAt.lt(retention_cutoff))
-            .all(self.audit.connection())
-            .await?;
-        SessionTabs::delete_many()
-            .filter(session_tabs::Column::ReleasedAt.is_not_null())
-            .filter(session_tabs::Column::ReleasedAt.lt(retention_cutoff))
-            .exec(self.audit.connection())
-            .await?;
-        TabClaims::delete_many()
-            .filter(tab_claims::Column::ReleasedAt.is_not_null())
-            .filter(tab_claims::Column::ReleasedAt.lt(retention_cutoff))
-            .exec(self.audit.connection())
-            .await?;
         Ok(RetentionSweepResult {
             recordings_deleted,
-            claims_deleted: u64::try_from(old_tab_claims.len() + old_target_claims.len())
-                .unwrap_or(u64::MAX),
+            claims_deleted: self
+                .index
+                .delete_released_claims_before(retention_cutoff)
+                .await?,
         })
     }
 
@@ -351,29 +256,14 @@ impl RecordingStore {
     async fn delete_document(&self, document_id: &str) -> AppResult<bool> {
         let lock = self.lock_for(document_id).await;
         let guard = lock.lock().await;
-        let result = async {
-            let Some(stream) = RecordingStreams::find_by_id(document_id.to_string())
-                .one(self.audit.connection())
-                .await?
-            else {
-                return Ok(false);
-            };
-            RecordingStreams::delete_by_id(stream.document_id)
-                .exec(self.audit.connection())
-                .await?;
-            Ok(true)
-        }
-        .await;
+        let result = async { self.index.delete_document(document_id).await }.await;
         drop(guard);
         self.release_lock(document_id, &lock).await;
         result
     }
 
     async fn delete_legacy_target(&self, target_id: &str, cutoff: i64) -> AppResult<bool> {
-        let Some(recording) = TabRecordings::find_by_id(target_id.to_string())
-            .one(self.audit.connection())
-            .await?
-        else {
+        let Some(recording) = self.index.legacy_recording(target_id).await? else {
             return Ok(false);
         };
         if recording.last_event_at >= cutoff
@@ -381,9 +271,7 @@ impl RecordingStore {
         {
             return Ok(false);
         }
-        TabRecordings::delete_by_id(target_id.to_string())
-            .exec(self.audit.connection())
-            .await?;
+        self.index.delete_legacy_recording(target_id).await?;
         Ok(true)
     }
 
@@ -489,27 +377,22 @@ fn sanitize_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::entities::{
-        prelude::{RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs},
-        session_tabs,
-    };
-    use sea_orm::{
-        ActiveValue::{NotSet, Set},
-        EntityTrait,
-    };
+    use crate::db::{Database, RecordingIndex};
     use tempfile::tempdir;
 
-    async fn setup() -> anyhow::Result<(tempfile::TempDir, Arc<AuditService>, Arc<RecordingStore>)>
+    async fn setup() -> anyhow::Result<(tempfile::TempDir, Arc<RecordingIndex>, Arc<RecordingStore>)>
     {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join("audit.sqlite")).await?,
+        ));
         let store = RecordingStore::new(
             dir.path().join("recordings"),
-            audit.clone(),
+            index.clone(),
             10,
             Duration::from_secs(1),
         );
-        Ok((dir, audit, store))
+        Ok((dir, index, store))
     }
 
     fn event(ts: i64) -> RecordingEventInput {
@@ -522,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn document_catalog_and_durable_dedupe_survive_store_recreation() -> anyhow::Result<()> {
-        let (_dir, audit, store) = setup().await?;
+        let (_dir, index, store) = setup().await?;
         let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
         assert!(
             store
@@ -538,7 +421,7 @@ mod tests {
         );
         let recreated = RecordingStore::new(
             store.root.clone(),
-            audit.clone(),
+            index.clone(),
             10,
             Duration::from_secs(1),
         );
@@ -547,27 +430,15 @@ mod tests {
                 .append_batch(document_id, 11, None, &[event(100)], "batch-a", false)
                 .await?
         );
-        assert_eq!(
-            RecordingStreams::find()
-                .all(audit.connection())
-                .await?
-                .len(),
-            1
-        );
-        assert_eq!(
-            RecordingBatches::find()
-                .all(audit.connection())
-                .await?
-                .len(),
-            1
-        );
+        assert_eq!(index.stream_count().await?, 1);
+        assert!(index.batch_exists(document_id, "batch-a").await?);
         assert_eq!(recreated.read_range(document_id, 100, 150).await?.len(), 1);
         Ok(())
     }
 
     #[tokio::test]
     async fn gap_is_sticky_and_target_can_resolve_after_first_batch() -> anyhow::Result<()> {
-        let (_dir, audit, store) = setup().await?;
+        let (_dir, index, store) = setup().await?;
         let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
         store
             .append_batch(document_id, 11, None, &[event(100)], "batch-a", true)
@@ -582,10 +453,7 @@ mod tests {
                 false,
             )
             .await?;
-        let Some(stream) = RecordingStreams::find_by_id(document_id)
-            .one(audit.connection())
-            .await?
-        else {
+        let Some(stream) = index.stream(document_id).await? else {
             anyhow::bail!("recording stream missing");
         };
         assert!(stream.has_gap);
@@ -597,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn document_identity_cannot_move_between_tabs() -> anyhow::Result<()> {
-        let (_dir, _audit, store) = setup().await?;
+        let (_dir, _index, store) = setup().await?;
         let document_id = "018f47a7-1c2b-7def-8123-0123456789ab";
         store
             .append_batch(document_id, 11, None, &[event(100)], "batch-a", false)
@@ -620,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn orphan_retention_keeps_claimed_streams_and_cascades_batches() -> anyhow::Result<()> {
-        let (_dir, audit, store) = setup().await?;
+        let (_dir, index, store) = setup().await?;
         let now = 10 * RECORDING_ORPHAN_TTL_MS;
         let claimed = "018f47a7-1c2b-7def-8123-0123456789ab";
         let orphan = "018f47a7-1c2b-7def-8123-0123456789ac";
@@ -644,17 +512,9 @@ mod tests {
                 false,
             )
             .await?;
-        SessionTabs::insert(session_tabs::ActiveModel {
-            id: NotSet,
-            session_id: Set("session-a".to_string()),
-            agent_id: Set("agent-a".to_string()),
-            tab_id: Set(11),
-            opened_target_id: Set(None),
-            claimed_at: Set(0),
-            released_at: Set(Some(now)),
-        })
-        .exec(audit.connection())
-        .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 11, None, 0, Some(now))
+            .await?;
 
         assert_eq!(
             store.sweep_retention(7, now).await?,
@@ -663,30 +523,10 @@ mod tests {
                 claims_deleted: 0,
             }
         );
-        assert!(
-            RecordingStreams::find_by_id(claimed)
-                .one(audit.connection())
-                .await?
-                .is_some()
-        );
-        assert!(
-            RecordingStreams::find_by_id(orphan)
-                .one(audit.connection())
-                .await?
-                .is_none()
-        );
-        assert!(
-            RecordingBatches::find_by_id((orphan.to_string(), "orphan".to_string()))
-                .one(audit.connection())
-                .await?
-                .is_none()
-        );
-        assert!(
-            RecordingPayloads::find_by_id(orphan)
-                .one(audit.connection())
-                .await?
-                .is_none()
-        );
+        assert!(index.stream(claimed).await?.is_some());
+        assert!(index.stream(orphan).await?.is_none());
+        assert!(!index.batch_exists(orphan, "orphan").await?);
+        assert!(!index.payload_exists(orphan).await?);
         Ok(())
     }
 }

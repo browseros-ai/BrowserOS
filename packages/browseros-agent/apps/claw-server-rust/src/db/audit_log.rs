@@ -213,6 +213,7 @@ impl AuditLog {
         Self { db }
     }
 
+    #[cfg(test)]
     pub(crate) fn connection(&self) -> &sea_orm::DatabaseConnection {
         self.db.connection()
     }

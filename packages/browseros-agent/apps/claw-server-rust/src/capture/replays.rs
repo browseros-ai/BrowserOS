@@ -1,17 +1,10 @@
 //! Read-time attribution from logical-tab ownership windows to document streams.
 
 use crate::{
-    capture::{
-        audit::AuditService,
-        recordings::{RecordedEvent, RecordingStore, legacy_document_id},
-    },
-    db::entities::{
-        prelude::{TabClaims, TabRecordings},
-        tab_claims,
-    },
+    capture::recordings::{RecordedEvent, RecordingStore, legacy_document_id},
+    db::{RecordingIndex, StreamMatchRow},
     error::AppResult,
 };
-use sea_orm::{ColumnTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, Statement};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 
@@ -60,13 +53,13 @@ pub struct ReplayMeta {
 /// Slices document streams through durable tab ownership windows.
 pub struct ReplayService {
     recordings: Arc<RecordingStore>,
-    audit: Arc<AuditService>,
+    index: Arc<RecordingIndex>,
 }
 
 impl ReplayService {
     #[must_use]
-    pub fn new(recordings: Arc<RecordingStore>, audit: Arc<AuditService>) -> Arc<Self> {
-        Arc::new(Self { recordings, audit })
+    pub fn new(recordings: Arc<RecordingStore>, index: Arc<RecordingIndex>) -> Arc<Self> {
+        Arc::new(Self { recordings, index })
     }
 
     pub async fn read_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
@@ -145,32 +138,11 @@ impl ReplayService {
     }
 
     async fn matches(&self, session_id: &str) -> AppResult<Vec<StreamMatchRow>> {
-        let statement = Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            r#"SELECT
-                rs.document_id, rs.tab_id, rs.target_id,
-                rs.first_event_at, rs.last_event_at, rs.size_bytes,
-                rs.event_count, rs.has_gap,
-                st.claimed_at, st.released_at
-              FROM session_tabs st
-              JOIN recording_streams rs
-                ON rs.tab_id = st.tab_id
-               AND rs.last_event_at >= st.claimed_at
-               AND rs.first_event_at <= COALESCE(st.released_at, 9223372036854775807)
-              WHERE st.session_id = ?
-              ORDER BY rs.first_event_at"#,
-            [session_id.into()],
-        );
-        Ok(StreamMatchRow::find_by_statement(statement)
-            .all(self.audit.connection())
-            .await?)
+        self.index.stream_matches(session_id).await
     }
 
     async fn read_legacy_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
-        let claims = TabClaims::find()
-            .filter(tab_claims::Column::SessionId.eq(session_id))
-            .all(self.audit.connection())
-            .await?;
+        let claims = self.index.legacy_claims(session_id).await?;
         let mut events = Vec::new();
         for claim in claims {
             events.extend(
@@ -199,12 +171,10 @@ impl ReplayService {
     }
 
     async fn legacy_meta(&self, session_id: &str) -> AppResult<Vec<(i64, ReplaySegmentMeta)>> {
-        let claims = TabClaims::find()
-            .filter(tab_claims::Column::SessionId.eq(session_id))
-            .all(self.audit.connection())
-            .await?;
-        let recordings = TabRecordings::find()
-            .all(self.audit.connection())
+        let claims = self.index.legacy_claims(session_id).await?;
+        let recordings = self
+            .index
+            .legacy_recordings()
             .await?
             .into_iter()
             .map(|recording| (recording.target_id.clone(), recording))
@@ -236,20 +206,6 @@ impl ReplayService {
             })
             .collect())
     }
-}
-
-#[derive(Debug, Clone, FromQueryResult)]
-struct StreamMatchRow {
-    document_id: String,
-    tab_id: i64,
-    target_id: Option<String>,
-    first_event_at: i64,
-    last_event_at: i64,
-    size_bytes: i64,
-    event_count: i64,
-    has_gap: bool,
-    claimed_at: i64,
-    released_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -370,9 +326,8 @@ mod tests {
     use super::*;
     use crate::{
         capture::recordings::RecordingEventInput,
-        db::entities::{prelude::SessionTabs, session_tabs},
+        db::{Database, RecordingIndex},
     };
-    use sea_orm::ActiveValue::{NotSet, Set};
     use serde_json::json;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -388,10 +343,12 @@ mod tests {
     #[tokio::test]
     async fn joins_tab_windows_across_document_targets_and_filters_exactly() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = Arc::new(AuditService::open(dir.path().join("audit.sqlite")).await?);
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join("audit.sqlite")).await?,
+        ));
         let recordings = RecordingStore::new(
             dir.path().join("recordings"),
-            audit.clone(),
+            index.clone(),
             10,
             Duration::from_secs(1),
         );
@@ -415,18 +372,10 @@ mod tests {
                 true,
             )
             .await?;
-        SessionTabs::insert(session_tabs::ActiveModel {
-            id: NotSet,
-            session_id: Set("session-a".to_string()),
-            agent_id: Set("agent-a".to_string()),
-            tab_id: Set(11),
-            opened_target_id: Set(Some("target-a".to_string())),
-            claimed_at: Set(100),
-            released_at: Set(Some(200)),
-        })
-        .exec(audit.connection())
-        .await?;
-        let replay = ReplayService::new(recordings, audit);
+        index
+            .insert_session_tab("session-a", "agent-a", 11, Some("target-a"), 100, Some(200))
+            .await?;
+        let replay = ReplayService::new(recordings, index);
 
         let events = replay.read_session("session-a").await?;
         assert_eq!(

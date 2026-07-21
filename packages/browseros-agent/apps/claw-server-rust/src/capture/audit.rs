@@ -15,12 +15,17 @@ pub struct AuditService {
 impl AuditService {
     pub async fn open(path: impl AsRef<Path>) -> AppResult<Self> {
         let database = Database::open(path).await?;
-        Ok(Self {
-            audit_log: Arc::new(DbAuditLog::new(database.clone())),
-            session_tabs: Arc::new(SessionTabLedger::new(database)),
-        })
+        Ok(Self::new(database))
     }
 
+    pub fn new(database: Database) -> Self {
+        Self {
+            audit_log: Arc::new(DbAuditLog::new(database.clone())),
+            session_tabs: Arc::new(SessionTabLedger::new(database)),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn connection(&self) -> &sea_orm::DatabaseConnection {
         self.audit_log.connection()
     }

@@ -7,6 +7,7 @@ use crate::{
         screenshots::ScreenshotService,
     },
     config::Config,
+    db::{Database, RecordingIndex},
     error::AppResult,
     harness::HarnessService,
     routes,
@@ -51,16 +52,17 @@ impl AppState {
     pub async fn new_with_home(config: Arc<Config>, home_dir: PathBuf) -> AppResult<Self> {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
-        let audit =
-            Arc::new(AuditService::open(config.browserclaw_dir.join("audit.sqlite")).await?);
+        let database = Database::open(config.browserclaw_dir.join("audit.sqlite")).await?;
+        let audit = Arc::new(AuditService::new(database.clone()));
+        let recording_index = Arc::new(RecordingIndex::new(database));
         audit.release_all_open_claims().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
-            audit.clone(),
+            recording_index.clone(),
             50,
             Duration::from_secs(30),
         );
-        let replays = ReplayReadService::new(recordings.clone(), audit.clone());
+        let replays = ReplayReadService::new(recordings.clone(), recording_index);
         let screenshots = Arc::new(ScreenshotService::new(
             config.browserclaw_dir.join("screenshots"),
         ));
