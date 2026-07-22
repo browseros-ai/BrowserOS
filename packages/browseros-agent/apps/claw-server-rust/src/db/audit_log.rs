@@ -24,6 +24,7 @@ use url::Url;
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
 
 const ARGS_JSON_MAX: usize = 4096;
+const SUSTAINED_ERROR_TAIL: usize = 3;
 
 #[derive(Clone)]
 pub struct AuditLog {
@@ -80,9 +81,9 @@ pub struct SessionScreenshotRow {
     pub tool_name: String,
 }
 
-/// Status derived from persisted dispatches and the session end event. Any dispatch error or an
-/// `errored` end is `Failed`; a `closed` end without errors is `Done`; all other materialized tasks
-/// are `Live`.
+/// Status derived from persisted dispatches and the session end event. Active and cancelled
+/// sessions keep lifecycle precedence; completed browser work fails only after three consecutive
+/// final tool errors. Sessions without browser work retain their explicit end status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
@@ -573,7 +574,7 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         .filter(|row| result_is_error(row.result_meta.as_deref()))
         .count() as i64;
     let end_event = end.clone().map(SessionEndEvent::from);
-    let status = derive_status(error_count, end_event.as_ref());
+    let status = derive_status(&dispatches, end_event.as_ref());
     let tool_sequence: Vec<String> = dispatches.iter().map(|row| row.tool_name.clone()).collect();
     let screenshot_ids: Vec<i64> = dispatches
         .iter()
@@ -660,12 +661,23 @@ async fn query_end<C: ConnectionTrait>(
         .await?)
 }
 
-fn derive_status(error_count: i64, end: Option<&SessionEndEvent>) -> TaskStatus {
-    match end.map(|event| event.kind.as_str()) {
-        Some("cancelled") => TaskStatus::Cancelled,
-        Some("errored") => TaskStatus::Failed,
-        Some("closed") if error_count == 0 => TaskStatus::Done,
-        _ if error_count > 0 => TaskStatus::Failed,
+fn derive_status(dispatches: &[ToolDispatchRow], end: Option<&SessionEndEvent>) -> TaskStatus {
+    let Some(end) = end else {
+        return TaskStatus::Live;
+    };
+    match end.kind.as_str() {
+        "cancelled" => TaskStatus::Cancelled,
+        "errored" if dispatches.is_empty() => TaskStatus::Failed,
+        "closed" if dispatches.is_empty() => TaskStatus::Done,
+        "closed" | "errored"
+            if dispatches.len() >= SUSTAINED_ERROR_TAIL
+                && dispatches[dispatches.len() - SUSTAINED_ERROR_TAIL..]
+                    .iter()
+                    .all(|row| result_is_error(row.result_meta.as_deref())) =>
+        {
+            TaskStatus::Failed
+        }
+        "closed" | "errored" => TaskStatus::Done,
         _ => TaskStatus::Live,
     }
 }
@@ -828,9 +840,12 @@ mod tests {
             .record_tool_dispatch(dispatch("a1", "https://alpha.example.com", false))
             .await?;
         audit.record_session_end("a1", "closed", None).await?;
-        audit
-            .record_tool_dispatch(dispatch("b1", "https://beta.example.com", true))
-            .await?;
+        for _ in 0..3 {
+            audit
+                .record_tool_dispatch(dispatch("b1", "https://beta.example.com", true))
+                .await?;
+        }
+        audit.record_session_end("b1", "closed", None).await?;
         let done = audit
             .list_tasks(ListTasksQuery {
                 status: Some(TaskStatus::Done),
@@ -851,6 +866,105 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_session_recovers_after_tool_error() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_tool_dispatch(dispatch("recovered", "https://example.com", true))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("recovered", "https://example.com", false))
+            .await?;
+        audit
+            .record_session_end("recovered", "errored", None)
+            .await?;
+
+        let summary = audit
+            .get_task_summary("recovered")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recovered task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Done);
+        assert_eq!(summary.error_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_session_failure_requires_three_error_tail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, error_tail) in [("two-errors", 2), ("three-errors", 3)] {
+            audit
+                .record_tool_dispatch(dispatch(session_id, "https://example.com", false))
+                .await?;
+            for _ in 0..error_tail {
+                audit
+                    .record_tool_dispatch(dispatch(session_id, "https://example.com", true))
+                    .await?;
+            }
+            audit.record_session_end(session_id, "closed", None).await?;
+        }
+
+        let two_errors = audit
+            .get_task_summary("two-errors")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("two-error task missing"))?;
+        assert_eq!(two_errors.status, TaskStatus::Done);
+        assert_eq!(two_errors.error_count, 2);
+
+        let three_errors = audit
+            .get_task_summary("three-errors")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("three-error task missing"))?;
+        assert_eq!(three_errors.status, TaskStatus::Failed);
+        assert_eq!(three_errors.error_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_session_stays_live_after_three_error_tail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for _ in 0..3 {
+            audit
+                .record_tool_dispatch(dispatch("active", "https://example.com", true))
+                .await?;
+        }
+
+        let summary = audit
+            .get_task_summary("active")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("active task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Live);
+        assert_eq!(summary.error_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_dispatch_tasks_keep_end_event_status() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, kind) in [("empty-closed", "closed"), ("empty-errored", "errored")] {
+            audit
+                .record_session_start(session_id, "agent", "agent", "Agent", "client", "1")
+                .await?;
+            audit.record_session_end(session_id, kind, None).await?;
+        }
+
+        let closed = audit
+            .get_task_summary("empty-closed")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("empty closed task missing"))?;
+        assert_eq!(closed.status, TaskStatus::Done);
+
+        let errored = audit
+            .get_task_summary("empty-errored")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("empty errored task missing"))?;
+        assert_eq!(errored.status, TaskStatus::Failed);
         Ok(())
     }
 
