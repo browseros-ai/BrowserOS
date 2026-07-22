@@ -76,6 +76,9 @@ pub async fn record_local_tool_dispatch(
         raw_args: raw_args.clone(),
         duration_ms,
         dispatch_id: dispatch_id.clone(),
+        tool_input_token_estimate: 0,
+        tool_output_token_estimate: 0,
+        token_estimator_version: 0,
         result: result_summary(result, false),
     };
     let _ = write_dispatch(state, input, &dispatch_id).await;
@@ -116,6 +119,9 @@ async fn record_dispatch(
             raw_args: call.raw_args.clone(),
             duration_ms,
             dispatch_id: call.dispatch_id.clone(),
+            tool_input_token_estimate: 0,
+            tool_output_token_estimate: 0,
+            token_estimator_version: 0,
             result: result_summary(result, cancelled),
         },
         &call.dispatch_id,

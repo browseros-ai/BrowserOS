@@ -553,6 +553,9 @@ async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
             raw_args: json!({}),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
+            tool_input_token_estimate: 1,
+            tool_output_token_estimate: 0,
+            token_estimator_version: 1,
             result: DispatchResultSummary {
                 is_error: false,
                 cancelled: false,

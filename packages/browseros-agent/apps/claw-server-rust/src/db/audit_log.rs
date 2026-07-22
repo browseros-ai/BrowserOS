@@ -11,6 +11,8 @@ use crate::{
     error::AppResult,
     ids::DispatchId,
 };
+use browseros_mcp::token_estimate::estimate_tool_output_tokens;
+use rmcp::model::ContentBlock;
 use sea_orm::{
     ActiveValue::{NotSet, Set},
     ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -25,6 +27,7 @@ pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
 
 const ARGS_JSON_MAX: usize = 4096;
 const SUSTAINED_ERROR_TAIL: usize = 3;
+const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
 
 #[derive(Clone)]
 pub struct AuditLog {
@@ -46,6 +49,12 @@ pub struct RecordToolDispatchInput {
     pub raw_args: serde_json::Value,
     pub duration_ms: i64,
     pub dispatch_id: DispatchId,
+    /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
+    pub tool_input_token_estimate: i64,
+    /// Approximate semantic content returned by BrowserClaw after result effects.
+    pub tool_output_token_estimate: i64,
+    /// Formula identity; version 0 is reserved for legacy or otherwise unmeasured rows.
+    pub token_estimator_version: i64,
     pub result: DispatchResultSummary,
 }
 
@@ -250,6 +259,9 @@ impl AuditLog {
             args_json: Set(Some(truncate(&safe_stringify(&input.raw_args)))),
             result_meta: Set(Some(summarize_result(&input.result))),
             duration_ms: Set(Some(input.duration_ms)),
+            tool_input_token_estimate: Set(input.tool_input_token_estimate.max(0)),
+            tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
+            token_estimator_version: Set(input.token_estimator_version.max(0)),
             dispatch_id: Set(Some(input.dispatch_id.into_inner())),
             has_screenshot: Set(false),
         })
@@ -278,18 +290,24 @@ impl AuditLog {
             is_error: true,
             cancelled: true,
             structured_content: json!({
-                "cancellationReason": "Operation cancelled by the User",
+                "cancellationReason": OPERATOR_CANCELLATION_REASON,
                 "cancellationKind": "cockpit.operator-cancelled",
             }),
             content: json!([{
                 "type": "text",
-                "text": "Operation cancelled by the User",
+                "text": OPERATOR_CANCELLATION_REASON,
             }]),
         };
+        let output_token_estimate =
+            estimate_tool_output_tokens(&[ContentBlock::text(OPERATOR_CANCELLATION_REASON)]);
         ToolDispatches::update_many()
             .col_expr(
                 tool_dispatches::Column::ResultMeta,
                 Expr::value(Some(summarize_result(&result))),
+            )
+            .col_expr(
+                tool_dispatches::Column::ToolOutputTokenEstimate,
+                Expr::value(output_token_estimate),
             )
             .filter(tool_dispatches::Column::Id.eq(dispatch.id))
             .exec(&txn)
@@ -772,6 +790,8 @@ mod tests {
         AuditLog, DispatchResultSummary, ListTasksQuery, RecordToolDispatchInput, TaskStatus,
     };
     use crate::db::{DATABASE_FILENAME, Database};
+    use browseros_mcp::token_estimate::estimate_tool_output_tokens;
+    use rmcp::model::ContentBlock;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -795,6 +815,9 @@ mod tests {
             raw_args: json!({ "url": url }),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
+            tool_input_token_estimate: 11,
+            tool_output_token_estimate: 22,
+            token_estimator_version: 1,
             result: DispatchResultSummary {
                 is_error,
                 cancelled: false,
@@ -802,6 +825,100 @@ mod tests {
                 content: json!([{ "type": "text", "text": "ok" }]),
             },
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_token_estimates_persist_and_sum_by_session() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut first = dispatch("a1", "https://one.example.com", false);
+        first.tool_input_token_estimate = 12;
+        first.tool_output_token_estimate = 34;
+        audit.record_tool_dispatch(first).await?;
+        let mut second = dispatch("a1", "https://two.example.com", false);
+        second.tool_input_token_estimate = 56;
+        second.tool_output_token_estimate = 78;
+        audit.record_tool_dispatch(second).await?;
+
+        let rows = audit
+            .list_dispatches(super::ListDispatchesQuery {
+                session_id: Some("a1".to_string()),
+                ..Default::default()
+            })
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.token_estimator_version == 1));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.tool_input_token_estimate)
+                .sum::<i64>(),
+            68
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.tool_output_token_estimate)
+                .sum::<i64>(),
+            112
+        );
+
+        let task = audit
+            .get_task_summary("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.dispatch_count, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_token_estimates_are_clamped_non_negative() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut input = dispatch("a1", "https://example.com", false);
+        input.tool_input_token_estimate = -1;
+        input.tool_output_token_estimate = -2;
+        input.token_estimator_version = -3;
+        audit.record_tool_dispatch(input).await?;
+
+        let row = audit
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.tool_input_token_estimate, 0);
+        assert_eq!(row.tool_output_token_estimate, 0);
+        assert_eq!(row.token_estimator_version, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operator_cancellation_replaces_only_the_output_estimate() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut input = dispatch("a1", "https://example.com", false);
+        input.tool_input_token_estimate = 123;
+        input.tool_output_token_estimate = 456;
+        let dispatch_id = input.dispatch_id.clone();
+        audit.record_tool_dispatch(input).await?;
+
+        assert!(audit.mark_dispatch_operator_cancelled(&dispatch_id).await?);
+
+        let row = audit
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.tool_input_token_estimate, 123);
+        assert_eq!(row.token_estimator_version, 1);
+        assert_eq!(
+            row.tool_output_token_estimate,
+            estimate_tool_output_tokens(&[ContentBlock::text("Operation cancelled by the User")])
+        );
+        Ok(())
     }
 
     #[tokio::test]

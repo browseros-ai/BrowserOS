@@ -12,7 +12,69 @@ impl MigratorTrait for Migrator {
             Box::new(m0003_document_recordings_and_tab_ownership::Migration),
             Box::new(m0004_atomic_recording_payloads::Migration),
             Box::new(m0005_reclassify_task_status::Migration),
+            Box::new(m0006_add_tool_token_estimates::Migration),
         ]
+    }
+}
+
+mod m0006_add_tool_token_estimates {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0006_add_tool_token_estimates"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Zero defaults preserve existing rows while reserving version 0 for unmeasured data.
+            for column in [
+                "tool_input_token_estimate",
+                "tool_output_token_estimate",
+                "token_estimator_version",
+            ] {
+                if !manager.has_column("tool_dispatches", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tool_dispatches"))
+                                .add_column(
+                                    ColumnDef::new(Alias::new(column))
+                                        .big_integer()
+                                        .not_null()
+                                        .default(0),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for column in [
+                "token_estimator_version",
+                "tool_output_token_estimate",
+                "tool_input_token_estimate",
+            ] {
+                if manager.has_column("tool_dispatches", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tool_dispatches"))
+                                .drop_column(Alias::new(column))
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 

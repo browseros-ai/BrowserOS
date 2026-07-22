@@ -203,7 +203,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 5);
+        assert_eq!(migrations.len(), 6);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -223,6 +223,10 @@ mod tests {
         assert_eq!(
             migrations[4].try_get::<String>("", "version")?,
             "m0005_reclassify_task_status"
+        );
+        assert_eq!(
+            migrations[5].try_get::<String>("", "version")?,
+            "m0006_add_tool_token_estimates"
         );
         Ok(())
     }
@@ -273,6 +277,9 @@ mod tests {
         assert_eq!(rows[0].tool_name, "navigate");
         assert_eq!(rows[0].dispatch_id, None);
         assert!(!rows[0].has_screenshot);
+        assert_eq!(rows[0].tool_input_token_estimate, 0);
+        assert_eq!(rows[0].tool_output_token_estimate, 0);
+        assert_eq!(rows[0].token_estimator_version, 0);
 
         let mut conn = SqliteConnection::connect_with(&options).await?;
         let columns = sqlx::query("PRAGMA table_info(tool_dispatches)")
@@ -284,6 +291,9 @@ mod tests {
         assert!(columns.contains("dispatch_id"));
         assert!(columns.contains("has_screenshot"));
         assert!(columns.contains("tab_id"));
+        assert!(columns.contains("tool_input_token_estimate"));
+        assert!(columns.contains("tool_output_token_estimate"));
+        assert!(columns.contains("token_estimator_version"));
         let drizzle_ledger: Option<i64> = sqlx::query_scalar(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'",
         )
@@ -339,7 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn double_open_keeps_one_baseline_record() -> anyhow::Result<()> {
+    async fn double_open_does_not_duplicate_migration_records() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
         let first = Database::open(&path).await?;
@@ -353,7 +363,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 5);
+        assert_eq!(migrations.len(), 6);
         Ok(())
     }
 

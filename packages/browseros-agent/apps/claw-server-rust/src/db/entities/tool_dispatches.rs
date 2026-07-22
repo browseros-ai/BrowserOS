@@ -21,6 +21,9 @@ pub struct Model {
     pub args_json: Option<String>,
     pub result_meta: Option<String>,
     pub duration_ms: Option<i64>,
+    pub tool_input_token_estimate: i64,
+    pub tool_output_token_estimate: i64,
+    pub token_estimator_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatch_id: Option<String>,
     pub has_screenshot: bool,
