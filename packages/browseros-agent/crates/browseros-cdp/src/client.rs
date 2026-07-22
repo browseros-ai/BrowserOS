@@ -159,6 +159,8 @@ impl CdpClient {
         self.inner.connected.load(Ordering::SeqCst)
     }
 
+    /// Identifies this client's WebSocket incarnation. Each successfully installed socket
+    /// advances it so consumers can invalidate and reseed connection-scoped state.
     #[must_use]
     pub fn epoch(&self) -> u64 {
         self.inner.epoch.load(Ordering::SeqCst)

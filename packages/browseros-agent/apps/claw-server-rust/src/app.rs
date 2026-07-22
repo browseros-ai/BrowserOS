@@ -1,7 +1,7 @@
 use crate::{
     api::http,
     config::Config,
-    db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
+    db::{AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger},
     error::AppResult,
     runtime::ShutdownHandle,
     services::{
@@ -52,7 +52,7 @@ impl AppState {
     pub async fn new_with_home(config: Arc<Config>, home_dir: PathBuf) -> AppResult<Self> {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
-        let database = Database::open(config.browserclaw_dir.join("audit.sqlite")).await?;
+        let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
         let audit_log = Arc::new(AuditLog::new(database.clone()));
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database));
@@ -132,4 +132,43 @@ pub fn build_router(state: AppState) -> Router {
     http::router(state.clone())
         .with_state(state)
         .layer(middleware::from_fn(http::request_context))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppState;
+    use crate::{config::Config, db::DATABASE_FILENAME};
+    use std::{sync::Arc, time::Duration};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn new_with_home_uses_browserclaw_database_without_touching_old_file()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let browserclaw_dir = dir.path().join("browserclaw");
+        tokio::fs::create_dir_all(&browserclaw_dir).await?;
+        let old_database = browserclaw_dir.join("audit.sqlite");
+        let old_contents = b"old database stays untouched";
+        tokio::fs::write(&old_database, old_contents).await?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: dir.path().join("resources"),
+            browserclaw_dir: browserclaw_dir.clone(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+
+        let _state = AppState::new_with_home(config, dir.path().join("home")).await?;
+
+        assert_eq!(DATABASE_FILENAME, "browserclaw.sqlite");
+        assert!(browserclaw_dir.join(DATABASE_FILENAME).is_file());
+        assert_eq!(tokio::fs::read(old_database).await?, old_contents);
+        Ok(())
+    }
 }

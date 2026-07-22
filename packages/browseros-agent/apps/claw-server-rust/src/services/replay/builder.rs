@@ -325,7 +325,7 @@ fn build_meta(entries: Vec<(i64, ReplaySegmentMeta)>) -> ReplayMeta {
 mod tests {
     use super::*;
     use crate::{
-        db::{Database, RecordingIndex},
+        db::{DATABASE_FILENAME, Database, RecordingIndex},
         services::recordings::RecordingEventInput,
     };
     use serde_json::json;
@@ -344,7 +344,7 @@ mod tests {
     async fn joins_tab_windows_across_document_targets_and_filters_exactly() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let index = Arc::new(RecordingIndex::new(
-            Database::open(dir.path().join("audit.sqlite")).await?,
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
         ));
         let recordings = RecordingStore::new(
             dir.path().join("recordings"),

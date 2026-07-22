@@ -4,6 +4,8 @@ pub struct SnapshotDiff {
     pub added: usize,
     pub removed: usize,
     pub changed: bool,
+    /// When true, `text` is the full current snapshot for a known URL change, not a line diff,
+    /// and `added` and `removed` are zero.
     pub url_changed: bool,
     pub before_url: Option<String>,
     pub after_url: Option<String>,

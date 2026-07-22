@@ -4,6 +4,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+/// Document identity synthesized for snapshot refs as `frame_id:loader_id`, not a raw CDP field.
+/// A change starts fresh stable-ref assignment for that document scope.
 pub type DocumentId = String;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,8 @@ pub struct RefEntry {
     pub backend_node_id: i64,
     pub role: String,
     pub name: String,
+    /// Zero-based occurrence among nodes with the same frame, role, and name in the latest capture.
+    /// Recomputed per snapshot and used only to recover a ref whose backend node id went stale.
     pub nth: usize,
     pub frame_id: Option<FrameId>,
 }

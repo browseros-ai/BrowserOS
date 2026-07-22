@@ -69,7 +69,7 @@ export interface ReplayData {
   frames: ReplayFrame[]
   complete: boolean | null
   tabs: ReplayTabData[]
-  eventsForDocument: (documentId: string) => readonly ReplayEvent[]
+  eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
 // `buildTabView` and the `TabView` shape live in `./tab-view.ts` so
@@ -172,7 +172,7 @@ function buildReplayData(
     frames,
     complete: metadata?.complete ?? null,
     tabs,
-    eventsForDocument: eventCatalog.eventsForDocument,
+    eventsForTab: eventCatalog.eventsForTab,
   }
 }
 
