@@ -11,6 +11,7 @@ import {
   useDisconnectHarness,
 } from '@/modules/api/connections.hooks'
 import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
@@ -118,6 +119,7 @@ export function Mcp() {
           </div>
         )}
       </section>
+      <ClaudeDesktopCard />
     </div>
   )
 }
