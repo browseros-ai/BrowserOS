@@ -22,9 +22,9 @@ nightly lanes use the repo-scoped Mac Mini runner instead; see
 | Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32als_v7` | P30, 1024 GB |
 | macOS arm64 | `warp-macos-26-arm64-12x` | macOS 26 | M4 Pro, 12 vCPU / 44 GB | 500 GB |
 
-WarpBuild provisions the Linux and Windows runners in the BrowserOS-owned
-Azure subscription `213254fd-b7b6-4b31-91d1-95ec27f848a8` through the
-`browseros-ci-eastus` BYOC stack in East US. Both configurations are
+WarpBuild provisions the Linux and Windows runners in the BrowserOS Azure
+subscription through the `browseros-ci-eastus` BYOC stack in East US. Both
+configurations are
 on-demand, with no standby pool and static IPs disabled. They are ephemeral:
 the VM and build disk are created for a job and discarded afterward. Their
 compute SKUs and disk capacities mirror the source Azure build VMs, but they
@@ -87,11 +87,10 @@ leaves `queued`:
    queued job was claimed within ~60 s of dispatch).
 
 2. **The Azure BYOC connection must be healthy**: sign in at
-   https://app.warpbuild.com/ and confirm subscription
-   `213254fd-b7b6-4b31-91d1-95ec27f848a8`, stack `browseros-ci-eastus` in
-   East US, and both custom runner configurations listed above. Also check
-   Azure quota and regional capacity for their VM SKUs when provisioning
-   fails.
+   https://app.warpbuild.com/ and confirm the BrowserOS Azure subscription,
+   stack `browseros-ci-eastus` in East US, and both custom runner
+   configurations listed above. Also check Azure quota and regional capacity
+   for their VM SKUs when provisioning fails.
 
 Smoke test after changing either:
 `gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false`,
