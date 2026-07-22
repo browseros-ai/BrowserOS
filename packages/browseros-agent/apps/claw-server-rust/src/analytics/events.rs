@@ -49,7 +49,7 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
     "Zed",
 ];
 
-pub(crate) const END_KIND_VALUES: [&str; 2] = ["closed", "errored"];
+pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PropertyKind {
@@ -390,6 +390,26 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn cancelled_session_end_kind_is_preserved() {
+        assert_eq!(
+            AGENT_SESSION_ENDED.sanitize(&json!({
+                "kind": "cancelled",
+                "client_name": "Codex",
+                "dispatch_count": 1,
+                "distinct_tool_count": 1,
+                "max_concurrent_used_sessions": 1,
+            })),
+            Some(json!({
+                "kind": "cancelled",
+                "client_name": "codex",
+                "dispatch_count": 1,
+                "distinct_tool_count": 1,
+                "max_concurrent_used_sessions": 1,
+            }))
+        );
     }
 
     #[test]
