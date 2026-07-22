@@ -128,13 +128,17 @@ async fn serve_with_boot_task(
     // or dev port (config port 0) is still published correctly.
     let bound = listener.local_addr().unwrap_or(addr);
     info!(%bound, "claw-server-rust listening");
-    // Publish the live server URL so external discovery (the Codex and Claude
-    // Desktop plugins) reads the current port instead of a stale file.
-    claw_server_rust::runtime_file::write_runtime_file(
-        &config.browserclaw_dir,
-        &format!("http://{bound}"),
-    )
-    .await;
+    // Publish the live server URL for external discovery (the Codex and Claude
+    // Desktop plugins). Fire-and-forget: a best-effort disk write must never
+    // gate the listener from accepting connections, since a stalled FUSE /
+    // network / container-mounted browserclaw_dir could otherwise leave the
+    // socket bound but never served. Mirrors the archived TS server, which
+    // deliberately did not await writeRuntimeFile for the same reason.
+    let runtime_dir = config.browserclaw_dir.clone();
+    let runtime_url = format!("http://{bound}");
+    tokio::spawn(async move {
+        claw_server_rust::runtime_file::write_runtime_file(&runtime_dir, &runtime_url).await;
+    });
     let shutdown = runtime.state().shutdown;
     runtime.spawn_task("MCP config integrity scan", boot_task);
     axum::serve(listener, app.into_make_service())
