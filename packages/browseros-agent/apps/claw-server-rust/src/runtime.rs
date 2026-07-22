@@ -1,10 +1,14 @@
-use crate::{AppState, error::AppResult};
+use crate::{
+    AppState,
+    error::{AppError, AppResult},
+};
 use std::{future::Future, time::Duration};
 use tokio::{task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -84,9 +88,26 @@ impl AppRuntime {
         });
     }
 
-    pub async fn shutdown(mut self) -> AppResult<()> {
+    pub async fn shutdown(self) -> AppResult<()> {
+        self.shutdown_with_session_timeout(SESSION_SHUTDOWN_TIMEOUT)
+            .await
+    }
+
+    async fn shutdown_with_session_timeout(mut self, session_timeout: Duration) -> AppResult<()> {
         self.state.shutdown.request();
-        let session_result = self.state.sessions.shutdown().await;
+        let session_result = match timeout(session_timeout, self.state.sessions.shutdown()).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    timeout_ms = session_timeout.as_millis(),
+                    "session teardown exceeded shutdown timeout"
+                );
+                Err(AppError::Internal(format!(
+                    "session teardown exceeded {} ms shutdown timeout",
+                    session_timeout.as_millis()
+                )))
+            }
+        };
         self.state.session_tabs.drain_writes().await;
         self.state.recordings.close().await;
         self.state.browser.stop();
@@ -131,9 +152,13 @@ mod tests {
     };
     use axum::{Router, body::Bytes, routing::any};
     use serde_json::Value;
-    use std::{sync::Arc, time::Duration};
+    use std::{future::pending, sync::Arc, time::Duration};
     use tempfile::tempdir;
-    use tokio::{net::TcpListener, sync::mpsc, time::Instant};
+    use tokio::{
+        net::TcpListener,
+        sync::{Notify, mpsc},
+        time::Instant,
+    };
 
     #[tokio::test]
     async fn repeated_requests_wake_every_shutdown_waiter() -> anyhow::Result<()> {
@@ -225,6 +250,89 @@ mod tests {
             events::AGENT_SESSION_ENDED.name()
         );
         endpoint.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_bounds_session_teardown_before_shutting_down_analytics() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
+        let analytics = Arc::new(
+            AnalyticsService::new_for_test(
+                &config.browserclaw_dir,
+                None,
+                "http://127.0.0.1:1".to_string(),
+                true,
+            )
+            .await?,
+        );
+        let sessions = Sessions::new_with_analytics(
+            state.audit_log.clone(),
+            state.session_tabs.clone(),
+            config.session_idle,
+            config.session_retention,
+            config.session_sweep_interval,
+            analytics.clone(),
+        );
+        let hook_entered = Arc::new(Notify::new());
+        sessions.set_retained_group_hook(Arc::new({
+            let hook_entered = hook_entered.clone();
+            move |_, _, _| {
+                let hook_entered = hook_entered.clone();
+                Box::pin(async move {
+                    hook_entered.notify_one();
+                    pending::<bool>().await
+                })
+            }
+        }));
+        let session = Session::new(
+            SessionId::new("stuck-teardown"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "stuck-label".to_string()),
+            Instant::now(),
+        );
+        sessions.insert_for_testing(session.clone()).await;
+        state.analytics = analytics.clone();
+        state.sessions = sessions.clone();
+
+        let remove = tokio::spawn({
+            let sessions = sessions.clone();
+            async move {
+                sessions
+                    .remove(session.id(), "closed", Some("transport closed"))
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), hook_entered.notified()).await?;
+        let result = AppRuntime {
+            state,
+            tasks: Vec::new(),
+        }
+        .shutdown_with_session_timeout(Duration::from_millis(50))
+        .await;
+        let Err(error) = result else {
+            anyhow::bail!("stuck teardown unexpectedly completed");
+        };
+        remove.abort();
+        assert!(error.to_string().contains("session teardown exceeded"));
+        assert_eq!(analytics.shutdown_calls_for_testing(), 1);
         Ok(())
     }
 }

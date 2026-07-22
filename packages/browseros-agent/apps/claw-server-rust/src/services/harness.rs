@@ -165,7 +165,7 @@ impl HarnessService {
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         let result = tokio::task::spawn_blocking(move || {
-            relink_managed_server(
+            let summary = relink_managed_server(
                 &manager,
                 &workspace_dir,
                 BROWSEROS_MCP_SERVER_NAME,
@@ -173,17 +173,22 @@ impl HarnessService {
                 spec,
                 true,
             )?;
-            Ok(resolve_agent_mcp_config_path(agent, AgentScope::System).ok())
+            Ok((
+                summary.created,
+                resolve_agent_mcp_config_path(agent, AgentScope::System).ok(),
+            ))
         })
         .await?;
 
         match result {
-            Ok(config_path) => {
+            Ok((created, config_path)) => {
                 tracing::info!(harness = %harness, agent = %agent, "connected BrowserClaw to harness");
-                self.analytics.capture(
-                    events::HARNESS_CONNECTED,
-                    json!({ "harness": harness.as_str() }),
-                );
+                if created {
+                    self.analytics.capture(
+                        events::HARNESS_CONNECTED,
+                        json!({ "harness": harness.as_str() }),
+                    );
+                }
                 Ok(ConnectionState {
                     harness,
                     installed: true,
@@ -219,10 +224,12 @@ impl HarnessService {
                     removed_manifest = summary.removed_manifest,
                     "disconnected BrowserClaw from harness"
                 );
-                self.analytics.capture(
-                    events::HARNESS_DISCONNECTED,
-                    json!({ "harness": harness.as_str() }),
-                );
+                if summary.unlinked {
+                    self.analytics.capture(
+                        events::HARNESS_DISCONNECTED,
+                        json!({ "harness": harness.as_str() }),
+                    );
+                }
                 Ok(ConnectionState {
                     harness,
                     installed: false,

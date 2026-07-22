@@ -140,21 +140,33 @@ impl AnalyticsService {
         self.telemetry_state(&state)
     }
 
-    /// Persists consent before changing delivery; disabling removes the active
-    /// client before awaiting its drain so later captures stop immediately.
-    pub async fn set_consent(&self, consent: bool) -> TelemetryState {
+    /**
+     * Serializes consent changes. Revocation removes the delivery client before disk I/O so a
+     * failed opt-out is reported to the caller while capture stays disabled for this process.
+     */
+    pub async fn set_consent(&self, consent: bool) -> AppResult<TelemetryState> {
         let mut state = self.state.lock().await;
         let next = AnalyticsState {
             distinct_id: state.distinct_id.clone(),
             enabled: consent,
         };
-        if let Err(error) = persist_state(&self.path, &next).await {
-            tracing::error!(%consent, %error, "analytics consent write failed; choice may not survive a restart");
+        let previous = if consent { None } else { self.take_active() };
+        if let Err(source) = persist_state(&self.path, &next).await {
+            if !consent {
+                *state = next;
+            }
+            drop(state);
+            if let Some(previous) = previous {
+                previous.client.shutdown().await;
+            }
+            return Err(AppError::Io {
+                path: Some(self.path.clone()),
+                source,
+            });
         }
         *state = next;
 
         if !consent || !self.config.is_configured() {
-            let previous = self.take_active();
             if let Some(previous) = previous {
                 previous.client.shutdown().await;
             }
@@ -167,11 +179,15 @@ impl AnalyticsService {
             }
         }
 
-        self.telemetry_state(&state)
+        Ok(self.telemetry_state(&state))
     }
 
     pub fn capture(&self, definition: EventDefinition, properties: Value) {
-        let Some(active) = self.active_client() else {
+        let active = self
+            .active
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(active) = active.as_ref() else {
             return;
         };
         let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
@@ -437,7 +453,7 @@ mod tests {
         let original = service.get_state().await;
         assert!(original.enabled);
 
-        let disabled = service.set_consent(false).await;
+        let disabled = service.set_consent(false).await?;
         assert!(!disabled.enabled);
         assert!(!disabled.consent);
         service.capture(SERVER_STARTED, json!({}));
@@ -447,7 +463,7 @@ mod tests {
                 .is_err()
         );
 
-        let enabled = service.set_consent(true).await;
+        let enabled = service.set_consent(true).await?;
         assert!(enabled.enabled);
         assert!(enabled.consent);
         assert_eq!(enabled.distinct_id, original.distinct_id);
@@ -477,6 +493,31 @@ mod tests {
         )
         .await?;
         assert!(!env_off.get_state().await.enabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_opt_out_returns_an_error_and_keeps_delivery_disabled() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let (host, mut requests, endpoint) = local_endpoint().await?;
+        let mut service =
+            AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
+        let non_directory = directory.path().join("not-a-directory");
+        tokio::fs::write(&non_directory, "block writes below this path").await?;
+        service.path = non_directory.join("analytics.json");
+
+        assert!(service.set_consent(false).await.is_err());
+        let state = service.get_state().await;
+        assert!(!state.enabled);
+        assert!(!state.consent);
+        service.capture(SERVER_STARTED, json!({}));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), requests.recv())
+                .await
+                .is_err()
+        );
+
+        endpoint.abort();
         Ok(())
     }
 

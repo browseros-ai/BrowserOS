@@ -259,14 +259,21 @@ async fn run_connections_case() -> anyhow::Result<()> {
     assert_eq!(scan.healed, 0);
     assert!(!path_for(&paths, AgentId::Cursor)?.exists());
 
+    for harness in Harness::ALL {
+        service.disconnect_browseros(harness).await?;
+    }
     analytics.take();
     for harness in Harness::ALL {
         let state = service.connect_browseros(harness, MCP_URL).await?;
         assert!(state.installed, "{}", state.message);
+        let repeated = service.connect_browseros(harness, MCP_URL).await?;
+        assert!(repeated.installed, "{}", repeated.message);
     }
     for harness in Harness::ALL {
         let state = service.disconnect_browseros(harness).await?;
         assert!(!state.installed, "{}", state.message);
+        let repeated = service.disconnect_browseros(harness).await?;
+        assert!(!repeated.installed, "{}", repeated.message);
     }
     let captured = analytics.take();
     assert_eq!(captured.len(), Harness::ALL.len() * 2);
