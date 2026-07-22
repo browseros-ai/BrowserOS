@@ -3,7 +3,7 @@ use crate::{
     api::http,
     config::Config,
     db::{AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger},
-    error::AppResult,
+    error::{AppError, AppResult},
     runtime::ShutdownHandle,
     services::{
         browser::{BrowserService, TabRegistry},
@@ -18,7 +18,7 @@ use crate::{
     storage::JsonStore,
 };
 use axum::{Router, middleware};
-use std::{env, path::PathBuf, sync::Arc, time::Duration};
+use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,9 +43,7 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(config: Arc<Config>) -> AppResult<Self> {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.browserclaw_dir.clone());
+        let home = resolve_user_home_with(|name| env::var_os(name))?;
         Self::new_with_home(config, home).await
     }
 
@@ -131,6 +129,18 @@ impl AppState {
     }
 }
 
+fn resolve_user_home_with(mut lookup: impl FnMut(&str) -> Option<OsString>) -> AppResult<PathBuf> {
+    for variable in ["HOME", "USERPROFILE"] {
+        if let Some(value) = lookup(variable).filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    Err(AppError::Internal(
+        "Cannot resolve the user home directory because neither HOME nor USERPROFILE is set"
+            .to_string(),
+    ))
+}
+
 pub fn build_router(state: AppState) -> Router {
     http::router(state.clone())
         .with_state(state)
@@ -139,9 +149,9 @@ pub fn build_router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
+    use super::{AppState, resolve_user_home_with};
     use crate::{config::Config, db::DATABASE_FILENAME};
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::BTreeMap, ffi::OsString, sync::Arc, time::Duration};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -173,5 +183,41 @@ mod tests {
         assert!(browserclaw_dir.join(DATABASE_FILENAME).is_file());
         assert_eq!(tokio::fs::read(old_database).await?, old_contents);
         Ok(())
+    }
+
+    #[test]
+    fn harness_skills_home_resolution_prefers_home_then_userprofile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let unix = BTreeMap::from([
+            ("HOME", OsString::from("/users/unix")),
+            ("USERPROFILE", OsString::from("C:\\Users\\windows")),
+        ]);
+        assert_eq!(
+            resolve_user_home_with(|name| unix.get(name).cloned())?,
+            std::path::PathBuf::from("/users/unix")
+        );
+
+        let windows = BTreeMap::from([("USERPROFILE", OsString::from("C:\\Users\\windows"))]);
+        assert_eq!(
+            resolve_user_home_with(|name| windows.get(name).cloned())?,
+            std::path::PathBuf::from("C:\\Users\\windows")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn harness_skills_home_resolution_rejects_missing_or_empty_variables() {
+        let error = resolve_user_home_with(|name| match name {
+            "HOME" => Some(OsString::new()),
+            _ => None,
+        })
+        .err()
+        .map(|error| error.to_string());
+        assert_eq!(
+            error.as_deref(),
+            Some(
+                "Cannot resolve the user home directory because neither HOME nor USERPROFILE is set"
+            )
+        );
     }
 }
