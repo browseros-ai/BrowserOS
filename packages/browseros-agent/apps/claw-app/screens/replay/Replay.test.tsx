@@ -447,15 +447,12 @@ describe('Replay', () => {
     )
   })
 
-  it('does not present a cataloged recording gap as complete', async () => {
-    const partialReplay = replayData(events.slice(0, 3))
+  it('does not hide a cataloged session gap behind a prefix warning', async () => {
+    const partialReplay = replayData([
+      { ...events[0], ts: 500, type: 3 },
+      ...events.slice(0, 3),
+    ])
     partialReplay.complete = false
-    const firstTab = partialReplay.tabs[0]
-    if (firstTab) {
-      firstTab.complete = false
-      const firstSegment = firstTab.segments[0]
-      if (firstSegment) firstSegment.hasGap = true
-    }
     replayResult = { ...replayResult, replay: partialReplay }
 
     await act(async () => {
@@ -469,6 +466,7 @@ describe('Replay', () => {
     expect(container.textContent).toContain(
       'Recording incomplete — this replay contains a known gap',
     )
+    expect(container.textContent).not.toContain('playback starts at')
   })
 })
 

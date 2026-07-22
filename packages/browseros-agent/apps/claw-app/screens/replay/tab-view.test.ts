@@ -250,8 +250,9 @@ describe('buildTabView', () => {
     expect(view.knownIncomplete).toBe(true)
   })
 
-  it('omits an unplayable middle document and reports a middle gap', () => {
+  it('reports a generic gap when omissions occur before and during playback', () => {
     const events = [
+      event(1_000_000, 'document-a', 1, 3),
       event(1_001_000, 'document-a'),
       event(1_002_000, 'document-a', 1, 3),
       event(1_003_000, 'document-b', 1, 3),
@@ -263,7 +264,7 @@ describe('buildTabView', () => {
         tab(1, [
           {
             documentId: 'document-a',
-            firstEventAt: 1_001_000,
+            firstEventAt: 1_000_000,
             lastEventAt: 1_002_000,
           },
           {

@@ -32,6 +32,7 @@ const NO_VISUAL_EVENTS: readonly ReplayEvent[] = []
 interface PlayableTabStream {
   events: readonly ReplayEvent[]
   hasOmittedEvents: boolean
+  hasOmittedEventsAfterPlaybackStart: boolean
   incompleteUntilMs: number | null
 }
 
@@ -43,6 +44,7 @@ const playableTabStreams = new WeakMap<
 const EMPTY_PLAYABLE_TAB_STREAM: PlayableTabStream = {
   events: NO_VISUAL_EVENTS,
   hasOmittedEvents: false,
+  hasOmittedEventsAfterPlaybackStart: false,
   incompleteUntilMs: null,
 }
 
@@ -80,6 +82,9 @@ export function buildTabView(
     timingEvents.at(-1)?.ts ??
     input.startedAtMs + (rawFrames.at(-1)?.t ?? 0) * 1000
   const originT = (originMs - input.startedAtMs) / 1000
+  const hasCatalogedGap =
+    tab.complete === false ||
+    tab.segments.some((segment) => segment.hasGap || segment.legacy)
   return {
     frames: rawFrames.map((frame) => ({
       ...frame,
@@ -88,11 +93,11 @@ export function buildTabView(
     events: stream.events,
     totalSeconds: Math.max(0, (endMs - originMs) / 1000),
     hasFullSnapshot,
-    knownIncomplete:
-      tab.complete === false ||
-      tab.segments.some((segment) => segment.hasGap || segment.legacy) ||
-      stream.hasOmittedEvents,
-    incompleteUntilMs: stream.incompleteUntilMs,
+    knownIncomplete: hasCatalogedGap || stream.hasOmittedEvents,
+    incompleteUntilMs:
+      hasCatalogedGap || stream.hasOmittedEventsAfterPlaybackStart
+        ? null
+        : stream.incompleteUntilMs,
   }
 }
 
@@ -143,13 +148,18 @@ function playableTabStream(
   const hasOmittedEvents = [...documents.values()].some(
     (state) => state.firstSnapshotIndex === -1 || state.mutationBeforeSnapshot,
   )
+  let playbackStarted = false
+  let hasOmittedEventsAfterPlaybackStart = false
   const events = hasOmittedEvents
     ? rawEvents.filter((event, index) => {
         const state = documents.get(event.documentId)
-        if (!state || state.firstSnapshotIndex === -1) return false
-        return (
-          !state.mutationBeforeSnapshot || index >= state.firstSnapshotIndex
-        )
+        const playable =
+          state !== undefined &&
+          state.firstSnapshotIndex !== -1 &&
+          (!state.mutationBeforeSnapshot || index >= state.firstSnapshotIndex)
+        if (playable) playbackStarted = true
+        else if (playbackStarted) hasOmittedEventsAfterPlaybackStart = true
+        return playable
       })
     : rawEvents
   const firstRawAt = rawEvents[0]?.ts
@@ -157,6 +167,7 @@ function playableTabStream(
   const result = {
     events,
     hasOmittedEvents,
+    hasOmittedEventsAfterPlaybackStart,
     incompleteUntilMs:
       firstRawAt !== undefined &&
       firstPlayableAt !== undefined &&
