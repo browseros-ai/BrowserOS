@@ -13,7 +13,6 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
-import { materializeCodexBrowserlessHome } from '../lib/agents/host-acp/codex-home'
 import {
   DANGEROUS_ALLOW_MODE_CANDIDATES,
   isHostAcpAdapter,
@@ -90,10 +89,19 @@ function expandHomeToken(path: string): string {
 async function codexBrowserlessEnv(): Promise<
   Record<string, string> | undefined
 > {
-  const codexHome = await materializeCodexBrowserlessHome({
-    browserosDir: getBrowserosDir(),
-  })
-  return codexHome ? { CODEX_HOME: codexHome } : undefined
+  try {
+    // Loaded lazily so the overlay's fs-heavy module stays out of the
+    // factory's static import graph (it is only needed for codex chats).
+    const { materializeCodexBrowserlessHome } = await import(
+      '../lib/agents/host-acp/codex-home'
+    )
+    const codexHome = await materializeCodexBrowserlessHome({
+      browserosDir: getBrowserosDir(),
+    })
+    return codexHome ? { CODEX_HOME: codexHome } : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function resolveAcpAgentId(config: ResolvedAgentConfig): string {
@@ -170,9 +178,13 @@ async function createAcpLanguageModel(
     // Codex ships a bundled in-app browser plugin that competes with the
     // BrowserOS MCP tools for browser tasks; point it at an overlay
     // CODEX_HOME that disables that plugin so BrowserOS is the only
-    // browser. Falls back to the real home when the overlay can't build.
+    // browser. Only built for the codex adapter when codex is the agent
+    // actually being spawned, and falls back to the real home if the
+    // overlay cannot be built.
     const extraEnv =
-      builtIn === 'codex' ? await codexBrowserlessEnv() : undefined
+      builtIn === 'codex' && agentId === 'codex'
+        ? await codexBrowserlessEnv()
+        : undefined
     const launcher = resolveAcpSpawnCommand({
       agentType: builtIn,
       browserosDir: getBrowserosDir(),
