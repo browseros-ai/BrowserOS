@@ -4,5 +4,6 @@ pub mod harness;
 pub mod profiles;
 pub mod recordings;
 pub mod replay;
+pub mod runtime_file;
 pub mod screenshots;
 pub mod sessions;

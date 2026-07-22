@@ -13,7 +13,7 @@ const RUNTIME_FILE: &str = "runtime.json";
 
 /// Atomically write `{ "url": <url> }` to `<dir>/runtime.json`. Errors are
 /// logged and swallowed so this best-effort disk write can never fail boot.
-pub async fn write_runtime_file(dir: &Path, url: &str) {
+pub async fn write(dir: &Path, url: &str) {
     if let Err(err) = try_write(dir, url).await {
         warn!(
             error = %err,
@@ -43,7 +43,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let dir = root.path();
 
-        write_runtime_file(dir, "http://127.0.0.1:9200").await;
+        write(dir, "http://127.0.0.1:9200").await;
 
         let raw = fs::read_to_string(dir.join("runtime.json")).await?;
         // Byte-for-byte identical to the archived TS writer's contract:
@@ -60,7 +60,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let dir = root.path().join("state");
 
-        write_runtime_file(&dir, "http://127.0.0.1:9201").await;
+        write(&dir, "http://127.0.0.1:9201").await;
 
         assert!(dir.join("runtime.json").exists());
         Ok(())
@@ -71,8 +71,8 @@ mod tests {
         let root = tempfile::tempdir()?;
         let dir = root.path();
 
-        write_runtime_file(dir, "http://127.0.0.1:9200").await;
-        write_runtime_file(dir, "http://127.0.0.1:9201").await;
+        write(dir, "http://127.0.0.1:9200").await;
+        write(dir, "http://127.0.0.1:9201").await;
 
         let raw = fs::read_to_string(dir.join("runtime.json")).await?;
         assert_eq!(raw, "{\n  \"url\": \"http://127.0.0.1:9201\"\n}\n");
