@@ -146,7 +146,7 @@ async fn serve_with_boot_task(
         Some(proxy) => format!("http://127.0.0.1:{proxy}"),
         None => format!("http://{bound}"),
     };
-    tokio::spawn(async move {
+    runtime.spawn_task("runtime file publication", async move {
         claw_server_rust::services::runtime_file::write(&runtime_dir, &runtime_url).await;
     });
     let shutdown = runtime.state().shutdown;
