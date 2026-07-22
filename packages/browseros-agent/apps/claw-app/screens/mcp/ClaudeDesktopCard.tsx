@@ -36,7 +36,7 @@ export function ClaudeDesktopCard() {
               sites, log in, and click through flows.
             </p>
             <p className="text-[12px] text-ink-3 leading-snug">
-              Also shipping as Cowork.
+              Also works with Cowork.
             </p>
           </div>
         </div>
