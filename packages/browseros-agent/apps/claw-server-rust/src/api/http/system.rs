@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{AppState, VERSION};
 use axum::{Json, extract::State};
 use claw_api::models::{
     HealthResponse, ShutdownResponse, SystemCapabilities, SystemInfo,
@@ -21,7 +21,7 @@ pub(super) async fn shutdown(State(state): State<AppState>) -> Json<ShutdownResp
 pub(super) async fn info(State(state): State<AppState>) -> Json<SystemInfo> {
     let mut info = SystemInfo::new(
         "BrowserClaw".to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
+        VERSION.to_string(),
         state.config.local_server_url(),
     );
     let mut capabilities = SystemCapabilities::new();

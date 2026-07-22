@@ -1,11 +1,18 @@
 use anyhow::Context;
 use axum::Router;
-use clap::Parser;
 use claw_server_rust::{
-    AppRuntime, AppState, ShutdownHandle, api::mcp::browser_mcp_service, build_router, config::Cli,
+    AppRuntime, AppState, ShutdownHandle, VERSION,
+    api::mcp::browser_mcp_service,
+    build_router,
+    config::{Cli, CliAction},
 };
 use rmcp::{serve_server, transport::stdio};
-use std::{future::Future, io, net::SocketAddr, sync::Arc};
+use std::{
+    future::Future,
+    io::{self, Write},
+    net::SocketAddr,
+    sync::Arc,
+};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -13,12 +20,18 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let config = Arc::new(claw_server_rust::config::Config::load(&cli.config)?);
+    let (config_path, stdio_mode) = match Cli::parse_action() {
+        CliAction::Version => {
+            writeln!(io::stdout().lock(), "{VERSION}")?;
+            return Ok(());
+        }
+        CliAction::Run { config, stdio } => (config, stdio),
+    };
+    let config = Arc::new(claw_server_rust::config::Config::load(config_path)?);
     let _guard = init_tracing(config.clone())?;
     let state = AppState::new(config.clone()).await?;
     let mut runtime = AppRuntime::start(state);
-    let run_result = run(&mut runtime, config, cli.stdio).await;
+    let run_result = run(&mut runtime, config, stdio_mode).await;
     let shutdown_result = runtime.shutdown().await;
     match (run_result, shutdown_result) {
         (Ok(()), Ok(())) => Ok(()),
