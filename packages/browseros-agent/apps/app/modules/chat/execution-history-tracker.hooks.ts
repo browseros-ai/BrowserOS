@@ -66,7 +66,7 @@ const WRITE_THROTTLE_MS = 400
 export function useExecutionHistoryTracker() {
   const activeTaskRef = useRef<ExecutionTaskRecord | null>(null)
   const lastSavedKeyRef = useRef('')
-  const pendingWriteRef = useRef<ExecutionTaskRecord | null>(null)
+  const pendingWritesRef = useRef<Map<string, ExecutionTaskRecord>>(new Map())
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const writingRef = useRef(false)
 
@@ -74,11 +74,16 @@ export function useExecutionHistoryTracker() {
     if (writingRef.current) return
     writingRef.current = true
     try {
-      while (pendingWriteRef.current) {
-        const task = pendingWriteRef.current
-        pendingWriteRef.current = null
+      while (pendingWritesRef.current.size > 0) {
+        const next = pendingWritesRef.current.entries().next().value
+        if (!next) break
+        const [taskId, task] = next
+        pendingWritesRef.current.delete(taskId)
         try {
           await upsertConversationExecutionTask(task)
+          // Advance the dedupe marker only after a successful write so a
+          // transient failure is retried by the next persist, not skipped.
+          lastSavedKeyRef.current = taskChangeKey(task)
         } catch (error) {
           sentry.captureException(error, {
             extra: {
@@ -102,14 +107,15 @@ export function useExecutionHistoryTracker() {
     void drainWrites()
   }, [drainWrites])
 
-  // Coalesce storage writes: keep only the newest pending task and write at
-  // most one at a time. A streamed turn produces a task update per token, and
-  // each write is a full read/modify/write of the whole history store, so
-  // during streaming they are batched behind a short timer; terminal updates
-  // flush immediately (#1972).
+  // Coalesce storage writes newest-per-task and write at most one at a time. A
+  // streamed turn produces a task update per token, and each write is a full
+  // read/modify/write of the whole history store, so during streaming they are
+  // batched behind a short timer; terminal updates flush immediately (#1972).
+  // Keying by task id means a queued terminal write is never dropped when the
+  // next turn's task queues before it drains.
   const scheduleWrite = useCallback(
     (task: ExecutionTaskRecord, immediate: boolean) => {
-      pendingWriteRef.current = task
+      pendingWritesRef.current.set(task.id, task)
       if (immediate) {
         flushWrites()
         return
@@ -127,9 +133,7 @@ export function useExecutionHistoryTracker() {
     (task: ExecutionTaskRecord, options?: { immediate?: boolean }) => {
       activeTaskRef.current = task
       const immediate = options?.immediate ?? task.status !== 'running'
-      const key = taskChangeKey(task)
-      if (!immediate && key === lastSavedKeyRef.current) return
-      lastSavedKeyRef.current = key
+      if (!immediate && taskChangeKey(task) === lastSavedKeyRef.current) return
       scheduleWrite(task, immediate)
     },
     [scheduleWrite],
@@ -138,7 +142,6 @@ export function useExecutionHistoryTracker() {
   const startTask = useCallback(
     (input: StartExecutionTaskInput) => {
       const task = createTask(input)
-      lastSavedKeyRef.current = ''
       persistTask(task, { immediate: true })
       return task.id
     },
@@ -208,11 +211,13 @@ export function useExecutionHistoryTracker() {
     flushWrites()
   }, [flushWrites])
 
+  // Flush (not just cancel) on unmount so a task still sitting in the throttle
+  // window is persisted when the panel closes mid-turn, rather than dropped.
   useEffect(
     () => () => {
-      if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
+      flushWrites()
     },
-    [],
+    [flushWrites],
   )
 
   return {

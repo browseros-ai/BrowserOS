@@ -71,4 +71,11 @@ describe('taskChangeKey', () => {
     expect(taskChangeKey(running)).not.toBe(taskChangeKey(completed))
     expect(taskChangeKey(running)).not.toBe(taskChangeKey(withPreview))
   })
+
+  it('distinguishes two tasks in the same state by id', () => {
+    const first = task({ id: 'task-1' })
+    const second = task({ id: 'task-2' })
+
+    expect(taskChangeKey(first)).not.toBe(taskChangeKey(second))
+  })
 })
