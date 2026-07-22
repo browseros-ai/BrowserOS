@@ -11,7 +11,7 @@
 
 import type { CaseContext, ContractCase } from './cases'
 import { apiGet, errorClass, expectOk, waitUntil } from './helpers'
-import { McpRequestError, textOf } from './mcp-client'
+import { textOf } from './mcp-client'
 
 const FENCE_OPEN = /\[UNTRUSTED_PAGE_CONTENT nonce=([0-9a-f]{16}) origin=/
 
@@ -372,10 +372,14 @@ export const clawLayerCases: ContractCase[] = [
       } catch (error) {
         rejection = error
       }
+      const rpcError = rejection as {
+        code?: unknown
+        message?: unknown
+      } | null
       if (
-        !(rejection instanceof McpRequestError) ||
-        rejection.code !== -32600 ||
-        !rejection.message.includes('session is no longer live')
+        rpcError?.code !== -32600 ||
+        typeof rpcError.message !== 'string' ||
+        !rpcError.message.includes('session is no longer live')
       ) {
         throw new Error(
           `post-cancel browser call was not rejected: ${rejection}`,
