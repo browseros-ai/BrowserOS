@@ -1,10 +1,11 @@
 import type { ChatStatus, UIMessage } from 'ai'
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   getResponsePreview,
   normalizeExecutionSteps,
 } from '@/lib/execution-history/normalize'
 import { upsertConversationExecutionTask } from '@/lib/execution-history/storage'
+import { taskChangeKey } from '@/lib/execution-history/task-change-key'
 import type {
   ExecutionTaskRecord,
   ExecutionTaskStatus,
@@ -60,44 +61,92 @@ function getFinishedStatus(
   return 'completed'
 }
 
+const WRITE_THROTTLE_MS = 400
+
 export function useExecutionHistoryTracker() {
   const activeTaskRef = useRef<ExecutionTaskRecord | null>(null)
-  const lastSavedHashRef = useRef('')
-  const writeQueueRef = useRef(Promise.resolve())
+  const lastSavedKeyRef = useRef('')
+  const pendingWriteRef = useRef<ExecutionTaskRecord | null>(null)
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const writingRef = useRef(false)
 
-  const persistTask = useCallback((task: ExecutionTaskRecord) => {
-    const taskHash = JSON.stringify(task)
-    if (taskHash === lastSavedHashRef.current) return
-
-    activeTaskRef.current = task
-    writeQueueRef.current = writeQueueRef.current
-      .then(async () => {
-        await upsertConversationExecutionTask(task)
-        lastSavedHashRef.current = taskHash
-      })
-      .catch((error) => {
-        sentry.captureException(error, {
-          extra: {
-            message: 'Failed to persist execution history task',
-            conversationId: task.conversationId,
-            taskId: task.id,
-          },
-        })
-      })
+  const drainWrites = useCallback(async () => {
+    if (writingRef.current) return
+    writingRef.current = true
+    try {
+      while (pendingWriteRef.current) {
+        const task = pendingWriteRef.current
+        pendingWriteRef.current = null
+        try {
+          await upsertConversationExecutionTask(task)
+        } catch (error) {
+          sentry.captureException(error, {
+            extra: {
+              message: 'Failed to persist execution history task',
+              conversationId: task.conversationId,
+              taskId: task.id,
+            },
+          })
+        }
+      }
+    } finally {
+      writingRef.current = false
+    }
   }, [])
+
+  const flushWrites = useCallback(() => {
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current)
+      writeTimerRef.current = null
+    }
+    void drainWrites()
+  }, [drainWrites])
+
+  // Coalesce storage writes: keep only the newest pending task and write at
+  // most one at a time. A streamed turn produces a task update per token, and
+  // each write is a full read/modify/write of the whole history store, so
+  // during streaming they are batched behind a short timer; terminal updates
+  // flush immediately (#1972).
+  const scheduleWrite = useCallback(
+    (task: ExecutionTaskRecord, immediate: boolean) => {
+      pendingWriteRef.current = task
+      if (immediate) {
+        flushWrites()
+        return
+      }
+      if (writeTimerRef.current) return
+      writeTimerRef.current = setTimeout(() => {
+        writeTimerRef.current = null
+        void drainWrites()
+      }, WRITE_THROTTLE_MS)
+    },
+    [drainWrites, flushWrites],
+  )
+
+  const persistTask = useCallback(
+    (task: ExecutionTaskRecord, options?: { immediate?: boolean }) => {
+      activeTaskRef.current = task
+      const immediate = options?.immediate ?? task.status !== 'running'
+      const key = taskChangeKey(task)
+      if (!immediate && key === lastSavedKeyRef.current) return
+      lastSavedKeyRef.current = key
+      scheduleWrite(task, immediate)
+    },
+    [scheduleWrite],
+  )
 
   const startTask = useCallback(
     (input: StartExecutionTaskInput) => {
       const task = createTask(input)
-      lastSavedHashRef.current = ''
-      persistTask(task)
+      lastSavedKeyRef.current = ''
+      persistTask(task, { immediate: true })
       return task.id
     },
     [persistTask],
   )
 
   const syncFromMessages = useCallback(
-    (messages: UIMessage[], _status: ChatStatus) => {
+    (messages: UIMessage[], status: ChatStatus) => {
       const activeTask = activeTaskRef.current
       if (!activeTask) return
 
@@ -109,19 +158,22 @@ export function useExecutionHistoryTracker() {
         nowIso: new Date().toISOString(),
       })
 
-      persistTask({
-        ...activeTask,
-        promptMessageId: activeTask.promptMessageId ?? promptMessage?.id,
-        assistantMessageId:
-          normalized.assistantMessageId ?? activeTask.assistantMessageId,
-        responsePreview:
-          getResponsePreview(assistantMessage) || activeTask.responsePreview,
-        actionCount: normalized.actionCount,
-        approvalCount: normalized.approvalCount,
-        deniedCount: normalized.deniedCount,
-        errorCount: normalized.errorCount,
-        steps: normalized.steps,
-      })
+      persistTask(
+        {
+          ...activeTask,
+          promptMessageId: activeTask.promptMessageId ?? promptMessage?.id,
+          assistantMessageId:
+            normalized.assistantMessageId ?? activeTask.assistantMessageId,
+          responsePreview:
+            getResponsePreview(assistantMessage) || activeTask.responsePreview,
+          actionCount: normalized.actionCount,
+          approvalCount: normalized.approvalCount,
+          deniedCount: normalized.deniedCount,
+          errorCount: normalized.errorCount,
+          steps: normalized.steps,
+        },
+        { immediate: status === 'ready' || status === 'error' },
+      )
     },
     [persistTask],
   )
@@ -144,7 +196,7 @@ export function useExecutionHistoryTracker() {
           : activeTask.responsePreview,
       }
 
-      persistTask(nextTask)
+      persistTask(nextTask, { immediate: true })
       activeTaskRef.current = null
     },
     [persistTask],
@@ -152,8 +204,16 @@ export function useExecutionHistoryTracker() {
 
   const clearActiveTask = useCallback(() => {
     activeTaskRef.current = null
-    lastSavedHashRef.current = ''
-  }, [])
+    lastSavedKeyRef.current = ''
+    flushWrites()
+  }, [flushWrites])
+
+  useEffect(
+    () => () => {
+      if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
+    },
+    [],
+  )
 
   return {
     startTask,
