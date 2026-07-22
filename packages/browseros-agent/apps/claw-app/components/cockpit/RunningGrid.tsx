@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
@@ -9,6 +11,7 @@ interface RunningGridProps {
 
 /** Renders one card and one set of controls per connected live session. */
 export function RunningGrid({ sessions }: RunningGridProps) {
+  const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
 
@@ -35,6 +38,14 @@ export function RunningGrid({ sessions }: RunningGridProps) {
     cancel.mutate(
       { sessionId },
       {
+        onSuccess: () => {
+          void queryClient.invalidateQueries({
+            queryKey: useLiveSessions.getKey(),
+          })
+          void queryClient.invalidateQueries({
+            queryKey: useSessions.getKey(),
+          })
+        },
         onError: (err) => {
           // eslint-disable-next-line no-console
           console.warn('cancel session failed', { sessionId, err })

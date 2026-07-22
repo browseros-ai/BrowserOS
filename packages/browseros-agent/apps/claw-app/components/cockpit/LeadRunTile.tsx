@@ -34,6 +34,7 @@ interface LeadRunTileProps {
 export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
   const isLive = task.status === 'live'
   const isFailed = task.status === 'failed'
+  const isStopped = task.status === 'cancelled'
   const screenshotId = task.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
@@ -69,7 +70,13 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
           <ArrowUpRight className="size-4" />
         </span>
       </div>
-      <Caption task={task} now={now} isLive={isLive} isFailed={isFailed} />
+      <Caption
+        task={task}
+        now={now}
+        isLive={isLive}
+        isFailed={isFailed}
+        isStopped={isStopped}
+      />
     </NavLink>
   )
 }
@@ -79,11 +86,13 @@ function Caption({
   now,
   isLive,
   isFailed,
+  isStopped,
 }: {
   task: TaskSummary
   now: number
   isLive: boolean
   isFailed: boolean
+  isStopped: boolean
 }) {
   return (
     <div className="flex flex-col gap-1 bg-ink-deep px-5 py-3 text-white">
@@ -108,6 +117,15 @@ function Caption({
               className="inline-block size-1.5 rounded-full bg-red-400"
             />
             FAILED
+          </span>
+        )}
+        {isStopped && (
+          <span className="inline-flex items-center gap-1.5 text-white/65">
+            <span
+              aria-hidden
+              className="inline-block size-1.5 rounded-full bg-white/50"
+            />
+            STOPPED
           </span>
         )}
       </div>

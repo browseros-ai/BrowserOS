@@ -24,7 +24,12 @@ const KEYS = {
   sort: 'sort',
 } as const
 
-const VALID_STATUS = new Set<TaskStatus>(['live', 'done', 'failed'])
+const VALID_STATUS = new Set<TaskStatus>([
+  'live',
+  'done',
+  'failed',
+  'cancelled',
+])
 
 export function paramsToFilters(params: URLSearchParams): AuditFilters {
   const statusRaw = params.get(KEYS.status)

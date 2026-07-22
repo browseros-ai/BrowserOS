@@ -23,7 +23,7 @@ interface TimelineProps {
   startedAt: number
   endEvent: {
     createdAt: number
-    kind: 'closed' | 'errored'
+    kind: 'closed' | 'errored' | 'cancelled'
     reason: string | null
   } | null
   /**
@@ -338,7 +338,9 @@ function SessionEndRow({
         session{' '}
         {endEvent.kind === 'closed'
           ? 'closed'
-          : `errored (${endEvent.reason ?? 'unknown'})`}
+          : endEvent.kind === 'cancelled'
+            ? 'stopped'
+            : `errored (${endEvent.reason ?? 'unknown'})`}
       </span>
     </li>
   )

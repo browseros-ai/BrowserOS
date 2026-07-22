@@ -132,4 +132,21 @@ describe('TaskDetailPage', () => {
     const html = render()
     expect(html).toContain('No screenshots captured for this task.')
   })
+
+  it('renders cancelled sessions as stopped', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, status: 'cancelled' },
+        dispatches: sampleTask.dispatches.map((dispatch) => ({
+          ...dispatch,
+          pageId: undefined,
+        })),
+      },
+    }
+    const html = render()
+    expect(html).toContain('Stopped')
+    expect(html).toContain('session stopped')
+  })
 })

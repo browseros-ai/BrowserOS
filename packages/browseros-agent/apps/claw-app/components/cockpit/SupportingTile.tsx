@@ -26,6 +26,7 @@ interface SupportingTileProps {
  */
 export function SupportingTile({ task, now, className }: SupportingTileProps) {
   const isLive = task.status === 'live'
+  const isStopped = task.status === 'cancelled'
   const screenshotId = task.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
@@ -61,7 +62,7 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
           <ArrowUpRight className="size-3.5" />
         </span>
       </div>
-      <Caption task={task} now={now} isLive={isLive} />
+      <Caption task={task} now={now} isLive={isLive} isStopped={isStopped} />
     </NavLink>
   )
 }
@@ -70,10 +71,12 @@ function Caption({
   task,
   now,
   isLive,
+  isStopped,
 }: {
   task: TaskSummary
   now: number
   isLive: boolean
+  isStopped: boolean
 }) {
   return (
     <div className="flex flex-col gap-0.5 bg-ink-deep px-3.5 py-2 text-white">
@@ -87,6 +90,15 @@ function Caption({
               className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff]"
             />
             LIVE
+          </span>
+        )}
+        {isStopped && (
+          <span className="inline-flex items-center gap-1 text-white/60">
+            <span
+              aria-hidden
+              className="inline-block size-1.5 rounded-full bg-white/45"
+            />
+            STOPPED
           </span>
         )}
       </div>

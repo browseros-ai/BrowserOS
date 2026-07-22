@@ -20,6 +20,7 @@ interface RunRowProps {
  */
 export function RunRow({ task, now }: RunRowProps) {
   const isLive = task.status === 'live'
+  const isStopped = task.status === 'cancelled'
   const location = useLocation()
   return (
     <NavLink
@@ -38,6 +39,15 @@ export function RunRow({ task, now }: RunRowProps) {
               className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent"
             />
             LIVE
+          </span>
+        )}
+        {isStopped && (
+          <span className="inline-flex items-center gap-1 text-ink-3">
+            <span
+              aria-hidden
+              className="inline-block size-1.5 rounded-full bg-ink-3"
+            />
+            STOPPED
           </span>
         )}
       </span>

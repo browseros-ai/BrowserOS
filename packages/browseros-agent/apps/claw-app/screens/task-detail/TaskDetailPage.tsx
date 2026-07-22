@@ -75,7 +75,9 @@ export function TaskDetailPage() {
         kind:
           session.status === 'failed'
             ? ('errored' as const)
-            : ('closed' as const),
+            : session.status === 'cancelled'
+              ? ('cancelled' as const)
+              : ('closed' as const),
         reason: null,
       }
     : null

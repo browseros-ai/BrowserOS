@@ -227,5 +227,6 @@ function StatusPill({ status }: { status: TaskStatus }) {
       </span>
     )
   }
+  if (status === 'cancelled') return <span>Stopped</span>
   return <span>Done</span>
 }

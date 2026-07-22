@@ -89,4 +89,16 @@ describe('RecentActivity', () => {
     expect(html).toContain('View all activity')
     expect(html).toContain('href="/audit"')
   })
+
+  it('labels stopped sessions in every recent-activity layout slot', () => {
+    const tasks = Array.from({ length: 6 }, (_, index) => ({
+      ...sampleTask,
+      sessionId: `stopped-${index}`,
+      startedAt: sampleTask.startedAt - index,
+      status: 'cancelled' as const,
+    }))
+    queryOverride = { isPending: false, data: { pages: [{ items: tasks }] } }
+    const html = render()
+    expect(html.match(/STOPPED/g)?.length).toBe(6)
+  })
 })

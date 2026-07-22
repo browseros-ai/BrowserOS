@@ -20,7 +20,7 @@ export interface TabViewProps {
   startedAt: number
   endEvent: {
     createdAt: number
-    kind: 'closed' | 'errored'
+    kind: 'closed' | 'errored' | 'cancelled'
     reason: string | null
   } | null
   onScreenshotClick: (screenshotId: number) => void

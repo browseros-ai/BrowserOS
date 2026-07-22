@@ -291,9 +291,12 @@ function safeParse(json: string): Record<string, unknown> | null {
   }
 }
 
-function mapTaskStatus(status: TaskDetail['session']['status']): RunStatus {
+export function mapTaskStatus(
+  status: TaskDetail['session']['status'],
+): RunStatus {
   if (status === 'live') return 'running'
   if (status === 'failed') return 'blocked'
+  if (status === 'cancelled') return 'stopped'
   return 'done'
 }
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { SessionBrowserTab } from '@browseros/claw-api'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
@@ -10,6 +11,7 @@ import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 
 const cancelCalls: Array<{ sessionId: string }> = []
 const focusCalls: Array<{ browserTabId: number }> = []
+const invalidatedQueryKeys: unknown[] = []
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
@@ -21,7 +23,13 @@ mock.module('@/modules/api/cancel.hooks', () => ({
   useCancelSession: () => ({
     isPending: false,
     variables: undefined,
-    mutate: (variables: { sessionId: string }) => cancelCalls.push(variables),
+    mutate: (
+      variables: { sessionId: string },
+      options?: { onSuccess?: () => void },
+    ) => {
+      cancelCalls.push(variables)
+      options?.onSuccess?.()
+    },
   }),
 }))
 
@@ -80,10 +88,12 @@ function session(
 
 let root: Root
 let container: HTMLElement
+let queryClient: QueryClient
 
 beforeEach(async () => {
   cancelCalls.length = 0
   focusCalls.length = 0
+  invalidatedQueryKeys.length = 0
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -108,6 +118,14 @@ beforeEach(async () => {
     value: true,
   })
   container = dom.document.getElementById('root') as unknown as HTMLElement
+  queryClient = new QueryClient()
+  const invalidateQueries = queryClient.invalidateQueries.bind(queryClient)
+  queryClient.invalidateQueries = ((
+    ...args: Parameters<QueryClient['invalidateQueries']>
+  ) => {
+    invalidatedQueryKeys.push(args[0]?.queryKey)
+    return invalidateQueries(...args)
+  }) as QueryClient['invalidateQueries']
   const { createRoot } = await import('react-dom/client')
   root = createRoot(container)
 })
@@ -122,7 +140,13 @@ afterEach(async () => {
 })
 
 async function render(sessions: LiveSessionCardRecord[]) {
-  await act(async () => root.render(<RunningGrid sessions={sessions} />))
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <RunningGrid sessions={sessions} />
+      </QueryClientProvider>,
+    ),
+  )
 }
 
 describe('RunningGrid', () => {
@@ -149,6 +173,10 @@ describe('RunningGrid', () => {
       stopB.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
     expect(cancelCalls).toEqual([{ sessionId: 'session-b' }])
+    expect(invalidatedQueryKeys).toEqual([
+      _auditHooks.useLiveSessions.getKey(),
+      _auditHooks.useSessions.getKey(),
+    ])
   })
 
   it('counts connected sessions, including an idle zero-tab session', async () => {

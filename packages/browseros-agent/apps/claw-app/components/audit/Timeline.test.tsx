@@ -43,7 +43,7 @@ function render(
 
 type TimelineEndEvent = {
   createdAt: number
-  kind: 'closed' | 'errored'
+  kind: 'closed' | 'errored' | 'cancelled'
   reason: string | null
 } | null
 
@@ -51,6 +51,12 @@ const CLOSED_END: TimelineEndEvent = {
   createdAt: startedAt + 60_000,
   kind: 'closed',
   reason: null,
+}
+
+const CANCELLED_END: TimelineEndEvent = {
+  createdAt: startedAt + 30_000,
+  kind: 'cancelled',
+  reason: 'operator requested stop',
 }
 
 describe('Timeline', () => {
@@ -153,6 +159,11 @@ describe('Timeline', () => {
     // "session errored") tail; either is enough to pin the presence
     // of the row.
     expect(html).toContain('session closed')
+  })
+
+  it('renders an operator-stopped terminal row', () => {
+    const html = render([dispatch()], { endEvent: CANCELLED_END })
+    expect(html).toContain('session stopped')
   })
 
   it('hides the SessionEndRow when showSessionEnd is false (per-tab view)', () => {
