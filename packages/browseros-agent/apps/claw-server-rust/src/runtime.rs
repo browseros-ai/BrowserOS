@@ -87,7 +87,8 @@ impl AppRuntime {
     pub async fn shutdown(mut self) -> AppResult<()> {
         self.state.shutdown.request();
         let session_result = self.state.sessions.shutdown().await;
-        // Session teardown enqueues final ownership releases; persist them before shutdown returns.
+        // Session teardown enqueues final ownership-release attempts, which are drained before
+        // shutdown returns.
         self.state.session_tabs.drain_writes().await;
         self.state.recordings.close().await;
         self.state.browser.stop();
