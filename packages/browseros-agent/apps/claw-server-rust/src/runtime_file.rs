@@ -46,8 +46,9 @@ mod tests {
         write_runtime_file(&dir, "http://127.0.0.1:9200").await;
 
         let raw = fs::read_to_string(dir.join("runtime.json")).await?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw)?;
-        assert_eq!(parsed["url"], "http://127.0.0.1:9200");
+        // Byte-for-byte identical to the archived TS writer's contract:
+        // JSON.stringify({ url }, null, 2) + "\n".
+        assert_eq!(raw, "{\n  \"url\": \"http://127.0.0.1:9200\"\n}\n");
         // The atomic temp file must not survive the rename.
         assert!(!dir.join("runtime.json.tmp").exists());
 
