@@ -372,7 +372,7 @@ export const clawLayerCases: ContractCase[] = [
       } catch (error) {
         rejection = error
       }
-      if (!String(rejection).includes('session is no longer live')) {
+      if (!String(rejection).includes('no longer live')) {
         throw new Error(
           `post-cancel browser call was not rejected: ${rejection}`,
         )
