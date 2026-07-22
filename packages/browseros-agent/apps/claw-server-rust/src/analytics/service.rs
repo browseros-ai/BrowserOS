@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
+const BUILD_POSTHOG_KEY: Option<&str> = option_env!("CLAW_POSTHOG_KEY");
+const BUILD_POSTHOG_HOST: Option<&str> = option_env!("CLAW_POSTHOG_HOST");
 const REQUEST_TIMEOUT_SECONDS: u64 = 2;
 const SHUTDOWN_TIMEOUT_MILLISECONDS: u64 = 2_000;
 const MAX_QUEUE_SIZE: usize = 256;
@@ -36,14 +38,10 @@ struct AnalyticsConfig {
 
 impl AnalyticsConfig {
     fn from_env() -> Self {
-        let project_key = env::var("CLAW_POSTHOG_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let host = env::var("CLAW_POSTHOG_HOST")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+        let runtime_project_key = env::var("CLAW_POSTHOG_KEY").ok();
+        let runtime_host = env::var("CLAW_POSTHOG_HOST").ok();
+        let project_key = configured_value(runtime_project_key.as_deref(), BUILD_POSTHOG_KEY);
+        let host = configured_value(runtime_host.as_deref(), BUILD_POSTHOG_HOST)
             .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_string());
         let environment_enabled = env::var("CLAW_ANALYTICS_ENABLED").ok().is_none_or(|value| {
             !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false")
@@ -58,6 +56,21 @@ impl AnalyticsConfig {
     fn is_configured(&self) -> bool {
         self.project_key.is_some() && self.environment_enabled
     }
+}
+
+/**
+ * Shipped sidecars inherit Chromium's environment, so release builds embed the public PostHog
+ * project key. A runtime value takes precedence for local builds and controlled deployments.
+ */
+fn configured_value(runtime: Option<&str>, compiled: Option<&str>) -> Option<String> {
+    runtime
+        .and_then(non_empty_value)
+        .or_else(|| compiled.and_then(non_empty_value))
+}
+
+fn non_empty_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 #[derive(Clone)]
@@ -324,6 +337,19 @@ mod tests {
             host,
             environment_enabled: enabled,
         }
+    }
+
+    #[test]
+    fn runtime_analytics_config_overrides_compiled_defaults() {
+        assert_eq!(
+            configured_value(Some(" runtime-key "), Some("compiled-key")),
+            Some("runtime-key".to_string())
+        );
+        assert_eq!(
+            configured_value(None, Some(" compiled-key ")),
+            Some("compiled-key".to_string())
+        );
+        assert_eq!(configured_value(Some("  "), Some("  ")), None);
     }
 
     #[tokio::test]
