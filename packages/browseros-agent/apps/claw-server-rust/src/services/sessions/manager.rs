@@ -1,11 +1,13 @@
 use super::{PageOwnership, Session};
 use crate::{
+    analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{AuditLog, SessionTabLedger},
     error::{AppError, AppResult},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
     ids::{ConvoId, SessionId},
 };
 use futures_util::future::BoxFuture;
+use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, OnceLock},
@@ -44,6 +46,7 @@ pub struct Sessions {
     ownership: Arc<PageOwnership>,
     audit_log: Arc<AuditLog>,
     session_tabs: Arc<SessionTabLedger>,
+    analytics: Arc<dyn AnalyticsSink>,
     reserved_keys: Mutex<HashSet<ConvoId>>,
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     reaping_keys: Mutex<HashSet<ConvoId>>,
@@ -62,11 +65,31 @@ impl Sessions {
         retention: Duration,
         sweep_interval: Duration,
     ) -> Arc<Self> {
+        Self::new_with_analytics(
+            audit_log,
+            session_tabs,
+            idle_after,
+            retention,
+            sweep_interval,
+            Arc::new(NoopAnalyticsSink),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_analytics(
+        audit_log: Arc<AuditLog>,
+        session_tabs: Arc<SessionTabLedger>,
+        idle_after: Duration,
+        retention: Duration,
+        sweep_interval: Duration,
+        analytics: Arc<dyn AnalyticsSink>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             ownership: Arc::new(PageOwnership::new()),
             audit_log,
             session_tabs,
+            analytics,
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
@@ -113,7 +136,7 @@ impl Sessions {
             identity
         };
         let session = Session::new(id.clone(), agent, identity, Instant::now());
-        if let Err(error) = self
+        let audit_result = self
             .audit_log
             .record_session_start(
                 id.as_str(),
@@ -123,12 +146,27 @@ impl Sessions {
                 client.name.as_str(),
                 client.version.as_str(),
             )
+            .await;
+        self.finish_mint(id, session, client.name, audit_result)
             .await
-        {
+    }
+
+    async fn finish_mint(
+        &self,
+        id: SessionId,
+        session: Arc<Session>,
+        client_name: String,
+        audit_result: AppResult<()>,
+    ) -> AppResult<Arc<Session>> {
+        if let Err(error) = audit_result {
             self.reserved_keys.lock().await.remove(session.convo_id());
             return Err(error);
         }
         self.sessions.write().await.insert(id, session.clone());
+        self.analytics.capture(
+            events::AGENT_SESSION_STARTED,
+            json!({ "client_name": client_name }),
+        );
         Ok(session)
     }
 
@@ -278,6 +316,15 @@ impl Sessions {
             .audit_log
             .record_session_end(session.id().as_str(), kind, reason)
             .await;
+        self.finish_teardown(session, kind, audit_result).await
+    }
+
+    async fn finish_teardown(
+        &self,
+        session: Arc<Session>,
+        kind: &str,
+        audit_result: AppResult<()>,
+    ) -> AppResult<()> {
         let key = session.convo_id().clone();
         self.retained.write().await.insert(
             key.clone(),
@@ -288,6 +335,8 @@ impl Sessions {
         if let Some(hook) = self.retained_group_hook.get() {
             hook(self.ownership.clone(), key, RetainedGroupAction::Collapse).await;
         }
+        self.analytics
+            .capture(events::AGENT_SESSION_ENDED, json!({ "kind": kind }));
         audit_result?;
         Ok(())
     }
@@ -348,19 +397,44 @@ impl Sessions {
 mod tests {
     use super::{RetainedGroupAction, Session, Sessions};
     use crate::{
+        analytics::{AnalyticsSink, events},
         db::{AuditLog, Database, SessionTabLedger},
         identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
         ids::{ConvoId, SessionId},
     };
+    use serde_json::{Value, json};
     use std::{
         sync::{
-            Arc,
+            Arc, Mutex as StdMutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
     use tempfile::tempdir;
     use tokio::time::Instant;
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: StdMutex<Vec<(events::EventDefinition, Value)>>,
+    }
+
+    impl AnalyticsSink for RecordingAnalytics {
+        fn capture(&self, event: events::EventDefinition, properties: Value) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((event, properties));
+        }
+    }
+
+    impl RecordingAnalytics {
+        fn snapshot(&self) -> Vec<(events::EventDefinition, Value)> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
 
     async fn repositories(
         dir: &tempfile::TempDir,
@@ -471,6 +545,167 @@ mod tests {
             )
             .await?;
         assert!(registry.lookup(session.id()).await.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_lifecycle_emits_once_at_successful_state_transitions() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Claude Code".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        assert!(registry.remove(session.id(), "closed", None).await?);
+        assert!(!registry.remove(session.id(), "closed", None).await?);
+
+        assert_eq!(
+            analytics.snapshot(),
+            vec![
+                (
+                    events::AGENT_SESSION_STARTED,
+                    json!({ "client_name": "Claude Code" }),
+                ),
+                (events::AGENT_SESSION_ENDED, json!({ "kind": "closed" }),),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_start_audit_emits_nothing_and_failed_end_audit_still_emits()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        let failed_start = Session::new(
+            SessionId::new("failed-start"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "failed-start-label".to_string()),
+            Instant::now(),
+        );
+        registry
+            .reserved_keys
+            .lock()
+            .await
+            .insert(failed_start.convo_id().clone());
+        assert!(
+            registry
+                .finish_mint(
+                    failed_start.id().clone(),
+                    failed_start.clone(),
+                    "Codex".to_string(),
+                    Err(crate::error::AppError::Internal("audit failed".to_string())),
+                )
+                .await
+                .is_err()
+        );
+        assert!(registry.lookup(failed_start.id()).await.is_none());
+        assert!(analytics.snapshot().is_empty());
+
+        let failed_end = Session::new(
+            SessionId::new("failed-end"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "failed-end-label".to_string()),
+            Instant::now(),
+        );
+        assert!(
+            registry
+                .finish_teardown(
+                    failed_end,
+                    "errored",
+                    Err(crate::error::AppError::Internal("audit failed".to_string())),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            analytics.snapshot(),
+            vec![(events::AGENT_SESSION_ENDED, json!({ "kind": "errored" }),)]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn idle_sweep_and_shutdown_emit_for_every_removed_session() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::ZERO,
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        for id in ["idle-1", "idle-2"] {
+            registry
+                .insert_for_testing(Session::new(
+                    SessionId::new(id),
+                    ClientIdentity::Ephemeral {
+                        slug: "agent".to_string(),
+                        label: "Agent".to_string(),
+                    },
+                    ConversationIdentity::new("agent", format!("{id}-label")),
+                    Instant::now(),
+                ))
+                .await;
+        }
+        assert_eq!(registry.sweep_idle().await?, 2);
+
+        registry
+            .insert_for_testing(Session::new(
+                SessionId::new("shutdown"),
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ConversationIdentity::new("agent", "shutdown-label".to_string()),
+                Instant::now(),
+            ))
+            .await;
+        assert_eq!(registry.shutdown().await?, 1);
+        assert_eq!(
+            analytics
+                .snapshot()
+                .into_iter()
+                .filter(|(event, _)| *event == events::AGENT_SESSION_ENDED)
+                .count(),
+            3
+        );
         Ok(())
     }
 

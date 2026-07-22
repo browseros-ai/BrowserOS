@@ -1,5 +1,5 @@
 use crate::{
-    analytics::AnalyticsService,
+    analytics::{AnalyticsService, AnalyticsSink},
     api::http,
     config::Config,
     db::{AuditLog, Database, RecordingIndex, SessionTabLedger},
@@ -68,18 +68,21 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let harness = Arc::new(HarnessService::new(
+        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
+        let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
+        let harness = Arc::new(HarnessService::new_with_analytics(
             config.browserclaw_dir.join("mcp-manager"),
             home_dir,
+            analytics_sink.clone(),
         ));
-        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
         let profiles = Arc::new(ProfileService::new(store.clone()));
-        let sessions = Sessions::new(
+        let sessions = Sessions::new_with_analytics(
             audit_log.clone(),
             session_tabs.clone(),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
+            analytics_sink,
         );
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
