@@ -125,6 +125,13 @@ async fn serve_with_boot_task(
     };
     analytics.capture(events::SERVER_STARTED, json!({}));
     info!(%addr, "claw-server-rust listening");
+    // Publish the live server URL so external discovery (the Codex and Claude
+    // Desktop plugins) reads the current port instead of a stale file.
+    claw_server_rust::runtime_file::write_runtime_file(
+        &config.browserclaw_dir,
+        &config.local_server_url(),
+    )
+    .await;
     let shutdown = runtime.state().shutdown;
     runtime.spawn_task("MCP config integrity scan", boot_task);
     axum::serve(listener, app.into_make_service())
