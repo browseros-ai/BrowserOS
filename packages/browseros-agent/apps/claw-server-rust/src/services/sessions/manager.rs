@@ -390,6 +390,7 @@ impl Sessions {
         kind: &str,
         audit_result: AppResult<()>,
     ) -> AppResult<()> {
+        let usage = session.usage_snapshot().await;
         let key = session.convo_id().clone();
         self.retained.write().await.insert(
             key.clone(),
@@ -400,8 +401,28 @@ impl Sessions {
         if let Some(hook) = self.retained_group_hook.get() {
             hook(self.ownership.clone(), key, RetainedGroupAction::Collapse).await;
         }
-        self.analytics
-            .capture(events::AGENT_SESSION_ENDED, json!({ "kind": kind }));
+        for tool in usage.tools.iter().filter(|tool| tool.dispatch_count > 0) {
+            self.analytics.capture(
+                events::AGENT_SESSION_TOOL_USAGE,
+                json!({
+                    "client_name": usage.client_name.as_str(),
+                    "tool_name": tool.tool_name.as_str(),
+                    "dispatch_count": tool.dispatch_count,
+                    "total_duration_ms": tool.total_duration_ms,
+                    "max_duration_ms": tool.max_duration_ms,
+                }),
+            );
+        }
+        self.analytics.capture(
+            events::AGENT_SESSION_ENDED,
+            json!({
+                "kind": kind,
+                "client_name": usage.client_name.as_str(),
+                "dispatch_count": usage.dispatch_count,
+                "distinct_tool_count": usage.distinct_tool_count,
+                "max_concurrent_used_sessions": usage.max_concurrent_used_sessions,
+            }),
+        );
         audit_result?;
         Ok(())
     }
@@ -715,7 +736,90 @@ mod tests {
                     events::AGENT_SESSION_STARTED,
                     json!({ "client_name": "Claude Code" }),
                 ),
-                (events::AGENT_SESSION_ENDED, json!({ "kind": "closed" }),),
+                (
+                    events::AGENT_SESSION_ENDED,
+                    json!({
+                        "kind": "closed",
+                        "client_name": "Claude Code",
+                        "dispatch_count": 0,
+                        "distinct_tool_count": 0,
+                        "max_concurrent_used_sessions": 0,
+                    }),
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn used_session_emits_sorted_tool_summaries_before_its_end_event() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        let session = Session::new(
+            SessionId::new("used-session"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "used-label".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+        session
+            .record_tool_usage("navigate", Duration::from_millis(100), 1)
+            .await;
+        session
+            .record_tool_usage("tabs", Duration::from_millis(20), 2)
+            .await;
+        session
+            .record_tool_usage("navigate", Duration::from_millis(50), 2)
+            .await;
+        registry.insert_for_testing(session.clone()).await;
+
+        assert!(registry.remove(session.id(), "closed", None).await?);
+        assert!(!registry.remove(session.id(), "closed", None).await?);
+        assert_eq!(
+            analytics.snapshot(),
+            vec![
+                (
+                    events::AGENT_SESSION_TOOL_USAGE,
+                    json!({
+                        "client_name": "Codex",
+                        "tool_name": "navigate",
+                        "dispatch_count": 2,
+                        "total_duration_ms": 150,
+                        "max_duration_ms": 100,
+                    }),
+                ),
+                (
+                    events::AGENT_SESSION_TOOL_USAGE,
+                    json!({
+                        "client_name": "Codex",
+                        "tool_name": "tabs",
+                        "dispatch_count": 1,
+                        "total_duration_ms": 20,
+                        "max_duration_ms": 20,
+                    }),
+                ),
+                (
+                    events::AGENT_SESSION_ENDED,
+                    json!({
+                        "kind": "closed",
+                        "client_name": "Codex",
+                        "dispatch_count": 3,
+                        "distinct_tool_count": 2,
+                        "max_concurrent_used_sessions": 2,
+                    }),
+                ),
             ]
         );
         Ok(())
@@ -785,7 +889,16 @@ mod tests {
         );
         assert_eq!(
             analytics.snapshot(),
-            vec![(events::AGENT_SESSION_ENDED, json!({ "kind": "errored" }),)]
+            vec![(
+                events::AGENT_SESSION_ENDED,
+                json!({
+                    "kind": "errored",
+                    "client_name": "Codex",
+                    "dispatch_count": 0,
+                    "distinct_tool_count": 0,
+                    "max_concurrent_used_sessions": 0,
+                }),
+            )]
         );
         Ok(())
     }
@@ -936,7 +1049,16 @@ mod tests {
         assert_eq!(shutdown_task.await??, 0);
         assert_eq!(
             analytics.snapshot(),
-            vec![(events::AGENT_SESSION_ENDED, json!({ "kind": "closed" }))]
+            vec![(
+                events::AGENT_SESSION_ENDED,
+                json!({
+                    "kind": "closed",
+                    "client_name": "Codex",
+                    "dispatch_count": 0,
+                    "distinct_tool_count": 0,
+                    "max_concurrent_used_sessions": 0,
+                }),
+            )]
         );
         Ok(())
     }
