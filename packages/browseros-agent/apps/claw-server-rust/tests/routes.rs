@@ -910,23 +910,33 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
         .await
     });
 
-    let mut cancelled = None;
-    for _ in 0..50 {
-        let (status, body) = request_json(
-            &app.router,
-            "POST",
-            &format!("/api/v1/sessions/{session_id}/cancel"),
-            None,
-        )
-        .await?;
-        if status == StatusCode::OK && body["cancelled"] == 1 {
-            cancelled = Some(body);
-            break;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(&session_id))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("live MCP session missing"))?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if session.active_dispatch_count().await == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let body = cancelled.ok_or_else(|| anyhow::anyhow!("cancel route never observed dispatch"))?;
-    assert_eq!(body["cancelled"], 1);
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("wait dispatch was not admitted"))?;
+
+    let (status, body) = request_json(
+        &app.router,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/cancel"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "cancelled");
+    assert_eq!(body["cancelledDispatches"], 1);
 
     let (status, _headers, wait_body) = wait_task.await??;
     assert_eq!(status, StatusCode::OK);
@@ -950,9 +960,68 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
         .ok_or_else(|| anyhow::anyhow!("missing cancellation audit row"))?;
     let cancellation_meta: Value = serde_json::from_str(cancellation_meta)?;
     assert_eq!(cancellation_meta["isError"], true);
+    assert_eq!(cancellation_meta["cancelled"], true);
+    assert_eq!(
+        cancellation_meta["cancellationKind"],
+        "cockpit.operator-cancelled"
+    );
     assert_eq!(
         cancellation_meta["structuredKeys"],
         json!(["cancellationKind", "cancellationReason"])
+    );
+    let dispatch_count = dispatches.rows.len();
+
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": { "name": "tabs", "arguments": { "action": "list" } }
+        })),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no longer live")),
+        "post-stop body: {body:?}"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .len(),
+        dispatch_count
+    );
+
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["sessionId"] != session_id))
+    );
+
+    let (status, body) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=cancelled",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["sessionId"] == session_id))
     );
     drop(mock);
     Ok(())
@@ -1375,6 +1444,7 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             dispatch_id: DispatchId::new(),
             result: DispatchResultSummary {
                 is_error: false,
+                cancelled: false,
                 structured_content: json!({}),
                 content: json!([]),
             },

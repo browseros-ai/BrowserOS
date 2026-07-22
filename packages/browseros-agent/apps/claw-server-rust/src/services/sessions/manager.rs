@@ -170,22 +170,15 @@ impl Sessions {
         self.sessions.read().await.len()
     }
 
-    pub async fn cancel_by_convo(&self, convo_id: &ConvoId) -> usize {
-        let sessions: Vec<Arc<Session>> = self.sessions.read().await.values().cloned().collect();
-        let mut cancelled = 0;
-        for session in sessions {
-            if session.convo_id() == convo_id {
-                cancelled += session.cancel_active_dispatches().await;
-            }
-        }
-        cancelled
-    }
-
-    /// `None` when the session is not live; `Some(n)` aborts its active
-    /// dispatches and reports how many there were.
-    pub async fn cancel_by_session(&self, session_id: &SessionId) -> Option<usize> {
-        let session = self.lookup(session_id).await?;
-        Some(session.cancel_active_dispatches().await)
+    /// Removes the live entry before teardown so transport requests cannot resolve it again.
+    pub async fn cancel_by_session(&self, session_id: &SessionId) -> AppResult<Option<usize>> {
+        let session = self.sessions.write().await.remove(session_id);
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        self.teardown(session, "cancelled", Some("operator requested stop"))
+            .await
+            .map(Some)
     }
 
     pub async fn owner_of_page(&self, page_id: &browseros_core::PageId) -> Option<ConvoId> {
@@ -269,9 +262,8 @@ impl Sessions {
         session: Arc<Session>,
         kind: &str,
         reason: Option<&str>,
-    ) -> AppResult<()> {
-        session.cancel_active_dispatches().await;
-        session.cancel();
+    ) -> AppResult<usize> {
+        let cancelled_dispatches = session.stop_dispatches().await;
         self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
         let audit_result = self
@@ -289,7 +281,7 @@ impl Sessions {
             hook(self.ownership.clone(), key, RetainedGroupAction::Collapse).await;
         }
         audit_result?;
-        Ok(())
+        Ok(cancelled_dispatches)
     }
 
     async fn reap_retained(&self, now: Instant) -> usize {
@@ -348,9 +340,9 @@ impl Sessions {
 mod tests {
     use super::{RetainedGroupAction, Session, Sessions};
     use crate::{
-        db::{AuditLog, DATABASE_FILENAME, Database, SessionTabLedger},
+        db::{AuditLog, DATABASE_FILENAME, Database, SessionTabLedger, audit_log::TaskStatus},
         identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
-        ids::{ConvoId, SessionId},
+        ids::{ConvoId, DispatchId, SessionId},
     };
     use std::{
         sync::{
@@ -361,6 +353,7 @@ mod tests {
     };
     use tempfile::tempdir;
     use tokio::time::Instant;
+    use tokio_util::sync::CancellationToken;
 
     async fn repositories(
         dir: &tempfile::TempDir,
@@ -471,6 +464,53 @@ mod tests {
             )
             .await?;
         assert!(registry.lookup(session.id()).await.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn terminal_cancellation_removes_session_and_records_end() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log.clone(),
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let token = CancellationToken::new();
+        assert!(
+            session
+                .try_register_dispatch(DispatchId::new(), token.clone())
+                .await
+        );
+
+        assert_eq!(registry.cancel_by_session(session.id()).await?, Some(1));
+        assert!(token.is_cancelled());
+        assert!(registry.lookup(session.id()).await.is_none());
+        let summary = audit_log
+            .get_task_summary(session.id().as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("cancelled summary missing"))?;
+        assert_eq!(summary.status, TaskStatus::Cancelled);
+        assert!(
+            !registry
+                .remove(session.id(), "closed", Some("transport closed"))
+                .await?
+        );
         Ok(())
     }
 

@@ -163,8 +163,8 @@ impl ClawMcpService {
                 .lookup(&session_id)
                 .await
                 .ok_or_else(|| {
-                    McpError::internal_error(
-                        format!("mcp session {session_id} is not registered"),
+                    McpError::invalid_request(
+                        format!("BrowserClaw session {session_id} is no longer live"),
                         None,
                     )
                 })?

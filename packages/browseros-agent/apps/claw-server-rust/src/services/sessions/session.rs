@@ -106,6 +106,10 @@ impl Session {
         self.dispatches.lock().await.active.remove(dispatch_id);
     }
 
+    pub async fn active_dispatch_count(&self) -> usize {
+        self.dispatches.lock().await.active.len()
+    }
+
     pub async fn stop_dispatches(&self) -> usize {
         let tokens = {
             let mut state = self.dispatches.lock().await;

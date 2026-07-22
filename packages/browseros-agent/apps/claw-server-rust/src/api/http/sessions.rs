@@ -122,33 +122,43 @@ pub(super) async fn cancel(
     Path(session_id): Path<String>,
 ) -> Result<Json<CancelSessionResponse>, CanonicalError> {
     let session_id = SessionId::new(session_id);
-    if let Some(cancelled) = state.sessions.cancel_by_session(&session_id).await {
-        return Ok(Json(CancelSessionResponse::new(
-            SessionStatus::Cancelled,
-            i64::try_from(cancelled).unwrap_or(i64::MAX),
-        )));
-    }
-    let known = state
-        .audit_log
-        .get_task(session_id.as_str())
+    let cancelled_dispatches = match state
+        .sessions
+        .cancel_by_session(&session_id)
         .await
         .map_err(|source| internal(&request_id, source))?
-        .is_some();
-    Err(if known {
-        error(
-            &request_id,
-            StatusCode::CONFLICT,
-            "session_not_live",
-            "session is not live",
-        )
-    } else {
-        error(
-            &request_id,
-            StatusCode::NOT_FOUND,
-            "session_not_found",
-            "session not found",
-        )
-    })
+    {
+        Some(cancelled_dispatches) => cancelled_dispatches,
+        None => match state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await
+            .map_err(|source| internal(&request_id, source))?
+            .map(|summary| summary.status)
+        {
+            Some(TaskStatus::Cancelled) => 0,
+            Some(_) => {
+                return Err(error(
+                    &request_id,
+                    StatusCode::CONFLICT,
+                    "session_not_live",
+                    "session is not live",
+                ));
+            }
+            None => {
+                return Err(error(
+                    &request_id,
+                    StatusCode::NOT_FOUND,
+                    "session_not_found",
+                    "session not found",
+                ));
+            }
+        },
+    };
+    Ok(Json(CancelSessionResponse::new(
+        SessionStatus::Cancelled,
+        i64::try_from(cancelled_dispatches).unwrap_or(i64::MAX),
+    )))
 }
 
 async fn live_sessions(state: &AppState) -> HashMap<String, Arc<Session>> {

@@ -13,8 +13,8 @@ use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetI
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
-    identity::{ClientIdentity, ConversationIdentity},
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput, TaskStatus},
+    identity::{ClientIdentity, ClientInfo, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
     services::cockpit::RecordToolInput,
     services::sessions::Session,
@@ -554,6 +554,7 @@ async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
             dispatch_id: DispatchId::new(),
             result: DispatchResultSummary {
                 is_error: false,
+                cancelled: false,
                 structured_content: json!({}),
                 content: json!([]),
             },
@@ -658,21 +659,12 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     assert!(detail["dispatches"][0].get("agentId").is_none());
     assert!(detail["dispatches"][0].get("url").is_none());
 
-    let (status, _, bytes) = request(
-        &app.router,
-        "POST",
-        "/api/v1/sessions/session-live/cancel",
-        None,
-        Body::empty(),
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "cancelled": 0 }));
-
     let dispatch_token = CancellationToken::new();
-    session
-        .register_dispatch(DispatchId::new(), dispatch_token.clone())
-        .await;
+    assert!(
+        session
+            .try_register_dispatch(DispatchId::new(), dispatch_token.clone())
+            .await
+    );
     let (status, _, bytes) = request(
         &app.router,
         "POST",
@@ -682,9 +674,39 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "cancelled": 1 }));
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({ "status": "cancelled", "cancelledDispatches": 1 })
+    );
     assert!(dispatch_token.is_cancelled());
-    assert!(app.state.sessions.contains(session.id()).await);
+    assert!(!app.state.sessions.contains(session.id()).await);
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/session-live",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let detail = json_body(&bytes)?;
+    assert_eq!(detail["session"]["status"], "cancelled");
+    assert!(detail["session"]["endedAt"].is_number());
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/sessions/session-live/cancel",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({ "status": "cancelled", "cancelledDispatches": 0 })
+    );
 
     let (status, _, bytes) = request(
         &app.router,
@@ -880,12 +902,6 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     assert!(seven_a < eight);
     assert!(eight < seven_b);
 
-    assert!(
-        app.state
-            .sessions
-            .remove(session.id(), "closed", Some("test"))
-            .await?
-    );
     let late_headers = [
         ("x-recording-tab-id", "101"),
         (
@@ -925,8 +941,56 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
         Body::empty(),
     )
     .await?;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(json_body(&bytes)?["code"], "session_not_live");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({ "status": "cancelled", "cancelledDispatches": 0 })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_cancel_stops_an_idle_zero_dispatch_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let session = app
+        .state
+        .sessions
+        .mint_with_id(
+            SessionId::new("session-idle"),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ClientInfo {
+                name: "Codex".to_string(),
+                version: "1".to_string(),
+                title: None,
+            },
+        )
+        .await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/sessions/session-idle/cancel",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({ "status": "cancelled", "cancelledDispatches": 0 })
+    );
+    assert!(!app.state.sessions.contains(session.id()).await);
+    let summary = app
+        .state
+        .audit_log
+        .get_task_summary(session.id().as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("idle cancelled summary missing"))?;
+    assert_eq!(summary.status, TaskStatus::Cancelled);
+    assert!(summary.ended_at.is_some());
     Ok(())
 }
 
