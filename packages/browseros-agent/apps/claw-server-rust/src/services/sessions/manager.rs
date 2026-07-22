@@ -10,6 +10,7 @@ use futures_util::future::BoxFuture;
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::{Arc, OnceLock},
     time::Duration,
 };
@@ -274,13 +275,10 @@ impl Sessions {
             let mut guard = self.sessions.write().await;
             std::mem::take(&mut *guard)
         };
-        let mut count = 0;
-        for session in sessions.into_values() {
+        teardown_all(sessions.into_values(), |session| {
             self.teardown(session, "closed", Some("server shutdown"))
-                .await?;
-            count += 1;
-        }
-        Ok(count)
+        })
+        .await
     }
 
     pub fn spawn_idle_sweeper(self: Arc<Self>, cancel: CancellationToken) -> JoinHandle<()> {
@@ -393,9 +391,31 @@ impl Sessions {
     }
 }
 
+async fn teardown_all<T, I, F, Fut>(items: I, mut teardown: F) -> AppResult<usize>
+where
+    I: IntoIterator<Item = T>,
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = AppResult<()>>,
+{
+    let mut count = 0;
+    let mut first_error = None;
+    for item in items {
+        count += 1;
+        if let Err(error) = teardown(item).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(count),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RetainedGroupAction, Session, Sessions};
+    use super::{RetainedGroupAction, Session, Sessions, teardown_all};
     use crate::{
         analytics::{AnalyticsSink, events},
         db::{AuditLog, Database, SessionTabLedger},
@@ -707,6 +727,30 @@ mod tests {
             3
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn shutdown_teardown_continues_after_the_first_error() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let result = teardown_all([0, 1, 2], {
+            let attempts = attempts.clone();
+            move |index| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if index == 0 {
+                        Err(crate::error::AppError::Internal(
+                            "first teardown failed".to_string(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

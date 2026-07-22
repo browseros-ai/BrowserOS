@@ -1,9 +1,11 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    io,
+    fs as std_fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
+use tempfile::NamedTempFile;
 use tokio::fs;
 use uuid::Uuid;
 
@@ -75,17 +77,23 @@ fn parse_state(raw: &str) -> Option<AnalyticsState> {
 }
 
 pub(crate) async fn persist_state(path: &Path, state: &AnalyticsState) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-    let tmp = path.with_file_name(format!(
-        "{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let path = path.to_path_buf();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || persist_state_blocking(&path, &state))
+        .await
+        .map_err(io::Error::other)?
+}
+
+fn persist_state_blocking(path: &Path, state: &AnalyticsState) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std_fs::create_dir_all(parent)?;
+    let mut tmp = NamedTempFile::new_in(parent)?;
     let mut raw = serde_json::to_string_pretty(state).map_err(io::Error::other)?;
     raw.push('\n');
-    fs::write(&tmp, raw).await?;
-    fs::rename(tmp, path).await
+    tmp.write_all(raw.as_bytes())?;
+    tmp.flush()?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map(|_| ()).map_err(|error| error.error)
 }
 
 #[cfg(test)]
@@ -127,6 +135,37 @@ mod tests {
                 .enabled
         );
         assert!(state_path(&unreadable_root).is_dir());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consent_state_atomically_replaces_an_existing_file() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = state_path(directory.path());
+        persist_state(
+            &path,
+            &AnalyticsState {
+                distinct_id: "stable".to_string(),
+                enabled: true,
+            },
+        )
+        .await?;
+        persist_state(
+            &path,
+            &AnalyticsState {
+                distinct_id: "stable".to_string(),
+                enabled: false,
+            },
+        )
+        .await?;
+
+        assert_eq!(
+            parse_state(&fs::read_to_string(path).await?),
+            Some(AnalyticsState {
+                distinct_id: "stable".to_string(),
+                enabled: false,
+            })
+        );
         Ok(())
     }
 

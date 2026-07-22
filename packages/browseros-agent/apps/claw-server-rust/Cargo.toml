@@ -34,6 +34,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
@@ -47,7 +48,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
-tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 
