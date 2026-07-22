@@ -206,19 +206,18 @@ async fn dispatch_tool_call_with(
     guards: &[ToolGuard],
     effects: &[NamedToolEffect],
 ) -> Result<CallToolResult, McpError> {
-    if let Some(identity) = &call.identity {
-        if !identity
+    if let Some(identity) = &call.identity
+        && !identity
             .session
             .try_register_dispatch(call.dispatch_id.clone(), call.dispatch_cancel.clone())
             .await
-        {
-            call.dispatch_cancel.cancel();
-            call.cancel.cancel();
-            return Err(McpError::invalid_request(
-                "BrowserClaw session is no longer live",
-                None,
-            ));
-        }
+    {
+        call.dispatch_cancel.cancel();
+        call.cancel.cancel();
+        return Err(McpError::invalid_request(
+            "BrowserClaw session is no longer live",
+            None,
+        ));
     }
     if let (Some(browser), Some(page_id)) = (&call.browser_session, extract_page_id(&call)) {
         call.page_snapshot = browser.pages.get_info(PageId(page_id)).await;
@@ -663,7 +662,9 @@ mod tests {
         )
         .await;
 
-        let error = result.expect_err("stopped session must reject dispatch");
+        let Err(error) = result else {
+            panic!("stopped session must reject dispatch");
+        };
         assert_eq!(
             error.message.as_ref(),
             "BrowserClaw session is no longer live"
