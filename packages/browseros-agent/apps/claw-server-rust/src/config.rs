@@ -212,12 +212,20 @@ impl Config {
         })
     }
 
+    /// Base URL external tools should reach BrowserClaw at: the Chrome-assigned
+    /// proxy port when present (the source of truth), else the direct server
+    /// port (dev, where the proxy is unavailable).
     #[must_use]
-    pub fn public_mcp_url(&self) -> String {
+    pub fn public_base_url(&self) -> String {
         format!(
-            "http://127.0.0.1:{}/mcp",
+            "http://127.0.0.1:{}",
             self.proxy_port.unwrap_or(self.server_port)
         )
+    }
+
+    #[must_use]
+    pub fn public_mcp_url(&self) -> String {
+        format!("{}/mcp", self.public_base_url())
     }
 
     #[must_use]
@@ -347,6 +355,8 @@ mod tests {
         assert_eq!(cfg.replay_retention_days, 7);
         assert!(cfg.browserclaw_dir.ends_with("browserclaw"));
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9200/mcp");
+        // No proxy configured (dev): falls back to the direct server port.
+        assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9200");
         Ok(())
     }
 
@@ -519,6 +529,8 @@ mod tests {
         assert_eq!(cfg.proxy_port, Some(9444));
         assert!(cfg.browserclaw_dir.ends_with(".browserclaw-dev"));
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9444/mcp");
+        // Proxy configured: the source of truth is the proxy port.
+        assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9444");
         Ok(())
     }
 }

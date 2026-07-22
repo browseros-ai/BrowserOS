@@ -128,14 +128,17 @@ async fn serve_with_boot_task(
     // or dev port (config port 0) is still published correctly.
     let bound = listener.local_addr().unwrap_or(addr);
     info!(%bound, "claw-server-rust listening");
-    // Publish the live server URL for external discovery (the Codex and Claude
-    // Desktop plugins). Fire-and-forget: a best-effort disk write must never
-    // gate the listener from accepting connections, since a stalled FUSE /
-    // network / container-mounted browserclaw_dir could otherwise leave the
-    // socket bound but never served. Mirrors the archived TS server, which
-    // deliberately did not await writeRuntimeFile for the same reason.
+    // Publish the canonical MCP URL for external discovery (the Codex and Claude
+    // Desktop plugins). This is the proxy port (the source of truth), falling
+    // back to the direct server port in dev where the proxy is unavailable, so
+    // runtime.json matches what the cockpit and connected agents advertise.
+    // Fire-and-forget: a best-effort disk write must never gate the listener
+    // from accepting connections, since a stalled FUSE / network /
+    // container-mounted browserclaw_dir could otherwise leave the socket bound
+    // but never served. Mirrors the archived TS server, which deliberately did
+    // not await writeRuntimeFile for the same reason.
     let runtime_dir = config.browserclaw_dir.clone();
-    let runtime_url = format!("http://{bound}");
+    let runtime_url = config.public_base_url();
     tokio::spawn(async move {
         claw_server_rust::runtime_file::write_runtime_file(&runtime_dir, &runtime_url).await;
     });
@@ -169,6 +172,21 @@ async fn ready_after<T, E>(
 }
 
 async fn heal_boot_config(state: &AppState) {
+    // Re-point every connected agent at the current canonical URL first (the
+    // proxy port may have moved on this app launch), then repair any config
+    // that still drifted from the now-current manifest spec.
+    match state
+        .harness
+        .migrate_connected_urls(&state.config.public_mcp_url())
+        .await
+    {
+        Ok(outcome) => info!(
+            migrated = outcome.migrated,
+            failed = outcome.failed,
+            "re-synced connected MCP agents to the current URL"
+        ),
+        Err(err) => error!(error = %err, "MCP URL migration failed"),
+    }
     match state.harness.run_integrity_scan().await {
         Ok(outcome) => info!(
             verified = outcome.verified,

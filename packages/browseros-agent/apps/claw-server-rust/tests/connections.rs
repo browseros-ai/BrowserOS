@@ -198,6 +198,40 @@ async fn run_connections_case() -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
         [Harness::ClaudeCode, Harness::Codex, Harness::Zed]
     );
+
+    // Proxy port moved on this launch: migrating re-links every connected
+    // harness to the new URL and rewrites their config files + the manifest.
+    const NEW_MCP_URL: &str = "http://127.0.0.1:9999/mcp";
+    let migrated = service.migrate_connected_urls(NEW_MCP_URL).await?;
+    assert_eq!(migrated.migrated, 3);
+    assert_eq!(migrated.failed, 0);
+
+    let claude_json: Value = serde_json::from_str(&fs::read_to_string(claude_path)?)?;
+    assert_eq!(
+        claude_json["mcpServers"]["BrowserClaw"]["url"], NEW_MCP_URL,
+        "claude config re-pointed to the new URL"
+    );
+    let codex_toml: toml::Value =
+        toml::from_str(&fs::read_to_string(path_for(&paths, AgentId::Codex)?)?)?;
+    assert_eq!(
+        codex_toml["mcp_servers"]["BrowserClaw"]["url"].as_str(),
+        Some(NEW_MCP_URL)
+    );
+    let zed_json: Value =
+        serde_json::from_str(&fs::read_to_string(path_for(&paths, AgentId::Zed)?)?)?;
+    assert_eq!(
+        zed_json["context_servers"]["BrowserClaw"]["url"],
+        NEW_MCP_URL
+    );
+
+    // Idempotent: re-running with the same URL is a no-op (nothing to rewrite).
+    let noop = service.migrate_connected_urls(NEW_MCP_URL).await?;
+    assert_eq!(noop.migrated, 0);
+    assert_eq!(noop.failed, 0);
+
+    // Restore the original URL so the rest of this scenario is unaffected.
+    let restored = service.migrate_connected_urls(MCP_URL).await?;
+    assert_eq!(restored.migrated, 3);
     assert_eq!(configured[0].message, "Configured in Claude Code.");
 
     fs::write(claude_path, "{\"mcpServers\":{}}")?;

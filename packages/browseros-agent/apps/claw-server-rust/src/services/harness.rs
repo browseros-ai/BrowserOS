@@ -123,6 +123,12 @@ pub struct IntegrityScanOutcome {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UrlMigrationOutcome {
+    pub migrated: usize,
+    pub failed: usize,
+}
+
 #[derive(Clone)]
 pub struct HarnessService {
     manager: Manager,
@@ -317,6 +323,26 @@ impl HarnessService {
         tokio::task::spawn_blocking(move || run_integrity_scan(&manager, &workspace_dir))
             .await?
             .map_err(manager_app_error)
+    }
+
+    /// Re-links every connected harness to `target_mcp_url`. Called on boot so a
+    /// proxy-port change (native re-resolves ports at app launch) re-points all
+    /// already-connected agents at the new URL. A no-op when the manifest
+    /// already records `target_mcp_url`; per-harness failures are isolated so
+    /// one unwritable config never blocks the rest.
+    pub async fn migrate_connected_urls(
+        &self,
+        target_mcp_url: &str,
+    ) -> AppResult<UrlMigrationOutcome> {
+        let _guard = self.mutex.lock().await;
+        let manager = self.manager.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        let target = target_mcp_url.to_string();
+        tokio::task::spawn_blocking(move || {
+            migrate_connected_urls(&manager, &workspace_dir, &target)
+        })
+        .await?
+        .map_err(manager_app_error)
     }
 
     fn failure(
@@ -624,6 +650,68 @@ fn tildify_home_path(path: Option<&Path>, home_dir: &Path) -> Option<String> {
         Ok(relative) => Some(format!("~/{}", relative.display())),
         Err(_) => Some(path.display().to_string()),
     }
+}
+
+/// Reads the canonical URL currently recorded for BrowserClaw in the manifest,
+/// from whichever transport spec it was last linked with. `None` when no entry
+/// exists or the URL cannot be recovered.
+fn manifest_server_url(manager: &Manager, workspace_dir: &Path) -> Option<String> {
+    with_legacy_manifest_migration(workspace_dir, || manager.list())
+        .ok()?
+        .into_iter()
+        .find(|server| server.name == BROWSEROS_MCP_SERVER_NAME)
+        .and_then(|server| match server.spec {
+            McpServerSpec::Http { url, .. } | McpServerSpec::Sse { url, .. } => Some(url),
+            // The stdio shape is `mcp-remote <url>`.
+            McpServerSpec::Stdio { args, .. } => args.into_iter().nth(1),
+        })
+}
+
+fn migrate_connected_urls(
+    manager: &Manager,
+    workspace_dir: &Path,
+    target_mcp_url: &str,
+) -> Result<UrlMigrationOutcome, ManagerError> {
+    // Nothing to do when the recorded URL already matches: every connected
+    // agent was last linked to it, so re-writing would only churn config files.
+    if manifest_server_url(manager, workspace_dir).as_deref() == Some(target_mcp_url) {
+        return Ok(UrlMigrationOutcome::default());
+    }
+
+    let links = with_legacy_manifest_migration(workspace_dir, || {
+        manager.list_links(ListLinksFilter {
+            server_names: Some(vec![BROWSEROS_MCP_SERVER_NAME.to_string()]),
+            agents: None,
+        })
+    })?;
+
+    let mut outcome = UrlMigrationOutcome::default();
+    for link in links {
+        let agent = link.agent;
+        let spec = match spec_for(agent, target_mcp_url) {
+            Ok(spec) => spec,
+            Err(error) => {
+                outcome.failed += 1;
+                tracing::warn!(agent = %agent, error = %error, "URL migration: spec build failed");
+                continue;
+            }
+        };
+        match relink_managed_server(
+            manager,
+            workspace_dir,
+            BROWSEROS_MCP_SERVER_NAME,
+            agent,
+            spec,
+            true,
+        ) {
+            Ok(_) => outcome.migrated += 1,
+            Err(error) => {
+                outcome.failed += 1;
+                tracing::warn!(agent = %agent, error = %error, "URL migration: relink failed");
+            }
+        }
+    }
+    Ok(outcome)
 }
 
 fn manager_app_error(error: ManagerError) -> AppError {
