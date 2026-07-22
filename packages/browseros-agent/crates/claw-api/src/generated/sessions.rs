@@ -13,13 +13,18 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CancelSessionResponse {
-    #[serde(rename = "cancelled")]
-    pub cancelled: i64,
+    #[serde(rename = "status")]
+    pub status: models::SessionStatus,
+    #[serde(rename = "cancelledDispatches")]
+    pub cancelled_dispatches: i64,
 }
 
 impl CancelSessionResponse {
-    pub fn new(cancelled: i64) -> CancelSessionResponse {
-        CancelSessionResponse { cancelled }
+    pub fn new(status: models::SessionStatus, cancelled_dispatches: i64) -> CancelSessionResponse {
+        CancelSessionResponse {
+            status,
+            cancelled_dispatches,
+        }
     }
 }
 
@@ -187,6 +192,8 @@ pub enum SessionStatus {
     Done,
     #[serde(rename = "failed")]
     Failed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
 }
 
 impl std::fmt::Display for SessionStatus {
@@ -195,6 +202,7 @@ impl std::fmt::Display for SessionStatus {
             Self::Live => write!(f, "live"),
             Self::Done => write!(f, "done"),
             Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }

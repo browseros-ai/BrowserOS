@@ -292,7 +292,7 @@ export interface components {
       consent: boolean
     }
     /** @enum {string} */
-    SessionStatus: 'live' | 'done' | 'failed'
+    SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'
     /** @enum {string} */
     LiveSessionActivityState: 'active' | 'idle'
     LiveSessionState: {
@@ -386,8 +386,9 @@ export interface components {
       screenshotId?: number
     }
     CancelSessionResponse: {
+      status: components['schemas']['SessionStatus']
       /** Format: int64 */
-      cancelled: number
+      cancelledDispatches: number
     }
     RecordingMetadata: {
       hasData: boolean
@@ -715,7 +716,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description Number of active dispatches cancelled, including zero for an idle live session. */
+      /** @description The session is terminally cancelled and reports how many active browser dispatches were interrupted. */
       200: {
         headers: {
           [name: string]: unknown

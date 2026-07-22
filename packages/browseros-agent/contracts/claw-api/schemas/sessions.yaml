@@ -1,6 +1,6 @@
 SessionStatus:
   type: string
-  enum: [live, done, failed]
+  enum: [live, done, failed, cancelled]
 LiveSessionActivityState:
   type: string
   enum: [active, idle]
@@ -168,9 +168,11 @@ SessionScreenshotList:
 CancelSessionResponse:
   type: object
   additionalProperties: false
-  required: [cancelled]
+  required: [status, cancelledDispatches]
   properties:
-    cancelled:
+    status:
+      $ref: '#/SessionStatus'
+    cancelledDispatches:
       type: integer
       format: int64
       minimum: 0

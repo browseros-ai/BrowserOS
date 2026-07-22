@@ -1,3 +1,4 @@
 {
-  "cancelled": 0
+  "status": "cancelled",
+  "cancelledDispatches": 0
 }

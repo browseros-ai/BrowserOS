@@ -64,7 +64,11 @@ describe('session visual API schema', () => {
     >
     const schemas = yaml('schemas/sessions.yaml') as Record<
       string,
-      { properties?: Record<string, unknown>; required?: string[] }
+      {
+        enum?: string[]
+        properties?: Record<string, unknown>
+        required?: string[]
+      }
     >
     const dispatches = yaml('schemas/dispatches.yaml') as Record<
       string,
@@ -100,5 +104,23 @@ describe('session visual API schema', () => {
       retiredDispatchScreenshotKey,
     )
     expect(dispatches.Dispatch?.required).not.toContain('screenshotId')
+    expect(schemas.SessionStatus?.enum).toEqual([
+      'live',
+      'done',
+      'failed',
+      'cancelled',
+    ])
+    expect(schemas.CancelSessionResponse?.required).toEqual([
+      'status',
+      'cancelledDispatches',
+    ])
+    expect(schemas.CancelSessionResponse?.properties).toEqual({
+      status: { $ref: '#/SessionStatus' },
+      cancelledDispatches: {
+        type: 'integer',
+        format: 'int64',
+        minimum: 0,
+      },
+    })
   })
 })

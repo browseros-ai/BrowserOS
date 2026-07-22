@@ -22,10 +22,16 @@ import type { Dispatch } from './dispatches.js';
 export interface CancelSessionResponse {
     /**
      *
+     * @type {SessionStatus}
+     * @memberof CancelSessionResponse
+     */
+    status: SessionStatus;
+    /**
+     *
      * @type {number}
      * @memberof CancelSessionResponse
      */
-    cancelled: number;
+    cancelledDispatches: number;
 }
 
 /**
@@ -201,7 +207,8 @@ export interface SessionScreenshotList {
 export const SessionStatus = {
     Live: 'live',
     Done: 'done',
-    Failed: 'failed'
+    Failed: 'failed',
+    Cancelled: 'cancelled'
 } as const;
 export type SessionStatus = typeof SessionStatus[keyof typeof SessionStatus];
 

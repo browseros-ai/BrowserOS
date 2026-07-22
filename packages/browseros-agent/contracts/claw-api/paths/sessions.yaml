@@ -80,7 +80,7 @@ cancel:
       - $ref: ../parameters.yaml#/SessionId
     responses:
       '200':
-        description: Number of active dispatches cancelled, including zero for an idle live session.
+        description: The session is terminally cancelled and reports how many active browser dispatches were interrupted.
         content:
           application/json:
             schema:
