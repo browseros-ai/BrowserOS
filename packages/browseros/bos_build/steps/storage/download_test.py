@@ -20,6 +20,7 @@ from bos_build.steps.storage.download import (
     ARTIFACT_METADATA_NAME,
     DownloadResourcesModule,
     extract_artifact_zip,
+    managed_binary_families,
 )
 
 
@@ -196,6 +197,70 @@ class ExtractArtifactZipTest(unittest.TestCase):
                 for relative_path, content in files.items()
             ],
         }
+
+
+class ManagedBinaryFamiliesTest(unittest.TestCase):
+    def test_collects_families_from_binaries_destinations(self) -> None:
+        # Arch-suffixed and family-root destinations both resolve to their
+        # family; destinations outside resources/binaries/ are ignored.
+        config = {
+            "download_operations": [
+                {
+                    "name": "Server arm64",
+                    "destination": "resources/binaries/browseros_server/darwin-arm64",
+                },
+                {
+                    "name": "Server x64",
+                    "destination": "resources/binaries/browseros_server/darwin-x64",
+                },
+                {
+                    "name": "Onboard",
+                    "destination": "resources/binaries/browseros_claw_onboard",
+                },
+                {
+                    "name": "Elsewhere",
+                    "destination": "resources/other/thing",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text(yaml.safe_dump(config))
+
+            self.assertEqual(
+                {"browseros_server", "browseros_claw_onboard"},
+                managed_binary_families(config_path),
+            )
+
+    def test_missing_file_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing = Path(temp_dir) / "does-not-exist.yaml"
+            self.assertEqual(set(), managed_binary_families(missing))
+
+    def test_config_without_download_operations_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text("some_other_key: true\n")
+            self.assertEqual(set(), managed_binary_families(config_path))
+
+    def test_malformed_yaml_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text("download_operations: [unclosed\n")
+            self.assertEqual(set(), managed_binary_families(config_path))
+
+    def test_real_config_lists_current_families(self) -> None:
+        config_path = (
+            Path(__file__).resolve().parents[2] / "config" / "download_resources.yaml"
+        )
+        families = managed_binary_families(config_path)
+
+        self.assertIn("browseros_server", families)
+        self.assertIn("browseros_claw_server_rust", families)
+        self.assertIn("browseros_claw_onboard", families)
+        # Retired by #1948; its leftover dir is exactly what pruning removes.
+        self.assertNotIn("browseros_claw_server", families)
 
 
 class DownloadResourceConfigTest(unittest.TestCase):
