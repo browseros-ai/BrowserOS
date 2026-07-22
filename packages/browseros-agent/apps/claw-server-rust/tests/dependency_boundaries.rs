@@ -154,6 +154,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "server_started",
         "agent_session_started",
         "agent_session_ended",
+        "agent_session_tool_usage",
         "harness_connected",
         "harness_disconnected",
     ];
@@ -190,7 +191,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         );
     }
     assert_eq!(sdk_locations, ["analytics/service.rs"]);
-    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 5);
+    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 6);
     Ok(())
 }
 
@@ -274,7 +275,13 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [file]
             if matches!(
                 file.as_str(),
-                "clock.rs" | "config.rs" | "error.rs" | "ids.rs" | "lib.rs" | "storage.rs"
+                "clock.rs"
+                    | "config.rs"
+                    | "error.rs"
+                    | "ids.rs"
+                    | "lib.rs"
+                    | "runtime_file.rs"
+                    | "storage.rs"
             ) =>
         {
             Ok(Layer::Support)
@@ -311,9 +318,8 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
         "AppState" => Some(Target::AppState),
-        "analytics" | "clock" | "config" | "error" | "ids" | "storage" | "AppResult" => {
-            Some(Target::Support)
-        }
+        "analytics" | "clock" | "config" | "error" | "ids" | "runtime_file" | "storage"
+        | "AppResult" => Some(Target::Support),
         _ => None,
     }
 }

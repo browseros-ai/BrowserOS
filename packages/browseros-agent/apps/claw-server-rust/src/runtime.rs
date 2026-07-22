@@ -153,7 +153,7 @@ mod tests {
         services::sessions::{Session, Sessions},
     };
     use axum::{Router, body::Bytes, routing::any};
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::{future::pending, sync::Arc, time::Duration};
     use tempfile::tempdir;
     use tokio::{
@@ -238,6 +238,7 @@ mod tests {
                     label: "Agent".to_string(),
                 },
                 ConversationIdentity::new("agent", "shutdown-label".to_string()),
+                "Codex".to_string(),
                 Instant::now(),
             ))
             .await;
@@ -250,6 +251,21 @@ mod tests {
         assert_eq!(
             request["batch"][0]["event"],
             events::AGENT_SESSION_ENDED.name()
+        );
+        assert_eq!(
+            request["batch"][0]["properties"],
+            json!({
+                "kind": "closed",
+                "client_name": "codex",
+                "dispatch_count": 0,
+                "distinct_tool_count": 0,
+                "max_concurrent_used_sessions": 0,
+                "server_version": env!("CARGO_PKG_VERSION"),
+                "os_platform": events::platform_token(),
+                "$process_person_profile": false,
+                "$geoip_disable": true,
+                "$is_server": true,
+            })
         );
         endpoint.abort();
         Ok(())
@@ -308,6 +324,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "stuck-label".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         sessions.insert_for_testing(session.clone()).await;

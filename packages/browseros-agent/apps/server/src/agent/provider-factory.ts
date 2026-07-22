@@ -86,6 +86,24 @@ function expandHomeToken(path: string): string {
   return path.replace(/^\$HOME(?=\/|$)/, homedir())
 }
 
+async function codexBrowserlessEnv(): Promise<
+  Record<string, string> | undefined
+> {
+  try {
+    // Loaded lazily so the overlay's fs-heavy module stays out of the
+    // factory's static import graph (it is only needed for codex chats).
+    const { materializeCodexBrowserlessHome } = await import(
+      '../lib/agents/host-acp/codex-home'
+    )
+    const codexHome = await materializeCodexBrowserlessHome({
+      browserosDir: getBrowserosDir(),
+    })
+    return codexHome ? { CODEX_HOME: codexHome } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function resolveAcpAgentId(config: ResolvedAgentConfig): string {
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM) {
     if (!config.acpAgentId) {
@@ -157,10 +175,21 @@ async function createAcpLanguageModel(
   // pinned version range for both tiers instead of falling through to
   // whatever range acpx happens to ship.
   for (const builtIn of ['claude', 'codex'] as const) {
+    // Codex ships a bundled in-app browser plugin that competes with the
+    // BrowserOS MCP tools for browser tasks; point it at an overlay
+    // CODEX_HOME that disables that plugin so BrowserOS is the only
+    // browser. Only built for the codex adapter when codex is the agent
+    // actually being spawned, and falls back to the real home if the
+    // overlay cannot be built.
+    const extraEnv =
+      builtIn === 'codex' && agentId === 'codex'
+        ? await codexBrowserlessEnv()
+        : undefined
     const launcher = resolveAcpSpawnCommand({
       agentType: builtIn,
       browserosDir: getBrowserosDir(),
       resourcesDir: config.resourcesDir,
+      extraEnv,
     })
     if (launcher) {
       agentRegistryOverrides[builtIn] = launcher.command

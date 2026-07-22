@@ -1,3 +1,4 @@
+use super::usage::{SessionUsageSnapshot, UsageTracker};
 use crate::{
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, SessionId},
@@ -23,6 +24,7 @@ pub struct Session {
     id: SessionId,
     agent: ClientIdentity,
     identity: ConversationIdentity,
+    usage: UsageTracker,
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
@@ -42,12 +44,14 @@ impl Session {
         id: SessionId,
         agent: ClientIdentity,
         identity: ConversationIdentity,
+        client_name: String,
         now: Instant,
     ) -> Arc<Self> {
         Arc::new(Self {
             id,
             agent,
             identity,
+            usage: UsageTracker::new(client_name),
             dispatches: Mutex::new(DispatchState {
                 accepting: true,
                 active: BTreeMap::new(),
@@ -78,6 +82,35 @@ impl Session {
     #[must_use]
     pub fn generated_label(&self) -> &str {
         self.identity.generated_label()
+    }
+
+    #[must_use]
+    pub fn client_name(&self) -> &str {
+        self.usage.client_name()
+    }
+
+    pub fn mark_used(&self) {
+        self.usage.mark_used();
+    }
+
+    #[must_use]
+    pub fn is_used(&self) -> bool {
+        self.usage.is_used()
+    }
+
+    pub async fn record_tool_usage(
+        &self,
+        tool_name: &str,
+        elapsed: Duration,
+        concurrent_used_sessions: usize,
+    ) {
+        self.usage
+            .record(tool_name, elapsed, concurrent_used_sessions)
+            .await;
+    }
+
+    pub(crate) async fn usage_snapshot(&self) -> SessionUsageSnapshot {
+        self.usage.snapshot().await
     }
 
     pub async fn label(&self) -> String {
@@ -235,6 +268,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "steady-otter".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         )
     }

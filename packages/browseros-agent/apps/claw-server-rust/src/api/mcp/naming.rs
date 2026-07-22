@@ -56,6 +56,7 @@ mod tests {
                 label: "Claude Code".to_string(),
             },
             ConversationIdentity::new("claude-code", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             tokio::time::Instant::now(),
         );
         assert_eq!(desired_group_title(&session).await, "claude/agile-alpaca");

@@ -5,11 +5,22 @@
 //! fixed tokens here before the delivery service ever sees it.
 
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::OnceLock,
+};
 
 const CLIENT_NAME: &str = "client_name";
 const HARNESS: &str = "harness";
 const KIND: &str = "kind";
+const TOOL_NAME: &str = "tool_name";
+const DISPATCH_COUNT: &str = "dispatch_count";
+const DISTINCT_TOOL_COUNT: &str = "distinct_tool_count";
+const MAX_CONCURRENT_USED_SESSIONS: &str = "max_concurrent_used_sessions";
+const TOTAL_DURATION_MS: &str = "total_duration_ms";
+const MAX_DURATION_MS: &str = "max_duration_ms";
+
+pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 const KNOWN_CLIENTS: [&str; 14] = [
     "claude-desktop",
@@ -41,30 +52,60 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 pub(crate) const END_KIND_VALUES: [&str; 2] = ["closed", "errored"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RequiredProperty {
+enum PropertyKind {
     ClientName,
     Harness,
-    Kind,
+    EndKind,
+    ToolName,
+    UnsignedInteger,
 }
 
-impl RequiredProperty {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::ClientName => CLIENT_NAME,
-            Self::Harness => HARNESS,
-            Self::Kind => KIND,
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PropertyDefinition {
+    name: &'static str,
+    kind: PropertyKind,
+}
+
+impl PropertyDefinition {
+    const fn new(name: &'static str, kind: PropertyKind) -> Self {
+        Self { name, kind }
     }
 
     fn normalize(self, value: &Value) -> Option<Value> {
-        let raw = value.as_str()?;
-        match self {
-            Self::ClientName => Some(Value::String(bucket_client_name(raw))),
-            Self::Harness if HARNESS_VALUES.contains(&raw) => Some(Value::String(raw.to_string())),
-            Self::Kind if END_KIND_VALUES.contains(&raw) => Some(Value::String(raw.to_string())),
-            Self::Harness | Self::Kind => None,
+        match self.kind {
+            PropertyKind::ClientName => Some(Value::String(bucket_client_name(value.as_str()?))),
+            PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
+            PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
+            PropertyKind::ToolName => {
+                let raw = value.as_str()?;
+                known_tool_names()
+                    .contains(raw)
+                    .then(|| Value::String(raw.to_string()))
+            }
+            PropertyKind::UnsignedInteger => value
+                .as_u64()
+                .filter(|value| *value <= MAX_SAFE_INTEGER)
+                .map(Value::from),
         }
     }
+}
+
+fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
+    let raw = value.as_str()?;
+    accepted
+        .contains(&raw)
+        .then(|| Value::String(raw.to_string()))
+}
+
+fn known_tool_names() -> &'static HashSet<&'static str> {
+    static KNOWN_TOOL_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    KNOWN_TOOL_NAMES.get_or_init(|| {
+        browseros_mcp::catalog()
+            .into_iter()
+            .map(|tool| tool.name)
+            .chain(std::iter::once("name_session"))
+            .collect()
+    })
 }
 
 /// One catalog entry. Its private fields and constructor prevent producers from
@@ -72,12 +113,12 @@ impl RequiredProperty {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventDefinition {
     name: &'static str,
-    required: &'static [RequiredProperty],
+    properties: &'static [PropertyDefinition],
 }
 
 impl EventDefinition {
-    const fn new(name: &'static str, required: &'static [RequiredProperty]) -> Self {
-        Self { name, required }
+    const fn new(name: &'static str, properties: &'static [PropertyDefinition]) -> Self {
+        Self { name, properties }
     }
 
     #[must_use]
@@ -86,22 +127,19 @@ impl EventDefinition {
     }
 
     #[must_use]
-    pub fn required_property_names(self) -> &'static [&'static str] {
-        match self.required {
-            [] => &[],
-            [RequiredProperty::ClientName] => &[CLIENT_NAME],
-            [RequiredProperty::Harness] => &[HARNESS],
-            [RequiredProperty::Kind] => &[KIND],
-            _ => &[],
-        }
+    pub fn property_names(self) -> Vec<&'static str> {
+        self.properties
+            .iter()
+            .map(|property| property.name)
+            .collect()
     }
 
     pub(crate) fn sanitize(self, properties: &Value) -> Option<Value> {
         let input = properties.as_object()?;
         let mut output = Map::new();
-        for required in self.required {
-            let value = input.get(required.name())?;
-            output.insert(required.name().to_string(), required.normalize(value)?);
+        for property in self.properties {
+            let value = input.get(property.name)?;
+            output.insert(property.name.to_string(), property.normalize(value)?);
         }
         Some(Value::Object(output))
     }
@@ -110,35 +148,63 @@ impl EventDefinition {
         self,
         properties: &HashMap<String, Value>,
     ) -> bool {
-        self.required.iter().all(|required| {
-            let Some(current) = properties.get(required.name()) else {
+        self.properties.iter().all(|property| {
+            let Some(current) = properties.get(property.name) else {
                 return false;
             };
-            required.normalize(current).as_ref() == Some(current)
+            property.normalize(current).as_ref() == Some(current)
         })
     }
 
     pub(crate) fn allows_property(self, key: &str) -> bool {
-        self.required.iter().any(|required| required.name() == key)
+        self.properties.iter().any(|property| property.name == key)
     }
 }
 
 pub const SERVER_STARTED: EventDefinition = EventDefinition::new("server_started", &[]);
-pub const AGENT_SESSION_STARTED: EventDefinition =
-    EventDefinition::new("agent_session_started", &[RequiredProperty::ClientName]);
-pub const AGENT_SESSION_ENDED: EventDefinition =
-    EventDefinition::new("agent_session_ended", &[RequiredProperty::Kind]);
-pub const HARNESS_CONNECTED: EventDefinition =
-    EventDefinition::new("harness_connected", &[RequiredProperty::Harness]);
-pub const HARNESS_DISCONNECTED: EventDefinition =
-    EventDefinition::new("harness_disconnected", &[RequiredProperty::Harness]);
+pub const AGENT_SESSION_STARTED: EventDefinition = EventDefinition::new(
+    "agent_session_started",
+    &[PropertyDefinition::new(
+        CLIENT_NAME,
+        PropertyKind::ClientName,
+    )],
+);
+pub const AGENT_SESSION_ENDED: EventDefinition = EventDefinition::new(
+    "agent_session_ended",
+    &[
+        PropertyDefinition::new(KIND, PropertyKind::EndKind),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::new(DISPATCH_COUNT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(DISTINCT_TOOL_COUNT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(MAX_CONCURRENT_USED_SESSIONS, PropertyKind::UnsignedInteger),
+    ],
+);
+pub const HARNESS_CONNECTED: EventDefinition = EventDefinition::new(
+    "harness_connected",
+    &[PropertyDefinition::new(HARNESS, PropertyKind::Harness)],
+);
+pub const HARNESS_DISCONNECTED: EventDefinition = EventDefinition::new(
+    "harness_disconnected",
+    &[PropertyDefinition::new(HARNESS, PropertyKind::Harness)],
+);
+pub const AGENT_SESSION_TOOL_USAGE: EventDefinition = EventDefinition::new(
+    "agent_session_tool_usage",
+    &[
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::new(TOOL_NAME, PropertyKind::ToolName),
+        PropertyDefinition::new(DISPATCH_COUNT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(TOTAL_DURATION_MS, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(MAX_DURATION_MS, PropertyKind::UnsignedInteger),
+    ],
+);
 
-pub const ALL: [EventDefinition; 5] = [
+pub const ALL: [EventDefinition; 6] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_ENDED,
     HARNESS_CONNECTED,
     HARNESS_DISCONNECTED,
+    AGENT_SESSION_TOOL_USAGE,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -187,14 +253,36 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
+        assert_eq!(ALL.len(), 6);
         assert_eq!(
-            ALL.map(|definition| (definition.name(), definition.required_property_names())),
+            ALL.map(EventDefinition::name),
             [
-                (SERVER_STARTED.name(), &[][..]),
-                (AGENT_SESSION_STARTED.name(), &["client_name"][..]),
-                (AGENT_SESSION_ENDED.name(), &["kind"][..]),
-                (HARNESS_CONNECTED.name(), &["harness"][..]),
-                (HARNESS_DISCONNECTED.name(), &["harness"][..]),
+                SERVER_STARTED.name(),
+                AGENT_SESSION_STARTED.name(),
+                AGENT_SESSION_ENDED.name(),
+                HARNESS_CONNECTED.name(),
+                HARNESS_DISCONNECTED.name(),
+                AGENT_SESSION_TOOL_USAGE.name(),
+            ]
+        );
+        assert_eq!(
+            AGENT_SESSION_ENDED.property_names(),
+            vec![
+                "kind",
+                "client_name",
+                "dispatch_count",
+                "distinct_tool_count",
+                "max_concurrent_used_sessions",
+            ]
+        );
+        assert_eq!(
+            AGENT_SESSION_TOOL_USAGE.property_names(),
+            vec![
+                "client_name",
+                "tool_name",
+                "dispatch_count",
+                "total_duration_ms",
+                "max_duration_ms",
             ]
         );
     }
@@ -269,8 +357,20 @@ mod tests {
         }
         for kind in END_KIND_VALUES {
             assert_eq!(
-                AGENT_SESSION_ENDED.sanitize(&json!({ "kind": kind })),
-                Some(json!({ "kind": kind }))
+                AGENT_SESSION_ENDED.sanitize(&json!({
+                    "kind": kind,
+                    "client_name": "Codex",
+                    "dispatch_count": 0,
+                    "distinct_tool_count": 0,
+                    "max_concurrent_used_sessions": 0,
+                })),
+                Some(json!({
+                    "kind": kind,
+                    "client_name": "codex",
+                    "dispatch_count": 0,
+                    "distinct_tool_count": 0,
+                    "max_concurrent_used_sessions": 0,
+                }))
             );
         }
 
@@ -280,10 +380,106 @@ mod tests {
                 None
             );
             assert_eq!(
-                AGENT_SESSION_ENDED.sanitize(&json!({ "kind": invalid })),
+                AGENT_SESSION_ENDED.sanitize(&json!({
+                    "kind": invalid,
+                    "client_name": "Codex",
+                    "dispatch_count": 0,
+                    "distinct_tool_count": 0,
+                    "max_concurrent_used_sessions": 0,
+                })),
                 None
             );
         }
+    }
+
+    #[test]
+    fn session_usage_schemas_accept_only_known_tools_and_safe_aggregates() {
+        assert_eq!(
+            AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                "client_name": "Claude Code",
+                "tool_name": "navigate",
+                "dispatch_count": 3,
+                "total_duration_ms": 810,
+                "max_duration_ms": 420,
+                "url": "https://private.example",
+                "arguments": { "prompt": "private" },
+                "result": "private",
+            })),
+            Some(json!({
+                "client_name": "claude-code",
+                "tool_name": "navigate",
+                "dispatch_count": 3,
+                "total_duration_ms": 810,
+                "max_duration_ms": 420,
+            }))
+        );
+        assert_eq!(
+            AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                "client_name": "Codex",
+                "tool_name": "name_session",
+                "dispatch_count": 1,
+                "total_duration_ms": 12,
+                "max_duration_ms": 12,
+            })),
+            Some(json!({
+                "client_name": "codex",
+                "tool_name": "name_session",
+                "dispatch_count": 1,
+                "total_duration_ms": 12,
+                "max_duration_ms": 12,
+            }))
+        );
+
+        for tool_name in ["unknown", "https://private.example", "user@example.com"] {
+            assert_eq!(
+                AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                    "client_name": "Codex",
+                    "tool_name": tool_name,
+                    "dispatch_count": 1,
+                    "total_duration_ms": 12,
+                    "max_duration_ms": 12,
+                })),
+                None
+            );
+        }
+
+        for invalid in [json!(-1), json!(1.5), json!(MAX_SAFE_INTEGER + 1)] {
+            assert_eq!(
+                AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                    "client_name": "Codex",
+                    "tool_name": "navigate",
+                    "dispatch_count": invalid,
+                    "total_duration_ms": 12,
+                    "max_duration_ms": 12,
+                })),
+                None
+            );
+        }
+        assert_eq!(
+            AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                "client_name": "Codex",
+                "tool_name": "navigate",
+                "dispatch_count": 1,
+                "total_duration_ms": MAX_SAFE_INTEGER,
+                "max_duration_ms": MAX_SAFE_INTEGER,
+            })),
+            Some(json!({
+                "client_name": "codex",
+                "tool_name": "navigate",
+                "dispatch_count": 1,
+                "total_duration_ms": MAX_SAFE_INTEGER,
+                "max_duration_ms": MAX_SAFE_INTEGER,
+            }))
+        );
+        assert_eq!(
+            AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                "client_name": "Codex",
+                "tool_name": "navigate",
+                "dispatch_count": 1,
+                "total_duration_ms": 12,
+            })),
+            None
+        );
     }
 
     #[test]

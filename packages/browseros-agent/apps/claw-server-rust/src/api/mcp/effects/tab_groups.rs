@@ -939,6 +939,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             tokio::time::Instant::now(),
         );
         let key = session.convo_id().clone();
