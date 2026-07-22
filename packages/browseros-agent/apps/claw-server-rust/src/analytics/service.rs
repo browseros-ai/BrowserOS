@@ -321,7 +321,9 @@ fn final_allowlist(mut event: Event) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytics::events::{AGENT_SESSION_STARTED, SERVER_STARTED};
+    use crate::analytics::events::{
+        AGENT_SESSION_STARTED, AGENT_SESSION_TOOL_USAGE, SERVER_STARTED,
+    };
     use axum::{Router, body::Bytes, routing::any};
     use serde_json::json;
     use tempfile::tempdir;
@@ -406,6 +408,63 @@ mod tests {
                 "$process_person_profile": false,
                 "$geoip_disable": true,
                 "$is_server": true
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_wire_payload_survives_both_allowlists_without_content() -> anyhow::Result<()>
+    {
+        let directory = tempdir()?;
+        let stable_id = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        persist_state(
+            &state_path(directory.path()),
+            &AnalyticsState {
+                distinct_id: stable_id.to_string(),
+                enabled: true,
+            },
+        )
+        .await?;
+        let (host, mut requests, endpoint) = local_endpoint().await?;
+        let service =
+            AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
+
+        service.capture(
+            AGENT_SESSION_TOOL_USAGE,
+            json!({
+                "client_name": "Claude Code",
+                "tool_name": "navigate",
+                "dispatch_count": 3,
+                "total_duration_ms": 810,
+                "max_duration_ms": 420,
+                "url": "https://private.example",
+                "arguments": { "prompt": "private" },
+                "result": "private",
+            }),
+        );
+        service.shutdown().await;
+
+        let body = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("local endpoint closed before capture"))?;
+        endpoint.abort();
+        let event = &body["batch"][0];
+        assert_eq!(event["event"], AGENT_SESSION_TOOL_USAGE.name());
+        assert_eq!(event["distinct_id"], stable_id);
+        assert_eq!(
+            event["properties"],
+            json!({
+                "client_name": "claude-code",
+                "tool_name": "navigate",
+                "dispatch_count": 3,
+                "total_duration_ms": 810,
+                "max_duration_ms": 420,
+                "server_version": env!("CARGO_PKG_VERSION"),
+                "os_platform": events::platform_token(),
+                "$process_person_profile": false,
+                "$geoip_disable": true,
+                "$is_server": true,
             })
         );
         Ok(())
