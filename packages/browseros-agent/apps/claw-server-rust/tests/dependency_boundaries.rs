@@ -16,6 +16,7 @@ const DELETED_ROOT_MODULES: &[&str] = &[
     "sessions",
     "browser",
     "live_sessions",
+    "telemetry",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +144,56 @@ fn sea_orm_is_rejected_outside_db() {
     assert!(errors.iter().any(|error| error.contains("sea_orm")));
 }
 
+#[test]
+fn analytics_catalog_and_sdk_have_single_source_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rust_files(&src, &mut files)?;
+    let wire_names = [
+        "server_started",
+        "agent_session_started",
+        "agent_session_ended",
+        "harness_connected",
+        "harness_disconnected",
+    ];
+    let mut wire_locations = wire_names
+        .iter()
+        .map(|name| (*name, Vec::new()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut sdk_locations = Vec::new();
+
+    for file in files {
+        let relative = file
+            .strip_prefix(&src)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(&file)?;
+        for name in wire_names {
+            if source.contains(&format!("\"{name}\"")) {
+                wire_locations
+                    .entry(name)
+                    .or_default()
+                    .push(relative.clone());
+            }
+        }
+        if source.contains("posthog_rs") {
+            sdk_locations.push(relative);
+        }
+    }
+
+    for (name, locations) in wire_locations {
+        assert_eq!(
+            locations,
+            ["analytics/events.rs"],
+            "analytics wire name {name} escaped the catalog"
+        );
+    }
+    assert_eq!(sdk_locations, ["analytics/service.rs"]);
+    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 5);
+    Ok(())
+}
+
 fn violations(relative: &str, source: &str) -> Vec<String> {
     check_source(Path::new(relative), source)
         .err()
@@ -215,6 +266,7 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         )),
         [db, ..] if db == "db" => Ok(Layer::Db),
         [identity, ..] if identity == "identity" => Ok(Layer::Identity),
+        [analytics, ..] if analytics == "analytics" => Ok(Layer::Support),
         [file] if matches!(file.as_str(), "app.rs" | "runtime.rs" | "main.rs") => {
             Ok(Layer::Composition)
         }
@@ -222,13 +274,7 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [file]
             if matches!(
                 file.as_str(),
-                "clock.rs"
-                    | "config.rs"
-                    | "error.rs"
-                    | "ids.rs"
-                    | "lib.rs"
-                    | "storage.rs"
-                    | "telemetry.rs"
+                "clock.rs" | "config.rs" | "error.rs" | "ids.rs" | "lib.rs" | "storage.rs"
             ) =>
         {
             Ok(Layer::Support)
@@ -265,7 +311,7 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
         "AppState" => Some(Target::AppState),
-        "clock" | "config" | "error" | "ids" | "storage" | "telemetry" | "AppResult" => {
+        "analytics" | "clock" | "config" | "error" | "ids" | "storage" | "AppResult" => {
             Some(Target::Support)
         }
         _ => None,

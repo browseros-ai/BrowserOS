@@ -370,7 +370,8 @@ mod tests {
     }
 
     #[test]
-    fn final_hook_drops_unknown_or_identified_events_and_strips_sdk_context() {
+    fn final_hook_drops_unknown_or_identified_events_and_strips_sdk_context() -> anyhow::Result<()>
+    {
         let mut valid = Event::new(SERVER_STARTED.name(), "stable-id");
         for (key, value) in [
             (SERVER_VERSION, json!("1")),
@@ -382,27 +383,23 @@ mod tests {
             ("$lib", json!("posthog-rs")),
             ("unexpected", json!("private")),
         ] {
-            valid
-                .insert_prop(key, value)
-                .expect("JSON values serialize");
+            valid.insert_prop(key, value)?;
         }
-        let filtered = final_allowlist(valid).expect("catalog event stays personless");
+        let filtered = final_allowlist(valid)
+            .ok_or_else(|| anyhow::anyhow!("catalog event was unexpectedly dropped"))?;
         assert_eq!(filtered.properties().len(), 5);
         assert!(!filtered.properties().contains_key("$os_version"));
         assert!(!filtered.properties().contains_key("$lib"));
         assert!(!filtered.properties().contains_key("unexpected"));
 
         let mut identified = Event::new(SERVER_STARTED.name(), "stable-id");
-        identified
-            .insert_prop(PROCESS_PERSON_PROFILE, true)
-            .expect("boolean serializes");
+        identified.insert_prop(PROCESS_PERSON_PROFILE, true)?;
         assert!(final_allowlist(identified).is_none());
 
         let mut unknown = Event::new("unknown", "stable-id");
-        unknown
-            .insert_prop(PROCESS_PERSON_PROFILE, false)
-            .expect("boolean serializes");
+        unknown.insert_prop(PROCESS_PERSON_PROFILE, false)?;
         assert!(final_allowlist(unknown).is_none());
+        Ok(())
     }
 
     #[tokio::test]
