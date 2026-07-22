@@ -12,7 +12,7 @@ pub use recording_index::{
 pub use session_tabs::SessionTabLedger;
 
 use crate::error::{AppError, AppResult, IoPath};
-use migration::AuditMigrator;
+use migration::Migrator;
 use sea_orm::{
     DatabaseConnection, DbErr, RuntimeErr, SqlxSqliteConnector,
     sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
@@ -24,15 +24,15 @@ use std::{
     time::Duration,
 };
 
+pub const DATABASE_FILENAME: &str = "browserclaw.sqlite";
+
 #[derive(Clone)]
 pub struct Database(DatabaseConnection);
 
 impl Database {
-    /// Opens and migrates the audit database.
+    /// Opens and migrates BrowserClaw's shared durable state database.
     pub async fn open(path: impl AsRef<Path>) -> AppResult<Self> {
-        open_and_migrate::<AuditMigrator>(path.as_ref())
-            .await
-            .map(Self)
+        open_and_migrate::<Migrator>(path.as_ref()).await.map(Self)
     }
 
     pub(in crate::db) fn connection(&self) -> &DatabaseConnection {
@@ -117,7 +117,10 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditLog, Database, audit_log::ListDispatchesQuery};
+    use super::{
+        AuditLog, DATABASE_FILENAME, Database, append_suffix, audit_log::ListDispatchesQuery,
+        back_up_database,
+    };
     use sea_orm::{
         ConnectionTrait, DbBackend, Statement,
         sqlx::{
@@ -140,7 +143,7 @@ mod tests {
     #[tokio::test]
     async fn fresh_file_has_the_complete_baseline_schema() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let db = Database::open(dir.path().join("audit.sqlite")).await?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
         let objects = db
             .connection()
             .query_all(Statement::from_string(
@@ -223,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn ts_snapshot_upgrades_in_place_and_preserves_dispatches() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let path = dir.path().join("audit.sqlite");
+        let path = dir.path().join(DATABASE_FILENAME);
         let options = sqlite_options(&path);
         let mut conn = SqliteConnection::connect_with(&options).await?;
         for migration in [TS_0000, TS_0001, TS_0002] {
@@ -290,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn garbage_file_is_backed_up_and_recreated() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let path = dir.path().join("audit.sqlite");
+        let path = dir.path().join(DATABASE_FILENAME);
         let backup = path.with_extension("sqlite.bak");
         tokio::fs::write(&path, b"not a sqlite database").await?;
 
@@ -304,9 +307,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn database_backups_include_wal_and_shm_sidecars() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+        for (source_suffix, contents) in [
+            ("", b"database".as_slice()),
+            ("-wal", b"wal".as_slice()),
+            ("-shm", b"shm".as_slice()),
+        ] {
+            tokio::fs::write(append_suffix(&path, source_suffix), contents).await?;
+        }
+
+        back_up_database(&path).await?;
+
+        for (source_suffix, backup_suffix, contents) in [
+            ("", ".bak", b"database".as_slice()),
+            ("-wal", ".bak-wal", b"wal".as_slice()),
+            ("-shm", ".bak-shm", b"shm".as_slice()),
+        ] {
+            assert!(!append_suffix(&path, source_suffix).exists());
+            assert_eq!(
+                tokio::fs::read(append_suffix(&path, backup_suffix)).await?,
+                contents
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn double_open_keeps_one_baseline_record() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let path = dir.path().join("audit.sqlite");
+        let path = dir.path().join(DATABASE_FILENAME);
         let first = Database::open(&path).await?;
         first.0.close().await?;
 

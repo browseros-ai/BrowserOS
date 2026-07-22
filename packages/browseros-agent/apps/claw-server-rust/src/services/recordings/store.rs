@@ -358,14 +358,14 @@ fn sanitize_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Database, RecordingIndex};
+    use crate::db::{DATABASE_FILENAME, Database, RecordingIndex};
     use tempfile::tempdir;
 
     async fn setup() -> anyhow::Result<(tempfile::TempDir, Arc<RecordingIndex>, Arc<RecordingStore>)>
     {
         let dir = tempdir()?;
         let index = Arc::new(RecordingIndex::new(
-            Database::open(dir.path().join("audit.sqlite")).await?,
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
         ));
         let store = RecordingStore::new(
             dir.path().join("recordings"),
