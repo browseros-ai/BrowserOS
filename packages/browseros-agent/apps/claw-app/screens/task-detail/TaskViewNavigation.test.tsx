@@ -274,7 +274,6 @@ describe('TaskViewNavigation', () => {
     ].find((option) => option.textContent?.includes('Tab 20'))
     if (!tab20) throw new Error('Tab 20 option missing')
     await act(async () => {
-      dispatchMouse(tab20, 'pointerdown')
       dispatchMouse(tab20, 'click')
     })
 
