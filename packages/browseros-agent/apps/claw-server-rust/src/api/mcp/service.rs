@@ -462,8 +462,9 @@ mod tests {
             "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
         ));
         assert!(instructions.contains(
-            "- Work in your own tabs; touch a tab you don't own only when the user points\n  you at it."
+            "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
         ));
+        assert!(!instructions.contains("touch a tab"));
         assert!(!instructions.contains("close them when done"));
         Ok(())
     }
