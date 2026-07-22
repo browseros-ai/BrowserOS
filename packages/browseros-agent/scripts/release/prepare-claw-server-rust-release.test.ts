@@ -116,6 +116,8 @@ async function prepare(
     options.refName ?? 'main',
     '--requested-version',
     options.requestedVersion ?? '',
+    '--release-ref',
+    'HEAD',
   ])
 }
 
