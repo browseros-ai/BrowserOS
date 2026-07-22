@@ -191,11 +191,8 @@ impl Sessions {
         {
             Ok(cancelled_dispatches) => Ok(Some(cancelled_dispatches)),
             Err(error) => {
-                self.sessions
-                    .write()
-                    .await
-                    .entry(session_id.clone())
-                    .or_insert(session);
+                self.restore_pending_operator_stop(session_id, session)
+                    .await;
                 Err(error)
             }
         }
@@ -213,10 +210,25 @@ impl Sessions {
     ) -> AppResult<bool> {
         let session = self.sessions.write().await.remove(id);
         if let Some(session) = session {
-            self.teardown(session, kind, reason).await?;
-            return Ok(true);
+            return match self.teardown(session.clone(), kind, reason).await {
+                Ok(_) => Ok(true),
+                Err(error) => {
+                    self.restore_pending_operator_stop(id, session).await;
+                    Err(error)
+                }
+            };
         }
         Ok(false)
+    }
+
+    async fn restore_pending_operator_stop(&self, id: &SessionId, session: Arc<Session>) {
+        if session.operator_stop_requested() {
+            self.sessions
+                .write()
+                .await
+                .entry(id.clone())
+                .or_insert(session);
+        }
     }
 
     pub async fn sweep_idle(&self) -> AppResult<usize> {
@@ -602,6 +614,40 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("cancelled summary missing"))?;
         assert_eq!(summary.status, TaskStatus::Cancelled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restores_pending_operator_stop_for_teardown_retry() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = Session::new(
+            SessionId::new("pending-stop"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "agile-alpaca".to_string()),
+            Instant::now(),
+        );
+        session.request_operator_stop();
+
+        registry
+            .restore_pending_operator_stop(session.id(), session.clone())
+            .await;
+
+        let restored = registry
+            .lookup(session.id())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("pending operator stop was not restored"))?;
+        assert!(Arc::ptr_eq(&restored, &session));
         Ok(())
     }
 
