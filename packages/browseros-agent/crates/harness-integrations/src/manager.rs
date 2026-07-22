@@ -10,11 +10,11 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Manager {
+pub struct McpManager {
     workspace_dir: PathBuf,
 }
 
-impl Manager {
+impl McpManager {
     /// Binds manager operations to one manifest workspace directory.
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {

@@ -10,7 +10,7 @@ pub enum Error {
     AgentNotSupported { agent: String },
 
     #[error(
-        "Entry \"{server_name}\" in {} was not written by agent-mcp-manager for agent \"{agent}\". Refusing to remove.",
+        "Entry \"{server_name}\" in {} was not written by harness-integrations for agent \"{agent}\". Refusing to remove.",
         config_path.display()
     )]
     ForeignEntry {

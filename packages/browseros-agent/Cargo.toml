@@ -9,7 +9,7 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/browseros-ai/BrowserOS"
 
 [workspace.dependencies]
-agent-mcp-manager = { path = "crates/agent-mcp-manager" }
+harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-mcp = { path = "crates/browseros-mcp" }

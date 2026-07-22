@@ -2,9 +2,9 @@ use crate::{
     analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     error::{AppError, AppResult},
 };
-use agent_mcp_manager::{
+use harness_integrations::{
     AgentId, AgentScope, DisconnectInput, Error as ManagerError, LinkInput, ListLinksFilter,
-    Manager, ManifestLinkEntry, ManifestServerEntry, McpServer, McpServerSpec, ServerManifest,
+    ManifestLinkEntry, ManifestServerEntry, McpManager, McpServer, McpServerSpec, ServerManifest,
     is_installed, resolve_agent_mcp_config_path, resolve_agent_surface,
 };
 use serde::{Deserialize, Serialize};
@@ -131,7 +131,7 @@ pub struct UrlMigrationOutcome {
 
 #[derive(Clone)]
 pub struct HarnessService {
-    manager: Manager,
+    manager: McpManager,
     workspace_dir: PathBuf,
     home_dir: PathBuf,
     mutex: Arc<Mutex<()>>,
@@ -151,7 +151,7 @@ impl HarnessService {
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
         Self {
-            manager: Manager::new(&workspace_dir),
+            manager: McpManager::new(&workspace_dir),
             workspace_dir,
             home_dir,
             mutex: Arc::new(Mutex::new(())),
@@ -401,7 +401,7 @@ pub fn spec_for(agent: AgentId, mcp_url: &str) -> Result<McpServerSpec, ManagerE
     let surface = resolve_agent_surface(agent, AgentScope::System)?;
     if surface
         .supported_transports
-        .contains(&agent_mcp_manager::McpTransport::Http)
+        .contains(&harness_integrations::McpTransport::Http)
     {
         return Ok(McpServerSpec::Http {
             url: mcp_url.to_string(),
@@ -416,13 +416,13 @@ pub fn spec_for(agent: AgentId, mcp_url: &str) -> Result<McpServerSpec, ManagerE
 }
 
 fn relink_managed_server(
-    manager: &Manager,
+    manager: &McpManager,
     workspace_dir: &Path,
     server_name: &str,
     agent: AgentId,
     spec: McpServerSpec,
     allow_overwrite: bool,
-) -> Result<agent_mcp_manager::LinkSummary, HarnessOperationError> {
+) -> Result<harness_integrations::LinkSummary, HarnessOperationError> {
     let previous_spec = with_legacy_manifest_migration(workspace_dir, || manager.list())
         .map_err(HarnessOperationError::Manager)?
         .into_iter()
@@ -458,7 +458,7 @@ fn relink_managed_server(
 }
 
 fn run_integrity_scan(
-    manager: &Manager,
+    manager: &McpManager,
     workspace_dir: &Path,
 ) -> Result<IntegrityScanOutcome, ManagerError> {
     let report = with_legacy_manifest_migration(workspace_dir, || manager.rescan())?;
@@ -654,7 +654,7 @@ fn tildify_home_path(path: Option<&Path>, home_dir: &Path) -> Option<String> {
 }
 
 fn migrate_connected_urls(
-    manager: &Manager,
+    manager: &McpManager,
     workspace_dir: &Path,
     target_mcp_url: &str,
 ) -> Result<UrlMigrationOutcome, ManagerError> {

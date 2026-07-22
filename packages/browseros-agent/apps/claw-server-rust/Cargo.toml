@@ -14,7 +14,7 @@ name = "browseros-claw-server-rs"
 path = "src/main.rs"
 
 [dependencies]
-agent-mcp-manager.workspace = true
+harness-integrations.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-mcp.workspace = true

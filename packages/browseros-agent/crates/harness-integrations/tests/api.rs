@@ -5,10 +5,10 @@ use std::{
     process::Command,
 };
 
-use agent_mcp_manager::{
-    AgentId, AgentScope, DisconnectInput, Error, LinkInput, ListLinksFilter, Manager, McpServer,
+use harness_integrations::{
+    AgentId, AgentScope, DisconnectInput, Error, LinkInput, ListLinksFilter, McpManager, McpServer,
     McpServerSpec, UnlinkInput, detect_installed_agents, is_agent_supported, is_installed,
-    list_supported_agents, resolve_agent_surface,
+    list_supported_agents, resolve_agent_surface, resolve_harness_definition,
 };
 use serde_json::Value;
 use tempfile::tempdir;
@@ -33,7 +33,7 @@ fn link_input(server: McpServer, agent: AgentId, config_path: &Path) -> LinkInpu
 #[test]
 fn link_writes_config_and_byte_compatible_manifest() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let config = root.path().join("cursor.json");
     let summary = manager.link(link_input(
         McpServer {
@@ -64,7 +64,7 @@ fn link_writes_config_and_byte_compatible_manifest() -> Result<(), Box<dyn std::
 #[test]
 fn relink_is_idempotent_and_spec_is_last_write_wins() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let cursor = root.path().join("cursor.json");
     let zed = root.path().join("zed.json");
     manager.link(link_input(stdio_server("gh"), AgentId::Cursor, &cursor))?;
@@ -105,7 +105,7 @@ fn relink_is_idempotent_and_spec_is_last_write_wins() -> Result<(), Box<dyn std:
 #[test]
 fn foreign_entries_require_explicit_overwrite() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let config = root.path().join("cursor.json");
     fs::write(&config, r#"{"mcpServers":{"gh":{"command":"foreign"}}}"#)?;
     let error = manager
@@ -131,7 +131,7 @@ fn unlink_uses_recorded_path_and_unknown_links_are_no_ops() -> Result<(), Box<dy
 {
     let root = tempdir()?;
     let workspace = root.path().join("workspace");
-    let manager = Manager::new(&workspace);
+    let manager = McpManager::new(&workspace);
     let unknown = manager.unlink(UnlinkInput::new("ghost", AgentId::Cursor))?;
     assert!(!unknown.removed);
     assert!(!workspace.join("manifest.json").exists());
@@ -149,7 +149,7 @@ fn unlink_uses_recorded_path_and_unknown_links_are_no_ops() -> Result<(), Box<dy
 #[test]
 fn disconnect_never_touches_other_agent_files() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let cursor = root.path().join("cursor.json");
     let vscode = root.path().join("vscode.json");
     let zed = root.path().join("zed.json");
@@ -174,7 +174,7 @@ fn disconnect_never_touches_other_agent_files() -> Result<(), Box<dyn std::error
 #[test]
 fn disconnect_can_keep_an_empty_manifest_entry() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let config = root.path().join("cursor.json");
     manager.link(link_input(stdio_server("solo"), AgentId::Cursor, &config))?;
     let mut input = DisconnectInput::new("solo", AgentId::Cursor);
@@ -188,7 +188,7 @@ fn disconnect_can_keep_an_empty_manifest_entry() -> Result<(), Box<dyn std::erro
 #[test]
 fn list_links_filters_by_server_and_agent() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let cursor = root.path().join("cursor.json");
     let zed = root.path().join("zed.json");
     manager.link(link_input(stdio_server("one"), AgentId::Cursor, &cursor))?;
@@ -205,7 +205,7 @@ fn list_links_filters_by_server_and_agent() -> Result<(), Box<dyn std::error::Er
 #[test]
 fn rescan_reads_each_manifest_recorded_config_path() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let first = root.path().join("custom/first.json");
     let second = root.path().join("custom/second.json");
     fs::create_dir_all(first.parent().ok_or("missing custom config parent")?)?;
@@ -230,7 +230,7 @@ fn rescan_reads_each_manifest_recorded_config_path() -> Result<(), Box<dyn std::
 #[test]
 fn install_gate_and_project_scope_return_typed_errors() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
-    let manager = Manager::new(root.path().join("workspace"));
+    let manager = McpManager::new(root.path().join("workspace"));
     let missing = root.path().join("missing/cursor.json");
     let error = manager
         .link(link_input(stdio_server("gh"), AgentId::Cursor, &missing))
@@ -260,16 +260,16 @@ fn malformed_manifest_is_never_silently_reset() -> Result<(), Box<dyn std::error
     let workspace = root.path().join("workspace");
     fs::create_dir_all(&workspace)?;
     fs::write(workspace.join("manifest.json"), "{ broken")?;
-    let manager = Manager::new(workspace);
+    let manager = McpManager::new(workspace);
     assert!(matches!(manager.list(), Err(Error::Manifest { .. })));
     Ok(())
 }
 
 #[test]
 fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error::Error>> {
-    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.client;
+    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?;
     assert_eq!(
-        opencode.install_check_paths.darwin,
+        opencode.harness.install_check_paths.darwin,
         &[
             "$XDG_CONFIG_HOME/opencode",
             "$HOME/.config/opencode",
@@ -278,7 +278,7 @@ fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error
         ]
     );
     assert_eq!(
-        opencode.install_check_paths.linux,
+        opencode.harness.install_check_paths.linux,
         &[
             "$XDG_CONFIG_HOME/opencode",
             "$HOME/.config/opencode",
@@ -287,7 +287,7 @@ fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error
         ]
     );
     assert_eq!(
-        opencode.install_check_paths.windows,
+        opencode.harness.install_check_paths.windows,
         &[
             "$USERPROFILE\\.config\\opencode",
             "$USERPROFILE\\.opencode",
@@ -295,7 +295,7 @@ fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error
         ]
     );
     assert_eq!(
-        opencode.system_paths.darwin,
+        opencode.mcp.system_paths.darwin,
         &[
             "$XDG_CONFIG_HOME/opencode/opencode.json",
             "$HOME/.config/opencode/opencode.json",
@@ -305,21 +305,21 @@ fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error
         ]
     );
 
-    let antigravity = resolve_agent_surface(AgentId::Antigravity, AgentScope::System)?.client;
+    let antigravity = resolve_agent_surface(AgentId::Antigravity, AgentScope::System)?;
     assert_eq!(
-        antigravity.install_check_paths.darwin,
+        antigravity.harness.install_check_paths.darwin,
         &["$HOME/.gemini/antigravity"]
     );
     assert_eq!(
-        antigravity.system_paths.darwin,
+        antigravity.mcp.system_paths.darwin,
         &["$HOME/.gemini/config/mcp_config.json"]
     );
     assert_eq!(
-        antigravity.system_paths.linux,
+        antigravity.mcp.system_paths.linux,
         &["$HOME/.gemini/config/mcp_config.json"]
     );
     assert_eq!(
-        antigravity.system_paths.windows,
+        antigravity.mcp.system_paths.windows,
         &["$USERPROFILE\\.gemini\\config\\mcp_config.json"]
     );
     Ok(())
@@ -363,7 +363,7 @@ fn exercise_opencode_install_fingerprint(home: &Path) -> Result<(), Box<dyn std:
         Some(&true)
     );
 
-    let manager = Manager::new(home.join("manager-workspace"));
+    let manager = McpManager::new(home.join("manager-workspace"));
     manager.link(LinkInput::new(stdio_server("browseros"), AgentId::OpenCode))?;
     let config_path = home.join(".config/opencode/opencode.json");
     let config: Value = serde_json::from_str(&fs::read_to_string(&config_path)?)?;
@@ -401,11 +401,11 @@ fn public_agent_helpers_expose_exactly_the_seven_harness_targets()
     assert_eq!(
         resolve_agent_surface(AgentId::Codex, AgentScope::System)?.supported_transports,
         &[
-            agent_mcp_manager::McpTransport::Stdio,
-            agent_mcp_manager::McpTransport::Http,
+            harness_integrations::McpTransport::Stdio,
+            harness_integrations::McpTransport::Http,
         ]
     );
-    let claude = resolve_agent_surface(AgentId::ClaudeCode, AgentScope::System)?.client;
+    let claude = resolve_agent_surface(AgentId::ClaudeCode, AgentScope::System)?.mcp;
     assert_eq!(
         claude.system_paths.darwin,
         &["$CLAUDE_CONFIG_DIR/.claude.json", "$HOME/.claude.json"]
@@ -414,14 +414,21 @@ fn public_agent_helpers_expose_exactly_the_seven_harness_targets()
         claude.http.and_then(|shape| shape.sse_tag_value),
         Some("sse")
     );
-    let codex = resolve_agent_surface(AgentId::Codex, AgentScope::System)?.client;
+    let codex = resolve_agent_surface(AgentId::Codex, AgentScope::System)?.mcp;
     assert_eq!(
         codex.http.and_then(|shape| shape.header_field),
         Some("http_headers")
     );
-    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.client;
+    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.mcp;
     assert!(opencode.stdio.command_as_array);
     assert_eq!(opencode.stdio.env_field, Some("environment"));
+    let codex = resolve_harness_definition(AgentId::Codex);
+    let zed = resolve_harness_definition(AgentId::Zed);
+    assert_ne!(codex.mcp.system_paths.darwin, zed.mcp.system_paths.darwin);
+    assert_eq!(
+        codex.skill.map(|surface| surface.global_roots.darwin),
+        zed.skill.map(|surface| surface.global_roots.darwin)
+    );
     assert_eq!(detect_installed_agents()?.len(), 7);
     assert!(is_installed(&[])?.is_empty());
     Ok(())

@@ -29,7 +29,7 @@ impl Emitter {
     }
 
     pub(crate) fn read(&self, raw: &str) -> Result<Vec<String>, Error> {
-        match self.surface.client.format {
+        match self.surface.mcp.format {
             ConfigFormat::Json | ConfigFormat::Jsonc => Ok(json_read(raw, self.surface.stdio)),
             ConfigFormat::Toml => toml_read(raw, self.surface.stdio),
         }
@@ -38,7 +38,7 @@ impl Emitter {
     pub(crate) fn add(&self, raw: &str, name: &str, spec: &McpServerSpec) -> Result<String, Error> {
         let key = transform_key(name, self.surface.stdio);
         let entry = build_entry(spec, self.surface.stdio, self.surface.http)?;
-        match self.surface.client.format {
+        match self.surface.mcp.format {
             ConfigFormat::Json | ConfigFormat::Jsonc => {
                 json_add(raw, self.surface.stdio.top_level_key, &key, entry)
             }
@@ -48,7 +48,7 @@ impl Emitter {
 
     pub(crate) fn remove(&self, raw: &str, name: &str) -> Result<String, Error> {
         let key = transform_key(name, self.surface.stdio);
-        match self.surface.client.format {
+        match self.surface.mcp.format {
             ConfigFormat::Json | ConfigFormat::Jsonc => {
                 json_remove(raw, self.surface.stdio.top_level_key, &key)
             }

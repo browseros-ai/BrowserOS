@@ -9,19 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-mcp-manager"
-version = "0.1.0"
-dependencies = [
- "jsonc-parser",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "time",
- "toml_edit",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -461,7 +448,6 @@ dependencies = [
 name = "claw-server-rust"
 version = "0.0.13"
 dependencies = [
- "agent-mcp-manager",
  "anyhow",
  "axum",
  "base64",
@@ -471,6 +457,7 @@ dependencies = [
  "clap",
  "claw-api",
  "futures-util",
+ "harness-integrations",
  "posthog-rs",
  "rand 0.9.4",
  "rmcp",
@@ -1086,6 +1073,19 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "harness-integrations"
+version = "0.1.0"
+dependencies = [
+ "jsonc-parser",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "toml_edit",
+]
 
 [[package]]
 name = "hashbrown"

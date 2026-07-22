@@ -1,7 +1,3 @@
-use agent_mcp_manager::{
-    AgentId, AgentScope, LinkInput, Manager, McpServer, McpServerSpec,
-    resolve_agent_mcp_config_path,
-};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -13,6 +9,10 @@ use claw_server_rust::{
     build_router,
     config::Config,
     services::harness::{Harness, HarnessService},
+};
+use harness_integrations::{
+    AgentId, AgentScope, LinkInput, McpManager, McpServer, McpServerSpec,
+    resolve_agent_mcp_config_path,
 };
 use serde_json::{Value, json};
 use std::{
@@ -287,7 +287,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
     let custom_workspace = browserclaw_dir.join("custom-mcp-manager");
     let custom_config = home.join("custom/cursor.json");
     fs::create_dir_all(parent(&custom_config)?)?;
-    let custom_manager = Manager::new(&custom_workspace);
+    let custom_manager = McpManager::new(&custom_workspace);
     let mut custom_link = LinkInput::new(
         McpServer {
             name: "CustomPath".to_string(),
@@ -387,7 +387,7 @@ async fn assert_legacy_manifest_migration(
         .await?;
     assert!(connected.installed, "{}", connected.message);
 
-    let migrated = Manager::new(&workspace).list()?;
+    let migrated = McpManager::new(&workspace).list()?;
     assert_eq!(migrated.len(), 1);
     assert_eq!(migrated[0].name, "BrowserClaw");
     assert_eq!(migrated[0].added_at, added_at);

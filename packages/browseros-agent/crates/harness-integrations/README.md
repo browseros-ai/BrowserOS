@@ -1,6 +1,6 @@
-# agent-mcp-manager
+# harness-integrations
 
-`agent-mcp-manager` registers and deregisters MCP servers in the real configuration files used by AI coding agents. A workspace `manifest.json` records which server entry the library wrote to each agent and the exact configuration path used.
+`harness-integrations` registers and deregisters MCP servers in the real configuration files used by AI coding agents. A workspace `manifest.json` records which server entry the library wrote to each agent and the exact configuration path used.
 
 The implementation has three strict layers:
 
@@ -8,7 +8,7 @@ The implementation has three strict layers:
 2. Pure planners derive ordered filesystem operations and the next manifest without mutating the snapshot.
 3. `apply_plan` executes atomic sibling-temp-file writes in plan order, then removals.
 
-The public API is the workspace-bound `Manager` plus agent discovery and path-resolution helpers. Configuration writes are synchronous; async callers should use their runtime's blocking-task facility.
+The public API is the workspace-bound `McpManager` plus agent discovery and path-resolution helpers. Configuration writes are synchronous; async callers should use their runtime's blocking-task facility.
 
 ## Differences from the TypeScript package
 

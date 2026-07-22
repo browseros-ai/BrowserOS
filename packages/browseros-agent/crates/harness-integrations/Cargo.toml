@@ -1,11 +1,11 @@
 [package]
-name = "agent-mcp-manager"
+name = "harness-integrations"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Programmatic MCP server registration for AI coding agents"
+description = "Managed integrations for AI coding harnesses"
 
 [dependencies]
 jsonc-parser.workspace = true
