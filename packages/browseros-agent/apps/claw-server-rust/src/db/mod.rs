@@ -203,7 +203,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -219,6 +219,10 @@ mod tests {
         assert_eq!(
             migrations[3].try_get::<String>("", "version")?,
             "m0004_atomic_recording_payloads"
+        );
+        assert_eq!(
+            migrations[4].try_get::<String>("", "version")?,
+            "m0005_reclassify_task_status"
         );
         Ok(())
     }
@@ -349,7 +353,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         Ok(())
     }
 

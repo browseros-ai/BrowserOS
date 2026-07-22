@@ -11,7 +11,272 @@ impl MigratorTrait for Migrator {
             Box::new(m0002_add_recordings_and_claims::Migration),
             Box::new(m0003_document_recordings_and_tab_ownership::Migration),
             Box::new(m0004_atomic_recording_payloads::Migration),
+            Box::new(m0005_reclassify_task_status::Migration),
         ]
+    }
+}
+
+mod m0005_reclassify_task_status {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0005_reclassify_task_status"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Task status is a persisted projection, so completed rows must be reclassified when
+            // its semantics change instead of waiting for another dispatch that will never arrive.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    WITH first_ends AS (
+                        SELECT session_id, kind
+                        FROM (
+                            SELECT
+                                session_id,
+                                kind,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY session_id
+                                    ORDER BY id ASC
+                                ) AS position
+                            FROM agent_session_ends
+                        )
+                        WHERE position = 1
+                    ),
+                    dispatch_tails AS (
+                        SELECT
+                            session_id,
+                            COUNT(*) AS dispatch_count,
+                            SUM(
+                                CASE WHEN json_valid(result_meta) THEN
+                                    CASE WHEN
+                                        json_extract(result_meta, '$.isError') = 1
+                                        AND COALESCE(
+                                            json_extract(result_meta, '$.cancelled'),
+                                            0
+                                        ) != 1
+                                    THEN 1 ELSE 0 END
+                                ELSE 0 END
+                            ) AS error_count
+                        FROM (
+                            SELECT
+                                session_id,
+                                result_meta,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY session_id
+                                    ORDER BY id DESC
+                                ) AS position
+                            FROM tool_dispatches
+                        )
+                        WHERE position <= 3
+                        GROUP BY session_id
+                    )
+                    UPDATE tasks
+                    SET status = CASE
+                        WHEN NOT EXISTS (
+                            SELECT 1 FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) THEN 'live'
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'cancelled' THEN 'cancelled'
+                        WHEN dispatch_count = 0 AND (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'errored' THEN 'failed'
+                        WHEN dispatch_count = 0 AND (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'closed' THEN 'done'
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) IN ('closed', 'errored') AND EXISTS (
+                            SELECT 1 FROM dispatch_tails
+                            WHERE dispatch_tails.session_id = tasks.session_id
+                                AND dispatch_tails.dispatch_count = 3
+                                AND dispatch_tails.error_count = 3
+                        ) THEN 'failed'
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) IN ('closed', 'errored') THEN 'done'
+                        ELSE 'live'
+                    END
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    WITH first_ends AS (
+                        SELECT session_id, kind
+                        FROM (
+                            SELECT
+                                session_id,
+                                kind,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY session_id
+                                    ORDER BY id ASC
+                                ) AS position
+                            FROM agent_session_ends
+                        )
+                        WHERE position = 1
+                    )
+                    UPDATE tasks
+                    SET status = CASE
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'cancelled' THEN 'cancelled'
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'errored' THEN 'failed'
+                        WHEN (
+                            SELECT kind FROM first_ends
+                            WHERE first_ends.session_id = tasks.session_id
+                        ) = 'closed' AND error_count = 0 THEN 'done'
+                        WHEN error_count > 0 THEN 'failed'
+                        ELSE 'live'
+                    END
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        struct PreviousMigrator;
+
+        #[async_trait::async_trait]
+        impl MigratorTrait for PreviousMigrator {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                vec![
+                    Box::new(super::super::m0001_baseline::Migration),
+                    Box::new(super::super::m0002_add_recordings_and_claims::Migration),
+                    Box::new(super::super::m0003_document_recordings_and_tab_ownership::Migration),
+                    Box::new(super::super::m0004_atomic_recording_payloads::Migration),
+                ]
+            }
+        }
+
+        async fn insert_legacy_task(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            results: &[bool],
+            end_kind: Option<&str>,
+        ) -> Result<(), DbErr> {
+            for (index, is_error) in results.iter().enumerate() {
+                let result_meta = format!(
+                    r#"{{"isError":{},"cancelled":false}}"#,
+                    if *is_error { "true" } else { "false" }
+                );
+                connection
+                    .execute_unprepared(&format!(
+                        "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, result_meta, has_screenshot) VALUES ({index}, 'agent', 'agent', 'Agent', '{session_id}', 'navigate', '{result_meta}', 0)"
+                    ))
+                    .await?;
+            }
+            if let Some(kind) = end_kind {
+                connection
+                    .execute_unprepared(&format!(
+                        "INSERT INTO agent_session_ends (created_at, session_id, kind) VALUES (100, '{session_id}', '{kind}')"
+                    ))
+                    .await?;
+            }
+            let error_count = results.iter().filter(|is_error| **is_error).count();
+            let old_status = match end_kind {
+                Some("cancelled") => "cancelled",
+                Some("errored") => "failed",
+                Some("closed") if error_count == 0 => "done",
+                _ if error_count > 0 => "failed",
+                _ => "live",
+            };
+            let ended_at = end_kind.map_or_else(|| "NULL".to_string(), |_| "100".to_string());
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, {ended_at}, 100, {}, '[]', '{old_status}', {error_count}, {}, 0, 100)",
+                    results.len(),
+                    results.len()
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn status_of(
+            connection: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<String, DbErr> {
+            connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!("SELECT status FROM tasks WHERE session_id = '{session_id}'"),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_string()))?
+                .try_get("", "status")
+        }
+
+        #[tokio::test]
+        async fn upgrade_reclassifies_existing_task_statuses() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            PreviousMigrator::up(&connection, None).await?;
+            for (session_id, results, end_kind) in [
+                ("recovered", vec![true, false], Some("errored")),
+                ("two-errors", vec![false, true, true], Some("closed")),
+                (
+                    "three-errors",
+                    vec![false, true, true, true],
+                    Some("closed"),
+                ),
+                ("active", vec![true, true, true], None),
+                ("empty-closed", vec![], Some("closed")),
+                ("empty-errored", vec![], Some("errored")),
+                ("cancelled", vec![true, true, true], Some("cancelled")),
+            ] {
+                insert_legacy_task(&connection, session_id, &results, end_kind).await?;
+            }
+
+            assert_eq!(status_of(&connection, "recovered").await?, "failed");
+            assert_eq!(status_of(&connection, "two-errors").await?, "failed");
+            assert_eq!(status_of(&connection, "active").await?, "failed");
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            for (session_id, status) in [
+                ("recovered", "done"),
+                ("two-errors", "done"),
+                ("three-errors", "failed"),
+                ("active", "live"),
+                ("empty-closed", "done"),
+                ("empty-errored", "failed"),
+                ("cancelled", "cancelled"),
+            ] {
+                assert_eq!(status_of(&connection, session_id).await?, status);
+            }
+            Ok(())
+        }
     }
 }
 
