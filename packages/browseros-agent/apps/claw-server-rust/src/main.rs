@@ -2,11 +2,13 @@ use anyhow::Context;
 use axum::Router;
 use claw_server_rust::{
     AppRuntime, AppState, ShutdownHandle, VERSION,
+    analytics::{AnalyticsSink, events},
     api::mcp::browser_mcp_service,
     build_router,
     config::{Cli, CliAction},
 };
 use rmcp::{serve_server, transport::stdio};
+use serde_json::json;
 use std::{
     future::Future,
     io::{self, Write},
@@ -91,9 +93,14 @@ async fn serve(
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     let heal_state = state.clone();
-    serve_with_boot_task(runtime, build_router(state), config, async move {
-        heal_boot_config(&heal_state).await
-    })
+    let analytics = state.analytics.clone();
+    serve_with_boot_task(
+        runtime,
+        build_router(state),
+        config,
+        analytics,
+        async move { heal_boot_config(&heal_state).await },
+    )
     .await
 }
 
@@ -102,6 +109,7 @@ async fn serve_with_boot_task(
     runtime: &mut AppRuntime,
     app: Router,
     config: Arc<claw_server_rust::config::Config>,
+    analytics: Arc<dyn AnalyticsSink>,
     boot_task: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], config.server_port));
@@ -115,6 +123,7 @@ async fn serve_with_boot_task(
         }
         Err(err) => return Err(err).context("failed to bind claw-server listener"),
     };
+    analytics.capture(events::SERVER_STARTED, json!({}));
     info!(%addr, "claw-server-rust listening");
     let shutdown = runtime.state().shutdown;
     runtime.spawn_task("MCP config integrity scan", boot_task);
@@ -125,11 +134,24 @@ async fn serve_with_boot_task(
 }
 
 async fn serve_stdio(state: AppState) -> anyhow::Result<()> {
-    let running = serve_server(browser_mcp_service(state.clone()), stdio())
-        .await
-        .context("failed to start stdio MCP server")?;
+    let running = ready_after(
+        state.analytics.clone(),
+        serve_server(browser_mcp_service(state.clone()), stdio()),
+    )
+    .await
+    .context("failed to start stdio MCP server")?;
     running.waiting().await.context("stdio MCP server failed")?;
     Ok(())
+}
+
+/// Marks stdio ready only after transport construction returns a live handle.
+async fn ready_after<T, E>(
+    analytics: Arc<dyn AnalyticsSink>,
+    start: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let running = start.await?;
+    analytics.capture(events::SERVER_STARTED, json!({}));
+    Ok(running)
 }
 
 async fn heal_boot_config(state: &AppState) {
@@ -178,12 +200,43 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::serve_with_boot_task;
+    use super::{ready_after, serve_with_boot_task};
     use axum::Router;
-    use claw_server_rust::{AppRuntime, AppState, config::Config};
-    use std::{sync::Arc, time::Duration};
+    use claw_server_rust::{
+        AppRuntime, AppState,
+        analytics::{AnalyticsSink, events},
+        config::Config,
+    };
+    use serde_json::Value;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use tempfile::tempdir;
     use tokio::{net::TcpStream, sync::oneshot};
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: Mutex<Vec<events::EventDefinition>>,
+    }
+
+    impl AnalyticsSink for RecordingAnalytics {
+        fn capture(&self, event: events::EventDefinition, _properties: Value) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+        }
+    }
+
+    impl RecordingAnalytics {
+        fn snapshot(&self) -> Vec<events::EventDefinition> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
 
     #[tokio::test]
     async fn listener_binds_while_boot_task_is_still_running() -> anyhow::Result<()> {
@@ -207,6 +260,7 @@ mod tests {
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
         let mut runtime = AppRuntime::start(state);
+        let analytics = Arc::new(RecordingAnalytics::default());
         let (boot_started_tx, boot_started_rx) = oneshot::channel();
         let release = Arc::new(tokio::sync::Notify::new());
         let boot_release = release.clone();
@@ -219,13 +273,67 @@ mod tests {
             anyhow::Ok(())
         });
 
-        serve_with_boot_task(&mut runtime, Router::new(), config, async move {
-            let _ = boot_started_tx.send(());
-            boot_release.notified().await;
-        })
+        serve_with_boot_task(
+            &mut runtime,
+            Router::new(),
+            config,
+            analytics.clone(),
+            async move {
+                let _ = boot_started_tx.send(());
+                boot_release.notified().await;
+            },
+        )
         .await?;
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
         client.await??;
         runtime.shutdown().await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn listener_bind_failure_emits_no_server_started_event() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = Arc::new(Config {
+            server_port: occupied.local_addr()?.port(),
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
+        let mut runtime = AppRuntime::start(state);
+        let analytics = Arc::new(RecordingAnalytics::default());
+
+        let result = serve_with_boot_task(
+            &mut runtime,
+            Router::new(),
+            config,
+            analytics.clone(),
+            async {},
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(analytics.snapshot().is_empty());
+        runtime.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stdio_readiness_emits_only_after_transport_start_succeeds() {
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let running = ready_after(analytics.clone(), async { Ok::<_, &str>("running") }).await;
+        assert_eq!(running, Ok("running"));
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
+
+        let failed = ready_after(analytics.clone(), async { Err::<(), _>("failed") }).await;
+        assert_eq!(failed, Err("failed"));
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
     }
 }

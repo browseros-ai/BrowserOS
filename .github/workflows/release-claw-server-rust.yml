@@ -1,4 +1,4 @@
-# Required secrets for resource publishing: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+# Required secrets: CLAW_POSTHOG_KEY, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 # R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
 # publish_ota is true.
 name: "Release: BrowserClaw Server (Rust)"
@@ -42,6 +42,8 @@ on:
         type: boolean
         default: false
     secrets:
+      CLAW_POSTHOG_KEY:
+        required: true
       R2_ACCOUNT_ID:
         required: true
       R2_ACCESS_KEY_ID:
@@ -276,11 +278,27 @@ jobs:
       - name: Build Rust binary
         shell: bash
         working-directory: packages/browseros-agent
+        env:
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
         run: |
           set -euo pipefail
+          if [ -z "$CLAW_POSTHOG_KEY" ]; then
+            echo "::error::CLAW_POSTHOG_KEY is required"
+            exit 1
+          fi
           cargo build --release --locked --target "$RUST_TARGET" \
             -p claw-server-rust \
             --bin browseros-claw-server-rs
+          "$PYTHON_BIN" <<'PY'
+          import os
+          from pathlib import Path
+
+          binary_name = f"browseros-claw-server-rs{os.environ['BINARY_EXT']}"
+          binary_path = Path("target") / os.environ["RUST_TARGET"] / "release" / binary_name
+          project_key = os.environ["CLAW_POSTHOG_KEY"].encode()
+          if project_key not in binary_path.read_bytes():
+              raise SystemExit("Compiled Rust server does not contain CLAW_POSTHOG_KEY")
+          PY
 
       - name: Verify stamped binary version
         shell: bash

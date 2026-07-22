@@ -1,4 +1,4 @@
-use super::error;
+use super::{error, internal};
 use crate::{AppState, error::CanonicalError, error::RequestId};
 use axum::{
     Extension, Json,
@@ -8,7 +8,7 @@ use axum::{
 use claw_api::models::{TelemetryState, UpdateTelemetryRequest};
 
 pub(super) async fn telemetry(State(state): State<AppState>) -> Json<TelemetryState> {
-    Json(to_contract_state(state.telemetry.get_state().await))
+    Json(to_contract_state(state.analytics.get_state().await))
 }
 
 pub(super) async fn update_telemetry(
@@ -24,11 +24,14 @@ pub(super) async fn update_telemetry(
             "consent must be a boolean",
         )
     })?;
-    Ok(Json(to_contract_state(
-        state.telemetry.set_consent(payload.consent).await,
-    )))
+    let telemetry = state
+        .analytics
+        .set_consent(payload.consent)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(to_contract_state(telemetry)))
 }
 
-fn to_contract_state(state: crate::telemetry::TelemetryState) -> TelemetryState {
+fn to_contract_state(state: crate::analytics::TelemetryState) -> TelemetryState {
     TelemetryState::new(state.distinct_id, state.enabled, state.consent)
 }

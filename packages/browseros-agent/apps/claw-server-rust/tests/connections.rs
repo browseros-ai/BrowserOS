@@ -7,15 +7,51 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::services::harness::{Harness, HarnessService};
-use claw_server_rust::{AppState, build_router, config::Config};
+use claw_server_rust::{
+    AppState,
+    analytics::{AnalyticsSink, events},
+    build_router,
+    config::Config,
+    services::harness::{Harness, HarnessService},
+};
 use serde_json::{Value, json};
-use std::{env, fs, path::Path, process::Command, sync::Arc, time::Duration};
+use std::{
+    env, fs,
+    path::Path,
+    process::Command,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tower::ServiceExt;
 
 const CHILD_CASE: &str = "CLAW_CONNECTIONS_TEST_CHILD";
 const TEST_HOME: &str = "CLAW_CONNECTIONS_TEST_HOME";
 const MCP_URL: &str = "http://127.0.0.1:9200/mcp";
+
+#[derive(Default)]
+struct RecordingAnalytics {
+    events: Mutex<Vec<(events::EventDefinition, Value)>>,
+}
+
+impl AnalyticsSink for RecordingAnalytics {
+    fn capture(&self, event: events::EventDefinition, properties: Value) {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((event, properties));
+    }
+}
+
+impl RecordingAnalytics {
+    fn take(&self) -> Vec<(events::EventDefinition, Value)> {
+        std::mem::take(
+            &mut *self
+                .events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+}
 
 #[test]
 fn connections_adapter_writes_lists_disconnects_and_heals() -> anyhow::Result<()> {
@@ -52,7 +88,12 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("missing test home"))?;
     let browserclaw_dir = home.join("claw");
-    let service = HarnessService::new(browserclaw_dir.join("mcp-manager"), home.clone());
+    let analytics = Arc::new(RecordingAnalytics::default());
+    let service = HarnessService::new_with_analytics(
+        browserclaw_dir.join("mcp-manager"),
+        home.clone(),
+        analytics.clone(),
+    );
     let paths = config_paths()?;
 
     for (agent, path) in &paths {
@@ -67,6 +108,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .connect_browseros(Harness::Antigravity, MCP_URL)
         .await?;
     assert!(!not_installed.installed);
+    assert!(analytics.take().is_empty());
     assert_eq!(
         not_installed.message,
         "Antigravity is not installed on this machine. Launch it once so the MCP config directory exists, then try again."
@@ -216,6 +258,41 @@ async fn run_connections_case() -> anyhow::Result<()> {
     assert_eq!(scan.verified, 1);
     assert_eq!(scan.healed, 0);
     assert!(!path_for(&paths, AgentId::Cursor)?.exists());
+
+    for harness in Harness::ALL {
+        service.disconnect_browseros(harness).await?;
+    }
+    analytics.take();
+    for harness in Harness::ALL {
+        let state = service.connect_browseros(harness, MCP_URL).await?;
+        assert!(state.installed, "{}", state.message);
+        let repeated = service.connect_browseros(harness, MCP_URL).await?;
+        assert!(repeated.installed, "{}", repeated.message);
+    }
+    for harness in Harness::ALL {
+        let state = service.disconnect_browseros(harness).await?;
+        assert!(!state.installed, "{}", state.message);
+        let repeated = service.disconnect_browseros(harness).await?;
+        assert!(!repeated.installed, "{}", repeated.message);
+    }
+    let captured = analytics.take();
+    assert_eq!(captured.len(), Harness::ALL.len() * 2);
+    for (index, harness) in Harness::ALL.into_iter().enumerate() {
+        assert_eq!(
+            captured[index],
+            (
+                events::HARNESS_CONNECTED,
+                json!({ "harness": harness.as_str() }),
+            )
+        );
+        assert_eq!(
+            captured[index + Harness::ALL.len()],
+            (
+                events::HARNESS_DISCONNECTED,
+                json!({ "harness": harness.as_str() }),
+            )
+        );
+    }
     Ok(())
 }
 

@@ -160,6 +160,7 @@ jobs:
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
           VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
           BROWSEROS_REPO_PATH: ${{ vars.BROWSEROS_REPO_PATH }}
@@ -200,6 +201,10 @@ jobs:
           if platform_selected macos; then
             require_value BROWSEROS_REPO_PATH
             require_value BROWSEROS_CHROMIUM_SRC
+          fi
+
+          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
+            require_value CLAW_POSTHOG_KEY
           fi
 
           if [ "$INPUT_EXTENSIONS" != "skip" ]; then

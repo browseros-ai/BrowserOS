@@ -7,6 +7,10 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-claw-server-rust.yml'),
   'utf8',
 )
+const browserClawWorkflow = readFileSync(
+  resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
+  'utf8',
+)
 const shellChannelPlaceholder = '$' + '{channel}'
 const shellTargetPlaceholder = '$' + '{target}'
 const shellAssetsPlaceholder = '$' + '{assets[@]}'
@@ -23,6 +27,14 @@ function generateReleaseNotesStep(): string {
 function createGithubReleaseStep(): string {
   const start = workflow.indexOf('- name: Create GitHub release')
   const end = workflow.indexOf('  cargo-test:')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
+}
+
+function buildRustBinaryStep(): string {
+  const start = workflow.indexOf('- name: Build Rust binary')
+  const end = workflow.indexOf('- name: Package artifact zip')
   expect(start).toBeGreaterThanOrEqual(0)
   expect(end).toBeGreaterThan(start)
   return workflow.slice(start, end)
@@ -74,6 +86,24 @@ describe('release-claw-server-rust workflow', () => {
     )
     expect(workflow).not.toContain('wine')
     expect(workflow).not.toContain('patch-windows-exe')
+  })
+
+  it('embeds and verifies the production analytics project key', () => {
+    const buildStep = buildRustBinaryStep()
+    expect(workflow).toMatch(/CLAW_POSTHOG_KEY:\n\s+required: true/)
+    expect(buildStep).toContain(
+      `CLAW_POSTHOG_KEY: ${'$'}{{ secrets.CLAW_POSTHOG_KEY }}`,
+    )
+    expect(buildStep).toContain('CLAW_POSTHOG_KEY is required')
+    expect(buildStep).toContain(
+      'Compiled Rust server does not contain CLAW_POSTHOG_KEY',
+    )
+    expect(browserClawWorkflow).toContain(
+      `CLAW_POSTHOG_KEY: ${'$'}{{ secrets.CLAW_POSTHOG_KEY }}`,
+    )
+    expect(browserClawWorkflow).toMatch(
+      /INPUT_INCLUDE_SERVERS[\s\S]*require_value CLAW_POSTHOG_KEY/,
+    )
   })
 
   it('validates the stamped target binary version before packaging', () => {
