@@ -108,7 +108,7 @@ impl AppRuntime {
                 )))
             }
         };
-        // Session teardown enqueues final ownership-release attempts, which are drained before
+        // Session teardown enqueues final ownership releases; wait for the FIFO barrier before
         // shutdown returns.
         self.state.session_tabs.drain_writes().await;
         self.state.recordings.close().await;

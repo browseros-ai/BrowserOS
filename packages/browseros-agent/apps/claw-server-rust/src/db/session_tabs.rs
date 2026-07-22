@@ -1,5 +1,5 @@
-//! Durable session-to-browser ownership windows. Asynchronous legacy-target and tab claim/release
-//! mutations share one FIFO writer so their observed lifecycle order reaches SQLite unchanged.
+//! Durable session-to-browser ownership windows. Enqueued legacy-target and tab claim/release
+//! mutations share one FIFO writer, preserving their observed order at the SQLite boundary.
 
 use crate::{
     clock::now_epoch_ms,

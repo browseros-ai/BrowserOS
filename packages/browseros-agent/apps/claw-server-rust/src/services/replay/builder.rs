@@ -23,9 +23,11 @@ pub struct ReplayEvent {
 pub struct ReplaySegmentMeta {
     pub document_id: String,
     pub target_id: Option<String>,
-    /// Lower bound in Unix-epoch milliseconds, clipped to the session's tab-ownership window.
+    /// Lower bound in Unix-epoch milliseconds, clipped to the envelope of this session's matching
+    /// tab-ownership windows.
     pub first_event_at: i64,
-    /// Upper bound in Unix-epoch milliseconds, clipped to the session's tab-ownership window.
+    /// Upper bound in Unix-epoch milliseconds, clipped to the envelope of this session's matching
+    /// tab-ownership windows.
     pub last_event_at: i64,
     pub size_bytes: i64,
     pub event_count: i64,
