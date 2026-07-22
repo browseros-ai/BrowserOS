@@ -38,6 +38,7 @@ tracing-appender = "0.2"
 socket2 = "0.6"
 url = "2"
 base64 = "0.22"
+imagesize = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
 rand = "0.9"
