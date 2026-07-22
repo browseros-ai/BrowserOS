@@ -74,6 +74,7 @@ describe('useLiveSessions', () => {
       'live',
     ])
     expect(useLiveSessions.getOptions().refetchInterval).toBe(1500)
+    expect(useLiveSessions.getOptions().refetchIntervalInBackground).toBe(true)
 
     expect(await useLiveSessions.fetcher(undefined)).toBe(response)
     expect(listSessions).toHaveBeenCalledWith({ status: 'live' })
