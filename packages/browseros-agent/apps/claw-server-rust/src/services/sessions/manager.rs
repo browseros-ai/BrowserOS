@@ -11,11 +11,14 @@ use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
     time::{Instant, MissedTickBehavior, interval},
 };
@@ -39,6 +42,46 @@ struct RetainedSession {
     ended_at: Instant,
 }
 
+/**
+ * Tracks sessions removed from the live map whose asynchronous teardown is still running. A
+ * removal registers while holding the sessions write lock, so shutdown cannot observe an empty
+ * map before the teardown it must await is visible here.
+ */
+#[derive(Default)]
+struct TeardownTracker {
+    active: AtomicUsize,
+    idle: Notify,
+}
+
+impl TeardownTracker {
+    fn begin(&self) -> TeardownPermit<'_> {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        TeardownPermit { tracker: self }
+    }
+
+    async fn wait_until_idle(&self) {
+        loop {
+            let idle = self.idle.notified();
+            if self.active.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            idle.await;
+        }
+    }
+}
+
+struct TeardownPermit<'a> {
+    tracker: &'a TeardownTracker,
+}
+
+impl Drop for TeardownPermit<'_> {
+    fn drop(&mut self) {
+        if self.tracker.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.tracker.idle.notify_one();
+        }
+    }
+}
+
 /// Owns live MCP sessions and retained conversation state. Minting resolves identity and records
 /// the audit start; teardown closes replay and audit state, then retains browser groups until a
 /// later reap succeeds.
@@ -48,6 +91,7 @@ pub struct Sessions {
     audit_log: Arc<AuditLog>,
     session_tabs: Arc<SessionTabLedger>,
     analytics: Arc<dyn AnalyticsSink>,
+    teardowns: TeardownTracker,
     reserved_keys: Mutex<HashSet<ConvoId>>,
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     reaping_keys: Mutex<HashSet<ConvoId>>,
@@ -91,6 +135,7 @@ impl Sessions {
             audit_log,
             session_tabs,
             analytics,
+            teardowns: TeardownTracker::default(),
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
@@ -237,8 +282,13 @@ impl Sessions {
         kind: &str,
         reason: Option<&str>,
     ) -> AppResult<bool> {
-        let session = self.sessions.write().await.remove(id);
-        if let Some(session) = session {
+        let session = {
+            let mut sessions = self.sessions.write().await;
+            sessions
+                .remove(id)
+                .map(|session| (session, self.teardowns.begin()))
+        };
+        if let Some((session, _teardown)) = session {
             self.teardown(session, kind, reason).await?;
             return Ok(true);
         }
@@ -275,10 +325,12 @@ impl Sessions {
             let mut guard = self.sessions.write().await;
             std::mem::take(&mut *guard)
         };
-        teardown_all(sessions.into_values(), |session| {
+        let result = teardown_all(sessions.into_values(), |session| {
             self.teardown(session, "closed", Some("server shutdown"))
         })
-        .await
+        .await;
+        self.teardowns.wait_until_idle().await;
+        result
     }
 
     pub fn spawn_idle_sweeper(self: Arc<Self>, cancel: CancellationToken) -> JoinHandle<()> {
@@ -751,6 +803,79 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_a_session_removed_by_transport_close() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let registry = Sessions::new_with_analytics(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+            analytics.clone(),
+        );
+        let teardown_entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let teardown_release = Arc::new(tokio::sync::Semaphore::new(0));
+        let hook_entered = teardown_entered.clone();
+        let hook_release = teardown_release.clone();
+        registry.set_retained_group_hook(Arc::new(move |_, _, action| {
+            let hook_entered = hook_entered.clone();
+            let hook_release = hook_release.clone();
+            Box::pin(async move {
+                if matches!(action, RetainedGroupAction::Collapse) {
+                    hook_entered.add_permits(1);
+                    let Ok(permit) = hook_release.acquire().await else {
+                        return false;
+                    };
+                    permit.forget();
+                }
+                true
+            })
+        }));
+        let session = Session::new(
+            SessionId::new("transport-close"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "transport-close-label".to_string()),
+            Instant::now(),
+        );
+        registry.insert_for_testing(session.clone()).await;
+
+        let remove_registry = registry.clone();
+        let session_id = session.id().clone();
+        let remove_task = tokio::spawn(async move {
+            remove_registry
+                .remove(&session_id, "closed", Some("transport closed"))
+                .await
+        });
+        let entered = teardown_entered
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("teardown semaphore closed"))?;
+        entered.forget();
+
+        let shutdown_registry = registry.clone();
+        let mut shutdown_task = tokio::spawn(async move { shutdown_registry.shutdown().await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut shutdown_task)
+                .await
+                .is_err()
+        );
+
+        teardown_release.add_permits(1);
+        assert!(remove_task.await??);
+        assert_eq!(shutdown_task.await??, 0);
+        assert_eq!(
+            analytics.snapshot(),
+            vec![(events::AGENT_SESSION_ENDED, json!({ "kind": "closed" }))]
+        );
+        Ok(())
     }
 
     #[tokio::test]
