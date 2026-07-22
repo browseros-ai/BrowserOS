@@ -13,6 +13,9 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 const DEFAULT_POSTHOG_HOST: &str = "https://us.i.posthog.com";
 const REQUEST_TIMEOUT_SECONDS: u64 = 2;
 const SHUTDOWN_TIMEOUT_MILLISECONDS: u64 = 2_000;
@@ -68,6 +71,8 @@ pub struct AnalyticsService {
     config: AnalyticsConfig,
     state: Mutex<AnalyticsState>,
     active: RwLock<Option<ActiveClient>>,
+    #[cfg(test)]
+    shutdown_calls: AtomicUsize,
 }
 
 impl AnalyticsService {
@@ -88,7 +93,32 @@ impl AnalyticsService {
             config,
             state: Mutex::new(state),
             active: RwLock::new(active),
+            #[cfg(test)]
+            shutdown_calls: AtomicUsize::new(0),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn new_for_test(
+        browserclaw_dir: &Path,
+        project_key: Option<&str>,
+        host: String,
+        environment_enabled: bool,
+    ) -> AppResult<Self> {
+        Self::new_with_config(
+            browserclaw_dir,
+            AnalyticsConfig {
+                project_key: project_key.map(str::to_string),
+                host,
+                environment_enabled,
+            },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shutdown_calls_for_testing(&self) -> usize {
+        self.shutdown_calls.load(Ordering::SeqCst)
     }
 
     /// Returns the persisted identity, effective delivery state, and raw consent choice.
@@ -162,6 +192,8 @@ impl AnalyticsService {
     }
 
     pub async fn shutdown(&self) {
+        #[cfg(test)]
+        self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(active) = self.take_active() {
             active.client.shutdown().await;
         }
@@ -422,6 +454,27 @@ mod tests {
         )
         .await?;
         assert!(!env_off.get_state().await.enabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unresponsive_delivery_cannot_hang_shutdown_past_the_request_and_drain_budgets()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let host = format!("http://{}", listener.local_addr()?);
+        let endpoint = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _stream = stream;
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        });
+        let service =
+            AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
+        service.capture(SERVER_STARTED, json!({}));
+
+        tokio::time::timeout(Duration::from_secs(5), service.shutdown()).await?;
+        endpoint.abort();
         Ok(())
     }
 }

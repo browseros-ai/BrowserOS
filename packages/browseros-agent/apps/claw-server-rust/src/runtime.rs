@@ -91,6 +91,7 @@ impl AppRuntime {
         self.state.recordings.close().await;
         self.state.browser.stop();
         self.join_tasks().await;
+        self.state.analytics.shutdown().await;
         let drained = session_result?;
         info!(drained, "drained sessions during shutdown");
         Ok(())
@@ -119,8 +120,20 @@ impl AppRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::ShutdownHandle;
-    use std::time::Duration;
+    use super::{AppRuntime, ShutdownHandle};
+    use crate::{
+        AppState,
+        analytics::{AnalyticsService, events},
+        config::Config,
+        identity::{ClientIdentity, ConversationIdentity},
+        ids::SessionId,
+        services::sessions::{Session, Sessions},
+    };
+    use axum::{Router, body::Bytes, routing::any};
+    use serde_json::Value;
+    use std::{sync::Arc, time::Duration};
+    use tempfile::tempdir;
+    use tokio::{net::TcpListener, sync::mpsc, time::Instant};
 
     #[tokio::test]
     async fn repeated_requests_wake_every_shutdown_waiter() -> anyhow::Result<()> {
@@ -140,6 +153,78 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), first).await??;
         tokio::time::timeout(Duration::from_secs(1), second).await??;
         shutdown.requested().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_drains_session_events_before_shutting_down_analytics() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let host = format!("http://{}", listener.local_addr()?);
+        let (sender, mut requests) = mpsc::unbounded_channel();
+        let endpoint = tokio::spawn(async move {
+            let app = Router::new().fallback(any(move |body: Bytes| {
+                let sender = sender.clone();
+                async move {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                        let _ = sender.send(value);
+                    }
+                    "ok"
+                }
+            }));
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
+        let analytics = Arc::new(
+            AnalyticsService::new_for_test(&config.browserclaw_dir, Some("test-key"), host, true)
+                .await?,
+        );
+        state.analytics = analytics.clone();
+        state.sessions = Sessions::new_with_analytics(
+            state.audit_log.clone(),
+            state.session_tabs.clone(),
+            config.session_idle,
+            config.session_retention,
+            config.session_sweep_interval,
+            analytics.clone(),
+        );
+        state
+            .sessions
+            .insert_for_testing(Session::new(
+                SessionId::new("shutdown-session"),
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ConversationIdentity::new("agent", "shutdown-label".to_string()),
+                Instant::now(),
+            ))
+            .await;
+
+        AppRuntime::start(state).shutdown().await?;
+        assert_eq!(analytics.shutdown_calls_for_testing(), 1);
+        let request = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("session-end event was not drained"))?;
+        assert_eq!(
+            request["batch"][0]["event"],
+            events::AGENT_SESSION_ENDED.name()
+        );
+        endpoint.abort();
         Ok(())
     }
 }
