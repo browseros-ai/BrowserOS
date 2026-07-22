@@ -348,7 +348,7 @@ impl Sessions {
 mod tests {
     use super::{RetainedGroupAction, Session, Sessions};
     use crate::{
-        db::{AuditLog, Database, SessionTabLedger},
+        db::{AuditLog, DATABASE_FILENAME, Database, SessionTabLedger},
         identity::{ClientIdentity, ClientInfo, ConversationIdentity, generate_fun_name},
         ids::{ConvoId, SessionId},
     };
@@ -365,7 +365,7 @@ mod tests {
     async fn repositories(
         dir: &tempfile::TempDir,
     ) -> anyhow::Result<(Arc<AuditLog>, Arc<SessionTabLedger>)> {
-        let database = Database::open(dir.path().join("audit.sqlite")).await?;
+        let database = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
         Ok((
             Arc::new(AuditLog::new(database.clone())),
             Arc::new(SessionTabLedger::new(database)),

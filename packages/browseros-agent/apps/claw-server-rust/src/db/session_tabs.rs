@@ -554,7 +554,7 @@ async fn release_claims_for_target(
 mod tests {
     use super::{ClaimWrite, SessionTabLedger};
     use crate::db::{
-        Database,
+        DATABASE_FILENAME, Database,
         entities::prelude::{SessionTabs, TabClaims},
     };
     use sea_orm::EntityTrait;
@@ -563,7 +563,8 @@ mod tests {
     #[tokio::test]
     async fn queued_claim_mutations_preserve_lifecycle_order() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let ledger = SessionTabLedger::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         ledger.enqueue_claim_target_for_session(
             "target-a".to_string(),
             "session-a".to_string(),
@@ -584,7 +585,8 @@ mod tests {
     #[tokio::test]
     async fn tab_claim_transfer_closes_the_prior_owner_at_the_boundary() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let ledger = SessionTabLedger::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         ledger.enqueue_claim_tab_for_session(
             11,
             Some("target-a".to_string()),
@@ -613,7 +615,8 @@ mod tests {
     #[tokio::test]
     async fn queued_tab_release_preserves_the_observed_boundary() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let ledger = SessionTabLedger::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         ledger.enqueue_claim_tab_for_session(
             11,
             Some("target-a".to_string()),
