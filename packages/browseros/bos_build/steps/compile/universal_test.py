@@ -187,7 +187,7 @@ class ServerBundleSkewTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "browseros_server"):
             universal._assert_server_bundles_aligned(self.root, "browseros")
 
-    def test_absent_x64_metadata_skips_family(self):
+    def test_absent_metadata_on_either_side_skips_family(self):
         self._write_bundle("browseros_server", "darwin-arm64", "0.0.10")
         # x64 dir exists but carries no metadata (partial/older layout).
         (
@@ -195,6 +195,10 @@ class ServerBundleSkewTest(unittest.TestCase):
         ).mkdir(parents=True)
 
         universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
+
+        self._write_bundle("browseros_claw_server_rust", "darwin-x64", "0.0.13")
+
+        universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
 
     def test_missing_binaries_dir_is_noop(self):
         universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
