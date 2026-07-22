@@ -3,10 +3,22 @@
  * Copyright 2025 BrowserOS
  */
 
-import { describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   disableInAppBrowserPlugin,
   IN_APP_BROWSER_PLUGIN_KEY,
+  materializeCodexBrowserlessHome,
   verifyBrowserDisabled,
 } from '../../../../src/lib/agents/host-acp/codex-home'
 
@@ -121,5 +133,122 @@ describe('verifyBrowserDisabled', () => {
     const out = disableInAppBrowserPlugin(src)
     expect(verifyBrowserDisabled(src, out)).toBe(true)
     expect(browserEnabled(out)).toBe(false)
+  })
+})
+
+describe('materializeCodexBrowserlessHome', () => {
+  let root: string
+  let source: string
+  let browserosDir: string
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'codex-home-test-'))
+    source = join(root, 'codex')
+    browserosDir = join(root, 'browseros')
+    await mkdir(source, { recursive: true })
+    await mkdir(browserosDir, { recursive: true })
+    await writeFile(join(source, 'auth.json'), '{"token":"x"}')
+    await mkdir(join(source, 'plugins'))
+    await writeFile(
+      join(source, 'config.toml'),
+      `model = "gpt-5.5"\n\n[plugins."browser@openai-bundled"]\nenabled = true\n`,
+    )
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  async function overlayConfig(target: string): Promise<string> {
+    return readFile(join(target, 'config.toml'), 'utf8')
+  }
+
+  it('disables the plugin and symlinks the rest of the home', async () => {
+    const target = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(target).not.toBeNull()
+    const config = await overlayConfig(target as string)
+    expect(browserEnabled(config)).toBe(false)
+    expect(config).toContain('model = "gpt-5.5"')
+    // real state is symlinked, config.toml is a real file
+    expect(
+      (await lstat(join(target as string, 'auth.json'))).isSymbolicLink(),
+    ).toBe(true)
+    expect(
+      (await lstat(join(target as string, 'config.toml'))).isSymbolicLink(),
+    ).toBe(false)
+  })
+
+  it('treats a missing config.toml as an empty config (ENOENT)', async () => {
+    await rm(join(source, 'config.toml'))
+    const target = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(target).not.toBeNull()
+    expect(browserEnabled(await overlayConfig(target as string))).toBe(false)
+  })
+
+  it('falls back (null) when config.toml exists but is unreadable', async () => {
+    await chmod(join(source, 'config.toml'), 0o000)
+    // Skip when the runner can still read it (e.g. running as root).
+    const stillReadable = await readFile(join(source, 'config.toml'), 'utf8')
+      .then(() => true)
+      .catch(() => false)
+    await chmod(join(source, 'config.toml'), 0o600)
+    if (stillReadable) return
+    await chmod(join(source, 'config.toml'), 0o000)
+    const target = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    await chmod(join(source, 'config.toml'), 0o600)
+    expect(target).toBeNull()
+  })
+
+  it('self-heals: picks up new source entries and prunes removed ones', async () => {
+    const first = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(first).not.toBeNull()
+    const target = first as string
+
+    await writeFile(join(source, 'newfile.json'), '{}')
+    await rm(join(source, 'auth.json'))
+    const second = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(second).toBe(target)
+    expect((await lstat(join(target, 'newfile.json'))).isSymbolicLink()).toBe(
+      true,
+    )
+    await expect(lstat(join(target, 'auth.json'))).rejects.toThrow()
+  })
+
+  it('is idempotent across repeated calls', async () => {
+    const a = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    const b = await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(a).toBe(b)
+    expect(browserEnabled(await overlayConfig(b as string))).toBe(false)
+  })
+
+  it('does not mutate the real config.toml', async () => {
+    await materializeCodexBrowserlessHome({
+      browserosDir,
+      sourceCodexHome: source,
+    })
+    expect(
+      browserEnabled(await readFile(join(source, 'config.toml'), 'utf8')),
+    ).toBe(true)
   })
 })

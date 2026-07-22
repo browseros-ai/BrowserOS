@@ -122,7 +122,13 @@ export async function materializeCodexBrowserlessHome(input: {
     const target = join(input.browserosDir, 'acpx-state', 'codex-home-no-iab')
     await mkdir(target, { recursive: true })
 
-    await syncSymlinkFarm(source, target)
+    if (!(await syncSymlinkFarm(source, target))) {
+      logger.error(
+        'Incomplete Codex home overlay (a required symlink failed); ' +
+          'using real home so Codex keeps its auth and settings',
+      )
+      return null
+    }
     const wrote = await writeBrowserlessConfig(source, target)
     return wrote ? target : null
   } catch (error) {
@@ -136,21 +142,31 @@ export async function materializeCodexBrowserlessHome(input: {
   }
 }
 
-/** Failsafe 1: converge the overlay's symlinks to mirror `source`. */
-async function syncSymlinkFarm(source: string, target: string): Promise<void> {
+/**
+ * Failsafe 1: converge the overlay's symlinks to mirror `source`. Returns
+ * false when any required link could not be created, so the caller falls
+ * back to the real home rather than handing Codex an incomplete overlay.
+ */
+async function syncSymlinkFarm(
+  source: string,
+  target: string,
+): Promise<boolean> {
   const sourceEntries = await readdir(source)
   const keep = new Set<string>()
+  let allOk = true
   for (const name of sourceEntries) {
     if (name === CONFIG_FILE) continue
     keep.add(name)
-    await ensureSymlink(join(source, name), join(target, name))
+    if (!(await ensureSymlink(join(source, name), join(target, name)))) {
+      allOk = false
+    }
   }
 
   let targetEntries: string[]
   try {
     targetEntries = await readdir(target)
   } catch {
-    return
+    return allOk
   }
   for (const name of targetEntries) {
     if (name === CONFIG_FILE || keep.has(name)) continue
@@ -159,27 +175,42 @@ async function syncSymlinkFarm(source: string, target: string): Promise<void> {
       await unlink(linkPath).catch(() => undefined)
     }
   }
+  return allOk
 }
 
+/**
+ * Ensure `linkPath` is a symlink to `sourcePath`. Returns true on success,
+ * including the benign case where a concurrent session created the same
+ * link first (EEXIST already pointing at the right target). Returns false
+ * on a genuine failure.
+ */
 async function ensureSymlink(
   sourcePath: string,
   linkPath: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const info = await lstat(linkPath).catch(() => null)
     if (info?.isSymbolicLink()) {
       const current = await readlink(linkPath).catch(() => null)
-      if (current === sourcePath) return
+      if (current === sourcePath) return true
       await unlink(linkPath)
     } else if (info) {
       await rm(linkPath, { recursive: true, force: true })
     }
     await symlink(sourcePath, linkPath)
+    return true
   } catch (error) {
-    logger.debug('Skipped a Codex home overlay symlink', {
+    // A concurrent session may have created the same link between our
+    // lstat and symlink; that is not a failure if it points where we want.
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      const current = await readlink(linkPath).catch(() => null)
+      if (current === sourcePath) return true
+    }
+    logger.warn('Failed to create a Codex home overlay symlink', {
       linkPath,
       error: error instanceof Error ? error.message : String(error),
     })
+    return false
   }
 }
 
@@ -188,9 +219,16 @@ async function writeBrowserlessConfig(
   source: string,
   target: string,
 ): Promise<boolean> {
-  const sourceText = await readFile(join(source, CONFIG_FILE), 'utf8').catch(
-    () => '',
-  )
+  // A missing config.toml is a valid empty config; any other read error
+  // (permissions, I/O) must propagate so the caller falls back to the real
+  // home instead of writing an overlay that drops the user's settings.
+  let sourceText: string
+  try {
+    sourceText = await readFile(join(source, CONFIG_FILE), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    sourceText = ''
+  }
   const editedText = disableInAppBrowserPlugin(sourceText)
   if (!verifyBrowserDisabled(sourceText, editedText)) {
     logger.error(
