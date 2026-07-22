@@ -141,7 +141,7 @@ async fn write_dispatch(
     }
 }
 
-fn result_summary(result: &ToolResult, cancelled: bool) -> DispatchResultSummary {
+pub(crate) fn result_summary(result: &ToolResult, cancelled: bool) -> DispatchResultSummary {
     let content = serde_json::to_value(&result.content).unwrap_or_else(|error| {
         warn!(error = %error, "tool content serialization failed");
         json!([])

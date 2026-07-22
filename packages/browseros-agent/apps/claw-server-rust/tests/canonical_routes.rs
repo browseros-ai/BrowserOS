@@ -660,19 +660,41 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     assert!(detail["dispatches"][0].get("url").is_none());
 
     let dispatch_token = CancellationToken::new();
+    let dispatch_id = DispatchId::new();
     assert!(
         session
-            .try_register_dispatch(DispatchId::new(), dispatch_token.clone())
+            .try_register_dispatch(dispatch_id.clone(), dispatch_token.clone())
             .await
     );
-    let (status, _, bytes) = request(
-        &app.router,
-        "POST",
-        "/api/v1/sessions/session-live/cancel",
-        None,
-        Body::empty(),
-    )
-    .await?;
+
+    let first_router = app.router.clone();
+    let first_cancel = tokio::spawn(async move {
+        request(
+            &first_router,
+            "POST",
+            "/api/v1/sessions/session-live/cancel",
+            None,
+            Body::empty(),
+        )
+        .await
+    });
+    dispatch_token.cancelled().await;
+    let retry_router = app.router.clone();
+    let retry_cancel = tokio::spawn(async move {
+        request(
+            &retry_router,
+            "POST",
+            "/api/v1/sessions/session-live/cancel",
+            None,
+            Body::empty(),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    assert!(!retry_cancel.is_finished());
+    assert!(!session.finish_dispatch(&dispatch_id).await);
+
+    let (status, _, bytes) = first_cancel.await??;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         json_body(&bytes)?,
@@ -680,6 +702,13 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     );
     assert!(dispatch_token.is_cancelled());
     assert!(!app.state.sessions.contains(session.id()).await);
+
+    let (status, _, bytes) = retry_cancel.await??;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({ "status": "cancelled", "cancelledDispatches": 0 })
+    );
 
     let (status, _, bytes) = request(
         &app.router,

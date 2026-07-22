@@ -47,6 +47,8 @@ pub struct Sessions {
     reserved_keys: Mutex<HashSet<ConvoId>>,
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     reaping_keys: Mutex<HashSet<ConvoId>>,
+    /// Serializes Stop through terminal persistence so retries never observe removed-but-live.
+    cancellation_transition: Mutex<()>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
     idle_after: Duration,
     retention: Duration,
@@ -70,6 +72,7 @@ impl Sessions {
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
+            cancellation_transition: Mutex::new(()),
             retained_group_hook: OnceLock::new(),
             idle_after,
             retention,
@@ -172,13 +175,29 @@ impl Sessions {
 
     /// Removes the live entry before teardown so transport requests cannot resolve it again.
     pub async fn cancel_by_session(&self, session_id: &SessionId) -> AppResult<Option<usize>> {
+        let _transition = self.cancellation_transition.lock().await;
         let session = self.sessions.write().await.remove(session_id);
         let Some(session) = session else {
             return Ok(None);
         };
-        self.teardown(session, "cancelled", Some("operator requested stop"))
+        match self
+            .teardown(
+                session.clone(),
+                "cancelled",
+                Some("operator requested stop"),
+            )
             .await
-            .map(Some)
+        {
+            Ok(cancelled_dispatches) => Ok(Some(cancelled_dispatches)),
+            Err(error) => {
+                self.sessions
+                    .write()
+                    .await
+                    .entry(session_id.clone())
+                    .or_insert(session);
+                Err(error)
+            }
+        }
     }
 
     pub async fn owner_of_page(&self, page_id: &browseros_core::PageId) -> Option<ConvoId> {
@@ -264,6 +283,7 @@ impl Sessions {
         reason: Option<&str>,
     ) -> AppResult<usize> {
         let cancelled_dispatches = session.stop_dispatches().await;
+        session.wait_for_dispatches().await;
         self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
         let audit_result = self
@@ -492,14 +512,29 @@ mod tests {
             )
             .await?;
         let token = CancellationToken::new();
+        let dispatch_id = DispatchId::new();
         assert!(
             session
-                .try_register_dispatch(DispatchId::new(), token.clone())
+                .try_register_dispatch(dispatch_id.clone(), token.clone())
                 .await
         );
 
-        assert_eq!(registry.cancel_by_session(session.id()).await?, Some(1));
-        assert!(token.is_cancelled());
+        let first_registry = registry.clone();
+        let first_session_id = session.id().clone();
+        let first =
+            tokio::spawn(async move { first_registry.cancel_by_session(&first_session_id).await });
+        token.cancelled().await;
+
+        let retry_registry = registry.clone();
+        let retry_session_id = session.id().clone();
+        let retry =
+            tokio::spawn(async move { retry_registry.cancel_by_session(&retry_session_id).await });
+        tokio::task::yield_now().await;
+        assert!(!retry.is_finished());
+        assert!(!session.finish_dispatch(&dispatch_id).await);
+
+        assert_eq!(first.await??, Some(1));
+        assert_eq!(retry.await??, None);
         assert!(registry.lookup(session.id()).await.is_none());
         let summary = audit_log
             .get_task_summary(session.id().as_str())

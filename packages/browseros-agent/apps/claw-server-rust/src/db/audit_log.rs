@@ -254,6 +254,34 @@ impl AuditLog {
         Ok(result.last_insert_id)
     }
 
+    /// Reconciles the recorded outcome when Stop wins after the audit effect ran.
+    pub async fn update_dispatch_result(
+        &self,
+        dispatch_id: &DispatchId,
+        result: &DispatchResultSummary,
+    ) -> AppResult<bool> {
+        let txn = self.db.connection().begin().await?;
+        let Some(dispatch) = ToolDispatches::find()
+            .filter(tool_dispatches::Column::DispatchId.eq(dispatch_id.as_str()))
+            .one(&txn)
+            .await?
+        else {
+            txn.commit().await?;
+            return Ok(false);
+        };
+        ToolDispatches::update_many()
+            .col_expr(
+                tool_dispatches::Column::ResultMeta,
+                Expr::value(Some(summarize_result(result))),
+            )
+            .filter(tool_dispatches::Column::Id.eq(dispatch.id))
+            .exec(&txn)
+            .await?;
+        recompute_task(&txn, &dispatch.session_id).await?;
+        txn.commit().await?;
+        Ok(true)
+    }
+
     /// Marks a dispatch screenshot and refreshes its task summary when present.
     pub async fn mark_screenshot(&self, dispatch_id: i64) -> AppResult<()> {
         let txn = self.db.connection().begin().await?;

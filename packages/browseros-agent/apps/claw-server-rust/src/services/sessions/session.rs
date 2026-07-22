@@ -3,7 +3,10 @@ use crate::{
     ids::{ConvoId, DispatchId, SessionId},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
-use tokio::{sync::Mutex, time::Instant};
+use tokio::{
+    sync::{Mutex, Notify},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 
 /// Runtime state for one MCP transport session.
@@ -14,6 +17,7 @@ pub struct Session {
     agent: ClientIdentity,
     identity: ConversationIdentity,
     dispatches: Mutex<DispatchState>,
+    dispatches_drained: Notify,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -39,6 +43,7 @@ impl Session {
                 accepting: true,
                 active: BTreeMap::new(),
             }),
+            dispatches_drained: Notify::new(),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -102,8 +107,17 @@ impl Session {
         true
     }
 
-    pub async fn unregister_dispatch(&self, dispatch_id: &DispatchId) {
-        self.dispatches.lock().await.active.remove(dispatch_id);
+    /// Returns true when completion linearized before Stop; false when Stop owns the result.
+    pub async fn finish_dispatch(&self, dispatch_id: &DispatchId) -> bool {
+        let (completed_before_stop, drained) = {
+            let mut state = self.dispatches.lock().await;
+            let was_active = state.active.remove(dispatch_id).is_some();
+            (was_active && state.accepting, state.active.is_empty())
+        };
+        if drained {
+            self.dispatches_drained.notify_waiters();
+        }
+        completed_before_stop
     }
 
     pub async fn active_dispatch_count(&self) -> usize {
@@ -121,6 +135,16 @@ impl Session {
         }
         self.cancel.cancel();
         tokens.len()
+    }
+
+    pub async fn wait_for_dispatches(&self) {
+        loop {
+            let drained = self.dispatches_drained.notified();
+            if self.dispatches.lock().await.active.is_empty() {
+                return;
+            }
+            drained.await;
+        }
     }
 
     #[must_use]
@@ -180,5 +204,28 @@ mod tests {
         assert_eq!(session.stop_dispatches().await, 0);
         let late = CancellationToken::new();
         assert!(!session.try_register_dispatch(DispatchId::new(), late).await);
+    }
+
+    #[tokio::test]
+    async fn finish_linearizes_against_stop() {
+        let completed = test_session("session-completed");
+        let completed_id = DispatchId::new();
+        assert!(
+            completed
+                .try_register_dispatch(completed_id.clone(), CancellationToken::new())
+                .await
+        );
+        assert!(completed.finish_dispatch(&completed_id).await);
+        assert_eq!(completed.stop_dispatches().await, 0);
+
+        let interrupted = test_session("session-interrupted");
+        let interrupted_id = DispatchId::new();
+        assert!(
+            interrupted
+                .try_register_dispatch(interrupted_id.clone(), CancellationToken::new())
+                .await
+        );
+        assert_eq!(interrupted.stop_dispatches().await, 1);
+        assert!(!interrupted.finish_dispatch(&interrupted_id).await);
     }
 }

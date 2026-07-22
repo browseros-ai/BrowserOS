@@ -267,11 +267,31 @@ async fn dispatch_tool_call_with(
         }
     };
 
-    if let Some(identity) = &call.identity {
-        identity
-            .session
-            .unregister_dispatch(&call.dispatch_id)
-            .await;
+    let stopped_before_finish = if let Some(identity) = &call.identity {
+        !identity.session.finish_dispatch(&call.dispatch_id).await
+    } else {
+        false
+    };
+    if stopped_before_finish {
+        let cancellation = operator_cancellation_result();
+        if let Err(error) = call
+            .state
+            .audit_log
+            .update_dispatch_result(
+                &call.dispatch_id,
+                &effects::audit::result_summary(&cancellation, true),
+            )
+            .await
+        {
+            warn!(
+                dispatch_id = %call.dispatch_id,
+                error = %error,
+                "failed to reconcile a late operator cancellation"
+            );
+        }
+        call.dispatch_cancel.cancel();
+        call.cancel.cancel();
+        return Ok(wire_result(cancellation));
     }
     call.dispatch_cancel.cancel();
     call.cancel.cancel();
@@ -446,12 +466,15 @@ mod tests {
     use super::*;
     use crate::db::audit_log::ListDispatchesQuery;
     use std::sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
+    use tokio::sync::Notify;
 
     static EFFECT_CALLS: AtomicUsize = AtomicUsize::new(0);
     static EFFECT_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static LATE_EFFECT_ENTERED: LazyLock<Notify> = LazyLock::new(Notify::new);
+    static LATE_EFFECT_RELEASE: LazyLock<Notify> = LazyLock::new(Notify::new);
 
     fn record_effect(name: &'static str) {
         EFFECT_ORDER
@@ -498,6 +521,17 @@ mod tests {
         Box::pin(async move {
             let _ = context;
             EFFECT_CALLS.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        })
+    }
+
+    fn wait_after_audit_effect(
+        context: ToolEffectContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
+        Box::pin(async move {
+            let _ = context;
+            LATE_EFFECT_ENTERED.notify_one();
+            LATE_EFFECT_RELEASE.notified().await;
             Ok(None)
         })
     }
@@ -677,6 +711,66 @@ mod tests {
                 .rows
                 .is_empty()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stop_winning_after_audit_rewrites_the_dispatch_as_cancelled() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("tool call identity missing"))?
+            .session
+            .clone();
+        let dispatched_call = call.clone();
+        let dispatch = tokio::spawn(async move {
+            dispatch_tool_call_with(
+                dispatched_call,
+                &[],
+                &[
+                    NamedToolEffect {
+                        name: "audit",
+                        run: effects::audit::apply,
+                    },
+                    NamedToolEffect {
+                        name: "wait-after-audit",
+                        run: wait_after_audit_effect,
+                    },
+                ],
+            )
+            .await
+        });
+
+        LATE_EFFECT_ENTERED.notified().await;
+        assert_eq!(session.stop_dispatches().await, 1);
+        LATE_EFFECT_RELEASE.notify_one();
+        let result = dispatch.await??;
+
+        assert_eq!(
+            result
+                .content
+                .first()
+                .and_then(|block| block.as_text())
+                .map(|text| text.text.as_str()),
+            Some(CANCELLATION_REASON)
+        );
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 1);
+        let meta: Value = serde_json::from_str(
+            rows[0]
+                .result_meta
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("result metadata missing"))?,
+        )?;
+        assert_eq!(meta["cancelled"], true);
+        assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
         Ok(())
     }
 
