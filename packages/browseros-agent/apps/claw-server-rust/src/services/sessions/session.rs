@@ -2,7 +2,14 @@ use crate::{
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, SessionId},
 };
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     sync::{Mutex, Notify},
     time::Instant,
@@ -18,6 +25,7 @@ pub struct Session {
     identity: ConversationIdentity,
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
+    operator_stop_requested: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -25,6 +33,7 @@ pub struct Session {
 struct DispatchState {
     accepting: bool,
     active: BTreeMap<DispatchId, CancellationToken>,
+    pending_operator_audits: BTreeSet<DispatchId>,
 }
 
 impl Session {
@@ -42,8 +51,10 @@ impl Session {
             dispatches: Mutex::new(DispatchState {
                 accepting: true,
                 active: BTreeMap::new(),
+                pending_operator_audits: BTreeSet::new(),
             }),
             dispatches_drained: Notify::new(),
+            operator_stop_requested: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -107,15 +118,50 @@ impl Session {
         true
     }
 
-    /// Returns true when completion linearized before Stop; false when Stop owns the result.
-    pub async fn finish_dispatch(&self, dispatch_id: &DispatchId) -> bool {
-        let (completed_before_stop, drained) = {
+    pub fn request_operator_stop(&self) {
+        self.operator_stop_requested.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn operator_stop_requested(&self) -> bool {
+        self.operator_stop_requested.load(Ordering::Acquire)
+    }
+
+    /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.
+    pub async fn begin_finish_dispatch(&self, dispatch_id: &DispatchId) -> bool {
+        let drained = {
             let mut state = self.dispatches.lock().await;
-            let was_active = state.active.remove(dispatch_id).is_some();
-            (was_active && state.accepting, state.active.is_empty())
+            if !state.accepting {
+                return false;
+            }
+            state.active.remove(dispatch_id);
+            state.active.is_empty()
         };
         if drained {
             self.dispatches_drained.notify_waiters();
+        }
+        true
+    }
+
+    pub async fn finish_interrupted_dispatch(&self, dispatch_id: &DispatchId) {
+        let drained = {
+            let mut state = self.dispatches.lock().await;
+            state.active.remove(dispatch_id);
+            if self.operator_stop_requested() {
+                state.pending_operator_audits.insert(dispatch_id.clone());
+            }
+            state.active.is_empty()
+        };
+        if drained {
+            self.dispatches_drained.notify_waiters();
+        }
+    }
+
+    /// Returns true when completion linearized before teardown; false when teardown owns it.
+    pub async fn finish_dispatch(&self, dispatch_id: &DispatchId) -> bool {
+        let completed_before_stop = self.begin_finish_dispatch(dispatch_id).await;
+        if !completed_before_stop {
+            self.finish_interrupted_dispatch(dispatch_id).await;
         }
         completed_before_stop
     }
@@ -145,6 +191,24 @@ impl Session {
             }
             drained.await;
         }
+    }
+
+    pub async fn pending_operator_cancellation_audits(&self) -> Vec<DispatchId> {
+        self.dispatches
+            .lock()
+            .await
+            .pending_operator_audits
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn mark_operator_cancellation_audit_reconciled(&self, dispatch_id: &DispatchId) {
+        self.dispatches
+            .lock()
+            .await
+            .pending_operator_audits
+            .remove(dispatch_id);
     }
 
     #[must_use]
@@ -227,5 +291,34 @@ mod tests {
         );
         assert_eq!(interrupted.stop_dispatches().await, 1);
         assert!(!interrupted.finish_dispatch(&interrupted_id).await);
+    }
+
+    #[tokio::test]
+    async fn operator_stop_keeps_late_audits_pending_until_reconciled() {
+        let session = test_session("session-pending-audit");
+        let dispatch_id = DispatchId::new();
+        assert!(
+            session
+                .try_register_dispatch(dispatch_id.clone(), CancellationToken::new())
+                .await
+        );
+        session.request_operator_stop();
+        assert_eq!(session.stop_dispatches().await, 1);
+
+        assert!(!session.begin_finish_dispatch(&dispatch_id).await);
+        session.finish_interrupted_dispatch(&dispatch_id).await;
+        assert_eq!(
+            session.pending_operator_cancellation_audits().await,
+            vec![dispatch_id.clone()]
+        );
+        session
+            .mark_operator_cancellation_audit_reconciled(&dispatch_id)
+            .await;
+        assert!(
+            session
+                .pending_operator_cancellation_audits()
+                .await
+                .is_empty()
+        );
     }
 }

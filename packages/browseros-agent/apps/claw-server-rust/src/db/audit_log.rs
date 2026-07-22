@@ -255,10 +255,9 @@ impl AuditLog {
     }
 
     /// Reconciles the recorded outcome when Stop wins after the audit effect ran.
-    pub async fn update_dispatch_result(
+    pub async fn mark_dispatch_operator_cancelled(
         &self,
         dispatch_id: &DispatchId,
-        result: &DispatchResultSummary,
     ) -> AppResult<bool> {
         let txn = self.db.connection().begin().await?;
         let Some(dispatch) = ToolDispatches::find()
@@ -269,10 +268,22 @@ impl AuditLog {
             txn.commit().await?;
             return Ok(false);
         };
+        let result = DispatchResultSummary {
+            is_error: true,
+            cancelled: true,
+            structured_content: json!({
+                "cancellationReason": "Operation cancelled by the User",
+                "cancellationKind": "cockpit.operator-cancelled",
+            }),
+            content: json!([{
+                "type": "text",
+                "text": "Operation cancelled by the User",
+            }]),
+        };
         ToolDispatches::update_many()
             .col_expr(
                 tool_dispatches::Column::ResultMeta,
-                Expr::value(Some(summarize_result(result))),
+                Expr::value(Some(summarize_result(&result))),
             )
             .filter(tool_dispatches::Column::Id.eq(dispatch.id))
             .exec(&txn)

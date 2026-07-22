@@ -267,28 +267,16 @@ async fn dispatch_tool_call_with(
         }
     };
 
-    let stopped_before_finish = if let Some(identity) = &call.identity {
-        !identity.session.finish_dispatch(&call.dispatch_id).await
+    let (teardown_before_finish, operator_stop_requested) = if let Some(identity) = &call.identity {
+        (
+            !identity.session.finish_dispatch(&call.dispatch_id).await,
+            identity.session.operator_stop_requested(),
+        )
     } else {
-        false
+        (false, false)
     };
-    if stopped_before_finish {
+    if teardown_before_finish && operator_stop_requested {
         let cancellation = operator_cancellation_result();
-        if let Err(error) = call
-            .state
-            .audit_log
-            .update_dispatch_result(
-                &call.dispatch_id,
-                &effects::audit::result_summary(&cancellation, true),
-            )
-            .await
-        {
-            warn!(
-                dispatch_id = %call.dispatch_id,
-                error = %error,
-                "failed to reconcile a late operator cancellation"
-            );
-        }
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
         return Ok(wire_result(cancellation));
@@ -744,9 +732,13 @@ mod tests {
         });
 
         LATE_EFFECT_ENTERED.notified().await;
-        assert_eq!(session.stop_dispatches().await, 1);
+        let sessions = call.state.sessions.clone();
+        let session_id = session.id().clone();
+        let cancel = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
+        call.dispatch_cancel.cancelled().await;
         LATE_EFFECT_RELEASE.notify_one();
         let result = dispatch.await??;
+        assert_eq!(cancel.await??, Some(1));
 
         assert_eq!(
             result

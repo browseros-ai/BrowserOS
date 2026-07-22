@@ -180,6 +180,7 @@ impl Sessions {
         let Some(session) = session else {
             return Ok(None);
         };
+        session.request_operator_stop();
         match self
             .teardown(
                 session.clone(),
@@ -282,8 +283,24 @@ impl Sessions {
         kind: &str,
         reason: Option<&str>,
     ) -> AppResult<usize> {
+        let operator_stop_requested = session.operator_stop_requested();
+        let (kind, reason) = if operator_stop_requested {
+            ("cancelled", Some("operator requested stop"))
+        } else {
+            (kind, reason)
+        };
         let cancelled_dispatches = session.stop_dispatches().await;
         session.wait_for_dispatches().await;
+        if operator_stop_requested {
+            for dispatch_id in session.pending_operator_cancellation_audits().await {
+                self.audit_log
+                    .mark_dispatch_operator_cancelled(&dispatch_id)
+                    .await?;
+                session
+                    .mark_operator_cancellation_audit_reconciled(&dispatch_id)
+                    .await;
+            }
+        }
         self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
         let audit_result = self
@@ -546,6 +563,45 @@ mod tests {
                 .remove(session.id(), "closed", Some("transport closed"))
                 .await?
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_operator_stop_survives_later_transport_close() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log.clone(),
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let session = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        session.request_operator_stop();
+
+        assert!(
+            registry
+                .remove(session.id(), "closed", Some("transport closed"))
+                .await?
+        );
+        let summary = audit_log
+            .get_task_summary(session.id().as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("cancelled summary missing"))?;
+        assert_eq!(summary.status, TaskStatus::Cancelled);
         Ok(())
     }
 
