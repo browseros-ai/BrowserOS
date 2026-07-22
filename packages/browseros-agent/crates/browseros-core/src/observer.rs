@@ -87,6 +87,8 @@ impl Observer {
         options: SnapshotOptions,
     ) -> Result<SnapshotResult, CoreError> {
         let result = self.capture().await?;
+        // Options filter only the returned presentation; commit keeps the full
+        // capture as the next diff baseline.
         let text = apply_snapshot_options(&result.text, options);
         self.commit(result.clone()).await;
         Ok(SnapshotResult {
