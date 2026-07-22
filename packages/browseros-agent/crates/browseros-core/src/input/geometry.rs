@@ -105,6 +105,8 @@ struct Bounds {
     h: f64,
 }
 
+/// The point is in `session`'s coordinate basis. Dispatch input through the same
+/// session so OOPIF coordinates remain valid without a manual transform.
 pub async fn get_element_center(
     session: &ProtocolSession,
     backend_node_id: i64,
