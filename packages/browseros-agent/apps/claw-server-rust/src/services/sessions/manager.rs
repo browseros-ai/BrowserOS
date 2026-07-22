@@ -97,8 +97,8 @@ pub struct Sessions {
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     // One retained-group close per key may be in flight; failed attempts remain retryable.
     reaping_keys: Mutex<HashSet<ConvoId>>,
-    /// Serializes Stop through terminal persistence so retries never observe removed-but-live.
-    cancellation_transition: Mutex<()>,
+    /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
+    cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
     idle_after: Duration,
     retention: Duration,
@@ -143,7 +143,7 @@ impl Sessions {
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
-            cancellation_transition: Mutex::new(()),
+            cancellation_transitions: Mutex::new(HashMap::new()),
             retained_group_hook: OnceLock::new(),
             idle_after,
             retention,
@@ -261,7 +261,20 @@ impl Sessions {
 
     /// Removes the live entry before teardown so transport requests cannot resolve it again.
     pub async fn cancel_by_session(&self, session_id: &SessionId) -> AppResult<Option<usize>> {
-        let _transition = self.cancellation_transition.lock().await;
+        let transition = self.cancellation_transition(session_id).await;
+        let result = {
+            let _transition = transition.lock().await;
+            self.cancel_by_session_serialized(session_id).await
+        };
+        self.release_cancellation_transition(session_id, &transition)
+            .await;
+        result
+    }
+
+    async fn cancel_by_session_serialized(
+        &self,
+        session_id: &SessionId,
+    ) -> AppResult<Option<usize>> {
         let session = {
             let mut sessions = self.sessions.write().await;
             sessions
@@ -286,6 +299,30 @@ impl Sessions {
                     .await;
                 Err(error)
             }
+        }
+    }
+
+    async fn cancellation_transition(&self, session_id: &SessionId) -> Arc<Mutex<()>> {
+        self.cancellation_transitions
+            .lock()
+            .await
+            .entry(session_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    async fn release_cancellation_transition(
+        &self,
+        session_id: &SessionId,
+        transition: &Arc<Mutex<()>>,
+    ) {
+        let mut transitions = self.cancellation_transitions.lock().await;
+        if Arc::strong_count(transition) == 2
+            && transitions
+                .get(session_id)
+                .is_some_and(|current| Arc::ptr_eq(current, transition))
+        {
+            transitions.remove(session_id);
         }
     }
 
@@ -729,6 +766,69 @@ mod tests {
                 .remove(session.id(), "closed", Some("transport closed"))
                 .await?
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stopping_one_session_does_not_block_another_session() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let first = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let second = registry
+            .mint(
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ClientInfo {
+                    name: "Agent".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        let dispatch_id = DispatchId::new();
+        let token = CancellationToken::new();
+        assert!(
+            first
+                .try_register_dispatch(dispatch_id.clone(), token.clone())
+                .await
+        );
+
+        let first_registry = registry.clone();
+        let first_session_id = first.id().clone();
+        let first_stop =
+            tokio::spawn(async move { first_registry.cancel_by_session(&first_session_id).await });
+        token.cancelled().await;
+
+        let second_stop = tokio::time::timeout(
+            Duration::from_secs(1),
+            registry.cancel_by_session(second.id()),
+        )
+        .await;
+        assert_eq!(second_stop??, Some(0));
+
+        assert!(!first.finish_dispatch(&dispatch_id).await);
+        assert_eq!(first_stop.await??, Some(1));
         Ok(())
     }
 
