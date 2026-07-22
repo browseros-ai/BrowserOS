@@ -333,6 +333,7 @@ fn live_session(session_id: &str) -> Arc<Session> {
             label: "Codex".to_string(),
         },
         ConversationIdentity::new("codex", "research-browserclaw".to_string()),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     )
 }
@@ -998,6 +999,7 @@ async fn seed_live_fixture(app: &TestApp) -> anyhow::Result<LiveFixture> {
             label: "Claude Code".to_string(),
         },
         ConversationIdentity::new("claude-code", "waiting-for-first-tool".to_string()),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     );
     for session in [&primary, &second, &zero_tab] {
@@ -1068,6 +1070,7 @@ fn profiled_session(session_id: &str, name: &str) -> Arc<Session> {
             label: "Codex".to_string(),
         },
         ConversationIdentity::new("codex", name.to_string()),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     )
 }

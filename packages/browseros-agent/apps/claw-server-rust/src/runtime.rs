@@ -238,6 +238,7 @@ mod tests {
                     label: "Agent".to_string(),
                 },
                 ConversationIdentity::new("agent", "shutdown-label".to_string()),
+                "Codex".to_string(),
                 Instant::now(),
             ))
             .await;
@@ -308,6 +309,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "stuck-label".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         sessions.insert_for_testing(session.clone()).await;

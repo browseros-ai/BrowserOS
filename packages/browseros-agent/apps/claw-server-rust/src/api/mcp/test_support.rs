@@ -36,6 +36,7 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
             label: "Codex".to_string(),
         },
         ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     );
     state.sessions.insert_for_testing(session.clone()).await;

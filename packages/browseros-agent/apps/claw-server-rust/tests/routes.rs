@@ -1003,6 +1003,7 @@ async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Re
             label: "Stored Agent".to_string(),
         },
         ConversationIdentity::new("mcp", "agile-alpaca".to_string()),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     );
     let ephemeral_session =
@@ -1341,6 +1342,7 @@ fn test_session(session_id: SessionId, agent_id: &str, slug: &str) -> Arc<Sessio
             label: slug.to_string(),
         },
         ConversationIdentity::new(slug, generated_label),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     )
 }

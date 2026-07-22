@@ -183,7 +183,13 @@ impl Sessions {
             reserved_keys.insert(identity.convo_id().clone());
             identity
         };
-        let session = Session::new(id.clone(), agent, identity, Instant::now());
+        let session = Session::new(
+            id.clone(),
+            agent,
+            identity,
+            client.name.clone(),
+            Instant::now(),
+        );
         let audit_result = self
             .audit_log
             .record_session_start(
@@ -195,15 +201,13 @@ impl Sessions {
                 client.version.as_str(),
             )
             .await;
-        self.finish_mint(id, session, client.name, audit_result)
-            .await
+        self.finish_mint(id, session, audit_result).await
     }
 
     async fn finish_mint(
         &self,
         id: SessionId,
         session: Arc<Session>,
-        client_name: String,
         audit_result: AppResult<()>,
     ) -> AppResult<Arc<Session>> {
         if let Err(error) = audit_result {
@@ -213,7 +217,7 @@ impl Sessions {
         self.sessions.write().await.insert(id, session.clone());
         self.analytics.capture(
             events::AGENT_SESSION_STARTED,
-            json!({ "client_name": client_name }),
+            json!({ "client_name": session.client_name() }),
         );
         Ok(session)
     }
@@ -254,6 +258,15 @@ impl Sessions {
 
     pub async fn count(&self) -> usize {
         self.sessions.read().await.len()
+    }
+
+    pub async fn used_count(&self) -> usize {
+        self.sessions
+            .read()
+            .await
+            .values()
+            .filter(|session| session.is_used())
+            .count()
     }
 
     pub async fn cancel_by_convo(&self, convo_id: &ConvoId) -> usize {
@@ -538,6 +551,7 @@ mod tests {
                 label: "A1".to_string(),
             },
             ConversationIdentity::new("a1", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry.insert_for_testing(session).await;
@@ -570,6 +584,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry.insert_for_testing(session.clone()).await;
@@ -619,6 +634,48 @@ mod tests {
             )
             .await?;
         assert!(registry.lookup(session.id()).await.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn used_count_excludes_initialize_only_sessions() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let first = Session::new(
+            SessionId::new("first"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "first-label".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+        let second = Session::new(
+            SessionId::new("second"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "second-label".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+        registry.insert_for_testing(first.clone()).await;
+        registry.insert_for_testing(second.clone()).await;
+
+        assert_eq!(registry.used_count().await, 0);
+        first.mark_used();
+        assert_eq!(registry.used_count().await, 1);
+        second.mark_used();
+        assert_eq!(registry.used_count().await, 2);
         Ok(())
     }
 
@@ -685,6 +742,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "failed-start-label".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry
@@ -697,7 +755,6 @@ mod tests {
                 .finish_mint(
                     failed_start.id().clone(),
                     failed_start.clone(),
-                    "Codex".to_string(),
                     Err(crate::error::AppError::Internal("audit failed".to_string())),
                 )
                 .await
@@ -713,6 +770,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "failed-end-label".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         assert!(
@@ -754,6 +812,7 @@ mod tests {
                         label: "Agent".to_string(),
                     },
                     ConversationIdentity::new("agent", format!("{id}-label")),
+                    "Codex".to_string(),
                     Instant::now(),
                 ))
                 .await;
@@ -768,6 +827,7 @@ mod tests {
                     label: "Agent".to_string(),
                 },
                 ConversationIdentity::new("agent", "shutdown-label".to_string()),
+                "Codex".to_string(),
                 Instant::now(),
             ))
             .await;
@@ -845,6 +905,7 @@ mod tests {
                 label: "Agent".to_string(),
             },
             ConversationIdentity::new("agent", "transport-close-label".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry.insert_for_testing(session.clone()).await;
@@ -969,6 +1030,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         let key = session.convo_id().clone();
@@ -1069,6 +1131,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         let key = session.convo_id().clone();
@@ -1127,6 +1190,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry.insert_for_testing(session.clone()).await;
@@ -1191,6 +1255,7 @@ mod tests {
                 label: "Codex".to_string(),
             },
             ConversationIdentity::new("codex", "agile-alpaca".to_string()),
+            "Codex".to_string(),
             Instant::now(),
         );
         registry.insert_for_testing(session.clone()).await;

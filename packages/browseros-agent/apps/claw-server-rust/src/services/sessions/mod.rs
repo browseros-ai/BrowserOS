@@ -1,6 +1,7 @@
 mod manager;
 mod session;
 mod tab_ownership;
+mod usage;
 
 pub use manager::{RetainedGroupAction, RetainedGroupHook, Sessions};
 pub use session::Session;

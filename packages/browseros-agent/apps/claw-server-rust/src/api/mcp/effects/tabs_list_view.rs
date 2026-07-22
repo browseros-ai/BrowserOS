@@ -170,6 +170,7 @@ mod tests {
                 label: "Cowork".to_string(),
             },
             crate::identity::ConversationIdentity::new("other", "bright-beaver".to_string()),
+            "Codex".to_string(),
             tokio::time::Instant::now(),
         );
         call.state
