@@ -53,9 +53,8 @@ pub struct ScreenshotCaptureOptions {
     pub clip: Option<Viewport>,
 }
 
-/// Coordinates in the returned image's capture space. Viewport captures are
-/// viewport-relative and apply the clip scale; full-page captures include the
-/// current scroll offsets before projection.
+/// Viewport boxes are viewport-relative and apply the clip scale. Full-page
+/// boxes add the sampled scroll offsets when that best-effort read succeeds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenshotAnnotationBox {
     pub x: i64,
