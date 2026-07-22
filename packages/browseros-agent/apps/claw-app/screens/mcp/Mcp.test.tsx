@@ -173,10 +173,19 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('Antigravity')
     expect(html).toContain('VS Code')
     expect(html).toContain('Zed')
-    expect(html).not.toContain('Claude Desktop')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')
     expect(html).not.toContain('OpenClaw')
+  })
+
+  it('renders the Claude Desktop extension callout linking to the repo install steps', () => {
+    const html = renderApp()
+    expect(html).toContain('Claude Desktop')
+    expect(html).toContain('Give Claude Desktop a real browser.')
+    expect(html).toContain('Also works with Cowork.')
+    expect(html).toContain(
+      'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension',
+    )
   })
 
   it('renders editorial state voices (silent success, mono uppercase action text)', () => {
