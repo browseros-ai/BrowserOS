@@ -13,9 +13,14 @@ pub struct Session {
     id: SessionId,
     agent: ClientIdentity,
     identity: ConversationIdentity,
-    active_dispatches: Mutex<BTreeMap<DispatchId, CancellationToken>>,
+    dispatches: Mutex<DispatchState>,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
+}
+
+struct DispatchState {
+    accepting: bool,
+    active: BTreeMap<DispatchId, CancellationToken>,
 }
 
 impl Session {
@@ -30,7 +35,10 @@ impl Session {
             id,
             agent,
             identity,
-            active_dispatches: Mutex::new(BTreeMap::new()),
+            dispatches: Mutex::new(DispatchState {
+                accepting: true,
+                active: BTreeMap::new(),
+            }),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -80,33 +88,93 @@ impl Session {
         self.cancel.cancel();
     }
 
-    pub async fn register_dispatch(&self, dispatch_id: DispatchId, token: CancellationToken) {
-        self.active_dispatches
-            .lock()
-            .await
-            .insert(dispatch_id, token);
+    pub async fn try_register_dispatch(
+        &self,
+        dispatch_id: DispatchId,
+        token: CancellationToken,
+    ) -> bool {
+        let mut state = self.dispatches.lock().await;
+        if !state.accepting {
+            token.cancel();
+            return false;
+        }
+        state.active.insert(dispatch_id, token);
+        true
     }
 
     pub async fn unregister_dispatch(&self, dispatch_id: &DispatchId) {
-        self.active_dispatches.lock().await.remove(dispatch_id);
+        self.dispatches.lock().await.active.remove(dispatch_id);
     }
 
-    pub async fn cancel_active_dispatches(&self) -> usize {
-        let tokens = self
-            .active_dispatches
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+    pub async fn stop_dispatches(&self) -> usize {
+        let tokens = {
+            let mut state = self.dispatches.lock().await;
+            state.accepting = false;
+            state.active.values().cloned().collect::<Vec<_>>()
+        };
         for token in &tokens {
             token.cancel();
         }
+        self.cancel.cancel();
         tokens.len()
     }
 
     #[must_use]
     pub fn child_token(&self) -> CancellationToken {
         self.cancel.child_token()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Session;
+    use crate::{
+        identity::{ClientIdentity, ConversationIdentity},
+        ids::{DispatchId, SessionId},
+    };
+    use tokio::time::Instant;
+    use tokio_util::sync::CancellationToken;
+
+    fn test_session(id: &str) -> std::sync::Arc<Session> {
+        Session::new(
+            SessionId::new(id),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", "steady-otter".to_string()),
+            Instant::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_registered_dispatch_and_rejects_late_registration() {
+        let session = test_session("session-stop");
+        let active = CancellationToken::new();
+        assert!(
+            session
+                .try_register_dispatch(DispatchId::new(), active.clone())
+                .await
+        );
+
+        assert_eq!(session.stop_dispatches().await, 1);
+        assert!(active.is_cancelled());
+        assert!(session.child_token().is_cancelled());
+
+        let late = CancellationToken::new();
+        assert!(
+            !session
+                .try_register_dispatch(DispatchId::new(), late.clone())
+                .await
+        );
+        assert!(late.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn stopping_idle_session_closes_future_dispatch_admission() {
+        let session = test_session("session-idle");
+        assert_eq!(session.stop_dispatches().await, 0);
+        let late = CancellationToken::new();
+        assert!(!session.try_register_dispatch(DispatchId::new(), late).await);
     }
 }
