@@ -24,8 +24,8 @@ nightly lanes use the repo-scoped Mac Mini runner instead; see
 
 WarpBuild provisions the Linux and Windows runners in the BrowserOS Azure
 subscription through the `browseros-ci-eastus` BYOC stack in East US. Both
-configurations are
-on-demand, with no standby pool and static IPs disabled. They are ephemeral:
+configurations are on-demand, with no standby pool and static IPs disabled.
+They are ephemeral:
 the VM and build disk are created for a job and discarded afterward. Their
 compute SKUs and disk capacities mirror the source Azure build VMs, but they
 do not clone or retain those VMs' persistent disks.
