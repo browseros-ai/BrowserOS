@@ -11,10 +11,10 @@ installed BrowserClaw precisely so they don't have to keep asking.
 Shared with other agents:
 - Open your own tab with tabs action="new". Pages you don't own are rejected —
   tabs action="list" shows yours vs other agents' vs the user's.
+- If the user points you at a tab you don't own, open its URL with
+  tabs action="new" and work on that copy; leave the original untouched.
 - Rename your session early with name_session using a 2-3 word task label;
   tabs group as <client>/<name>.
-- Work in your own tabs; touch a tab you don't own only when the user points
-  you at it.
 - The user oversees this browser from the BrowserClaw cockpit (live view,
   audit, replay).
 
