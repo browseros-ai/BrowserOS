@@ -164,6 +164,11 @@ const GUARDS: &[ToolGuard] = &[
     guards::page_ownership::guard,
 ];
 
+/**
+ * Result-mutating effects precede audit so the persisted estimate matches the wire content.
+ * The full list still finishes before `finish_dispatch`, leaving a row for operator-stop
+ * teardown to reconcile when cancellation wins after audit.
+ */
 const EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "ownership-claims",
@@ -178,16 +183,16 @@ const EFFECTS: &[NamedToolEffect] = &[
         run: effects::tab_activity::apply,
     },
     NamedToolEffect {
-        name: "audit",
-        run: effects::audit::apply,
-    },
-    NamedToolEffect {
         name: "tab-groups",
         run: effects::tab_groups::apply,
     },
     NamedToolEffect {
         name: "session-naming",
         run: effects::session_naming::apply,
+    },
+    NamedToolEffect {
+        name: "audit",
+        run: effects::audit::apply,
     },
 ];
 
@@ -461,6 +466,9 @@ pub fn linked_cancel_token(
 mod tests {
     use super::*;
     use crate::db::audit_log::ListDispatchesQuery;
+    use browseros_mcp::token_estimate::{
+        TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
+    };
     use std::sync::{
         LazyLock, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -491,7 +499,10 @@ mod tests {
     ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
         Box::pin(async move {
             let _ = context;
-            Ok(Some(ToolResult::text("replacement", None)))
+            Ok(Some(ToolResult::text(
+                "replacement",
+                Some(json!({ "internal": "x".repeat(300) })),
+            )))
         })
     }
 
@@ -521,14 +532,14 @@ mod tests {
         })
     }
 
-    fn wait_after_audit_effect(
+    fn audit_then_wait_effect(
         context: ToolEffectContext<'_>,
     ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
         Box::pin(async move {
-            let _ = context;
+            let replacement = effects::audit::apply(context).await?;
             LATE_EFFECT_ENTERED.notify_one();
             LATE_EFFECT_RELEASE.notified().await;
-            Ok(None)
+            Ok(replacement)
         })
     }
 
@@ -651,6 +662,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_audit_counts_the_final_wire_content_once() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let initial = ToolResult::text("initial", Some(json!({ "internal": true })));
+        let final_result = run_effects(
+            ToolEffectContext {
+                call: &call,
+                result: &initial,
+                cancelled: false,
+                duration_ms: 1,
+            },
+            &[
+                NamedToolEffect {
+                    name: "replace",
+                    run: replacement_effect,
+                },
+                NamedToolEffect {
+                    name: "session-naming",
+                    run: effects::session_naming::apply,
+                },
+                NamedToolEffect {
+                    name: "audit",
+                    run: effects::audit::apply,
+                },
+            ],
+        )
+        .await;
+        let wire = wire_result(final_result.clone());
+        assert_eq!(wire.content.len(), 2);
+        assert_eq!(wire.structured_content, None);
+
+        let row = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
+        assert_eq!(
+            row.tool_input_token_estimate,
+            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
+        );
+        assert_eq!(
+            row.tool_output_token_estimate,
+            estimate_tool_output_tokens(&wire.content)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn guard_rejection_skips_effects() -> anyhow::Result<()> {
         EFFECT_CALLS.store(0, Ordering::SeqCst);
         let call =
@@ -725,16 +789,10 @@ mod tests {
             dispatch_tool_call_with(
                 dispatched_call,
                 &[],
-                &[
-                    NamedToolEffect {
-                        name: "audit",
-                        run: effects::audit::apply,
-                    },
-                    NamedToolEffect {
-                        name: "wait-after-audit",
-                        run: wait_after_audit_effect,
-                    },
-                ],
+                &[NamedToolEffect {
+                    name: "audit",
+                    run: audit_then_wait_effect,
+                }],
             )
             .await
         });
@@ -771,6 +829,15 @@ mod tests {
         )?;
         assert_eq!(meta["cancelled"], true);
         assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
+        assert_eq!(rows[0].token_estimator_version, TOKEN_ESTIMATOR_VERSION);
+        assert_eq!(
+            rows[0].tool_input_token_estimate,
+            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
+        );
+        assert_eq!(
+            rows[0].tool_output_token_estimate,
+            estimate_tool_output_tokens(&result.content)
+        );
         Ok(())
     }
 
@@ -783,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn production_effects_run_in_ts_pipeline_order() {
+    fn production_effects_end_with_terminal_audit() {
         let names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
         assert_eq!(
             names,
@@ -791,9 +858,9 @@ mod tests {
                 "ownership-claims",
                 "tabs-list-view",
                 "tab-activity",
-                "audit",
                 "tab-groups",
                 "session-naming",
+                "audit",
             ]
         );
     }
@@ -855,6 +922,15 @@ mod tests {
         assert_eq!(meta["isError"], true);
         assert_eq!(meta["cancelled"], true);
         assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
+        assert_eq!(rows[0].token_estimator_version, TOKEN_ESTIMATOR_VERSION);
+        assert_eq!(
+            rows[0].tool_input_token_estimate,
+            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
+        );
+        assert_eq!(
+            rows[0].tool_output_token_estimate,
+            estimate_tool_output_tokens(&result.content)
+        );
         let summary = call
             .state
             .audit_log

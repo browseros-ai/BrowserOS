@@ -8,7 +8,12 @@ use crate::{
     services::sessions::Session,
 };
 use browseros_core::PageId;
-use browseros_mcp::ToolResult;
+use browseros_mcp::{
+    ToolResult,
+    token_estimate::{
+        TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
+    },
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tracing::warn;
@@ -76,9 +81,9 @@ pub async fn record_local_tool_dispatch(
         raw_args: raw_args.clone(),
         duration_ms,
         dispatch_id: dispatch_id.clone(),
-        tool_input_token_estimate: 0,
-        tool_output_token_estimate: 0,
-        token_estimator_version: 0,
+        tool_input_token_estimate: estimate_tool_input_tokens(tool_name, raw_args),
+        tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
+        token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         result: result_summary(result, false),
     };
     let _ = write_dispatch(state, input, &dispatch_id).await;
@@ -119,9 +124,9 @@ async fn record_dispatch(
             raw_args: call.raw_args.clone(),
             duration_ms,
             dispatch_id: call.dispatch_id.clone(),
-            tool_input_token_estimate: 0,
-            tool_output_token_estimate: 0,
-            token_estimator_version: 0,
+            tool_input_token_estimate: estimate_tool_input_tokens(call.tool().name, &call.raw_args),
+            tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
+            token_estimator_version: TOKEN_ESTIMATOR_VERSION,
             result: result_summary(result, cancelled),
         },
         &call.dispatch_id,
@@ -193,8 +198,19 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use crate::db::audit_log::ListDispatchesQuery;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use browseros_mcp::token_estimate::{
+        TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
+    };
     use rmcp::model::ContentBlock;
     use serde_json::json;
+
+    fn png_header(width: u32, height: u32) -> String {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        STANDARD.encode(bytes)
+    }
 
     #[tokio::test]
     async fn records_ordinary_errors_and_cancellations() -> anyhow::Result<()> {
@@ -232,6 +248,22 @@ mod tests {
             .await?
             .rows;
         assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| row.token_estimator_version == TOKEN_ESTIMATOR_VERSION)
+        );
+        assert!(rows.iter().all(|row| {
+            row.tool_input_token_estimate
+                == estimate_tool_input_tokens(call.tool().name, &call.raw_args)
+        }));
+        assert_eq!(
+            rows[0].tool_output_token_estimate,
+            estimate_tool_output_tokens(&cancelled.content)
+        );
+        assert_eq!(
+            rows[1].tool_output_token_estimate,
+            estimate_tool_output_tokens(&failed.content)
+        );
         assert!(rows.iter().all(|row| {
             row.result_meta
                 .as_deref()
@@ -255,15 +287,67 @@ mod tests {
             .await?
             .is_none()
         );
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 1);
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
+        assert_eq!(row.tool_output_token_estimate, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_tool_uses_the_shared_mixed_content_estimator() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let session = &call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .session;
+        let raw_args = json!({ "name": "focus" });
+        let result = ToolResult {
+            content: vec![
+                ContentBlock::text("abc"),
+                ContentBlock::image(png_header(33, 65), "image/png"),
+            ],
+            is_error: false,
+            structured_content: Some(json!({ "ignored": true })),
+        };
+
+        record_local_tool_dispatch(
+            &call.state,
+            session,
+            "Codex",
+            "name_session",
+            &raw_args,
+            &result,
+            1,
+        )
+        .await;
+
+        let row = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
         assert_eq!(
-            call.state
-                .audit_log
-                .list_dispatches(ListDispatchesQuery::default())
-                .await?
-                .rows
-                .len(),
-            1
+            row.tool_input_token_estimate,
+            estimate_tool_input_tokens("name_session", &raw_args)
         );
+        assert_eq!(row.tool_output_token_estimate, 7);
         Ok(())
     }
 
