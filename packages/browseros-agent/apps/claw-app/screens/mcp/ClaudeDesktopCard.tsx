@@ -15,7 +15,7 @@ export function ClaudeDesktopCard() {
       <header className="flex items-baseline justify-between gap-3">
         <h2 className="font-semibold text-ink text-lg">Claude Desktop</h2>
         <span className="font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]">
-          browser extension
+          extension
         </span>
       </header>
       <a
