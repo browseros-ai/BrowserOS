@@ -11,7 +11,7 @@
 
 import type { CaseContext, ContractCase } from './cases'
 import { apiGet, errorClass, expectOk, waitUntil } from './helpers'
-import { textOf } from './mcp-client'
+import { McpRequestError, textOf } from './mcp-client'
 
 const FENCE_OPEN = /\[UNTRUSTED_PAGE_CONTENT nonce=([0-9a-f]{16}) origin=/
 
@@ -314,7 +314,7 @@ export const clawLayerCases: ContractCase[] = [
 
   // [6] cancellation -------------------------------------------------------
   {
-    name: 'cancellation: a REST cancel interrupts a long run, session survives',
+    name: 'cancellation: a REST cancel interrupts a long run and closes browser admission',
     async run(ctx) {
       const session = await ctx.openSession('cancel-client')
       await waitUntil(
@@ -341,8 +341,15 @@ export const clawLayerCases: ContractCase[] = [
         `${ctx.server.baseUrl}/api/v1/sessions/${sessionId}/cancel`,
         { method: 'POST', signal: AbortSignal.timeout(10_000) },
       )
-      const body = (await cancelResponse.json()) as { cancelled?: number }
-      if (cancelResponse.status !== 200 || (body.cancelled ?? 0) < 1) {
+      const body = (await cancelResponse.json()) as {
+        status?: string
+        cancelledDispatches?: number
+      }
+      if (
+        cancelResponse.status !== 200 ||
+        body.status !== 'cancelled' ||
+        (body.cancelledDispatches ?? 0) < 1
+      ) {
         throw new Error(
           `cancel did not report a cancelled dispatch: ${JSON.stringify(body)}`,
         )
@@ -357,11 +364,35 @@ export const clawLayerCases: ContractCase[] = [
       if (!result.isError) {
         throw new Error('cancelled run returned a successful result')
       }
-      // The session is still usable after a cancellation.
-      expectOk(
-        await session.callTool('tabs', { action: 'list' }),
-        'session after cancellation',
-      )
+
+      const beforeRejectedCall = await auditSession(ctx, sessionId)
+      let rejection: unknown
+      try {
+        await session.callTool('tabs', { action: 'list' })
+      } catch (error) {
+        rejection = error
+      }
+      if (
+        !(rejection instanceof McpRequestError) ||
+        rejection.code !== -32600 ||
+        !rejection.message.includes('session is no longer live')
+      ) {
+        throw new Error(
+          `post-cancel browser call was not rejected: ${rejection}`,
+        )
+      }
+      const afterRejectedCall = await auditSession(ctx, sessionId)
+      if (
+        afterRejectedCall.dispatches.length !==
+        beforeRejectedCall.dispatches.length
+      ) {
+        throw new Error('post-cancel browser rejection created an audit row')
+      }
+
+      const tools = await session.listTools()
+      if (tools.length === 0) {
+        throw new Error('cancel closed the underlying MCP transport')
+      }
     },
   },
 
