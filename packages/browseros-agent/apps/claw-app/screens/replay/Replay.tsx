@@ -266,7 +266,7 @@ export function Replay() {
             </div>
           )}
           {perTabView.incompleteUntilMs === null &&
-            (perTabView.knownIncomplete || replay.complete === false) && (
+            perTabView.knownIncomplete && (
               <div
                 role="status"
                 className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"

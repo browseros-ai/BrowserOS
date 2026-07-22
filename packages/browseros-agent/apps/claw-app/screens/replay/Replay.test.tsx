@@ -476,6 +476,28 @@ describe('Replay', () => {
       'this replay contains a known gap',
     )
   })
+
+  it("does not leak another tab's gap into the selected tab", async () => {
+    const partialReplay = replayData(events)
+    partialReplay.complete = false
+    const secondTab = partialReplay.tabs[1]
+    if (secondTab) {
+      secondTab.complete = false
+      const firstSegment = secondTab.segments[0]
+      if (firstSegment) firstSegment.hasGap = true
+    }
+    replayResult = { ...replayResult, replay: partialReplay }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
+          <Replay />
+        </MemoryRouter>,
+      )
+    })
+
+    expect(container.textContent).not.toContain('Recording incomplete')
+  })
 })
 
 const { Replay } = await import('./Replay')
