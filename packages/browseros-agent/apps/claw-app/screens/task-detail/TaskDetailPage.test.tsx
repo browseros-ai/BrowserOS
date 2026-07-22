@@ -133,6 +133,32 @@ describe('TaskDetailPage', () => {
     expect(html).toContain('No screenshots captured for this task.')
   })
 
+  it('uses one compact selector for a twelve-tab session', () => {
+    const baseDispatch = sampleTask.dispatches[0]
+    if (!baseDispatch) throw new Error('test fixture missing first dispatch')
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, dispatchCount: 12 },
+        dispatches: Array.from({ length: 12 }, (_, index) => ({
+          ...baseDispatch,
+          dispatchId: index + 1,
+          pageId: index + 1,
+          createdAt: sampleTask.session.startedAt + index,
+        })),
+      },
+    }
+
+    const html = render()
+    expect(html).toContain('data-task-view-navigation="13"')
+    expect(html.match(/data-slot="select-trigger"/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Audit view"')
+    expect(html).toContain('Session')
+    expect(html).toContain('12')
+    expect(html).not.toContain('role="tablist"')
+  })
+
   it('renders cancelled sessions as stopped', () => {
     dataOverride = {
       ...baseData,
@@ -148,5 +174,6 @@ describe('TaskDetailPage', () => {
     const html = render()
     expect(html).toContain('Stopped')
     expect(html).toContain('session stopped')
+    expect(html).not.toContain('data-task-view-navigation')
   })
 })
