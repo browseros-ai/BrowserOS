@@ -1,5 +1,5 @@
 use crate::{
-    AppState,
+    AppState, VERSION,
     api::mcp::{
         dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
         effects::audit::record_local_tool_dispatch,
@@ -259,7 +259,7 @@ impl Drop for ClawMcpService {
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder().enable_tools().build();
-        let mut implementation = Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION"));
+        let mut implementation = Implementation::new(SERVER_NAME, VERSION);
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
@@ -448,6 +448,7 @@ mod tests {
         let service = ClawMcpService::new(call.state);
         let info = service.get_info();
         assert_eq!(info.server_info.name, SERVER_NAME);
+        assert_eq!(info.server_info.version, VERSION);
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
