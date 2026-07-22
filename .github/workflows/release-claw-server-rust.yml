@@ -6,7 +6,7 @@ name: "Release: BrowserClaw Server (Rust)"
 on:
   push:
     tags:
-      - "claw-server-rust/v*"
+      - "claw-server/v*"
   workflow_dispatch:
     inputs:
       version:
@@ -299,6 +299,18 @@ jobs:
           if project_key not in binary_path.read_bytes():
               raise SystemExit("Compiled Rust server does not contain CLAW_POSTHOG_KEY")
           PY
+
+      - name: Verify stamped binary version
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"
+          ACTUAL_VERSION="$("$BINARY_PATH" --version)"
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION" >&2
+            exit 1
+          fi
 
       - name: Package artifact zip
         id: package

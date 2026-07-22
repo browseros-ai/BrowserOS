@@ -20,10 +20,36 @@ const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 #[derive(Debug, Parser)]
 #[command(name = "browseros-claw-server-rs")]
 pub struct Cli {
+    #[arg(long, conflicts_with_all = ["config", "stdio"], help = "Print version")]
+    version: bool,
+    #[arg(long, required_unless_present = "version")]
+    config: Option<PathBuf>,
     #[arg(long)]
-    pub config: PathBuf,
-    #[arg(long)]
-    pub stdio: bool,
+    stdio: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CliAction {
+    Version,
+    Run { config: PathBuf, stdio: bool },
+}
+
+impl Cli {
+    #[must_use]
+    pub fn parse_action() -> CliAction {
+        Self::parse().into_action()
+    }
+
+    fn into_action(self) -> CliAction {
+        match (self.version, self.config) {
+            (true, None) => CliAction::Version,
+            (false, Some(config)) => CliAction::Run {
+                config,
+                stdio: self.stdio,
+            },
+            _ => unreachable!("Clap enforces version and run argument constraints"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -257,9 +283,45 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigEnv};
+    use super::{Cli, CliAction, Config, ConfigEnv};
+    use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
     use tempfile::tempdir;
+
+    #[test]
+    fn version_action_does_not_require_config() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from(["browseros-claw-server-rs", "--version"])?;
+        assert_eq!(cli.into_action(), CliAction::Version);
+        Ok(())
+    }
+
+    #[test]
+    fn run_action_requires_config() -> anyhow::Result<()> {
+        let Err(error) = Cli::try_parse_from(["browseros-claw-server-rs"]) else {
+            anyhow::bail!("run mode parsed without --config");
+        };
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        Ok(())
+    }
+
+    #[test]
+    fn version_action_rejects_run_flags() -> anyhow::Result<()> {
+        for args in [
+            &["browseros-claw-server-rs", "--version", "--stdio"][..],
+            &[
+                "browseros-claw-server-rs",
+                "--version",
+                "--config",
+                "sidecar.json",
+            ],
+        ] {
+            let Err(error) = Cli::try_parse_from(args) else {
+                anyhow::bail!("version mode accepted run-only arguments: {args:?}");
+            };
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_sidecar_defaults_and_browserclaw_dir_override() -> anyhow::Result<()> {

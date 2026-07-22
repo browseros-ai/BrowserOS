@@ -1,3 +1,7 @@
+//! `PageId` is BrowserOS's process-local handle for tools and page ownership. It remains stable
+//! when a live Chrome tab is rebound, while the tab's `TargetId` and attached `SessionId`
+//! protocol incarnations may change.
+
 use serde::{Deserialize, Serialize};
 use std::{fmt, hash::Hash};
 

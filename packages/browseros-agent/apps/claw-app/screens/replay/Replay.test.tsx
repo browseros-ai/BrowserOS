@@ -209,7 +209,7 @@ function replayData(replayEvents: readonly ReplayEvent[], tabOrder?: number[]) {
     frames,
     complete: true,
     tabs,
-    eventsForDocument: eventCatalog.eventsForDocument,
+    eventsForTab: eventCatalog.eventsForTab,
   }
 }
 
@@ -304,6 +304,11 @@ describe('Replay', () => {
         ?.getAttribute('data-player-documents'),
     ).toBe('document-a,document-a,document-a')
     expect(
+      [...container.querySelectorAll('[data-target-chip]')].map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(['Tab 1', 'Tab 2'])
+    expect(
       container
         .querySelector('[data-playback-playing]')
         ?.getAttribute('data-playback-playing'),
@@ -355,7 +360,7 @@ describe('Replay', () => {
     ).toBe('0')
   })
 
-  it('offers navigation segments without merging their rrweb lifecycles', async () => {
+  it('merges navigation lifecycles into one tab-level replay', async () => {
     const navigationEvents: ReplayEvent[] = [
       ...events.slice(0, 3),
       ...events.slice(3).map((candidate) => ({
@@ -377,29 +382,16 @@ describe('Replay', () => {
       )
     })
 
-    expect(container.textContent).toContain('Navigation 1')
-    expect(container.textContent).toContain('Navigation 2')
+    expect(container.textContent).not.toContain('Navigation 1')
+    expect(container.textContent).not.toContain('Navigation 2')
     expect(
       container
         .querySelector('[data-player-documents]')
         ?.getAttribute('data-player-documents'),
-    ).toBe('document-a,document-a,document-a')
-
-    const secondNavigation = container.querySelector(
-      '[data-target-chip="document-b"]',
-    )
-    if (!secondNavigation) throw new Error('second navigation missing')
-    await act(async () => {
-      secondNavigation.dispatchEvent(
-        new window.Event('click', { bubbles: true }),
-      )
-    })
-
+    ).toBe('document-a,document-a,document-a,document-b,document-b,document-b')
     expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-b,document-b,document-b')
+      container.querySelector('[data-target-chip="document-b"]'),
+    ).toBeNull()
   })
 
   it('slices orphan mutations and explains where visual playback starts', async () => {
@@ -455,13 +447,16 @@ describe('Replay', () => {
     )
   })
 
-  it('does not present a cataloged recording gap as complete', async () => {
-    const partialReplay = replayData(events.slice(0, 3))
+  it("keeps the selected tab's prefix warning when another tab has a gap", async () => {
+    const partialReplay = replayData([
+      { ...events[0], ts: 0, type: 3 },
+      ...events,
+    ])
     partialReplay.complete = false
-    const firstTab = partialReplay.tabs[0]
-    if (firstTab) {
-      firstTab.complete = false
-      const firstSegment = firstTab.segments[0]
+    const secondTab = partialReplay.tabs[1]
+    if (secondTab) {
+      secondTab.complete = false
+      const firstSegment = secondTab.segments[0]
       if (firstSegment) firstSegment.hasGap = true
     }
     replayResult = { ...replayResult, replay: partialReplay }
@@ -475,8 +470,33 @@ describe('Replay', () => {
     })
 
     expect(container.textContent).toContain(
-      'Recording incomplete — this replay contains a known gap',
+      'Recording incomplete — playback starts at 0:01',
     )
+    expect(container.textContent).not.toContain(
+      'this replay contains a known gap',
+    )
+  })
+
+  it("does not leak another tab's gap into the selected tab", async () => {
+    const partialReplay = replayData(events)
+    partialReplay.complete = false
+    const secondTab = partialReplay.tabs[1]
+    if (secondTab) {
+      secondTab.complete = false
+      const firstSegment = secondTab.segments[0]
+      if (firstSegment) firstSegment.hasGap = true
+    }
+    replayResult = { ...replayResult, replay: partialReplay }
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
+          <Replay />
+        </MemoryRouter>,
+      )
+    })
+
+    expect(container.textContent).not.toContain('Recording incomplete')
   })
 })
 

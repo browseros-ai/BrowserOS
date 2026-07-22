@@ -11,5 +11,7 @@ pub mod runtime;
 pub mod services;
 pub mod storage;
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use app::{AppState, build_router};
 pub use runtime::{AppRuntime, ShutdownHandle};

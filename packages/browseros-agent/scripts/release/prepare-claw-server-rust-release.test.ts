@@ -116,28 +116,33 @@ async function prepare(
     options.refName ?? 'main',
     '--requested-version',
     options.requestedVersion ?? '',
+    '--release-ref',
+    'HEAD',
   ])
 }
 
 describe('prepare-claw-server-rust-release', () => {
-  it('creates a manual tag from the requested version', async () => {
-    const { dir, bareDir } = await initFixture('0.1.0')
+  it('continues the product sequence despite the historical Rust tag', async () => {
+    const { dir, bareDir } = await initFixture('0.0.12')
     try {
+      await tag(dir, 'claw-server/v0.0.12')
+      await tag(dir, 'claw-server-rust/v0.1.0')
+      await mustRun(dir, ['git', 'push', 'origin', '--tags'])
       const mainBefore = await revParse(bareDir, 'refs/heads/main')
 
       const result = await prepare(dir, {
         eventName: 'workflow_dispatch',
-        requestedVersion: '0.1.1',
+        requestedVersion: '0.0.13',
       })
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
       expect(parseOutput(result.stdout)).toMatchObject({
-        version: '0.1.1',
-        tag: 'claw-server-rust/v0.1.1',
+        version: '0.0.13',
+        tag: 'claw-server/v0.0.13',
         release_sha: mainBefore,
-        previous_tag: '',
+        previous_tag: 'claw-server/v0.0.12',
       })
-      expect(await revParse(bareDir, 'claw-server-rust/v0.1.1^{commit}')).toBe(
+      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
         mainBefore,
       )
     } finally {
@@ -147,7 +152,7 @@ describe('prepare-claw-server-rust-release', () => {
   })
 
   it('derives a workflow_call release version from Cargo.toml', async () => {
-    const { dir, bareDir } = await initFixture('0.1.0')
+    const { dir, bareDir } = await initFixture('0.0.13')
     try {
       const releaseSha = await revParse(dir, 'HEAD')
 
@@ -157,11 +162,11 @@ describe('prepare-claw-server-rust-release', () => {
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
       expect(parseOutput(result.stdout)).toMatchObject({
-        version: '0.1.0',
-        tag: 'claw-server-rust/v0.1.0',
+        version: '0.0.13',
+        tag: 'claw-server/v0.0.13',
         release_sha: releaseSha,
       })
-      expect(await revParse(bareDir, 'claw-server-rust/v0.1.0^{commit}')).toBe(
+      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
         releaseSha,
       )
     } finally {
@@ -171,7 +176,7 @@ describe('prepare-claw-server-rust-release', () => {
   })
 
   it('derives a workflow_dispatch release version from Cargo.toml when omitted', async () => {
-    const { dir, bareDir } = await initFixture('0.1.0')
+    const { dir, bareDir } = await initFixture('0.0.13')
     try {
       const releaseSha = await revParse(dir, 'HEAD')
 
@@ -181,11 +186,11 @@ describe('prepare-claw-server-rust-release', () => {
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
       expect(parseOutput(result.stdout)).toMatchObject({
-        version: '0.1.0',
-        tag: 'claw-server-rust/v0.1.0',
+        version: '0.0.13',
+        tag: 'claw-server/v0.0.13',
         release_sha: releaseSha,
       })
-      expect(await revParse(bareDir, 'claw-server-rust/v0.1.0^{commit}')).toBe(
+      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
         releaseSha,
       )
     } finally {
@@ -194,24 +199,25 @@ describe('prepare-claw-server-rust-release', () => {
     }
   })
 
-  it('resolves pushed Rust tags and previous tags', async () => {
-    const { dir, bareDir } = await initFixture('0.1.0')
+  it('resolves pushed product tags and previous tags', async () => {
+    const { dir, bareDir } = await initFixture('0.0.12')
     try {
+      await tag(dir, 'claw-server/v0.0.12')
       await tag(dir, 'claw-server-rust/v0.1.0')
-      await commitCargoToml(dir, '0.1.1')
-      await tag(dir, 'claw-server-rust/v0.1.1')
+      await commitCargoToml(dir, '0.0.13')
+      await tag(dir, 'claw-server/v0.0.13')
       await mustRun(dir, ['git', 'push', 'origin', 'main', '--tags'])
 
       const result = await prepare(dir, {
         eventName: 'push',
-        refName: 'claw-server-rust/v0.1.1',
+        refName: 'claw-server/v0.0.13',
       })
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
       expect(parseOutput(result.stdout)).toMatchObject({
-        version: '0.1.1',
-        tag: 'claw-server-rust/v0.1.1',
-        previous_tag: 'claw-server-rust/v0.1.0',
+        version: '0.0.13',
+        tag: 'claw-server/v0.0.13',
+        previous_tag: 'claw-server/v0.0.12',
       })
     } finally {
       rmSync(dir, { recursive: true, force: true })

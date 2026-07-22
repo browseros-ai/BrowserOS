@@ -16,9 +16,10 @@ export interface ReplayEventCatalog {
   tabIds: number[]
   documentIdsForTab: (tabId: number) => readonly string[]
   eventsForDocument: (documentId: string) => readonly ReplayEvent[]
+  eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
-/** Keeps each Chrome document in its own stable rrweb event array. */
+/** Keeps stable rrweb event arrays for both internal documents and visible tabs. */
 export function buildReplayEventCatalog(
   events: readonly ReplayEvent[],
 ): ReplayEventCatalog {
@@ -27,6 +28,7 @@ export function buildReplayEventCatalog(
       tabIds: [],
       documentIdsForTab: () => [],
       eventsForDocument: () => EMPTY_REPLAY_EVENTS,
+      eventsForTab: () => EMPTY_REPLAY_EVENTS,
     }
   }
 
@@ -34,11 +36,15 @@ export function buildReplayEventCatalog(
   const seenTabs = new Set<number>()
   const documentsByTab = new Map<number, string[]>()
   const eventsByDocument = new Map<string, ReplayEvent[]>()
+  const eventsByTab = new Map<number, ReplayEvent[]>()
   for (const event of events) {
     if (!seenTabs.has(event.tabId)) {
       seenTabs.add(event.tabId)
       tabIds.push(event.tabId)
     }
+    const tabEvents = eventsByTab.get(event.tabId)
+    if (tabEvents) tabEvents.push(event)
+    else eventsByTab.set(event.tabId, [event])
     const documentEvents = eventsByDocument.get(event.documentId)
     if (documentEvents) {
       documentEvents.push(event)
@@ -55,6 +61,7 @@ export function buildReplayEventCatalog(
     documentIdsForTab: (tabId) => documentsByTab.get(tabId) ?? [],
     eventsForDocument: (documentId) =>
       eventsByDocument.get(documentId) ?? EMPTY_REPLAY_EVENTS,
+    eventsForTab: (tabId) => eventsByTab.get(tabId) ?? EMPTY_REPLAY_EVENTS,
   }
 }
 

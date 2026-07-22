@@ -98,6 +98,7 @@ async fn wait_for_load(
             ),
         )
         .await;
+        // Navigation can tear down the execution context; errors and timeouts mean not ready yet, so keep polling.
         if let Ok(Ok(result)) = result
             && result.result.value.as_ref().and_then(Value::as_str) == Some("complete")
         {

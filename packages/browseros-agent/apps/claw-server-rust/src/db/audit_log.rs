@@ -701,7 +701,7 @@ mod tests {
     use super::{
         AuditLog, DispatchResultSummary, ListTasksQuery, RecordToolDispatchInput, TaskStatus,
     };
-    use crate::db::Database;
+    use crate::db::{DATABASE_FILENAME, Database};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -736,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn migrations_and_dispatch_pagination_work() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         assert!(
             audit
                 .list_dispatches(Default::default())
@@ -764,7 +764,7 @@ mod tests {
     #[tokio::test]
     async fn task_filters_compose_before_pagination() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         audit
             .record_tool_dispatch(dispatch("a1", "https://alpha.example.com", false))
             .await?;
@@ -798,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn zero_dispatch_tasks_are_excluded_before_pagination() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         for session_id in ["handshake-1", "handshake-2"] {
             audit
                 .record_session_start(session_id, "agent", "agent", "Agent", "client", "1")
