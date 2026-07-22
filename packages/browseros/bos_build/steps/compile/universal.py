@@ -15,6 +15,7 @@ from typing import Optional
 
 from ...core.context import Context
 from ...core.step import Step, ValidationError, step
+from ...products.server_binaries import server_bundles_for_product
 from ..package.merge import merge_architectures
 from ..storage.download import ARTIFACT_METADATA_NAME
 
@@ -34,22 +35,23 @@ def _read_artifact_metadata(path: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _assert_server_bundles_aligned(binaries_dir: Path) -> None:
-    """Fail if a family's darwin-arm64/-x64 bundles disagree on version.
+def _assert_server_bundles_aligned(root_dir: Path, product_id: str) -> None:
+    """Fail if a product bundle's darwin-arm64/-x64 versions disagree.
 
     The universal merge folds both arch server bundles into one app. A
     skewed pair (fresh arm64 vs stale x64) either trips the universalizer
     on differing non-Mach-O files or, for all-Mach-O bundles, silently
     ships mismatched server versions (BrowserClaw 0.47.11). A correct
     universal build re-downloads both dirs, so this only fires on stale
-    state left by a --from resume or --no-download flow. Families missing
-    either metadata file are skipped (older layouts, non-artifact dirs).
+    state left by a --from resume or --no-download flow. Only the merging
+    product's registered bundles are checked: retired families leave
+    orphaned resources/binaries dirs on persistent runners that downloads
+    never re-align (BrowserClaw 0.48.0), and other products' bundles
+    never enter this app. Bundles missing either metadata file are
+    skipped (older layouts, undownloaded dirs).
     """
-    if not binaries_dir.is_dir():
-        return
-    for family_dir in sorted(binaries_dir.iterdir()):
-        if not family_dir.is_dir():
-            continue
+    for bundle in server_bundles_for_product(product_id):
+        family_dir = root_dir / bundle.local_resources_root
         arm_meta = _read_artifact_metadata(
             family_dir / "darwin-arm64" / ARTIFACT_METADATA_NAME
         )
@@ -63,7 +65,7 @@ def _assert_server_bundles_aligned(binaries_dir: Path) -> None:
         if arm_version == x64_version:
             continue
         raise ValidationError(
-            f"Skewed '{family_dir.name}' server bundle: "
+            f"Skewed '{bundle.local_resources_root.name}' server bundle: "
             f"darwin-arm64 version {arm_version!r} "
             f"(generated {arm_meta.get('generatedAt', 'unknown')}) "
             f"!= darwin-x64 version {x64_version!r} "
@@ -106,7 +108,7 @@ class MergeUniversalModule(Step):
             app = _arch_app_path(ctx, arch)
             if not app.exists():
                 raise ValidationError(f"{arch} app not found (build it first): {app}")
-        _assert_server_bundles_aligned(ctx.root_dir / "resources" / "binaries")
+        _assert_server_bundles_aligned(ctx.root_dir, ctx.product.id)
 
     def execute(self, ctx: Context) -> None:
         arm64_app, x64_app = (
