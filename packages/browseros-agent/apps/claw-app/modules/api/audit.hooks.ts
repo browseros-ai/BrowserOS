@@ -72,6 +72,7 @@ export const useLiveSessions = createQuery<SessionList>({
   fetcher: async () =>
     (await apiClient()).listSessions({ status: SessionStatus.Live }),
   refetchInterval: 1500,
+  refetchIntervalInBackground: true,
 })
 
 export const useSessionDetail = createQuery<

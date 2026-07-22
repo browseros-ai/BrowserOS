@@ -17,6 +17,7 @@ use tokio::time::Instant;
 use tracing::warn;
 
 const NO_EPOCH: u64 = u64::MAX;
+// Retain destroyed tab-to-target mappings for late recorder batches that still need attribution.
 const GRACE_MS: u64 = 5 * 60 * 1_000;
 
 type TargetClaimReleaser = Arc<dyn Fn(String) -> BoxFuture<'static, AppResult<()>> + Send + Sync>;

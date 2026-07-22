@@ -1,4 +1,5 @@
 use crate::{
+    analytics::{AnalyticsService, AnalyticsSink},
     api::http,
     config::Config,
     db::{AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger},
@@ -15,7 +16,6 @@ use crate::{
         sessions::Sessions,
     },
     storage::JsonStore,
-    telemetry::TelemetryService,
 };
 use axum::{Router, middleware};
 use std::{env, path::PathBuf, sync::Arc, time::Duration};
@@ -32,7 +32,7 @@ pub struct AppState {
     pub tab_activity: Arc<TabActivityService>,
     pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
-    pub telemetry: Arc<TelemetryService>,
+    pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub browser: Arc<BrowserService>,
@@ -68,18 +68,21 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let harness = Arc::new(HarnessService::new(
+        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
+        let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
+        let harness = Arc::new(HarnessService::new_with_analytics(
             config.browserclaw_dir.join("mcp-manager"),
             home_dir,
+            analytics_sink.clone(),
         ));
-        let telemetry = Arc::new(TelemetryService::new(&config.browserclaw_dir));
         let profiles = Arc::new(ProfileService::new(store.clone()));
-        let sessions = Sessions::new(
+        let sessions = Sessions::new_with_analytics(
             audit_log.clone(),
             session_tabs.clone(),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
+            analytics_sink,
         );
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
@@ -112,7 +115,7 @@ impl AppState {
             tab_activity,
             tab_registry,
             harness,
-            telemetry,
+            analytics,
             profiles,
             sessions,
             browser,

@@ -1,10 +1,14 @@
-use crate::error::{AppError, AppResult};
+use crate::{
+    analytics::{AnalyticsSink, NoopAnalyticsSink, events},
+    error::{AppError, AppResult},
+};
 use agent_mcp_manager::{
     AgentId, AgentScope, DisconnectInput, Error as ManagerError, LinkInput, ListLinksFilter,
     Manager, ManifestLinkEntry, ManifestServerEntry, McpServer, McpServerSpec, ServerManifest,
     is_installed, resolve_agent_mcp_config_path, resolve_agent_surface,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -125,16 +129,27 @@ pub struct HarnessService {
     workspace_dir: PathBuf,
     home_dir: PathBuf,
     mutex: Arc<Mutex<()>>,
+    analytics: Arc<dyn AnalyticsSink>,
 }
 
 impl HarnessService {
     #[must_use]
     pub fn new(workspace_dir: PathBuf, home_dir: PathBuf) -> Self {
+        Self::new_with_analytics(workspace_dir, home_dir, Arc::new(NoopAnalyticsSink))
+    }
+
+    #[must_use]
+    pub fn new_with_analytics(
+        workspace_dir: PathBuf,
+        home_dir: PathBuf,
+        analytics: Arc<dyn AnalyticsSink>,
+    ) -> Self {
         Self {
             manager: Manager::new(&workspace_dir),
             workspace_dir,
             home_dir,
             mutex: Arc::new(Mutex::new(())),
+            analytics,
         }
     }
 
@@ -150,7 +165,7 @@ impl HarnessService {
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         let result = tokio::task::spawn_blocking(move || {
-            relink_managed_server(
+            let summary = relink_managed_server(
                 &manager,
                 &workspace_dir,
                 BROWSEROS_MCP_SERVER_NAME,
@@ -158,13 +173,22 @@ impl HarnessService {
                 spec,
                 true,
             )?;
-            Ok(resolve_agent_mcp_config_path(agent, AgentScope::System).ok())
+            Ok((
+                summary.created,
+                resolve_agent_mcp_config_path(agent, AgentScope::System).ok(),
+            ))
         })
         .await?;
 
         match result {
-            Ok(config_path) => {
+            Ok((created, config_path)) => {
                 tracing::info!(harness = %harness, agent = %agent, "connected BrowserClaw to harness");
+                if created {
+                    self.analytics.capture(
+                        events::HARNESS_CONNECTED,
+                        json!({ "harness": harness.as_str() }),
+                    );
+                }
                 Ok(ConnectionState {
                     harness,
                     installed: true,
@@ -200,6 +224,12 @@ impl HarnessService {
                     removed_manifest = summary.removed_manifest,
                     "disconnected BrowserClaw from harness"
                 );
+                if summary.unlinked {
+                    self.analytics.capture(
+                        events::HARNESS_DISCONNECTED,
+                        json!({ "harness": harness.as_str() }),
+                    );
+                }
                 Ok(ConnectionState {
                     harness,
                     installed: false,

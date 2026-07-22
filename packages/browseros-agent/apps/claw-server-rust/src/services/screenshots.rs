@@ -22,6 +22,8 @@ impl ScreenshotService {
         self.audit_log.list_session_screenshots(session_id).await
     }
 
+    /// Requires an audit row authorizing the `(session, screenshot)` pair before either the
+    /// session-qualified or legacy file lookup, so compatibility does not weaken isolation.
     pub async fn read(&self, session_id: &str, screenshot_id: i64) -> AppResult<Vec<u8>> {
         if !self
             .audit_log

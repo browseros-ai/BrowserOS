@@ -24,6 +24,7 @@ pub const RECORDING_ORPHAN_TTL_MS: i64 = 60 * 60 * 1000;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingEventInput {
+    /// Recorder-supplied rrweb event time in Unix-epoch milliseconds.
     pub ts: i64,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub event_type: Option<Value>,

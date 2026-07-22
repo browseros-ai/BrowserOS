@@ -80,6 +80,8 @@ pub struct BrowserMcpServiceOptions {
     pub instructions: Option<String>,
     pub defaults: BrowserToolDefaults,
     pub output_files: Option<OutputFileAccess>,
+    /// `false` suppresses only legacy untyped structured content. Content declared
+    /// by a tool's output schema is retained to preserve the advertised MCP contract.
     pub include_structured_content: Option<bool>,
     pub on_tool_execution_start: Option<BrowserToolLifecycleCallback>,
     pub on_tool_execution_end: Option<BrowserToolLifecycleCallback>,

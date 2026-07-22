@@ -1,3 +1,7 @@
+//! Builds a tool's primary result, then appends registered post-action context in order.
+//! Post-actions are best-effort: failures and timeouts add unavailable context without changing
+//! primary success, while cancellation terminates response assembly.
+
 use crate::{
     constants::TOOL_POST_ACTION_CAPTURE_TIMEOUT,
     format::{diff::format_diff_result, snapshot::format_snapshot_result},
