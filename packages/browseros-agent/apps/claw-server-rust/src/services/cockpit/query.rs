@@ -211,6 +211,8 @@ impl CockpitQuery {
             });
         }
 
+        // Reconciliation can overlap a transfer. Keep only candidates whose original ownership row
+        // remains open, so the stale snapshot attributes the tab to neither session.
         self.session_tabs.drain_writes().await;
         let current_ownership_ids = self
             .session_tabs

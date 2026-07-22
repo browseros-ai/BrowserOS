@@ -18,6 +18,7 @@ const USE_SYSTEM_TIME: i64 = i64::MIN;
 #[derive(Debug, Clone)]
 pub struct ToolEvent {
     pub name: String,
+    /// Unix-epoch milliseconds.
     pub at: i64,
 }
 
@@ -33,7 +34,9 @@ pub struct TabActivityRecord {
     pub session_id: String,
     pub agent_id: String,
     pub slug: String,
+    /// Unix-epoch milliseconds.
     pub first_tool_at: i64,
+    /// Unix-epoch milliseconds.
     pub last_tool_at: i64,
     pub last_tool_name: String,
     pub tool_count: usize,
@@ -274,6 +277,8 @@ impl TabActivityService {
                     LivePageState::Live { .. } | LivePageState::Missing => {
                         records.remove(&target_id);
                     }
+                    // An unavailable browser refresh is not confirmed page death; retain the record
+                    // so its activity can recover after reconnect.
                     LivePageState::Unavailable => {}
                 }
                 break;

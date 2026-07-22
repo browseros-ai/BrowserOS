@@ -10,6 +10,8 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
         let page_id = PageId(extract_page_id(call)?);
         let identity = call.identity.as_ref()?;
         let ownership = call.state.sessions.ownership();
+        // Dispatch requires a pre-existing claim for this conversation; unclaimed user
+        // pages are rejected here and never auto-claimed.
         if let Some(owner) = call.state.sessions.owner_of_page(&page_id).await {
             if page_missing_after_refresh(call, &page_id).await {
                 ownership.remove_page(&page_id).await;

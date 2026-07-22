@@ -41,6 +41,8 @@ const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 
+/// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
+/// server session, which records its end and begins retained-group handling.
 pub struct ClawMcpService {
     state: AppState,
     catalog: Arc<Vec<ToolDef>>,

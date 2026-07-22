@@ -49,10 +49,16 @@ pub struct ToolCall {
     pub session_id: SessionId,
     pub identity: Option<ToolIdentity>,
     pub browser_session: Option<Arc<BrowserSession>>,
+    /// Pre-execution page incarnation retained for activity, close cleanup, and
+    /// audit fallback even if execution changes or removes the live page.
     pub page_snapshot: Option<PageInfo>,
     pub started_at_ms: i64,
+    /// Linked token passed into browser execution; session cancellation becomes a
+    /// protocol error that skips effects.
     pub cancel: CancellationToken,
+    /// Original transport/request token; client cancellation follows the same protocol path.
     pub client_cancel: CancellationToken,
+    /// Original cockpit/operator token; cancellation becomes an audited in-band tool error.
     pub dispatch_cancel: CancellationToken,
     pub default_tab_group_id: Option<String>,
     pub flags: ToolFlags,
@@ -370,6 +376,8 @@ fn operator_cancellation_result() -> ToolResult {
 }
 
 fn wire_result(result: ToolResult) -> CallToolResult {
+    // Ordered effects retain structured content internally; the default BrowserClaw
+    // wire envelope deliberately exposes content blocks only.
     if result.is_error {
         CallToolResult::error(result.content)
     } else {

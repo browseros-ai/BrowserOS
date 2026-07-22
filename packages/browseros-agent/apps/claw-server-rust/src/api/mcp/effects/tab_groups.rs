@@ -37,6 +37,8 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         } else {
             None
         };
+        // Detach browser-group synchronization so cosmetic/durable grouping cannot
+        // delay the tool response.
         drop(spawn_tab_group_work(context.call.clone(), page_id));
         Ok(None)
     })
@@ -66,6 +68,8 @@ async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     if session_cancel.is_cancelled() {
         return;
     }
+    // Session teardown gates queued work above; once browser mutation starts, let it
+    // finish so any created group can be recorded.
     let operation_cancel = CancellationToken::new();
     sync_pending_group_title_unlocked(
         tab_groups,

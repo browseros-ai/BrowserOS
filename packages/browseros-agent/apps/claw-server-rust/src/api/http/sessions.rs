@@ -1,3 +1,7 @@
+//! Two cockpit read models: explicit `status=live` returns a complete browser-reconciled
+//! snapshot; other lists return cursor-paginated audit history, enriched from a live
+//! transport session only while one exists.
+
 use super::{error, internal};
 use crate::{
     AppState,

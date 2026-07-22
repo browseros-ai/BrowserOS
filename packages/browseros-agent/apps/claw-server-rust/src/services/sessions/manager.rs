@@ -44,8 +44,10 @@ pub struct Sessions {
     ownership: Arc<PageOwnership>,
     audit_log: Arc<AuditLog>,
     session_tabs: Arc<SessionTabLedger>,
+    // Conversation keys remain reserved through live use and retained browser-group cleanup.
     reserved_keys: Mutex<HashSet<ConvoId>>,
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
+    // One retained-group close per key may be in flight; failed attempts remain retryable.
     reaping_keys: Mutex<HashSet<ConvoId>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
     idle_after: Duration,

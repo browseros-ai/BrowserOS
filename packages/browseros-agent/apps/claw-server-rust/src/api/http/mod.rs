@@ -26,6 +26,8 @@ mod sessions;
 mod settings;
 mod system;
 
+/// UTF-8 request-body ceiling enforced before recording ingest and advertised by
+/// `/api/v1/system` so the relay can reject oversized queued batches before POSTing.
 pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router<AppState> {
@@ -209,6 +211,8 @@ fn trusted_recording_origin(headers: &axum::http::HeaderMap) -> bool {
         None => true,
         Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
         Some("null") => {
+            // The native opaque recorder may send `Origin: null`; accept it only with
+            // `Sec-Fetch-Site: none`, not as general trust of null origins.
             headers
                 .get("sec-fetch-site")
                 .and_then(|value| value.to_str().ok())

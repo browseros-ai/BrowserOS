@@ -48,6 +48,8 @@ pub struct RecordToolDispatchInput {
     pub result: DispatchResultSummary,
 }
 
+/// Audit-write input. Persistence keeps only the error bit, content-block count, and structured
+/// top-level keys, never content text or structured values.
 #[derive(Debug, Clone)]
 pub struct DispatchResultSummary {
     pub is_error: bool,
@@ -77,6 +79,9 @@ pub struct SessionScreenshotRow {
     pub tool_name: String,
 }
 
+/// Status derived from persisted dispatches and the session end event. Any dispatch error or an
+/// `errored` end is `Failed`; a `closed` end without errors is `Done`; all other materialized tasks
+/// are `Live`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {

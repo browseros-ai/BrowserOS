@@ -1,3 +1,6 @@
+//! Durable session-to-browser ownership windows. Legacy-target and tab claim/release mutations
+//! share one FIFO writer so their observed lifecycle order reaches SQLite unchanged.
+
 use crate::{
     clock::now_epoch_ms,
     db::{
@@ -250,6 +253,8 @@ impl SessionTabLedger {
         });
     }
 
+    /// A point-in-time FIFO barrier that waits for every mutation ordered ahead of its flush
+    /// message. It neither closes the writer nor waits for later sends.
     pub async fn drain_writes(&self) {
         let (done, receiver) = oneshot::channel();
         if self.claim_writes.send(ClaimWrite::Flush(done)).is_ok() {
