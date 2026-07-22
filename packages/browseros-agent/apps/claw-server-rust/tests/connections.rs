@@ -224,10 +224,23 @@ async fn run_connections_case() -> anyhow::Result<()> {
         NEW_MCP_URL
     );
 
-    // Idempotent: re-running with the same URL is a no-op (nothing to rewrite).
-    let noop = service.migrate_connected_urls(NEW_MCP_URL).await?;
-    assert_eq!(noop.migrated, 0);
-    assert_eq!(noop.failed, 0);
+    // Regression: a crash mid-migration can leave the manifest already at the
+    // target while some agent configs are still stale. Re-running must repair
+    // the straggler, not short-circuit on the manifest URL. Simulate it by
+    // reverting one agent's config to a stale port with the manifest untouched.
+    const STALE_MCP_URL: &str = "http://127.0.0.1:8888/mcp";
+    fs::write(
+        claude_path,
+        format!(r#"{{"mcpServers":{{"BrowserClaw":{{"type":"http","url":"{STALE_MCP_URL}"}}}}}}"#),
+    )?;
+    let repaired = service.migrate_connected_urls(NEW_MCP_URL).await?;
+    assert_eq!(repaired.migrated, 3);
+    assert_eq!(repaired.failed, 0);
+    let claude_json: Value = serde_json::from_str(&fs::read_to_string(claude_path)?)?;
+    assert_eq!(
+        claude_json["mcpServers"]["BrowserClaw"]["url"], NEW_MCP_URL,
+        "a straggler left on a stale port is repaired, not skipped"
+    );
 
     // Restore the original URL so the rest of this scenario is unaffected.
     let restored = service.migrate_connected_urls(MCP_URL).await?;

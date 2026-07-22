@@ -138,7 +138,14 @@ async fn serve_with_boot_task(
     // but never served. Mirrors the archived TS server, which deliberately did
     // not await writeRuntimeFile for the same reason.
     let runtime_dir = config.browserclaw_dir.clone();
-    let runtime_url = config.public_base_url();
+    // The proxy port is the advertised endpoint. Without a proxy (dev) publish
+    // the ACTUAL bound port, which stays correct even when the config requested
+    // an OS-assigned port (server_port == 0) that public_base_url would render
+    // as an unreachable `:0`.
+    let runtime_url = match config.proxy_port {
+        Some(proxy) => format!("http://127.0.0.1:{proxy}"),
+        None => format!("http://{bound}"),
+    };
     tokio::spawn(async move {
         claw_server_rust::runtime_file::write_runtime_file(&runtime_dir, &runtime_url).await;
     });

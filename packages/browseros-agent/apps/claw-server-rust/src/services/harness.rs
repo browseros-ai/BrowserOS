@@ -327,9 +327,10 @@ impl HarnessService {
 
     /// Re-links every connected harness to `target_mcp_url`. Called on boot so a
     /// proxy-port change (native re-resolves ports at app launch) re-points all
-    /// already-connected agents at the new URL. A no-op when the manifest
-    /// already records `target_mcp_url`; per-harness failures are isolated so
-    /// one unwritable config never blocks the rest.
+    /// already-connected agents at the new URL. Harnesses already on the URL are
+    /// verified without rewriting their config (relink is write-on-change);
+    /// per-harness failures are isolated so one unwritable config never blocks
+    /// the rest.
     pub async fn migrate_connected_urls(
         &self,
         target_mcp_url: &str,
@@ -652,32 +653,17 @@ fn tildify_home_path(path: Option<&Path>, home_dir: &Path) -> Option<String> {
     }
 }
 
-/// Reads the canonical URL currently recorded for BrowserClaw in the manifest,
-/// from whichever transport spec it was last linked with. `None` when no entry
-/// exists or the URL cannot be recovered.
-fn manifest_server_url(manager: &Manager, workspace_dir: &Path) -> Option<String> {
-    with_legacy_manifest_migration(workspace_dir, || manager.list())
-        .ok()?
-        .into_iter()
-        .find(|server| server.name == BROWSEROS_MCP_SERVER_NAME)
-        .and_then(|server| match server.spec {
-            McpServerSpec::Http { url, .. } | McpServerSpec::Sse { url, .. } => Some(url),
-            // The stdio shape is `mcp-remote <url>`.
-            McpServerSpec::Stdio { args, .. } => args.into_iter().nth(1),
-        })
-}
-
 fn migrate_connected_urls(
     manager: &Manager,
     workspace_dir: &Path,
     target_mcp_url: &str,
 ) -> Result<UrlMigrationOutcome, ManagerError> {
-    // Nothing to do when the recorded URL already matches: every connected
-    // agent was last linked to it, so re-writing would only churn config files.
-    if manifest_server_url(manager, workspace_dir).as_deref() == Some(target_mcp_url) {
-        return Ok(UrlMigrationOutcome::default());
-    }
-
+    // Always re-link every connected agent rather than short-circuiting on the
+    // manifest URL. A partial migration (crash after some agents relinked but
+    // before the rest) leaves the manifest already pointing at the target while
+    // stale agents keep the old port; a manifest-level skip would strand them,
+    // and the integrity scan only checks server-name presence, not the URL.
+    // relink is write-on-change, so agents already on the target aren't rewritten.
     let links = with_legacy_manifest_migration(workspace_dir, || {
         manager.list_links(ListLinksFilter {
             server_names: Some(vec![BROWSEROS_MCP_SERVER_NAME.to_string()]),
