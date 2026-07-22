@@ -1,10 +1,10 @@
 use sea_orm_migration::prelude::*;
 
-/// Applies the audit schema migrations.
-pub struct AuditMigrator;
+/// Applies the shared BrowserClaw database schema migrations.
+pub struct Migrator;
 
 #[async_trait::async_trait]
-impl MigratorTrait for AuditMigrator {
+impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m0001_baseline::Migration),
