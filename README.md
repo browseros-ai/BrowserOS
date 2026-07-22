@@ -109,7 +109,7 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 
 ## BrowserOS
 
-**What is BrowserOS?** BrowserOS is a free, open-source Chromium fork with an AI agent built into every new tab. Ask it to summarise a page, click through a flow, extract data, or run a scheduled task, and it uses 53+ built-in browser tools plus 40+ app integrations to get the work done. Bring your own AI keys or run everything locally with Ollama.
+**What is BrowserOS?** BrowserOS is a free, open-source Chromium fork with an AI agent built into every new tab. Ask it to summarise a page, click through a flow, extract data, or run a scheduled task, and it uses 20+ built-in tools plus 40+ app integrations to get the work done. Bring your own AI keys or run everything locally with Ollama.
 
 Every AI browser today asks you to sign into their cloud and hand over your data. BrowserOS is the one that doesn't. Same daily browser you already use, with a helpful agent one keystroke away.
 
@@ -125,7 +125,7 @@ Every AI browser today asks you to sign into their cloud and hand over your data
 <tr>
 <td width="40%" valign="middle">
 <h4>BrowserOS agent in action</h4>
-Ask it in plain English. 53+ browser tools plus 40+ app integrations (Gmail, Slack, GitHub, Linear, Notion, and more). <a href="https://docs.browseros.com/getting-started">Docs</a>
+Ask it in plain English. 20+ built-in tools plus 40+ app integrations (Gmail, Slack, GitHub, Linear, Notion, and more). <a href="https://docs.browseros.com/getting-started">Docs</a>
 </td>
 <td width="60%">
 <a href="https://www.youtube.com/watch?v=SoSFev5R5dI"><img src="docs/videos/browserOS-agent-in-action.gif" alt="BrowserOS agent completing a browser task with natural language" width="100%" /></a>
@@ -167,7 +167,7 @@ Point the agent at a page, tell it what to pull, and get structured data back. <
 
 ### Why BrowserOS over the alternatives?
 
-- **Not Chrome with an AI extension.** Extensions can't touch the browser chrome, can't run scheduled background tasks, can't ship 53+ browser tools that the agent uses natively. BrowserOS builds the agent into Chromium itself.
+- **Not Chrome with an AI extension.** Extensions can't touch the browser chrome, can't run scheduled background tasks, can't ship the 20+ built-in tools that the agent uses natively. BrowserOS builds the agent into Chromium itself.
 - **Not Comet, Atlas, or Dia.** Those AI browsers route your prompts through their cloud with their model. BrowserOS runs on your machine with your AI keys. Your data stays yours.
 
 ## LLM support
@@ -265,7 +265,6 @@ BrowserOS/
 │   │   └── cli/                     # CLI tool (Go)
 │   │
 │   └── packages/
-│       ├── agent-sdk/               # Node.js SDK (npm: @browseros-ai/agent-sdk)
 │       ├── cdp-protocol/            # CDP type bindings
 │       └── shared/                  # Shared constants
 ```
@@ -275,10 +274,9 @@ BrowserOS/
 | [`packages/browseros`](packages/browseros/) | Chromium fork: patches, build system, signing |
 | [`apps/claw-server-rust`](packages/browseros-agent/apps/claw-server-rust/) | BrowserClaw backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserClaw new-tab dashboard: watch, replay, and manage agent sessions |
-| [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing 53+ MCP tools and running the BrowserOS AI agent loop |
+| [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing the browser MCP tools and running the BrowserOS AI agent loop |
 | [`apps/app`](packages/browseros-agent/apps/app/) | BrowserOS extension: new tab, side panel chat, onboarding, settings |
 | [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI: control BrowserOS from the terminal or AI coding agents |
-| [`agent-sdk`](packages/browseros-agent/packages/agent-sdk/) | Node.js SDK for browser automation with natural language |
 | [`cdp-protocol`](packages/browseros-agent/packages/cdp-protocol/) | Type-safe Chrome DevTools Protocol bindings |
 
 ## Contributing
