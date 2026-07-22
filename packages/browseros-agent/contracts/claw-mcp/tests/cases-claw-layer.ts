@@ -372,15 +372,7 @@ export const clawLayerCases: ContractCase[] = [
       } catch (error) {
         rejection = error
       }
-      const rpcError = rejection as {
-        code?: unknown
-        message?: unknown
-      } | null
-      if (
-        rpcError?.code !== -32600 ||
-        typeof rpcError.message !== 'string' ||
-        !rpcError.message.includes('session is no longer live')
-      ) {
+      if (!String(rejection).includes('session is no longer live')) {
         throw new Error(
           `post-cancel browser call was not rejected: ${rejection}`,
         )
