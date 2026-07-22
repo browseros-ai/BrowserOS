@@ -6,7 +6,7 @@ name: "Release: BrowserClaw Server (Rust)"
 on:
   push:
     tags:
-      - "claw-server-rust/v*"
+      - "claw-server/v*"
   workflow_dispatch:
     inputs:
       version:
@@ -281,6 +281,18 @@ jobs:
           cargo build --release --locked --target "$RUST_TARGET" \
             -p claw-server-rust \
             --bin browseros-claw-server-rs
+
+      - name: Verify stamped binary version
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"
+          ACTUAL_VERSION="$("$BINARY_PATH" --version)"
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION" >&2
+            exit 1
+          fi
 
       - name: Package artifact zip
         id: package

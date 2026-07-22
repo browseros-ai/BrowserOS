@@ -29,9 +29,10 @@ function createGithubReleaseStep(): string {
 }
 
 describe('release-claw-server-rust workflow', () => {
-  it('uses the Rust claw tag trigger and workflow_call contract', () => {
+  it('uses the BrowserClaw product tag trigger and workflow_call contract', () => {
     expect(workflow).toContain('name: "Release: BrowserClaw Server (Rust)"')
-    expect(workflow).toContain('"claw-server-rust/v*"')
+    expect(workflow).toContain('"claw-server/v*"')
+    expect(workflow).not.toContain('"claw-server-rust/v*"')
     expect(workflow).toContain('workflow_call:')
     expect(workflow).toContain('ref:')
     expect(workflow).toContain(
@@ -73,6 +74,25 @@ describe('release-claw-server-rust workflow', () => {
     )
     expect(workflow).not.toContain('wine')
     expect(workflow).not.toContain('patch-windows-exe')
+  })
+
+  it('validates the stamped target binary version before packaging', () => {
+    const verifyStart = workflow.indexOf(
+      '- name: Verify stamped binary version',
+    )
+    const packageStart = workflow.indexOf('- name: Package artifact zip')
+    expect(verifyStart).toBeGreaterThanOrEqual(0)
+    expect(packageStart).toBeGreaterThan(verifyStart)
+
+    const step = workflow.slice(verifyStart, packageStart)
+    expect(step).toContain(
+      'BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"',
+    )
+    expect(step).toContain('ACTUAL_VERSION="$("$BINARY_PATH" --version)"')
+    expect(step).toContain('if [ "$ACTUAL_VERSION" != "$VERSION" ]; then')
+    expect(step).toContain(
+      '::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION',
+    )
   })
 
   it('packages and validates artifact-compatible Rust resource zips', () => {
