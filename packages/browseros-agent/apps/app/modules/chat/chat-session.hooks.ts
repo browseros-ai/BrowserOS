@@ -52,6 +52,7 @@ import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
 import { useNotifyActiveTab } from './notify-active-tab.hooks'
 import { useRemoteConversationSave } from './remote-conversation-save.hooks'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
+import { stripImageToolOutputs } from './tool-output-strip'
 
 const getLastMessageText = (messages: UIMessage[]) => {
   const lastMessage = messages[messages.length - 1]
@@ -427,13 +428,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     },
   })
 
-  // Remove messages with empty parts (e.g. interrupted assistant responses)
-  // to prevent AI SDK validation errors on subsequent sends
+  // Two cleanups once a turn is no longer streaming: drop messages with
+  // empty parts (interrupted responses trip AI SDK validation on the next
+  // send), and strip retained base64 image tool outputs from older turns.
+  // Nothing renders those screenshots, but the AI SDK keeps every message
+  // resident, so they accumulate until the renderer OOMs (#1972). The latest
+  // message stays intact so the just-finished turn is untouched.
   useEffect(() => {
     if (status === 'streaming') return
-    if (messages.some((m) => !m.parts?.length)) {
-      setMessages(messages.filter((m) => m.parts?.length > 0))
-    }
+    const nonEmpty = messages.some((m) => !m.parts?.length)
+      ? messages.filter((m) => m.parts?.length > 0)
+      : messages
+    const cleaned = stripImageToolOutputs(nonEmpty, { keepLastMessage: true })
+    if (cleaned !== messages) setMessages(cleaned)
   }, [messages, status, setMessages])
 
   useNotifyActiveTab({
