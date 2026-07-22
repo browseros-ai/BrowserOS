@@ -28,7 +28,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::Instant as StdInstant,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -95,8 +95,12 @@ impl ClawMcpService {
         tools
     }
 
-    async fn call_name_session(&self, started: StartedSession, raw_args: &Value) -> CallToolResult {
-        let started_at = Instant::now();
+    async fn call_name_session(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+    ) -> CallToolResult {
+        let started_at = StdInstant::now();
         let rename = match rename_session(Some(started.session.as_ref()), raw_args).await {
             Ok(rename) => rename,
             Err(message) => {
@@ -319,48 +323,76 @@ impl ServerHandler for ClawMcpService {
             .unwrap_or_else(|| Value::Object(JsonObject::new()));
         let started = self.learn_session_from_request(&context).await?;
         started.session.touch(tokio::time::Instant::now()).await;
-        if is_name_session {
-            return Ok(self.call_name_session(started, &raw_args).await);
-        }
-        let Some(tool_index) = tool_index else {
-            return Err(McpError::method_not_found::<CallToolRequestMethod>());
+        started.session.mark_used();
+        let concurrent_used_sessions = self.state.sessions.used_count().await.max(1);
+        let tool_started_at = tokio::time::Instant::now();
+        let tool_name = request.name.to_string();
+
+        let result = if is_name_session {
+            Ok(self.call_name_session(&started, &raw_args).await)
+        } else {
+            let Some(tool_index) = tool_index else {
+                unreachable!("catalog tool was validated before session resolution");
+            };
+            let browser_session = self.state.browser.session().await;
+            let ownership_key = started.session.convo_id().clone();
+            let default_tab_group_id = self
+                .state
+                .sessions
+                .ownership()
+                .tab_group_ref(&ownership_key)
+                .await;
+            let dispatch_cancel = CancellationToken::new();
+            let cancel = linked_cancel_token(
+                started.session.child_token(),
+                context.ct.clone(),
+                dispatch_cancel.clone(),
+            );
+            let identity = ToolIdentity {
+                session: started.session.clone(),
+                agent: started.session.agent().clone(),
+                ownership_key,
+                agent_label: started.agent_label,
+            };
+            let call = ToolCall::new(
+                self.catalog.clone(),
+                tool_index,
+                raw_args,
+                started.session.id().clone(),
+                Some(identity),
+                browser_session,
+                cancel,
+                context.ct.clone(),
+                dispatch_cancel,
+                default_tab_group_id,
+                self.state.clone(),
+                self.output_files.clone(),
+            );
+            dispatch_tool_call(call).await
         };
-        let browser_session = self.state.browser.session().await;
-        let ownership_key = started.session.convo_id().clone();
-        let default_tab_group_id = self
-            .state
-            .sessions
-            .ownership()
-            .tab_group_ref(&ownership_key)
-            .await;
-        let dispatch_cancel = CancellationToken::new();
-        let cancel = linked_cancel_token(
-            started.session.child_token(),
-            context.ct.clone(),
-            dispatch_cancel.clone(),
-        );
-        let identity = ToolIdentity {
-            session: started.session.clone(),
-            agent: started.session.agent().clone(),
-            ownership_key,
-            agent_label: started.agent_label,
-        };
-        let call = ToolCall::new(
-            self.catalog.clone(),
-            tool_index,
-            raw_args,
-            started.session.id().clone(),
-            Some(identity),
-            browser_session,
-            cancel,
-            context.ct.clone(),
-            dispatch_cancel,
-            default_tab_group_id,
-            self.state.clone(),
-            self.output_files.clone(),
-        );
-        dispatch_tool_call(call).await
+
+        finish_tool_call(
+            started.session.as_ref(),
+            &tool_name,
+            tool_started_at,
+            concurrent_used_sessions,
+            result,
+        )
+        .await
     }
+}
+
+async fn finish_tool_call(
+    session: &Session,
+    tool_name: &str,
+    started_at: tokio::time::Instant,
+    concurrent_used_sessions: usize,
+    result: Result<CallToolResult, McpError>,
+) -> Result<CallToolResult, McpError> {
+    session
+        .record_tool_usage(tool_name, started_at.elapsed(), concurrent_used_sessions)
+        .await;
+    result
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -441,8 +473,78 @@ fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<Se
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    fn usage_session() -> Arc<Session> {
+        Session::new(
+            SessionId::new("usage-session"),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", "usage-test".to_string()),
+            "Codex".to_string(),
+            tokio::time::Instant::now(),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_browser_tool_success_is_recorded_and_returned_unchanged() {
+        let session = usage_session();
+        assert_eq!(session.usage_snapshot().await.dispatch_count, 0);
+        let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text("ok")]);
+        let expected = result.clone();
+        let started_at = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_millis(40)).await;
+
+        let returned = finish_tool_call(session.as_ref(), "tabs", started_at, 2, Ok(result)).await;
+
+        assert_eq!(returned, Ok(expected));
+        let snapshot = session.usage_snapshot().await;
+        assert_eq!(snapshot.dispatch_count, 1);
+        assert_eq!(snapshot.max_concurrent_used_sessions, 2);
+        assert_eq!(snapshot.tools[0].tool_name, "tabs");
+        assert_eq!(snapshot.tools[0].total_duration_ms, 40);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_local_tool_error_result_is_recorded_and_returned_unchanged() {
+        let session = usage_session();
+        let result = CallToolResult::error(vec![rmcp::model::ContentBlock::text("invalid")]);
+        let expected = result.clone();
+        let started_at = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_millis(12)).await;
+
+        let returned =
+            finish_tool_call(session.as_ref(), "name_session", started_at, 1, Ok(result)).await;
+
+        assert_eq!(returned, Ok(expected));
+        let snapshot = session.usage_snapshot().await;
+        assert_eq!(snapshot.dispatch_count, 1);
+        assert_eq!(snapshot.tools[0].tool_name, "name_session");
+        assert_eq!(snapshot.tools[0].max_duration_ms, 12);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_protocol_error_is_recorded_and_returned_unchanged() {
+        let session = usage_session();
+        let error = McpError::internal_error("dispatch failed", None);
+        let expected = error.clone();
+        let started_at = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_millis(7)).await;
+
+        let returned =
+            finish_tool_call(session.as_ref(), "navigate", started_at, 3, Err(error)).await;
+
+        assert_eq!(returned, Err(expected));
+        let snapshot = session.usage_snapshot().await;
+        assert_eq!(snapshot.dispatch_count, 1);
+        assert_eq!(snapshot.max_concurrent_used_sessions, 3);
+        assert_eq!(snapshot.tools[0].tool_name, "navigate");
+        assert_eq!(snapshot.tools[0].total_duration_ms, 7);
+    }
 
     #[tokio::test]
     async fn initialize_info_uses_browserclaw_branding_and_prompt() -> anyhow::Result<()> {
