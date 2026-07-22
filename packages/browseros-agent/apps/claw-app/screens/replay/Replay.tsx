@@ -202,8 +202,6 @@ export function Replay() {
     { label: 'Duration', value: replay.duration },
     { label: 'Steps', value: replay.steps },
   ]
-  const incompleteStartsAtMs =
-    replay.complete === false ? null : perTabView.incompleteUntilMs
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-bg-canvas">
@@ -258,16 +256,16 @@ export function Replay() {
               </TabsList>
             </Tabs>
           )}
-          {incompleteStartsAtMs !== null && (
+          {perTabView.incompleteUntilMs !== null && (
             <div
               role="status"
               className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
             >
               Recording incomplete — playback starts at{' '}
-              {formatIncompleteOffset(incompleteStartsAtMs)}
+              {formatIncompleteOffset(perTabView.incompleteUntilMs)}
             </div>
           )}
-          {incompleteStartsAtMs === null &&
+          {perTabView.incompleteUntilMs === null &&
             (perTabView.knownIncomplete || replay.complete === false) && (
               <div
                 role="status"

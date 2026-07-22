@@ -447,12 +447,18 @@ describe('Replay', () => {
     )
   })
 
-  it('does not hide a cataloged session gap behind a prefix warning', async () => {
+  it("keeps the selected tab's prefix warning when another tab has a gap", async () => {
     const partialReplay = replayData([
-      { ...events[0], ts: 500, type: 3 },
-      ...events.slice(0, 3),
+      { ...events[0], ts: 0, type: 3 },
+      ...events,
     ])
     partialReplay.complete = false
+    const secondTab = partialReplay.tabs[1]
+    if (secondTab) {
+      secondTab.complete = false
+      const firstSegment = secondTab.segments[0]
+      if (firstSegment) firstSegment.hasGap = true
+    }
     replayResult = { ...replayResult, replay: partialReplay }
 
     await act(async () => {
@@ -464,9 +470,11 @@ describe('Replay', () => {
     })
 
     expect(container.textContent).toContain(
-      'Recording incomplete — this replay contains a known gap',
+      'Recording incomplete — playback starts at 0:01',
     )
-    expect(container.textContent).not.toContain('playback starts at')
+    expect(container.textContent).not.toContain(
+      'this replay contains a known gap',
+    )
   })
 })
 
