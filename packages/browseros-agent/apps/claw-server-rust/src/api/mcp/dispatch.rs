@@ -751,12 +751,22 @@ mod tests {
             .await?
             .rows;
         assert_eq!(rows.len(), 1);
-        assert!(
+        let meta: Value = serde_json::from_str(
             rows[0]
                 .result_meta
                 .as_deref()
-                .is_some_and(|meta| { meta.contains("cancellationKind") })
-        );
+                .ok_or_else(|| anyhow::anyhow!("result metadata missing"))?,
+        )?;
+        assert_eq!(meta["isError"], true);
+        assert_eq!(meta["cancelled"], true);
+        assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
+        let summary = call
+            .state
+            .audit_log
+            .get_task_summary(call.session_id.as_str())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task summary missing"))?;
+        assert_eq!(summary.error_count, 0);
         assert_eq!(session.stop_dispatches().await, 0);
         Ok(())
     }

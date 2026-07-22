@@ -148,6 +148,7 @@ fn result_summary(result: &ToolResult, cancelled: bool) -> DispatchResultSummary
     });
     DispatchResultSummary {
         is_error: cancelled || result.is_error,
+        cancelled,
         structured_content: result.structured_content.clone().unwrap_or(Value::Null),
         content,
     }

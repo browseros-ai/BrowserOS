@@ -124,6 +124,7 @@ pub(super) async fn cancel(
     let session_id = SessionId::new(session_id);
     if let Some(cancelled) = state.sessions.cancel_by_session(&session_id).await {
         return Ok(Json(CancelSessionResponse::new(
+            SessionStatus::Cancelled,
             i64::try_from(cancelled).unwrap_or(i64::MAX),
         )));
     }
@@ -271,6 +272,7 @@ fn contract_status(status: TaskStatus) -> SessionStatus {
         TaskStatus::Live => SessionStatus::Live,
         TaskStatus::Done => SessionStatus::Done,
         TaskStatus::Failed => SessionStatus::Failed,
+        TaskStatus::Cancelled => SessionStatus::Cancelled,
     }
 }
 
@@ -309,6 +311,7 @@ fn parse_query(
         Some("live") => Some(TaskStatus::Live),
         Some("done") => Some(TaskStatus::Done),
         Some("failed") => Some(TaskStatus::Failed),
+        Some("cancelled") => Some(TaskStatus::Cancelled),
         Some(_) => return Err(invalid_query(request_id, "invalid status")),
     };
     Ok(SessionQuery {

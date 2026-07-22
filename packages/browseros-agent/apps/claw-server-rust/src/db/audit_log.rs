@@ -51,6 +51,7 @@ pub struct RecordToolDispatchInput {
 #[derive(Debug, Clone)]
 pub struct DispatchResultSummary {
     pub is_error: bool,
+    pub cancelled: bool,
     pub structured_content: serde_json::Value,
     pub content: serde_json::Value,
 }
@@ -83,6 +84,7 @@ pub enum TaskStatus {
     Live,
     Done,
     Failed,
+    Cancelled,
 }
 
 impl TaskStatus {
@@ -91,6 +93,7 @@ impl TaskStatus {
             Self::Live => "live",
             Self::Done => "done",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -98,6 +101,7 @@ impl TaskStatus {
         match value.as_str() {
             "done" => Self::Done,
             "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
             _ => Self::Live,
         }
     }
@@ -613,12 +617,12 @@ async fn query_end<C: ConnectionTrait>(
 }
 
 fn derive_status(error_count: i64, end: Option<&SessionEndEvent>) -> TaskStatus {
-    if end.map(|event| event.kind.as_str()) == Some("errored") || error_count > 0 {
-        TaskStatus::Failed
-    } else if end.map(|event| event.kind.as_str()) == Some("closed") {
-        TaskStatus::Done
-    } else {
-        TaskStatus::Live
+    match end.map(|event| event.kind.as_str()) {
+        Some("cancelled") => TaskStatus::Cancelled,
+        Some("errored") => TaskStatus::Failed,
+        Some("closed") if error_count == 0 => TaskStatus::Done,
+        _ if error_count > 0 => TaskStatus::Failed,
+        _ => TaskStatus::Live,
     }
 }
 
@@ -661,8 +665,10 @@ fn url_from_args(raw: &str) -> Option<String> {
 fn result_is_error(result_meta: Option<&str>) -> bool {
     result_meta
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|value| value.get("isError").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+        .is_some_and(|value| {
+            value.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+                && value.get("cancelled").and_then(serde_json::Value::as_bool) != Some(true)
+        })
 }
 
 fn safe_stringify(value: &serde_json::Value) -> String {
@@ -688,12 +694,20 @@ fn summarize_result(result: &DispatchResultSummary) -> String {
         .as_array()
         .map(|items| format!("{} block(s)", items.len()))
         .unwrap_or_else(|| "unknown".to_string());
-    json!({
+    let mut summary = json!({
         "isError": result.is_error,
+        "cancelled": result.cancelled,
         "contentSummary": content_summary,
         "structuredKeys": structured_keys,
-    })
-    .to_string()
+    });
+    if let Some(cancellation_kind) = result
+        .structured_content
+        .get("cancellationKind")
+        .and_then(serde_json::Value::as_str)
+    {
+        summary["cancellationKind"] = json!(cancellation_kind);
+    }
+    summary.to_string()
 }
 
 #[cfg(test)]
@@ -727,6 +741,7 @@ mod tests {
             dispatch_id: crate::ids::DispatchId::new(),
             result: DispatchResultSummary {
                 is_error,
+                cancelled: false,
                 structured_content: json!({ "page": 1 }),
                 content: json!([{ "type": "text", "text": "ok" }]),
             },
@@ -792,6 +807,29 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_end_is_terminal_even_when_dispatches_include_errors() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        audit
+            .record_session_start("cancelled-1", "agent", "codex", "Codex", "Codex", "1")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("cancelled-1", "https://example.com", true))
+            .await?;
+        audit
+            .record_session_end("cancelled-1", "cancelled", Some("operator requested stop"))
+            .await?;
+
+        let summary = audit
+            .get_task_summary("cancelled-1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("cancelled task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Cancelled);
+        assert_eq!(summary.error_count, 1);
         Ok(())
     }
 
