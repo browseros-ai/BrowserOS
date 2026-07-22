@@ -36,6 +36,12 @@ pub enum Error {
     #[error("Invalid MCP server spec: {reason}")]
     InvalidServerSpec { reason: String },
 
+    #[error("Invalid managed skill spec: {reason}")]
+    InvalidSkillSpec { reason: String },
+
+    #[error("Cannot resolve skill target for agent \"{agent}\": {reason}")]
+    UnresolvedSkillTarget { agent: AgentId, reason: String },
+
     #[error(
         "Agent \"{agent}\" does not appear to be installed on this machine. The library needs \"{}\" or its parent directory \"{}\" to exist before it can write an MCP entry. Install {agent} and launch it at least once, or pass an explicit \"configPath\" to write to a custom location.",
         config_path.display(),

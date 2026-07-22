@@ -5,6 +5,7 @@ mod io;
 mod manager;
 mod paths;
 mod planner;
+mod skills;
 mod types;
 
 pub use catalog::{
@@ -16,6 +17,10 @@ pub use catalog::{
 pub use error::Error;
 pub use manager::McpManager;
 pub use paths::is_installed;
+pub use skills::{
+    SkillEnvironment, SkillReconcileOutcome, SkillReconciler, SkillSpec, SkillWarning,
+    TargetPlatform, resolve_agent_skill_target,
+};
 pub use types::{
     AgentId, AgentInfo, AgentScope, DisconnectInput, DisconnectSummary, LinkInput, LinkSummary,
     ListLinksFilter, ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServer, McpServerSpec,

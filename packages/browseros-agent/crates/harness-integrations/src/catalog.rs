@@ -522,7 +522,10 @@ const OPENCODE: HarnessDefinition = HarnessDefinition {
                 "$XDG_CONFIG_HOME/opencode/skills",
                 "$HOME/.config/opencode/skills",
             ],
-            &["$USERPROFILE\\.config\\opencode\\skills"],
+            &[
+                "$XDG_CONFIG_HOME\\opencode\\skills",
+                "$USERPROFILE\\.config\\opencode\\skills",
+            ],
         ),
         "https://opencode.ai/docs/skills",
         "2026-07-22",
