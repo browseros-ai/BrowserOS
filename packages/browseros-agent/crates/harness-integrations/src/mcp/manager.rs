@@ -2,11 +2,15 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{
-    AgentScope, DisconnectInput, DisconnectSummary, Error, LinkInput, LinkSummary, ListLinksFilter,
-    ListedLink, ManifestServerEntry, RescanReport, UnlinkInput, UnlinkSummary,
+use crate::error::Error;
+
+use super::{
     io::{apply_plan, read_state, read_state_at_paths},
     planner::{plan_disconnect, plan_link, plan_rescan, plan_unlink},
+    types::{
+        AgentScope, DisconnectInput, DisconnectSummary, LinkInput, LinkSummary, ListLinksFilter,
+        ListedLink, ManifestServerEntry, RescanReport, UnlinkInput, UnlinkSummary,
+    },
 };
 
 #[derive(Debug, Clone)]

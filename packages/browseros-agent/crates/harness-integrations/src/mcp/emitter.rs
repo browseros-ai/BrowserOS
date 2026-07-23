@@ -7,9 +7,11 @@ use jsonc_parser::{
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value as toml_value};
 
 use crate::{
-    AgentSurface, ConfigFormat, Error, HttpShape, InjectValue, KeyTransform, McpServerSpec,
-    StdioShape,
+    catalog::{ConfigFormat, HttpShape, InjectValue, KeyTransform, StdioShape},
+    error::Error,
 };
+
+use super::types::{AgentSurface, McpServerSpec};
 
 pub(crate) struct Emitter {
     surface: AgentSurface,

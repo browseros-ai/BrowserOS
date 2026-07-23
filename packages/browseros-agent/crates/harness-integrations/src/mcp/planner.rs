@@ -1,12 +1,19 @@
 use std::{collections::BTreeMap, path::Path};
 
 use crate::{
-    AgentId, AgentScope, DisconnectInput, DisconnectSummary, Error, LinkInput, LinkSummary,
-    ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServerSpec, McpTransport, RescanEntry,
-    RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
+    catalog::{AgentId, McpTransport},
+    error::Error,
+};
+
+use super::{
     emitter::Emitter,
     io::{AgentFileState, FsOp, Plan, State, serialize_manifest},
-    mcp::paths::resolve_agent_surface,
+    paths::resolve_agent_surface,
+    types::{
+        AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, LinkInput, LinkSummary,
+        ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServerSpec, RescanEntry,
+        RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
+    },
 };
 
 pub(crate) struct PlannedLink {
@@ -285,7 +292,7 @@ fn ensure_transport_supported(
     agent: AgentId,
     scope: AgentScope,
     transport: McpTransport,
-) -> Result<crate::AgentSurface, Error> {
+) -> Result<AgentSurface, Error> {
     let surface = resolve_agent_surface(agent, scope)?;
     if surface.supported_transports.contains(&transport) {
         return Ok(surface);
@@ -369,7 +376,7 @@ mod tests {
     use crate::{
         AgentId, AgentScope, DisconnectInput, Error, LinkInput, ManifestLinkEntry,
         ManifestServerEntry, McpServer, McpServerSpec, ServerManifest,
-        io::{AgentFileState, FsOp, State},
+        mcp::io::{AgentFileState, FsOp, State},
     };
 
     const NOW: &str = "2026-07-06T12:00:00Z";
