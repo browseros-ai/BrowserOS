@@ -353,6 +353,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 },
                 cancel: call.cancel.clone(),
                 output_files: call.output_files.clone(),
+                inner_call_hook: None,
             });
             match execute_tool(call.tool(), call.raw_args.clone(), &ctx).await {
                 Ok(result) => result,
