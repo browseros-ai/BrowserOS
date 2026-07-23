@@ -1,6 +1,6 @@
 use crate::framework::{
-    BrowserToolDefaults, InnerCallHook, InnerCallRecord, ToolCtx, ToolError, ToolExecResult,
-    ToolResult, page_json, parse_args, text_result,
+    InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult, execute_tool,
+    page_json, parse_args, text_result,
 };
 use browseros_core::{
     PageId, Ref, SessionId, WindowId, input::ScrollDirection, pages::NewPageOptions,
@@ -41,6 +41,11 @@ Available as `browser`:
   browser.nav(pageId).goto(url) / back() / forward() / reload()
   browser.cdp(method, params?, sessionId?)   // raw CDP escape hatch
   browser.cdpJsonForPage(pageId, method, paramsJson) // page-scoped raw CDP with validated JSON params
+  browser.read(pageId, opts?) / grep(pageId, opts?) / wait(pageId, opts?)
+  browser.screenshot(pageId, opts?) / evaluate(pageId, opts?) / pdf(pageId, opts?)
+  browser.download(pageId, opts?) / upload(pageId, opts?)
+  browser.tabGroups(opts?) / windows(opts?)
+opts mirrors the same-named tool's arguments (page is supplied for you).
 Refs (eN) come from a snapshot's text/refs."#;
 
 const BOOTSTRAP_JS: &str = r#"
@@ -126,6 +131,16 @@ const BOOTSTRAP_JS: &str = r#"
     cdp: (method, params, sessionId) => call('cdp', [method, params, sessionId]),
     cdpJsonForPage: (pageId, method, paramsJson) =>
       call('cdpJsonForPage', [pageId, method, paramsJson]),
+    read: (pageId, opts) => call('tool:read', [pageId, opts]),
+    grep: (pageId, opts) => call('tool:grep', [pageId, opts]),
+    wait: (pageId, opts) => call('tool:wait', [pageId, opts]),
+    screenshot: (pageId, opts) => call('tool:screenshot', [pageId, opts]),
+    evaluate: (pageId, opts) => call('tool:evaluate', [pageId, opts]),
+    download: (pageId, opts) => call('tool:download', [pageId, opts]),
+    pdf: (pageId, opts) => call('tool:pdf', [pageId, opts]),
+    upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
+    tabGroups: (opts) => call('tool:tab_groups', [opts]),
+    windows: (opts) => call('tool:windows', [opts]),
   };
 
   const sink = (level) => (...parts) => {
@@ -232,10 +247,11 @@ impl RunControl {
 
 #[derive(Clone)]
 struct BrowserBridge {
-    session: Arc<browseros_core::BrowserSession>,
-    defaults: BrowserToolDefaults,
+    /// The full tool context: session-direct primitives use `ctx.session`,
+    /// tool-backed primitives dispatch through `execute_tool` with this ctx,
+    /// and the inner-call hook lives at `ctx.inner_call_hook`.
+    ctx: ToolCtx,
     control: RunControl,
-    hook: Option<Arc<dyn InnerCallHook>>,
 }
 
 enum BrowserCallValue {
@@ -328,15 +344,7 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         deadline,
         timeout_message: timeout_message.clone(),
     };
-    let run = execute_quickjs(
-        args.code,
-        ctx.session.clone(),
-        ctx.defaults.clone(),
-        logs.clone(),
-        control.clone(),
-        ctx.inner_call_hook.clone(),
-        duration,
-    );
+    let run = execute_quickjs(args.code, ctx.clone(), logs.clone(), control.clone(), duration);
     tokio::select! {
         () = ctx.cancel.cancelled() => Err(RunError::Cancelled),
         () = sleep_until(deadline) => Ok(RunOutcome::failure(timeout_message.to_string(), logs_snapshot(&logs))),
@@ -346,11 +354,9 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
 
 async fn execute_quickjs(
     code: String,
-    session: Arc<browseros_core::BrowserSession>,
-    defaults: BrowserToolDefaults,
+    tool_ctx: ToolCtx,
     logs: SharedLogs,
     control: RunControl,
-    hook: Option<Arc<dyn InnerCallHook>>,
     duration: Duration,
 ) -> Result<RunOutcome, RunError> {
     let runtime = AsyncRuntime::new().map_err(engine_error)?;
@@ -366,7 +372,7 @@ async fn execute_quickjs(
     let context = AsyncContext::full(&runtime).await.map_err(engine_error)?;
     let result = context
         .async_with(async |ctx| {
-            install_globals(&ctx, session, defaults, logs.clone(), control.clone(), hook)?;
+            install_globals(&ctx, tool_ctx, logs.clone(), control.clone())?;
             ctx.eval::<(), _>(BOOTSTRAP_JS).catch(&ctx).map_err(|err| {
                 RunError::Engine(format!(
                     "failed to initialize run runtime: {}",
@@ -461,17 +467,13 @@ async fn execute_quickjs(
 
 fn install_globals<'js>(
     ctx: &Ctx<'js>,
-    session: Arc<browseros_core::BrowserSession>,
-    defaults: BrowserToolDefaults,
+    tool_ctx: ToolCtx,
     logs: SharedLogs,
     control: RunControl,
-    hook: Option<Arc<dyn InnerCallHook>>,
 ) -> Result<(), RunError> {
     let bridge = BrowserBridge {
-        session,
-        defaults,
+        ctx: tool_ctx,
         control,
-        hook,
     };
     let call_bridge = {
         let bridge = bridge.clone();
@@ -505,12 +507,12 @@ impl BrowserBridge {
     async fn call(&self, method: &str, args_json: &str) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
-        if let Some(hook) = &self.hook {
+        if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
-        if let Some(hook) = &self.hook {
+        if let Some(hook) = &self.ctx.inner_call_hook {
             hook.record(InnerCallRecord {
                 method,
                 page,
@@ -525,7 +527,7 @@ impl BrowserBridge {
     async fn dispatch(&self, method: &str, args: Vec<Value>) -> Result<BrowserCallValue, String> {
         match method {
             "pages.list" => {
-                let pages = self.control.race(self.session.pages.list()).await?;
+                let pages = self.control.race(self.ctx.session.pages.list()).await?;
                 Ok(BrowserCallValue::Json(Value::Array(
                     pages.iter().map(page_json).collect(),
                 )))
@@ -535,12 +537,12 @@ impl BrowserBridge {
                 let opts = optional_object_arg(&args, 1)?;
                 let window_id = optional_i64_field(opts, "windowId")?
                     .map(WindowId)
-                    .or_else(|| self.defaults.default_window_id.clone());
+                    .or_else(|| self.ctx.defaults.default_window_id.clone());
                 let tab_group_id = optional_string_field(opts, "tabGroupId")?
-                    .or_else(|| self.defaults.default_tab_group_id.clone());
+                    .or_else(|| self.ctx.defaults.default_tab_group_id.clone());
                 let page_id = self
                     .control
-                    .race(self.session.pages.new_page(
+                    .race(self.ctx.session.pages.new_page(
                         &url,
                         NewPageOptions {
                             background: optional_bool_field(opts, "background")?,
@@ -554,14 +556,14 @@ impl BrowserBridge {
             }
             "pages.close" => {
                 let page_id = page_arg(&args, 0)?;
-                self.control.race(self.session.pages.close(page_id)).await?;
+                self.control.race(self.ctx.session.pages.close(page_id)).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "pages.getInfo" => {
                 let page_id = page_arg(&args, 0)?;
                 let info = self
                     .control
-                    .race(self.session.pages.refresh(page_id))
+                    .race(self.ctx.session.pages.refresh(page_id))
                     .await?;
                 Ok(BrowserCallValue::Json(
                     info.map(|page| page_json(&page)).unwrap_or(Value::Null),
@@ -569,7 +571,7 @@ impl BrowserBridge {
             }
             "observe.snapshot" => {
                 let page_id = page_arg(&args, 0)?;
-                let observer = self.session.observe(page_id).await;
+                let observer = self.ctx.session.observe(page_id).await;
                 let snapshot = self.control.race(observer.snapshot()).await?;
                 Ok(BrowserCallValue::Json(json!({
                     "text": snapshot.text,
@@ -579,14 +581,14 @@ impl BrowserBridge {
             }
             "observe.diff" => {
                 let page_id = page_arg(&args, 0)?;
-                let observer = self.session.observe(page_id).await;
+                let observer = self.ctx.session.observe(page_id).await;
                 let diff = self.control.race(observer.diff()).await?;
                 Ok(BrowserCallValue::Json(diff_json(&diff)))
             }
             "observe.resolveRef" => {
                 let page_id = page_arg(&args, 0)?;
                 let ref_id = string_arg(&args, 1, "ref")?;
-                let observer = self.session.observe(page_id).await;
+                let observer = self.ctx.session.observe(page_id).await;
                 let resolved = self
                     .control
                     .race(observer.resolve_ref(&Ref(ref_id)))
@@ -598,7 +600,7 @@ impl BrowserBridge {
             }
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control
                     .race(input.click(&Ref(ref_id), Default::default()))
                     .await?;
@@ -607,7 +609,7 @@ impl BrowserBridge {
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control
                     .race(input.fill(&Ref(ref_id), &value, true))
                     .await?;
@@ -616,27 +618,27 @@ impl BrowserBridge {
             "input.type" => {
                 let page_id = page_arg(&args, 0)?;
                 let text = string_arg(&args, 1, "text")?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control.race(input.type_text(&text)).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "input.press" => {
                 let page_id = page_arg(&args, 0)?;
                 let key = string_arg(&args, 1, "key")?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control.race(input.press(&key)).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "input.hover" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control.race(input.hover(&Ref(ref_id))).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "input.selectOption" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 let selected = self
                     .control
                     .race(input.select_option(&Ref(ref_id), &value))
@@ -648,7 +650,7 @@ impl BrowserBridge {
                 let direction = scroll_direction(&string_arg(&args, 1, "dir")?)?;
                 let amount = optional_f64_arg(&args, 2).unwrap_or(3.0).round() as i64;
                 let ref_id = optional_string_arg(&args, 3)?.map(Ref);
-                let input = self.session.input(page_id).await;
+                let input = self.ctx.session.input(page_id).await;
                 self.control
                     .race(input.scroll(direction, amount, ref_id.as_ref()))
                     .await?;
@@ -657,25 +659,25 @@ impl BrowserBridge {
             "nav.goto" => {
                 let page_id = page_arg(&args, 0)?;
                 let url = string_arg(&args, 1, "url")?;
-                let nav = self.session.nav(page_id);
+                let nav = self.ctx.session.nav(page_id);
                 self.control.race(nav.goto(&url)).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.back" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.session.nav(page_id);
+                let nav = self.ctx.session.nav(page_id);
                 self.control.race(nav.back()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.forward" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.session.nav(page_id);
+                let nav = self.ctx.session.nav(page_id);
                 self.control.race(nav.forward()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.reload" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.session.nav(page_id);
+                let nav = self.ctx.session.nav(page_id);
                 self.control.race(nav.reload()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
@@ -685,7 +687,7 @@ impl BrowserBridge {
                 let session_id = optional_string_arg(&args, 2)?.map(SessionId::from);
                 let value = self
                     .control
-                    .race(self.session.cdp(&method, params, session_id.as_ref()))
+                    .race(self.ctx.session.cdp(&method, params, session_id.as_ref()))
                     .await?;
                 Ok(BrowserCallValue::Json(value))
             }
@@ -696,16 +698,94 @@ impl BrowserBridge {
                 let raw = self
                     .control
                     .race(
-                        self.session
+                        self.ctx.session
                             .cdp_json_for_page(page_id, &method, &params_json),
                     )
                     .await?;
                 let value = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
                 Ok(BrowserCallValue::Json(value))
             }
+            method if method.starts_with("tool:") => {
+                let tool_name = &method["tool:".len()..];
+                self.run_tool(tool_name, build_tool_args(&args)).await
+            }
             _ => Err(format!("Unknown browser method {method}")),
         }
     }
+
+    /// Dispatches a tool-backed primitive through the real tool handler so the
+    /// SDK reaches full parity without reimplementing each tool. The inner-call
+    /// hook already wrapped this via `call`, so `execute_tool` runs the handler
+    /// with the same ctx.
+    async fn run_tool(&self, tool_name: &str, args: Value) -> Result<BrowserCallValue, String> {
+        let def = tool_def(tool_name).ok_or_else(|| format!("Unknown tool {tool_name}"))?;
+        let result = execute_tool(&def, args, &self.ctx)
+            .await
+            .map_err(|err| err.to_string())?;
+        if result.is_error {
+            return Err(tool_result_text(&result));
+        }
+        Ok(match result.structured_content {
+            Some(value) => BrowserCallValue::Json(value),
+            None => {
+                let text = tool_result_text(&result);
+                if text.is_empty() {
+                    BrowserCallValue::Undefined
+                } else {
+                    BrowserCallValue::Json(Value::String(text))
+                }
+            }
+        })
+    }
+}
+
+/// Resolves a tool-backed primitive name to its definition. Only the tools that
+/// are not already covered by the session-direct SDK are routable.
+fn tool_def(name: &str) -> Option<ToolDef> {
+    use crate::tools;
+    Some(match name {
+        "read" => tools::read::definition(),
+        "grep" => tools::grep::definition(),
+        "wait" => tools::wait::definition(),
+        "screenshot" => tools::screenshot::definition(),
+        "evaluate" => tools::evaluate::definition(),
+        "download" => tools::download::definition(),
+        "pdf" => tools::pdf::definition(),
+        "upload" => tools::upload::definition(),
+        "tab_groups" => tools::tab_groups::definition(),
+        "windows" => tools::windows::definition(),
+        _ => return None,
+    })
+}
+
+/// Builds a tool's argument object from the SDK call arguments. Page-scoped
+/// primitives pass `[pageId, opts]`; page-less ones pass `[opts]`.
+fn build_tool_args(args: &[Value]) -> Value {
+    match args.first() {
+        Some(Value::Number(page)) => {
+            let mut object = args
+                .get(1)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            object.insert("page".to_string(), Value::Number(page.clone()));
+            Value::Object(object)
+        }
+        Some(object @ Value::Object(_)) => object.clone(),
+        _ => Value::Object(Map::new()),
+    }
+}
+
+fn tool_result_text(result: &ToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rmcp::model::ContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
@@ -721,6 +801,7 @@ fn target_page(method: &str, args: &[Value]) -> Option<u32> {
     let page_first = method.starts_with("observe.")
         || method.starts_with("input.")
         || method.starts_with("nav.")
+        || method.starts_with("tool:")
         || matches!(method, "pages.close" | "pages.getInfo" | "cdpJsonForPage");
     if !page_first {
         return None;
@@ -1022,6 +1103,7 @@ fn engine_error(error: rquickjs::Error) -> RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framework::InnerCallHook;
     use crate::{
         framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, execute_tool},
         output_file::create_browser_output_file_access,
@@ -1293,6 +1375,29 @@ mod tests {
         assert_eq!(log.authorized, vec![Some(1)]);
         // Rejected before dispatch, so nothing is recorded.
         assert!(log.recorded.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_routes_tool_backed_primitive_through_handler_and_hooks_it() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "return await browser.windows({ action: 'list' })",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        // The windows tool ran and its structured output is the script's return value.
+        assert_eq!(structured["value"]["action"], json!("list"));
+        // A page-less tool primitive authorizes with no page and is recorded.
+        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(log.authorized, vec![None]);
+        assert_eq!(log.recorded, vec![("tool:windows".to_owned(), None, false)]);
         Ok(())
     }
 
