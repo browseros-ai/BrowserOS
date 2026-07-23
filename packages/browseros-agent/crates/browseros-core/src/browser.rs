@@ -57,9 +57,6 @@ impl Browser {
         url: &str,
         opts: crate::pages::NewPageOptions,
     ) -> Result<PageId, CoreError> {
-        if opts.hidden.unwrap_or(false) {
-            return self.core.pages.new_page(url, opts).await;
-        }
         let mut opts = opts;
         if opts.window_id.is_none() {
             opts.window_id = self.resolve_visible_window_id().await?;
@@ -158,7 +155,7 @@ impl Browser {
         if let Some(active) = active {
             return Ok(Some(crate::WindowId(active.window_id)));
         }
-        let created = self.core.windows.create(false).await?;
+        let created = self.core.windows.create().await?;
         Ok(Some(crate::WindowId(created.window_id)))
     }
 }

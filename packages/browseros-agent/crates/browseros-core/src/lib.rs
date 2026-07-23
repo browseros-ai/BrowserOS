@@ -23,3 +23,5 @@ pub use session::{BrowserSession, BrowserSessionHooks};
 pub use types::{FrameId, PageId, Ref, SessionId, TabId, TargetId, WindowId};
 
 mod session;
+#[cfg(test)]
+mod test_support;

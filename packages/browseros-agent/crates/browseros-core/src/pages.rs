@@ -34,7 +34,6 @@ pub struct PageInfo {
     pub is_loading: bool,
     pub load_progress: f64,
     pub is_pinned: bool,
-    pub is_hidden: bool,
     pub window_id: Option<WindowId>,
     pub index: Option<i64>,
     pub group_id: Option<String>,
@@ -54,7 +53,6 @@ struct PageState {
     sessions: HashMap<TargetId, SessionId>,
     connection_epoch: u64,
     next_page_id: u32,
-    hidden_window_id: Option<WindowId>,
 }
 
 pub struct PageManager {
@@ -80,9 +78,7 @@ impl PageManager {
     pub async fn list(&self) -> Result<Vec<PageInfo>, CoreError> {
         self.ensure_connected().await?;
         let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::GetTabsResult = root
-            .send("Browser.getTabs", json!({ "includeHidden": true }))
-            .await?;
+        let result: browser::GetTabsResult = root.send("Browser.getTabs", json!({})).await?;
         let tabs = result
             .tabs
             .into_iter()
@@ -288,14 +284,13 @@ impl PageManager {
 
     pub async fn new_page(&self, url: &str, opts: NewPageOptions) -> Result<PageId, CoreError> {
         self.ensure_connected().await?;
-        let window_id = self.resolve_window_id_for_new_page(&opts).await?;
         let root = ProtocolSession::root(self.cdp.clone());
         let mut params = serde_json::Map::new();
         params.insert("url".to_string(), Value::String(url.to_string()));
         if let Some(background) = opts.background {
             params.insert("background".to_string(), Value::Bool(background));
         }
-        if let Some(window_id) = window_id {
+        if let Some(window_id) = opts.window_id {
             params.insert("windowId".to_string(), Value::from(window_id.0));
         }
         let created: browser::CreateTabResult = root
@@ -379,36 +374,6 @@ impl PageManager {
         Ok(())
     }
 
-    pub async fn show(
-        &self,
-        page_id: PageId,
-        opts: ShowPageOptions,
-    ) -> Result<PageInfo, CoreError> {
-        self.ensure_connected().await?;
-        let info = self
-            .refresh(page_id.clone())
-            .await?
-            .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
-        if !info.is_hidden {
-            return Err(CoreError::Message(format!(
-                "Page {page_id} is already visible."
-            )));
-        }
-        let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::ShowTabResult = root
-            .send(
-                "Browser.showTab",
-                json!({
-                    "tabId": info.tab_id.0,
-                    "windowId": opts.window_id.map(|id| id.0),
-                    "index": opts.index,
-                    "activate": opts.activate
-                }),
-            )
-            .await?;
-        self.update_from_tab(page_id, result.tab).await
-    }
-
     pub async fn move_page(
         &self,
         page_id: PageId,
@@ -486,7 +451,6 @@ impl PageManager {
         let mut state = self.state.lock().await;
         if epoch != state.connection_epoch {
             state.sessions.clear();
-            state.hidden_window_id = None;
             state.connection_epoch = epoch;
             return Ok(true);
         }
@@ -515,56 +479,6 @@ impl PageManager {
         })
     }
 
-    async fn resolve_window_id_for_new_page(
-        &self,
-        opts: &NewPageOptions,
-    ) -> Result<Option<WindowId>, CoreError> {
-        if !opts.hidden.unwrap_or(false) {
-            return Ok(opts.window_id.clone());
-        }
-
-        let root = ProtocolSession::root(self.cdp.clone());
-        let windows: browser::GetWindowsResult = root.send("Browser.getWindows", json!({})).await?;
-        if let Some(requested) = &opts.window_id {
-            if let Some(window) = windows
-                .windows
-                .iter()
-                .find(|window| window.window_id == requested.0)
-            {
-                if !window.is_visible {
-                    self.state.lock().await.hidden_window_id = Some(requested.clone());
-                    return Ok(Some(requested.clone()));
-                }
-                warn!(
-                    "requested hidden page target window is visible; creating hidden window instead"
-                );
-            }
-            let hidden: browser::CreateWindowResult = root
-                .send("Browser.createWindow", json!({ "hidden": true }))
-                .await?;
-            let window_id = WindowId(hidden.window.window_id);
-            self.state.lock().await.hidden_window_id = Some(window_id.clone());
-            return Ok(Some(window_id));
-        }
-
-        let cached = self.state.lock().await.hidden_window_id.clone();
-        if let Some(cached) = cached
-            && windows
-                .windows
-                .iter()
-                .any(|window| window.window_id == cached.0 && !window.is_visible)
-        {
-            return Ok(Some(cached));
-        }
-
-        let hidden: browser::CreateWindowResult = root
-            .send("Browser.createWindow", json!({ "hidden": true }))
-            .await?;
-        let window_id = WindowId(hidden.window.window_id);
-        self.state.lock().await.hidden_window_id = Some(window_id.clone());
-        Ok(Some(window_id))
-    }
-
     async fn update_from_tab(
         &self,
         page_id: PageId,
@@ -590,16 +504,8 @@ impl PageManager {
 #[derive(Debug, Clone, Default)]
 pub struct NewPageOptions {
     pub background: Option<bool>,
-    pub hidden: Option<bool>,
     pub window_id: Option<WindowId>,
     pub tab_group_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ShowPageOptions {
-    pub window_id: Option<WindowId>,
-    pub index: Option<i64>,
-    pub activate: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -623,7 +529,6 @@ fn page_info_from_tab(
         is_loading: tab.is_loading,
         load_progress: tab.load_progress,
         is_pinned: tab.is_pinned,
-        is_hidden: tab.is_hidden,
         window_id: tab.window_id.map(WindowId).or(prior_window),
         index: tab.index,
         group_id: tab.group_id,
@@ -642,4 +547,40 @@ fn find_by_tab(pages: &HashMap<PageId, PageInfo>, tab_id: TabId) -> Option<PageI
         .values()
         .find(|info| info.tab_id == tab_id)
         .map(|info| info.page_id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PageManager, PageManagerHooks};
+    use crate::test_support::TestConnection;
+    use serde_json::json;
+    use std::error::Error;
+
+    #[tokio::test]
+    async fn list_omits_hidden_tab_enumeration_option() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([(
+            "Browser.getTabs",
+            json!({
+                "tabs": [{
+                    "tabId": 7,
+                    "targetId": "target-7",
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "isActive": true,
+                    "isLoading": false,
+                    "loadProgress": 1.0,
+                    "isPinned": false,
+                    "isHidden": false,
+                    "windowId": 3
+                }]
+            }),
+        )]);
+        let pages = PageManager::new(connection.clone(), PageManagerHooks::default())
+            .list()
+            .await?;
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(connection.calls()?[0].params, json!({}));
+        Ok(())
+    }
 }
