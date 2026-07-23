@@ -17,6 +17,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0008_add_task_token_estimates::Migration),
             Box::new(m0009_rebase_screenshot_baseline::Migration),
             Box::new(m0010_sum_session_efficiency_durations::Migration),
+            Box::new(m0011_use_session_durations_for_efficiency::Migration),
         ]
     }
 }
@@ -275,6 +276,150 @@ mod m0010_sum_session_efficiency_durations {
                     ("saturated".to_owned(), i64::MAX, 3)
                 ]
             );
+            Ok(())
+        }
+    }
+}
+
+mod m0011_use_session_durations_for_efficiency {
+    use super::*;
+    use sea_orm_migration::sea_orm::{DbBackend, Statement};
+
+    const SOURCE_EFFICIENCY_ESTIMATOR_VERSION: i64 = 3;
+    const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0011_use_session_durations_for_efficiency"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained projections can outlive tasks, and session IDs can be reused. The end
+            // timestamp and dispatch count identify the task materialized from the same audit rows.
+            manager
+                .get_connection()
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    r#"
+                    UPDATE session_efficiency_stats
+                    SET active_duration_ms = MAX((
+                            SELECT task.duration_ms
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        ), 0),
+                        efficiency_estimator_version = ?
+                    WHERE efficiency_estimator_version = ?
+                        AND EXISTS (
+                            SELECT 1
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        )
+                    "#,
+                    [
+                        EFFICIENCY_ESTIMATOR_VERSION.into(),
+                        SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into(),
+                    ],
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained audit history cannot reconstruct the old summed-tool duration.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        async fn insert_projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats VALUES ('{session_id}', {ended_at}, {dispatch_count}, 900, 0, 0, 0, 3, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn insert_task(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+            duration_ms: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, {ended_at}, {duration_ms}, {dispatch_count}, '[]', 'done', 0, 0, 0, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT active_duration_ms, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "active_duration_ms")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn upgrade_uses_only_matching_task_durations() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(10)).await?;
+
+            insert_projection(&connection, "matching", 10, 2).await?;
+            insert_task(&connection, "matching", 10, 2, 1_234).await?;
+
+            insert_projection(&connection, "negative", 20, 1).await?;
+            insert_task(&connection, "negative", 20, 1, -5).await?;
+
+            insert_projection(&connection, "end-mismatch", 30, 1).await?;
+            insert_task(&connection, "end-mismatch", 31, 1, 300).await?;
+
+            insert_projection(&connection, "count-mismatch", 40, 2).await?;
+            insert_task(&connection, "count-mismatch", 40, 1, 400).await?;
+
+            insert_projection(&connection, "absent-task", 50, 1).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(projection(&connection, "matching").await?, (1_234, 4));
+            assert_eq!(projection(&connection, "negative").await?, (0, 4));
+            assert_eq!(projection(&connection, "end-mismatch").await?, (900, 3));
+            assert_eq!(projection(&connection, "count-mismatch").await?, (900, 3));
+            assert_eq!(projection(&connection, "absent-task").await?, (900, 3));
             Ok(())
         }
     }
