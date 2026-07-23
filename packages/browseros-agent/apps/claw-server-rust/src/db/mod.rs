@@ -2,6 +2,7 @@ pub mod audit_log;
 pub mod entities;
 mod migration;
 pub mod recording_index;
+pub mod session_efficiency_stats;
 pub mod session_tabs;
 
 pub use audit_log::AuditLog;
@@ -9,6 +10,7 @@ pub use recording_index::{
     AppendDocumentBatch, LegacyClaimRow, LegacyRecordingRow, RecordingIndex, RecordingStreamRow,
     SessionTabWindow, StreamMatchRow,
 };
+pub use session_efficiency_stats::SessionEfficiencyStatsRepository;
 pub use session_tabs::SessionTabLedger;
 
 use crate::error::{AppError, AppResult, IoPath};
@@ -119,7 +121,7 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
 mod tests {
     use super::{
         AuditLog, DATABASE_FILENAME, Database, append_suffix, audit_log::ListDispatchesQuery,
-        back_up_database,
+        back_up_database, connect_and_migrate, migration::Migrator,
     };
     use sea_orm::{
         ConnectionTrait, DbBackend, Statement,
@@ -128,6 +130,7 @@ mod tests {
             sqlite::{SqliteConnectOptions, SqliteConnection},
         },
     };
+    use sea_orm_migration::{MigrationTrait, MigratorTrait, async_trait};
     use std::{collections::HashSet, path::Path};
     use tempfile::tempdir;
 
@@ -167,6 +170,7 @@ mod tests {
             "recording_streams",
             "recording_payloads",
             "recording_batches",
+            "session_efficiency_stats",
             "seaql_migrations",
         ] {
             assert!(names.contains(table), "missing table {table}");
@@ -192,9 +196,50 @@ mod tests {
             "session_tabs_one_live_owner_idx",
             "recording_streams_tab_time_idx",
             "recording_streams_retention_idx",
+            "session_efficiency_stats_ended_at_idx",
         ] {
             assert!(names.contains(index), "missing index {index}");
         }
+
+        let efficiency_columns = db
+            .connection()
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA table_info(session_efficiency_stats)".to_string(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "name")?,
+                    row.try_get::<i64>("", "pk")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+        assert_eq!(
+            efficiency_columns
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "session_id",
+                "ended_at",
+                "dispatch_count",
+                "active_duration_ms",
+                "tool_input_token_estimate",
+                "tool_output_token_estimate",
+                "screenshot_baseline_token_estimate",
+                "efficiency_estimator_version",
+                "computed_at",
+            ])
+        );
+        assert_eq!(
+            efficiency_columns
+                .iter()
+                .find(|(name, _)| name == "session_id")
+                .map(|(_, primary_key)| *primary_key),
+            Some(1)
+        );
 
         let migrations = db
             .connection()
@@ -203,7 +248,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 6);
+        assert_eq!(migrations.len(), 7);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -228,6 +273,75 @@ mod tests {
             migrations[5].try_get::<String>("", "version")?,
             "m0006_add_tool_token_estimates"
         );
+        assert_eq!(
+            migrations[6].try_get::<String>("", "version")?,
+            "m0007_add_session_efficiency_stats"
+        );
+        Ok(())
+    }
+
+    struct MigratorThrough6;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for MigratorThrough6 {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            Migrator::migrations().into_iter().take(6).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_7_upgrades_a_version_6_database_once() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+        let version_6 = connect_and_migrate::<MigratorThrough6>(&path).await?;
+        version_6.close().await?;
+
+        let upgraded = Database::open(&path).await?;
+        let objects = upgraded
+            .connection()
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')".to_string(),
+            ))
+            .await?;
+        let names = objects
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "name"))
+            .collect::<Result<HashSet<_>, _>>()?;
+        assert!(names.contains("session_efficiency_stats"));
+        assert!(names.contains("session_efficiency_stats_ended_at_idx"));
+
+        let migrations = upgraded
+            .connection()
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
+            ))
+            .await?;
+        assert_eq!(migrations.len(), 7);
+        assert_eq!(
+            migrations
+                .iter()
+                .filter(|row| {
+                    row.try_get::<String>("", "version").as_deref()
+                        == Ok("m0007_add_session_efficiency_stats")
+                })
+                .count(),
+            1
+        );
+        upgraded.0.close().await?;
+
+        let reopened = Database::open(&path).await?;
+        let migration_count = reopened
+            .connection()
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM seaql_migrations".to_string(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
+            .try_get::<i64>("", "count")?;
+        assert_eq!(migration_count, 7);
         Ok(())
     }
 
@@ -363,7 +477,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 6);
+        assert_eq!(migrations.len(), 7);
         Ok(())
     }
 

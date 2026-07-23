@@ -31,6 +31,14 @@ pub fn estimate_tool_output_tokens(content: &[ContentBlock]) -> i64 {
     saturating_token_sum(content.iter().map(estimate_content_block_tokens))
 }
 
+/// Estimates image tokens from pixel dimensions using the version-1 bounded patch model.
+#[must_use]
+pub fn estimate_image_tokens_from_dimensions(width_px: usize, height_px: usize) -> i64 {
+    let width = width_px.div_ceil(IMAGE_PATCH_EDGE_PX);
+    let height = height_px.div_ceil(IMAGE_PATCH_EDGE_PX);
+    bounded_tokens(width.saturating_mul(height).min(MAX_IMAGE_PATCHES))
+}
+
 #[must_use]
 pub fn slice_text_by_estimated_tokens(text: &str, max_tokens: usize) -> String {
     if estimate_text_tokens(text) <= max_tokens {
@@ -82,9 +90,7 @@ fn estimate_image_tokens(encoded: &str) -> i64 {
     let Ok(size) = imagesize::blob_size(&bytes) else {
         return 0;
     };
-    let width = size.width.div_ceil(IMAGE_PATCH_EDGE_PX);
-    let height = size.height.div_ceil(IMAGE_PATCH_EDGE_PX);
-    bounded_tokens(width.saturating_mul(height).min(MAX_IMAGE_PATCHES))
+    estimate_image_tokens_from_dimensions(size.width, size.height)
 }
 
 fn bounded_tokens(tokens: usize) -> i64 {
@@ -104,8 +110,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        estimate_text_tokens, estimate_tool_input_tokens, estimate_tool_output_tokens,
-        saturating_token_sum,
+        estimate_image_tokens_from_dimensions, estimate_text_tokens, estimate_tool_input_tokens,
+        estimate_tool_output_tokens, saturating_token_sum,
     };
 
     fn png_header(width: u32, height: u32) -> String {
@@ -157,6 +163,11 @@ mod tests {
         let image = ContentBlock::image(png_header(2048, 2048), "image/png");
 
         assert_eq!(estimate_tool_output_tokens(&[image]), 1536);
+    }
+
+    #[test]
+    fn standard_screenshot_dimensions_reach_the_patch_cap() {
+        assert_eq!(estimate_image_tokens_from_dimensions(1920, 1080), 1536);
     }
 
     #[test]

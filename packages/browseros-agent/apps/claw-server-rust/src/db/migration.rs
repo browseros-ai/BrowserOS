@@ -13,7 +13,117 @@ impl MigratorTrait for Migrator {
             Box::new(m0004_atomic_recording_payloads::Migration),
             Box::new(m0005_reclassify_task_status::Migration),
             Box::new(m0006_add_tool_token_estimates::Migration),
+            Box::new(m0007_add_session_efficiency_stats::Migration),
         ]
+    }
+}
+
+mod m0007_add_session_efficiency_stats {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0007_add_session_efficiency_stats"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .create_table(
+                    Table::create()
+                        .table(SessionEfficiencyStats::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::SessionId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::EndedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::DispatchCount)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::ActiveDurationMs)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::ToolInputTokenEstimate)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::ToolOutputTokenEstimate)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::ScreenshotBaselineTokenEstimate)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::EfficiencyEstimatorVersion)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SessionEfficiencyStats::ComputedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("session_efficiency_stats_ended_at_idx")
+                        .table(SessionEfficiencyStats::Table)
+                        .col(SessionEfficiencyStats::EndedAt)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(SessionEfficiencyStats::Table)
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum SessionEfficiencyStats {
+        Table,
+        SessionId,
+        EndedAt,
+        DispatchCount,
+        ActiveDurationMs,
+        ToolInputTokenEstimate,
+        ToolOutputTokenEstimate,
+        ScreenshotBaselineTokenEstimate,
+        EfficiencyEstimatorVersion,
+        ComputedAt,
     }
 }
 
