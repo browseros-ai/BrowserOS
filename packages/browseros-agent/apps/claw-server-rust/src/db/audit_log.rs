@@ -15,8 +15,8 @@ use browseros_mcp::token_estimate::estimate_tool_output_tokens;
 use rmcp::model::ContentBlock;
 use sea_orm::{
     ActiveValue::{NotSet, Set},
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, Statement, TransactionTrait,
     sea_query::{Condition, Expr, ExprTrait, Func, OnConflict},
 };
 use serde::{Deserialize, Serialize};
@@ -1194,6 +1194,27 @@ mod tests {
         audit.reclaim_disk().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn retention_includes_sessions_without_dispatches() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("c3", "agent-c", "agent", "Agent", "cli", "1.0")
+            .await?;
+
+        let future = crate::clock::now_epoch_ms() + 1_000_000;
+        assert_eq!(
+            audit.sessions_older_than(future).await?,
+            vec!["c3".to_string()]
+        );
+
+        let counts = audit.delete_sessions(&["c3".to_string()]).await?;
+        assert_eq!(counts.session_starts, 1);
+        assert!(audit.get_task_summary("c3").await?.is_none());
+        assert!(audit.sessions_older_than(future).await?.is_empty());
+        Ok(())
+    }
 }
 
 /// Row counts removed by an audit-retention delete.
@@ -1205,18 +1226,33 @@ pub struct AuditDeleteCounts {
     pub tasks: u64,
 }
 
+#[derive(FromQueryResult)]
+struct SessionIdRow {
+    session_id: String,
+}
+
 impl AuditLog {
-    /// Session ids whose most recent tool dispatch is older than `cutoff` (unix
-    /// millis): `GROUP BY session_id HAVING max(created_at) < cutoff`.
+    /// Session ids whose most recent activity is older than `cutoff` (unix
+    /// millis). "Activity" spans dispatches AND lifecycle events, so a session
+    /// that only started/ended without any tool dispatch is still swept once it
+    /// ages out. The UNION-then-GROUP BY has no query-builder form, so it uses a
+    /// bound raw statement (as the recording-stream join does).
     pub async fn sessions_older_than(&self, cutoff: i64) -> AppResult<Vec<String>> {
-        Ok(ToolDispatches::find()
-            .select_only()
-            .column(tool_dispatches::Column::SessionId)
-            .group_by(tool_dispatches::Column::SessionId)
-            .having(Expr::col(tool_dispatches::Column::CreatedAt).max().lt(cutoff))
-            .into_tuple::<String>()
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT session_id FROM (\
+               SELECT session_id, created_at FROM tool_dispatches \
+               UNION ALL SELECT session_id, created_at FROM agent_session_starts \
+               UNION ALL SELECT session_id, created_at FROM agent_session_ends\
+             ) GROUP BY session_id HAVING max(created_at) < ?",
+            [cutoff.into()],
+        );
+        Ok(SessionIdRow::find_by_statement(statement)
             .all(self.db.connection())
-            .await?)
+            .await?
+            .into_iter()
+            .map(|row| row.session_id)
+            .collect())
     }
 
     /// `(session_id, dispatch_id)` for every dispatch in `session_ids` carrying
