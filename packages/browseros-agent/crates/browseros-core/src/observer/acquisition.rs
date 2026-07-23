@@ -12,7 +12,7 @@ use super::{
 use crate::{
     CoreError, FrameId, ProtocolSession,
     frames::FrameTarget,
-    snapshot::{AxNode, DocumentId},
+    snapshot::{AxNode, DocumentId, IframeStitch},
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
@@ -70,10 +70,17 @@ impl SnapshotBudget {
 /// Immutable Chrome inputs for one frame. Rendering receives this only after acquisition
 /// completes, so no concurrent future can observe or mutate the capture's `RefMap`.
 pub(super) struct AcquiredFrame {
+    pub(super) frame_id: Option<FrameId>,
     pub(super) target: FrameTarget,
     pub(super) nodes: Vec<AxNode>,
     pub(super) cursor_hits: HashMap<i64, Vec<String>>,
     pub(super) document_id: Option<DocumentId>,
+}
+
+pub(super) struct AcquiredChild {
+    pub(super) stitch: IframeStitch,
+    pub(super) result: Result<AcquiredFrame, CoreError>,
+    stitch_index: usize,
 }
 
 impl Observer {
@@ -95,6 +102,49 @@ impl Observer {
         )
         .await
     }
+
+    pub(super) async fn acquire_child_frames(
+        &self,
+        parent: &FrameTarget,
+        stitches: &[IframeStitch],
+        visited: &[FrameId],
+        context: &CaptureContext,
+    ) -> Vec<AcquiredChild> {
+        let mut pending = FuturesUnordered::new();
+        for (stitch_index, stitch) in stitches.iter().cloned().enumerate() {
+            let parent_session = parent.session.clone();
+            let visited = visited.to_vec();
+            let context = context.clone();
+            pending.push(async move {
+                let child_frame_id = resolve_child_frame_id(
+                    &parent_session,
+                    stitch.backend_node_id,
+                    &context.budget,
+                )
+                .await?;
+                if visited.contains(&child_frame_id) {
+                    return None;
+                }
+                let result = self.acquire_frame(Some(child_frame_id), &context).await;
+                Some(AcquiredChild {
+                    stitch,
+                    result,
+                    stitch_index,
+                })
+            });
+        }
+
+        let mut acquired = Vec::with_capacity(stitches.len());
+        while let Some(child) = pending.next().await {
+            if let Some(child) = child {
+                acquired.push(child);
+            }
+        }
+        // Acquisition completion order is intentionally unordered. Re-establish the renderer's
+        // stitch order here so assembly can reverse it exactly as the serialized implementation did.
+        acquired.sort_by_key(|child| child.stitch_index);
+        acquired
+    }
 }
 
 async fn acquire_frame_data(
@@ -104,6 +154,7 @@ async fn acquire_frame_data(
     frame_documents: &HashMap<Option<FrameId>, DocumentId>,
     budget: &SnapshotBudget,
 ) -> Result<AcquiredFrame, CoreError> {
+    let acquired_frame_id = frame_id.clone();
     let ax_tree = budget.send::<AxTreeResult>(
         &target.session,
         "Accessibility.getFullAXTree",
@@ -116,11 +167,33 @@ async fn acquire_frame_data(
     let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
 
     Ok(AcquiredFrame {
+        frame_id: acquired_frame_id,
         target,
         nodes: nodes?.nodes,
         cursor_hits: cursor_hits.unwrap_or_default(),
         document_id,
     })
+}
+
+async fn resolve_child_frame_id(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+    budget: &SnapshotBudget,
+) -> Option<FrameId> {
+    let described = budget
+        .send::<DescribeNodeResult>(
+            session,
+            "DOM.describeNode",
+            json!({ "backendNodeId": backend_node_id, "depth": 1 }),
+        )
+        .await
+        .ok()?;
+    described
+        .node
+        .content_document
+        .and_then(|node| node.frame_id)
+        .or(described.node.frame_id)
+        .map(FrameId)
 }
 
 async fn stable_document_id_for_frame(

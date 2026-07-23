@@ -180,7 +180,7 @@ impl Observer {
     fn capture_frame(
         &self,
         frame_id: Option<FrameId>,
-        mut refs: RefMap,
+        refs: RefMap,
         base_depth: usize,
         mut visited: Vec<FrameId>,
         context: CaptureContext,
@@ -193,12 +193,28 @@ impl Observer {
                 visited.push(frame_id.clone());
             }
 
+            let acquired = self.acquire_frame(frame_id, &context).await?;
+            self.assemble_acquired_frame(acquired, refs, base_depth, visited, context)
+                .await
+        })
+    }
+
+    fn assemble_acquired_frame(
+        &self,
+        acquired: AcquiredFrame,
+        mut refs: RefMap,
+        base_depth: usize,
+        visited: Vec<FrameId>,
+        context: CaptureContext,
+    ) -> BoxFuture<'_, Result<(String, RefMap), CoreError>> {
+        Box::pin(async move {
             let AcquiredFrame {
+                frame_id,
                 target,
                 nodes,
                 cursor_hits,
                 document_id,
-            } = self.acquire_frame(frame_id.clone(), &context).await?;
+            } = acquired;
             let mut render_opts = RenderOptions {
                 refs: &mut refs,
                 frame_id: frame_id.clone(),
@@ -219,19 +235,27 @@ impl Observer {
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
             };
-            for stitch in rendered.iframes.iter().rev() {
-                let child_frame_id =
-                    resolve_child_frame_id(&target.session, stitch.backend_node_id).await;
-                let Some(child_frame_id) = child_frame_id else {
+            let children = self
+                .acquire_child_frames(&target, &rendered.iframes, &visited, &context)
+                .await;
+            // `acquire_child_frames` restores original stitch order after unordered completion.
+            // Reverse it here because refs and line insertion have historically followed reverse
+            // iframe order; changing that would renumber stable public refs.
+            for child in children.into_iter().rev() {
+                let refs_before_child = refs.clone();
+                let Ok(acquired_child) = child.result else {
                     continue;
                 };
-                let refs_before_child = refs.clone();
+                let mut child_visited = visited.clone();
+                if let Some(child_frame_id) = &acquired_child.frame_id {
+                    child_visited.push(child_frame_id.clone());
+                }
                 let child_result = self
-                    .capture_frame(
-                        Some(child_frame_id),
+                    .assemble_acquired_frame(
+                        acquired_child,
                         refs.clone(),
-                        stitch.depth + 1,
-                        visited.clone(),
+                        child.stitch.depth + 1,
+                        child_visited,
                         context.clone(),
                     )
                     .await;
@@ -246,7 +270,7 @@ impl Observer {
                     }
                 };
                 if !child_text.is_empty() {
-                    lines.insert(stitch.line_index + 1, child_text);
+                    lines.insert(child.stitch.line_index + 1, child_text);
                 }
             }
             text = lines.join("\n");
@@ -474,25 +498,6 @@ async fn fetch_ax_tree(
     Ok(result.nodes)
 }
 
-async fn resolve_child_frame_id(
-    session: &ProtocolSession,
-    backend_node_id: i64,
-) -> Option<FrameId> {
-    let described = session
-        .send::<_, DescribeNodeResult>(
-            "DOM.describeNode",
-            json!({ "backendNodeId": backend_node_id, "depth": 1 }),
-        )
-        .await
-        .ok()?;
-    described
-        .node
-        .content_document
-        .and_then(|node| node.frame_id)
-        .or(described.node.frame_id)
-        .map(FrameId)
-}
-
 fn known_main_frame_changed(before: &MainFrameState, after: &MainFrameState) -> bool {
     if known_urls_differ(&before.url, &after.url) {
         return true;
@@ -595,9 +600,12 @@ mod tests {
     use serde_json::{Value, json};
     use std::{
         collections::HashSet,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        },
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{Notify, Semaphore, broadcast};
 
     struct MockConnection {
         live: HashSet<i64>,
@@ -890,6 +898,314 @@ mod tests {
         }
     }
 
+    struct SiblingConnection {
+        started: AtomicU8,
+        started_changed: Notify,
+        gates: [Arc<Semaphore>; 2],
+        completions: Mutex<Vec<usize>>,
+        completed: Notify,
+        fail_second_child: bool,
+        cycle_first_child: AtomicBool,
+        root_ax_reads: AtomicUsize,
+        main_loader: Mutex<String>,
+    }
+
+    impl SiblingConnection {
+        fn new(fail_second_child: bool) -> Self {
+            Self {
+                started: AtomicU8::new(0),
+                started_changed: Notify::new(),
+                gates: [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))],
+                completions: Mutex::new(Vec::new()),
+                completed: Notify::new(),
+                fail_second_child,
+                cycle_first_child: AtomicBool::new(false),
+                root_ax_reads: AtomicUsize::new(0),
+                main_loader: Mutex::new("main-loader".to_string()),
+            }
+        }
+
+        async fn wait_for_both_children(&self) {
+            loop {
+                let notified = self.started_changed.notified();
+                if self.started.load(Ordering::SeqCst) == 0b11 {
+                    return;
+                }
+                notified.await;
+            }
+        }
+
+        async fn wait_for_completions(&self, target: usize) {
+            loop {
+                let notified = self.completed.notified();
+                if self
+                    .completions
+                    .lock()
+                    .map(|completions| completions.len())
+                    .unwrap_or_default()
+                    >= target
+                {
+                    return;
+                }
+                notified.await;
+            }
+        }
+    }
+
+    impl CdpConnection for SiblingConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Browser.getTabs" => Ok(json!({
+                        "tabs": [tab_value("https://example.com/")]
+                    })),
+                    "Browser.getTabInfo" => Ok(json!({
+                        "tab": tab_value("https://example.com/")
+                    })),
+                    "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
+                    "Page.enable"
+                    | "DOM.enable"
+                    | "Runtime.enable"
+                    | "Accessibility.enable"
+                    | "Runtime.runIfWaitingForDebugger"
+                    | "Target.setAutoAttach" => Ok(json!({})),
+                    "Page.getFrameTree" => {
+                        let loader_id = self
+                            .main_loader
+                            .lock()
+                            .map(|loader| loader.clone())
+                            .unwrap_or_else(|_error| "main-loader".to_string());
+                        Ok(json!({
+                            "frameTree": {
+                                "frame": {
+                                    "id": "main",
+                                    "loaderId": loader_id,
+                                    "url": "https://example.com/"
+                                },
+                                "childFrames": [
+                                    {
+                                        "frame": {
+                                            "id": "child-a",
+                                            "parentId": "main",
+                                            "loaderId": "loader-a",
+                                            "url": "https://example.com/a"
+                                        }
+                                    },
+                                    {
+                                        "frame": {
+                                            "id": "child-b",
+                                            "parentId": "main",
+                                            "loaderId": "loader-b",
+                                            "url": "https://example.com/b"
+                                        }
+                                    }
+                                ]
+                            }
+                        }))
+                    }
+                    "Accessibility.getFullAXTree" => {
+                        let frame_id = params.get("frameId").and_then(Value::as_str);
+                        let Some(index) = (match frame_id {
+                            Some("child-a") => Some(0),
+                            Some("child-b") => Some(1),
+                            _ => None,
+                        }) else {
+                            self.root_ax_reads.fetch_add(1, Ordering::SeqCst);
+                            return Ok(json!({
+                                "nodes": [
+                                    root_with(&["frame-a", "frame-b"]),
+                                    iframe_node("frame-a", 10),
+                                    iframe_node("frame-b", 20)
+                                ]
+                            }));
+                        };
+                        self.started.fetch_or(1 << index, Ordering::SeqCst);
+                        self.started_changed.notify_waiters();
+                        let permit =
+                            self.gates[index]
+                                .clone()
+                                .acquire_owned()
+                                .await
+                                .map_err(|error| CdpError::Protocol {
+                                    code: -1,
+                                    message: error.to_string(),
+                                })?;
+                        permit.forget();
+                        if let Ok(mut completions) = self.completions.lock() {
+                            completions.push(index);
+                        }
+                        self.completed.notify_waiters();
+                        if index == 1 && self.fail_second_child {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "child capture failed".to_string(),
+                            });
+                        }
+                        if index == 0 && self.cycle_first_child.load(Ordering::SeqCst) {
+                            return Ok(json!({
+                                "nodes": [
+                                    root_with(&["cycle-a"]),
+                                    iframe_node("cycle-a", 10)
+                                ]
+                            }));
+                        }
+                        let (node_id, name, backend_id) = if index == 0 {
+                            ("button-a", "A", 101)
+                        } else {
+                            ("button-b", "B", 201)
+                        };
+                        Ok(json!({
+                            "nodes": [
+                                root_with(&[node_id]),
+                                ax_button(node_id, name, backend_id)
+                            ]
+                        }))
+                    }
+                    "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
+                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
+                    "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    "DOM.describeNode" => {
+                        let frame_id = match params.get("backendNodeId").and_then(Value::as_i64) {
+                            Some(10) => Some("child-a"),
+                            Some(20) => Some("child-b"),
+                            _ => None,
+                        };
+                        Ok(json!({
+                            "node": {
+                                "contentDocument": {
+                                    "frameId": frame_id
+                                }
+                            }
+                        }))
+                    }
+                    _ => Ok(json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    struct DepthConnection {
+        max_child_requested: AtomicUsize,
+    }
+
+    impl CdpConnection for DepthConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Browser.getTabs" => Ok(json!({
+                        "tabs": [tab_value("https://example.com/")]
+                    })),
+                    "Browser.getTabInfo" => Ok(json!({
+                        "tab": tab_value("https://example.com/")
+                    })),
+                    "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
+                    "Page.enable"
+                    | "DOM.enable"
+                    | "Runtime.enable"
+                    | "Accessibility.enable"
+                    | "Runtime.runIfWaitingForDebugger"
+                    | "Target.setAutoAttach" => Ok(json!({})),
+                    "Page.getFrameTree" => Ok(json!({
+                        "frameTree": depth_frame_tree()
+                    })),
+                    "Accessibility.getFullAXTree" => {
+                        let depth = params
+                            .get("frameId")
+                            .and_then(Value::as_str)
+                            .and_then(|frame_id| frame_id.strip_prefix("child-"))
+                            .and_then(|depth| depth.parse::<usize>().ok());
+                        if let Some(depth) = depth {
+                            self.max_child_requested.fetch_max(depth, Ordering::SeqCst);
+                            return Ok(json!({
+                                "nodes": [
+                                    root_with(&["nested-frame"]),
+                                    iframe_node("nested-frame", 100 + depth as i64)
+                                ]
+                            }));
+                        }
+                        Ok(json!({
+                            "nodes": [
+                                root_with(&["nested-frame"]),
+                                iframe_node("nested-frame", 100)
+                            ]
+                        }))
+                    }
+                    "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
+                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
+                    "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    "DOM.describeNode" => {
+                        let frame_id = params
+                            .get("backendNodeId")
+                            .and_then(Value::as_i64)
+                            .map(|backend_id| format!("child-{}", backend_id - 99));
+                        Ok(json!({
+                            "node": {
+                                "contentDocument": {
+                                    "frameId": frame_id
+                                }
+                            }
+                        }))
+                    }
+                    _ => Ok(json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
     async fn observer_harness(
         state: HarnessState,
     ) -> Result<(Arc<HarnessConnection>, Arc<super::Observer>), CoreError> {
@@ -905,6 +1221,28 @@ mod tests {
         Ok((connection, observer))
     }
 
+    async fn sibling_observer(
+        connection: Arc<SiblingConnection>,
+    ) -> Result<Arc<super::Observer>, CoreError> {
+        let session = BrowserSession::new(connection, BrowserSessionHooks::default());
+        let pages = session.pages.list().await?;
+        let Some(page) = pages.first() else {
+            return Err(CoreError::Message("missing test page".to_string()));
+        };
+        Ok(session.observe(page.page_id.clone()).await)
+    }
+
+    async fn depth_observer(
+        connection: Arc<DepthConnection>,
+    ) -> Result<Arc<super::Observer>, CoreError> {
+        let session = BrowserSession::new(connection, BrowserSessionHooks::default());
+        let pages = session.pages.list().await?;
+        let Some(page) = pages.first() else {
+            return Err(CoreError::Message("missing test page".to_string()));
+        };
+        Ok(session.observe(page.page_id.clone()).await)
+    }
+
     fn tab_value(url: &str) -> Value {
         json!({
             "tabId": 101,
@@ -918,6 +1256,39 @@ mod tests {
             "isHidden": false,
             "windowId": 1
         })
+    }
+
+    fn depth_frame_tree() -> Value {
+        let mut child = None;
+        for depth in (1..=7).rev() {
+            let mut node = json!({
+                "frame": {
+                    "id": format!("child-{depth}"),
+                    "parentId": if depth == 1 {
+                        "main".to_string()
+                    } else {
+                        format!("child-{}", depth - 1)
+                    },
+                    "loaderId": format!("loader-{depth}"),
+                    "url": format!("https://example.com/{depth}")
+                }
+            });
+            if let Some(nested) = child {
+                node["childFrames"] = json!([nested]);
+            }
+            child = Some(node);
+        }
+        let mut root = json!({
+            "frame": {
+                "id": "main",
+                "loaderId": "main-loader",
+                "url": "https://example.com/"
+            }
+        });
+        if let Some(child) = child {
+            root["childFrames"] = json!([child]);
+        }
+        root
     }
 
     fn frame_tree_value(state: &HarnessState) -> Value {
@@ -948,6 +1319,15 @@ mod tests {
             node_id: "1".to_string(),
             role: Some(AxValue::role("RootWebArea")),
             child_ids: Some(children.iter().map(|child| (*child).to_string()).collect()),
+            ..AxNode::default()
+        }
+    }
+
+    fn iframe_node(node_id: &str, backend_id: i64) -> AxNode {
+        AxNode {
+            node_id: node_id.to_string(),
+            role: Some(AxValue::role("Iframe")),
+            backend_dom_node_id: Some(backend_id),
             ..AxNode::default()
         }
     }
@@ -1110,6 +1490,152 @@ mod tests {
             ]
             .join("\n")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_acquires_siblings_out_of_order_but_assembles_reverse_stitch_order()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        let observer = sibling_observer(connection.clone()).await?;
+        let task_observer = observer.clone();
+        let task = tokio::spawn(async move { task_observer.snapshot().await });
+
+        let overlap = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await;
+        if overlap.is_err() {
+            connection.gates[0].add_permits(1);
+            connection.gates[1].add_permits(1);
+            let _result = task
+                .await
+                .map_err(|error| CoreError::Message(error.to_string()))?;
+            return Err(CoreError::Message(
+                "sibling acquisition did not overlap".to_string(),
+            ));
+        }
+        connection.gates[1].add_permits(1);
+        connection.wait_for_completions(1).await;
+        connection.gates[0].add_permits(1);
+        let first = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        assert_eq!(
+            first.text,
+            [
+                "- iframe",
+                "  - button \"A\" [ref=e2]",
+                "- iframe",
+                "  - button \"B\" [ref=e1]"
+            ]
+            .join("\n")
+        );
+        connection.gates[0].add_permits(1);
+        connection.gates[1].add_permits(1);
+        let second = observer.snapshot().await?;
+        assert_eq!(second.text, first.text);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_failed_child_does_not_consume_later_sibling_refs() -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(true));
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        connection.gates[1].add_permits(1);
+        connection.gates[0].add_permits(1);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        assert_eq!(
+            snapshot.text,
+            ["- iframe", "  - button \"A\" [ref=e1]", "- iframe"].join("\n")
+        );
+        assert_eq!(
+            snapshot
+                .refs
+                .get(&crate::Ref("e1".to_string()))
+                .map(|entry| entry.backend_node_id),
+            Some(101)
+        );
+        assert!(snapshot.refs.get(&crate::Ref("e2".to_string())).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_navigation_during_sibling_acquisition_retries_capture()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        if let Ok(mut loader) = connection.main_loader.lock() {
+            *loader = "main-loader-2".to_string();
+        }
+        connection.gates[0].add_permits(2);
+        connection.gates[1].add_permits(2);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        assert_eq!(connection.root_ax_reads.load(Ordering::SeqCst), 2);
+        assert!(snapshot.text.contains("button \"A\" [ref=e2]"));
+        assert!(snapshot.text.contains("button \"B\" [ref=e1]"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_skips_a_nested_frame_cycle() -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        connection.cycle_first_child.store(true, Ordering::SeqCst);
+        let observer = sibling_observer(connection.clone()).await?;
+        connection.gates[0].add_permits(1);
+        connection.gates[1].add_permits(1);
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            [
+                "- iframe",
+                "  - iframe",
+                "- iframe",
+                "  - button \"B\" [ref=e1]"
+            ]
+            .join("\n")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_nested_frames_stop_at_five_levels() -> Result<(), CoreError> {
+        let connection = Arc::new(DepthConnection {
+            max_child_requested: AtomicUsize::new(0),
+        });
+        let observer = depth_observer(connection.clone()).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(connection.max_child_requested.load(Ordering::SeqCst), 5);
+        assert_eq!(snapshot.text.lines().count(), 6);
+        assert_eq!(snapshot.text.lines().last(), Some("          - iframe"));
         Ok(())
     }
 
