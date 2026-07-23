@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index 6a3a8ba7d7997..12cd7a001c5e6 100644
+index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..f8b8cb3572a382aa657712ce21c41373b37727af 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 @@ -21,6 +21,7 @@
@@ -27,10 +27,96 @@ index 6a3a8ba7d7997..12cd7a001c5e6 100644
  #include "components/infobars/content/content_infobar_manager.h"
  #include "components/infobars/core/infobar.h"
  #include "components/infobars/core/infobar_delegate.h"
-@@ -2121,6 +2125,93 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+@@ -89,6 +93,7 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
+ #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+ #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
+@@ -2121,6 +2126,171 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
    SendCommandSync("Target.getTargets");
    EXPECT_EQ(2u, result()->FindList("targetInfos")->size());
  }
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserCreateWindowRejectsHiddenWithoutSideEffects) {
++  AttachToBrowserTarget();
++  const size_t initial_browser_count = chrome::GetTotalBrowserCount();
++
++  SendCommandSync(
++      "Browser.createWindow",
++      base::DictValue().Set("url", "about:blank").Set("hidden", true));
++
++  ASSERT_TRUE(error());
++  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
++  EXPECT_EQ("Hidden windows are no longer supported.",
++            *error()->FindString("message"));
++  EXPECT_EQ(initial_browser_count, chrome::GetTotalBrowserCount());
++}
++
++IN_PROC_BROWSER_TEST_F(
++    DevToolsProtocolTest,
++    BrowserSetWindowVisibilityRejectsHideWithoutMutation) {
++  AttachToBrowserTarget();
++  ASSERT_TRUE(browser()->window()->IsVisible());
++
++  SendCommandSync(
++      "Browser.setWindowVisibility",
++      base::DictValue()
++          .Set("windowId", browser()->session_id().id())
++          .Set("visible", false));
++
++  ASSERT_TRUE(error());
++  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
++  EXPECT_EQ("Hidden windows are no longer supported.",
++            *error()->FindString("message"));
++  EXPECT_TRUE(browser()->window()->IsVisible());
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserSetWindowVisibilityShowsInPlace) {
++  AttachToBrowserTarget();
++  const int window_id = browser()->session_id().id();
++
++  const base::DictValue* result = SendCommandSync(
++      "Browser.setWindowVisibility",
++      base::DictValue()
++          .Set("windowId", window_id)
++          .Set("visible", true)
++          .Set("activate", false));
++
++  ASSERT_TRUE(result);
++  ASSERT_FALSE(error());
++  EXPECT_THAT(result->FindBool("replaced"), testing::Optional(false));
++  EXPECT_THAT(result->FindInt("previousWindowId"),
++              testing::Optional(window_id));
++  const base::DictValue* window = result->FindDict("window");
++  ASSERT_TRUE(window);
++  EXPECT_THAT(window->FindInt("windowId"), testing::Optional(window_id));
++  EXPECT_THAT(window->FindBool("isVisible"), testing::Optional(true));
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserGetTabsAcceptsRetiredIncludeHiddenFlag) {
++  AttachToBrowserTarget();
++
++  const base::DictValue* result = SendCommandSync(
++      "Browser.getTabs", base::DictValue().Set("includeHidden", true));
++
++  ASSERT_TRUE(result);
++  ASSERT_FALSE(error());
++  const base::ListValue* tabs = result->FindList("tabs");
++  ASSERT_TRUE(tabs);
++  ASSERT_FALSE(tabs->empty());
++  for (const auto& value : *tabs) {
++    const base::DictValue& tab = value.GetDict();
++    EXPECT_THAT(tab.FindBool("isHidden"), testing::Optional(false));
++    EXPECT_TRUE(tab.FindInt("windowId").has_value());
++    EXPECT_TRUE(tab.FindInt("index").has_value());
++  }
++}
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 +                       CreateTabGroupAcceptsUnsortedTabIds) {
