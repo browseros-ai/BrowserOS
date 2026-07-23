@@ -15,6 +15,7 @@ import {
 import {
   type BuildTabViewInput,
   buildTabView,
+  projectGlobalTimeToTab,
   tabSeekForFrame,
 } from './tab-view'
 
@@ -25,6 +26,7 @@ function frame(
 ): ReplayFrame {
   return {
     t,
+    cameraT: t,
     kind: 'action',
     verb: 'read',
     node: 'test',
@@ -138,6 +140,32 @@ describe('buildTabView', () => {
     ])
     expect(view.frames.map(({ t }) => t)).toEqual([0, 4])
     expect(view.totalSeconds).toBe(5)
+    expect(view.globalStartSeconds).toBe(1)
+    expect(view.globalEndSeconds).toBe(6)
+  })
+
+  it('projects absolute session time onto the tab clock and clamps both boundaries', () => {
+    const input = makeInput({
+      frames: [frame(12, 1)],
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-a',
+            firstEventAt: 1_010_000,
+            lastEventAt: 1_015_000,
+          },
+        ]),
+      ],
+      eventsForTab: () => [
+        event(1_010_000, 'document-a'),
+        event(1_015_000, 'document-a', 1, 3),
+      ],
+    })
+    const view = buildTabView(input, 1)
+
+    expect(projectGlobalTimeToTab(view, 8)).toBe(0)
+    expect(projectGlobalTimeToTab(view, 12)).toBe(2)
+    expect(projectGlobalTimeToTab(view, 20)).toBe(5)
   })
 
   it('keeps a merged tab event array stable across audit polling', () => {

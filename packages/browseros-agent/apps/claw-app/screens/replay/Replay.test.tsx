@@ -156,6 +156,7 @@ const events: ReplayEvent[] = [
 const frames: ReplayFrame[] = [
   {
     t: 1,
+    cameraT: 1,
     kind: 'action',
     verb: 'read',
     node: 'A',
@@ -166,6 +167,7 @@ const frames: ReplayFrame[] = [
   },
   {
     t: 12,
+    cameraT: 12,
     kind: 'action',
     verb: 'click',
     node: 'B',
