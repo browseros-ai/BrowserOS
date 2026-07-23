@@ -65,7 +65,7 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'tabs: new background hidden page does not become active',
+    name: 'tabs: background page stays inactive and hidden is rejected',
     async run(ctx) {
       const focused = await ctx.openPage(ctx.fixture('/form.html'))
       await waitUntil(async () => {
@@ -78,17 +78,24 @@ export const tabsCases: ContractCase[] = [
         action: 'new',
         url: ctx.fixture('/links.html'),
         background: true,
-        hidden: true,
       })
-      expectOk(result, 'tabs new background+hidden')
+      expectOk(result, 'tabs new background')
       const opened = parsePageId(result)
       const active = expectOk(
         await ctx.mcp.callTool('tabs', { action: 'active' }),
       )
       if (active.includes(`[${opened}]`)) {
-        throw new Error(`hidden background page became active: ${active}`)
+        throw new Error(`background page became active: ${active}`)
       }
-      // Track for cleanup — openPage was bypassed to control background/hidden.
+      expectError(
+        await ctx.mcp.callTool('tabs', {
+          action: 'new',
+          url: ctx.fixture('/links.html'),
+          hidden: true,
+        }),
+        'tabs new hidden',
+      )
+      // Track for cleanup — openPage was bypassed to control background creation.
       await ctx.mcp.callTool('tabs', { action: 'close', page: opened })
       await ctx.mcp.callTool('tabs', { action: 'close', page: focused })
     },
@@ -272,10 +279,10 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'windows: create opens a hidden window',
+    name: 'windows: create opens an ordinary window',
     async run(ctx) {
       const created = expectOk(
-        await ctx.mcp.callTool('windows', { action: 'create', hidden: true }),
+        await ctx.mcp.callTool('windows', { action: 'create' }),
         'windows create',
       )
       const windowId = Number(created.match(/\b(\d+)\b/)?.[1])
@@ -284,7 +291,7 @@ export const tabsCases: ContractCase[] = [
       }
       expectOk(
         await ctx.mcp.callTool('windows', { action: 'close', windowId }),
-        'windows close hidden',
+        'windows close',
       )
     },
   },
@@ -304,32 +311,22 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'windows: set_visibility toggles a window',
+    name: 'windows: retired hidden controls are rejected',
     async run(ctx) {
-      const created = expectOk(
-        await ctx.mcp.callTool('windows', { action: 'create' }),
+      expectError(
+        await ctx.mcp.callTool('windows', {
+          action: 'create',
+          hidden: true,
+        }),
+        'windows create hidden',
       )
-      let windowId = Number(created.match(/\b(\d+)\b/)?.[1])
-      const hidden = await ctx.mcp.callTool('windows', {
-        action: 'set_visibility',
-        windowId,
-        visible: false,
-      })
-      expectOk(hidden, 'windows hide')
-      // Some browser versions recreate a window while changing its visibility.
-      const newId = textOf(hidden).match(/new window id (\d+)/)?.[1]
-      if (newId) windowId = Number(newId)
-      const shown = await ctx.mcp.callTool('windows', {
-        action: 'set_visibility',
-        windowId,
-        visible: true,
-      })
-      expectOk(shown, 'windows show')
-      const shownId = textOf(shown).match(/new window id (\d+)/)?.[1]
-      if (shownId) windowId = Number(shownId)
-      expectOk(
-        await ctx.mcp.callTool('windows', { action: 'close', windowId }),
-        'windows close after visibility changes',
+      expectError(
+        await ctx.mcp.callTool('windows', {
+          action: 'set_visibility',
+          windowId: 99_999,
+          visible: false,
+        }),
+        'windows set_visibility',
       )
     },
   },
