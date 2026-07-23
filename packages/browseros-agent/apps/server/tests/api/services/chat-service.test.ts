@@ -796,6 +796,183 @@ describe('ChatService chat/agent mode switches', () => {
   })
 })
 
+describe('ChatService single-rebuild reconciliation', () => {
+  // When several session inputs change in the same turn, the session must be
+  // rebuilt exactly once (one AiSdkAgent.create beyond the initial build), and
+  // every applicable change notice must still reach the model.
+
+  beforeEach(() => {
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'openai',
+      model: 'gpt-5',
+      apiKey: 'test-key',
+    }))
+  })
+
+  function makeService(getKlavis: () => KlavisProxyStatus) {
+    const browser = {
+      resolveTabIds: mock(
+        async (tabIds: number[]) =>
+          new Map(tabIds.map((tabId) => [tabId, tabId + 100])),
+      ),
+      closePage: mock(async () => {}),
+    }
+    return new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub(getKlavis) as never,
+      browser: browser as never,
+      registry: {} as never,
+    })
+  }
+
+  function captureStreamPrompt() {
+    const captured: { prompt?: MockMessage[] } = {}
+    streamResponseHandler = async ({ onFinish, uiMessages }) => {
+      captured.prompt = uiMessages
+      await onFinish({ messages: uiMessages ?? [] })
+      return new Response('ok')
+    }
+    return captured
+  }
+
+  it('rebuilds once and emits both notices when MCP servers and mode change together', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    const captured = captureStreamPrompt()
+
+    let klavis: KlavisProxyStatus = { state: 'connecting' }
+    const service = makeService(() => klavis)
+    const before = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const base = {
+      conversationId,
+      isScheduledTask: false,
+      origin: 'newtab',
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+        enabledMcpServers: ['slack'],
+      },
+    }
+
+    await service.processMessage(
+      { ...base, message: 'hi', mode: 'chat' } as never,
+      new AbortController().signal,
+    )
+    agentToReturn = secondAgent
+    klavis = { state: 'ready', toolCount: 0 }
+    await service.processMessage(
+      { ...base, message: 'now act', mode: 'agent' } as never,
+      new AbortController().signal,
+    )
+
+    // One initial build + exactly one rebuild covering both changes.
+    expect(createAgentSpy.mock.calls.length - before).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+
+    const text = captured.prompt?.at(-1)?.parts[0]?.text ?? ''
+    expect(text).toContain(
+      'Klavis app integration tools are now available for the following connected apps: slack.',
+    )
+    expect(text).toContain('The user switched to agent mode')
+  })
+
+  it('rebuilds once and emits both notices when workspace and mode change together', async () => {
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    const captured = captureStreamPrompt()
+
+    const service = makeService(() => ({ state: 'stopped' }))
+    const before = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const base = {
+      conversationId,
+      isScheduledTask: false,
+      origin: 'newtab',
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+      },
+    }
+
+    await service.processMessage(
+      { ...base, message: 'hi', mode: 'agent' } as never,
+      new AbortController().signal,
+    )
+    agentToReturn = secondAgent
+    await service.processMessage(
+      {
+        ...base,
+        message: 'restrict me',
+        mode: 'chat',
+        userWorkingDir: '/ws',
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(createAgentSpy.mock.calls.length - before).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+
+    const text = captured.prompt?.at(-1)?.parts[0]?.text ?? ''
+    expect(text).toContain(
+      'The user connected a workspace during this conversation, but read-only chat mode',
+    )
+    expect(text).toContain('The user switched to read-only chat mode')
+  })
+
+  it('keeps the workspace notice when MCP servers also change in the same turn', async () => {
+    // Regression guard for the fix. The previous flag-based flow rebuilt on the
+    // MCP branch first, which restamped session.workingDir and silently dropped
+    // the workspace notice. Reading a pre-rebuild snapshot emits both.
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    const captured = captureStreamPrompt()
+
+    let klavis: KlavisProxyStatus = { state: 'connecting' }
+    const service = makeService(() => klavis)
+    const before = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const base = {
+      conversationId,
+      isScheduledTask: false,
+      origin: 'newtab',
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+        enabledMcpServers: ['slack'],
+      },
+    }
+
+    await service.processMessage(
+      { ...base, message: 'hi', mode: 'agent' } as never,
+      new AbortController().signal,
+    )
+    agentToReturn = secondAgent
+    klavis = { state: 'ready', toolCount: 0 }
+    await service.processMessage(
+      {
+        ...base,
+        message: 'connect a workspace',
+        mode: 'agent',
+        userWorkingDir: '/ws',
+      } as never,
+      new AbortController().signal,
+    )
+
+    // Still a single rebuild for both changes.
+    expect(createAgentSpy.mock.calls.length - before).toBe(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+
+    const text = captured.prompt?.at(-1)?.parts[0]?.text ?? ''
+    expect(text).toContain(
+      'Klavis app integration tools are now available for the following connected apps: slack.',
+    )
+    expect(text).toContain(
+      'The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: /ws',
+    )
+  })
+})
+
 describe('ChatService ACP provider chat history handling', () => {
   // ACP-backed providers (claude-code, codex, acp-custom) run against
   // a persistent acpx session that owns the agent's conversation
