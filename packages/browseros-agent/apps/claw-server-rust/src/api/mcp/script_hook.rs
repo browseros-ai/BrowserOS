@@ -1,49 +1,34 @@
 use crate::{
-    AppState,
-    api::mcp::dispatch::ToolIdentity,
+    api::mcp::dispatch::{ToolCall, ToolIdentity},
+    api::mcp::effects::{ownership_claims, tab_groups},
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
-    ids::{ConvoId, DispatchId},
+    ids::DispatchId,
 };
-use browseros_core::{BrowserSession, PageId};
+use browseros_core::PageId;
 use browseros_mcp::{InnerCallHook, InnerCallRecord};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::sync::Arc;
 use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
-/// It enforces per-primitive ownership (the pipeline's `page_ownership` guard
-/// never sees the pages a script touches) and records each primitive as a child
-/// audit row linked to the script dispatch via `parent_dispatch_id`.
+/// A script drives the shared browser session directly, bypassing the pipeline
+/// guards and effects, so this hook reproduces what those effects would have
+/// done: it enforces per-primitive ownership, records each primitive as a child
+/// audit row linked to the script dispatch, and (on page creation) claims and
+/// groups the page exactly as a `tabs new` would. It holds the script's own
+/// `ToolCall` so it can reuse the effect helpers with the same inputs.
 pub struct ScriptInnerCallHook {
-    state: AppState,
-    browser_session: Option<Arc<BrowserSession>>,
-    ownership_key: ConvoId,
-    agent_id: String,
-    slug: String,
-    agent_label: String,
-    session_id: String,
-    parent_dispatch_id: DispatchId,
+    call: ToolCall,
 }
 
 impl ScriptInnerCallHook {
-    pub fn new(
-        state: AppState,
-        browser_session: Option<Arc<BrowserSession>>,
-        identity: &ToolIdentity,
-        session_id: String,
-        parent_dispatch_id: DispatchId,
-    ) -> Self {
-        Self {
-            state,
-            browser_session,
-            ownership_key: identity.ownership_key.clone(),
-            agent_id: identity.session.convo_id().as_str().to_string(),
-            slug: identity.agent.slug().to_string(),
-            agent_label: identity.agent_label.clone(),
-            session_id,
-            parent_dispatch_id,
-        }
+    #[must_use]
+    pub fn new(call: ToolCall) -> Self {
+        Self { call }
+    }
+
+    fn identity(&self) -> Option<&ToolIdentity> {
+        self.call.identity.as_ref()
     }
 }
 
@@ -53,12 +38,14 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(page) = page else {
                 return Ok(());
             };
+            let Some(identity) = self.identity() else {
+                return Ok(());
+            };
             // Reject pages owned by another conversation. Pages a script creates
-            // itself are unclaimed and stay usable; full guard parity (rejecting
-            // unclaimed pages too) requires claiming script-created pages and is
-            // a follow-up.
-            match self.state.sessions.owner_of_page(&PageId(page)).await {
-                Some(owner) if owner != self.ownership_key => Err(format!(
+            // itself are claimed via on_page_created, so they pass; a page the
+            // agent never owned is rejected.
+            match self.call.state.sessions.owner_of_page(&PageId(page)).await {
+                Some(owner) if owner != identity.ownership_key => Err(format!(
                     "page {page} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
                 )),
                 _ => Ok(()),
@@ -72,15 +59,18 @@ impl InnerCallHook for ScriptInnerCallHook {
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
         Box::pin(async move {
-            let live = match (&self.browser_session, page) {
+            let Some(identity) = self.identity() else {
+                return;
+            };
+            let live = match (&self.call.browser_session, page) {
                 (Some(browser), Some(page)) => browser.pages.get_info(PageId(page)).await,
                 _ => None,
             };
             let input = RecordToolDispatchInput {
-                agent_id: self.agent_id.clone(),
-                slug: self.slug.clone(),
-                agent_label: self.agent_label.clone(),
-                session_id: self.session_id.clone(),
+                agent_id: identity.session.convo_id().as_str().to_string(),
+                slug: identity.agent.slug().to_string(),
+                agent_label: identity.agent_label.clone(),
+                session_id: self.call.session_id.as_str().to_string(),
                 tool_name,
                 page_id: page.map(i64::from),
                 tab_id: live.as_ref().map(|page| page.tab_id.0),
@@ -92,7 +82,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 raw_args: json!({ "page": page }),
                 duration_ms,
                 dispatch_id: DispatchId::new(),
-                parent_dispatch_id: Some(self.parent_dispatch_id.clone()),
+                parent_dispatch_id: Some(self.call.dispatch_id.clone()),
                 // Inner-primitive token traffic is not measured; version 0 is
                 // the reserved unmeasured marker.
                 tool_input_token_estimate: 0,
@@ -105,9 +95,35 @@ impl InnerCallHook for ScriptInnerCallHook {
                     content: json!([]),
                 },
             };
-            if let Err(error) = self.state.audit_log.record_tool_dispatch(input).await {
+            if let Err(error) = self.call.state.audit_log.record_tool_dispatch(input).await {
                 warn!(error = %error, "script inner-call audit write failed");
             }
+        })
+    }
+
+    fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(identity) = self.identity() else {
+                return;
+            };
+            // Claim the page, record tab activity, and open the session-tab
+            // window, exactly as the tabs-new effect does. Awaited so the claim
+            // lands before the script's next primitive on this page.
+            ownership_claims::record_new_page(
+                &self.call.state,
+                identity,
+                self.call.browser_session.as_ref(),
+                self.call.session_id.as_str(),
+                page_id,
+                self.call.started_at_ms,
+            )
+            .await;
+            // Ensure the agent's tab group and place the page in it. Detached so
+            // browser grouping does not block the script, matching the effect.
+            tokio::spawn(tab_groups::run_tab_group_work(
+                self.call.clone(),
+                Some(page_id),
+            ));
         })
     }
 }
@@ -115,28 +131,18 @@ impl InnerCallHook for ScriptInnerCallHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::mcp::dispatch::ToolCall;
     use crate::api::mcp::test_support::tool_call;
     use crate::db::audit_log::ListDispatchesQuery;
+    use crate::ids::ConvoId;
 
-    fn hook_for(call: &ToolCall) -> anyhow::Result<ScriptInnerCallHook> {
-        let identity = call
-            .identity
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        Ok(ScriptInnerCallHook::new(
-            call.state.clone(),
-            call.browser_session.clone(),
-            identity,
-            call.session_id.as_str().to_string(),
-            call.dispatch_id.clone(),
-        ))
+    fn hook_for(call: &crate::api::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
+        ScriptInnerCallHook::new(call.clone())
     }
 
     #[tokio::test]
     async fn authorize_rejects_foreign_owned_pages_only() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
-        let hook = hook_for(&call)?;
+        let hook = hook_for(&call);
 
         // A page owned by another conversation is rejected.
         call.state
@@ -168,9 +174,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn on_page_created_claims_the_page_for_the_agent() -> anyhow::Result<()> {
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let mine = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let hook = hook_for(&call);
+
+        // A page the script opens is claimed for the agent, so a subsequent
+        // primitive on it authorizes and the cockpit can attribute it.
+        hook.on_page_created(5).await;
+        assert_eq!(
+            call.state.sessions.owner_of_page(&PageId(5)).await,
+            Some(mine)
+        );
+        assert!(hook.authorize(Some(5)).await.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn record_writes_child_row_linked_to_parent() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
-        let hook = hook_for(&call)?;
+        let hook = hook_for(&call);
 
         hook.record(InnerCallRecord {
             method: "input.click",

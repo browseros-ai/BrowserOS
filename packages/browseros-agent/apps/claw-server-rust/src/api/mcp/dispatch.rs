@@ -350,16 +350,12 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             // per tool. Inject a hook so each primitive is ownership-checked and
             // recorded as a child of this script's dispatch.
             let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
-                if ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name) {
-                    call.identity.as_ref().map(|identity| {
-                        Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
-                            call.state.clone(),
-                            call.browser_session.clone(),
-                            identity,
-                            call.session_id.as_str().to_string(),
-                            call.dispatch_id.clone(),
-                        )) as Arc<dyn browseros_mcp::InnerCallHook>
-                    })
+                if ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name)
+                    && call.identity.is_some()
+                {
+                    Some(Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
+                        call.clone(),
+                    )) as Arc<dyn browseros_mcp::InnerCallHook>)
                 } else {
                     None
                 };

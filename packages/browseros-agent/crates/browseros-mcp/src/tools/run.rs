@@ -513,6 +513,12 @@ impl BrowserBridge {
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
         if let Some(hook) = &self.ctx.inner_call_hook {
+            if method == "pages.newPage"
+                && let Ok(BrowserCallValue::Json(Value::Number(number))) = &outcome
+                && let Some(page_id) = number.as_u64().and_then(|value| u32::try_from(value).ok())
+            {
+                hook.on_page_created(page_id).await;
+            }
             hook.record(InnerCallRecord {
                 method,
                 page,
@@ -1314,6 +1320,7 @@ mod tests {
     struct HookLog {
         authorized: Vec<Option<u32>>,
         recorded: Vec<(String, Option<u32>, bool)>,
+        created: Vec<u32>,
         reject: Option<String>,
     }
 
@@ -1335,6 +1342,15 @@ mod tests {
                 .lock().unwrap_or_else(std::sync::PoisonError::into_inner)
                 .recorded
                 .push((record.method.to_owned(), record.page, record.is_error));
+            Box::pin(async move {})
+        }
+
+        fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .created
+                .push(page_id);
             Box::pin(async move {})
         }
     }

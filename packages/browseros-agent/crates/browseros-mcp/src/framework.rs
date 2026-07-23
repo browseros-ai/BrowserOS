@@ -80,6 +80,11 @@ pub trait InnerCallHook: Send + Sync {
 
     /// Record a completed inner primitive as a child audit row.
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
+
+    /// Signal that the script just created a page. The host claims and groups
+    /// it exactly as a `tabs new` would, so a script's tabs get the agent's
+    /// tab group, ownership, and the cockpit ownership window.
+    fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()>;
 }
 
 /// A completed inner primitive handed to [`InnerCallHook::record`].
