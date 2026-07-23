@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { type FC, useMemo, useState } from 'react'
+import { type FC, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +31,7 @@ import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
+import { sentry } from '@/lib/sentry/sentry'
 import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
@@ -54,6 +56,7 @@ import { LlmProvidersHeader } from './LlmProvidersHeader'
 import { McpPromoBanner } from './McpPromoBanner'
 import { NewProviderDialog } from './NewProviderDialog'
 import { ProviderTemplatesSection } from './ProviderTemplatesSection'
+import { partitionSyncedProviders } from './synced-providers'
 
 // All OAuth providers share the same flow via useOAuthProviderFlow
 const OAUTH_PROVIDERS_CONFIG: Record<string, OAuthProviderFlowConfig> = {
@@ -140,7 +143,7 @@ export const BrowserOsAiPane: FC = () => {
     { enabled: !!profileId },
   )
 
-  const deleteRemoteProviderMutation = useGraphqlMutation(
+  const { mutate: deleteRemoteProvider } = useGraphqlMutation(
     DeleteRemoteLlmProviderDocument,
     {
       onSuccess: () => {
@@ -148,16 +151,33 @@ export const BrowserOsAiPane: FC = () => {
           queryKey: [getQueryKeyFromDocument(GetRemoteLlmProvidersDocument)],
         })
       },
+      onError: (error, { rowId }) => {
+        sentry.captureException(error, {
+          extra: {
+            message: 'Failed to delete a synced provider',
+            providerId: rowId,
+          },
+        })
+      },
     },
   )
 
-  const incompleteProviders = useMemo<IncompleteProvider[]>(() => {
-    if (!remoteProvidersData?.llmProviders?.nodes) return []
+  const { incompleteProviders, retiredProviderIds } = useMemo(() => {
+    if (!remoteProvidersData?.llmProviders?.nodes) {
+      return { incompleteProviders: [], retiredProviderIds: [] }
+    }
     const localProviderIds = new Set(providers.map((p) => p.id))
-    return remoteProvidersData.llmProviders.nodes
-      .filter((node): node is NonNullable<typeof node> => node !== null)
-      .filter((node) => !localProviderIds.has(node.rowId))
+    return partitionSyncedProviders(
+      remoteProvidersData.llmProviders.nodes,
+      localProviderIds,
+    )
   }, [remoteProvidersData, providers])
+
+  useEffect(() => {
+    for (const rowId of retiredProviderIds) {
+      deleteRemoteProvider({ rowId })
+    }
+  }, [deleteRemoteProvider, retiredProviderIds])
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -283,22 +303,8 @@ export const BrowserOsAiPane: FC = () => {
       track(oauthFlow.disconnectedEvent)
     }
 
-    const wasLastRemoteHermes =
-      providerToDelete.type === 'remote-hermes' &&
-      providers.filter((p) => p.type === 'remote-hermes').length === 1
-
     await deleteProvider(providerToDelete.id)
-    deleteRemoteProviderMutation.mutate({ rowId: providerToDelete.id })
-
-    if (wasLastRemoteHermes && agentServerUrl) {
-      void fetch(`${agentServerUrl}/remote-hermes/destroy`, {
-        method: 'POST',
-      }).catch(() => {
-        // Best-effort; Fly machine is leaked if this fails. User can
-        // re-add and re-delete to retry, or destroy via the worker
-        // dashboard.
-      })
-    }
+    deleteRemoteProvider({ rowId: providerToDelete.id })
 
     setProviderToDelete(null)
   }
@@ -328,7 +334,7 @@ export const BrowserOsAiPane: FC = () => {
 
   const confirmDeleteIncompleteProvider = () => {
     if (incompleteProviderToDelete) {
-      deleteRemoteProviderMutation.mutate({
+      deleteRemoteProvider({
         rowId: incompleteProviderToDelete.rowId,
       })
       setIncompleteProviderToDelete(null)
@@ -337,15 +343,6 @@ export const BrowserOsAiPane: FC = () => {
 
   const handleSaveProvider = async (provider: LlmProviderConfig) => {
     await saveProvider(provider)
-    if (provider.type === 'remote-hermes' && agentServerUrl) {
-      void fetch(`${agentServerUrl}/remote-hermes/start`, {
-        method: 'POST',
-      }).catch(() => {
-        // Best-effort warm; user's first chat will still boot the VM if
-        // this didn't reach the server. No toast — the boot pill handles
-        // the visible feedback path.
-      })
-    }
   }
 
   const handleTestProvider = async (provider: LlmProviderConfig) => {
@@ -409,6 +406,7 @@ export const BrowserOsAiPane: FC = () => {
         onAddProvider={handleAddProvider}
       />
 
+      <BrowserClawPromoBanner />
       <McpPromoBanner />
 
       <ProviderTemplatesSection

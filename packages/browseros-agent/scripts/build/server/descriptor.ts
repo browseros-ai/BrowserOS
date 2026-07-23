@@ -12,7 +12,6 @@ const REQUIRED_PROD_VARS = [
 ]
 const INLINED_ENV_VARS = [
   ...REQUIRED_PROD_VARS,
-  'AGENT_RUNNER_JWT_SECRET',
   'NODE_ENV',
   'LOG_LEVEL',
 ] as const

@@ -20,6 +20,7 @@ from ...lib.paths import get_package_root
 from ...lib.r2 import get_r2_client
 from ...lib.utils import log_error, log_info, log_success, log_warning
 from .render import (
+    extract_appcast_item_count,
     extract_appcast_version,
     extract_channel_metadata,
     extract_enclosure_urls,
@@ -149,7 +150,7 @@ class FeedPublisher:
             spec.kind in ("browser", "server")
             and extract_appcast_version(content) is None
         ):
-            log_error(f"{spec.key}: new content carries no sparkle:version")
+            self._log_appcast_version_error(spec, content)
             return False
 
         if not self._check_download_urls(spec, content):
@@ -289,7 +290,7 @@ class FeedPublisher:
     ) -> bool:
         new_version = extract_appcast_version(content)
         if new_version is None:
-            log_error(f"{spec.key}: new content carries no sparkle:version")
+            self._log_appcast_version_error(spec, content)
             return False
 
         live_version = extract_appcast_version(live)
@@ -298,6 +299,14 @@ class FeedPublisher:
 
         return self._refuse_downgrade(
             spec, f"{spec.key}", new_version, live_version, allow_downgrade
+        )
+
+    def _log_appcast_version_error(self, spec: FeedSpec, content: str) -> None:
+        if extract_appcast_item_count(content) == 0:
+            log_error(f"{spec.key}: new content has no <item> entries")
+            return
+        log_error(
+            f"{spec.key}: new content has <item> entries but no sparkle:version"
         )
 
     def _guard_manifest_versions(

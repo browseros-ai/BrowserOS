@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Overlay fixture</title>
+    <style>
+      #covered-button {
+        position: absolute;
+        top: 60px;
+        left: 20px;
+      }
+      #overlay-cover {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 200px;
+        background: rgba(20, 20, 20, 0.9);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Overlay fixture</h1>
+    <button id="covered-button" type="button">Covered button</button>
+    <div id="overlay-cover">Overlay cover</div>
+    <div id="overlay-result">untouched</div>
+    <script>
+      document.getElementById('covered-button').addEventListener('click', () => {
+        document.getElementById('overlay-result').textContent = 'covered-clicked'
+      })
+    </script>
+  </body>
+</html>

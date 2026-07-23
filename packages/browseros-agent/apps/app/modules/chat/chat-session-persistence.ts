@@ -1,4 +1,5 @@
 import type { ChatStatus, UIMessage } from 'ai'
+import { stripImageToolOutputs } from './tool-output-strip'
 
 export function didStreamingTurnFinish(
   previousStatus: ChatStatus,
@@ -10,5 +11,7 @@ export function didStreamingTurnFinish(
 }
 
 export function getPersistableMessages(messages: UIMessage[]) {
-  return messages.filter((message) => message.parts?.length > 0)
+  return stripImageToolOutputs(
+    messages.filter((message) => message.parts?.length > 0),
+  )
 }

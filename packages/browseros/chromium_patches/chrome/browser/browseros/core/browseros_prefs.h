@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..9ea1d4683fc35
+index 0000000000000..b04a6ef039a6b
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,111 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -102,8 +102,7 @@ index 0000000000000..9ea1d4683fc35
 +// Returns false if action's visibility pref is false.
 +bool ShouldShowToolbarAction(actions::ActionId id, PrefService* pref_service);
 +
-+// Check if a BrowserOS extension should be pinned in the toolbar based on its
-+// extension metadata and visibility pref.
++// Check if a BrowserOS extension should be pinned from its catalog metadata.
 +bool ShouldPinBrowserOSExtension(const std::string& extension_id,
 +                                 PrefService* pref_service);
 +

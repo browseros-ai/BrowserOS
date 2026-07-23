@@ -1,0 +1,43 @@
+collection:
+  get:
+    operationId: listConnections
+    responses:
+      '200':
+        description: Supported harness connection states.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/connections.yaml#/ConnectionList
+      '500':
+        $ref: ../responses.yaml#/InternalError
+harness:
+  put:
+    operationId: connectHarness
+    parameters:
+      - $ref: ../parameters.yaml#/Harness
+    responses:
+      '200':
+        description: Connected or already-connected harness state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/connections.yaml#/Connection
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  delete:
+    operationId: disconnectHarness
+    parameters:
+      - $ref: ../parameters.yaml#/Harness
+    responses:
+      '200':
+        description: Disconnected or already-disconnected harness state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/connections.yaml#/Connection
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError

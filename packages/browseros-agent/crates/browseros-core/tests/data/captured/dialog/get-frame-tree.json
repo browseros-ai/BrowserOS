@@ -1,0 +1,21 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "18BD5ED6DD6E5C341D4D84080175E83F",
+      "loaderId": "A118E91C20D1BDBC6274C70D295AAFC4",
+      "url": "http://127.0.0.1:17243/dialog.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    }
+  }
+}

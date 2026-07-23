@@ -87,6 +87,9 @@ impl ToolDef {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ToolMetadata {
+    /// Treats top-level `raw_args.page` as the authoritative dispatch page. The framework
+    /// uses it for page signals; the claw-server host uses it for pre-dispatch snapshots,
+    /// ownership guards, audit records, and tab-activity effects.
     pub accepts_page_arg: bool,
 }
 

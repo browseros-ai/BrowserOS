@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Build, stamp, pack, and upload extension CRXs."""
 
+import json
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 from ...core.step import Step, ValidationError
 from ...lib.paths import get_package_root
 from ...lib.r2 import BOTO3_AVAILABLE, get_r2_client, upload_file_to_r2
 from ...lib.utils import log_info, log_success, log_warning
-from ..feeds.spec import CDN_BASE_URL
+from ..feeds.spec import CDN_BASE_URL, EXTENSIONS as FEED_EXTENSIONS
 from .crx import find_chrome_binary, pack_crx
 from .specs import (
     ExtensionSpec,
@@ -29,6 +30,24 @@ from .workspace import (
 
 # Chrome requires extension versions to be 1-4 dot-separated integers.
 _VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}$")
+_UPDATE_FEED_EXTENSION_NAMES = frozenset(
+    extension.name for extension in FEED_EXTENSIONS if extension.in_update_feed
+)
+_UPDATE_MANIFEST_URL = f"{CDN_BASE_URL}/extensions/update-manifest.xml"
+
+
+def _validate_manifest_update_url(
+    spec: ExtensionSpec, manifest: Mapping[str, object], dist_path: Path
+) -> None:
+    """Require update-feed extensions to declare the stable updater manifest."""
+    if spec.name not in _UPDATE_FEED_EXTENSION_NAMES:
+        return
+    update_url = manifest.get("update_url")
+    if update_url != _UPDATE_MANIFEST_URL:
+        raise RuntimeError(
+            f"Extension '{spec.name}' build at '{dist_path}' has update_url "
+            f"{update_url!r}; expected '{_UPDATE_MANIFEST_URL}'"
+        )
 
 
 class ExtensionReleaseModule(Step):
@@ -145,8 +164,13 @@ class ExtensionReleaseModule(Step):
                 run_command(spec.pre_build, source_root)
             run_command(spec.build, source_root)
 
+            dist_path = source_root / spec.dist_path
+            manifest = json.loads(
+                (dist_path / "manifest.json").read_text(encoding="utf-8")
+            )
+            _validate_manifest_update_url(spec, manifest, dist_path)
             crx_path = pack_crx(
-                source_root / spec.dist_path,
+                dist_path,
                 require_env(spec.signing_key_env),
                 chrome,
                 work_root / "dist" / spec.crx_filename(self.version),

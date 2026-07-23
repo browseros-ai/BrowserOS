@@ -187,6 +187,41 @@ def _clear_destination(dest_path: Path) -> None:
     dest_path.unlink()
 
 
+def managed_binary_families(config_path: Path) -> set[str]:
+    """Return the resource families download_resources.yaml manages.
+
+    A family is the first path component after resources/binaries/ in an
+    operation destination; destinations elsewhere are ignored. Returns an
+    empty set for a missing or malformed config — callers must treat empty
+    as "unknown", never as "nothing is managed".
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError):
+        return set()
+
+    if not isinstance(config, dict):
+        return set()
+
+    operations = config.get("download_operations")
+    if not isinstance(operations, list):
+        return set()
+
+    families = set()
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        destination = op.get("destination")
+        if not isinstance(destination, str):
+            continue
+        parts = PurePosixPath(destination).parts
+        if len(parts) >= 3 and parts[:2] == ("resources", "binaries"):
+            families.add(parts[2])
+
+    return families
+
+
 @step("download_resources", phase="prep")
 class DownloadResourcesModule(Step):
     """Download resources from Cloudflare R2 before build

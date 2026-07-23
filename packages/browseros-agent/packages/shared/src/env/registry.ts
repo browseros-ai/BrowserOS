@@ -329,15 +329,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: 'true' } },
   },
   {
-    key: 'AGENT_RUNNER_JWT_SECRET',
-    section: 'build',
-    description:
-      'Agent runner JWT secret inlined into server builds when present.',
-    secret: true,
-    schema: stringSchema,
-    modes: { production: { value: '' } },
-  },
-  {
     key: 'R2_ACCOUNT_ID',
     section: 'upload',
     description: 'R2 account ID for production artifact uploads.',

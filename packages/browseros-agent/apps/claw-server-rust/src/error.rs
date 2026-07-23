@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use claw_api::models::ApiError;
 use serde::Serialize;
 use std::{io, path::PathBuf};
 use thiserror::Error;
@@ -28,7 +29,7 @@ pub enum AppError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Sql(#[from] rusqlite::Error),
+    Db(Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error("{0}")]
@@ -97,7 +98,7 @@ impl AppError {
                 StatusCode::BAD_REQUEST
             }
             Self::StorageNotFound(_) => StatusCode::NOT_FOUND,
-            Self::Io { .. } | Self::Sql(_) | Self::Join(_) | Self::Internal(_) => {
+            Self::Io { .. } | Self::Db(_) | Self::Join(_) | Self::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }
@@ -113,6 +114,44 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// Server-minted id for one HTTP request — never read from an inbound
+/// header. The `request_context` middleware creates it, stores it as a
+/// request extension, and echoes it back as `x-request-id`; canonical
+/// error bodies embed it so a reported failure can be tied to its
+/// request span in the logs.
+#[derive(Clone, Debug)]
+pub struct RequestId(pub String);
+
+/// The canonical routes' error dialect: the contract's `ApiError`
+/// envelope (`code` / `message` / `requestId`), as opposed to the
+/// generic `{ "error": … }` body `AppError` renders. Handlers on the
+/// canonical surface must fail through this type so error responses
+/// stay in-contract.
+pub struct CanonicalError {
+    status: StatusCode,
+    body: ApiError,
+}
+
+impl CanonicalError {
+    #[must_use]
+    pub fn new(
+        status: StatusCode,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        request_id: Option<&RequestId>,
+    ) -> Self {
+        let mut body = ApiError::new(code.into(), message.into());
+        body.request_id = request_id.map(|request_id| request_id.0.clone());
+        Self { status, body }
+    }
+}
+
+impl IntoResponse for CanonicalError {
+    fn into_response(self) -> Response {
+        (self.status, Json(self.body)).into_response()
+    }
+}
 
 pub trait IoPath<T> {
     fn with_path(self, path: impl Into<PathBuf>) -> AppResult<T>;

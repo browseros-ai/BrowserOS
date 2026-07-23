@@ -34,7 +34,8 @@ interface LeadRunTileProps {
 export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
   const isLive = task.status === 'live'
   const isFailed = task.status === 'failed'
-  const screenshotId = task.lastScreenshotDispatchId
+  const isStopped = task.status === 'cancelled'
+  const screenshotId = task.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const location = useLocation()
   return (
@@ -50,8 +51,12 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
       <div className="relative flex-1 overflow-hidden">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
-            alt={`Session hero from ${task.agentLabel}`}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
+            alt={`Session hero from ${task.label}`}
             loading="lazy"
             decoding="async"
             className="absolute inset-0 h-full w-full object-cover object-top"
@@ -65,7 +70,13 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
           <ArrowUpRight className="size-4" />
         </span>
       </div>
-      <Caption task={task} now={now} isLive={isLive} isFailed={isFailed} />
+      <Caption
+        task={task}
+        now={now}
+        isLive={isLive}
+        isFailed={isFailed}
+        isStopped={isStopped}
+      />
     </NavLink>
   )
 }
@@ -75,18 +86,20 @@ function Caption({
   now,
   isLive,
   isFailed,
+  isStopped,
 }: {
   task: TaskSummary
   now: number
   isLive: boolean
   isFailed: boolean
+  isStopped: boolean
 }) {
   return (
     <div className="flex flex-col gap-1 bg-ink-deep px-5 py-3 text-white">
       <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
         <span className="inline-flex items-center gap-1.5">
           <AgentDot slug={task.slug} />
-          <span className="text-white">{task.agentLabel}</span>
+          <span className="text-white">{task.label}</span>
         </span>
         {isLive && (
           <span className="inline-flex items-center gap-1.5 text-[#8fb4ff]">
@@ -106,9 +119,18 @@ function Caption({
             FAILED
           </span>
         )}
+        {isStopped && (
+          <span className="inline-flex items-center gap-1.5 text-white/65">
+            <span
+              aria-hidden
+              className="inline-block size-1.5 rounded-full bg-white/50"
+            />
+            STOPPED
+          </span>
+        )}
       </div>
       <h2 className="truncate font-semibold text-[17px] text-white leading-tight tracking-tight md:text-[19px]">
-        {task.title}
+        {task.name}
       </h2>
       <p className="font-mono text-[11.5px] text-white/70 tabular-nums">
         {formatDuration(task.durationMs)}{' '}

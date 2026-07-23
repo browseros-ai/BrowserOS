@@ -1,5 +1,22 @@
-import { describe, expect, it } from 'bun:test'
-import { isAcpProbeEnabled, resolveAcpAgentId } from './acp-probe.hooks'
+import { beforeAll, describe, expect, it, mock } from 'bun:test'
+
+// Bun does not resolve WXT aliases, so register the full runtime export shape.
+const browserosHelpersMock = {
+  getAgentServerUrl: async () => 'http://127.0.0.1:9000',
+  getMcpServerUrl: async () => 'http://127.0.0.1:9000/mcp',
+  getProxyPort: async () => 9000,
+  getHealthCheckUrl: async () => 'http://127.0.0.1:9000/system/health',
+} satisfies typeof import('@/lib/browseros/helpers')
+mock.module('@/lib/browseros/helpers', () => browserosHelpersMock)
+
+let isAcpProbeEnabled: typeof import('./acp-probe.hooks').isAcpProbeEnabled
+let resolveAcpAgentId: typeof import('./acp-probe.hooks').resolveAcpAgentId
+
+beforeAll(async () => {
+  ;({ isAcpProbeEnabled, resolveAcpAgentId } = await import(
+    './acp-probe.hooks'
+  ))
+})
 
 describe('resolveAcpAgentId', () => {
   it('returns the built-in claude id for claude-code', () => {

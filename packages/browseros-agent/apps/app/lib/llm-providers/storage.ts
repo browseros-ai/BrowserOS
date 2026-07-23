@@ -15,10 +15,20 @@ import { uploadLlmProvidersToGraphql } from './uploadLlmProvidersToGraphql'
 
 export { DEFAULT_PROVIDER_ID } from './provider-selection'
 
+function dropUnshippedProviderConfigs(
+  providers: LlmProviderConfig[] | null,
+): LlmProviderConfig[] | null {
+  if (!providers) return providers
+  // The literal catches persisted configs from the unshipped alpha provider.
+  return providers.filter(
+    (provider) => String(provider.type) !== 'remote-hermes',
+  )
+}
+
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',
   {
-    version: 3,
+    version: 4,
     migrations: {
       2: (
         providers: LlmProviderConfig[] | null,
@@ -39,6 +49,7 @@ export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
       ): LlmProviderConfig[] | null => {
         return migrateLlmProvidersToV3(providers)
       },
+      4: dropUnshippedProviderConfigs,
     },
   },
 )
@@ -90,14 +101,18 @@ export function setupLlmProvidersSyncToBackend(): () => void {
   return unsubscribe
 }
 
-/** Returns provider configs after applying display-name compatibility fixes. */
+/** Returns provider configs after applying stored-config compatibility fixes. */
 export async function loadProviders(): Promise<LlmProviderConfig[]> {
   const providers = (await providersStorage.getValue()) || []
-  const normalizedProviders = normalizeProviderNames(providers)
+  const supportedProviders = dropUnshippedProviderConfigs(providers) ?? []
+  const normalizedProviders = normalizeProviderNames(supportedProviders)
 
-  // Keep storage consistent so every consumer sees the same provider name.
+  // Persist compatibility fixes so direct storage consumers see the same list.
   if (
-    normalizedProviders.some((provider, index) => provider !== providers[index])
+    supportedProviders.length !== providers.length ||
+    normalizedProviders.some(
+      (provider, index) => provider !== supportedProviders[index],
+    )
   ) {
     await providersStorage.setValue(normalizedProviders)
   }

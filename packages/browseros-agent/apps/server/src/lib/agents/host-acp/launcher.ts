@@ -31,6 +31,12 @@ export interface ResolveAcpSpawnCommandInput {
   env?: NodeJS.ProcessEnv
   resourcesDir?: string | null
   platform?: NodeJS.Platform
+  /**
+   * Extra env baked into the spawn command for this adapter (e.g. a
+   * `CODEX_HOME` overlay that disables Codex's bundled in-app browser).
+   * Merged into both the bundled-Bun and npx-fallback commands.
+   */
+  extraEnv?: Record<string, string>
   /** Injected for tests; production callers leave it unset. */
   resolveBundledBun?: typeof resolveBundledBun
 }
@@ -59,14 +65,23 @@ export function resolveAcpSpawnCommand(
     return {
       command: wrapCommandWithEnv(
         `${quoteAcpCommandToken(bunPath)} x --bun --silent --package ${quoteAcpCommandToken(config.acpPackageSpec)} ${quoteAcpCommandToken(config.acpBin)}`,
-        withBundledBunAcpAdapterEnv({
-          bunPath,
-          browserosDir: input.browserosDir,
-          env: input.env,
-          platform: input.platform,
-        }),
+        {
+          ...withBundledBunAcpAdapterEnv({
+            bunPath,
+            browserosDir: input.browserosDir,
+            env: input.env,
+            platform: input.platform,
+          }),
+          ...input.extraEnv,
+        },
       ),
       source: 'bundled-bun',
+    }
+  }
+  if (input.extraEnv && Object.keys(input.extraEnv).length > 0) {
+    return {
+      command: wrapCommandWithEnv(config.acpCommand, input.extraEnv),
+      source: 'host-npx-fallback',
     }
   }
   return { command: config.acpCommand, source: 'host-npx-fallback' }

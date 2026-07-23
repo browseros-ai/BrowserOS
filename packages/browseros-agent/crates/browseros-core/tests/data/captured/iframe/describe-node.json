@@ -1,0 +1,68 @@
+{
+  "node": {
+    "nodeId": 1,
+    "backendNodeId": 2,
+    "nodeType": 9,
+    "nodeName": "#document",
+    "localName": "",
+    "nodeValue": "",
+    "childNodeCount": 2,
+    "children": [
+      {
+        "nodeId": 2,
+        "parentId": 0,
+        "backendNodeId": 19,
+        "nodeType": 10,
+        "nodeName": "html",
+        "localName": "",
+        "nodeValue": "",
+        "publicId": "",
+        "systemId": ""
+      },
+      {
+        "nodeId": 3,
+        "parentId": 0,
+        "backendNodeId": 6,
+        "nodeType": 1,
+        "nodeName": "HTML",
+        "localName": "html",
+        "nodeValue": "",
+        "childNodeCount": 2,
+        "children": [
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 7,
+            "nodeType": 1,
+            "nodeName": "HEAD",
+            "localName": "head",
+            "nodeValue": "",
+            "childNodeCount": 2,
+            "attributes": []
+          },
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 10,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": 5,
+            "attributes": []
+          }
+        ],
+        "attributes": [
+          "lang",
+          "en"
+        ],
+        "frameId": "85D36A879FFFBC2F7EF82787CC415832"
+      }
+    ],
+    "documentURL": "http://127.0.0.1:17243/iframe.html",
+    "baseURL": "http://127.0.0.1:17243/iframe.html",
+    "xmlVersion": "",
+    "compatibilityMode": "NoQuirksMode",
+    "isScrollable": true
+  }
+}

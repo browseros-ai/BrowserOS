@@ -1,0 +1,169 @@
+collection:
+  get:
+    operationId: listSessions
+    description: An explicit `status=live` query returns the complete connected-session snapshot and omits `nextCursor`. Cursor and limit govern historical queries.
+    parameters:
+      - name: profileId
+        in: query
+        schema:
+          type: string
+      - name: slug
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: Use `live` to request a complete current snapshot with live browser state.
+        schema:
+          $ref: ../schemas/sessions.yaml#/SessionStatus
+      - name: site
+        in: query
+        schema:
+          type: string
+      - name: search
+        in: query
+        schema:
+          type: string
+      - name: since
+        in: query
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Historical pagination cursor; ignored for the complete live snapshot.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: limit
+        in: query
+        description: Historical page size; ignored for the complete live snapshot.
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          default: 25
+    responses:
+      '200':
+        description: A complete connected-session snapshot for `status=live`; otherwise a cursor-paginated historical result.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionList
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+detail:
+  get:
+    operationId: getSession
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: A session and its ordered dispatches.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionDetail
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+cancel:
+  post:
+    operationId: cancelSession
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: The session is terminally cancelled and reports how many active browser dispatches were interrupted.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/CancelSessionResponse
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '409':
+        $ref: ../responses.yaml#/Conflict
+      '500':
+        $ref: ../responses.yaml#/InternalError
+preview:
+  get:
+    operationId: getSessionPreview
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+      - name: refresh
+        in: query
+        description: Ignored client cache-busting token for preview URLs.
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+    responses:
+      '200':
+        description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        description: The session does not resolve to a currently owned live browser tab preview.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+            example:
+              code: preview_not_found
+              message: session preview not found
+      '500':
+        $ref: ../responses.yaml#/InternalError
+screenshots:
+  get:
+    operationId: listSessionScreenshots
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: Screenshot metadata ordered oldest to newest by capture time and screenshot ID.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/SessionScreenshotList
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+screenshot:
+  get:
+    operationId: getSessionScreenshot
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+      - $ref: ../parameters.yaml#/ScreenshotId
+    responses:
+      '200':
+        description: Immutable session-owned screenshot JPEG.
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        description: The screenshot is unknown or is not owned by this session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+            example:
+              code: screenshot_not_found
+              message: session screenshot not found
+      '500':
+        $ref: ../responses.yaml#/InternalError

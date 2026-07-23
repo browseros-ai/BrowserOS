@@ -317,17 +317,28 @@ export const opencode: ClientConfig = {
   id: 'opencode',
   displayName: 'OpenCode',
   installCheckPaths: {
+    // `$HOME/.local/share/opencode` is OpenCode's OAuth token store
+    // (per its docs at https://opencode.ai/docs/mcp-servers/). It
+    // exists as soon as the user has authenticated any OAuth MCP
+    // server or run the OpenCode installer, even before they create
+    // their global `opencode.json`.
     darwin: [
       '$XDG_CONFIG_HOME/opencode',
       '$HOME/.config/opencode',
       '$HOME/.opencode',
+      '$HOME/.local/share/opencode',
     ],
     linux: [
       '$XDG_CONFIG_HOME/opencode',
       '$HOME/.config/opencode',
       '$HOME/.opencode',
+      '$HOME/.local/share/opencode',
     ],
-    win32: ['$USERPROFILE\\.config\\opencode', '$USERPROFILE\\.opencode'],
+    win32: [
+      '$USERPROFILE\\.config\\opencode',
+      '$USERPROFILE\\.opencode',
+      '$USERPROFILE\\.local\\share\\opencode',
+    ],
   },
   systemPaths: {
     darwin: [
@@ -695,9 +706,9 @@ export const antigravity: ClientConfig = {
     win32: ['$USERPROFILE\\.gemini\\antigravity'],
   },
   systemPaths: {
-    darwin: ['$HOME/.gemini/antigravity/mcp_config.json'],
-    linux: ['$HOME/.gemini/antigravity/mcp_config.json'],
-    win32: ['$USERPROFILE\\.gemini\\antigravity\\mcp_config.json'],
+    darwin: ['$HOME/.gemini/config/mcp_config.json'],
+    linux: ['$HOME/.gemini/config/mcp_config.json'],
+    win32: ['$USERPROFILE\\.gemini\\config\\mcp_config.json'],
   },
   format: 'json',
   supportedTransports: { system: ['stdio', 'http'] },
@@ -710,7 +721,7 @@ export const antigravity: ClientConfig = {
     firstParty: 'https://antigravity.google/',
     smithery: SMITHERY_URL,
     notes:
-      "Google's Antigravity editor. Uses `serverUrl` for remote entries (matches Windsurf's convention).",
+      "Google's Antigravity editor. Config lives at `~/.gemini/config/mcp_config.json` (schema id: https://antigravity.google/schemas/mcp_config.json). Uses `serverUrl` for remote entries (matches Windsurf's convention).",
     verified: VERIFIED,
   },
 }

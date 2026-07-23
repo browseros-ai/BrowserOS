@@ -8,6 +8,7 @@
  * dispatch rows without a React tree.
  */
 
+import type { SessionScreenshot } from '@browseros/claw-api'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
 
 export interface TabGroup {
@@ -29,20 +30,19 @@ export interface TabGroup {
   /** Chronological subset of the task's dispatches for this group. */
   dispatches: ToolDispatchRow[]
   dispatchCount: number
-  /** Subset of `allScreenshotIds` whose dispatch belongs to this group. */
-  screenshotDispatchIds: number[]
+  /** Chronological subset of the session's screenshots for this group. */
+  screenshots: SessionScreenshot[]
 }
 
 /** Groups task dispatches into a session overview and first-seen page buckets for task detail. */
 export function groupDispatchesByTab(
   dispatches: ToolDispatchRow[],
-  allScreenshotIds: readonly number[],
+  allScreenshots: readonly SessionScreenshot[],
 ): TabGroup[] {
-  const screenshotSet = new Set(allScreenshotIds)
   const buckets = new Map<number, ToolDispatchRow[]>()
   const pageBuckets: Array<[number, ToolDispatchRow[]]> = []
   for (const d of dispatches) {
-    if (d.pageId === null) continue
+    if (d.pageId === undefined) continue
     const arr = buckets.get(d.pageId)
     if (arr) {
       arr.push(d)
@@ -64,18 +64,21 @@ export function groupDispatchesByTab(
       displayTitle: null,
       dispatches,
       dispatchCount: dispatches.length,
-      screenshotDispatchIds: dispatches
-        .map((d) => d.id)
-        .filter((id) => screenshotSet.has(id)),
+      screenshots: [...allScreenshots],
     })
   }
 
   pageBuckets.forEach(([pageId, rows], idx) => {
     // Prefer a paired title/url snapshot to avoid showing a stale title beside a fresh URL.
     const reversed = [...rows].reverse()
-    const lastPaired = reversed.find((d) => d.url !== null && d.title !== null)
-    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url !== null)
-    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title !== null)
+    const lastPaired = reversed.find((d) => d.url && d.title)
+    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url)
+    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title)
+    const screenshotIds = new Set(
+      rows.flatMap((row) =>
+        row.screenshotId === undefined ? [] : [row.screenshotId],
+      ),
+    )
     groups.push({
       id: `page-${pageId}`,
       pageId,
@@ -84,9 +87,9 @@ export function groupDispatchesByTab(
       displayTitle: lastWithTitle?.title ?? null,
       dispatches: rows,
       dispatchCount: rows.length,
-      screenshotDispatchIds: rows
-        .map((d) => d.id)
-        .filter((id) => screenshotSet.has(id)),
+      screenshots: allScreenshots.filter((screenshot) =>
+        screenshotIds.has(screenshot.screenshotId),
+      ),
     })
   })
 

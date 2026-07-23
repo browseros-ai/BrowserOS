@@ -61,7 +61,8 @@ async fn run_child_case(case: &str) -> anyhow::Result<()> {
 
 async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
     let router = test_router(root).await?;
-    let (status, initial) = request_json(&router, "GET", "/system/telemetry", None).await?;
+    let (status, initial) =
+        request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(initial["enabled"], true);
     assert_eq!(initial["consent"], true);
@@ -72,8 +73,8 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
 
     let (status, _) = request_json(
         &router,
-        "POST",
-        "/system/telemetry",
+        "PUT",
+        "/api/v1/settings/telemetry",
         Some(json!({ "consent": "yes" })),
     )
     .await?;
@@ -81,8 +82,8 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
 
     let (status, disabled) = request_json(
         &router,
-        "POST",
-        "/system/telemetry",
+        "PUT",
+        "/api/v1/settings/telemetry",
         Some(json!({ "consent": false })),
     )
     .await?;
@@ -102,13 +103,13 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
 
     let restarted = test_router(root).await?;
     let (status, after_restart) =
-        request_json(&restarted, "GET", "/system/telemetry", None).await?;
+        request_json(&restarted, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(after_restart, disabled);
     let (status, enabled) = request_json(
         &restarted,
-        "POST",
-        "/system/telemetry",
+        "PUT",
+        "/api/v1/settings/telemetry",
         Some(json!({ "consent": true })),
     )
     .await?;
@@ -120,7 +121,7 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
 
 async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
     let router = test_router(root).await?;
-    let (status, state) = request_json(&router, "GET", "/system/telemetry", None).await?;
+    let (status, state) = request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["enabled"], false);
     assert_eq!(state["consent"], true);
@@ -137,14 +138,14 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         proxy_port: None,
         resources_dir: root.join("resources"),
         browserclaw_dir: root.to_path_buf(),
-        claw_dir: root.to_path_buf(),
         session_idle: Duration::from_secs(300),
+        session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
-        screencast_screenshot_fallback: true,
+        replay_retention_days: 7,
         dev_mode: false,
         auth_token: None,
     });
-    let state = AppState::new_with_home(config, None, root.join("home")).await?;
+    let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(build_router(state))
 }
 

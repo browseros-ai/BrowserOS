@@ -1,0 +1,269 @@
+# Required secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
+name: "Release: BrowserClaw Onboarding"
+
+on:
+  push:
+    tags:
+      - "claw-onboard/v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version; defaults to apps/claw-onboard/package.json at ref"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Git ref to release; defaults to the repository default branch"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version; defaults to apps/claw-onboard/package.json at ref"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Git ref to release; defaults to the repository default branch"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-claw-onboard
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name != 'push' || github.event.deleted != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      previous_tag: ${{ steps.release.outputs.previous_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Resolve release
+        id: release
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          packages/browseros-agent/scripts/release/prepare-claw-onboard-release.sh \
+            --event-name "$EVENT_NAME" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --ref-name "$REF_NAME" \
+            --requested-version "$REQUESTED_VERSION" \
+            --release-ref HEAD
+
+      - name: Generate release notes
+        env:
+          PREVIOUS_TAG: ${{ steps.release.outputs.previous_tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          changelog="/tmp/release-changelog.md"
+          notes="/tmp/release-notes.md"
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "Initial BrowserClaw Onboarding release." > "$changelog"
+          else
+            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$changelog"
+            if [ ! -s "$changelog" ]; then
+              echo "No commits since $PREVIOUS_TAG." > "$changelog"
+            fi
+          fi
+          node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+            --input "$changelog" \
+            --output "$notes" \
+            --max-entries 15 \
+            --previous-tag "$PREVIOUS_TAG" \
+            --release-tag "$RELEASE_TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          title="BrowserClaw Onboarding - v$VERSION"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$title" --notes-file /tmp/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --title "$title" --notes-file /tmp/release-notes.md
+          fi
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
+  build-publish:
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Install browseros-agent dependencies
+        working-directory: packages/browseros-agent
+        run: bun ci
+
+      - name: Stamp onboarding artifact version
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          node - "$VERSION" <<'JS'
+          const fs = require('fs')
+          const version = process.argv[2]
+          const packagePath = 'apps/claw-onboard/package.json'
+          const lockPath = 'bun.lock'
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+          let lock = fs.readFileSync(lockPath, 'utf8')
+          const pattern = /("apps\/claw-onboard":\s*\{\s*"name":\s*"@browseros\/claw-onboard",\s*"version":\s*")([^"]+)(")/
+          const matches = lock.match(new RegExp(pattern.source, 'g'))
+          if (matches?.length !== 1) throw new Error(`Expected one claw-onboard lock entry, found ${matches?.length ?? 0}`)
+          lock = lock.replace(pattern, `$1${version}$3`)
+          fs.writeFileSync(lockPath, lock)
+          JS
+
+      - name: Publish onboarding resources to R2
+        working-directory: packages/browseros-agent
+        run: bun scripts/build/claw-onboard.ts --upload
+
+      - name: Attach onboarding zip to GitHub release
+        working-directory: packages/browseros-agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          asset="dist/prod/claw-onboard/browseros-claw-onboard-resources.zip"
+          test -f "$asset"
+          gh release upload "$RELEASE_TAG" "$asset" --clobber
+
+      - name: Summarize onboarding resource keys
+        run: |
+          {
+            echo "### BrowserClaw Onboarding resource publish"
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- GitHub release: \`$RELEASE_TAG\`"
+            echo "- Latest: \`claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip\`"
+            echo "- Versioned: \`claw-onboard/prod-resources/${VERSION}/browseros-claw-onboard-resources.zip\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  reflect-version:
+    needs:
+      - release
+      - build-publish
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Reflect onboarding version on main via PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          package_json="packages/browseros-agent/apps/claw-onboard/package.json"
+          lock="packages/browseros-agent/bun.lock"
+          branch="chore-bump-claw-onboard-v${VERSION}"
+
+          git fetch origin "$DEFAULT_BRANCH" --no-tags
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+
+          node - "$package_json" "$lock" "$VERSION" <<'JS'
+          const fs = require('fs')
+          const [packagePath, lockPath, version] = process.argv.slice(2)
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+          let lock = fs.readFileSync(lockPath, 'utf8')
+          const pattern = /("apps\/claw-onboard":\s*\{\s*"name":\s*"@browseros\/claw-onboard",\s*"version":\s*")([^"]+)(")/
+          const matches = lock.match(new RegExp(pattern.source, 'g'))
+          if (matches?.length !== 1) throw new Error(`Expected one claw-onboard lock entry, found ${matches?.length ?? 0}`)
+          lock = lock.replace(pattern, `$1${version}$3`)
+          fs.writeFileSync(lockPath, lock)
+          JS
+
+          if git diff --quiet -- "$package_json" "$lock"; then
+            echo "claw-onboard is already at $VERSION"
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
+            if [ -z "$pr" ]; then
+              gh pr create \
+                --title "chore: bump claw onboarding version to ${VERSION}" \
+                --body "Reflects the published claw-onboard/v${VERSION} onboarding resources." \
+                --base "$DEFAULT_BRANCH" \
+                --head "$branch"
+            fi
+            gh pr merge "$branch" --squash --auto
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add "$package_json" "$lock"
+          git commit -m "chore: bump claw onboarding version to ${VERSION}"
+          git push origin "$branch"
+          gh pr create \
+            --title "chore: bump claw onboarding version to ${VERSION}" \
+            --body "Reflects the published claw-onboard/v${VERSION} onboarding resources." \
+            --base "$DEFAULT_BRANCH" \
+            --head "$branch"
+          gh pr merge "$branch" --squash --auto

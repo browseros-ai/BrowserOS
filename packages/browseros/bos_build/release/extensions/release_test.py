@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 from ...core.context import Context
 from ...core.step import ValidationError
-from .release import ExtensionReleaseModule, build_pipeline
+from .release import (
+    ExtensionReleaseModule,
+    _validate_manifest_update_url,
+    build_pipeline,
+)
+from .specs import spec_by_name
 
 MODULE = "bos_build.release.extensions.release"
 
@@ -132,6 +137,42 @@ class ValidateTest(unittest.TestCase):
             self._module(names=("nope",)).validate(_ctx())
 
 
+class ManifestUpdateUrlTest(unittest.TestCase):
+    def setUp(self):
+        self.dist_path = Path("apps/claw-app/dist/chrome-mv3")
+        self.expected_url = "https://cdn.browseros.com/extensions/update-manifest.xml"
+
+    def test_in_feed_extension_without_update_url_fails(self):
+        with self.assertRaisesRegex(
+            RuntimeError, "browserclaw.*apps/claw-app/dist/chrome-mv3"
+        ):
+            _validate_manifest_update_url(
+                spec_by_name("browserclaw"), {}, self.dist_path
+            )
+
+    def test_in_feed_extension_with_wrong_update_url_fails(self):
+        with self.assertRaisesRegex(
+            RuntimeError, "browserclaw.*apps/claw-app/dist/chrome-mv3"
+        ):
+            _validate_manifest_update_url(
+                spec_by_name("browserclaw"),
+                {"update_url": "https://example.com/update.xml"},
+                self.dist_path,
+            )
+
+    def test_in_feed_extension_with_expected_update_url_passes(self):
+        _validate_manifest_update_url(
+            spec_by_name("browserclaw"),
+            {"update_url": self.expected_url},
+            self.dist_path,
+        )
+
+    def test_controller_without_update_url_passes(self):
+        _validate_manifest_update_url(
+            spec_by_name("controller"), {}, Path("apps/controller-ext/dist")
+        )
+
+
 class ExecuteTest(unittest.TestCase):
     def setUp(self):
         self.monorepo = Path("/mono")
@@ -144,6 +185,7 @@ class ExecuteTest(unittest.TestCase):
             "update_manifest_version": MagicMock(),
             "write_env_file": MagicMock(),
             "run_command": MagicMock(),
+            "_validate_manifest_update_url": MagicMock(),
             "pack_crx": MagicMock(
                 side_effect=lambda dist, key, chrome, out, **kw: out
             ),
@@ -159,6 +201,10 @@ class ExecuteTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
             self.mocks[name] = mock
             self.tracker.attach_mock(mock, name)
+
+        read_text_patcher = patch(f"{MODULE}.Path.read_text", return_value="{}")
+        self.read_text = read_text_patcher.start()
+        self.addCleanup(read_text_patcher.stop)
 
         env_patcher = patch.dict("os.environ", ALL_KEYS)
         env_patcher.start()
@@ -176,6 +222,8 @@ class ExecuteTest(unittest.TestCase):
     def test_agent_flow_order_and_arguments(self):
         self._module(("agent",)).execute(_ctx())
 
+        self.read_text.assert_called_once_with(encoding="utf-8")
+
         called = [c[0] for c in self.tracker.mock_calls]
         self.assertEqual(
             called,
@@ -187,6 +235,7 @@ class ExecuteTest(unittest.TestCase):
                 "write_env_file",
                 "run_command",
                 "run_command",
+                "_validate_manifest_update_url",
                 "pack_crx",
                 "upload_file_to_r2",
             ],
@@ -216,6 +265,11 @@ class ExecuteTest(unittest.TestCase):
                 ("bun run build:agent", Path("/src/agent")),
             ],
         )
+
+        validate_args = self.mocks["_validate_manifest_update_url"].call_args.args
+        self.assertEqual(validate_args[0].name, "agent")
+        self.assertEqual(validate_args[1], {})
+        self.assertEqual(validate_args[2], Path("/src/agent/apps/app/dist/chrome-mv3"))
 
         pack_args = self.mocks["pack_crx"].call_args.args
         self.assertEqual(pack_args[0], Path("/src/agent/apps/app/dist/chrome-mv3"))

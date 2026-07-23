@@ -20,20 +20,10 @@ import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
 interface TimelineProps {
   dispatches: ToolDispatchRow[]
-  /**
-   * Dispatch ids whose screenshot file is confirmed to exist on
-   * disk (from `TaskDetail.screenshotDispatchIds`). Used to decide
-   * which rows show the screenshot preview block. Predates PR #1488:
-   * previously the row derived this from `toolName === 'screenshot'`
-   * but the screencast fallback and first-capture policy now write
-   * screenshots for many non-screenshot-tool dispatches, so the
-   * server-side disk-existence list is authoritative.
-   */
-  screenshotDispatchIds: readonly number[]
   startedAt: number
   endEvent: {
     createdAt: number
-    kind: 'closed' | 'errored'
+    kind: 'closed' | 'errored' | 'cancelled'
     reason: string | null
   } | null
   /**
@@ -43,7 +33,7 @@ interface TimelineProps {
    * scoped to any one tab; it lives on the Session tab only.
    */
   showSessionEnd?: boolean
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
@@ -51,20 +41,18 @@ const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
 function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
   const ids = new Set<number>()
   for (const d of dispatches) {
-    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.id)
+    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.dispatchId)
   }
   return ids
 }
 
 export function Timeline({
   dispatches,
-  screenshotDispatchIds,
   startedAt,
   endEvent,
   showSessionEnd = true,
   onScreenshotClick,
 }: TimelineProps) {
-  const screenshotIdSet = new Set(screenshotDispatchIds)
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
@@ -81,10 +69,10 @@ export function Timeline({
     })
   }
   const expandAll = (): void =>
-    setExpanded(new Set(dispatches.map((d) => d.id)))
+    setExpanded(new Set(dispatches.map((d) => d.dispatchId)))
   const collapseAll = (): void => setExpanded(new Set())
   const allExpanded =
-    dispatches.length > 0 && dispatches.every((d) => expanded.has(d.id))
+    dispatches.length > 0 && dispatches.every((d) => expanded.has(d.dispatchId))
   const noneExpanded = expanded.size === 0
 
   return (
@@ -124,13 +112,12 @@ export function Timeline({
       <ol className="space-y-1.5">
         {dispatches.map((d) => (
           <TimelineRow
-            key={d.id}
+            key={d.dispatchId}
             dispatch={d}
             offsetMs={Math.max(0, d.createdAt - startedAt)}
-            expanded={expanded.has(d.id)}
-            hasScreenshot={screenshotIdSet.has(d.id)}
+            expanded={expanded.has(d.dispatchId)}
             screenshotBaseUrl={screenshotBaseUrl}
-            onToggle={() => toggle(d.id)}
+            onToggle={() => toggle(d.dispatchId)}
             onScreenshotClick={onScreenshotClick}
           />
         ))}
@@ -146,24 +133,15 @@ interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
   expanded: boolean
-  /**
-   * Whether this dispatch has a screenshot file on disk (per the
-   * server's authoritative `screenshotDispatchIds` list). True for
-   * both explicit-screenshot-tool calls AND the many non-screenshot
-   * dispatches (navigate / act / tabs new / first read / ...) that
-   * the screencast fallback + first-capture policy now capture.
-   */
-  hasScreenshot: boolean
   screenshotBaseUrl: string | null
   onToggle: () => void
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 function TimelineRow({
   dispatch,
   offsetMs,
   expanded,
-  hasScreenshot,
   screenshotBaseUrl,
   onToggle,
   onScreenshotClick,
@@ -171,7 +149,8 @@ function TimelineRow({
   const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
-  const isScreenshot = hasScreenshot && !isError
+  const screenshotId = dispatch.screenshotId
+  const isScreenshot = screenshotId !== undefined
   return (
     <li
       className={cn(
@@ -236,12 +215,16 @@ function TimelineRow({
             <Block label="screenshot">
               <button
                 type="button"
-                onClick={() => onScreenshotClick(dispatch.id)}
+                onClick={() => onScreenshotClick(screenshotId)}
                 className="block w-64 overflow-hidden rounded-md border border-border-2"
               >
                 <AspectRatio ratio={16 / 10}>
                   <img
-                    src={taskScreenshotUrl(dispatch.id, screenshotBaseUrl)}
+                    src={taskScreenshotUrl(
+                      dispatch.sessionId,
+                      screenshotId,
+                      screenshotBaseUrl,
+                    )}
                     alt={`Screenshot at T+${formatOffset(offsetMs)}`}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -355,7 +338,9 @@ function SessionEndRow({
         session{' '}
         {endEvent.kind === 'closed'
           ? 'closed'
-          : `errored (${endEvent.reason ?? 'unknown'})`}
+          : endEvent.kind === 'cancelled'
+            ? 'stopped'
+            : `errored (${endEvent.reason ?? 'unknown'})`}
       </span>
     </li>
   )
@@ -371,7 +356,7 @@ function formatOffset(ms: number): string {
   return `${mins}m${rem.toString().padStart(2, '0')}s`
 }
 
-function argsSummary(argsJson: string | null): string {
+function argsSummary(argsJson: string | null | undefined): string {
   if (!argsJson || argsJson === '{}') return ''
   if (argsJson.length <= 80) return argsJson
   return `${argsJson.slice(0, 80)}…`

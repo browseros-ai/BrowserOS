@@ -1,0 +1,28 @@
+{
+  "name": "@browseros/acpx-ai-provider",
+  "version": "0.0.6",
+  "description": "Vercel AI SDK provider on top of the acpx ACP runtime. Inlined snapshot of acpx-ai-provider from DaniAkash/acpx.",
+  "license": "MIT",
+  "author": "Dani Akash",
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.10",
+    "@ai-sdk/provider-utils": "^4.0.26"
+  },
+  "peerDependencies": {
+    "acpx": ">=0.8.0",
+    "ai": ">=6.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  }
+}

@@ -15,7 +15,7 @@
 import {
   BROWSEROS_MCP_SERVER_NAME,
   MCP_PATH,
-} from '@browseros/claw-server/shared/mcp-url-common'
+} from '@browseros/shared/constants/urls'
 import {
   apiBaseUrlSourcesFromWindow,
   resolveBrowserOSMcpBaseUrl,

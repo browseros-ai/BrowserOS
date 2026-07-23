@@ -20,7 +20,12 @@ from ..release.ota.common import (
     SERVER_PLATFORMS,
 )
 from ..release.feeds.publisher import FeedPublisher
+from ..release.feeds.render import (
+    extract_appcast_item_count,
+    extract_appcast_version,
+)
 from ..release.feeds.spec import server_feed
+from ..products import SERVER_BUNDLES
 from ..products.server_binaries import server_ota_bundles_for_product
 
 app = typer.Typer(
@@ -74,6 +79,37 @@ def _feed_publisher() -> FeedPublisher:
         )
         raise typer.Exit(1)
     return FeedPublisher(env=env)
+
+
+def _log_alternate_product_appcasts(
+    selected_product: str, selected_bundle_id: str, channel: str
+) -> None:
+    """Suggest versioned staging appcasts owned by a different product."""
+    for bundle in SERVER_BUNDLES:
+        if bundle.id == selected_bundle_id:
+            continue
+        alternate_products = tuple(
+            product_id
+            for product_id in bundle.product_ids
+            if product_id != selected_product
+        )
+        if not alternate_products:
+            continue
+
+        candidate_path = get_appcast_path(channel, bundle.id).resolve()
+        try:
+            version = extract_appcast_version(candidate_path.read_text())
+        except (OSError, UnicodeError):
+            continue
+        if version is None:
+            continue
+
+        candidate_key = server_feed(bundle.id, channel).key
+        for product_id in alternate_products:
+            log_error(
+                f"Did you mean --product {product_id}? "
+                f"{candidate_key} carries {version}"
+            )
 
 
 @server_app.command("release")
@@ -166,7 +202,11 @@ def server_release_appcast(
         log_error(str(e))
         raise typer.Exit(1)
 
-    source_path = appcast_file or get_appcast_path(channel, bundle_id)
+    source_path = (appcast_file or get_appcast_path(channel, bundle_id)).resolve()
+    log_info(
+        f"Resolved appcast: product={product} bundle={bundle_id} "
+        f"channel={channel} spec={spec.key} source={source_path}"
+    )
     if not source_path.exists():
         log_error(f"Appcast file not found: {source_path}")
         if not appcast_file:
@@ -175,10 +215,17 @@ def server_release_appcast(
             )
         raise typer.Exit(1)
 
+    content = source_path.read_text()
+    if extract_appcast_item_count(content) == 0:
+        log_error(f"{spec.key} has no <item> entries: {source_path}")
+        if appcast_file is None:
+            _log_alternate_product_appcasts(product, bundle_id, channel)
+        raise typer.Exit(1)
+
     publisher = _feed_publisher()
     if not publisher.publish(
         spec,
-        source_path.read_text(),
+        content,
         publish=publish,
         allow_downgrade=allow_downgrade,
     ):

@@ -5,7 +5,6 @@
  */
 
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
 import { logger } from '../../lib/logger'
@@ -17,7 +16,6 @@ import type { ServerActivity } from '../services/server-activity'
 import type { Env } from '../types'
 
 export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
-export const REMOTE_AGENT_HARNESS_MCP_SOURCE = 'remote-agent-harness'
 
 type CreateMcpServerFn = typeof createMcpServer
 type CreateMcpTransportFn = (
@@ -28,7 +26,6 @@ interface McpRouteDeps {
   version: string
   browserSession: BrowserSession
   klavis?: KlavisService
-  executionDir: string
   createMcpServer?: CreateMcpServerFn
   createMcpTransport?: CreateMcpTransportFn
   activity?: ServerActivity
@@ -36,8 +33,6 @@ interface McpRouteDeps {
 
 interface McpRequestLogContext extends Record<string, unknown> {
   scopeId: string
-  source?: string
-  remoteAgentHarness: boolean
   selectedServerNames: string[]
   selectedServerCount: number
   defaultWindowId?: number
@@ -82,9 +77,6 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   const makeMcpTransport =
     deps.createMcpTransport ??
     ((options) => new StreamableHTTPTransport(options))
-  const remoteAgentHarness = {
-    outputFileAccess: createBrowserOutputFileAccess(),
-  }
 
   app.get('/', (c) =>
     c.json({
@@ -96,7 +88,6 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
     metrics.log('mcp.request', { scopeId })
-    const source = c.req.query('source') || undefined
     const includeStructuredContent = c.req.query('structured') === '1'
 
     const defaultWindowId = parseOptionalNumber(
@@ -108,14 +99,8 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       c.req.header(MANAGED_MCP_SERVERS_HEADER),
     )
 
-    const harness =
-      source === REMOTE_AGENT_HARNESS_MCP_SOURCE
-        ? remoteAgentHarness
-        : undefined
     const logContext: McpRequestLogContext = {
       scopeId,
-      source,
-      remoteAgentHarness: Boolean(harness),
       selectedServerNames,
       selectedServerCount: selectedServerNames.length,
       defaultWindowId,
@@ -134,8 +119,6 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       defaultWindowId,
       defaultTabGroupId,
       includeStructuredContent,
-      executionDir: deps.executionDir,
-      remoteAgentHarness: harness,
       activity: deps.activity,
     })
     const transport = makeMcpTransport({

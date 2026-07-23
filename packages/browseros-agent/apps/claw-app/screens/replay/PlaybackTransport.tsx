@@ -62,14 +62,17 @@ export function PlaybackTransport({
             className="absolute left-0 h-1.5 rounded-full bg-accent transition-[width] duration-100"
             style={{ width: `${progress}%` }}
           />
-          {frames.map((frame) => {
+          {frames.map((frame, index) => {
             if (frame.kind === 'action') return null
             const pct = totalSeconds === 0 ? 0 : (frame.t / totalSeconds) * 100
             const kind = KIND_STYLE[frame.kind]
             return (
               <button
                 type="button"
-                key={`bookmark-${frame.kind}-${frame.t}`}
+                key={
+                  frame.dispatchId ??
+                  `bookmark-${frame.kind}-${frame.t}-${index}`
+                }
                 title={frame.caption}
                 aria-label={`Jump to ${frame.caption}`}
                 onClick={() => onSeek(frame.t)}

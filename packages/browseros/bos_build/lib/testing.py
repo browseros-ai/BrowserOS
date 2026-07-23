@@ -218,6 +218,14 @@ class MockBrowserOSRoot:
             yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
         return path
 
+    def write_download_config(self, config: Dict) -> Path:
+        """Write build/config/download_resources.yaml with the given mapping."""
+        path = self.root / "bos_build" / "config" / "download_resources.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+        return path
+
     def write_gn_flags(self, platform: str, build_type: str, content: str) -> Path:
         """Write build/config/gn/flags.{platform}.{build_type}.gn."""
         path = self.root / "bos_build" / "config" / "gn" / f"flags.{platform}.{build_type}.gn"

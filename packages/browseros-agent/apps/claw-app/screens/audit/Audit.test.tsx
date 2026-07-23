@@ -57,10 +57,9 @@ function renderApp(): string {
 
 const sampleTask: TaskSummary = {
   sessionId: 'sess-1',
-  agentId: 'claude-code',
   slug: 'claude-code',
-  agentLabel: 'Claude Code',
-  title: 'Browsed example.com',
+  label: 'Claude Code',
+  name: 'Browsed example.com',
   site: 'example.com',
   startedAt: Date.now() - 12000,
   endedAt: Date.now(),
@@ -69,8 +68,7 @@ const sampleTask: TaskSummary = {
   toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
   status: 'done',
   errorCount: 0,
-  lastScreenshotDispatchId: 7,
-  cursorId: 8,
+  latestScreenshotId: 7,
 }
 
 describe('Audit screen', () => {
@@ -119,7 +117,7 @@ describe('Audit screen', () => {
     expect(html).toContain('Claude Code')
     expect(html).toContain('Browsed example.com')
     // DONE is the silent default in the editorial cockpit; the row's
-    // identity carries state (LIVE / FAILED render inline dots), so
+    // identity carries state (LIVE / FAILED / STOPPED render inline dots), so
     // no visible 'Done' text renders here anymore.
   })
 
@@ -131,6 +129,18 @@ describe('Audit screen', () => {
     }
     const html = renderApp()
     expect(html).toContain('Load older tasks')
+  })
+
+  it('labels cancelled rows as stopped', () => {
+    dataOverride = {
+      ...baseData,
+      tasks: [{ ...sampleTask, status: 'cancelled' }],
+      statusOptions: [{ status: 'cancelled', count: 1 }],
+      filters: { ...baseData.filters, status: 'cancelled' },
+    }
+    const html = renderApp()
+    expect(html).toContain('STOPPED')
+    expect(html).toContain('Stopped')
   })
 
   it('keeps the FilterBar visible when a filter yields zero results', () => {

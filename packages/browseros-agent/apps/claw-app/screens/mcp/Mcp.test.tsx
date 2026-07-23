@@ -9,49 +9,43 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import * as _connectionsHooks from '@/modules/api/connections.hooks'
 
 const mcpBrowserosConnections = [
   {
     harness: 'Claude Code',
     installed: false,
-    agentId: 'claude-code',
     message: '',
   },
   {
     harness: 'Cursor',
     installed: true,
-    agentId: 'cursor',
     configPath: '/tmp/cursor.json',
     message: 'Configured in Cursor.',
   },
   {
     harness: 'Codex',
     installed: false,
-    agentId: 'codex',
     message: '',
   },
   {
     harness: 'OpenCode',
     installed: false,
-    agentId: 'opencode',
     message: '',
   },
   {
     harness: 'Antigravity',
     installed: false,
-    agentId: 'antigravity',
     message: '',
   },
   {
     harness: 'VS Code',
     installed: false,
-    agentId: 'vscode',
     message: '',
   },
   {
     harness: 'Zed',
     installed: false,
-    agentId: 'zed',
     message: '',
   },
 ]
@@ -70,7 +64,7 @@ function getConnectionsHookResult() {
   return (
     connectionsHookState()[connectionsHookResultKey] ?? {
       data: {
-        connections: mcpBrowserosConnections,
+        items: mcpBrowserosConnections,
       },
       isPending: false,
       isError: false,
@@ -78,16 +72,21 @@ function getConnectionsHookResult() {
   )
 }
 
+// Spread the real module so unrelated tests that import a different
+// hook from connections.hooks still work: partial mock.module()
+// replacements corrupt Bun's process-scoped module registry (see the
+// 2026-07-17 test reliability audit).
 mock.module('@/modules/api/connections.hooks', () => ({
-  useBrowserosConnections: Object.assign(() => getConnectionsHookResult(), {
+  ..._connectionsHooks,
+  useConnections: Object.assign(() => getConnectionsHookResult(), {
     getKey: () => ['cockpit', 'connections'],
   }),
-  useConnectBrowseros: () => ({
+  useConnectHarness: () => ({
     isPending: false,
     variables: undefined,
     mutateAsync: async () => ({ installed: true }),
   }),
-  useDisconnectBrowseros: () => ({
+  useDisconnectHarness: () => ({
     isPending: false,
     variables: undefined,
     mutateAsync: async () => ({ installed: false }),
@@ -97,7 +96,7 @@ mock.module('@/modules/api/connections.hooks', () => ({
 beforeEach(() => {
   setConnectionsHookResult({
     data: {
-      connections: mcpBrowserosConnections,
+      items: mcpBrowserosConnections,
     },
     isPending: false,
     isError: false,
@@ -174,10 +173,19 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('Antigravity')
     expect(html).toContain('VS Code')
     expect(html).toContain('Zed')
-    expect(html).not.toContain('Claude Desktop')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')
     expect(html).not.toContain('OpenClaw')
+  })
+
+  it('renders the Claude Desktop extension callout linking to the repo install steps', () => {
+    const html = renderApp()
+    expect(html).toContain('Claude Desktop')
+    expect(html).toContain('Give Claude Desktop a real browser.')
+    expect(html).toContain('Also works with Cowork.')
+    expect(html).toContain(
+      'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension',
+    )
   })
 
   it('renders editorial state voices (silent success, mono uppercase action text)', () => {

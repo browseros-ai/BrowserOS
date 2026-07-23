@@ -3,12 +3,15 @@ use axum::{
     body::{Body, BodyDataStream, to_bytes},
     http::{HeaderMap, Request, StatusCode, header},
 };
-use browseros_core::TargetId;
+use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    domain::{AgentId, AgentRef, Session, SessionId, TabGroupColor},
-    services::tab_activity::RecordToolInput,
+    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+    identity::{ClientIdentity, ConversationIdentity},
+    ids::{ConvoId, DispatchId, ProfileId, SessionId},
+    services::sessions::Session,
+    services::{cockpit::RecordToolInput, sessions::PageOwnership},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -22,6 +25,9 @@ use tokio::{
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tower::ServiceExt;
 
+#[path = "support/contract_fixtures.rs"]
+mod contract_fixtures;
+
 struct TestApp {
     router: Router,
     state: AppState,
@@ -34,14 +40,6 @@ async fn test_app() -> anyhow::Result<TestApp> {
 }
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
-    test_app_with_options(cdp_port, start_browser, true).await
-}
-
-async fn test_app_with_options(
-    cdp_port: u16,
-    start_browser: bool,
-    screencast_screenshot_fallback: bool,
-) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -49,15 +47,15 @@ async fn test_app_with_options(
         cdp_port,
         proxy_port: None,
         resources_dir: dir.path().join("resources"),
-        browserclaw_dir: root.clone(),
-        claw_dir: root,
+        browserclaw_dir: root,
         session_idle: Duration::from_secs(300),
+        session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
-        screencast_screenshot_fallback,
+        replay_retention_days: 7,
         dev_mode: false,
         auth_token: None,
     });
-    let state = AppState::new_with_home(config, None, dir.path().join("home")).await?;
+    let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
         Some(state.browser.start())
     } else {
@@ -245,150 +243,44 @@ async fn health_survives_cdp_down() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (status, body) = request_json(&app.router, "GET", "/system/health", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "ok");
-    assert_eq!(body["cdp"]["connected"], false);
+    assert_eq!(body, json!({ "status": "ok" }));
     Ok(())
 }
 
 #[tokio::test]
-async fn audit_empty_and_replay_gone() -> anyhow::Result<()> {
+async fn system_shutdown_preserves_contract_body_and_defers_runtime_teardown() -> anyhow::Result<()>
+{
     let app = test_app().await?;
-    let (status, dispatches) = request_json(&app.router, "GET", "/audit/dispatches", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        dispatches["rows"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("rows not array"))?
-            .len(),
-        0
-    );
-    assert!(dispatches["nextCursor"].is_null());
-
-    let (status, body) = request_json(
-        &app.router,
-        "POST",
-        "/audit/replay/missing/events",
-        Some(json!({ "type": 3 })),
-    )
-    .await?;
-    assert_eq!(status, StatusCode::GONE);
-    assert_eq!(body["error"], "session not live");
-    Ok(())
-}
-
-#[tokio::test]
-async fn replay_tabs_tracks_only_live_agent_sessions() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    app.state
-        .tab_activity
-        .record_tool(RecordToolInput {
-            target_id: TargetId::from("target-live".to_string()),
-            page_id: 7,
-            url: "https://example.com/live".to_string(),
-            title: "Live Tab".to_string(),
-            agent_id: "agent-live".to_string(),
-            slug: "codex".to_string(),
-            tool_name: "tabs".to_string(),
-        })
-        .await;
-
-    let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
-    assert_eq!(body, json!({ "tabs": [] }));
-
-    let session_id = SessionId::new("session-live");
-    let session = test_session(session_id.clone(), "agent-live", "codex");
-    app.state.sessions.insert_for_testing(session.clone()).await;
-
-    let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    let rows = body["tabs"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("tabs not array"))?;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["sessionId"], "session-live");
-    assert_eq!(rows[0]["tabPageId"], 7);
-    assert_eq!(rows[0]["url"], "https://example.com/live");
-    assert_eq!(rows[0]["title"], "Live Tab");
-    assert!(rows[0]["groupColor"].is_null());
-
-    app.state
-        .sessions
-        .ownership()
-        .set_tab_group(
-            session.agent().ownership_key(),
-            Some("group-live".to_string()),
-            Some(TabGroupColor::Purple),
-        )
-        .await;
-    let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["tabs"][0]["groupColor"], "purple");
-
-    assert!(
-        app.state
-            .sessions
-            .remove(&session_id, "closed", Some("test close"))
-            .await?
-    );
-    let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "tabs": [] }));
-    Ok(())
-}
-
-#[tokio::test]
-async fn replay_tabs_keeps_first_live_session_per_agent_id() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    app.state
-        .tab_activity
-        .record_tool(RecordToolInput {
-            target_id: TargetId::from("target-duplicate".to_string()),
-            page_id: 8,
-            url: "https://example.com/duplicate".to_string(),
-            title: "Duplicate".to_string(),
-            agent_id: "agent-duplicate".to_string(),
-            slug: "codex".to_string(),
-            tool_name: "tabs".to_string(),
-        })
-        .await;
     app.state
         .sessions
         .insert_for_testing(test_session(
-            SessionId::new("session-a"),
-            "agent-duplicate",
-            "codex",
+            SessionId::new("shutdown-session"),
+            "shutdown-agent",
+            "shutdown-convo",
         ))
         .await;
-    app.state
-        .sessions
-        .insert_for_testing(test_session(
-            SessionId::new("session-b"),
-            "agent-duplicate",
-            "codex",
-        ))
-        .await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/system/shutdown")
+        .header(header::HOST, "localhost")
+        .body(Body::empty())?;
 
-    let (status, body) = request_json(&app.router, "GET", "/replay/tabs", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["tabs"][0]["sessionId"], "session-a");
-    Ok(())
-}
+    let response = app.router.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+    assert_eq!(bytes.as_ref(), br#"{"status":"ok"}"#);
+    tokio::time::timeout(Duration::from_secs(1), app.state.shutdown.requested()).await?;
+    assert_eq!(app.state.sessions.count().await, 1);
 
-#[tokio::test]
-async fn cancel_with_no_active_dispatches_returns_ts_shaped_404() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    let (status, body) =
-        request_json(&app.router, "POST", "/agents/idle-agent/cancel", None).await?;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(
-        body,
-        json!({
-            "ok": false,
-            "cancelled": 0,
-            "reason": "no active dispatches for this agent"
-        })
-    );
+    let retry = Request::builder()
+        .method("POST")
+        .uri("/system/shutdown")
+        .header(header::HOST, "localhost")
+        .body(Body::empty())?;
+    let retry_response = app.router.clone().oneshot(retry).await?;
+    let retry_bytes = to_bytes(retry_response.into_body(), usize::MAX).await?;
+    assert_eq!(retry_bytes.as_ref(), br#"{"status":"ok"}"#);
+    assert_eq!(app.state.sessions.shutdown().await?, 1);
     Ok(())
 }
 
@@ -485,7 +377,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("tools not array"))?
             .len(),
-        16
+        17
     );
 
     let blocked = json!({
@@ -514,12 +406,15 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             .contains("javascript")
     );
 
-    let (status, dispatches) = request_json(&app.router, "GET", "/audit/dispatches", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    let rows = dispatches["rows"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("rows not array"))?;
-    assert!(rows.is_empty(), "guard rejections must skip audit effects");
+    let dispatches = app
+        .state
+        .audit_log
+        .list_dispatches(Default::default())
+        .await?;
+    assert!(
+        dispatches.rows.is_empty(),
+        "guard rejections must skip audit effects"
+    );
 
     let (status, _headers, _body) = request_json_with_headers(
         &app.router,
@@ -549,18 +444,165 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn mcp_session_naming_triggers_once_after_first_successful_tabs_new() -> anyhow::Result<()> {
+async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let session_id = initialize_mcp(&app).await?;
+    let headers = [("mcp-session-id", session_id.as_str())];
+
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} })),
+        &headers,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let tool = body["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "name_session"))
+        .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
+    assert_eq!(
+        tool["description"],
+        "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename."
+    );
+    assert_eq!(
+        tool["inputSchema"],
+        json!({
+            "type": "object",
+            "properties": { "name": { "type": "string", "maxLength": 64 } },
+            "required": ["name"]
+        })
+    );
+    assert_eq!(
+        tool["annotations"],
+        json!({
+            "title": "Name session",
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true
+        })
+    );
+    assert!(
+        app.state
+            .audit_log
+            .list_tasks(Default::default())
+            .await?
+            .tasks
+            .is_empty()
+    );
+
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(session_id.clone()))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("session not minted"))?;
+    let generated = session.generated_label().to_string();
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(name_session_request(3, "  Invoice Processing!!!  ")),
+        &headers,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false);
+    assert_eq!(
+        body["result"]["content"][0]["text"],
+        format!("renamed to codex/invoice-processing (was codex/{generated})")
+    );
+    assert_eq!(session.label().await, "invoice-processing");
+    let first_task = app
+        .state
+        .audit_log
+        .get_task(session_id.as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("name_session dispatch missing"))?;
+    assert_eq!(first_task.summary.dispatch_count, 1);
+    assert_eq!(first_task.summary.tool_sequence, ["name_session"]);
+    assert_eq!(first_task.dispatches[0].tool_name, "name_session");
+    assert_eq!(
+        first_task.dispatches[0].args_json.as_deref(),
+        Some(r#"{"name":"  Invoice Processing!!!  "}"#)
+    );
+    let (status, live) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(live["items"][0]["sessionId"], session_id);
+    assert_eq!(live["items"][0]["dispatchCount"], 1);
+    assert_eq!(live["items"][0]["toolSequence"], json!(["name_session"]));
+
+    let (_status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(name_session_request(4, "Quarterly Reporting")),
+        &headers,
+    )
+    .await?;
+    assert_eq!(
+        body["result"]["content"][0]["text"],
+        "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| (task.dispatch_count, task.tool_sequence)),
+        Some((
+            2,
+            vec!["name_session".to_string(), "name_session".to_string()]
+        ))
+    );
+
+    for (id, invalid, message) in [
+        (
+            5,
+            "!!!".to_string(),
+            "name must contain a usable session name",
+        ),
+        (6, "x".repeat(65), "name must be at most 64 characters"),
+    ] {
+        let (_status, _headers, body) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(name_session_request(id, &invalid)),
+            &headers,
+        )
+        .await?;
+        assert_eq!(body["result"]["isError"], true);
+        assert_eq!(body["result"]["content"][0]["text"], message);
+        assert_eq!(session.label().await, "quarterly-reporting");
+    }
+    assert_eq!(
+        app.state
+            .audit_log
+            .get_task_summary(session_id.as_str())
+            .await?
+            .map(|task| task.dispatch_count),
+        Some(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app.router).await?;
+    wait_for_cdp_connected(&app).await?;
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
             "protocolVersion": "2025-06-18",
-            "capabilities": { "elicitation": {} },
+            "capabilities": {},
             "clientInfo": { "name": "Claude Code", "version": "1.0" }
         }
     });
@@ -574,24 +616,6 @@ async fn mcp_session_naming_triggers_once_after_first_successful_tabs_new() -> a
         .to_string();
     send_initialized(&app.router, &session_id).await?;
 
-    // Naming starts only after a successful tabs-new call, so initialize and
-    // tool discovery must not create an elicitation or session label.
-    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(list),
-        &[("mcp-session-id", &session_id)],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        body["result"]["tools"]
-            .as_array()
-            .is_some_and(|tools| !tools.is_empty())
-    );
-
     wait_for_session_registration(&app, &session_id).await?;
     let session = app
         .state
@@ -599,81 +623,43 @@ async fn mcp_session_naming_triggers_once_after_first_successful_tabs_new() -> a
         .lookup(&SessionId::new(session_id.clone()))
         .await
         .ok_or_else(|| anyhow::anyhow!("session not minted"))?;
-    assert_eq!(session.session_label().await, None);
+    let generated = session.generated_label().to_string();
+    assert_eq!(session.label().await, generated);
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(tabs_new_request(3)),
-        &[("mcp-session-id", &session_id)],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-
-    let elicitation = tokio::time::timeout(
-        Duration::from_secs(2),
-        stream.next_method("elicitation/create"),
-    )
-    .await??;
-    assert_eq!(elicitation["params"]["mode"], "form");
-    assert_eq!(
-        elicitation["params"]["requestedSchema"]["required"],
-        json!(["name"])
+    let tip = format!(
+        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
     );
-    let request_id = elicitation["id"].clone();
-    let (status, _headers, _body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "action": "accept",
-                "content": { "name": "Invoice Processing!!!" }
-            }
-        })),
-        &[("mcp-session-id", &session_id)],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::ACCEPTED);
-
-    let mut applied = false;
-    for _ in 0..100 {
-        let label_ready = session.session_label().await.as_deref() == Some("invoice-processing");
-        let title_ready = mock.group_updates.lock().await.iter().any(|params| {
-            params.get("title").and_then(Value::as_str) == Some("claude/invoice-processing")
-        });
-        if label_ready && title_ready {
-            applied = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    for id in 3..=7 {
+        let (status, _headers, body) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(tabs_new_request(id)),
+            &[("mcp-session-id", &session_id)],
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
+        assert_eq!(
+            body["result"]["content"]
+                .as_array()
+                .and_then(|content| content.last())
+                .and_then(|block| block["text"].as_str()),
+            Some(tip.as_str())
+        );
     }
-    assert!(applied, "session label or group title was not applied");
-    assert_eq!(
-        app.state
-            .sessions
-            .ownership()
-            .tab_group_ref(&session.agent().ownership_key())
-            .await
-            .as_deref(),
-        Some("group-1")
-    );
-
     let (status, _headers, body) = request_json_with_headers(
         &app.router,
         "POST",
         "/mcp",
-        Some(tabs_new_request(4)),
+        Some(tabs_new_request(8)),
         &[("mcp-session-id", &session_id)],
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
+    assert!(!body.to_string().contains("Tip: this session is"));
     match tokio::time::timeout(
         Duration::from_millis(250),
         stream.next_method("elicitation/create"),
@@ -681,9 +667,10 @@ async fn mcp_session_naming_triggers_once_after_first_successful_tabs_new() -> a
     .await
     {
         Err(_) => {}
-        Ok(Ok(request)) => anyhow::bail!("second tabs new elicited again: {request:?}"),
+        Ok(Ok(request)) => anyhow::bail!("unexpected elicitation: {request:?}"),
         Ok(Err(error)) => return Err(error),
     }
+    assert!(!mock.group_updates.lock().await.is_empty());
     drop(mock);
     Ok(())
 }
@@ -693,7 +680,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app.router).await?;
+    wait_for_cdp_connected(&app).await?;
     let session_id = initialize_mcp(&app).await?;
 
     let (status, _headers, body) = request_json_with_headers(
@@ -732,20 +719,6 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
             .is_some_and(|text| text.starts_with("Your tabs:\n[1] https://example.com"))
     );
 
-    let screencast_task = app
-        .state
-        .screencast
-        .clone()
-        .start(app.state.browser.clone(), app.state.tab_activity.clone());
-    let _ = request_json(&app.router, "GET", "/tabs/activity", None).await?;
-    for _ in 0..50 {
-        if app.state.screencast.frame_for(1).await.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(app.state.screencast.frame_for(1).await.is_some());
-
     let wait = json!({
         "jsonrpc": "2.0",
         "id": 12,
@@ -766,95 +739,144 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(wait_body["result"]["isError"], false);
 
-    let (status, dispatches) = request_json(&app.router, "GET", "/audit/dispatches", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    let rows = dispatches["rows"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("rows not array"))?;
+    let dispatches = app
+        .state
+        .audit_log
+        .list_dispatches(Default::default())
+        .await?;
+    let rows = &dispatches.rows;
     assert!(
         rows.iter()
-            .any(|row| row["toolName"] == "tabs" && row["dispatchId"].is_string())
+            .any(|row| row.tool_name == "tabs" && row.dispatch_id.is_some())
     );
-
-    // The first successful page read persists the already-cached poller frame.
-    let mut screenshot_statuses = Vec::new();
-    for row in rows {
-        let dispatch_id = row["dispatchId"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("dispatchId not string"))?;
-        screenshot_statuses.push(
-            request_status(
-                &app.router,
-                "GET",
-                &format!("/audit/screenshot/{dispatch_id}"),
-            )
-            .await?,
-        );
-    }
+    let screenshot = rows
+        .iter()
+        .find(|row| row.has_screenshot)
+        .ok_or_else(|| anyhow::anyhow!("no dispatch had a session screenshot"))?;
+    assert_eq!(
+        tokio::fs::read(app.state.screenshots.path_for(&session_id, screenshot.id)).await?,
+        b"jpeg"
+    );
     assert!(
-        screenshot_statuses.contains(&StatusCode::OK),
-        "no dispatch had a persisted screenshot: {screenshot_statuses:?}"
+        tokio::fs::metadata(app.state.screenshots.legacy_path_for(screenshot.id))
+            .await
+            .is_err()
     );
-    app.state.screencast.stop();
-    screencast_task.await?;
+
     drop(mock);
     Ok(())
 }
 
 #[tokio::test]
-async fn screencast_fallback_flag_disables_fallback_screenshots() -> anyhow::Result<()> {
-    let mock = MockCdp::start().await?;
-    let app = test_app_with_options(mock.cdp_port, false, false).await?;
-    app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app.router).await?;
-    let session_id = initialize_mcp(&app).await?;
-
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "POST",
-        "/mcp",
-        Some(tabs_new_request(30)),
-        &[("mcp-session-id", &session_id)],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-
-    let (status, dispatches) = request_json(&app.router, "GET", "/audit/dispatches", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    let rows = dispatches["rows"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("rows not array"))?;
-    assert_eq!(rows.len(), 1);
-    let dispatch_id = rows[0]["dispatchId"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("dispatchId not string"))?;
-    let status = request_status(
-        &app.router,
-        "GET",
-        &format!("/audit/screenshot/{dispatch_id}"),
-    )
-    .await?;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    drop(mock);
-    Ok(())
-}
-
-#[tokio::test]
-async fn cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
+async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_access()
+-> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app.router).await?;
-    let session_id = initialize_mcp(&app).await?;
-    let session = app
+    wait_for_cdp_connected(&app).await?;
+    let session_a_id = initialize_mcp(&app).await?;
+    let session_b_id = initialize_mcp(&app).await?;
+    let session_a = app
         .state
         .sessions
-        .lookup(&SessionId::new(session_id.clone()))
+        .lookup(&SessionId::new(session_a_id.clone()))
         .await
-        .ok_or_else(|| anyhow::anyhow!("missing test session"))?;
-    let agent_id = session.agent().agent_id().as_str().to_string();
+        .ok_or_else(|| anyhow::anyhow!("first session missing"))?;
+    let session_b = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(session_b_id.clone()))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("second session missing"))?;
+    assert_ne!(session_a.convo_id(), session_b.convo_id());
 
+    for (id, session_id) in [(10, &session_a_id), (11, &session_b_id)] {
+        let (status, _headers, body) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(tabs_new_request(id)),
+            &[("mcp-session-id", session_id)],
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "tabs new: {body:?}");
+    }
+
+    let ownership = app.state.sessions.ownership();
+    let (group_a, group_b) =
+        wait_for_distinct_session_groups(&ownership, session_a.convo_id(), session_b.convo_id())
+            .await?;
+    assert_ne!(group_a, group_b);
+    let pages_a = ownership.owned_pages(session_a.convo_id()).await;
+    let pages_b = ownership.owned_pages(session_b.convo_id()).await;
+    assert_eq!(pages_a.len(), 1);
+    assert_eq!(pages_b.len(), 1);
+    assert!(pages_a.is_disjoint(&pages_b));
+    let page_a = pages_a
+        .first()
+        .map(|page| page.0)
+        .ok_or_else(|| anyhow::anyhow!("first session page missing"))?;
+    let page_b = pages_b
+        .first()
+        .map(|page| page.0)
+        .ok_or_else(|| anyhow::anyhow!("second session page missing"))?;
+
+    for (id, name, arguments) in [
+        (12, "snapshot", json!({ "page": page_b })),
+        (
+            13,
+            "navigate",
+            json!({ "page": page_b, "url": "https://example.org" }),
+        ),
+    ] {
+        let (status, _headers, body) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            })),
+            &[("mcp-session-id", &session_a_id)],
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], true, "cross-page body: {body:?}");
+        assert_eq!(
+            body["result"]["content"][0]["text"],
+            format!(
+                "page {page_b} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
+            )
+        );
+    }
+    let (_status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "tools/call",
+            "params": { "name": "snapshot", "arguments": { "page": page_a } }
+        })),
+        &[("mcp-session-id", &session_b_id)],
+    )
+    .await?;
+    assert_eq!(body["result"]["isError"], true);
+    drop(mock);
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let session_id = initialize_mcp(&app).await?;
     let (status, _headers, body) = request_json_with_headers(
         &app.router,
         "POST",
@@ -888,23 +910,33 @@ async fn cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
         .await
     });
 
-    let mut cancelled = None;
-    for _ in 0..50 {
-        let (status, body) = request_json(
-            &app.router,
-            "POST",
-            &format!("/agents/{agent_id}/cancel"),
-            None,
-        )
-        .await?;
-        if status == StatusCode::OK {
-            cancelled = Some(body);
-            break;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(&session_id))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("live MCP session missing"))?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if session.active_dispatch_count().await == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let body = cancelled.ok_or_else(|| anyhow::anyhow!("cancel route never observed dispatch"))?;
-    assert_eq!(body["cancelled"], 1);
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("wait dispatch was not admitted"))?;
+
+    let (status, body) = request_json(
+        &app.router,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/cancel"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "cancelled");
+    assert_eq!(body["cancelledDispatches"], 1);
 
     let (status, _headers, wait_body) = wait_task.await??;
     assert_eq!(status, StatusCode::OK);
@@ -915,27 +947,101 @@ async fn cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
     );
     assert!(wait_body["result"].get("structuredContent").is_none());
 
-    let (status, dispatches) = request_json(&app.router, "GET", "/audit/dispatches", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    let cancellation_meta = dispatches["rows"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["toolName"] == "wait"))
-        .and_then(|row| row["resultMeta"].as_str())
+    let dispatches = app
+        .state
+        .audit_log
+        .list_dispatches(Default::default())
+        .await?;
+    let cancellation_meta = dispatches
+        .rows
+        .iter()
+        .find(|row| row.tool_name == "wait")
+        .and_then(|row| row.result_meta.as_deref())
         .ok_or_else(|| anyhow::anyhow!("missing cancellation audit row"))?;
     let cancellation_meta: Value = serde_json::from_str(cancellation_meta)?;
     assert_eq!(cancellation_meta["isError"], true);
+    assert_eq!(cancellation_meta["cancelled"], true);
+    assert_eq!(
+        cancellation_meta["cancellationKind"],
+        "cockpit.operator-cancelled"
+    );
     assert_eq!(
         cancellation_meta["structuredKeys"],
         json!(["cancellationKind", "cancellationReason"])
+    );
+    let dispatch_count = dispatches.rows.len();
+
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": { "name": "tabs", "arguments": { "action": "list" } }
+        })),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no longer live")),
+        "post-stop body: {body:?}"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .len(),
+        dispatch_count
+    );
+
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["sessionId"] != session_id))
+    );
+
+    let (status, body) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=cancelled",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["sessionId"] == session_id))
     );
     drop(mock);
     Ok(())
 }
 
 #[tokio::test]
-async fn tabs_activity_enriches_by_agent_id_only() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    let agents_dir = app.state.config.claw_dir.join("agents");
+async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-exact", 1).await;
+    mock.add_tab(102, "target-fallback", 1).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert_eq!(browser.pages.list().await?.len(), 2);
+    let agents_dir = app.state.config.browserclaw_dir.join("agents");
     tokio::fs::create_dir_all(&agents_dir).await?;
     tokio::fs::write(
         agents_dir.join("stored-agent.json"),
@@ -958,127 +1064,318 @@ async fn tabs_activity_enriches_by_agent_id_only() -> anyhow::Result<()> {
     )
     .await?;
 
+    let stored_session = Session::new(
+        SessionId::new("stored-session"),
+        ClientIdentity::Profile {
+            profile_id: ProfileId::new("stored-agent"),
+            slug: "mcp".to_string(),
+            label: "Stored Agent".to_string(),
+        },
+        ConversationIdentity::new("mcp", "agile-alpaca".to_string()),
+        "Codex".to_string(),
+        tokio::time::Instant::now(),
+    );
+    let ephemeral_session =
+        test_session(SessionId::new("ephemeral-session"), "bright-beaver", "mcp");
+    app.state
+        .sessions
+        .insert_for_testing(stored_session.clone())
+        .await;
+    app.state
+        .sessions
+        .insert_for_testing(ephemeral_session.clone())
+        .await;
+    record_session_with_dispatch(&app, &stored_session).await?;
+    record_session_with_dispatch(&app, &ephemeral_session).await?;
+
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
             target_id: TargetId::from("target-exact".to_string()),
+            tab_id: 101,
             page_id: 1,
-            url: "https://example.com/exact".to_string(),
-            title: "Exact".to_string(),
-            agent_id: "stored-agent".to_string(),
+            session_id: stored_session.id().as_str().to_string(),
+            agent_id: stored_session.convo_id().as_str().to_string(),
             slug: "mcp".to_string(),
             tool_name: "tabs".to_string(),
         })
         .await;
+    app.state.session_tabs.enqueue_claim_tab_for_session(
+        101,
+        Some("target-exact".to_string()),
+        stored_session.id().as_str().to_string(),
+        stored_session.convo_id().as_str().to_string(),
+        1,
+    );
     app.state
         .tab_activity
         .record_tool(RecordToolInput {
             target_id: TargetId::from("target-fallback".to_string()),
+            tab_id: 102,
             page_id: 2,
-            url: "https://example.com/fallback".to_string(),
-            title: "Fallback".to_string(),
-            agent_id: "ephemeral-agent".to_string(),
+            session_id: ephemeral_session.id().as_str().to_string(),
+            agent_id: ephemeral_session.convo_id().as_str().to_string(),
             slug: "mcp".to_string(),
             tool_name: "tabs".to_string(),
         })
         .await;
+    app.state.session_tabs.enqueue_claim_tab_for_session(
+        102,
+        Some("target-fallback".to_string()),
+        ephemeral_session.id().as_str().to_string(),
+        ephemeral_session.convo_id().as_str().to_string(),
+        1,
+    );
 
-    let (status, body) = request_json(&app.router, "GET", "/tabs/activity", None).await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
     assert_eq!(status, StatusCode::OK);
-    let rows = body["tabs"]
+    let rows = body["items"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("tabs not array"))?;
+        .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
     let exact = rows
         .iter()
-        .find(|row| row["targetId"] == "target-exact")
-        .ok_or_else(|| anyhow::anyhow!("missing exact tab"))?;
-    assert_eq!(exact["agentLabel"], "Stored Agent");
+        .find(|row| row["sessionId"] == stored_session.id().as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing exact session"))?;
+    assert_eq!(exact["label"], "Stored Agent");
     assert_eq!(exact["harness"], "Codex");
+    assert_eq!(exact["live"]["browserTabs"][0]["browserTabId"], 101);
 
     let fallback = rows
         .iter()
-        .find(|row| row["targetId"] == "target-fallback")
-        .ok_or_else(|| anyhow::anyhow!("missing fallback tab"))?;
-    assert_eq!(fallback["agentLabel"], "mcp");
+        .find(|row| row["sessionId"] == ephemeral_session.id().as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing fallback session"))?;
+    assert_eq!(fallback["label"], "mcp");
     assert!(fallback["harness"].is_null());
+    assert_eq!(fallback["live"]["browserTabs"][0]["browserTabId"], 102);
     Ok(())
 }
 
 #[tokio::test]
-async fn tabs_activity_embeds_polled_screenshot_frames() -> anyhow::Result<()> {
+async fn live_projection_filters_external_close() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    mock.add_tab(1, "target-1", 1).await;
-    mock.add_tab(2, "target-2", 2).await;
+    mock.add_tab(101, "target-old", 1).await;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
     app.state.browser.connect_once_for_testing().await?;
-    wait_for_cdp_connected(&app.router).await?;
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert_eq!(browser.pages.list().await?.len(), 1);
+    let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    record_session_with_dispatch(&app, &session).await?;
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-old".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "snapshot".to_string(),
+        })
+        .await;
+    app.state.session_tabs.enqueue_claim_tab_for_session(
+        101,
+        Some("target-old".to_string()),
+        session.id().as_str().to_string(),
+        session.convo_id().as_str().to_string(),
+        1,
+    );
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["browserTabId"],
+        101
+    );
+
+    mock.remove_tab(101).await;
+    let recording_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sessions/session-live/recording/events")
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header("x-recording-tab-id", "101")
+        .header("x-recording-page-id", "1")
+        .header("x-recording-target-id", "target-old")
+        .body(Body::from("{\"ts\":1}\n"))?;
+    let recording_response = app.router.clone().oneshot(recording_request).await?;
+    assert_eq!(recording_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"][0]["live"]["browserTabs"], json!([]));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_projection_refreshes_metadata_and_preview_uses_current_target() -> anyhow::Result<()>
+{
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-old", 1).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    record_session_with_dispatch(&app, &session).await?;
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-old".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "navigate".to_string(),
+        })
+        .await;
+    app.state.session_tabs.enqueue_claim_tab_for_session(
+        101,
+        Some("target-old".to_string()),
+        session.id().as_str().to_string(),
+        session.convo_id().as_str().to_string(),
+        1,
+    );
+
+    mock.update_tab(
+        101,
+        "target-old",
+        "https://example.com/after-navigation",
+        "After navigation",
+    )
+    .await;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["url"],
+        "https://example.com/after-navigation"
+    );
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["title"],
+        "After navigation"
+    );
+    mock.update_tab(
+        101,
+        "target-new",
+        "https://example.com/reused",
+        "Replacement tab",
+    )
+    .await;
+    let captures_before = mock.captures.lock().await.len();
+    let browser = app
+        .state
+        .browser
+        .session()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing browser session"))?;
+    assert!(
+        browser
+            .screenshot_for_target(
+                PageId(1),
+                &TargetId::from("target-old".to_string()),
+                ScreenshotCaptureOptions::default(),
+            )
+            .await?
+            .is_none()
+    );
+    assert_eq!(mock.captures.lock().await.len(), captures_before);
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["items"][0]["live"]["browserTabs"][0]["browserTabId"],
+        101
+    );
+    assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 0);
+    assert_eq!(
+        request_status(&app.router, "GET", "/api/v1/sessions/session-live/preview",).await?,
+        StatusCode::OK
+    );
+
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-new".to_string()),
+            tab_id: 101,
+            page_id: 1,
+            session_id: session.id().as_str().to_string(),
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "navigate".to_string(),
+        })
+        .await;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=live", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"][0]["live"]["browserTabs"][0]["toolCount"], 1);
+    assert_eq!(
+        request_status(&app.router, "GET", "/api/v1/sessions/session-live/preview",).await?,
+        StatusCode::OK
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_previews_capture_each_sessions_owned_target() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-1", 1).await;
+    mock.add_tab(102, "target-2", 2).await;
+    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
 
     for (page_id, target_id, agent_id) in [(1, "target-1", "agent-a"), (2, "target-2", "agent-b")] {
+        let session = test_session(
+            SessionId::new(format!("session-{target_id}")),
+            agent_id,
+            "codex",
+        );
+        app.state.sessions.insert_for_testing(session.clone()).await;
+        record_session_with_dispatch(&app, &session).await?;
         app.state
             .tab_activity
             .record_tool(RecordToolInput {
                 target_id: TargetId::from(target_id.to_string()),
+                tab_id: i64::from(page_id) + 100,
                 page_id,
-                url: format!("https://example.com/{target_id}"),
-                title: target_id.to_string(),
+                session_id: format!("session-{target_id}"),
                 agent_id: agent_id.to_string(),
                 slug: "codex".to_string(),
                 tool_name: "tabs".to_string(),
             })
             .await;
+        app.state.session_tabs.enqueue_claim_tab_for_session(
+            i64::from(page_id) + 100,
+            Some(target_id.to_string()),
+            session.id().as_str().to_string(),
+            session.convo_id().as_str().to_string(),
+            1,
+        );
     }
 
-    let screencast_task = app
-        .state
-        .screencast
-        .clone()
-        .start(app.state.browser.clone(), app.state.tab_activity.clone());
-
-    let mut last_frames: Vec<(String, Option<Value>)> = Vec::new();
-    let mut done = false;
-    for _ in 0..100 {
-        let (status, body) = request_json(&app.router, "GET", "/tabs/activity", None).await?;
-        assert_eq!(status, StatusCode::OK);
-        let rows = body["tabs"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tabs not array"))?;
-        last_frames = rows
-            .iter()
-            .map(|row| {
-                (
-                    row["targetId"].as_str().unwrap_or_default().to_string(),
-                    (!row["screencast"].is_null()).then(|| row["screencast"].clone()),
-                )
-            })
-            .collect();
-        let frame_data = |target: &str| {
-            last_frames
-                .iter()
-                .find(|(target_id, _)| target_id == target)
-                .and_then(|(_, frame)| frame.as_ref())
-                .and_then(|frame| frame["jpegBase64"].as_str())
-                .map(str::to_string)
-        };
-        if frame_data("target-1").as_deref() == Some("anBlZw==")
-            && frame_data("target-2").as_deref() == Some("anBlZw==")
-        {
-            done = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        done,
-        "polled frames never reached /tabs/activity; last: {last_frames:?}"
+    assert_eq!(
+        request_status(&app.router, "GET", "/api/v1/sessions?status=live").await?,
+        StatusCode::OK
     );
-
-    for (_, frame) in &last_frames {
-        let frame = frame
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing screencast frame"))?;
-        assert_eq!(frame.as_object().map(serde_json::Map::len), Some(2));
-        assert!(frame["capturedAt"].as_i64().is_some_and(|at| at > 0));
-        assert_eq!(frame["jpegBase64"], "anBlZw==");
+    for session_id in ["session-target-1", "session-target-2"] {
+        assert_eq!(
+            request_status(
+                &app.router,
+                "GET",
+                &format!("/api/v1/sessions/{session_id}/preview"),
+            )
+            .await?,
+            StatusCode::OK
+        );
     }
 
     let captures = mock.captures.lock().await.clone();
@@ -1098,22 +1395,67 @@ async fn tabs_activity_embeds_polled_screenshot_frames() -> anyhow::Result<()> {
         );
     }
 
-    app.state.screencast.stop();
-    screencast_task.await?;
     drop(mock);
     Ok(())
 }
 
 fn test_session(session_id: SessionId, agent_id: &str, slug: &str) -> Arc<Session> {
+    let generated_label = agent_id
+        .strip_prefix(&format!("{slug}-"))
+        .unwrap_or(agent_id)
+        .to_string();
     Session::new(
         session_id,
-        AgentRef::Ephemeral {
-            agent_id: AgentId::new(agent_id),
+        ClientIdentity::Ephemeral {
             slug: slug.to_string(),
             label: slug.to_string(),
         },
+        ConversationIdentity::new(slug, generated_label),
+        "Codex".to_string(),
         tokio::time::Instant::now(),
     )
+}
+
+async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyhow::Result<()> {
+    app.state
+        .audit_log
+        .record_session_start(
+            session.id().as_str(),
+            session.convo_id().as_str(),
+            session.agent().slug(),
+            session.agent().label(),
+            session.agent().label(),
+            "1.0",
+        )
+        .await?;
+    app.state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: session.agent().slug().to_string(),
+            agent_label: session.agent().label().to_string(),
+            session_id: session.id().as_str().to_string(),
+            tool_name: "snapshot".to_string(),
+            page_id: None,
+            tab_id: None,
+            target_id: None,
+            url: None,
+            title: None,
+            raw_args: json!({}),
+            duration_ms: 1,
+            dispatch_id: DispatchId::new(),
+            tool_input_token_estimate: 1,
+            tool_output_token_estimate: 0,
+            token_estimator_version: 1,
+            result: DispatchResultSummary {
+                is_error: false,
+                cancelled: false,
+                structured_content: json!({}),
+                content: json!([]),
+            },
+        })
+        .await?;
+    Ok(())
 }
 
 async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
@@ -1159,6 +1501,18 @@ fn tabs_new_request(id: u64) -> Value {
     })
 }
 
+fn name_session_request(id: u64, name: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": "name_session",
+            "arguments": { "name": name }
+        }
+    })
+}
+
 /// The initialized notification is acknowledged before the service finishes
 /// registering the session, so an immediate tool call can race the registry.
 async fn wait_for_session_registration(app: &TestApp, session_id: &str) -> anyhow::Result<()> {
@@ -1192,19 +1546,30 @@ async fn send_initialized(router: &Router, session_id: &str) -> anyhow::Result<(
     Ok(())
 }
 
-async fn wait_for_cdp_connected(router: &Router) -> anyhow::Result<()> {
-    let mut last = Value::Null;
+async fn wait_for_cdp_connected(app: &TestApp) -> anyhow::Result<()> {
     for _ in 0..120 {
-        let (status, body) = request_json(router, "GET", "/system/health", None).await?;
-        if status == StatusCode::OK && body["cdp"]["connected"] == true {
+        if app.state.browser.state().connected {
             return Ok(());
         }
-        last = body;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err(anyhow::anyhow!(
-        "mock CDP did not connect; last health: {last}"
-    ))
+    Err(anyhow::anyhow!("mock CDP did not connect"))
+}
+
+async fn wait_for_distinct_session_groups(
+    ownership: &Arc<PageOwnership>,
+    key_a: &ConvoId,
+    key_b: &ConvoId,
+) -> anyhow::Result<(String, String)> {
+    for _ in 0..100 {
+        let group_a = ownership.tab_group_ref(key_a).await;
+        let group_b = ownership.tab_group_ref(key_b).await;
+        if let (Some(group_a), Some(group_b)) = (group_a, group_b) {
+            return Ok((group_a, group_b));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    anyhow::bail!("session tab groups were not created")
 }
 
 struct MockCdp {
@@ -1270,6 +1635,24 @@ impl MockCdp {
             group_id: None,
             window_id,
         });
+    }
+
+    async fn remove_tab(&self, tab_id: i64) {
+        self.tabs.lock().await.retain(|tab| tab.tab_id != tab_id);
+    }
+
+    async fn update_tab(&self, tab_id: i64, target_id: &str, url: &str, title: &str) {
+        if let Some(tab) = self
+            .tabs
+            .lock()
+            .await
+            .iter_mut()
+            .find(|tab| tab.tab_id == tab_id)
+        {
+            tab.target_id = target_id.to_string();
+            tab.url = url.to_string();
+            tab.title = title.to_string();
+        }
     }
 }
 
@@ -1435,6 +1818,14 @@ async fn handle_mock_cdp_method(
         "Page.captureScreenshot" => Ok(json!({ "data": "anBlZw==" })),
         "Browser.createTabGroup" => {
             let mut tabs = tabs.lock().await;
+            let group_id = format!(
+                "group-{}",
+                tabs.iter()
+                    .filter_map(|tab| tab.group_id.as_deref())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    + 1
+            );
             let tab_ids = params
                 .get("tabIds")
                 .and_then(Value::as_array)
@@ -1444,12 +1835,12 @@ async fn handle_mock_cdp_method(
                 if let Some(tab_id) = id.as_i64()
                     && let Some(tab) = tabs.iter_mut().find(|tab| tab.tab_id == tab_id)
                 {
-                    tab.group_id = Some("group-1".to_string());
+                    tab.group_id = Some(group_id.clone());
                 }
             }
             Ok(json!({
                 "group": {
-                    "groupId": "group-1",
+                    "groupId": group_id,
                     "windowId": 1,
                     "title": params.get("title").and_then(Value::as_str).unwrap_or("group"),
                     "color": "blue",

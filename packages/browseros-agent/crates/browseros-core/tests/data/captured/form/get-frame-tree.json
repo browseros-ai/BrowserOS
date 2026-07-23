@@ -1,0 +1,21 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "1FFFBB627D722A438AD9A5114C03E849",
+      "loaderId": "E668E3E78E13E52E0F8557D51F8BB9F3",
+      "url": "http://127.0.0.1:17243/form.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    }
+  }
+}

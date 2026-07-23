@@ -1,43 +1,77 @@
 use anyhow::Context;
 use axum::Router;
-use clap::Parser;
-use claw_server_rust::{AppState, build_router, config::Cli, mcp::browser_mcp_service};
+use claw_server_rust::{
+    AppRuntime, AppState, ShutdownHandle, VERSION,
+    analytics::{AnalyticsSink, events},
+    api::mcp::browser_mcp_service,
+    build_router,
+    config::{Cli, CliAction},
+};
 use rmcp::{serve_server, transport::stdio};
-use std::{future::Future, io, net::SocketAddr, sync::Arc};
-use tokio::{net::TcpListener, sync::oneshot};
-use tracing::{error, info};
+use serde_json::json;
+use std::{
+    future::Future,
+    io::{self, Write},
+    net::SocketAddr,
+    sync::Arc,
+};
+use tokio::net::TcpListener;
+use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let config = Arc::new(claw_server_rust::config::Config::load(&cli.config)?);
+    let (config_path, stdio_mode) = match Cli::parse_action() {
+        CliAction::Version => {
+            writeln!(io::stdout().lock(), "{VERSION}")?;
+            return Ok(());
+        }
+        CliAction::Run { config, stdio } => (config, stdio),
+    };
+    let config = Arc::new(claw_server_rust::config::Config::load(config_path)?);
     let _guard = init_tracing(config.clone())?;
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let state = AppState::new(config.clone(), Some(shutdown_tx)).await?;
-    state.browser.start();
-    state
-        .screencast
-        .clone()
-        .start(state.browser.clone(), state.tab_activity.clone());
-    state.sessions.clone().spawn_idle_sweeper();
-    if cli.stdio {
+    let state = AppState::new(config.clone()).await?;
+    let mut runtime = AppRuntime::start(state);
+    let run_result = run(&mut runtime, config, stdio_mode).await;
+    let shutdown_result = runtime.shutdown().await;
+    match (run_result, shutdown_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Err(run_error), Err(shutdown_error)) => {
+            error!(error = %shutdown_error, "application teardown failed after server error");
+            Err(run_error)
+        }
+    }
+}
+
+async fn run(
+    runtime: &mut AppRuntime,
+    config: Arc<claw_server_rust::config::Config>,
+    stdio_mode: bool,
+) -> anyhow::Result<()> {
+    let state = runtime.state();
+    state.browser.wait_for_initial_attempt().await;
+    let initial_browser = state.browser.state();
+    if initial_browser.connected && !state.tab_registry.is_ready(initial_browser.epoch) {
+        anyhow::bail!("failed to seed tab target identities before server startup");
+    }
+    if stdio_mode {
         return serve_stdio(state).await;
     }
-    spawn_signal_shutdown(state.clone());
-    serve(state, config, shutdown_rx).await
+    serve(runtime, config).await
 }
 
 fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result<WorkerGuard> {
-    std::fs::create_dir_all(config.claw_dir.join("logs")).with_context(|| {
+    std::fs::create_dir_all(config.browserclaw_dir.join("logs")).with_context(|| {
         format!(
             "failed to create log directory {}",
-            config.claw_dir.join("logs").display()
+            config.browserclaw_dir.join("logs").display()
         )
     })?;
     let file_appender =
-        tracing_appender::rolling::daily(config.claw_dir.join("logs"), "claw-server.log");
+        tracing_appender::rolling::daily(config.browserclaw_dir.join("logs"), "claw-server.log");
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
     let env_filter = EnvFilter::try_from_env("CLAW_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
@@ -54,22 +88,28 @@ fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result
 }
 
 async fn serve(
-    state: AppState,
+    runtime: &mut AppRuntime,
     config: Arc<claw_server_rust::config::Config>,
-    shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
+    let state = runtime.state();
     let heal_state = state.clone();
-    serve_with_boot_task(build_router(state), config, shutdown_rx, async move {
-        heal_boot_config(&heal_state).await
-    })
+    let analytics = state.analytics.clone();
+    serve_with_boot_task(
+        runtime,
+        build_router(state),
+        config,
+        analytics,
+        async move { heal_boot_config(&heal_state).await },
+    )
     .await
 }
 
 /// Binds the HTTP listener before starting non-critical boot work in the background.
 async fn serve_with_boot_task(
+    runtime: &mut AppRuntime,
     app: Router,
     config: Arc<claw_server_rust::config::Config>,
-    shutdown_rx: oneshot::Receiver<()>,
+    analytics: Arc<dyn AnalyticsSink>,
     boot_task: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], config.server_port));
@@ -83,28 +123,77 @@ async fn serve_with_boot_task(
         }
         Err(err) => return Err(err).context("failed to bind claw-server listener"),
     };
-    info!(%addr, "claw-server-rust listening");
-    tokio::spawn(boot_task);
+    analytics.capture(events::SERVER_STARTED, json!({}));
+    // Use the ACTUAL bound address, not the requested port, so an OS-assigned
+    // or dev port (config port 0) is still published correctly.
+    let bound = listener.local_addr().unwrap_or(addr);
+    info!(%bound, "claw-server-rust listening");
+    // Publish the canonical MCP URL for external discovery (the Codex and Claude
+    // Desktop plugins). This is the proxy port (the source of truth), falling
+    // back to the direct server port in dev where the proxy is unavailable, so
+    // runtime.json matches what the cockpit and connected agents advertise.
+    // Fire-and-forget: a best-effort disk write must never gate the listener
+    // from accepting connections, since a stalled FUSE / network /
+    // container-mounted browserclaw_dir could otherwise leave the socket bound
+    // but never served. Mirrors the archived TS server, which deliberately did
+    // not await writeRuntimeFile for the same reason.
+    let runtime_dir = config.browserclaw_dir.clone();
+    // The proxy port is the advertised endpoint. Without a proxy (dev) publish
+    // the ACTUAL bound port, which stays correct even when the config requested
+    // an OS-assigned port (server_port == 0) that public_base_url would render
+    // as an unreachable `:0`.
+    let runtime_url = match config.proxy_port {
+        Some(proxy) => format!("http://127.0.0.1:{proxy}"),
+        None => format!("http://{bound}"),
+    };
+    runtime.spawn_task("runtime file publication", async move {
+        claw_server_rust::services::runtime_file::write(&runtime_dir, &runtime_url).await;
+    });
+    let shutdown = runtime.state().shutdown;
+    runtime.spawn_task("harness integration reconciliation", boot_task);
     axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
-        })
+        .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await
         .context("claw-server listener failed")
 }
 
 async fn serve_stdio(state: AppState) -> anyhow::Result<()> {
-    let running = serve_server(browser_mcp_service(state.clone()), stdio())
-        .await
-        .context("failed to start stdio MCP server")?;
+    let running = ready_after(
+        state.analytics.clone(),
+        serve_server(browser_mcp_service(state.clone()), stdio()),
+    )
+    .await
+    .context("failed to start stdio MCP server")?;
     running.waiting().await.context("stdio MCP server failed")?;
-    state.sessions.shutdown().await?;
-    state.screencast.stop();
-    state.browser.stop();
     Ok(())
 }
 
+/// Marks stdio ready only after transport construction returns a live handle.
+async fn ready_after<T, E>(
+    analytics: Arc<dyn AnalyticsSink>,
+    start: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let running = start.await?;
+    analytics.capture(events::SERVER_STARTED, json!({}));
+    Ok(running)
+}
+
 async fn heal_boot_config(state: &AppState) {
+    // Re-point every connected agent at the current canonical URL first (the
+    // proxy port may have moved on this app launch), then repair any config
+    // that still drifted from the now-current manifest spec.
+    match state
+        .harness
+        .migrate_connected_urls(&state.config.public_mcp_url())
+        .await
+    {
+        Ok(outcome) => info!(
+            migrated = outcome.migrated,
+            failed = outcome.failed,
+            "re-synced connected MCP agents to the current URL"
+        ),
+        Err(err) => error!(error = %err, "MCP URL migration failed"),
+    }
     match state.harness.run_integrity_scan().await {
         Ok(outcome) => info!(
             verified = outcome.verified,
@@ -116,21 +205,29 @@ async fn heal_boot_config(state: &AppState) {
         ),
         Err(err) => error!(error = %err, "MCP config integrity scan failed"),
     }
+    match state.harness.run_skill_reconciliation().await {
+        Ok(outcome) => {
+            for warning in &outcome.warnings {
+                warn!(target = %warning.target.display(), warning = %warning.message, "harness skill reconciliation needs a retry");
+            }
+            info!(
+                installed = outcome.installed,
+                updated = outcome.updated,
+                removed = outcome.removed,
+                unchanged = outcome.unchanged,
+                warnings = outcome.warnings.len(),
+                "completed harness skill reconciliation"
+            );
+        }
+        Err(err) => error!(error = %err, "harness skill reconciliation failed"),
+    }
 }
 
-fn spawn_signal_shutdown(state: AppState) {
-    tokio::spawn(async move {
-        wait_for_shutdown_signal().await;
-        match state.sessions.shutdown().await {
-            Ok(drained) => info!(drained, "drained sessions after shutdown signal"),
-            Err(err) => error!(error = %err, "session drain after shutdown signal failed"),
-        }
-        state.screencast.stop();
-        state.browser.stop();
-        if let Some(tx) = state.shutdown.lock().await.take() {
-            let _ = tx.send(());
-        }
-    });
+async fn wait_for_shutdown(shutdown: ShutdownHandle) {
+    tokio::select! {
+        () = shutdown.requested() => {}
+        () = wait_for_shutdown_signal() => shutdown.request(),
+    }
 }
 
 #[cfg(unix)]
@@ -158,12 +255,43 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::serve_with_boot_task;
+    use super::{ready_after, serve_with_boot_task};
     use axum::Router;
-    use claw_server_rust::config::Config;
-    use std::{sync::Arc, time::Duration};
+    use claw_server_rust::{
+        AppRuntime, AppState,
+        analytics::{AnalyticsSink, events},
+        config::Config,
+    };
+    use serde_json::Value;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use tempfile::tempdir;
     use tokio::{net::TcpStream, sync::oneshot};
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: Mutex<Vec<events::EventDefinition>>,
+    }
+
+    impl AnalyticsSink for RecordingAnalytics {
+        fn capture(&self, event: events::EventDefinition, _properties: Value) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+        }
+    }
+
+    impl RecordingAnalytics {
+        fn snapshot(&self) -> Vec<events::EventDefinition> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
 
     #[tokio::test]
     async fn listener_binds_while_boot_task_is_still_running() -> anyhow::Result<()> {
@@ -177,33 +305,90 @@ mod tests {
             proxy_port: None,
             resources_dir: root.path().join("resources"),
             browserclaw_dir: root.path().to_path_buf(),
-            claw_dir: root.path().to_path_buf(),
             session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
-            screencast_screenshot_fallback: true,
+            replay_retention_days: 7,
             dev_mode: false,
             auth_token: None,
         });
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
+        let shutdown = state.shutdown.clone();
+        let mut runtime = AppRuntime::start(state);
+        let analytics = Arc::new(RecordingAnalytics::default());
         let (boot_started_tx, boot_started_rx) = oneshot::channel();
         let release = Arc::new(tokio::sync::Notify::new());
         let boot_release = release.clone();
-        let server = tokio::spawn(serve_with_boot_task(
+        let client = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(1), boot_started_rx).await??;
+            let stream = TcpStream::connect(("127.0.0.1", port)).await?;
+            drop(stream);
+            release.notify_one();
+            shutdown.request();
+            anyhow::Ok(())
+        });
+
+        serve_with_boot_task(
+            &mut runtime,
             Router::new(),
             config,
-            shutdown_rx,
+            analytics.clone(),
             async move {
                 let _ = boot_started_tx.send(());
                 boot_release.notified().await;
             },
-        ));
-
-        tokio::time::timeout(Duration::from_secs(1), boot_started_rx).await??;
-        let stream = TcpStream::connect(("127.0.0.1", port)).await?;
-        drop(stream);
-        release.notify_one();
-        let _ = shutdown_tx.send(());
-        server.await??;
+        )
+        .await?;
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
+        client.await??;
+        runtime.shutdown().await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn listener_bind_failure_emits_no_server_started_event() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = Arc::new(Config {
+            server_port: occupied.local_addr()?.port(),
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
+        let mut runtime = AppRuntime::start(state);
+        let analytics = Arc::new(RecordingAnalytics::default());
+
+        let result = serve_with_boot_task(
+            &mut runtime,
+            Router::new(),
+            config,
+            analytics.clone(),
+            async {},
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(analytics.snapshot().is_empty());
+        runtime.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stdio_readiness_emits_only_after_transport_start_succeeds() {
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let running = ready_after(analytics.clone(), async { Ok::<_, &str>("running") }).await;
+        assert_eq!(running, Ok("running"));
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
+
+        let failed = ready_after(analytics.clone(), async { Err::<(), _>("failed") }).await;
+        assert_eq!(failed, Err("failed"));
+        assert_eq!(analytics.snapshot(), vec![events::SERVER_STARTED]);
     }
 }

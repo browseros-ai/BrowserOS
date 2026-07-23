@@ -229,7 +229,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +                                    bool hidden,
 +                                    bool activate) {
 +  if (hidden) {
-+    window->ShowInactive();
++    // Headless Browser windows must stay unshown.
 +    return;
 +  }
 +  if (activate) {
@@ -611,7 +611,7 @@ index 30bd52d09c3fc..5ef348c475174 100644
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +850,810 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -297,3 +850,813 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -687,8 +687,9 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  chrome::AddTabAt(browser, navigate_url, -1, true);
 +
-+  browser->window()->Show();
-+
++  if (!want_hidden) {
++    browser->window()->Show();
++  }
 +  BrowserWindowInterface* bwi = GetBrowserWindowInterface(
 +      browser->session_id().id());
 +  if (!bwi) {
@@ -704,7 +705,9 @@ index 30bd52d09c3fc..5ef348c475174 100644
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
-+  bwi->GetTabStripModel()->CloseAllTabs();
++  // BrowserWindow::Close owns the full Browser/TabStripModel teardown. Calling
++  // CloseAllTabs() first can synchronously start native-window destruction; a
++  // second close against the same BrowserWindowInterface crashes on macOS.
 +  bwi->GetWindow()->Close();
 +  return Response::Success();
 +}

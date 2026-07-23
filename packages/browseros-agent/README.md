@@ -117,7 +117,6 @@ The server and Claw server read startup ports, resource directories, execution d
 | `app` | `.env.development` | Browser extension and local BrowserOS launch settings, including dev ports, public Vite values, source-map upload settings, and optional GraphQL schema path. |
 | `claw` | `.env.development` | Optional Claw app/server overrides such as Claw API URL, user-data dir, CDP port, and `BROWSERCLAW_DIR`. |
 | `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, and local server test settings. |
-| `build` | `.env.production` | Build-time production values such as `AGENT_RUNNER_JWT_SECRET`. |
 | `upload` | `.env.production` | Cloudflare R2 credentials and bucket for production artifact uploads. |
 
 Production build and upload scripts read root `.env.production` plus exported process env through the shared loader in `@browseros/shared/env/*`; exported process env takes precedence. Missing required values fail with an error naming the key, section, and root file.
@@ -150,6 +149,8 @@ bun run lint                  # Check with Biome
 bun run lint:fix              # Auto-fix
 bun run typecheck             # TypeScript check
 ```
+
+`bun run typecheck` runs the native TypeScript 7 compiler (`tsc` from `typescript@7`, the Go-native build). Unlike an editor's bundled classic TypeScript, the native compiler does not implicitly include every `@types/*` package it finds — each tsconfig must list its ambient type packages in `compilerOptions.types` (the root tsconfig defaults to `["node", "bun"]`). A new package that omits this may look green in the editor but fail `bun run typecheck` in CI with "Cannot find name 'Bun' / 'process'"; add the needed names to its `types` array. For editor parity with CI, install your editor's native TypeScript 7 support.
 
 `build:server` now emits artifacts under `dist/prod/server/<target>/` and zip files under `dist/prod/server/`.
 

@@ -14,7 +14,9 @@ pub const WAIT_FOR_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 pub const WAIT_FOR_LOAD_POLL: Duration = Duration::from_millis(150);
 pub const NEW_PAGE_READY_ATTEMPTS: usize = 30;
 pub const NEW_PAGE_READY_POLL: Duration = Duration::from_millis(100);
-pub const ACTION_SETTLE_DEFAULT_TIMEOUT: Duration = Duration::from_millis(2_000);
+/// Total automatic post-action settle budget, deliberately short to keep agent actions responsive.
+/// Callers awaiting slower asynchronous page changes should use the explicit `wait` tool.
+pub const ACTION_SETTLE_DEFAULT_TIMEOUT: Duration = Duration::from_millis(50);
 pub const ACTION_SETTLE_NAVIGATION_DETECT: Duration = Duration::from_millis(150);
 pub const ACTION_SETTLE_NAVIGATION_POLL: Duration = Duration::from_millis(50);
 pub const ACTION_SETTLE_DOM_QUIET: Duration = Duration::from_millis(100);

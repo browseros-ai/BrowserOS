@@ -7,10 +7,10 @@ import { createAzure } from '@ai-sdk/azure'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import type { AcpxProvider } from '@browseros/acpx-ai-provider'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import type { AcpxProvider } from 'acpx-ai-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
 import {
@@ -86,6 +86,24 @@ function expandHomeToken(path: string): string {
   return path.replace(/^\$HOME(?=\/|$)/, homedir())
 }
 
+async function codexBrowserlessEnv(): Promise<
+  Record<string, string> | undefined
+> {
+  try {
+    // Loaded lazily so the overlay's fs-heavy module stays out of the
+    // factory's static import graph (it is only needed for codex chats).
+    const { materializeCodexBrowserlessHome } = await import(
+      '../lib/agents/host-acp/codex-home'
+    )
+    const codexHome = await materializeCodexBrowserlessHome({
+      browserosDir: getBrowserosDir(),
+    })
+    return codexHome ? { CODEX_HOME: codexHome } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function resolveAcpAgentId(config: ResolvedAgentConfig): string {
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM) {
     if (!config.acpAgentId) {
@@ -157,10 +175,21 @@ async function createAcpLanguageModel(
   // pinned version range for both tiers instead of falling through to
   // whatever range acpx happens to ship.
   for (const builtIn of ['claude', 'codex'] as const) {
+    // Codex ships a bundled in-app browser plugin that competes with the
+    // BrowserOS MCP tools for browser tasks; point it at an overlay
+    // CODEX_HOME that disables that plugin so BrowserOS is the only
+    // browser. Only built for the codex adapter when codex is the agent
+    // actually being spawned, and falls back to the real home if the
+    // overlay cannot be built.
+    const extraEnv =
+      builtIn === 'codex' && agentId === 'codex'
+        ? await codexBrowserlessEnv()
+        : undefined
     const launcher = resolveAcpSpawnCommand({
       agentType: builtIn,
       browserosDir: getBrowserosDir(),
       resourcesDir: config.resourcesDir,
+      extraEnv,
     })
     if (launcher) {
       agentRegistryOverrides[builtIn] = launcher.command
@@ -272,21 +301,37 @@ function createAnthropicFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
-  return createAnthropic({ apiKey: config.apiKey })
+  return createAnthropic({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
+// The SDK defaults to the Responses API; many OpenAI-shape proxies
+// only speak Chat Completions. The `NewProviderDialog` shows a hint
+// on the OpenAI Base URL field pointing users at the "OpenAI
+// Compatible" provider template for that case, so a proxy that fails
+// here has a documented next step. Users who point at a Responses-
+// compatible custom endpoint get the direct-forward behavior they
+// asked for.
 function createOpenAIFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
-  return createOpenAI({ apiKey: config.apiKey })
+  return createOpenAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
 function createGoogleFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
-  return createGoogleGenerativeAI({ apiKey: config.apiKey })
+  return createGoogleGenerativeAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })
 }
 
 function createOpenRouterFactory(
@@ -297,18 +342,27 @@ function createOpenRouterFactory(
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
 }
 
 function createAzureFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
-  if (!config.apiKey || !config.resourceName) {
-    throw new Error('Azure provider requires apiKey and resourceName')
+  // baseUrl and resourceName are mutually exclusive per the
+  // @ai-sdk/azure contract; the SDK ignores resourceName when
+  // baseURL is set. Accept either so users of custom Azure OpenAI
+  // gateways can point at a full URL directly. The UI copy already
+  // says "Overrides resource name if set".
+  if (!config.apiKey || (!config.resourceName && !config.baseUrl)) {
+    throw new Error(
+      'Azure provider requires apiKey and either resourceName or baseUrl',
+    )
   }
   return createAzure({
-    resourceName: config.resourceName,
     apiKey: config.apiKey,
+    ...(config.resourceName && { resourceName: config.resourceName }),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
 }
 

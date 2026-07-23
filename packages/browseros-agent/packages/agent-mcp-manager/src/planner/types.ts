@@ -45,6 +45,18 @@ export interface AgentFileState {
    * directory and creating a ghost config.
    */
   parentExists: boolean
+  /**
+   * True when at least one of the catalog's `installCheckPaths`
+   * entries for this agent exists on disk. Agents whose global
+   * config file is user-created (OpenCode, Codex, ...) can be
+   * installed without any of the `systemPaths` files or their
+   * parents existing yet, so this widens the install signal beyond
+   * `exists || parentExists`. Optional so pre-existing tests that
+   * synthesize an `AgentFileState` do not need to be updated;
+   * `readState` populates it in system scope, and the planner
+   * treats `undefined` as `false`.
+   */
+  installCheckHit?: boolean
 }
 
 /**

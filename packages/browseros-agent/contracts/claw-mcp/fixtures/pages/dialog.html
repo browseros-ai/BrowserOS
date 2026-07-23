@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dialog fixture</title>
+  </head>
+  <body>
+    <h1>Dialog fixture</h1>
+    <button id="trigger-alert" type="button">Trigger alert</button>
+    <button id="trigger-confirm" type="button">Trigger confirm</button>
+    <div id="dialog-result">no dialog yet</div>
+    <script>
+      document.getElementById('trigger-alert').addEventListener('click', () => {
+        alert('fixture alert')
+        document.getElementById('dialog-result').textContent = 'alert:done'
+      })
+      document.getElementById('trigger-confirm').addEventListener('click', () => {
+        const accepted = confirm('fixture confirm')
+        document.getElementById('dialog-result').textContent = `confirm:${accepted}`
+      })
+    </script>
+  </body>
+</html>

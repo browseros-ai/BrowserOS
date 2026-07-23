@@ -99,7 +99,7 @@ export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
     }
     map.set(t.slug, {
       slug: t.slug,
-      agentLabel: t.agentLabel,
+      agentLabel: t.label,
       count: 1,
     })
   }
@@ -109,9 +109,14 @@ export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
 export function statusOptions(
   tasks: TaskSummary[],
 ): { status: TaskStatus; count: number }[] {
-  const counts: Record<TaskStatus, number> = { live: 0, done: 0, failed: 0 }
+  const counts: Record<TaskStatus, number> = {
+    live: 0,
+    done: 0,
+    failed: 0,
+    cancelled: 0,
+  }
   for (const t of tasks) counts[t.status] += 1
-  return (['live', 'done', 'failed'] as TaskStatus[])
+  return (['live', 'done', 'failed', 'cancelled'] as TaskStatus[])
     .filter((s) => counts[s] > 0)
     .map((s) => ({ status: s, count: counts[s] }))
 }
@@ -129,7 +134,7 @@ export function siteOptions(
     .sort((a, b) => b.count - a.count)
 }
 
-export function parseResultMeta(raw: string | null): {
+export function parseResultMeta(raw: string | null | undefined): {
   isError: boolean
   contentSummary: string
   structuredKeys: string[]

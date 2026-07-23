@@ -15,7 +15,7 @@ import {
  * outside the component is the canonical stable-reference recipe.
  *
  * Editorial cockpit language: mono tabular numerics for grid data,
- * agent dot + mono-uppercase label for identity, LIVE / FAILED
+ * agent dot + mono-uppercase label for identity, LIVE / FAILED / STOPPED
  * folded inline into the agent cell so the row's identity carries
  * its state (DONE stays silent, no Status column).
  */
@@ -28,10 +28,11 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
       <div className="inline-flex items-center gap-2">
         <AgentDot slug={row.original.slug} />
         <span className="font-mono text-[11px] text-ink-2 uppercase tracking-[0.06em]">
-          {row.original.agentLabel}
+          {row.original.label}
         </span>
         {row.original.status === 'live' && <LiveInlineChip />}
         {row.original.status === 'failed' && <FailedInlineChip />}
+        {row.original.status === 'cancelled' && <StoppedInlineChip />}
       </div>
     ),
     enableSorting: true,
@@ -42,7 +43,7 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     accessorKey: 'title',
     cell: ({ row }) => (
       <span className="block truncate text-[13px] text-ink">
-        {row.original.title}
+        {row.original.name}
       </span>
     ),
     enableSorting: false,
@@ -138,6 +139,18 @@ function FailedInlineChip() {
         className="inline-block size-1.5 rounded-full bg-red-500"
       />
       FAILED
+    </span>
+  )
+}
+
+function StoppedInlineChip() {
+  return (
+    <span className="inline-flex items-center gap-1 font-mono text-[10px] text-ink-3 uppercase tracking-[0.08em]">
+      <span
+        aria-hidden
+        className="inline-block size-1.5 rounded-full bg-ink-3"
+      />
+      STOPPED
     </span>
   )
 }

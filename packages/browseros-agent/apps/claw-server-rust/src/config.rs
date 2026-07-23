@@ -3,25 +3,53 @@ use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     env, fs,
-    num::NonZeroU16,
+    num::{NonZeroU16, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
-const DEFAULT_SESSION_IDLE_MS: u64 = 5 * 60 * 1000;
+const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
+const DEFAULT_SESSION_RETENTION_MS: u64 = 2 * 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
+const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
 #[command(name = "browseros-claw-server-rs")]
 pub struct Cli {
+    #[arg(long, conflicts_with_all = ["config", "stdio"], help = "Print version")]
+    version: bool,
+    #[arg(long, required_unless_present = "version")]
+    config: Option<PathBuf>,
     #[arg(long)]
-    pub config: PathBuf,
-    #[arg(long)]
-    pub stdio: bool,
+    stdio: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CliAction {
+    Version,
+    Run { config: PathBuf, stdio: bool },
+}
+
+impl Cli {
+    #[must_use]
+    pub fn parse_action() -> CliAction {
+        Self::parse().into_action()
+    }
+
+    fn into_action(self) -> CliAction {
+        match (self.version, self.config) {
+            (true, None) => CliAction::Version,
+            (false, Some(config)) => CliAction::Run {
+                config,
+                stdio: self.stdio,
+            },
+            _ => unreachable!("Clap enforces version and run argument constraints"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,10 +59,10 @@ pub struct Config {
     pub proxy_port: Option<u16>,
     pub resources_dir: PathBuf,
     pub browserclaw_dir: PathBuf,
-    pub claw_dir: PathBuf,
     pub session_idle: Duration,
+    pub session_retention: Duration,
     pub session_sweep_interval: Duration,
-    pub screencast_screenshot_fallback: bool,
+    pub replay_retention_days: u64,
     pub dev_mode: bool,
     pub auth_token: Option<String>,
 }
@@ -77,6 +105,8 @@ struct SidecarConfig {
     flags: SidecarFlags,
     #[serde(default)]
     auth: SidecarAuth,
+    #[serde(default)]
+    replay: Option<SidecarReplay>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -100,6 +130,12 @@ struct SidecarFlags {
 #[derive(Debug, Default, Deserialize)]
 struct SidecarAuth {
     token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarReplay {
+    retention_days: NonZeroU64,
 }
 
 impl Config {
@@ -141,7 +177,6 @@ impl Config {
             .unwrap_or_else(|| cwd.join("resources"));
         let dev_mode = sidecar.flags.dev_mode.unwrap_or(default_dev_mode);
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
-        let claw_dir = browserclaw_dir.clone();
         let auth_token = sidecar
             .auth
             .token
@@ -153,32 +188,44 @@ impl Config {
             proxy_port,
             resources_dir,
             browserclaw_dir,
-            claw_dir,
             session_idle: Duration::from_millis(read_positive_ms(
                 env,
                 "CLAW_SESSION_IDLE_MS",
                 DEFAULT_SESSION_IDLE_MS,
+            )),
+            session_retention: Duration::from_millis(read_positive_ms(
+                env,
+                "CLAW_SESSION_RETENTION_MS",
+                DEFAULT_SESSION_RETENTION_MS,
             )),
             session_sweep_interval: Duration::from_millis(read_positive_ms(
                 env,
                 "CLAW_SESSION_SWEEP_INTERVAL_MS",
                 DEFAULT_SESSION_SWEEP_INTERVAL_MS,
             )),
-            screencast_screenshot_fallback: read_bool_default_true(
-                env,
-                "CLAW_SCREENCAST_SCREENSHOT_FALLBACK",
-            ),
+            replay_retention_days: sidecar
+                .replay
+                .map(|replay| replay.retention_days.get())
+                .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
             auth_token,
         })
     }
 
+    /// Base URL external tools should reach BrowserClaw at: the Chrome-assigned
+    /// proxy port when present (the source of truth), else the direct server
+    /// port (dev, where the proxy is unavailable).
     #[must_use]
-    pub fn public_mcp_url(&self) -> String {
+    pub fn public_base_url(&self) -> String {
         format!(
-            "http://127.0.0.1:{}/mcp",
+            "http://127.0.0.1:{}",
             self.proxy_port.unwrap_or(self.server_port)
         )
+    }
+
+    #[must_use]
+    pub fn public_mcp_url(&self) -> String {
+        format!("{}/mcp", self.public_base_url())
     }
 
     #[must_use]
@@ -219,9 +266,8 @@ fn read_positive_ms(env: &ConfigEnv, key: &str, fallback: u64) -> u64 {
     parse_positive_int_prefix(raw).unwrap_or(fallback)
 }
 
-/// Mirrors the TS server's `Number.parseInt(raw, 10)` env semantics: the
-/// leading integer prefix wins and trailing garbage is ignored ("500ms" is
-/// 500), while digit-less or non-positive values fall back.
+/// Accepts the established leading-integer format: trailing text is ignored
+/// ("500ms" is 500), while digit-less or non-positive values fall back.
 fn parse_positive_int_prefix(raw: &str) -> Option<u64> {
     let trimmed = raw.trim_start();
     let unsigned = trimmed.strip_prefix('+').unwrap_or(trimmed);
@@ -232,14 +278,6 @@ fn parse_positive_int_prefix(raw: &str) -> Option<u64> {
         .parse::<u64>()
         .ok()
         .filter(|value| *value > 0)
-}
-
-fn read_bool_default_true(env: &ConfigEnv, key: &str) -> bool {
-    let Some(raw) = env.get(key) else {
-        return true;
-    };
-    let normalized = raw.trim().to_ascii_lowercase();
-    normalized != "0" && normalized != "false"
 }
 
 fn clean_string(value: &str) -> Option<String> {
@@ -253,9 +291,45 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigEnv};
+    use super::{Cli, CliAction, Config, ConfigEnv};
+    use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
     use tempfile::tempdir;
+
+    #[test]
+    fn version_action_does_not_require_config() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from(["browseros-claw-server-rs", "--version"])?;
+        assert_eq!(cli.into_action(), CliAction::Version);
+        Ok(())
+    }
+
+    #[test]
+    fn run_action_requires_config() -> anyhow::Result<()> {
+        let Err(error) = Cli::try_parse_from(["browseros-claw-server-rs"]) else {
+            anyhow::bail!("run mode parsed without --config");
+        };
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        Ok(())
+    }
+
+    #[test]
+    fn version_action_rejects_run_flags() -> anyhow::Result<()> {
+        for args in [
+            &["browseros-claw-server-rs", "--version", "--stdio"][..],
+            &[
+                "browseros-claw-server-rs",
+                "--version",
+                "--config",
+                "sidecar.json",
+            ],
+        ] {
+            let Err(error) = Cli::try_parse_from(args) else {
+                anyhow::bail!("version mode accepted run-only arguments: {args:?}");
+            };
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_sidecar_defaults_and_browserclaw_dir_override() -> anyhow::Result<()> {
@@ -268,6 +342,7 @@ mod tests {
             dir.path().join("browserclaw").to_string_lossy().to_string(),
         );
         vars.insert("CLAW_SESSION_IDLE_MS".to_string(), "1000".to_string());
+        vars.insert("CLAW_SESSION_RETENTION_MS".to_string(), "2000".to_string());
         let cfg = Config::load_with_env(
             &config_path,
             &ConfigEnv::with_vars(vars, PathBuf::from("/tmp/home")),
@@ -276,9 +351,25 @@ mod tests {
         assert_eq!(cfg.cdp_port, 49337);
         assert_eq!(cfg.proxy_port, None);
         assert_eq!(cfg.session_idle, Duration::from_millis(1000));
+        assert_eq!(cfg.session_retention, Duration::from_millis(2000));
+        assert_eq!(cfg.replay_retention_days, 7);
         assert!(cfg.browserclaw_dir.ends_with("browserclaw"));
-        assert_eq!(cfg.claw_dir, cfg.browserclaw_dir);
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9200/mcp");
+        // No proxy configured (dev): falls back to the direct server port.
+        assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9200");
+        Ok(())
+    }
+
+    #[test]
+    fn reads_replay_retention_days_from_sidecar_config() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let config_path = dir.path().join("sidecar.json");
+        fs::write(&config_path, r#"{"replay":{"retentionDays":14}}"#)?;
+        let cfg = Config::load_with_env(
+            &config_path,
+            &ConfigEnv::with_vars(BTreeMap::new(), dir.path().join("home")),
+        )?;
+        assert_eq!(cfg.replay_retention_days, 14);
         Ok(())
     }
 
@@ -346,18 +437,20 @@ mod tests {
         fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
         let home = dir.path().join("home");
 
-        let cases: &[(&str, &str, Duration, Duration)] = &[
-            // (idle raw, sweep raw, expected idle, expected sweep)
+        let cases: &[(&str, &str, Duration, Duration, Duration)] = &[
+            // (idle raw, sweep raw, expected idle, expected retention, expected sweep)
             (
                 "garbage",
                 "-500",
-                Duration::from_millis(300_000),
+                Duration::from_secs(30 * 60),
+                Duration::from_millis(7_200_000),
                 Duration::from_millis(60_000),
             ),
             (
                 "0",
                 "0x10",
-                Duration::from_millis(300_000),
+                Duration::from_secs(30 * 60),
+                Duration::from_millis(7_200_000),
                 Duration::from_millis(60_000),
             ),
             // Number.parseInt parity: integer prefix wins, trailing garbage
@@ -367,11 +460,16 @@ mod tests {
                 "500ms",
                 Duration::from_millis(2500),
                 Duration::from_millis(500),
+                Duration::from_millis(500),
             ),
         ];
-        for (idle_raw, sweep_raw, expected_idle, expected_sweep) in cases {
+        for (idle_raw, sweep_raw, expected_idle, expected_retention, expected_sweep) in cases {
             let mut vars = BTreeMap::new();
             vars.insert("CLAW_SESSION_IDLE_MS".to_string(), (*idle_raw).to_string());
+            vars.insert(
+                "CLAW_SESSION_RETENTION_MS".to_string(),
+                (*sweep_raw).to_string(),
+            );
             vars.insert(
                 "CLAW_SESSION_SWEEP_INTERVAL_MS".to_string(),
                 (*sweep_raw).to_string(),
@@ -379,6 +477,10 @@ mod tests {
             let cfg =
                 Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))?;
             assert_eq!(cfg.session_idle, *expected_idle, "idle raw: {idle_raw:?}");
+            assert_eq!(
+                cfg.session_retention, *expected_retention,
+                "retention raw: {sweep_raw:?}"
+            );
             assert_eq!(
                 cfg.session_sweep_interval, *expected_sweep,
                 "sweep raw: {sweep_raw:?}"
@@ -389,42 +491,9 @@ mod tests {
             &config_path,
             &ConfigEnv::with_vars(BTreeMap::new(), home.clone()),
         )?;
-        assert_eq!(cfg.session_idle, Duration::from_millis(300_000));
+        assert_eq!(cfg.session_idle, Duration::from_secs(30 * 60));
+        assert_eq!(cfg.session_retention, Duration::from_millis(7_200_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
-        Ok(())
-    }
-
-    #[test]
-    fn screencast_fallback_flag_disables_only_on_zero_or_false() -> anyhow::Result<()> {
-        let dir = tempdir()?;
-        let config_path = dir.path().join("sidecar.json");
-        fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
-        let home = dir.path().join("home");
-
-        let cases: &[(Option<&str>, bool)] = &[
-            (None, true),
-            (Some("0"), false),
-            (Some("false"), false),
-            (Some(" FALSE "), false),
-            (Some("1"), true),
-            (Some("off"), true),
-            (Some(""), true),
-        ];
-        for (raw, expected) in cases {
-            let mut vars = BTreeMap::new();
-            if let Some(raw) = raw {
-                vars.insert(
-                    "CLAW_SCREENCAST_SCREENSHOT_FALLBACK".to_string(),
-                    (*raw).to_string(),
-                );
-            }
-            let cfg =
-                Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))?;
-            assert_eq!(
-                cfg.screencast_screenshot_fallback, *expected,
-                "flag raw: {raw:?}"
-            );
-        }
         Ok(())
     }
 
@@ -459,8 +528,9 @@ mod tests {
         assert_eq!(cfg.cdp_port, 49338);
         assert_eq!(cfg.proxy_port, Some(9444));
         assert!(cfg.browserclaw_dir.ends_with(".browserclaw-dev"));
-        assert_eq!(cfg.claw_dir, cfg.browserclaw_dir);
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9444/mcp");
+        // Proxy configured: the source of truth is the proxy port.
+        assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9444");
         Ok(())
     }
 }

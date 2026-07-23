@@ -83,6 +83,7 @@ async fn capture_download(
     ref_id: &str,
     _download_dir: &PathBuf,
 ) -> ToolExecResult<String> {
+    // Subscribe before clicking so synchronous download events cannot outrun the receiver.
     let mut events = ctx.session.cdp_events();
     let input = ctx.session.input(page_id).await;
     input

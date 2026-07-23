@@ -7,6 +7,17 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-claw-server-rust.yml'),
   'utf8',
 )
+const browserClawWorkflow = readFileSync(
+  resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
+  'utf8',
+)
+const localStaging = readFileSync(
+  resolve(
+    repoRoot,
+    'packages/browseros-agent/scripts/build/claw-server-rust-local.sh',
+  ),
+  'utf8',
+)
 const shellChannelPlaceholder = '$' + '{channel}'
 const shellTargetPlaceholder = '$' + '{target}'
 const shellAssetsPlaceholder = '$' + '{assets[@]}'
@@ -28,16 +39,26 @@ function createGithubReleaseStep(): string {
   return workflow.slice(start, end)
 }
 
+function buildRustBinaryStep(): string {
+  const start = workflow.indexOf('- name: Build Rust binary')
+  const end = workflow.indexOf('- name: Package artifact zip')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return workflow.slice(start, end)
+}
+
 describe('release-claw-server-rust workflow', () => {
-  it('uses the Rust claw tag trigger and workflow_call contract', () => {
+  it('uses the BrowserClaw product tag trigger and workflow_call contract', () => {
     expect(workflow).toContain('name: "Release: BrowserClaw Server (Rust)"')
-    expect(workflow).toContain('"claw-server-rust/v*"')
+    expect(workflow).toContain('"claw-server/v*"')
+    expect(workflow).not.toContain('"claw-server-rust/v*"')
     expect(workflow).toContain('workflow_call:')
     expect(workflow).toContain('ref:')
     expect(workflow).toContain(
       'Release version; defaults to apps/claw-server-rust/Cargo.toml at ref',
     )
     expect(workflow).toContain('required: false')
+    expect(workflow).toContain('publish_ota:')
     expect(workflow).toContain(
       'packages/browseros-agent/scripts/release/prepare-claw-server-rust-release.sh',
     )
@@ -74,13 +95,92 @@ describe('release-claw-server-rust workflow', () => {
     expect(workflow).not.toContain('patch-windows-exe')
   })
 
+  it('runs the filesystem reconciliation suite natively on macOS and Windows', () => {
+    expect(workflow).toContain('harness-integrations-test:')
+    expect(workflow).toContain(
+      'name: Harness integrations / ${{ matrix.runner }}',
+    )
+    expect(workflow).toContain('runner: macos-14')
+    expect(workflow).toContain('runner: windows-latest')
+    expect(workflow).toContain('cargo test --locked -p harness-integrations')
+    expect(workflow).toMatch(
+      /build:[\s\S]*needs:[\s\S]*- harness-integrations-test/,
+    )
+  })
+
+  it('embeds and verifies the production analytics project key', () => {
+    const buildStep = buildRustBinaryStep()
+    expect(workflow).toMatch(/CLAW_POSTHOG_KEY:\n\s+required: true/)
+    expect(buildStep).toContain(
+      `CLAW_POSTHOG_KEY: ${'$'}{{ secrets.CLAW_POSTHOG_KEY }}`,
+    )
+    expect(buildStep).toContain('CLAW_POSTHOG_KEY is required')
+    expect(buildStep).toContain(
+      'Compiled Rust server does not contain CLAW_POSTHOG_KEY',
+    )
+    expect(browserClawWorkflow).toContain(
+      `CLAW_POSTHOG_KEY: ${'$'}{{ secrets.CLAW_POSTHOG_KEY }}`,
+    )
+    expect(browserClawWorkflow).toMatch(
+      /INPUT_INCLUDE_SERVERS[\s\S]*require_value CLAW_POSTHOG_KEY/,
+    )
+  })
+
+  it('validates the stamped target binary version before packaging', () => {
+    const verifyStart = workflow.indexOf(
+      '- name: Verify stamped binary version',
+    )
+    const packageStart = workflow.indexOf('- name: Package artifact zip')
+    expect(verifyStart).toBeGreaterThanOrEqual(0)
+    expect(packageStart).toBeGreaterThan(verifyStart)
+
+    const step = workflow.slice(verifyStart, packageStart)
+    expect(step).toContain(
+      'BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"',
+    )
+    expect(step).toContain('ACTUAL_VERSION="$("$BINARY_PATH" --version)"')
+    expect(step).toContain('if [ "$ACTUAL_VERSION" != "$VERSION" ]; then')
+    expect(step).toContain(
+      '::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION',
+    )
+  })
+
   it('packages and validates artifact-compatible Rust resource zips', () => {
     expect(workflow).toContain(
       'browseros-claw-server-rust-resources-{target}.zip',
     )
     expect(workflow).toContain('"artifact-metadata.json"')
     expect(workflow).toContain('extract_artifact_zip')
-    expect(workflow).toContain('resources/bin/browseros-claw-server-rs')
+    expect(workflow).toContain(
+      'binary_name = f"browseros-claw-server-rs{binary_ext}"',
+    )
+    expect(workflow).toContain(
+      'runtime_binary_name = f"browseros-claw-server{binary_ext}"',
+    )
+    expect(workflow).toContain(
+      'source_resources = agent / "apps/claw-server-rust/resources"',
+    )
+    expect(workflow).toContain(
+      'shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)',
+    )
+    for (const expected of [
+      'f"resources/bin/browseros-claw-server{binary_ext}"',
+      '"resources/skills/browserclaw/SKILL.md"',
+    ]) {
+      expect(workflow).toContain(expected)
+      expect(localStaging).toContain(
+        expected.replace(
+          'f"resources/bin/browseros-claw-server{binary_ext}"',
+          'f"resources/bin/{runtime_binary}"',
+        ),
+      )
+    }
+    expect(localStaging).toContain(
+      'source_resources = agent_root / "apps/claw-server-rust/resources"',
+    )
+    expect(localStaging).toContain(
+      'shutil.copytree(source_resources, destination / "resources", dirs_exist_ok=True)',
+    )
   })
 
   it('uses matching artifact actions without unused Python dependencies', () => {
@@ -110,6 +210,28 @@ describe('release-claw-server-rust workflow', () => {
       `gh release upload "$RELEASE_TAG" "${shellAssetsPlaceholder}" --clobber`,
     )
     expect(workflow).toContain('Expected 5 Rust server resource zips')
+  })
+
+  it('publishes OTA from Rust artifacts only when requested', () => {
+    const publishOta = workflow.slice(workflow.indexOf('  publish-ota:'))
+    expect(workflow).toContain(
+      `if: \${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}`,
+    )
+    for (const secret of [
+      'SPARKLE_PRIVATE_KEY',
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET',
+    ]) {
+      expect(publishOta).toContain(`${secret}: \${{ secrets.${secret} }}`)
+    }
+    expect(publishOta).toContain(
+      'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
+    )
+    expect(workflow.indexOf('  publish-ota:')).toBeGreaterThan(
+      workflow.indexOf('  publish:'),
+    )
   })
 
   it('caps generated changelogs before create and edit consume release notes', () => {

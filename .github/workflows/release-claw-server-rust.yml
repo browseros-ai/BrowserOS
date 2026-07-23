@@ -1,11 +1,12 @@
-# Required secrets for resource publishing: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
-# R2_SECRET_ACCESS_KEY, R2_BUCKET.
+# Required secrets: CLAW_POSTHOG_KEY, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
+# publish_ota is true.
 name: "Release: BrowserClaw Server (Rust)"
 
 on:
   push:
     tags:
-      - "claw-server-rust/v*"
+      - "claw-server/v*"
   workflow_dispatch:
     inputs:
       version:
@@ -18,6 +19,11 @@ on:
         required: false
         type: string
         default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
@@ -30,7 +36,14 @@ on:
         required: false
         type: string
         default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
     secrets:
+      CLAW_POSTHOG_KEY:
+        required: true
       R2_ACCOUNT_ID:
         required: true
       R2_ACCESS_KEY_ID:
@@ -39,6 +52,8 @@ on:
         required: true
       R2_BUCKET:
         required: true
+      SPARKLE_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: write
@@ -155,10 +170,44 @@ jobs:
         working-directory: packages/browseros-agent
         run: cargo test --workspace --locked
 
+  harness-integrations-test:
+    needs: release
+    if: needs.release.outputs.version != ''
+    name: Harness integrations / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+          - runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Test native harness filesystem reconciliation
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: cargo test --locked -p harness-integrations
+
   build:
     needs:
       - release
       - cargo-test
+      - harness-integrations-test
     if: needs.release.outputs.version != ''
     name: Build / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -263,11 +312,39 @@ jobs:
       - name: Build Rust binary
         shell: bash
         working-directory: packages/browseros-agent
+        env:
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
         run: |
           set -euo pipefail
+          if [ -z "$CLAW_POSTHOG_KEY" ]; then
+            echo "::error::CLAW_POSTHOG_KEY is required"
+            exit 1
+          fi
           cargo build --release --locked --target "$RUST_TARGET" \
             -p claw-server-rust \
             --bin browseros-claw-server-rs
+          "$PYTHON_BIN" <<'PY'
+          import os
+          from pathlib import Path
+
+          binary_name = f"browseros-claw-server-rs{os.environ['BINARY_EXT']}"
+          binary_path = Path("target") / os.environ["RUST_TARGET"] / "release" / binary_name
+          project_key = os.environ["CLAW_POSTHOG_KEY"].encode()
+          if project_key not in binary_path.read_bytes():
+              raise SystemExit("Compiled Rust server does not contain CLAW_POSTHOG_KEY")
+          PY
+
+      - name: Verify stamped binary version
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"
+          ACTUAL_VERSION="$("$BINARY_PATH" --version)"
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION" >&2
+            exit 1
+          fi
 
       - name: Package artifact zip
         id: package
@@ -291,19 +368,24 @@ jobs:
           rust_target = os.environ["RUST_TARGET"]
           binary_ext = os.environ["BINARY_EXT"]
           binary_name = f"browseros-claw-server-rs{binary_ext}"
+          runtime_binary_name = f"browseros-claw-server{binary_ext}"
           binary_path = agent / "target" / rust_target / "release" / binary_name
           if not binary_path.is_file():
               raise SystemExit(f"Missing compiled binary: {binary_path}")
+          source_resources = agent / "apps/claw-server-rust/resources"
+          if not source_resources.is_dir():
+              raise SystemExit(f"Missing server resources: {source_resources}")
 
           dist_root = agent / "dist/prod/claw-server-rust"
           stage_root = dist_root / target
           if stage_root.exists():
               shutil.rmtree(stage_root)
-          staged_binary = stage_root / "resources/bin" / binary_name
+          staged_binary = stage_root / "resources/bin" / runtime_binary_name
           staged_binary.parent.mkdir(parents=True, exist_ok=True)
           shutil.copy2(binary_path, staged_binary)
           if binary_ext != ".exe":
               staged_binary.chmod(0o755)
+          shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)
 
           files = sorted(
               path
@@ -359,16 +441,19 @@ jobs:
           zip_path = Path(os.environ["ZIP_PATH"])
           target = os.environ["BROWSEROS_TARGET"]
           binary_ext = os.environ["BINARY_EXT"]
-          expected = f"resources/bin/browseros-claw-server-rs{binary_ext}"
+          expected = sorted([
+              f"resources/bin/browseros-claw-server{binary_ext}",
+              "resources/skills/browserclaw/SKILL.md",
+          ])
           with tempfile.TemporaryDirectory() as tmp:
               destination = Path(tmp) / target
               extracted = extract_artifact_zip(zip_path, destination)
               extracted_rel = sorted(
                   path.relative_to(destination).as_posix() for path in extracted
               )
-              if extracted_rel != [expected]:
+              if extracted_rel != expected:
                   raise SystemExit(
-                      f"Expected extracted files {[expected]}, got {extracted_rel}"
+                      f"Expected extracted files {expected}, got {extracted_rel}"
                   )
           PY
         env:
@@ -508,3 +593,37 @@ jobs:
               echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/${VERSION}/browseros-claw-server-rust-resources-${target}.zip"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-ota:
+    needs:
+      - release
+      - publish
+    if: ${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Preflight OTA signing key
+        run: |
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is required when publish_ota is true"
+            exit 1
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Publish alpha BrowserClaw server OTA artifacts
+        working-directory: packages/browseros
+        run: uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw

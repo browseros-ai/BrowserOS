@@ -147,10 +147,11 @@ jobs:
           cd "$agent_root"
           bun ci
           bun scripts/build/server.ts --target=darwin-arm64 --ci
-          bun scripts/build/claw-server.ts --target=darwin-arm64 --no-upload
+          scripts/build/claw-server-rust-local.sh \
+            --target=darwin-arm64 \
+            --agent-root "$agent_root" \
+            --browseros-root "$browseros_root"
           bun scripts/build/claw-onboard.ts --ci
-          # Rust alternative: run scripts/build/claw-server-rust-local.sh here
-          # and flip copy_resources.yaml/download_resources.yaml.
 
           cd "$browseros_root"
           AGENT_ROOT="$agent_root" BROWSEROS_ROOT="$browseros_root" uv run python - <<'PY'
@@ -171,12 +172,6 @@ jobs:
                   agent_root / "dist/prod/claw-onboard/browseros-claw-onboard-resources.zip",
                   browseros_root / "resources/binaries/browseros_claw_onboard",
               ),
-              (
-                  agent_root
-                  / "dist/prod/claw-server/browseros-claw-server-resources-darwin-arm64.zip",
-                  browseros_root
-                  / "resources/binaries/browseros_claw_server/darwin-arm64",
-              ),
           ]
 
           for archive, destination in artifacts:
@@ -193,6 +188,8 @@ jobs:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
           UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
+          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
+          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"

@@ -6,19 +6,20 @@ import {
 } from '@/components/harness/harness.types'
 import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
 import {
-  useBrowserosConnections,
-  useConnectBrowseros,
-  useDisconnectBrowseros,
+  useConnectHarness,
+  useConnections,
+  useDisconnectHarness,
 } from '@/modules/api/connections.hooks'
 import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
 export function Mcp() {
   const [url, setUrl] = useState<string | null>(null)
-  const connections = useBrowserosConnections()
-  const connect = useConnectBrowseros()
-  const disconnect = useDisconnectBrowseros()
+  const connections = useConnections()
+  const connect = useConnectHarness()
+  const disconnect = useDisconnectHarness()
   const queryClient = useQueryClient()
   const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
 
@@ -35,7 +36,7 @@ export function Mcp() {
   const isLoading = connections.isPending && !connections.data
 
   const visibleRows = useMemo(() => {
-    const list = connections.data?.connections ?? []
+    const list = connections.data?.items ?? []
     return list.filter((c) => isUserFacingHarness(c.harness))
   }, [connections.data])
 
@@ -50,7 +51,7 @@ export function Mcp() {
         setErrors((prev) => ({ ...prev, [harness]: result.message }))
       }
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -65,7 +66,7 @@ export function Mcp() {
     try {
       await disconnect.mutateAsync({ harness })
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -118,6 +119,7 @@ export function Mcp() {
           </div>
         )}
       </section>
+      <ClaudeDesktopCard />
     </div>
   )
 }

@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+  Shell for the HTML sibling of an internal doc. write-internal-docs fills
+  {{TITLE}}, {{SOURCE_MD}} (relative path to the source .md), and {{BODY}}
+  (the converted Markdown body). Self-contained on purpose: no external
+  URLs, scripts, or fonts, so it renders offline from any checkout.
+  The .md is the source of truth; regenerate this file, never hand-edit it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} · BrowserOS internal docs</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f24; --muted: #57606a; --border: #d0d7de;
+    --code-bg: #f6f8fa; --link: #0a5ad2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d;
+      --code-bg: #161b22; --link: #539bf5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; padding: 2.5rem 1.25rem 5rem; max-width: 46rem;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header.doc-meta {
+    color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem;
+    padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);
+  }
+  header.doc-meta a { color: var(--muted); }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+  h2 { font-size: 1.25rem; margin: 2rem 0 0.5rem; padding-top: 0.5rem; }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
+  a { color: var(--link); }
+  p, ul, ol { margin: 0.6rem 0; }
+  li { margin: 0.25rem 0; }
+  code {
+    font: 0.875em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.1em 0.35em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; margin: 1rem 0; width: 100%; }
+  th, td { border: 1px solid var(--border); padding: 0.4rem 0.7rem; text-align: left; }
+  th { background: var(--code-bg); }
+  blockquote {
+    margin: 1rem 0; padding: 0.1rem 1rem; color: var(--muted);
+    border-left: 3px solid var(--border);
+  }
+  img { max-width: 100%; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<header class="doc-meta">
+  Rendered from <a href="{{SOURCE_MD}}"><code>{{SOURCE_MD}}</code></a> — the Markdown is the source of truth.
+</header>
+{{BODY}}
+</body>
+</html>

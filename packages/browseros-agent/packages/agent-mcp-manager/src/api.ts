@@ -13,8 +13,8 @@
 
 import { dirname } from 'node:path'
 
-import { pathExists } from './_internal/paths'
-import { resolveAgentMcpConfigPath } from './agents'
+import { anyExists, pathExists } from './_internal/paths'
+import { resolveAgentMcpConfigPath, resolveInstallCheckPaths } from './agents'
 import { UnresolvedConfigPathError } from './errors'
 import { applyPlan, readState } from './io/index'
 import {
@@ -248,11 +248,18 @@ export async function rescan(
 // -------------------------------------------------------------------
 // isInstalled: batch check whether agents can safely receive a link.
 //
-// "Installed" here means "the library can write MCP config to this
-// agent's config path": either the config file already exists on disk
-// OR its parent directory does. This is the same signal `link()` uses
-// to gate `AgentNotInstalledError`, so `isInstalled` predicts what
-// `link()` would throw.
+// "Installed" here means the library can write an MCP entry for the
+// agent. In system scope, that's true when the catalog's
+// `installCheckPaths` fingerprint the agent's presence on the machine
+// (`~/.opencode/`, `~/.claude.json`, etc.) OR the resolved config
+// file / its parent directory already exists. Aligned with the
+// `link()` gate so `isInstalled` predicts what `link()` would throw.
+//
+// Why installCheckPaths first: agents whose global config file is
+// USER-CREATED (OpenCode's `opencode.json`, Codex's `config.toml`,
+// ...) have no config file on a fresh install; systemPaths-only
+// probing misses them. installCheckPaths is the catalog's explicit
+// "the agent lives here" enumeration.
 // -------------------------------------------------------------------
 
 export interface IsInstalledInput {
@@ -285,6 +292,13 @@ async function checkOneInstalled(
   scope: AgentScope,
   projectRoot: string | undefined,
 ): Promise<boolean> {
+  // System scope: prefer the catalog's install fingerprint. `project`
+  // scope is answered entirely by the resolved projectRoot path, so
+  // the systemPath branch below covers it on its own.
+  if (scope === 'system') {
+    const checkList = resolveInstallCheckPaths(agent)
+    if (checkList.length > 0 && (await anyExists(checkList))) return true
+  }
   let configPath: string
   try {
     configPath = await resolveAgentMcpConfigPath(agent, scope, projectRoot)

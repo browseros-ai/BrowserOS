@@ -7,6 +7,7 @@ from pathlib import Path
 from .render import (
     ExistingAppcast,
     SignedArtifact,
+    extract_appcast_item_count,
     extract_appcast_version,
     extract_channel_metadata,
     extract_enclosure_urls,
@@ -320,6 +321,11 @@ class VersionHelpersTest(unittest.TestCase):
         )
         self.assertEqual(extract_appcast_version(GOLDEN_CLAW_SERVER_APPCAST), "0.0.5")
         self.assertIsNone(extract_appcast_version("<rss><channel/></rss>"))
+
+    def test_extract_appcast_item_count(self):
+        self.assertEqual(extract_appcast_item_count(GOLDEN_MAC_APPCAST), 1)
+        self.assertEqual(extract_appcast_item_count("<rss><channel/></rss>"), 0)
+        self.assertIsNone(extract_appcast_item_count("<rss><channel>"))
 
     def test_extract_manifest_versions(self):
         self.assertEqual(

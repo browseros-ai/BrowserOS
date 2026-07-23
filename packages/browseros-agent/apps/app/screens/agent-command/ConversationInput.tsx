@@ -1,13 +1,11 @@
 import {
   ArrowRight,
-  AudioLines,
   Bot,
   ChevronDown,
   FileText,
   Folder,
   Layers,
   Loader2,
-  Mic,
   Paperclip,
   Square,
   X,
@@ -30,13 +28,19 @@ import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { type StagedAttachment, stageAttachments } from '@/lib/attachments'
+import { Feature } from '@/lib/browseros/capabilities'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { cn } from '@/lib/utils'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
+import {
+  ConversationVoiceControls,
+  resolveVoicePresentation,
+} from './ConversationVoiceControls'
 
 export interface ConversationInputSendInput {
   text: string
@@ -119,74 +123,6 @@ function StopButton({ onStop }: { onStop: () => void }) {
       className="h-8 w-8 flex-shrink-0 rounded-lg bg-destructive/10 text-destructive transition-colors hover:bg-destructive/15 hover:text-destructive"
     >
       <Square className="h-3.5 w-3.5 fill-current" />
-    </Button>
-  )
-}
-
-function VoiceModeEntryButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={onClick}
-      className="h-10 w-10 flex-shrink-0 rounded-xl text-muted-foreground transition-colors hover:text-foreground"
-      title="Open voice mode"
-      aria-label="Open voice mode"
-    >
-      <AudioLines className="h-5 w-5" />
-    </Button>
-  )
-}
-
-function VoiceButton({
-  isRecording,
-  isTranscribing,
-  onStart,
-  onStop,
-}: {
-  isRecording: boolean
-  isTranscribing: boolean
-  onStart: () => void
-  onStop: () => void
-}) {
-  if (isRecording) {
-    return (
-      <Button
-        type="button"
-        size="icon"
-        onClick={onStop}
-        className="h-10 w-10 flex-shrink-0 rounded-xl bg-red-600 text-white hover:bg-red-700"
-      >
-        <Square className="h-4 w-4" />
-      </Button>
-    )
-  }
-
-  if (isTranscribing) {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        disabled
-        className="h-10 w-10 flex-shrink-0 rounded-xl"
-      >
-        <Loader2 className="h-5 w-5 animate-spin" />
-      </Button>
-    )
-  }
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={onStart}
-      className="h-10 w-10 flex-shrink-0 rounded-xl text-muted-foreground transition-colors hover:text-foreground"
-      title="Voice input"
-    >
-      <Mic className="h-5 w-5" />
     </Button>
   )
 }
@@ -393,6 +329,14 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const voice = useVoiceInput()
+  const { supports } = useCapabilities()
+  const supportsVoiceInput = supports(Feature.VOICE_INPUT_SUPPORT)
+  const voicePresentation = resolveVoicePresentation({
+    enabled: supportsVoiceInput,
+    isRecording: voice.isRecording,
+    isTranscribing: voice.isTranscribing,
+    error: voice.error,
+  })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isConversation = variant === 'conversation'
 
@@ -437,11 +381,20 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   })
 
   useEffect(() => {
-    if (voice.transcript && !voice.isTranscribing) {
+    if (
+      supportsVoiceInput &&
+      voice.transcript &&
+      !voicePresentation.isTranscribing
+    ) {
       setInput(voice.transcript)
       voice.clearTranscript()
     }
-  }, [voice.transcript, voice.isTranscribing, voice])
+  }, [
+    supportsVoiceInput,
+    voice.transcript,
+    voicePresentation.isTranscribing,
+    voice,
+  ])
 
   useEffect(() => {
     if (attachmentsEnabled) return
@@ -585,12 +538,12 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               onPaste={handlePaste}
               rows={1}
               placeholder={
-                voice.isTranscribing
+                voicePresentation.isTranscribing
                   ? 'Transcribing...'
                   : (placeholder ??
                     `Message ${selectedProvider?.name ?? 'agent'}...`)
               }
-              disabled={disabled || voice.isTranscribing}
+              disabled={disabled || voicePresentation.isTranscribing}
               className={cn(
                 'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 dark:bg-transparent',
                 '[field-sizing:fixed]',
@@ -602,26 +555,25 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             />
           </div>
           {streaming && onStop ? <StopButton onStop={onStop} /> : null}
-          {onOpenVoiceMode ? (
-            <VoiceModeEntryButton onClick={onOpenVoiceMode} />
-          ) : null}
-          <VoiceButton
+          <ConversationVoiceControls
+            enabled={supportsVoiceInput}
             isRecording={voice.isRecording}
             isTranscribing={voice.isTranscribing}
-            onStart={() => {
+            onStartRecording={() => {
               void voice.startRecording()
             }}
-            onStop={() => {
+            onStopRecording={() => {
               void voice.stopRecording()
             }}
+            onOpenVoiceMode={onOpenVoiceMode}
           />
           <InputActionButton
             disabled={
               !hasContent ||
               isStaging ||
               !!disabled ||
-              voice.isRecording ||
-              voice.isTranscribing ||
+              voicePresentation.isRecording ||
+              voicePresentation.isTranscribing ||
               (streaming && !queueAware)
             }
             onClick={handleSend}
@@ -631,9 +583,9 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             hasContent={hasContent}
           />
         </div>
-        {voice.error ? (
+        {voicePresentation.error ? (
           <div className="px-5 pb-2 text-destructive text-xs">
-            {voice.error}
+            {voicePresentation.error}
           </div>
         ) : null}
         <CalmContextControls

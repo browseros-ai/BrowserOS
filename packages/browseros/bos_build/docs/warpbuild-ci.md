@@ -1,7 +1,7 @@
 # WarpBuild Release CI
 
 The release Linux and Windows browser lanes run Chromium builds on WarpBuild
-cloud runners:
+Azure BYOC runners:
 
 - `.github/workflows/release-linux.yml`
 - `.github/workflows/release-windows.yml`
@@ -16,11 +16,19 @@ nightly lanes use the repo-scoped Mac Mini runner instead; see
 
 ## Runners
 
-| Platform | Label | Specs | Disk |
-| --- | --- | --- | --- |
-| Linux x64 | `warp-ubuntu-2204-x64-32x` | 32 vCPU / 128 GB | 256 GB |
-| Windows x64 | `warp-windows-2025-x64-32x` | 32 vCPU / 128 GB | 256 GB |
-| macOS arm64 | `warp-macos-26-arm64-12x` | M4 Pro, 12 vCPU / 44 GB | 500 GB |
+| Platform | Label | Image | Compute | Disk |
+| --- | --- | --- | --- | --- |
+| Linux x64 | `warp-custom-browseros-ubuntu-2204-x64-32x` | Ubuntu 22.04 | `Standard_D32alds_v7` | P40, 2048 GB |
+| Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32als_v7` | P30, 1024 GB |
+| macOS arm64 | `warp-macos-26-arm64-12x` | macOS 26 | M4 Pro, 12 vCPU / 44 GB | 500 GB |
+
+WarpBuild provisions the Linux and Windows runners in the BrowserOS Azure
+subscription through the `browseros-ci-eastus` BYOC stack in East US. Both
+configurations are on-demand, with no standby pool and static IPs disabled.
+They are ephemeral:
+the VM and build disk are created for a job and discarded afterward. Their
+compute SKUs and disk capacities mirror the source Azure build VMs, but they
+do not clone or retain those VMs' persistent disks.
 
 There is no 32-core macOS tier; 12x is WarpBuild's largest Mac. The macOS
 label is kept in the runner catalog for future reusable `build-browseros.yml`
@@ -33,11 +41,11 @@ and the macOS 15 image (Xcode 16.4 / SDK 15.5) fails compiling
 `skia_utils_mac.mm` (`kCGImageByteOrder32Host` only exists in SDK 26).
 WarpBuild runners register as self-hosted, so GitHub's 6-hour hosted-job
 cap does not apply — but `timeout-minutes` must be set explicitly (the
-implicit default is 360). Disk is comfortable on all three tiers — the
-~60-75 GB checkout + ~25-40 GB out dir leave ample headroom. The workflow
-prints `df -h` after each build. Specs above come from the account's runner catalog
-(app.warpbuild.com → Runners), which is the source of truth for labels
-and sizes; WarpBuild's public docs pages can lag it.
+implicit default is 360). The 2048 GB Linux and 1024 GB Windows build disks
+leave ample headroom for the ~60-75 GB checkout and ~25-40 GB out dir. The
+workflow prints `df -h` after each build. The WarpBuild BYOC connection and
+runner configurations are the source of truth for labels, sizes, and Azure
+placement; public docs pages can lag the live configuration.
 
 ## One-time setup (WarpBuild)
 
@@ -78,15 +86,16 @@ leaves `queued`:
    Done for `browseros-ai` on 2026-06-13 — pickup verified live (a
    queued job was claimed within ~60 s of dispatch).
 
-2. **The WarpBuild org must be active**: sign in at
-   https://app.warpbuild.com/, confirm the `browseros-ai` connection and
-   that billing/credits are set up — runners are not provisioned without
-   an active account.
+2. **The Azure BYOC connection must be healthy**: sign in at
+   https://app.warpbuild.com/ and confirm the BrowserOS Azure subscription,
+   stack `browseros-ci-eastus` in East US, and both custom runner
+   configurations listed above. Also check Azure quota and regional capacity
+   for their VM SKUs when provisioning fails.
 
 Smoke test after changing either:
 `gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false`,
 then watch the build job leave `queued` within ~5 minutes (`gh run watch`).
-Only do this when you intentionally want to spend release runner time.
+Only do this when you intentionally want to spend Azure compute time.
 
 ## Release lane flow
 
@@ -131,9 +140,9 @@ exists — pristine and deterministic. The pin changes rarely, so steady state
 is one cold sync per chromium bump per platform.
 
 - **Linux / macOS — WarpCache** (`WarpBuilds/cache@v1`): drop-in for
-  `actions/cache` with no size cap (entries expire 7 days after last use;
-  storage $0.20/GB-month). Restore-keys fall back to the previous pin's
-  cache, then the script fast-forwards `src` with a single-tag fetch.
+  `actions/cache` with no size cap (entries expire 7 days after last use).
+  Restore-keys fall back to the previous pin's cache, then the script
+  fast-forwards `src` with a single-tag fetch.
 - **Windows — R2 tarball** (`browseros source cache`): WarpCache does not
   support Windows runners and `actions/cache` caps at 10 GB/repo. The tree
   is zstd-tarred (~25-30 GB) into `ci-cache/chromium/` in the existing R2
@@ -153,19 +162,18 @@ The compile dominates either way; the cache removes the checkout cost and
 network flakiness. Toolchains deleted by `clean` (~2-4 GB) are re-fetched by
 hooks each run — accepted, matches the maintainer's local flow.
 
-Cost ballpark at WarpBuild list prices: linux 32x $3.84/h, windows 32x
-$7.68/h, mac 12x $9.60/h. A Linux+Windows release pass is roughly $35-80
-depending on duration, plus ~$12/month cache storage. The macOS catalog price
-is kept here for future WarpBuild callers; current signed macOS release and
-nightly builds run on the self-hosted Mac Mini.
+Linux and Windows compute and managed-disk costs accrue in the BrowserOS Azure
+subscription; WarpBuild's managed-runner list prices do not apply. Use Azure
+Cost Management for the actual BYOC cost and the WarpBuild account for any
+separate platform or cache charges. Current signed macOS release and nightly
+builds run on the self-hosted Mac Mini.
+
+Azure BYOC does not support WarpBuild snapshot runners. Keep checkout
+acceleration on WarpCache for Linux and the R2 tarball for Windows; do not add
+`snapshot.key` runner syntax or `WarpBuilds/snapshot-save` to these lanes.
 
 ### Future optimizations (not yet wired)
 
-- **Snapshot runners (Linux only)**: boot from a disk image with the
-  checkout baked in (`runs-on: "warp-ubuntu-2204-x64-32x;snapshot.key=..."`
-  + `WarpBuilds/snapshot-save`). Kills even the cache-restore minutes, but
-  snapshots expire after 15 days and need a bake/boot split; revisit once
-  the cache flow is proven.
 - **Compiler cache (sccache/ccache via `cc_wrapper`)** in a CI gn flags
   variant: release rebuilds often differ only slightly, so this is the lever
   that could cut warm builds to well under an hour.
@@ -207,14 +215,14 @@ Causes, in the order to check:
 
 1. **Runner group blocks public repos** — see one-time setup above. This
    stalls all platforms at once.
-2. **Label not in the account's runner catalog** — the canonical list is
-   the Runners page at https://app.warpbuild.com/ (the public docs lag
-   it: in 2026-06 the preinstalled-software page omitted the Windows
-   Server 2025 images the catalog already offered). An unsupported label
-   queues forever; WarpBuild reports no error back to GitHub.
-3. **WarpBuild account** — org connection or billing lapsed
-   (https://app.warpbuild.com/).
-4. **WarpBuild capacity or incident** — rare; check their dashboard.
+2. **Label does not match a live runner configuration** — compare the job
+   label with the two exact custom labels above in
+   https://app.warpbuild.com/. An unsupported label queues forever;
+   WarpBuild reports no error back to GitHub.
+3. **Azure BYOC stack** — confirm the connection and stack are healthy,
+   then check subscription quota and East US capacity for the configured
+   VM SKU.
+4. **WarpBuild incident** — check their dashboard.
 
 Mechanics worth knowing:
 

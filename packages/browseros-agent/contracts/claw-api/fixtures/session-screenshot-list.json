@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "screenshotId": 7,
+      "capturedAt": 1000,
+      "toolName": "navigate"
+    },
+    {
+      "screenshotId": 42,
+      "capturedAt": 2000,
+      "toolName": "snapshot"
+    }
+  ]
+}

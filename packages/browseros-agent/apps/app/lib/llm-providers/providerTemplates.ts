@@ -47,14 +47,6 @@ function enrichTemplate(
  */
 export const providerTemplates: ProviderTemplate[] = [
   {
-    id: 'remote-hermes',
-    name: 'Remote Hermes',
-    defaultBaseUrl: '',
-    defaultModelId: 'default',
-    supportsImages: false,
-    contextWindow: 200000,
-  },
-  {
     id: 'chatgpt-pro',
     name: CHATGPT_PROVIDER_DISPLAY_NAME,
     defaultBaseUrl: 'https://chatgpt.com/backend-api',
@@ -156,7 +148,6 @@ export const providerTemplates: ProviderTemplate[] = [
  * @public
  */
 export const providerTypeOptions: { value: ProviderType; label: string }[] = [
-  { value: 'remote-hermes', label: 'Remote Hermes' },
   { value: 'chatgpt-pro', label: CHATGPT_PROVIDER_DISPLAY_NAME },
   { value: 'github-copilot', label: 'GitHub Copilot' },
   { value: 'qwen-code', label: 'Qwen Code' },
@@ -190,7 +181,6 @@ export const getProviderTemplate = (
  * Auto-fills when user selects a provider type
  */
 const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
-  'remote-hermes': '',
   'chatgpt-pro': 'https://chatgpt.com/backend-api',
   'github-copilot': 'https://api.githubcopilot.com',
   'qwen-code': 'https://portal.qwen.ai/v1',

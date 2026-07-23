@@ -10,7 +10,6 @@ import type { TurnRegistry } from '../../lib/agents/turns/active-turn-registry'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
 import { requireTrustedOrigin } from '../middleware/require-trusted-origin'
 import type { KlavisService } from '../services/klavis'
-import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
 import type { Env, HttpServerConfig } from '../types'
 import { defaultCorsConfig } from '../utils/cors'
 import { requireTrustedAppOrigin } from '../utils/request-auth'
@@ -26,7 +25,6 @@ import { createNudgeMcpRoute } from './nudge-mcp'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
-import { createRemoteHermesRoutes } from './remote-hermes'
 import { createScreencastRoute } from './screencast'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
@@ -37,7 +35,6 @@ interface CreateApiRoutesDeps {
   gatewayBaseUrl?: string
   klavis: KlavisService
   onShutdown: () => void
-  remoteHermes: RemoteHermesService | null
   tokenManager: OAuthTokenManager | null
   turnRegistry: TurnRegistry
 }
@@ -50,19 +47,11 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     gatewayBaseUrl,
     klavis,
     onShutdown,
-    remoteHermes,
     tokenManager,
     turnRegistry,
   } = deps
-  const {
-    browser,
-    browserosId,
-    browserSession,
-    executionDir,
-    port,
-    resourcesDir,
-    version,
-  } = config
+  const { browser, browserosId, browserSession, port, resourcesDir, version } =
+    config
   const { activity } = config
 
   return (
@@ -97,7 +86,6 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           version,
           browserSession,
           klavis,
-          executionDir,
           activity,
         }),
       )
@@ -122,16 +110,11 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
           serverPort: port,
           resourcesDir,
-          remoteHermes,
           activity,
         }),
       )
       .route('/screencast', createScreencastRoute({ browser }))
       .route('/agents', protectedAgentRoutes(config, turnRegistry, agentRoutes))
-      .route(
-        '/remote-hermes',
-        createRemoteHermesRoutes({ service: remoteHermes }),
-      )
   )
 }
 

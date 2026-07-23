@@ -20,6 +20,7 @@ from bos_build.steps.storage.download import (
     ARTIFACT_METADATA_NAME,
     DownloadResourcesModule,
     extract_artifact_zip,
+    managed_binary_families,
 )
 
 
@@ -198,6 +199,70 @@ class ExtractArtifactZipTest(unittest.TestCase):
         }
 
 
+class ManagedBinaryFamiliesTest(unittest.TestCase):
+    def test_collects_families_from_binaries_destinations(self) -> None:
+        # Arch-suffixed and family-root destinations both resolve to their
+        # family; destinations outside resources/binaries/ are ignored.
+        config = {
+            "download_operations": [
+                {
+                    "name": "Server arm64",
+                    "destination": "resources/binaries/browseros_server/darwin-arm64",
+                },
+                {
+                    "name": "Server x64",
+                    "destination": "resources/binaries/browseros_server/darwin-x64",
+                },
+                {
+                    "name": "Onboard",
+                    "destination": "resources/binaries/browseros_claw_onboard",
+                },
+                {
+                    "name": "Elsewhere",
+                    "destination": "resources/other/thing",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text(yaml.safe_dump(config))
+
+            self.assertEqual(
+                {"browseros_server", "browseros_claw_onboard"},
+                managed_binary_families(config_path),
+            )
+
+    def test_missing_file_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing = Path(temp_dir) / "does-not-exist.yaml"
+            self.assertEqual(set(), managed_binary_families(missing))
+
+    def test_config_without_download_operations_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text("some_other_key: true\n")
+            self.assertEqual(set(), managed_binary_families(config_path))
+
+    def test_malformed_yaml_returns_empty_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "download_resources.yaml"
+            config_path.write_text("download_operations: [unclosed\n")
+            self.assertEqual(set(), managed_binary_families(config_path))
+
+    def test_real_config_lists_current_families(self) -> None:
+        config_path = (
+            Path(__file__).resolve().parents[2] / "config" / "download_resources.yaml"
+        )
+        families = managed_binary_families(config_path)
+
+        self.assertIn("browseros_server", families)
+        self.assertIn("browseros_claw_server_rust", families)
+        self.assertIn("browseros_claw_onboard", families)
+        # Retired by #1948; its leftover dir is exactly what pruning removes.
+        self.assertNotIn("browseros_claw_server", families)
+
+
 class DownloadResourceConfigTest(unittest.TestCase):
     def test_real_config_includes_server_artifacts_by_target(self) -> None:
         cases = [
@@ -211,9 +276,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                         "resources/binaries/browseros_server/darwin-arm64",
                     ),
                     (
-                        "BrowserOS Claw Server Resources - macOS ARM64",
-                        "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-arm64.zip",
-                        "resources/binaries/browseros_claw_server/darwin-arm64",
+                        "BrowserOS Claw Rust Server Resources - macOS ARM64",
+                        "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
+                        "resources/binaries/browseros_claw_server_rust/darwin-arm64",
                     ),
                 ],
             ),
@@ -227,9 +292,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                         "resources/binaries/browseros_server/darwin-x64",
                     ),
                     (
-                        "BrowserOS Claw Server Resources - macOS x64",
-                        "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-x64.zip",
-                        "resources/binaries/browseros_claw_server/darwin-x64",
+                        "BrowserOS Claw Rust Server Resources - macOS x64",
+                        "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-x64.zip",
+                        "resources/binaries/browseros_claw_server_rust/darwin-x64",
                     ),
                 ],
             ),
@@ -243,9 +308,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                         "resources/binaries/browseros_server/linux-arm64",
                     ),
                     (
-                        "BrowserOS Claw Server Resources - Linux ARM64",
-                        "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-arm64.zip",
-                        "resources/binaries/browseros_claw_server/linux-arm64",
+                        "BrowserOS Claw Rust Server Resources - Linux ARM64",
+                        "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-arm64.zip",
+                        "resources/binaries/browseros_claw_server_rust/linux-arm64",
                     ),
                 ],
             ),
@@ -259,9 +324,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                         "resources/binaries/browseros_server/linux-x64",
                     ),
                     (
-                        "BrowserOS Claw Server Resources - Linux x64",
-                        "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-x64.zip",
-                        "resources/binaries/browseros_claw_server/linux-x64",
+                        "BrowserOS Claw Rust Server Resources - Linux x64",
+                        "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip",
+                        "resources/binaries/browseros_claw_server_rust/linux-x64",
                     ),
                 ],
             ),
@@ -275,9 +340,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                         "resources/binaries/browseros_server/windows-x64",
                     ),
                     (
-                        "BrowserOS Claw Server Resources - Windows x64",
-                        "claw-server/prod-resources/latest/browseros-claw-server-resources-windows-x64.zip",
-                        "resources/binaries/browseros_claw_server/windows-x64",
+                        "BrowserOS Claw Rust Server Resources - Windows x64",
+                        "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-windows-x64.zip",
+                        "resources/binaries/browseros_claw_server_rust/windows-x64",
                     ),
                 ],
             ),
@@ -303,8 +368,8 @@ class DownloadResourceConfigTest(unittest.TestCase):
             [
                 "BrowserOS Server Resources - macOS ARM64",
                 "BrowserOS Server Resources - macOS x64",
-                "BrowserOS Claw Server Resources - macOS ARM64",
-                "BrowserOS Claw Server Resources - macOS x64",
+                "BrowserOS Claw Rust Server Resources - macOS ARM64",
+                "BrowserOS Claw Rust Server Resources - macOS x64",
                 "BrowserOS Claw Onboarding Resources",
             ],
             [op["name"] for op in filtered],
@@ -324,8 +389,8 @@ class DownloadResourceConfigTest(unittest.TestCase):
 
         self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
         self.assertIn("BrowserOS Server Resources - macOS x64", names)
-        self.assertIn("BrowserOS Claw Server Resources - macOS ARM64", names)
-        self.assertIn("BrowserOS Claw Server Resources - macOS x64", names)
+        self.assertIn("BrowserOS Claw Rust Server Resources - macOS ARM64", names)
+        self.assertIn("BrowserOS Claw Rust Server Resources - macOS x64", names)
 
     def test_flat_multi_arch_plan_stays_arch_scoped(self) -> None:
         # Flat multi-arch (arm64, x64 without universal) plans a full
@@ -340,7 +405,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
 
         self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
         self.assertNotIn("BrowserOS Server Resources - macOS x64", names)
-        self.assertNotIn("BrowserOS Claw Server Resources - macOS x64", names)
+        self.assertNotIn("BrowserOS Claw Rust Server Resources - macOS x64", names)
 
     def test_real_config_includes_claw_onboard_resources_everywhere(self) -> None:
         # The onboarding dist is platform-independent and its grit pak is
@@ -378,7 +443,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
                     ]
                     self.assertEqual([expected], actual)
 
-    def test_real_config_downloads_bun_claw_server_for_browserclaw(
+    def test_real_config_downloads_rust_claw_server_for_browserclaw(
         self,
     ) -> None:
         operations = self._real_download_operations()
@@ -398,9 +463,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
                     "resources/binaries/browseros_server/darwin-arm64",
                 ),
                 (
-                    "BrowserOS Claw Server Resources - macOS ARM64",
-                    "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-arm64.zip",
-                    "resources/binaries/browseros_claw_server/darwin-arm64",
+                    "BrowserOS Claw Rust Server Resources - macOS ARM64",
+                    "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
+                    "resources/binaries/browseros_claw_server_rust/darwin-arm64",
                 ),
             ],
             [
@@ -417,6 +482,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
             for op in operations
             if op["name"].startswith("BrowserOS Server Resources")
             or op["name"].startswith("BrowserOS Claw Server Resources")
+            or op["name"].startswith("BrowserOS Claw Rust Server Resources")
         ]
 
         self.assertTrue(server_ops)
@@ -424,7 +490,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
             with self.subTest(name=op["name"]):
                 self.assertNotIn("product", op)
 
-    def test_real_config_keeps_rust_claw_downloads_commented(self) -> None:
+    def test_real_config_uses_rust_claw_downloads(self) -> None:
         config_path = (
             Path(__file__).resolve().parents[2] / "config" / "download_resources.yaml"
         )
@@ -432,18 +498,18 @@ class DownloadResourceConfigTest(unittest.TestCase):
         operations = self._real_download_operations()
 
         self.assertIn(
-            "# Rust alternative resource bundles - uncomment only when shipping "
-            "claw-server-rust.",
+            "# BrowserClaw now ships claw-server-rust; copy_resources.yaml normalizes",
             text,
         )
         self.assertIn(
-            '# - name: "BrowserOS Claw Rust Server Resources - macOS ARM64"',
+            "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
             text,
         )
-        self.assertNotIn(
+        self.assertIn(
             "BrowserOS Claw Rust Server Resources - macOS ARM64",
             [op["name"] for op in operations],
         )
+        self.assertNotIn("claw-server/prod-resources/latest/", text)
 
     def _real_download_operations(self) -> list[dict]:
         config_path = (

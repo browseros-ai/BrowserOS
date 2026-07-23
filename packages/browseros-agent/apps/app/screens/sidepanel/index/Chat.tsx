@@ -27,7 +27,6 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
-import { RemoteHermesBootPill } from './RemoteHermesBootPill'
 
 /**
  * @public
@@ -50,7 +49,6 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
-    vmStatus,
     retryLastTurn,
   } = useChatSessionContext()
 
@@ -250,8 +248,6 @@ export const Chat = () => {
         )}
         {chatErrorProps && <ChatError {...chatErrorProps} />}
       </main>
-
-      {vmStatus && <RemoteHermesBootPill vm={vmStatus} />}
 
       <ChatFooter
         mode={mode}

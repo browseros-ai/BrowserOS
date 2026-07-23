@@ -9,24 +9,29 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/browseros-ai/BrowserOS"
 
 [workspace.dependencies]
-agent-mcp-manager = { path = "crates/agent-mcp-manager" }
+harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-mcp = { path = "crates/browseros-mcp" }
+claw-api = { path = "crates/claw-api" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_repr = "0.1"
+serde-saphyr = { version = "0.0.29", default-features = false, features = ["deserialize"] }
+sha2 = "0.10"
 jsonc-parser = { version = "0.33", features = ["cst"] }
 toml_edit = "0.22"
-rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server", "elicitation"] }
+rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
 axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
@@ -35,6 +40,7 @@ tracing-appender = "0.2"
 socket2 = "0.6"
 url = "2"
 base64 = "0.22"
+imagesize = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
 rand = "0.9"
@@ -42,8 +48,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 serde_path_to_error = "0.1"
 rquickjs = { version = "0.12.1", default-features = false, features = ["std", "futures", "parallel"] }
 clap = { version = "4.5", features = ["derive"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
-rusqlite_migration = "=1.3.1"
+sea-orm = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio", "macros"] }
+sea-orm-migration = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio"] }
 ulid = "1.2"
 time = { version = "0.3", features = ["formatting"] }
 tempfile = "3.14"

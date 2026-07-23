@@ -316,8 +316,6 @@ features:
       - chrome/browser/ui/toolbar/BUILD.gn
       - chrome/browser/ui/toolbar/toolbar_actions_model.cc
       - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-      - chrome/browser/ui/side_panel/side_panel_action_callback.cc
-      - chrome/browser/ui/side_panel/side_panel_action_callback.h
 
   flags:
     description: "feat: browser flags"
@@ -494,3 +492,12 @@ features:
       - components/os_crypt/common/keychain_password_mac_unittest.mm
       - ui/webui/resources/tools/generate_grd.gni
       - ui/webui/resources/tools/generate_grd.py
+
+  pdf-infobar-icons:
+    description: "feat: pdf-infobar-icons"
+    files:
+      - chrome/browser/ui/pdf/infobar/
+      - chrome/browser/ui/startup/default_browser_prompt/
+      - chrome/browser/ui/startup/startup_launch_infobar_delegate.cc
+      - chrome/browser/ui/startup/startup_launch_infobar_delegate.h
+      - chrome/browser/ui/views/session_restore_infobar/

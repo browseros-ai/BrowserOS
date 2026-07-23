@@ -33,7 +33,7 @@ pub struct AxNode {
     pub properties: Option<Vec<AxProperty>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_ids: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendDOMNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_dom_node_id: Option<i64>,
 }
 

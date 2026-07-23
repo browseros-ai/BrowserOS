@@ -29,6 +29,9 @@ export interface SidecarConfig {
     browseros_version?: string
     chromium_version?: string
   }
+  replay?: {
+    retentionDays?: number
+  }
 }
 
 const portSchema = z.preprocess(
@@ -79,6 +82,12 @@ const SidecarConfigFileSchema = z
       })
       .passthrough()
       .optional(),
+    replay: z
+      .object({
+        retentionDays: z.number().int().positive().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough()
 
@@ -122,6 +131,9 @@ function projectSidecarConfig(
   parsed: ParsedSidecarConfigFile,
   configDir: string,
 ): SidecarConfig {
+  const replay = omitUndefined({
+    retentionDays: parsed.replay?.retentionDays,
+  })
   return {
     ports: omitUndefined({
       server: parsed.ports?.server,
@@ -141,6 +153,7 @@ function projectSidecarConfig(
       browseros_version: parsed.instance?.browseros_version,
       chromium_version: parsed.instance?.chromium_version,
     }),
+    ...(Object.keys(replay).length > 0 && { replay }),
   }
 }
 

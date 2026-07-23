@@ -3,17 +3,25 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
+import * as _auditHooks from '@/modules/api/audit.hooks'
 
 interface MockQueryShape {
-  data?: { pages: { tasks: TaskSummary[] }[] }
+  data?: { pages: { items: TaskSummary[] }[] }
   isPending: boolean
 }
 
 let queryOverride: MockQueryShape = { isPending: true }
 
+// Spread the real audit-hooks module so unrelated tests that import
+// useTaskDetail / useDispatches / useAuditCleanupCandidates keep
+// working: Bun's mock.module registry is process-scoped and a
+// partial replacement drops the un-overridden exports (see the
+// 2026-07-17 test reliability audit).
 mock.module('@/modules/api/audit.hooks', () => ({
-  useTasks: () => queryOverride,
-  taskScreenshotUrl: (id: number) => `/audit/screenshot/${id}`,
+  ..._auditHooks,
+  useSessions: () => queryOverride,
+  taskScreenshotUrl: (sessionId: string, id: number) =>
+    `/api/v1/sessions/${sessionId}/screenshots/${id}`,
   useTaskScreenshotBaseUrl: () => null,
 }))
 
@@ -34,10 +42,9 @@ function render(): string {
 
 const sampleTask: TaskSummary = {
   sessionId: 'sess-1',
-  agentId: 'claude-code',
   slug: 'claude-code',
-  agentLabel: 'Claude Code',
-  title: 'Browsed example.com',
+  label: 'Claude Code',
+  name: 'Browsed example.com',
   site: 'example.com',
   startedAt: Date.now() - 12000,
   endedAt: Date.now(),
@@ -46,8 +53,7 @@ const sampleTask: TaskSummary = {
   toolSequence: ['tabs', 'snapshot', 'read', 'screenshot'],
   status: 'done',
   errorCount: 0,
-  lastScreenshotDispatchId: 7,
-  cursorId: 8,
+  latestScreenshotId: 7,
 }
 
 describe('RecentActivity', () => {
@@ -58,7 +64,7 @@ describe('RecentActivity', () => {
   })
 
   it('renders the empty state when there are no tasks', () => {
-    queryOverride = { isPending: false, data: { pages: [{ tasks: [] }] } }
+    queryOverride = { isPending: false, data: { pages: [{ items: [] }] } }
     const html = render()
     expect(html).toContain('No recent activity')
   })
@@ -66,7 +72,7 @@ describe('RecentActivity', () => {
   it('renders the freshest task as the lead tile with title, agent, and meta', () => {
     queryOverride = {
       isPending: false,
-      data: { pages: [{ tasks: [sampleTask] }] },
+      data: { pages: [{ items: [sampleTask] }] },
     }
     const html = render()
     expect(html).toContain('Browsed example.com')
@@ -77,10 +83,22 @@ describe('RecentActivity', () => {
   })
 
   it('renders the section header + view-all CTA in the empty state', () => {
-    queryOverride = { isPending: false, data: { pages: [{ tasks: [] }] } }
+    queryOverride = { isPending: false, data: { pages: [{ items: [] }] } }
     const html = render()
     expect(html).toContain('Recent activity')
     expect(html).toContain('View all activity')
     expect(html).toContain('href="/audit"')
+  })
+
+  it('labels stopped sessions in every recent-activity layout slot', () => {
+    const tasks = Array.from({ length: 6 }, (_, index) => ({
+      ...sampleTask,
+      sessionId: `stopped-${index}`,
+      startedAt: sampleTask.startedAt - index,
+      status: 'cancelled' as const,
+    }))
+    queryOverride = { isPending: false, data: { pages: [{ items: tasks }] } }
+    const html = render()
+    expect(html.match(/STOPPED/g)?.length).toBe(6)
   })
 })

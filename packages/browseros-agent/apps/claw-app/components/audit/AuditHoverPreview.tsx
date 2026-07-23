@@ -22,7 +22,7 @@ interface AuditHoverPreviewProps {
  * never a grey placeholder.
  */
 export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
-  const screenshotId = task?.lastScreenshotDispatchId ?? null
+  const screenshotId = task?.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   return (
     <div
@@ -35,7 +35,11 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
       <div className="relative aspect-[16/10] w-full overflow-hidden">
         {task && screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
             alt=""
             className="absolute inset-0 h-full w-full object-cover object-top"
           />
@@ -49,11 +53,11 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
         <div className="flex flex-col gap-0.5 bg-ink-deep px-4 py-3 text-white">
           <div className="flex items-center gap-2 font-mono text-[10px] text-white/75 uppercase tracking-[0.08em]">
             <AgentDot slug={task.slug} />
-            <span className="truncate text-white/95">{task.agentLabel}</span>
+            <span className="truncate text-white/95">{task.label}</span>
             {task.status === 'live' && <LiveDot />}
           </div>
           <p className="truncate font-semibold text-[13px] text-white leading-tight">
-            {task.title}
+            {task.name}
           </p>
           <p className="font-mono text-[10.5px] text-white/65 tabular-nums">
             {formatDuration(task.durationMs)}{' '}

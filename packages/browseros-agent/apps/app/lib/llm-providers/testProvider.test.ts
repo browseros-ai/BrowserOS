@@ -17,7 +17,7 @@ beforeEach(() => {
       ok: true,
       json: async () => ({ success: true, message: 'ok' }),
     } as Response
-  }) as typeof globalThis.fetch
+  }) as unknown as typeof globalThis.fetch
 })
 
 afterEach(() => {
@@ -84,5 +84,60 @@ describe('testProvider — request body', () => {
       acpAgentId: 'my-agent',
       acpCommand: 'my-bin acp',
     })
+  })
+})
+
+describe('testProvider — client-side fetch failure (issue #1844)', () => {
+  it('wraps a network fetch error as "could not reach BrowserOS server"', async () => {
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch')
+    }) as unknown as typeof globalThis.fetch
+
+    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    expect(result.success).toBe(false)
+    // Message must call out the LOCAL server and the URL we tried,
+    // not blame the user's provider config. Guards against a future
+    // refactor re-introducing the bare `error.message` return which
+    // reads as if the port the user typed was dropped.
+    expect(result.message).toContain('local BrowserOS server')
+    expect(result.message).toContain('http://127.0.0.1:9200')
+    expect(result.message).toContain('Failed to fetch')
+    expect(result.responseTime).toBeGreaterThanOrEqual(0)
+  })
+
+  it('wraps a JSON-parse failure the same way (server returned non-JSON)', async () => {
+    globalThis.fetch = (async () =>
+      ({
+        ok: true,
+        json: async () => {
+          throw new SyntaxError('Unexpected token < in JSON')
+        },
+      }) as unknown as Response) as unknown as typeof globalThis.fetch
+
+    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('local BrowserOS server')
+    expect(result.message).toContain('http://127.0.0.1:9200')
+    expect(result.message).toContain('Unexpected token')
+  })
+
+  it('does NOT wrap a server-returned failure (provider error passes through)', async () => {
+    // Server-side probe returns success: false with a `[<provider>]`
+    // prefixed message. That is the happy path and must land in the
+    // return statement unmodified so the user sees the real provider
+    // error (bad URL, 401, timeout, etc.).
+    globalThis.fetch = (async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          success: false,
+          message: '[anthropic] 401 Unauthorized',
+        }),
+      }) as unknown as Response) as unknown as typeof globalThis.fetch
+
+    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    expect(result.success).toBe(false)
+    expect(result.message).toBe('[anthropic] 401 Unauthorized')
+    expect(result.message).not.toContain('local BrowserOS server')
   })
 })

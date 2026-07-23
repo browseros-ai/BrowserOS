@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..437809a5bf4cf
+index 0000000000000..d1e1eea1df751
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -127,10 +127,7 @@ index 0000000000000..437809a5bf4cf
 +}
 +
 +bool ShouldPinBrowserOSExtension(const std::string& extension_id,
-+                                 PrefService* pref_service) {
-+  if (extension_id == kAgentExtensionId) {
-+    return ShouldShowAssistant(pref_service);
-+  }
++                                 PrefService*) {
 +  return IsBrowserOSPinnedExtension(extension_id);
 +}
 +

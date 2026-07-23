@@ -3,177 +3,124 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * react-query-kit factories for the v2 audit surfaces.
+ * Session audit surface for the cockpit and audit screens.
  *
- * useTasks         paginated task list (homepage + audit screen)
- * useTaskDetail    one task's full dispatch list + screenshot ids
- * useDispatches    legacy flat dispatch stream (kept for callers
- *                  that want raw rows)
+ * useSessions        paginated session history (homepage + audit screen)
+ * useLiveSessions    complete connected-session snapshot for Running now
+ * useSessionDetail   one session's summary + full dispatch list;
+ *                    polls only while the session is live
  *
- * taskScreenshotUrl builds the absolute URL to the binary screenshot
- * route so an <img src> can render the persisted JPEG without going
- * through the rpc client (which is JSON-only).
+ * The URL helpers let <img src> render binary JPEG routes without
+ * routing those payloads through the JSON client.
  */
 
+import {
+  type Dispatch,
+  type SessionDetail,
+  type SessionList,
+  type SessionScreenshotList,
+  SessionStatus,
+  type SessionSummary,
+} from '@browseros/claw-api'
+import {
+  buildSessionPreviewUrl,
+  buildSessionScreenshotUrl,
+} from '@browseros/claw-api-client'
 import { useEffect, useState } from 'react'
 import { createInfiniteQuery, createQuery } from 'react-query-kit'
-import { api, apiBaseUrl, resolveApiBaseUrl } from './client'
-import { parseResponse } from './parseResponse'
+import { apiBaseUrl, apiClient, resolveApiBaseUrl } from './client'
 
-export interface ToolDispatchRow {
-  id: number
-  createdAt: number
-  agentId: string
-  slug: string
-  agentLabel: string
-  sessionId: string
-  toolName: string
-  pageId: number | null
-  targetId: string | null
-  url: string | null
-  title: string | null
-  argsJson: string | null
-  resultMeta: string | null
-  durationMs: number | null
-}
+// The screens speak task-*; the contract speaks session-*. Aliased here
+// so call sites keep their vocabulary while the shapes stay canonical.
+export type ToolDispatchRow = Dispatch
+export type TaskStatus = SessionStatus
+export type TaskSummary = SessionSummary
+export type TaskDetail = SessionDetail
 
-export interface ListDispatchesResponse {
-  rows: ToolDispatchRow[]
-  nextCursor: number | null
-}
-
-export interface UseDispatchesVars {
-  agentId?: string
-}
-
-export const useDispatches = createInfiniteQuery<
-  ListDispatchesResponse,
-  UseDispatchesVars,
-  Error,
-  number | undefined
->({
-  queryKey: ['audit', 'dispatches'],
-  fetcher: async (vars, { pageParam }) => {
-    const response = await api.audit.dispatches.$get({
-      query: {
-        ...(vars?.agentId ? { agentId: vars.agentId } : {}),
-        ...(pageParam !== undefined ? { cursor: String(pageParam) } : {}),
-        limit: '100',
-      },
-    })
-    return parseResponse<ListDispatchesResponse>(response)
-  },
-  initialPageParam: undefined,
-  getNextPageParam: (last) => last.nextCursor ?? undefined,
-  refetchInterval: 3000,
-})
-
-export type TaskStatus = 'live' | 'done' | 'failed'
-
-export interface TaskSummary {
-  sessionId: string
-  agentId: string
-  slug: string
-  agentLabel: string
-  title: string
-  site: string | null
-  startedAt: number
-  endedAt: number | null
-  durationMs: number
-  dispatchCount: number
-  toolSequence: string[]
-  status: TaskStatus
-  errorCount: number
-  lastScreenshotDispatchId: number | null
-  cursorId: number
-}
-
-export interface ListTasksResponse {
-  tasks: TaskSummary[]
-  nextCursor: number | null
-}
-
-export interface UseTasksVars {
-  agentId?: string
+export interface UseSessionsVariables {
+  profileId?: string
   slug?: string
-  status?: TaskStatus
+  status?: SessionStatus
   site?: string
   search?: string
   since?: number
   limit?: number
 }
 
-export const useTasks = createInfiniteQuery<
-  ListTasksResponse,
-  UseTasksVars,
+export const useSessions = createInfiniteQuery<
+  SessionList,
+  UseSessionsVariables,
   Error,
   number | undefined
 >({
-  queryKey: ['audit', 'tasks'],
-  fetcher: async (vars, { pageParam }) => {
-    const query: Record<string, string> = {}
-    if (vars?.agentId) query.agentId = vars.agentId
-    if (vars?.slug) query.slug = vars.slug
-    if (vars?.status) query.status = vars.status
-    if (vars?.site) query.site = vars.site
-    if (vars?.search) query.search = vars.search
-    if (typeof vars?.since === 'number') query.since = String(vars.since)
-    if (typeof vars?.limit === 'number') query.limit = String(vars.limit)
-    if (pageParam !== undefined) query.cursor = String(pageParam)
-    const response = await api.audit.tasks.$get({ query })
-    return parseResponse<ListTasksResponse>(response)
-  },
+  queryKey: ['api', 'sessions'],
+  fetcher: async (variables, { pageParam }) =>
+    (await apiClient()).listSessions({
+      ...variables,
+      ...(pageParam === undefined ? {} : { cursor: pageParam }),
+    }),
   initialPageParam: undefined,
-  getNextPageParam: (last) => last.nextCursor ?? undefined,
+  getNextPageParam: (last) => last.nextCursor,
   refetchInterval: 3000,
-  // Keep the previously-fetched pages visible while a new variable
-  // set is fetching. Without this every filter / search change
-  // briefly clears the table to the loading skeleton, which also
-  // unmounts adjacent surfaces (FilterBar) and steals focus from
-  // the search input mid-typing.
-  placeholderData: (prev) => prev,
+  // Keep the prior pages visible while a new filter set loads so the
+  // adjacent filter controls remain mounted and retain keyboard focus.
+  placeholderData: (previous) => previous,
 })
 
-export interface TaskDetail extends TaskSummary {
-  dispatches: ToolDispatchRow[]
-  screenshotDispatchIds: number[]
-  startEvent: {
-    createdAt: number
-    clientName: string
-    clientVersion: string
-  } | null
-  endEvent: {
-    createdAt: number
-    kind: 'closed' | 'errored'
-    reason: string | null
-  } | null
-}
+export const useLiveSessions = createQuery<SessionList>({
+  queryKey: ['api', 'sessions', 'live'],
+  fetcher: async () =>
+    (await apiClient()).listSessions({ status: SessionStatus.Live }),
+  refetchInterval: 1500,
+  refetchIntervalInBackground: true,
+})
 
-export const useTaskDetail = createQuery<
-  TaskDetail,
+export const useSessionDetail = createQuery<
+  SessionDetail,
   { sessionId: string },
   Error
 >({
-  queryKey: ['audit', 'task'],
-  fetcher: async ({ sessionId }) => {
-    const response = await api.audit.tasks[':sessionId'].$get({
-      param: { sessionId },
-    })
-    return parseResponse<TaskDetail>(response)
-  },
-  refetchInterval: (q) => (q.state.data?.status === 'live' ? 3000 : false),
+  queryKey: ['api', 'session'],
+  fetcher: async ({ sessionId }) =>
+    (await apiClient()).getSession({ sessionId }),
+  refetchInterval: (query) =>
+    query.state.data?.session.status === 'live' ? 3000 : false,
 })
 
-/** Absolute URL for the persisted screenshot of one dispatch. */
+export const useSessionScreenshots = createQuery<
+  SessionScreenshotList,
+  { sessionId: string },
+  Error
+>({
+  queryKey: ['api', 'session', 'screenshots'],
+  fetcher: async ({ sessionId }) =>
+    (await apiClient()).listSessionScreenshots({ sessionId }),
+  refetchInterval: 3000,
+})
+
+/** Absolute URL for one immutable session-owned screenshot. */
 export function taskScreenshotUrl(
-  dispatchId: number,
+  sessionId: string,
+  screenshotId: number,
   baseUrl = apiBaseUrl(),
 ): string {
-  return `${baseUrl}/audit/screenshot/${dispatchId}`
+  return buildSessionScreenshotUrl(baseUrl, { sessionId, screenshotId })
 }
 
-/** Provides a screenshot URL base that follows BrowserOS server-port prefs. */
-export function useTaskScreenshotBaseUrl(): string | null {
+/** Absolute URL for a fresh live-session JPEG; `refresh` only busts browser caches. */
+export function sessionPreviewUrl(
+  sessionId: string,
+  refresh: number,
+  baseUrl = apiBaseUrl(),
+): string {
+  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh })
+}
+
+/**
+ * API base that follows the BrowserOS server-port pref. The pref API is
+ * callback-based, so synchronous URL helpers cannot see it directly.
+ */
+function useResolvedApiBaseUrl(): string | null {
   const [baseUrl, setBaseUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -187,4 +134,18 @@ export function useTaskScreenshotBaseUrl(): string | null {
   }, [])
 
   return baseUrl
+}
+
+export function useTaskScreenshotBaseUrl(): string | null {
+  return useResolvedApiBaseUrl()
+}
+
+export function useSessionPreviewUrl(
+  sessionId: string,
+  refresh: number,
+): string | null {
+  const baseUrl = useResolvedApiBaseUrl()
+  return baseUrl === null
+    ? null
+    : sessionPreviewUrl(sessionId, refresh, baseUrl)
 }

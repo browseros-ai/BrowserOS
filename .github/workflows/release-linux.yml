@@ -133,7 +133,7 @@ jobs:
       platform: linux
       arch: x64
       product: ${{ matrix.product }}
-      runner: warp-ubuntu-2204-x64-32x
+      runner: warp-custom-browseros-ubuntu-2204-x64-32x
       timeout-minutes: 660
       profile: release-ci
       sign: false

@@ -17,7 +17,7 @@ interface StarterPromptTileProps {
   /**
    * Fires after the prompt lands on the clipboard. The parent uses
    * this to bump analytics + show the waiting banner immediately
-   * rather than waiting for the next poll of `useTasks`.
+   * rather than waiting for the next session poll.
    */
   onCopied?: () => void
 }

@@ -96,14 +96,8 @@ class WorkflowSecretScannerTest(unittest.TestCase):
             consumers,
         )
 
-    def test_claw_posthog_keys_are_required_and_hosts_are_optional(self):
+    def test_browserclaw_build_key_is_required_and_host_is_optional(self):
         expected_consumers = {
-            "CLAW_POSTHOG_KEY": (
-                "nightly-browserclaw.yml",
-                "release-browserclaw.yml",
-                "release-claw-server.yml",
-            ),
-            "CLAW_POSTHOG_HOST": ("release-claw-server.yml",),
             "VITE_CLAW_POSTHOG_KEY": (
                 "build-browseros.yml",
                 "release-browserclaw.yml",
@@ -114,8 +108,8 @@ class WorkflowSecretScannerTest(unittest.TestCase):
                 "release-extensions.yml",
             ),
         }
-        required_keys = {"CLAW_POSTHOG_KEY", "VITE_CLAW_POSTHOG_KEY"}
-        optional_hosts = {"CLAW_POSTHOG_HOST", "VITE_CLAW_POSTHOG_HOST"}
+        required_keys = {"VITE_CLAW_POSTHOG_KEY"}
+        optional_hosts = {"VITE_CLAW_POSTHOG_HOST"}
         referenced = scan_workflow_secret_refs(REPO_ROOT)
         allowlisted = {
             spec.name: spec.consumers
@@ -148,19 +142,6 @@ class SecretPlanTest(unittest.TestCase):
         self.assertEqual(["ESIGNER_USERNAME"], result.present)
         self.assertEqual(["ESIGNER_CREDENTIAL_ID"], result.optional)
         self.assertEqual([], result.missing_required)
-
-    def test_optional_agent_runner_secret_syncs_when_env_provides_it(self):
-        plan = build_plan({"AGENT_RUNNER_JWT_SECRET": "jwt-secret"}, set())
-
-        self.assertEqual(
-            ("AGENT_RUNNER_JWT_SECRET", "set"),
-            next(
-                (item.name, item.status)
-                for item in plan
-                if item.name == "AGENT_RUNNER_JWT_SECRET"
-            ),
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

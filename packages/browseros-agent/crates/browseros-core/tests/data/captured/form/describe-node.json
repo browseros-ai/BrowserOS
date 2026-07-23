@@ -1,0 +1,67 @@
+{
+  "node": {
+    "nodeId": 1,
+    "backendNodeId": 10,
+    "nodeType": 9,
+    "nodeName": "#document",
+    "localName": "",
+    "nodeValue": "",
+    "childNodeCount": 2,
+    "children": [
+      {
+        "nodeId": 2,
+        "parentId": 0,
+        "backendNodeId": 67,
+        "nodeType": 10,
+        "nodeName": "html",
+        "localName": "",
+        "nodeValue": "",
+        "publicId": "",
+        "systemId": ""
+      },
+      {
+        "nodeId": 3,
+        "parentId": 0,
+        "backendNodeId": 12,
+        "nodeType": 1,
+        "nodeName": "HTML",
+        "localName": "html",
+        "nodeValue": "",
+        "childNodeCount": 2,
+        "children": [
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 13,
+            "nodeType": 1,
+            "nodeName": "HEAD",
+            "localName": "head",
+            "nodeValue": "",
+            "childNodeCount": 2,
+            "attributes": []
+          },
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 16,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": 5,
+            "attributes": []
+          }
+        ],
+        "attributes": [
+          "lang",
+          "en"
+        ],
+        "frameId": "1FFFBB627D722A438AD9A5114C03E849"
+      }
+    ],
+    "documentURL": "http://127.0.0.1:17243/form.html",
+    "baseURL": "http://127.0.0.1:17243/form.html",
+    "xmlVersion": "",
+    "compatibilityMode": "NoQuirksMode"
+  }
+}

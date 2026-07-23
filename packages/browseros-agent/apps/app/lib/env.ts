@@ -2,7 +2,7 @@ import { ZodError, z } from 'zod'
 import { parseBrowserOSApiUrl } from './browseros-api-url'
 
 export function parseAlphaFeaturesFlag(value: string | undefined): boolean {
-  return (value ?? 'true') === 'true'
+  return value === 'true'
 }
 
 const EnvSchema = z.object({

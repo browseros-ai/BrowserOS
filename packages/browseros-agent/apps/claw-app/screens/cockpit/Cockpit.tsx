@@ -2,9 +2,11 @@ import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
+import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
-import { useTasks } from '@/modules/api/audit.hooks'
-import { useBrowserosConnections } from '@/modules/api/connections.hooks'
+import { useSessions } from '@/modules/api/audit.hooks'
+import { useCockpitStats } from '@/modules/api/cockpit.hooks'
+import { useConnections } from '@/modules/api/connections.hooks'
 import { useCockpitData } from './cockpit.data'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
@@ -12,14 +14,12 @@ const ONBOARDING_PROBE_LIMIT = 1
 
 /** Renders the Claw cockpit homepage. */
 export function Cockpit() {
-  const { agents } = useCockpitData()
+  const { sessions } = useCockpitData()
 
-  // Probe the two data sources the onboarding state hinges on. Both
-  // queries live in react-query's cache under stable keys, so the
-  // downstream components (RecentActivity / Mcp screen) that read
-  // the same keys hit the cache instead of refetching.
-  const connections = useBrowserosConnections()
-  const taskProbe = useTasks({
+  // When no live session is connected, these probes decide which onboarding
+  // shell to show. Their stable keys are shared with RecentActivity and MCP.
+  const connections = useConnections()
+  const taskProbe = useSessions({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
     // Scoped to the onboarding shells: poll every 4s while the
     // reader has no activity yet so the 'ready' handoff lands
@@ -30,7 +30,7 @@ export function Cockpit() {
     // no-polling behaviour is unchanged.
     refetchInterval: (query) => {
       const pages = query.state.data?.pages ?? []
-      const hasAnyActivity = pages.some((p) => p.tasks.length > 0)
+      const hasAnyActivity = pages.some((p) => p.items.length > 0)
       return hasAnyActivity ? false : 4000
     },
   })
@@ -39,21 +39,32 @@ export function Cockpit() {
   // preinstalled but are never something the reader intentionally
   // connected, so lighting up 'MCP installed' for them is misleading.
   const hasConnection =
-    connections.data?.connections.some(
+    connections.data?.items.some(
       (c) => c.installed && isUserFacingHarness(c.harness),
     ) ?? false
-  const hasActivity = (taskProbe.data?.pages ?? []).some(
-    (p) => p.tasks.length > 0,
+  const hasHistoricalActivity = (taskProbe.data?.pages ?? []).some(
+    (p) => p.items.length > 0,
   )
+  const hasLiveSessions = sessions.length > 0
 
   // Wait for both probes to resolve at least once before deciding
   // which shell to render. Otherwise the onboarding block flashes on
   // first paint for returning users whose tasks are still in-flight.
   const probesResolved =
     connections.data !== undefined && taskProbe.data !== undefined
-  const state = probesResolved
-    ? getOnboardingState({ hasConnection, hasActivity })
-    : 'ready'
+  const state = hasLiveSessions
+    ? 'ready'
+    : probesResolved
+      ? getOnboardingState({
+          hasConnection,
+          hasActivity: hasHistoricalActivity,
+        })
+      : 'ready'
+  const shouldLoadStats =
+    probesResolved && state === 'ready' && !hasLiveSessions
+  const stats = useCockpitStats({
+    enabled: shouldLoadStats,
+  })
 
   if (state !== 'ready') {
     return (
@@ -66,7 +77,11 @@ export function Cockpit() {
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
       <CockpitHero />
-      <RunningGrid agents={agents} />
+      {shouldLoadStats && stats.data?.hasMeasuredStats ? (
+        <SavedStatsBand stats={stats.data} />
+      ) : (
+        <RunningGrid sessions={sessions} />
+      )}
       <RecentActivity />
     </div>
   )

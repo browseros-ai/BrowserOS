@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dynamic fixture</title>
+  </head>
+  <body>
+    <h1>Dynamic fixture</h1>
+    <button id="add-item" type="button">Add item</button>
+    <ul id="list">
+      <li>alpha item</li>
+      <li>beta item</li>
+      <li>gamma item</li>
+    </ul>
+    <button id="replace-section" type="button">Replace section</button>
+    <section id="volatile"><span>volatile content v1</span></section>
+    <div id="delayed">waiting</div>
+    <div id="marker">fresh-load</div>
+    <section id="big"></section>
+    <script>
+      let added = 0
+      document.getElementById('add-item').addEventListener('click', () => {
+        added += 1
+        const item = document.createElement('li')
+        item.textContent = `delta item ${added}`
+        document.getElementById('list').append(item)
+        document.getElementById('marker').textContent = `mutated-${added}`
+      })
+      let version = 1
+      document.getElementById('replace-section').addEventListener('click', () => {
+        version += 1
+        const section = document.getElementById('volatile')
+        section.textContent = ''
+        const span = document.createElement('span')
+        span.textContent = `volatile content v${version}`
+        section.append(span)
+      })
+      setTimeout(() => {
+        document.getElementById('delayed').textContent = 'delayed content ready'
+      }, 1500)
+      // Generated filler drives the >15k-token snapshot spill and the >5k-char
+      // grep/read spills; one oversized line exercises the 500-char grep clamp.
+      // h6 (not div): plain divs are ignored AX nodes and never reach the
+      // snapshot, while headings carry their text as the accessible name.
+      const big = document.getElementById('big')
+      const lines = []
+      for (let index = 1; index <= 3000; index += 1) {
+        lines.push(`<h6>filler line ${index} keeps the accessibility tree large</h6>`)
+      }
+      lines.push(`<h6>longline ${'x'.repeat(600)} endlong</h6>`)
+      big.innerHTML = lines.join('')
+    </script>
+  </body>
+</html>

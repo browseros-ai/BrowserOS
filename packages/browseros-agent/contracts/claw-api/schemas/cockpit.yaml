@@ -1,0 +1,54 @@
+CockpitStats:
+  type: object
+  additionalProperties: false
+  required: [hasMeasuredStats, allTime, last30Days, last7Days]
+  properties:
+    hasMeasuredStats:
+      type: boolean
+    allTime:
+      $ref: '#/CockpitStatsWindow'
+    last30Days:
+      $ref: '#/CockpitStatsWindow'
+    last7Days:
+      $ref: '#/CockpitStatsWindow'
+CockpitStatsWindow:
+  type: object
+  additionalProperties: false
+  required:
+    - browserClawTokenEstimate
+    - screenshotFirstTokenEstimate
+    - rawTokenSavingsEstimate
+    - humanTimeSavedMs
+    - sessionCount
+    - toolCallCount
+  properties:
+    browserClawTokenEstimate:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+    screenshotFirstTokenEstimate:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+    rawTokenSavingsEstimate:
+      type: integer
+      format: int64
+      minimum: -9007199254740991
+      maximum: 9007199254740991
+    humanTimeSavedMs:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+    sessionCount:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+    toolCallCount:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991

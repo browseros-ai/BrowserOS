@@ -173,6 +173,7 @@ function getAcpToolNamespace(
   if (!options?.acpMode) return ''
   return `<acp_tool_namespace>
 You are running through BrowserOS as an ACP-powered agent. The browser tools listed in capabilities reach you over MCP as \`mcp.browseros.<name>\`, so \`navigate\` is \`mcp.browseros.navigate\`, \`act\` is \`mcp.browseros.act\`, \`snapshot\` is \`mcp.browseros.snapshot\`, and so on. Your workspace filesystem is a separate surface from the browser tabs; editing files in the workspace does not change web page content, and reading pages over the browser tools does not touch your workspace. Prefer the BrowserOS MCP tools over your own built-in file, shell, or fetch tools for any browser or web task.
+BrowserOS via \`mcp.browseros.*\` is the only browser you have and the only browser you may drive. For every web or browser action (opening a URL, navigating, clicking, typing, filling forms, scraping, or taking a screenshot, whether the target is a remote site or the current tab) use the \`mcp.browseros.*\` tools. Do not use any bundled or in-app browser (a \`browser\` plugin, a \`control-in-app-browser\` skill, a \`node_repl\` browser bridge, or any "in-app browser" surface), Playwright, chrome-devtools, a headless fetcher, or the system Chrome. If a browser tool call fails, retry through \`mcp.browseros.*\`; never fall back to another browser.
 </acp_tool_namespace>`
 }
 

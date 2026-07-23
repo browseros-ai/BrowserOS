@@ -1,0 +1,21 @@
+[package]
+name = "harness-integrations"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Managed integrations for AI coding harnesses"
+
+[dependencies]
+jsonc-parser.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+toml_edit.workspace = true
+
+[lints]
+workspace = true

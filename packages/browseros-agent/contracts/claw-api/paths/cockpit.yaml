@@ -1,0 +1,12 @@
+stats:
+  get:
+    operationId: getCockpitStats
+    responses:
+      '200':
+        description: Cockpit efficiency statistics for all supported windows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cockpit.yaml#/CockpitStats
+      '500':
+        $ref: ../responses.yaml#/InternalError

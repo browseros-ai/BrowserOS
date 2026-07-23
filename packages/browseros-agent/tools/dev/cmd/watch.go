@@ -30,7 +30,6 @@ var (
 	watchNew    bool
 	watchManual bool
 	watchClaw   bool
-	watchRust   bool
 )
 
 const (
@@ -43,7 +42,6 @@ func init() {
 	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
 	watchCmd.Flags().BoolVar(&watchManual, "manual", false, "Build agent statically instead of WXT HMR mode")
 	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserClaw UI and standalone server")
-	watchCmd.Flags().BoolVar(&watchRust, "rust", false, "Run BrowserClaw with the Rust claw-server")
 	rootCmd.AddCommand(watchCmd)
 }
 
@@ -57,7 +55,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if watchRust {
+	if watchClaw {
 		if err := ensureCargoPresent(); err != nil {
 			return err
 		}
@@ -175,7 +173,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	var procs []*proc.ManagedProc
 
 	if watchClaw {
-		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchRust)
+		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir)
 	} else {
 		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual)
 		if err != nil {
@@ -210,12 +208,6 @@ func runWatch(cmd *cobra.Command, args []string) error {
 func watchMode() (string, error) {
 	if watchManual && watchClaw {
 		return "", fmt.Errorf("--manual cannot be combined with --claw")
-	}
-	if watchRust && !watchClaw {
-		return "", fmt.Errorf("--rust can only be combined with --claw")
-	}
-	if watchClaw && watchRust {
-		return "BrowserClaw Rust", nil
 	}
 	if watchClaw {
 		return "BrowserClaw", nil
@@ -342,7 +334,7 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 }
 
 // startClawWatch supervises the BrowserClaw UI plus standalone server.
-func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, rust bool) []*proc.ManagedProc {
+func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string) []*proc.ManagedProc {
 	var procs []*proc.ManagedProc
 
 	reservations.ReleaseCDP()
@@ -374,19 +366,19 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")
 	reservations.ReleaseServer()
 	reservations.ReleaseExtension()
-	serverProc := proc.StartManaged(ctx, wg, clawServerProcConfig(root, env, p, userDataDir, sidecarPath, rust, proc.KillPortAndWait))
+	serverProc := proc.StartManaged(ctx, wg, clawServerProcConfig(root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait))
 	procs = append(procs, serverProc)
-	if rust {
-		startRustClawSourceWatcher(ctx, wg, root, serverProc)
-	}
+	startRustClawSourceWatcher(ctx, wg, root, serverProc)
 	return procs
 }
 
-func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, rust bool, killPort func(int, time.Duration) error) proc.ProcConfig {
-	cfg := proc.ProcConfig{
+func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, killPort func(int, time.Duration) error) proc.ProcConfig {
+	return proc.ProcConfig{
 		Tag:     proc.TagServer,
+		Dir:     root,
 		Env:     env,
 		Restart: true,
+		Cmd:     []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
 			if err := writeServerSidecarConfig(sidecarPath, root, userDataDir, p); err != nil {
 				return err
@@ -394,14 +386,6 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 			return killPort(p.Server, 3*time.Second)
 		},
 	}
-	if rust {
-		cfg.Dir = root
-		cfg.Cmd = []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", sidecarPath}
-	} else {
-		cfg.Dir = filepath.Join(root, "apps/claw-server")
-		cfg.Cmd = []string{"bun", "--watch", "--env-file=../../.env.development", "src/main.ts", "--config", sidecarPath}
-	}
-	return cfg
 }
 
 func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc) {
@@ -419,7 +403,7 @@ func rustClawWatchInputs(root string) []string {
 	inputs := []string{
 		filepath.Join(root, "apps/claw-server-rust/src"),
 		filepath.Join(root, "apps/claw-server-rust/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server/drizzle"),
+		filepath.Join(root, "apps/claw-server-rust/tests/fixtures/legacy-drizzle"),
 	}
 	for _, pattern := range []string{
 		filepath.Join(root, "crates", "*", "src"),
@@ -574,7 +558,7 @@ func ensureLimactlPresent() error {
 func ensureCargoPresent() error {
 	if _, err := exec.LookPath("cargo"); err != nil {
 		return fmt.Errorf("%s %s",
-			proc.ErrorColor.Sprint("Cargo is required for --claw --rust but is not installed."),
+			proc.ErrorColor.Sprint("Cargo is required for --claw but is not installed."),
 			proc.DimColor.Sprintf("Install it with %s, or from %s.", proc.BoldColor.Sprint("brew install rustup"), proc.BoldColor.Sprint("https://rustup.rs")),
 		)
 	}

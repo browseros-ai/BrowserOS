@@ -34,10 +34,6 @@
       "types": "./src/constants/paths.ts",
       "default": "./src/constants/paths.ts"
     },
-    "./constants/hermes": {
-      "types": "./src/constants/hermes.ts",
-      "default": "./src/constants/hermes.ts"
-    },
     "./env/registry": {
       "types": "./src/env/registry.ts",
       "default": "./src/env/registry.ts"

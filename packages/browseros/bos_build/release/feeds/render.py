@@ -372,6 +372,15 @@ def extract_appcast_version(content: str) -> Optional[str]:
     return max(versions, key=parse_dotted_version)
 
 
+def extract_appcast_item_count(content: str) -> Optional[int]:
+    """Return the channel item count, or None for malformed XML."""
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return None
+    return len(root.findall("channel/item"))
+
+
 def _gupdate_apps(root: ET.Element) -> List[ET.Element]:
     apps = root.findall(f".//{{{GUPDATE_NS}}}app")
     return apps if apps else root.findall(".//app")

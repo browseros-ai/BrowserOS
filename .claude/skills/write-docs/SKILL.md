@@ -2,6 +2,7 @@
 name: write-docs
 description: Write BrowserOS feature documentation. Use when the user wants to create or update documentation for a BrowserOS feature. This skill explores the codebase to understand features and writes concise Mintlify MDX docs.
 allowed-tools: Read, Grep, Glob, Bash, Task, Write, Edit
+disable-model-invocation: true
 ---
 
 # Write BrowserOS Documentation

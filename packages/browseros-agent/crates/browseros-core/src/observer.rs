@@ -87,6 +87,8 @@ impl Observer {
         options: SnapshotOptions,
     ) -> Result<SnapshotResult, CoreError> {
         let result = self.capture().await?;
+        // Options filter only the returned presentation; commit keeps the full
+        // capture as the next diff baseline.
         let text = apply_snapshot_options(&result.text, options);
         self.commit(result.clone()).await;
         Ok(SnapshotResult {
@@ -379,6 +381,7 @@ struct RuntimeEvalResult {
 #[derive(Debug, Deserialize)]
 struct RemoteValue {
     value: Option<Value>,
+    #[serde(rename = "objectId")]
     object_id: Option<String>,
 }
 
@@ -673,7 +676,7 @@ fn name_of(node: &AxNode) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_ref_entry;
+    use super::{RemoteValue, resolve_ref_entry};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, ProtocolSession,
         connection::CdpConnection,
@@ -773,6 +776,17 @@ mod tests {
                 .then(|| children.iter().map(|child| (*child).to_string()).collect()),
             ..AxNode::default()
         }
+    }
+
+    #[test]
+    fn runtime_remote_value_deserializes_object_id() -> Result<(), serde_json::Error> {
+        let value: RemoteValue = serde_json::from_value(json!({
+            "type": "object",
+            "objectId": "-6404171882913021072.1.1"
+        }))?;
+
+        assert_eq!(value.object_id.as_deref(), Some("-6404171882913021072.1.1"));
+        Ok(())
     }
 
     #[tokio::test]

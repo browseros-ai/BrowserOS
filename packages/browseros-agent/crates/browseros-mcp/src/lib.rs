@@ -9,6 +9,7 @@ pub mod framework;
 pub mod output_file;
 pub mod response;
 pub mod service;
+pub mod token_estimate;
 pub mod tools;
 pub mod trust_boundary;
 

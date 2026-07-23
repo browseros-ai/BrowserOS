@@ -1,7 +1,7 @@
 import { ArrowRight, History } from 'lucide-react'
 import { NavLink } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type TaskSummary, useTasks } from '@/modules/api/audit.hooks'
+import { type TaskSummary, useSessions } from '@/modules/api/audit.hooks'
 import { EmptyState } from './EmptyState'
 import { LeadRunTile } from './LeadRunTile'
 import { RunRow } from './RunRow'
@@ -28,9 +28,9 @@ const HOME_TASK_LIMIT = 12
  * At mobile: everything single-column.
  */
 export function RecentActivity() {
-  const query = useTasks({ variables: { limit: HOME_TASK_LIMIT } })
+  const query = useSessions({ variables: { limit: HOME_TASK_LIMIT } })
   const tasks = (query.data?.pages ?? [])
-    .flatMap((p) => p.tasks)
+    .flatMap((p) => p.items)
     .slice(0, HOME_TASK_LIMIT)
   const now = Date.now()
   const ordered = orderByLiveThenRecency(tasks)

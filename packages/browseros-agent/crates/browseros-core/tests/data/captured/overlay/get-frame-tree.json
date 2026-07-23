@@ -1,0 +1,21 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "165CE2BED571497FC00CA458910BC21C",
+      "loaderId": "0D7CCDEB96110FAB60CCBC429A3F8DC5",
+      "url": "http://127.0.0.1:17243/overlay.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    }
+  }
+}

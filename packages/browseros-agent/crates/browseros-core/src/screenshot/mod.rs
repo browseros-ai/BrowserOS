@@ -53,6 +53,8 @@ pub struct ScreenshotCaptureOptions {
     pub clip: Option<Viewport>,
 }
 
+/// Viewport boxes are viewport-relative and apply the clip scale. Full-page
+/// boxes add the sampled scroll offsets when that best-effort read succeeds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenshotAnnotationBox {
     pub x: i64,
@@ -644,6 +646,8 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<T, CoreError>>,
 {
+    // Plain captures share this protocol-session lock because annotated capture
+    // temporarily overlays the DOM; overlap could include that overlay in a plain image.
     let mutex = screenshot_mutex(page_session);
     let _guard = mutex.lock().await;
     task().await

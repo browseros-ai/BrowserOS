@@ -1,7 +1,6 @@
 # Required secrets for resource publishing: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 # R2_SECRET_ACCESS_KEY, R2_BUCKET, BROWSEROS_CONFIG_URL, POSTHOG_API_KEY,
-# SENTRY_DSN. Optional: AGENT_RUNNER_JWT_SECRET (inlined when present),
-# SPARKLE_PRIVATE_KEY (required only when publish_ota is true).
+# SENTRY_DSN. SPARKLE_PRIVATE_KEY is required only when publish_ota is true.
 name: "Release: BrowserOS Server"
 
 on:
@@ -56,8 +55,6 @@ on:
         required: true
       SENTRY_DSN:
         required: true
-      AGENT_RUNNER_JWT_SECRET:
-        required: false
       SPARKLE_PRIVATE_KEY:
         required: false
 
@@ -171,7 +168,6 @@ jobs:
       BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      AGENT_RUNNER_JWT_SECRET: ${{ secrets.AGENT_RUNNER_JWT_SECRET }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       NODE_ENV: production
       LOG_LEVEL: info
@@ -195,9 +191,6 @@ jobs:
             POSTHOG_API_KEY
             SENTRY_DSN
           )
-          # AGENT_RUNNER_JWT_SECRET is inlined when present but not required —
-          # the descriptor's requiredInlineEnvKeys omits it
-          # (scripts/build/server/descriptor.ts).
           if [ "${PUBLISH_OTA:-false}" = "true" ]; then
             required+=(SPARKLE_PRIVATE_KEY)
           fi

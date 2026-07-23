@@ -15,12 +15,13 @@ import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
 
 interface TaskHeaderProps {
-  task: TaskDetail
+  detail: TaskDetail
 }
 
-export function TaskHeader({ task }: TaskHeaderProps) {
+export function TaskHeader({ detail }: TaskHeaderProps) {
+  const { session: task, dispatches } = detail
   const [copied, setCopied] = useState(false)
-  const finalUrl = lastUrl(task) ?? task.dispatches[0]?.url ?? null
+  const finalUrl = lastUrl(dispatches) ?? dispatches[0]?.url ?? null
   const navigate = useNavigate()
   const location = useLocation()
   // Semantic back: prefer the referring path passed via router state
@@ -58,7 +59,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <AgentDot slug={task.slug} />
-              <span className="font-semibold text-ink">{task.agentLabel}</span>
+              <span className="font-semibold text-ink">{task.label}</span>
               <StatusBadge status={task.status} />
               {task.errorCount > 0 && (
                 <span className="text-[12.5px] text-red-600 dark:text-red-400">
@@ -67,7 +68,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
               )}
             </div>
             <h1 className="font-extrabold text-2xl tracking-tight">
-              {task.title}
+              {task.name}
             </h1>
           </div>
         </div>
@@ -170,9 +171,9 @@ export function TaskHeader({ task }: TaskHeaderProps) {
   )
 }
 
-function lastUrl(task: TaskDetail): string | null {
-  for (let i = task.dispatches.length - 1; i >= 0; i--) {
-    const url = task.dispatches[i]?.url
+function lastUrl(dispatches: TaskDetail['dispatches']): string | null {
+  for (let i = dispatches.length - 1; i >= 0; i--) {
+    const url = dispatches[i]?.url
     if (url) return url
   }
   return null

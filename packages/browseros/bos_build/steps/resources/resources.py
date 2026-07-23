@@ -182,9 +182,15 @@ def apply_renames(base: Path, renames) -> None:
             raise ValueError("rename entries must be mappings")
         src_rel = _safe_relative_path(rename.get("from"), "from")
         dst_rel = _safe_relative_path(rename.get("to"), "to")
+        optional = bool(rename.get("optional", False))
         src = base / src_rel
         dst = base / dst_rel
         if not src.is_file():
+            if optional and dst.is_file():
+                log_info(
+                    f"    ✓ Rename skipped; target already present: {dst_rel.as_posix()}"
+                )
+                continue
             raise FileNotFoundError(f"rename source not found: {src_rel.as_posix()}")
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():

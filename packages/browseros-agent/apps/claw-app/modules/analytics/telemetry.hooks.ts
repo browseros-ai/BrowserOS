@@ -9,27 +9,15 @@
  * the opt-out toggle governs both surfaces.
  */
 
+import type { TelemetryState } from '@browseros/claw-api'
 import { createMutation, createQuery } from 'react-query-kit'
-import { api } from '@/modules/api/client'
-import { parseResponse } from '@/modules/api/parseResponse'
-
-export interface TelemetryState {
-  /** Anonymous install UUID shared with the server. */
-  distinctId: string
-  /** Effective server-side state (informational). */
-  enabled: boolean
-  /** The user's consent choice; drives the toggle and the extension's capture. */
-  consent: boolean
-}
+import { apiClient } from '@/modules/api/client'
 
 export const TELEMETRY_QUERY_KEY = ['system', 'telemetry'] as const
 
 export const useTelemetryState = createQuery<TelemetryState>({
   queryKey: TELEMETRY_QUERY_KEY,
-  fetcher: async () => {
-    const response = await api.system.telemetry.$get()
-    return parseResponse<TelemetryState>(response)
-  },
+  fetcher: async () => (await apiClient()).getTelemetry(),
   // Identity + consent change rarely (only via the toggle, which
   // invalidates this query), so don't poll.
   staleTime: Number.POSITIVE_INFINITY,
@@ -39,8 +27,8 @@ export const useSetTelemetryConsent = createMutation<
   TelemetryState,
   { consent: boolean }
 >({
-  mutationFn: async ({ consent }) => {
-    const response = await api.system.telemetry.$post({ json: { consent } })
-    return parseResponse<TelemetryState>(response)
-  },
+  mutationFn: async ({ consent }) =>
+    (await apiClient()).updateTelemetry({
+      updateTelemetryRequest: { consent },
+    }),
 })

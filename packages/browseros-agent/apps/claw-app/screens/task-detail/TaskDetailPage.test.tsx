@@ -11,7 +11,8 @@ import type { TaskDetail } from '@/modules/api/audit.hooks'
 import type { TaskDetailScreenData } from './task-detail.data'
 
 const baseData: TaskDetailScreenData = {
-  task: undefined,
+  detail: undefined,
+  screenshots: [],
   isPending: false,
   isError: false,
   error: null,
@@ -41,32 +42,30 @@ function render(): string {
 }
 
 const sampleTask: TaskDetail = {
-  sessionId: 'sess-1',
-  agentId: 'claude-code',
-  slug: 'claude-code',
-  agentLabel: 'Claude Code',
-  title: 'Browsed example.com',
-  site: 'example.com',
-  startedAt: Date.now() - 12000,
-  endedAt: Date.now(),
-  durationMs: 12000,
-  dispatchCount: 2,
-  toolSequence: ['tabs', 'screenshot'],
-  status: 'done',
-  errorCount: 0,
-  lastScreenshotDispatchId: 2,
-  cursorId: 2,
+  session: {
+    sessionId: 'sess-1',
+    slug: 'claude-code',
+    label: 'Claude Code',
+    name: 'Browsed example.com',
+    site: 'example.com',
+    startedAt: Date.now() - 12000,
+    endedAt: Date.now(),
+    durationMs: 12000,
+    dispatchCount: 2,
+    toolSequence: ['tabs', 'screenshot'],
+    status: 'done',
+    errorCount: 0,
+    latestScreenshotId: 20,
+  },
   dispatches: [
     {
-      id: 1,
+      dispatchId: 1,
       createdAt: Date.now() - 12000,
-      agentId: 'claude-code',
       slug: 'claude-code',
-      agentLabel: 'Claude Code',
+      label: 'Claude Code',
       sessionId: 'sess-1',
       toolName: 'tabs',
       pageId: 1,
-      targetId: null,
       url: 'https://example.com',
       title: 'Example',
       argsJson: '{"action":"new"}',
@@ -74,25 +73,20 @@ const sampleTask: TaskDetail = {
       durationMs: 12,
     },
     {
-      id: 2,
+      dispatchId: 2,
       createdAt: Date.now() - 9000,
-      agentId: 'claude-code',
       slug: 'claude-code',
-      agentLabel: 'Claude Code',
+      label: 'Claude Code',
       sessionId: 'sess-1',
       toolName: 'screenshot',
       pageId: 1,
-      targetId: null,
       url: 'https://example.com',
-      title: null,
       argsJson: '{"page":1}',
       resultMeta: '{"isError":false}',
       durationMs: 80,
+      screenshotId: 20,
     },
   ],
-  screenshotDispatchIds: [2],
-  startEvent: null,
-  endEvent: { createdAt: Date.now(), kind: 'closed', reason: null },
 }
 
 describe('TaskDetailPage', () => {
@@ -109,7 +103,13 @@ describe('TaskDetailPage', () => {
   })
 
   it('renders header + timeline + strip for a real task', () => {
-    dataOverride = { ...baseData, task: sampleTask }
+    dataOverride = {
+      ...baseData,
+      detail: sampleTask,
+      screenshots: [
+        { screenshotId: 20, capturedAt: Date.now() - 9000, toolName: 'act' },
+      ],
+    }
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
@@ -124,13 +124,56 @@ describe('TaskDetailPage', () => {
     if (!first) throw new Error('test fixture missing first dispatch')
     dataOverride = {
       ...baseData,
-      task: {
+      detail: {
         ...sampleTask,
-        screenshotDispatchIds: [],
         dispatches: [first],
       },
     }
     const html = render()
     expect(html).toContain('No screenshots captured for this task.')
+  })
+
+  it('uses one compact selector for a twelve-tab session', () => {
+    const baseDispatch = sampleTask.dispatches[0]
+    if (!baseDispatch) throw new Error('test fixture missing first dispatch')
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, dispatchCount: 12 },
+        dispatches: Array.from({ length: 12 }, (_, index) => ({
+          ...baseDispatch,
+          dispatchId: index + 1,
+          pageId: index + 1,
+          createdAt: sampleTask.session.startedAt + index,
+        })),
+      },
+    }
+
+    const html = render()
+    expect(html).toContain('data-task-view-navigation="13"')
+    expect(html.match(/data-slot="select-trigger"/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Audit view"')
+    expect(html).toContain('Session')
+    expect(html).toContain('12')
+    expect(html).not.toContain('role="tablist"')
+  })
+
+  it('renders cancelled sessions as stopped', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, status: 'cancelled' },
+        dispatches: sampleTask.dispatches.map((dispatch) => ({
+          ...dispatch,
+          pageId: undefined,
+        })),
+      },
+    }
+    const html = render()
+    expect(html).toContain('Stopped')
+    expect(html).toContain('session stopped')
+    expect(html).not.toContain('data-task-view-navigation')
   })
 })

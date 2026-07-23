@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from .publisher import FeedPublisher
 from .render import (
@@ -72,6 +73,19 @@ def _mac_appcast(sparkle_version="10000.0.47.0.2"):
         sparkle_version,
         "2026-06-19T06:41:33Z",
     )
+
+
+def _empty_mac_appcast():
+    spec = feed_by_key("appcast.xml")
+    return f"""\
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>{spec.title}</title>
+    <link>{spec.link}</link>
+  </channel>
+</rss>
+"""
 
 
 class PublisherTestCase(unittest.TestCase):
@@ -312,16 +326,76 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
 
-    def test_versionless_appcast_refused_even_on_first_publish(self):
+    def test_empty_appcast_refused_with_item_error(self):
+        publisher = self._publisher()
+
+        with mock.patch(
+            "bos_build.release.feeds.publisher.log_error"
+        ) as log_error:
+            ok = publisher.publish(
+                feed_by_key("appcast.xml"), _empty_mac_appcast(), publish=True
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+        log_error.assert_called_with(
+            "appcast.xml: new content has no <item> entries"
+        )
+
+    def test_versionless_appcast_refused_with_version_error(self):
         content = _mac_appcast().replace(
             "<sparkle:version>10000.0.47.0.2</sparkle:version>", ""
         )
         publisher = self._publisher()
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), content, publish=True)
+        with mock.patch(
+            "bos_build.release.feeds.publisher.log_error"
+        ) as log_error:
+            ok = publisher.publish(
+                feed_by_key("appcast.xml"), content, publish=True
+            )
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
+        log_error.assert_called_with(
+            "appcast.xml: new content has <item> entries but no sparkle:version"
+        )
+
+    def test_live_guard_distinguishes_empty_appcast(self):
+        publisher = self._publisher()
+
+        with mock.patch(
+            "bos_build.release.feeds.publisher.log_error"
+        ) as log_error:
+            ok = publisher._guard_appcast_version(
+                feed_by_key("appcast.xml"),
+                _empty_mac_appcast(),
+                _mac_appcast(),
+                False,
+            )
+
+        self.assertFalse(ok)
+        log_error.assert_called_with(
+            "appcast.xml: new content has no <item> entries"
+        )
+
+    def test_live_guard_distinguishes_versionless_items(self):
+        content = _mac_appcast().replace(
+            "<sparkle:version>10000.0.47.0.2</sparkle:version>", ""
+        )
+        publisher = self._publisher()
+
+        with mock.patch(
+            "bos_build.release.feeds.publisher.log_error"
+        ) as log_error:
+            ok = publisher._guard_appcast_version(
+                feed_by_key("appcast.xml"), content, _mac_appcast(), False
+            )
+
+        self.assertFalse(ok)
+        log_error.assert_called_with(
+            "appcast.xml: new content has <item> entries but no sparkle:version"
+        )
 
     def test_json_array_document_refused_cleanly(self):
         publisher = self._publisher()

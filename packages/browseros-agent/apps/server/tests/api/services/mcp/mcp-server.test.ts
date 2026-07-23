@@ -36,7 +36,6 @@ describe('createMcpServer structured browser results', () => {
       createMcpServer({
         version: 'test',
         browserSession: browserSession(),
-        executionDir: '/tmp/browseros-execution',
       }),
     )
 
@@ -52,7 +51,6 @@ describe('createMcpServer structured browser results', () => {
       createMcpServer({
         version: 'test',
         browserSession: browserSession(),
-        executionDir: '/tmp/browseros-execution',
         includeStructuredContent: true,
       }),
     )

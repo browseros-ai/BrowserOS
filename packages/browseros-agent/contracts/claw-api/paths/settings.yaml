@@ -1,0 +1,31 @@
+telemetry:
+  get:
+    operationId: getTelemetry
+    responses:
+      '200':
+        description: Current telemetry state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/TelemetryState
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  put:
+    operationId: updateTelemetry
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateTelemetryRequest
+    responses:
+      '200':
+        description: Updated telemetry state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/TelemetryState
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError

@@ -6,9 +6,7 @@ import { formatTime, KIND_STYLE, VERB_META } from './replay.helpers'
 interface EventTimelineProps {
   frames: readonly ReplayFrame[]
   currentFrameIndex: number
-  /** Seconds elapsed, used to dim frames that have not played yet. */
-  currentTime: number
-  onSeek: (seconds: number) => void
+  onSelectFrame: (frame: ReplayFrame) => void
 }
 
 /**
@@ -20,8 +18,7 @@ interface EventTimelineProps {
 export function EventTimeline({
   frames,
   currentFrameIndex,
-  currentTime,
-  onSeek,
+  onSelectFrame,
 }: EventTimelineProps) {
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-border border-l bg-card">
@@ -31,7 +28,7 @@ export function EventTimeline({
       </header>
       <div className="flex flex-1 flex-col overflow-y-auto px-3 py-2">
         {frames.map((frame, i) => {
-          const seen = frame.t <= currentTime + 0.001
+          const seen = currentFrameIndex >= 0 && i <= currentFrameIndex
           const isCurrent = i === currentFrameIndex
           const verb = VERB_META[frame.verb]
           const kind = KIND_STYLE[frame.kind]
@@ -39,8 +36,11 @@ export function EventTimeline({
           return (
             <button
               type="button"
-              key={`frame-${frame.kind}-${frame.verb}-${frame.t}`}
-              onClick={() => onSeek(frame.t)}
+              key={
+                frame.dispatchId ??
+                `frame-${frame.kind}-${frame.verb}-${frame.t}-${i}`
+              }
+              onClick={() => onSelectFrame(frame)}
               className={cn(
                 'flex gap-3 rounded-lg p-2.5 text-left transition-opacity',
                 isCurrent && 'bg-accent-tint',

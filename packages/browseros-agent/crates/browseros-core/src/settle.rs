@@ -236,6 +236,7 @@ mod tests {
     use super::{SettleOutcome, wait_for_action_settle};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, SessionId, connection::CdpConnection,
+        timeouts,
     };
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -430,14 +431,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settle_respects_budget_cap() -> Result<(), CoreError> {
+    async fn automatic_settle_respects_50ms_total_budget() -> Result<(), CoreError> {
         let (session, page_id) = harness(VecDeque::from([1, 2, 3]), VecDeque::new()).await?;
-        let budget = Duration::from_millis(320);
+        let budget = timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT;
+        assert_eq!(budget, Duration::from_millis(50));
         let start = Instant::now();
         let outcome = wait_for_action_settle(&session.pages, page_id, budget).await;
         assert_eq!(outcome, SettleOutcome::BudgetExpired);
         assert!(start.elapsed() >= budget);
-        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(start.elapsed() < Duration::from_millis(150));
         Ok(())
     }
 

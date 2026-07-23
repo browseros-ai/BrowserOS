@@ -1,0 +1,32 @@
+Harness:
+  type: string
+  enum:
+    - Claude Code
+    - Codex
+    - Cursor
+    - OpenCode
+    - Antigravity
+    - VS Code
+    - Zed
+Connection:
+  type: object
+  additionalProperties: false
+  required: [harness, installed, message]
+  properties:
+    harness:
+      $ref: '#/Harness'
+    installed:
+      type: boolean
+    configPath:
+      type: string
+    message:
+      type: string
+ConnectionList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/Connection'

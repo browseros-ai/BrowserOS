@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "harness": "Codex",
+      "installed": true,
+      "configPath": "~/.codex/config.toml",
+      "message": "Configured in Codex."
+    },
+    {
+      "harness": "Cursor",
+      "installed": false,
+      "message": "Cursor is not configured."
+    }
+  ]
+}

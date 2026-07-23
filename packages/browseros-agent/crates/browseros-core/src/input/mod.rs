@@ -285,12 +285,8 @@ impl Input {
         value: &str,
     ) -> Result<Option<String>, CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
-        self.select_backend_node_with_session(
-            &resolved.session,
-            InputTarget::from_ref_entry(&resolved.entry),
-            value,
-        )
-        .await
+        self.select_backend_node_with_session(&resolved.session, resolved.backend_node_id, value)
+            .await
     }
 
     pub async fn select_backend_node(
@@ -301,12 +297,8 @@ impl Input {
         self.with_page_session_retry(|session| {
             let value = value.to_string();
             async move {
-                self.select_backend_node_with_session(
-                    &session,
-                    InputTarget::from_backend_node(backend_node_id),
-                    &value,
-                )
-                .await
+                self.select_backend_node_with_session(&session, backend_node_id, &value)
+                    .await
             }
         })
         .await
@@ -315,16 +307,13 @@ impl Input {
     async fn select_backend_node_with_session(
         &self,
         session: &ProtocolSession,
-        target: InputTarget,
+        backend_node_id: i64,
         value: &str,
     ) -> Result<Option<String>, CoreError> {
-        scroll_into_view(session, target.backend_node_id).await;
-        if let Ok(point) = get_element_center(session, target.backend_node_id).await {
-            self.check_click_point(session, &target, point).await?;
-        }
+        scroll_into_view(session, backend_node_id).await;
         let selected = call_on_element(
             session,
-            target.backend_node_id,
+            backend_node_id,
             SELECT_OPTION_FN,
             Some(vec![json!(value)]),
         )
@@ -456,15 +445,16 @@ impl Input {
             return Ok(());
         }
         let session = self.page_session().await?;
-        let metrics: LayoutMetrics = session.send("Page.getLayoutMetrics", json!({})).await?;
-        dispatch_scroll(
-            &session,
-            metrics.layout_viewport.client_width as f64 / 2.0,
-            metrics.layout_viewport.client_height as f64 / 2.0,
-            delta_x as f64,
-            delta_y as f64,
-        )
-        .await
+        let _: Value = session
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": format!("window.scrollBy({delta_x}, {delta_y})"),
+                    "returnByValue": true
+                }),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
@@ -506,19 +496,6 @@ impl Input {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LayoutMetrics {
-    layout_viewport: LayoutViewport,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LayoutViewport {
-    client_width: i64,
-    client_height: i64,
-}
-
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
     if(this.options[i].value===val||this.options[i].textContent.trim()===val){\
@@ -532,7 +509,7 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOptions, Input};
+    use super::{ClickOptions, Input, ScrollDirection};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
@@ -553,12 +530,18 @@ mod tests {
 
     struct HarnessState {
         hit_test: HitTestResponse,
+        hit_test_calls: usize,
         mouse_events: usize,
+        page_scrolls: usize,
         select_calls: usize,
+        select_result: Option<&'static str>,
+        select_semantics_preserved: bool,
     }
 
     struct HarnessConnection {
         state: Mutex<HarnessState>,
+        target_role: &'static str,
+        target_name: &'static str,
     }
 
     impl HarnessConnection {
@@ -569,10 +552,31 @@ mod tests {
             }
         }
 
+        fn page_scrolls(&self) -> usize {
+            match self.state.lock() {
+                Ok(state) => state.page_scrolls,
+                Err(_err) => 0,
+            }
+        }
+
         fn select_calls(&self) -> usize {
             match self.state.lock() {
                 Ok(state) => state.select_calls,
                 Err(_err) => 0,
+            }
+        }
+
+        fn hit_test_calls(&self) -> usize {
+            match self.state.lock() {
+                Ok(state) => state.hit_test_calls,
+                Err(_err) => 0,
+            }
+        }
+
+        fn select_semantics_preserved(&self) -> bool {
+            match self.state.lock() {
+                Ok(state) => state.select_semantics_preserved,
+                Err(_err) => false,
             }
         }
     }
@@ -606,8 +610,20 @@ mod tests {
                             }
                         }
                     })),
-                    "Accessibility.getFullAXTree" => Ok(json!({ "nodes": ax_tree() })),
-                    "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
+                    "Accessibility.getFullAXTree" => Ok(json!({
+                        "nodes": ax_tree(self.target_role, self.target_name)
+                    })),
+                    "Runtime.evaluate" => {
+                        if params
+                            .get("expression")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("window.scrollBy"))
+                            && let Ok(mut state) = self.state.lock()
+                        {
+                            state.page_scrolls += 1;
+                        }
+                        Ok(json!({ "result": { "value": [] } }))
+                    }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
                     "DOM.getContentQuads" => Ok(json!({
                         "quads": [[0.0, 0.0, 100.0, 0.0, 100.0, 50.0, 0.0, 50.0]]
@@ -655,7 +671,10 @@ mod tests {
                 .unwrap_or_default();
             if function.contains("elementFromPoint") {
                 let response = match self.state.lock() {
-                    Ok(state) => state.hit_test,
+                    Ok(mut state) => {
+                        state.hit_test_calls += 1;
+                        state.hit_test
+                    }
                     Err(_err) => HitTestResponse::Error,
                 };
                 return match response {
@@ -672,11 +691,15 @@ mod tests {
             if function.contains("return this.checked") {
                 return Ok(json!({ "result": { "value": false } }));
             }
-            if function.contains("this.options") {
-                if let Ok(mut state) = self.state.lock() {
-                    state.select_calls += 1;
-                }
-                return Ok(json!({ "result": { "value": "Choice" } }));
+            if function.contains("this.options")
+                && let Ok(mut state) = self.state.lock()
+            {
+                state.select_calls += 1;
+                state.select_semantics_preserved = function.contains(
+                    "this.options[i].value===val||this.options[i].textContent.trim()===val",
+                ) && function.contains("this.selectedIndex=i")
+                    && function.contains("this.dispatchEvent(new Event('change',{bubbles:true}))");
+                return Ok(json!({ "result": { "value": state.select_result } }));
             }
             Ok(json!({ "result": { "value": null } }))
         }
@@ -685,12 +708,34 @@ mod tests {
     async fn input_harness(
         hit_test: HitTestResponse,
     ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
+        input_harness_for_target(hit_test, "button", "Submit", Some("Choice")).await
+    }
+
+    async fn select_input_harness(
+        hit_test: HitTestResponse,
+        select_result: Option<&'static str>,
+    ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
+        input_harness_for_target(hit_test, "combobox", "Sort by:", select_result).await
+    }
+
+    async fn input_harness_for_target(
+        hit_test: HitTestResponse,
+        target_role: &'static str,
+        target_name: &'static str,
+        select_result: Option<&'static str>,
+    ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
         let connection = Arc::new(HarnessConnection {
             state: Mutex::new(HarnessState {
                 hit_test,
+                hit_test_calls: 0,
                 mouse_events: 0,
+                page_scrolls: 0,
                 select_calls: 0,
+                select_result,
+                select_semantics_preserved: false,
             }),
+            target_role,
+            target_name,
         });
         let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -719,18 +764,18 @@ mod tests {
         })
     }
 
-    fn ax_tree() -> Vec<AxNode> {
+    fn ax_tree(target_role: &str, target_name: &str) -> Vec<AxNode> {
         vec![
             AxNode {
                 node_id: "root".to_string(),
                 role: Some(AxValue::role("RootWebArea")),
-                child_ids: Some(vec!["button".to_string()]),
+                child_ids: Some(vec!["target".to_string()]),
                 ..AxNode::default()
             },
             AxNode {
-                node_id: "button".to_string(),
-                role: Some(AxValue::role("button")),
-                name: Some(AxValue::string("Submit")),
+                node_id: "target".to_string(),
+                role: Some(AxValue::role(target_role)),
+                name: Some(AxValue::string(target_name)),
                 backend_dom_node_id: Some(10),
                 ..AxNode::default()
             },
@@ -798,25 +843,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn select_option_reports_covered_ref_before_selection() -> Result<(), CoreError> {
-        let (connection, input, ref_id) =
-            input_harness(HitTestResponse::Blocked("dialog#privacy")).await?;
+    async fn semantic_select_ignores_pointer_occlusion_but_click_stays_blocked()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = select_input_harness(
+            HitTestResponse::Blocked("span.a-dropdown-prompt"),
+            Some("Price: Low to High"),
+        )
+        .await?;
 
-        let result = input.select_option(&ref_id, "Choice").await;
+        let selected = input.select_option(&ref_id, "price-asc-rank").await?;
 
-        assert!(matches!(result, Err(CoreError::ElementCovered { .. })));
-        assert_eq!(connection.select_calls(), 0);
+        assert_eq!(selected.as_deref(), Some("Price: Low to High"));
+        assert_eq!(connection.select_calls(), 1);
+        assert_eq!(connection.hit_test_calls(), 0);
+        assert_eq!(connection.mouse_events(), 0);
+        assert!(connection.select_semantics_preserved());
+
+        let click_result = input.click(&ref_id, ClickOptions::default()).await;
+        match click_result {
+            Err(CoreError::ElementCovered { target, blocker }) => {
+                assert_eq!(target.ref_id, Some(Ref("e1".to_string())));
+                assert_eq!(target.role.as_deref(), Some("combobox"));
+                assert_eq!(target.name.as_deref(), Some("Sort by:"));
+                assert_eq!(blocker, "span.a-dropdown-prompt");
+            }
+            other => {
+                return Err(CoreError::Message(format!(
+                    "expected ElementCovered, got {other:?}"
+                )));
+            }
+        }
+        assert_eq!(connection.hit_test_calls(), 1);
+        assert_eq!(connection.mouse_events(), 0);
         Ok(())
     }
 
     #[tokio::test]
-    async fn select_option_proceeds_when_point_is_clear() -> Result<(), CoreError> {
-        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+    async fn semantic_select_returns_none_for_missing_option() -> Result<(), CoreError> {
+        let (connection, input, ref_id) =
+            select_input_harness(HitTestResponse::Clear, None).await?;
 
-        let selected = input.select_option(&ref_id, "Choice").await?;
+        let selected = input.select_option(&ref_id, "missing").await?;
 
-        assert_eq!(selected.as_deref(), Some("Choice"));
+        assert_eq!(selected, None);
         assert_eq!(connection.select_calls(), 1);
+        assert_eq!(connection.hit_test_calls(), 0);
+        assert!(connection.select_semantics_preserved());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn page_scroll_uses_runtime_instead_of_mouse_wheel() -> Result<(), CoreError> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+
+        input.scroll(ScrollDirection::Down, 3, None).await?;
+
+        assert_eq!(connection.page_scrolls(), 1);
+        assert_eq!(connection.mouse_events(), 0);
         Ok(())
     }
 }
