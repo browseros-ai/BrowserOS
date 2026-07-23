@@ -2,9 +2,9 @@ use crate::{
     AppState, VERSION,
     api::mcp::{
         dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
-        effects::audit::record_local_tool_dispatch,
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
+        observers::audit::record_local_tool_dispatch,
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
@@ -117,16 +117,19 @@ impl ClawMcpService {
         )
         .await;
         let result = ToolResult::text(rename.response, None);
-        record_local_tool_dispatch(
+        if let Err(error) = record_local_tool_dispatch(
             &self.state,
-            started.session.as_ref(),
+            &started.session,
             &started.agent_label,
             NAME_SESSION_TOOL_NAME,
             raw_args,
             &result,
             i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
         )
-        .await;
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
         result.into_call_tool_result()
     }
 

@@ -13,7 +13,7 @@ use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetI
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput, TaskStatus},
+    db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
     services::cockpit::RecordToolInput,
@@ -559,18 +559,13 @@ async fn seed_dispatch_with_estimates(
             target_id: Some("target-7".to_string()),
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         })
         .await?)
 }

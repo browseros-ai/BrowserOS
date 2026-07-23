@@ -5,7 +5,7 @@ use crate::{
     services::{
         browser::BrowserService,
         cockpit::{TabActivityRecord, TabActivityService},
-        sessions::Sessions,
+        sessions::{Session, Sessions},
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -76,9 +76,23 @@ impl SessionVisualService {
 
     pub async fn capture(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
         let session_key = SessionId::new(session_id);
-        if !self.sessions.contains(&session_key).await {
+        let Some(session) = self.sessions.lookup(&session_key).await else {
             return Ok(None);
-        }
+        };
+        self.capture_with_session(&session, true).await
+    }
+
+    /// Captures through a teardown-owned session lease after live request resolution has stopped.
+    pub async fn capture_for_session(&self, session: &Arc<Session>) -> AppResult<Option<Vec<u8>>> {
+        self.capture_with_session(session, false).await
+    }
+
+    async fn capture_with_session(
+        &self,
+        session: &Arc<Session>,
+        require_live_at_end: bool,
+    ) -> AppResult<Option<Vec<u8>>> {
+        let session_id = session.id().as_str();
         self.session_tabs.drain_writes().await;
         let browser = match self.browser.session().await {
             Some(browser) => browser,
@@ -144,7 +158,9 @@ impl SessionVisualService {
             .open_session_tab(session_id, candidate.tab_id)
             .await?
             .is_some();
-        if !owns_tab || !self.sessions.contains(&session_key).await {
+        if !owns_tab
+            || (require_live_at_end && !self.sessions.contains(&SessionId::new(session_id)).await)
+        {
             return Ok(None);
         }
         Ok(Some(bytes))

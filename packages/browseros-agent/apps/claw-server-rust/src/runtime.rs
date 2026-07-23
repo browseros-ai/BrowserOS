@@ -196,7 +196,7 @@ mod tests {
         config::Config,
         db::{
             DATABASE_FILENAME, Database,
-            audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+            audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
         },
         identity::{ClientIdentity, ConversationIdentity},
         ids::{DispatchId, SessionId},
@@ -227,18 +227,13 @@ mod tests {
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         }
     }
 

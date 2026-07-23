@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards},
+    api::mcp::{effects, guards, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -179,11 +179,6 @@ const GUARDS: &[ToolGuard] = &[
     guards::page_ownership::guard,
 ];
 
-/**
- * Result-mutating effects precede audit so the persisted estimate matches the wire content.
- * The full list still finishes before `finish_dispatch`, leaving a row for operator-stop
- * teardown to reconcile when cancellation wins after audit.
- */
 const EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "ownership-claims",
@@ -205,13 +200,12 @@ const EFFECTS: &[NamedToolEffect] = &[
         name: "session-naming",
         run: effects::session_naming::apply,
     },
-    NamedToolEffect {
-        name: "audit",
-        run: effects::audit::apply,
-    },
 ];
 
-const OBSERVERS: &[NamedToolObserver] = &[];
+const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
+    name: "audit",
+    run: observers::audit::apply,
+}];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -639,14 +633,14 @@ mod tests {
         })
     }
 
-    fn audit_then_wait_effect(
-        context: ToolEffectContext<'_>,
-    ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
+    fn audit_then_wait_observer(
+        context: ToolObserverContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
         Box::pin(async move {
-            let replacement = effects::audit::apply(context).await?;
+            observers::audit::apply(context).await?;
             LATE_EFFECT_ENTERED.notify_one();
             LATE_EFFECT_RELEASE.notified().await;
-            Ok(replacement)
+            Ok(())
         })
     }
 
@@ -844,13 +838,26 @@ mod tests {
                     name: "session-naming",
                     run: effects::session_naming::apply,
                 },
-                NamedToolEffect {
-                    name: "audit",
-                    run: effects::audit::apply,
-                },
             ],
         )
         .await;
+        run_observers(
+            ToolObserverContext {
+                call: &call,
+                result: &final_result,
+                cancelled: false,
+                duration_ms: 1,
+            },
+            &[NamedToolObserver {
+                name: "audit",
+                run: observers::audit::apply,
+            }],
+        )
+        .await;
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
         let wire = wire_result(final_result.clone());
         assert_eq!(wire.content.len(), 2);
         assert_eq!(wire.structured_content, None);
@@ -945,11 +952,11 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
-                name: "audit",
-                run: effects::audit::apply,
-            }],
             &[],
+            &[NamedToolObserver {
+                name: "audit",
+                run: observers::audit::apply,
+            }],
         )
         .await;
 
@@ -986,11 +993,11 @@ mod tests {
             dispatch_tool_call_with(
                 dispatched_call,
                 &[],
-                &[NamedToolEffect {
-                    name: "audit",
-                    run: audit_then_wait_effect,
-                }],
                 &[],
+                &[NamedToolObserver {
+                    name: "audit",
+                    run: audit_then_wait_observer,
+                }],
             )
             .await
         });
@@ -1048,18 +1055,24 @@ mod tests {
     }
 
     #[test]
-    fn production_effects_end_with_terminal_audit() {
-        let names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
+    fn production_pipeline_keeps_audit_in_the_observer_lane() {
+        let effect_names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
         assert_eq!(
-            names,
+            effect_names,
             [
                 "ownership-claims",
                 "tabs-list-view",
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
-                "audit",
             ]
+        );
+        assert_eq!(
+            OBSERVERS
+                .iter()
+                .map(|observer| observer.name)
+                .collect::<Vec<_>>(),
+            ["audit"]
         );
     }
 
@@ -1088,14 +1101,18 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
-                name: "audit",
-                run: effects::audit::apply,
-            }],
             &[],
+            &[NamedToolObserver {
+                name: "audit",
+                run: observers::audit::apply,
+            }],
         )
         .await
         .unwrap_or_else(|error| panic!("operator cancellation should stay in-band: {error:?}"));
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             result
@@ -1156,14 +1173,17 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
-                name: "audit",
-                run: effects::audit::apply,
-            }],
-            &[NamedToolObserver {
-                name: "count",
-                run: client_counting_observer,
-            }],
+            &[],
+            &[
+                NamedToolObserver {
+                    name: "audit",
+                    run: observers::audit::apply,
+                },
+                NamedToolObserver {
+                    name: "count",
+                    run: client_counting_observer,
+                },
+            ],
         )
         .await;
         let Err(error) = result else {

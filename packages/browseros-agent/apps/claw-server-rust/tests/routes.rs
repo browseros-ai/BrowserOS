@@ -7,7 +7,7 @@ use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
     services::sessions::Session,
@@ -1441,18 +1441,13 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 1,
             dispatch_id: DispatchId::new(),
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         })
         .await?;
     Ok(())

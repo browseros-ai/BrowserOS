@@ -343,7 +343,7 @@ mod tests {
         },
         db::{
             AuditLog, DATABASE_FILENAME, Database, SessionEfficiencyStatsRepository,
-            audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+            audit_log::RecordToolDispatchInput,
             entities::{
                 agent_session_ends, agent_session_starts, session_efficiency_stats, tool_dispatches,
             },
@@ -550,18 +550,13 @@ mod tests {
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: crate::db::audit_log::bounded_args_json(&json!({})),
+            result_meta: crate::db::audit_log::result_meta(is_error, cancelled, &json!({}), 0),
             duration_ms: 10,
             dispatch_id: DispatchId::new(),
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,
             token_estimator_version: version,
-            result: DispatchResultSummary {
-                is_error,
-                cancelled,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         }
     }
 
