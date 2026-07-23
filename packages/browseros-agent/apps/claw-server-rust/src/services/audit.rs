@@ -6,10 +6,10 @@ use crate::{
 };
 use futures_util::future::BoxFuture;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Weak},
 };
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 pub const AUDIT_INGRESS_CAPACITY: usize = 64;
@@ -105,6 +105,7 @@ struct PreviewCompletion {
 struct SessionWork {
     preview_in_flight: bool,
     pending_preview: Option<PreviewRequest>,
+    preview_queued: bool,
     flush_waiters: Vec<oneshot::Sender<AppResult<()>>>,
     errors: Vec<String>,
 }
@@ -147,7 +148,9 @@ impl AuditWorker {
                 preview_receiver,
                 store,
                 previews,
-                preview_limit: Arc::new(Semaphore::new(preview_concurrency)),
+                preview_concurrency,
+                active_previews: 0,
+                ready_previews: VecDeque::new(),
                 sessions: HashMap::new(),
                 shutdown_reply: None,
                 command_channel_open: true,
@@ -197,7 +200,9 @@ struct AuditActor {
     preview_receiver: mpsc::Receiver<PreviewCompletion>,
     store: Arc<dyn AuditStore>,
     previews: Arc<dyn PreviewBackend>,
-    preview_limit: Arc<Semaphore>,
+    preview_concurrency: usize,
+    active_previews: usize,
+    ready_previews: VecDeque<String>,
     sessions: HashMap<String, SessionWork>,
     shutdown_reply: Option<oneshot::Sender<AppResult<()>>>,
     command_channel_open: bool,
@@ -318,8 +323,11 @@ impl AuditActor {
         preview: PreviewCompletion,
         dirty_sessions: &mut HashSet<String>,
     ) {
-        let state = self.sessions.entry(preview.session_id.clone()).or_default();
-        state.preview_in_flight = false;
+        self.sessions
+            .entry(preview.session_id.clone())
+            .or_default()
+            .preview_in_flight = false;
+        self.active_previews = self.active_previews.saturating_sub(1);
         match preview.result {
             Ok(true) => match self.store.mark_screenshot(preview.row_id).await {
                 Ok(()) => {
@@ -338,47 +346,62 @@ impl AuditActor {
                 "audit preview failed"
             ),
         }
-        if let Some(next) = state.pending_preview.take() {
-            self.start_preview(next);
+        let state = self.sessions.entry(preview.session_id.clone()).or_default();
+        if state.pending_preview.is_some() && !state.preview_queued {
+            state.preview_queued = true;
+            self.ready_previews.push_back(preview.session_id);
         }
+        self.start_ready_previews();
     }
 
     fn queue_preview(&mut self, request: PreviewRequest) {
-        let state = self.sessions.entry(request.session_id.clone()).or_default();
-        if state.preview_in_flight {
-            state.pending_preview = Some(request);
-        } else {
-            self.start_preview(request);
+        let session_id = request.session_id.clone();
+        let state = self.sessions.entry(session_id.clone()).or_default();
+        state.pending_preview = Some(request);
+        if !state.preview_in_flight && !state.preview_queued {
+            state.preview_queued = true;
+            self.ready_previews.push_back(session_id);
         }
+        self.start_ready_previews();
     }
 
-    fn start_preview(&mut self, request: PreviewRequest) {
-        self.sessions
-            .entry(request.session_id.clone())
-            .or_default()
-            .preview_in_flight = true;
-        let previews = self.previews.clone();
-        let preview_limit = self.preview_limit.clone();
-        let preview_sender = self.preview_sender.clone();
-        tokio::spawn(async move {
-            let session_id = request.session_id.clone();
-            let dispatch_id = request.dispatch_id.clone();
-            let row_id = request.row_id;
-            let result = match preview_limit.acquire_owned().await {
-                Ok(_permit) => previews.capture_and_write(request).await,
-                Err(_) => Err(AppError::Internal(
-                    "audit preview limiter has shut down".to_string(),
-                )),
+    fn start_ready_previews(&mut self) {
+        while self.active_previews < self.preview_concurrency {
+            let Some(session_id) = self.ready_previews.pop_front() else {
+                return;
             };
-            let _ = preview_sender
-                .send(PreviewCompletion {
-                    session_id,
-                    dispatch_id,
-                    row_id,
-                    result,
-                })
-                .await;
-        });
+            let request = {
+                let state = self.sessions.entry(session_id).or_default();
+                state.preview_queued = false;
+                if state.preview_in_flight {
+                    None
+                } else {
+                    let request = state.pending_preview.take();
+                    state.preview_in_flight = request.is_some();
+                    request
+                }
+            };
+            let Some(request) = request else {
+                continue;
+            };
+            self.active_previews += 1;
+            let previews = self.previews.clone();
+            let preview_sender = self.preview_sender.clone();
+            tokio::spawn(async move {
+                let session_id = request.session_id.clone();
+                let dispatch_id = request.dispatch_id.clone();
+                let row_id = request.row_id;
+                let result = previews.capture_and_write(request).await;
+                let _ = preview_sender
+                    .send(PreviewCompletion {
+                        session_id,
+                        dispatch_id,
+                        row_id,
+                        result,
+                    })
+                    .await;
+            });
+        }
     }
 
     async fn refresh_dirty(&mut self, dirty_sessions: HashSet<String>) {
@@ -400,7 +423,7 @@ impl AuditActor {
 
     fn settle_flushes(&mut self) {
         for state in self.sessions.values_mut() {
-            if state.preview_in_flight || state.pending_preview.is_some() {
+            if state.preview_in_flight || state.pending_preview.is_some() || state.preview_queued {
                 continue;
             }
             let waiters = std::mem::take(&mut state.flush_waiters);
@@ -419,7 +442,7 @@ impl AuditActor {
     }
 
     fn has_preview_in_flight(&self) -> bool {
-        self.sessions.values().any(|state| state.preview_in_flight)
+        self.active_previews > 0
     }
 
     fn finish_shutdown(&mut self) {
@@ -442,13 +465,17 @@ impl AuditActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::audit_log::{bounded_args_json, result_meta};
+    use crate::{
+        db::audit_log::{bounded_args_json, result_meta},
+        identity::{ClientIdentity, ConversationIdentity},
+        ids::SessionId,
+    };
     use std::sync::{
         Mutex as StdMutex,
         atomic::{AtomicI64, AtomicUsize, Ordering},
     };
     use tokio::{
-        sync::Notify,
+        sync::{Notify, Semaphore},
         time::{Duration, timeout},
     };
 
@@ -456,9 +483,11 @@ mod tests {
         append_permits: Semaphore,
         append_started: Notify,
         rows: StdMutex<Vec<(String, String)>>,
+        markers: StdMutex<Vec<i64>>,
         refreshes: AtomicUsize,
         next_row_id: AtomicI64,
         failing_tool: Option<&'static str>,
+        failing_marker: AtomicI64,
     }
 
     impl TestStore {
@@ -467,9 +496,11 @@ mod tests {
                 append_permits: Semaphore::new(append_permits),
                 append_started: Notify::new(),
                 rows: StdMutex::new(Vec::new()),
+                markers: StdMutex::new(Vec::new()),
                 refreshes: AtomicUsize::new(0),
                 next_row_id: AtomicI64::new(1),
                 failing_tool,
+                failing_marker: AtomicI64::new(-1),
             })
         }
 
@@ -503,8 +534,17 @@ mod tests {
             })
         }
 
-        fn mark_screenshot(&self, _dispatch_id: i64) -> BoxFuture<'_, AppResult<()>> {
-            Box::pin(async { Ok(()) })
+        fn mark_screenshot(&self, dispatch_id: i64) -> BoxFuture<'_, AppResult<()>> {
+            Box::pin(async move {
+                if self.failing_marker.load(Ordering::SeqCst) == dispatch_id {
+                    return Err(AppError::Internal(format!("failed marker {dispatch_id}")));
+                }
+                self.markers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(dispatch_id);
+                Ok(())
+            })
         }
 
         fn refresh_task<'a>(&'a self, _session_id: &'a str) -> BoxFuture<'a, AppResult<()>> {
@@ -520,6 +560,86 @@ mod tests {
     impl PreviewBackend for NoPreview {
         fn capture_and_write(&self, _request: PreviewRequest) -> BoxFuture<'_, AppResult<bool>> {
             Box::pin(async { Ok(false) })
+        }
+    }
+
+    struct BlockingPreview {
+        releases: Semaphore,
+        started: StdMutex<Vec<i64>>,
+        started_notify: Notify,
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    impl BlockingPreview {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                releases: Semaphore::new(0),
+                started: StdMutex::new(Vec::new()),
+                started_notify: Notify::new(),
+                active: AtomicUsize::new(0),
+                max_active: AtomicUsize::new(0),
+            })
+        }
+
+        fn started_rows(&self) -> Vec<i64> {
+            self.started
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+
+        async fn wait_for_started(&self, count: usize) {
+            loop {
+                let started = self.started_notify.notified();
+                if self.started_rows().len() >= count {
+                    return;
+                }
+                started.await;
+            }
+        }
+    }
+
+    impl PreviewBackend for BlockingPreview {
+        fn capture_and_write(&self, request: PreviewRequest) -> BoxFuture<'_, AppResult<bool>> {
+            Box::pin(async move {
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_active.fetch_max(active, Ordering::SeqCst);
+                self.started
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(request.row_id);
+                self.started_notify.notify_waiters();
+                let permit =
+                    self.releases.acquire().await.map_err(|_| {
+                        AppError::Internal("test preview semaphore closed".to_string())
+                    })?;
+                permit.forget();
+                self.active.fetch_sub(1, Ordering::SeqCst);
+                Ok(true)
+            })
+        }
+    }
+
+    struct ScriptedPreview;
+
+    impl PreviewBackend for ScriptedPreview {
+        fn capture_and_write(&self, request: PreviewRequest) -> BoxFuture<'_, AppResult<bool>> {
+            Box::pin(async move {
+                match request.row_id {
+                    1 => Err(AppError::Internal("capture failed".to_string())),
+                    2 => Ok(false),
+                    _ => Ok(true),
+                }
+            })
+        }
+    }
+
+    struct LeaseCheckingPreview;
+
+    impl PreviewBackend for LeaseCheckingPreview {
+        fn capture_and_write(&self, request: PreviewRequest) -> BoxFuture<'_, AppResult<bool>> {
+            Box::pin(async move { Ok(request.session.upgrade().is_some()) })
         }
     }
 
@@ -543,6 +663,25 @@ mod tests {
             tool_output_token_estimate: 1,
             token_estimator_version: 1,
         })
+    }
+
+    fn preview_event(session: &Arc<Session>, tool_name: &str) -> AuditEvent {
+        let mut event = event(session.id().as_str(), tool_name);
+        event.preview_session = Some(Arc::downgrade(session));
+        event
+    }
+
+    fn session(session_id: &str) -> Arc<Session> {
+        Session::new(
+            SessionId::new(session_id),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", format!("{session_id}-label")),
+            "Agent".to_string(),
+            tokio::time::Instant::now(),
+        )
     }
 
     #[tokio::test]
@@ -611,6 +750,124 @@ mod tests {
         assert!(
             store.refreshes.load(Ordering::SeqCst) <= 2,
             "the first blocked event and one ready batch need at most two projections"
+        );
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn previews_keep_one_in_flight_and_only_the_latest_pending_per_session()
+    -> anyhow::Result<()> {
+        let store = TestStore::new(8, None);
+        let previews = BlockingPreview::new();
+        let worker = AuditWorker::start(store.clone(), previews.clone(), 8, 1);
+        let session = session("s1");
+
+        worker.submit(preview_event(&session, "one")).await?;
+        previews.wait_for_started(1).await;
+        worker.submit(preview_event(&session, "two")).await?;
+        worker.submit(preview_event(&session, "three")).await?;
+        let flush_worker = worker.clone();
+        let mut flush = tokio::spawn(async move { flush_worker.flush_session("s1").await });
+        assert!(
+            timeout(Duration::from_millis(50), &mut flush)
+                .await
+                .is_err()
+        );
+
+        previews.releases.add_permits(1);
+        previews.wait_for_started(2).await;
+        assert_eq!(previews.started_rows(), [1, 3]);
+        previews.releases.add_permits(1);
+        flush.await??;
+
+        assert_eq!(store.tools(), ["one", "two", "three"]);
+        assert_eq!(
+            *store
+                .markers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            [1, 3]
+        );
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preview_captures_respect_the_global_concurrency_limit() -> anyhow::Result<()> {
+        let store = TestStore::new(8, None);
+        let previews = BlockingPreview::new();
+        let worker = AuditWorker::start(store, previews.clone(), 8, 2);
+        let first = session("s1");
+        let second = session("s2");
+        let third = session("s3");
+
+        worker.submit(preview_event(&first, "one")).await?;
+        worker.submit(preview_event(&second, "two")).await?;
+        worker.submit(preview_event(&third, "three")).await?;
+        previews.wait_for_started(2).await;
+        assert_eq!(previews.active.load(Ordering::SeqCst), 2);
+        assert_eq!(previews.max_active.load(Ordering::SeqCst), 2);
+        assert_eq!(previews.started_rows().len(), 2);
+
+        previews.releases.add_permits(1);
+        previews.wait_for_started(3).await;
+        assert_eq!(previews.max_active.load(Ordering::SeqCst), 2);
+        previews.releases.add_permits(2);
+        worker.flush_session("s1").await?;
+        worker.flush_session("s2").await?;
+        worker.flush_session("s3").await?;
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preview_and_marker_failures_keep_rows_and_allow_later_work() -> anyhow::Result<()> {
+        let store = TestStore::new(8, None);
+        store.failing_marker.store(3, Ordering::SeqCst);
+        let worker = AuditWorker::start(store.clone(), Arc::new(ScriptedPreview), 8, 1);
+        let session = session("s1");
+
+        for tool in ["capture-fails", "absent", "marker-fails", "succeeds"] {
+            worker.submit(preview_event(&session, tool)).await?;
+            worker.flush_session("s1").await?;
+        }
+
+        assert_eq!(
+            store.tools(),
+            ["capture-fails", "absent", "marker-fails", "succeeds"]
+        );
+        assert_eq!(
+            *store
+                .markers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            [4]
+        );
+        worker.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_preview_lease_becomes_a_no_op_without_losing_the_row() -> anyhow::Result<()> {
+        let store = TestStore::new(0, None);
+        let worker = AuditWorker::start(store.clone(), Arc::new(LeaseCheckingPreview), 2, 1);
+        let session = session("s1");
+        let append_started = store.append_started.notified();
+
+        worker.submit(preview_event(&session, "one")).await?;
+        append_started.await;
+        drop(session);
+        store.append_permits.add_permits(1);
+        worker.flush_session("s1").await?;
+
+        assert_eq!(store.tools(), ["one"]);
+        assert!(
+            store
+                .markers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
         );
         worker.shutdown().await?;
         Ok(())

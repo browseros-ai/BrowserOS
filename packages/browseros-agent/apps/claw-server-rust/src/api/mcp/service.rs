@@ -8,7 +8,7 @@ use crate::{
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
-    ids::SessionId,
+    ids::{DispatchId, SessionId},
     services::sessions::Session,
 };
 use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult, catalog};
@@ -100,10 +100,22 @@ impl ClawMcpService {
         started: &StartedSession,
         raw_args: &Value,
     ) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserClaw session is no longer live",
+            )]);
+        }
         let started_at = StdInstant::now();
         let rename = match rename_session(Some(started.session.as_ref()), raw_args).await {
             Ok(rename) => rename,
             Err(message) => {
+                started.session.finish_dispatch(&dispatch_id).await;
                 return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
             }
         };
@@ -125,11 +137,13 @@ impl ClawMcpService {
             raw_args,
             &result,
             i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+            dispatch_id.clone(),
         )
         .await
         {
             warn!(error = %error, "local tool audit submission failed");
         }
+        started.session.finish_dispatch(&dispatch_id).await;
         result.into_call_tool_result()
     }
 

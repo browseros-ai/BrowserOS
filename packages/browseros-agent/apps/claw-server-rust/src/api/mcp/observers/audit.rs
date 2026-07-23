@@ -51,8 +51,8 @@ pub async fn record_local_tool_dispatch(
     raw_args: &Value,
     result: &ToolResult,
     duration_ms: i64,
+    dispatch_id: DispatchId,
 ) -> anyhow::Result<()> {
-    let dispatch_id = DispatchId::new();
     state
         .audit_worker
         .submit(AuditEvent::without_preview(RecordToolDispatchInput {
@@ -274,6 +274,7 @@ mod tests {
             &raw_args,
             &result,
             1,
+            DispatchId::new(),
         )
         .await?;
         call.state
