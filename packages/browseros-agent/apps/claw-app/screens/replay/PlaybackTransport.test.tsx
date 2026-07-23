@@ -45,6 +45,10 @@ beforeEach(async () => {
       value,
     })
   }
+  Object.assign(dom.window, {
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => undefined,
+  })
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
     configurable: true,
     writable: true,
