@@ -70,6 +70,10 @@ async fn connect_and_migrate<M: MigratorTrait>(path: &Path) -> Result<DatabaseCo
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
+        // Freshly created databases stick in incremental auto-vacuum, so
+        // `PRAGMA incremental_vacuum` can return freed pages to the OS after an
+        // audit-retention sweep. Existing databases are converted on first reclaim.
+        .pragma("auto_vacuum", "incremental")
         .busy_timeout(Duration::from_secs(5));
     // A single connection preserves the old mutex-serialized write behavior and avoids SQLite write-upgrade contention.
     // A blocking task prevents paused Tokio clocks from expiring SQLx's acquire timeout before its SQLite worker responds.

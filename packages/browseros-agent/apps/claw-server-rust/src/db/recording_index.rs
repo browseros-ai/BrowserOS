@@ -18,7 +18,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, Statement, TransactionTrait,
+    IntoActiveModel, QueryFilter, QuerySelect, Statement, TransactionTrait, sea_query::Expr,
 };
 
 #[derive(Clone)]
@@ -145,6 +145,21 @@ pub struct StreamMatchRow {
 impl RecordingIndex {
     pub fn new(db: Database) -> Self {
         Self { db }
+    }
+
+    /// Total bytes of rrweb recording payloads tracked in the stream index.
+    pub async fn recording_bytes_total(&self) -> AppResult<i64> {
+        let total = RecordingStreams::find()
+            .select_only()
+            .column_as(
+                Expr::col(recording_streams::Column::SizeBytes).sum(),
+                "total",
+            )
+            .into_tuple::<Option<i64>>()
+            .one(self.db.connection())
+            .await?
+            .flatten();
+        Ok(total.unwrap_or(0))
     }
 
     pub async fn append_document_batch(&self, input: AppendDocumentBatch<'_>) -> AppResult<bool> {

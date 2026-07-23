@@ -156,6 +156,11 @@ impl RecordingStore {
         read_file_range::<LegacyRecordedEvent>(self.path_for(target_id), from, to).await
     }
 
+    /// Total bytes of rrweb recording payloads stored in the database.
+    pub async fn recording_bytes_total(&self) -> AppResult<i64> {
+        self.index.recording_bytes_total().await
+    }
+
     pub async fn sweep_retention(
         &self,
         retention_days: u64,

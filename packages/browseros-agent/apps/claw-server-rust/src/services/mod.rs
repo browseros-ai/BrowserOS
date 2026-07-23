@@ -1,3 +1,4 @@
+pub mod audit_settings;
 pub mod browser;
 pub mod cockpit;
 pub mod harness;

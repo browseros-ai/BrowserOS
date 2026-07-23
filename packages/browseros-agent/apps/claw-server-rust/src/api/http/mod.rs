@@ -17,6 +17,7 @@ use std::time::Instant;
 use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
+pub(crate) mod audit;
 mod cockpit;
 mod connections;
 mod previews;
@@ -37,6 +38,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))
         .route("/api/v1/cockpit/stats", get(cockpit::stats))
+        .route("/api/v1/audit/storage", get(audit::storage))
+        .route("/api/v1/audit/retention", put(audit::set_retention))
+        .route("/api/v1/audit/cleanup", post(audit::cleanup))
         .route(
             "/api/v1/settings/telemetry",
             get(settings::telemetry).put(settings::update_telemetry),

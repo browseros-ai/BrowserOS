@@ -62,11 +62,39 @@ impl AppRuntime {
                     .spawn_idle_sweeper(shutdown.child_token()),
             },
             BackgroundTask {
-                name: "recording retention sweeper",
-                handle: state
-                    .recordings
-                    .clone()
-                    .spawn_retention(state.config.replay_retention_days, shutdown.child_token()),
+                name: "audit retention sweeper",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                        ticker
+                            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    match crate::api::http::audit::sweep_audit_retention(
+                                        &state,
+                                        crate::clock::now_epoch_ms(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(report) => info!(
+                                            sessions_deleted = report.sessions_deleted,
+                                            recordings_deleted = report.recordings_deleted,
+                                            bytes_reclaimed = report.bytes_reclaimed,
+                                            "audit retention sweep finished"
+                                        ),
+                                        Err(error) => {
+                                            warn!(error = %error, "audit retention sweep failed");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
             },
             BackgroundTask {
                 name: "session efficiency reconciliation",

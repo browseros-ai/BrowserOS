@@ -26,6 +26,7 @@ use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 pub struct AppState {
     pub config: Arc<Config>,
     pub audit_log: Arc<AuditLog>,
+    pub audit_settings: Arc<crate::services::audit_settings::AuditSettingsStore>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
@@ -55,6 +56,9 @@ impl AppState {
         let store = JsonStore::new(config.browserclaw_dir.clone());
         let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
         let audit_log = Arc::new(AuditLog::new(database.clone()));
+        let audit_settings = Arc::new(
+            crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
+        );
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database.clone()));
         session_tabs.release_all_open().await?;
@@ -121,6 +125,7 @@ impl AppState {
         Ok(Self {
             config,
             audit_log,
+            audit_settings,
             session_tabs,
             recordings,
             recording_ingest,
