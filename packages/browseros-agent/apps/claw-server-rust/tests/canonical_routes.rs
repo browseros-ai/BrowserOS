@@ -1299,7 +1299,7 @@ async fn live_projection_hides_handshakes_and_keeps_dispatch_backed_zero_tab_ses
     assert_eq!(second["profileId"], primary["profileId"]);
     assert_ne!(second["sessionId"], primary["sessionId"]);
     assert_eq!(primary["harness"], "Codex");
-    assert_eq!(primary["color"], "#7A5AF8");
+    assert_eq!(primary["color"], "#DB2777");
     assert_eq!(primary["live"]["state"], "active");
     assert_eq!(primary["live"]["browserTabs"][0]["browserTabId"], 101);
     assert_eq!(primary["live"]["browserTabs"][0]["toolCount"], 1);
