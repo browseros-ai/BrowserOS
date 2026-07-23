@@ -152,11 +152,12 @@ impl Observer {
         &self,
         frame_id: Option<FrameId>,
         runtime_document_id: Option<i64>,
+        same_process_parent: Option<&ProtocolSession>,
         context: &CaptureContext,
     ) -> Result<AcquiredFrame, CoreError> {
         let target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), frame_id.clone())
+            .resolve_frame_target(self.page_id.clone(), frame_id.clone(), same_process_parent)
             .await?;
         let runtime_document_id = if target.cursor_uses_session_default {
             None
@@ -200,6 +201,7 @@ impl Observer {
                     .acquire_frame(
                         Some(child_frame.frame_id),
                         child_frame.runtime_document_id,
+                        Some(&parent_session),
                         &context,
                     )
                     .await;
@@ -282,16 +284,30 @@ async fn acquire_frame_data(
         budget,
         trace,
     );
+    let document_started = Instant::now();
     let document_id =
-        stable_document_id_for_frame(root_session, frame_id, frame_documents, budget, trace);
+        eager_document_id_for_frame(root_session, frame_id.clone(), frame_documents, budget);
     // These stages are independent after target resolution. AX failure remains fatal, while
     // cursor and document identity retain their existing best-effort fallback semantics.
     let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
+    let nodes = nodes?.nodes;
+    let (document_id, document_outcome) =
+        revalidate_document_after_acquisition(root_session, frame_id.as_ref(), document_id, budget)
+            .await;
+    if let Some(trace) = trace {
+        trace_stage(
+            trace,
+            frame_id.as_ref(),
+            SnapshotStage::DocumentValidation,
+            document_started,
+            document_outcome,
+        );
+    }
 
     Ok(AcquiredFrame {
         frame_id: acquired_frame_id,
         target,
-        nodes: nodes?.nodes,
+        nodes,
         cursor_hits: cursor_hits.unwrap_or_default(),
         document_id,
     })
@@ -329,25 +345,14 @@ async fn resolve_child_frame(
     })
 }
 
-async fn stable_document_id_for_frame(
+async fn eager_document_id_for_frame(
     root_session: &ProtocolSession,
     frame_id: Option<FrameId>,
     frame_documents: &HashMap<Option<FrameId>, DocumentId>,
     budget: &SnapshotBudget,
-    trace: Option<&CaptureTrace>,
 ) -> Option<DocumentId> {
-    let started = Instant::now();
     let before = frame_documents.get(&frame_id).cloned();
     if frame_id.is_none() || before.is_none() {
-        if let Some(trace) = trace {
-            trace_stage(
-                trace,
-                frame_id.as_ref(),
-                SnapshotStage::DocumentValidation,
-                started,
-                "cached",
-            );
-        }
         return before;
     }
     let latest_result = budget
@@ -358,23 +363,36 @@ async fn stable_document_id_for_frame(
         .ok()
         .map(|result| collect_frame_documents(&result.frame_tree));
     let after = latest.and_then(|latest| latest.get(&frame_id).cloned());
-    let stable = after == before;
-    if let Some(trace) = trace {
-        trace_stage(
-            trace,
-            frame_id.as_ref(),
-            SnapshotStage::DocumentValidation,
-            started,
-            if latest_result.is_err() {
-                "failure"
-            } else if stable {
-                "success"
-            } else {
-                "changed"
-            },
-        );
+    (after == before).then_some(before).flatten()
+}
+
+async fn revalidate_document_after_acquisition(
+    root_session: &ProtocolSession,
+    frame_id: Option<&FrameId>,
+    candidate: Option<DocumentId>,
+    budget: &SnapshotBudget,
+) -> (Option<DocumentId>, &'static str) {
+    let Some(frame_id) = frame_id else {
+        return (candidate, "cached");
+    };
+    let Some(candidate) = candidate else {
+        return (None, "fallback");
+    };
+    let latest_result = budget
+        .send::<GetFrameTreeResult>(root_session, "Page.getFrameTree", json!({}))
+        .await;
+    let latest = latest_result
+        .as_ref()
+        .ok()
+        .map(|result| collect_frame_documents(&result.frame_tree));
+    let after = latest.and_then(|latest| latest.get(&Some(frame_id.clone())).cloned());
+    if latest_result.is_err() {
+        (None, "failure")
+    } else if after.as_ref() == Some(&candidate) {
+        (Some(candidate), "success")
+    } else {
+        (None, "changed")
     }
-    if stable { before } else { None }
 }
 
 #[derive(Debug, Deserialize)]
@@ -884,7 +902,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     };
     use tokio::sync::{Notify, Semaphore, broadcast};
 
@@ -1219,6 +1237,10 @@ mod tests {
         ax_gate: Arc<Semaphore>,
         cursor_gate: Arc<Semaphore>,
         document_gate: Arc<Semaphore>,
+        document_reads: AtomicUsize,
+        document_responses: AtomicUsize,
+        document_responded: Notify,
+        loader_changed: AtomicBool,
     }
 
     impl StageOverlapConnection {
@@ -1229,6 +1251,10 @@ mod tests {
                 ax_gate: Arc::new(Semaphore::new(0)),
                 cursor_gate: Arc::new(Semaphore::new(0)),
                 document_gate: Arc::new(Semaphore::new(0)),
+                document_reads: AtomicUsize::new(0),
+                document_responses: AtomicUsize::new(0),
+                document_responded: Notify::new(),
+                loader_changed: AtomicBool::new(false),
             }
         }
 
@@ -1250,6 +1276,16 @@ mod tests {
             loop {
                 let notified = self.started_changed.notified();
                 if self.started.load(Ordering::SeqCst) == 0b111 {
+                    return;
+                }
+                notified.await;
+            }
+        }
+
+        async fn wait_for_document_response(&self, target: usize) {
+            loop {
+                let notified = self.document_responded.notified();
+                if self.document_responses.load(Ordering::SeqCst) >= target {
                     return;
                 }
                 notified.await;
@@ -1305,8 +1341,18 @@ mod tests {
                         }))
                     }
                     "Page.getFrameTree" => {
-                        self.mark_and_wait(0b100, self.document_gate.clone())
-                            .await?;
+                        let read_index = self.document_reads.fetch_add(1, Ordering::SeqCst);
+                        if read_index == 0 {
+                            self.mark_and_wait(0b100, self.document_gate.clone())
+                                .await?;
+                        }
+                        let child_loader_id = if self.loader_changed.load(Ordering::SeqCst) {
+                            "changed-loader"
+                        } else {
+                            "child-loader"
+                        };
+                        self.document_responses.fetch_add(1, Ordering::SeqCst);
+                        self.document_responded.notify_waiters();
                         Ok(json!({
                             "frameTree": {
                                 "frame": {
@@ -1317,7 +1363,7 @@ mod tests {
                                 "childFrames": [{
                                     "frame": {
                                         "id": "child-frame",
-                                        "loaderId": "child-loader",
+                                        "loaderId": child_loader_id,
                                         "url": "https://example.com/frame"
                                     }
                                 }]
@@ -1983,6 +2029,48 @@ mod tests {
             acquired.document_id.as_deref(),
             Some("child-frame:child-loader")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_navigation_after_eager_validation_uses_fallback_refs() -> Result<(), CoreError> {
+        let connection = Arc::new(StageOverlapConnection::new());
+        let session = ProtocolSession::root(connection.clone());
+        let frame_id = FrameId("child-frame".to_string());
+        let target = FrameTarget {
+            session: session.clone(),
+            ax_params: json!({"frameId": frame_id.0}),
+            cursor_uses_session_default: false,
+        };
+        let frame_documents = std::collections::HashMap::from([(
+            Some(frame_id.clone()),
+            "child-frame:child-loader".to_string(),
+        )]);
+        let task = tokio::spawn(async move {
+            super::acquire_frame_data(
+                target,
+                Some(frame_id),
+                Some(901),
+                &session,
+                &frame_documents,
+                &SnapshotBudget::new(),
+                None,
+            )
+            .await
+        });
+
+        connection.wait_for_all_stages().await;
+        connection.document_gate.add_permits(1);
+        connection.wait_for_document_response(1).await;
+        connection.loader_changed.store(true, Ordering::SeqCst);
+        connection.ax_gate.add_permits(1);
+        connection.cursor_gate.add_permits(1);
+
+        let acquired = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+        assert!(acquired.document_id.is_none());
+        assert_eq!(connection.document_reads.load(Ordering::SeqCst), 2);
         Ok(())
     }
 

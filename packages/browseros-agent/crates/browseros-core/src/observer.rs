@@ -138,7 +138,7 @@ impl Observer {
         let _page_session = self.pages.get_session(self.page_id.clone()).await?;
         let target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone())
+            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone(), None)
             .await?;
         let mut entry_for_resolution = entry.clone();
         let resolved =
@@ -248,7 +248,7 @@ impl Observer {
                 visited.push(frame_id.clone());
             }
 
-            let acquired = self.acquire_frame(frame_id, None, &context).await?;
+            let acquired = self.acquire_frame(frame_id, None, None, &context).await?;
             self.assemble_acquired_frame(acquired, refs, base_depth, visited, context)
                 .await
         })
@@ -1148,7 +1148,6 @@ mod tests {
                         }))
                     }
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
-                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
                     "DOM.describeNode" => {
                         let frame_id = match params.get("backendNodeId").and_then(Value::as_i64) {
@@ -1244,7 +1243,6 @@ mod tests {
                         }))
                     }
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
-                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
                     "DOM.describeNode" => {
                         let frame_id = params
