@@ -971,6 +971,91 @@ describe('ChatService single-rebuild reconciliation', () => {
       'The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: /ws',
     )
   })
+
+  it('rebuilds an ACP session for an MCP change without adopting a mid-conversation mode switch', async () => {
+    // The ACP exclusion must hold even when another input triggers the rebuild:
+    // an ACP agent's mode lives in the on-disk instruction file that a rebuild
+    // does not refresh, so a Klavis-driven rebuild must not flip it to chat.
+    const firstAgent = createFakeAgent()
+    const secondAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    captureStreamPrompt()
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'claude-code',
+      model: 'claude-opus-4-8',
+      apiKey: 'test-key',
+    }))
+
+    let klavis: KlavisProxyStatus = { state: 'connecting' }
+    const service = makeService(() => klavis)
+    const before = createAgentSpy.mock.calls.length
+    const conversationId = crypto.randomUUID()
+    const base = {
+      conversationId,
+      isScheduledTask: false,
+      origin: 'newtab',
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+        enabledMcpServers: ['slack'],
+      },
+    }
+
+    await service.processMessage(
+      { ...base, message: 'hi', mode: 'agent' } as never,
+      new AbortController().signal,
+    )
+    agentToReturn = secondAgent
+    klavis = { state: 'ready', toolCount: 0 }
+    await service.processMessage(
+      { ...base, message: 'now restrict me', mode: 'chat' } as never,
+      new AbortController().signal,
+    )
+
+    const createCalls = createAgentSpy.mock.calls.slice(before)
+    // The MCP change still rebuilds the ACP session.
+    expect(createCalls).toHaveLength(2)
+    expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
+    // ...but the rebuild keeps the conversation's original agent mode instead
+    // of adopting the ignored chat toggle.
+    const rebuiltConfig = createCalls[1]?.[0] as {
+      resolvedConfig?: { chatMode?: boolean }
+    }
+    expect(rebuiltConfig?.resolvedConfig?.chatMode).toBe(false)
+  })
+
+  it('keeps an ACP session in agent mode even when the request asks for chat mode', async () => {
+    // ACP ignores the chat toggle entirely; chat mode is never enforced for it,
+    // so the build is agent mode regardless of what the request carries.
+    const firstAgent = createFakeAgent()
+    agentToReturn = firstAgent
+    captureStreamPrompt()
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'claude-code',
+      model: 'claude-opus-4-8',
+      apiKey: 'test-key',
+    }))
+
+    const service = makeService(() => ({ state: 'stopped' }))
+    const before = createAgentSpy.mock.calls.length
+    await service.processMessage(
+      {
+        conversationId: crypto.randomUUID(),
+        message: 'hi',
+        isScheduledTask: false,
+        mode: 'chat',
+        origin: 'newtab',
+        browserContext: {
+          activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+        },
+      } as never,
+      new AbortController().signal,
+    )
+
+    const createConfig = createAgentSpy.mock.calls[before]?.[0] as {
+      resolvedConfig?: { chatMode?: boolean }
+    }
+    expect(createConfig?.resolvedConfig?.chatMode).toBe(false)
+  })
 })
 
 describe('ChatService ACP provider chat history handling', () => {

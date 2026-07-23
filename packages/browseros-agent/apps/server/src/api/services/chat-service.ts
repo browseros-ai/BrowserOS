@@ -87,7 +87,14 @@ export class ChatService {
       userSystemPrompt: request.userSystemPrompt,
       workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
-      chatMode: request.mode === 'chat',
+      // ACP conversations are always agent mode: read-only chat mode is not
+      // enforced for those providers, so the mode toggle is ignored for them.
+      // Pinning chatMode to false keeps the on-disk instruction file and every
+      // (re)built in-band prompt in agent mode, so no request or rebuild can
+      // put an ACP agent into a chat-mode prompt that contradicts it.
+      chatMode: isAcpProvider(llmConfig.provider)
+        ? false
+        : request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
       origin: request.origin,
       declinedApps: request.declinedApps,
