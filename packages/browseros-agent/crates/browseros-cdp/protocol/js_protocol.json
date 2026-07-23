@@ -22,6 +22,14 @@
           ]
         },
         {
+          "id": "PropertyDescriptor",
+          "type": "object",
+          "properties": [
+            { "name": "name", "type": "string" },
+            { "name": "value", "$ref": "RemoteObject", "optional": true }
+          ]
+        },
+        {
           "id": "CallArgument",
           "type": "object",
           "properties": [
@@ -123,6 +131,20 @@
               "name": "exceptionDetails",
               "$ref": "ExceptionDetails",
               "optional": true
+            }
+          ]
+        },
+        {
+          "name": "getProperties",
+          "parameters": [
+            { "name": "objectId", "type": "string" },
+            { "name": "ownProperties", "type": "boolean", "optional": true }
+          ],
+          "returns": [
+            {
+              "name": "result",
+              "type": "array",
+              "items": { "$ref": "PropertyDescriptor" }
             }
           ]
         },

@@ -205,6 +205,14 @@
         },
         { "name": "reload" },
         {
+          "name": "createIsolatedWorld",
+          "parameters": [
+            { "name": "frameId", "$ref": "FrameId" },
+            { "name": "worldName", "type": "string", "optional": true }
+          ],
+          "returns": [{ "name": "executionContextId", "type": "integer" }]
+        },
+        {
           "name": "getFrameTree",
           "returns": [{ "name": "frameTree", "$ref": "FrameTree" }]
         },

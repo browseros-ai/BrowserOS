@@ -8,6 +8,9 @@ use tokio::sync::Mutex;
 pub struct FrameTarget {
     pub session: ProtocolSession,
     pub ax_params: Value,
+    /// Frame whose isolated world must host DOM cursor scanning. Root targets use their session's
+    /// default document; same-process and out-of-process children require an explicit frame.
+    pub runtime_frame_id: Option<FrameId>,
 }
 
 pub struct FrameRegistry {
@@ -64,17 +67,20 @@ impl FrameRegistry {
             return Ok(FrameTarget {
                 session: ProtocolSession::for_session(self.cdp.clone(), page_session_id),
                 ax_params: json!({}),
+                runtime_frame_id: None,
             });
         };
         if let Some(oopif) = self.oopif_sessions.lock().await.get(&frame_id).cloned() {
             return Ok(FrameTarget {
                 session: ProtocolSession::for_session(self.cdp.clone(), oopif),
                 ax_params: json!({}),
+                runtime_frame_id: Some(frame_id),
             });
         }
         Ok(FrameTarget {
             session: ProtocolSession::for_session(self.cdp.clone(), page_session_id),
             ax_params: json!({ "frameId": frame_id.0 }),
+            runtime_frame_id: Some(frame_id),
         })
     }
 

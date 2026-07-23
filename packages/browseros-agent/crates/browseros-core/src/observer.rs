@@ -14,9 +14,11 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
+mod acquisition;
+use acquisition::{SnapshotBudget, find_cursor_hits};
+
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
-const CURSOR_SCAN_JS: &str = include_str!("assets/cursor-augment.js");
 
 #[derive(Debug, Clone)]
 pub struct SnapshotResult {
@@ -51,6 +53,13 @@ struct CaptureResult {
     refs: RefMap,
     url: String,
     scope: Option<RefScope>,
+}
+
+#[derive(Clone)]
+struct CaptureContext {
+    root_session: ProtocolSession,
+    frame_documents: HashMap<Option<FrameId>, DocumentId>,
+    budget: SnapshotBudget,
 }
 
 #[derive(Debug, Default)]
@@ -143,18 +152,17 @@ impl Observer {
 
     async fn capture(&self) -> Result<CaptureResult, CoreError> {
         let page_session = self.pages.get_session(self.page_id.clone()).await?;
+        let budget = SnapshotBudget::new();
         for _attempt in 0..MAX_STABLE_CAPTURE_ATTEMPTS {
             let before = self.read_main_frame_state(&page_session.session).await;
             let refs = self.refs_for_capture(&before).await;
+            let context = CaptureContext {
+                root_session: page_session.session.clone(),
+                frame_documents: before.frame_documents.clone(),
+                budget: budget.clone(),
+            };
             let (text, refs) = self
-                .capture_frame(
-                    None,
-                    refs,
-                    0,
-                    Vec::new(),
-                    page_session.session.clone(),
-                    before.frame_documents.clone(),
-                )
+                .capture_frame(None, refs, 0, Vec::new(), context)
                 .await?;
             let after = self.read_main_frame_state(&page_session.session).await;
             if !known_main_frame_changed(&before, &after) {
@@ -175,8 +183,7 @@ impl Observer {
         mut refs: RefMap,
         base_depth: usize,
         mut visited: Vec<FrameId>,
-        root_session: ProtocolSession,
-        frame_documents: HashMap<Option<FrameId>, DocumentId>,
+        context: CaptureContext,
     ) -> BoxFuture<'_, Result<(String, RefMap), CoreError>> {
         Box::pin(async move {
             if let Some(frame_id) = &frame_id {
@@ -191,9 +198,19 @@ impl Observer {
                 .resolve_frame_target(self.page_id.clone(), frame_id.clone())
                 .await?;
             let nodes = fetch_ax_tree(&target.session, target.ax_params.clone()).await?;
-            let cursor_hits = find_cursor_hits(&target.session).await.unwrap_or_default();
+            let cursor_hits = find_cursor_hits(
+                &target.session,
+                target.runtime_frame_id.as_ref(),
+                &context.budget,
+            )
+            .await
+            .unwrap_or_default();
             let document_id = self
-                .stable_document_id_for_frame(&root_session, frame_id.clone(), &frame_documents)
+                .stable_document_id_for_frame(
+                    &context.root_session,
+                    frame_id.clone(),
+                    &context.frame_documents,
+                )
                 .await;
             let mut render_opts = RenderOptions {
                 refs: &mut refs,
@@ -228,8 +245,7 @@ impl Observer {
                         refs.clone(),
                         stitch.depth + 1,
                         visited.clone(),
-                        root_session.clone(),
-                        frame_documents.clone(),
+                        context.clone(),
                     )
                     .await;
                 let child_text = match child_result {
@@ -373,24 +389,6 @@ struct DescribedNode {
     content_document: Option<Box<DescribedNode>>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RuntimeEvalResult {
-    result: RemoteValue,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteValue {
-    value: Option<Value>,
-    #[serde(rename = "objectId")]
-    object_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CursorHit {
-    marker: String,
-    reasons: Vec<String>,
-}
-
 pub async fn resolve_ref_entry(
     session: &ProtocolSession,
     entry: &mut RefEntry,
@@ -512,60 +510,6 @@ async fn fetch_ax_tree(
     Ok(result.nodes)
 }
 
-async fn find_cursor_hits(
-    session: &ProtocolSession,
-) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    let mut hits = HashMap::new();
-    let result: RuntimeEvalResult = session
-        .send(
-            "Runtime.evaluate",
-            json!({ "expression": CURSOR_SCAN_JS, "returnByValue": true }),
-        )
-        .await?;
-    let found = result
-        .result
-        .value
-        .and_then(|value| serde_json::from_value::<Vec<CursorHit>>(value).ok())
-        .unwrap_or_default();
-    if found.is_empty() {
-        return Ok(hits);
-    }
-
-    for hit in found {
-        let query = format!("document.querySelector('[data-__bcid=\"{}\"]')", hit.marker);
-        let result = session
-            .send::<_, RuntimeEvalResult>(
-                "Runtime.evaluate",
-                json!({ "expression": query, "returnByValue": false }),
-            )
-            .await;
-        let Ok(result) = result else {
-            continue;
-        };
-        let Some(object_id) = result.result.object_id else {
-            continue;
-        };
-        let described = session
-            .send::<_, DescribeNodeResult>("DOM.describeNode", json!({ "objectId": object_id }))
-            .await;
-        if let Ok(described) = described
-            && let Some(backend_node_id) = described.node.backend_node_id
-        {
-            hits.insert(backend_node_id, hit.reasons);
-        }
-    }
-    let _ = session
-        .send::<_, Value>(
-            "Runtime.evaluate",
-            json!({
-                "expression": "document.querySelectorAll('[data-__bcid]').forEach(function(e){e.removeAttribute('data-__bcid')})",
-                "returnByValue": true
-            }),
-        )
-        .await;
-    Ok(hits)
-}
-
 async fn resolve_child_frame_id(
     session: &ProtocolSession,
     backend_node_id: i64,
@@ -676,7 +620,7 @@ fn name_of(node: &AxNode) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RemoteValue, resolve_ref_entry};
+    use super::resolve_ref_entry;
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, ProtocolSession,
         connection::CdpConnection,
@@ -776,17 +720,6 @@ mod tests {
                 .then(|| children.iter().map(|child| (*child).to_string()).collect()),
             ..AxNode::default()
         }
-    }
-
-    #[test]
-    fn runtime_remote_value_deserializes_object_id() -> Result<(), serde_json::Error> {
-        let value: RemoteValue = serde_json::from_value(json!({
-            "type": "object",
-            "objectId": "-6404171882913021072.1.1"
-        }))?;
-
-        assert_eq!(value.object_id.as_deref(), Some("-6404171882913021072.1.1"));
-        Ok(())
     }
 
     #[tokio::test]

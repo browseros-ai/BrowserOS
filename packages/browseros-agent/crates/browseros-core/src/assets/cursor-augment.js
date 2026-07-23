@@ -1,6 +1,6 @@
 // biome-ignore-all lint: Injected ES5 asset mirrors the TypeScript browser-core runtime string.
 // biome-ignore format: Keep injected script byte-oriented and close to the TypeScript source.
-(function(){
+(function(markerAttribute){
   var interactiveTags=new Set(['a','button','input','select','textarea','details','summary']);
   var interactiveRoles=new Set(['button','link','textbox','checkbox','radio','combobox','listbox',
     'menuitem','menuitemcheckbox','menuitemradio','option','searchbox','slider','spinbutton','switch','tab','treeitem']);
@@ -24,7 +24,7 @@
     }
     var rect=el.getBoundingClientRect();
     if(rect.width===0||rect.height===0)continue;
-    el.setAttribute('data-__bcid',String(i));
+    el.setAttribute(markerAttribute,String(i));
     var reasons=[];
     if(hasCursor)reasons.push('cursor:pointer');
     if(hasOnClick)reasons.push('onclick');
@@ -33,4 +33,4 @@
     out.push({marker:String(i),reasons:reasons});
   }
   return out;
-})()
+})(__BROWSEROS_CURSOR_MARKER__)
