@@ -32,14 +32,46 @@
       data-last-label="Cursor candidate 63"
     ></div>
 
-    <div id="pointer-only">Pointer-only target</div>
-    <div id="assigned-onclick">Assigned onclick target</div>
-    <div id="editable-target" contenteditable="true">
+    <div id="pointer-only" role="group" aria-label="Pointer-only target">
+      Pointer-only target
+    </div>
+    <div
+      id="assigned-onclick"
+      role="group"
+      aria-label="Assigned onclick target"
+    >
+      Assigned onclick target
+    </div>
+    <div
+      id="editable-target"
+      contenteditable="true"
+      role="group"
+      aria-label="Editable target ready"
+    >
       Editable target ready
     </div>
-    <span id="tabindex-target" tabindex="0">Tabindex target</span>
-    <span id="zero-sized-excluded">Zero-sized excluded target</span>
-    <div id="vanishing-candidate">Vanishing cursor target</div>
+    <span
+      id="tabindex-target"
+      tabindex="0"
+      role="group"
+      aria-label="Tabindex target"
+    >
+      Tabindex target
+    </span>
+    <span
+      id="zero-sized-excluded"
+      role="group"
+      aria-label="Zero-sized excluded target"
+    >
+      Zero-sized excluded target
+    </span>
+    <div
+      id="vanishing-candidate"
+      role="group"
+      aria-label="Vanishing cursor target"
+    >
+      Vanishing cursor target
+    </div>
     <div id="page-owned-marker" data-__bcid-page-owned="fixture-owned">
       Page-owned marker sentinel
     </div>
@@ -98,6 +130,8 @@
         const candidate = document.createElement('div')
         candidate.className = 'cursor-candidate'
         candidate.textContent = `Cursor candidate ${String(index).padStart(2, '0')}`
+        candidate.setAttribute('role', 'group')
+        candidate.setAttribute('aria-label', candidate.textContent)
         generatedBatch.append(candidate)
       }
 

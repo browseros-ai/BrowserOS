@@ -441,4 +441,99 @@ export const snapshotConcurrencyCases: ContractCase[] = [
       }
     },
   },
+  {
+    name: 'snapshot concurrency: overlapping cursor captures stay isolated',
+    async run(ctx) {
+      const page = await ctx.openPage(
+        ctx.fixture('/snapshot-cursor-concurrency.html'),
+      )
+      await waitForCursorFixture(ctx, page)
+      await requireCleanCursorProbe(ctx, page)
+      await evaluateText(
+        ctx,
+        page,
+        'window.snapshotCursorFixture.resetProbe(); return "reset"',
+      )
+
+      const snapshots = await Promise.all(
+        Array.from({ length: 4 }, async () =>
+          expectOk(
+            await ctx.mcp.callTool('snapshot', { page }),
+            'overlapping cursor snapshot',
+          ),
+        ),
+      )
+      const expectedRefs = selectedRefs(snapshots[0], CURSOR_STABLE_LABELS)
+      for (const [index, snapshot] of snapshots.entries()) {
+        requireSameRefs(
+          selectedRefs(snapshot, CURSOR_STABLE_LABELS),
+          expectedRefs,
+          `overlapping cursor snapshot ${index + 1}`,
+        )
+      }
+
+      const overlapState = await requireCleanCursorProbe(ctx, page)
+      if (overlapState.maxActiveMarkerNamespaces < 2) {
+        throw new Error(
+          `cursor captures were serialized instead of overlapping: ${JSON.stringify(overlapState)}`,
+        )
+      }
+
+      const final = expectOk(
+        await ctx.mcp.callTool('snapshot', { page }),
+        'final cursor snapshot after overlap',
+      )
+      requireSameRefs(
+        selectedRefs(final, CURSOR_STABLE_LABELS),
+        expectedRefs,
+        'final cursor snapshot after overlap',
+      )
+      await requireCleanCursorProbe(ctx, page)
+    },
+  },
+  {
+    name: 'snapshot concurrency: overlapping frame captures keep baseline',
+    async run(ctx) {
+      const page = await ctx.openPage(mixedFrameUrl(ctx))
+      const settled = await waitForFrameSnapshot(ctx, page)
+      const expectedRefs = selectedRefs(settled, FRAME_REF_LABELS)
+
+      const snapshots = await Promise.all(
+        Array.from({ length: 4 }, async () =>
+          expectOk(
+            await ctx.mcp.callTool('snapshot', { page }),
+            'overlapping mixed-frame snapshot',
+          ),
+        ),
+      )
+      for (const [index, snapshot] of snapshots.entries()) {
+        requireLabels(snapshot, FRAME_REF_LABELS)
+        requireSameRefs(
+          selectedRefs(snapshot, FRAME_REF_LABELS),
+          expectedRefs,
+          `overlapping mixed-frame snapshot ${index + 1}`,
+        )
+      }
+
+      const final = await waitForFrameSnapshot(ctx, page)
+      requireSameRefs(
+        selectedRefs(final, FRAME_REF_LABELS),
+        expectedRefs,
+        'final mixed-frame snapshot after overlap',
+      )
+      const diffResult = await ctx.mcp.callTool('diff', { page })
+      const diffText = expectOk(diffResult, 'diff after overlapping snapshots')
+      const structured = diffResult.structuredContent as
+        | { changed?: boolean }
+        | undefined
+      if (
+        structured?.changed !== false &&
+        !/no change|unchanged/i.test(diffText)
+      ) {
+        throw new Error(
+          `overlapping snapshot commits poisoned the diff baseline: ${diffText.slice(0, 400)}`,
+        )
+      }
+    },
+  },
 ]
