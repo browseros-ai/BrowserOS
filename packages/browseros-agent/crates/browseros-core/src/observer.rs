@@ -11,11 +11,11 @@ use crate::{
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 mod acquisition;
-use acquisition::{AcquiredFrame, SnapshotBudget};
+use acquisition::{AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, trace_stage};
 
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
@@ -60,6 +60,7 @@ struct CaptureContext {
     root_session: ProtocolSession,
     frame_documents: HashMap<Option<FrameId>, DocumentId>,
     budget: SnapshotBudget,
+    trace: CaptureTrace,
 }
 
 #[derive(Debug, Default)]
@@ -151,21 +152,60 @@ impl Observer {
     }
 
     async fn capture(&self) -> Result<CaptureResult, CoreError> {
-        let page_session = self.pages.get_session(self.page_id.clone()).await?;
+        let capture_started = Instant::now();
+        let initial_trace = CaptureTrace::new(self.page_id.clone(), 1);
+        let page_session = match self.pages.get_session(self.page_id.clone()).await {
+            Ok(page_session) => page_session,
+            Err(error) => {
+                trace_stage(
+                    &initial_trace,
+                    None,
+                    SnapshotStage::Capture,
+                    capture_started,
+                    "failure",
+                );
+                return Err(error);
+            }
+        };
         let budget = SnapshotBudget::new();
-        for _attempt in 0..MAX_STABLE_CAPTURE_ATTEMPTS {
-            let before = self.read_main_frame_state(&page_session.session).await;
+        for attempt in 1..=MAX_STABLE_CAPTURE_ATTEMPTS {
+            let attempt_started = Instant::now();
+            let trace = CaptureTrace::new(self.page_id.clone(), attempt);
+            let before = self
+                .read_main_frame_state(&page_session.session, &budget)
+                .await;
             let refs = self.refs_for_capture(&before).await;
             let context = CaptureContext {
                 root_session: page_session.session.clone(),
                 frame_documents: before.frame_documents.clone(),
                 budget: budget.clone(),
+                trace: trace.clone(),
             };
-            let (text, refs) = self
-                .capture_frame(None, refs, 0, Vec::new(), context)
-                .await?;
-            let after = self.read_main_frame_state(&page_session.session).await;
+            let frame_result = self.capture_frame(None, refs, 0, Vec::new(), context).await;
+            let (text, refs) = match frame_result {
+                Ok(result) => result,
+                Err(error) => {
+                    trace_stage(
+                        &trace,
+                        None,
+                        SnapshotStage::Capture,
+                        capture_started,
+                        "failure",
+                    );
+                    return Err(error);
+                }
+            };
+            let after = self
+                .read_main_frame_state(&page_session.session, &budget)
+                .await;
             if !known_main_frame_changed(&before, &after) {
+                trace_stage(
+                    &trace,
+                    None,
+                    SnapshotStage::Capture,
+                    capture_started,
+                    "success",
+                );
                 return Ok(CaptureResult {
                     text,
                     refs,
@@ -173,7 +213,22 @@ impl Observer {
                     scope: ref_scope_from(&after),
                 });
             }
+            trace_stage(
+                &trace,
+                None,
+                SnapshotStage::Retry,
+                attempt_started,
+                "document_changed",
+            );
         }
+        let trace = CaptureTrace::new(self.page_id.clone(), MAX_STABLE_CAPTURE_ATTEMPTS);
+        trace_stage(
+            &trace,
+            None,
+            SnapshotStage::Capture,
+            capture_started,
+            "document_changed",
+        );
         Err(CoreError::DocumentChanged)
     }
 
@@ -208,6 +263,8 @@ impl Observer {
         context: CaptureContext,
     ) -> BoxFuture<'_, Result<(String, RefMap), CoreError>> {
         Box::pin(async move {
+            let assembly_started = Instant::now();
+            let assembly_frame_id = acquired.frame_id.clone();
             let AcquiredFrame {
                 frame_id,
                 target,
@@ -225,6 +282,13 @@ impl Observer {
             let rendered = render_snapshot(&nodes, &mut render_opts);
             let mut text = rendered.text;
             if rendered.iframes.is_empty() || base_depth >= MAX_FRAME_DEPTH {
+                trace_stage(
+                    &context.trace,
+                    assembly_frame_id.as_ref(),
+                    SnapshotStage::Assembly,
+                    assembly_started,
+                    "success",
+                );
                 return Ok((text, refs));
             }
 
@@ -274,6 +338,13 @@ impl Observer {
                 }
             }
             text = lines.join("\n");
+            trace_stage(
+                &context.trace,
+                assembly_frame_id.as_ref(),
+                SnapshotStage::Assembly,
+                assembly_started,
+                "success",
+            );
             Ok((text, refs))
         })
     }
@@ -297,9 +368,13 @@ impl Observer {
         }
     }
 
-    async fn read_main_frame_state(&self, session: &ProtocolSession) -> MainFrameState {
-        let result = session
-            .send::<_, GetFrameTreeResult>("Page.getFrameTree", json!({}))
+    async fn read_main_frame_state(
+        &self,
+        session: &ProtocolSession,
+        budget: &SnapshotBudget,
+    ) -> MainFrameState {
+        let result = budget
+            .send::<GetFrameTreeResult>(session, "Page.getFrameTree", json!({}))
             .await;
         if let Ok(result) = result {
             return MainFrameState {

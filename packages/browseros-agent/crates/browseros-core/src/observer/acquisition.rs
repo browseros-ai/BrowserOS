@@ -10,7 +10,7 @@ use super::{
     collect_frame_documents,
 };
 use crate::{
-    CoreError, FrameId, ProtocolSession,
+    CoreError, FrameId, PageId, ProtocolSession,
     frames::FrameTarget,
     snapshot::{AxNode, DocumentId, IframeStitch},
 };
@@ -25,6 +25,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Instant,
 };
 use tokio::sync::Semaphore;
 
@@ -32,6 +33,76 @@ const MAX_IN_FLIGHT_REQUESTS: usize = 8;
 const CURSOR_SCAN_JS: &str = include_str!("../assets/cursor-augment.js");
 const CURSOR_WORLD_NAME: &str = "browseros-snapshot-cursor";
 static NEXT_CURSOR_NAMESPACE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy)]
+pub(super) enum SnapshotStage {
+    Capture,
+    Ax,
+    CursorScan,
+    CursorDescribe,
+    DocumentValidation,
+    SiblingAcquisition,
+    Assembly,
+    Retry,
+}
+
+impl SnapshotStage {
+    #[cfg(test)]
+    const ALL: &[Self] = &[
+        Self::Capture,
+        Self::Ax,
+        Self::CursorScan,
+        Self::CursorDescribe,
+        Self::DocumentValidation,
+        Self::SiblingAcquisition,
+        Self::Assembly,
+        Self::Retry,
+    ];
+
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Capture => "capture",
+            Self::Ax => "ax",
+            Self::CursorScan => "cursor_scan",
+            Self::CursorDescribe => "cursor_describe",
+            Self::DocumentValidation => "document_validation",
+            Self::SiblingAcquisition => "sibling_acquisition",
+            Self::Assembly => "assembly",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct CaptureTrace {
+    page_id: PageId,
+    attempt: usize,
+}
+
+impl CaptureTrace {
+    pub(super) fn new(page_id: PageId, attempt: usize) -> Self {
+        Self { page_id, attempt }
+    }
+}
+
+pub(super) fn trace_stage(
+    trace: &CaptureTrace,
+    frame_id: Option<&FrameId>,
+    stage: SnapshotStage,
+    started: Instant,
+    outcome: &'static str,
+) {
+    tracing::debug!(
+        target: "browseros.snapshot",
+        snapshot_stage = stage.as_str(),
+        page_id = %trace.page_id,
+        frame_id = frame_id.map(|frame_id| frame_id.0.as_str()).unwrap_or("main"),
+        attempt = trace.attempt,
+        duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+        outcome,
+        "snapshot stage complete"
+    );
+}
 
 #[derive(Clone)]
 pub(super) struct SnapshotBudget {
@@ -99,6 +170,7 @@ impl Observer {
             &context.root_session,
             &context.frame_documents,
             &context.budget,
+            Some(&context.trace),
         )
         .await
     }
@@ -110,6 +182,7 @@ impl Observer {
         visited: &[FrameId],
         context: &CaptureContext,
     ) -> Vec<AcquiredChild> {
+        let started = Instant::now();
         let mut pending = FuturesUnordered::new();
         for (stitch_index, stitch) in stitches.iter().cloned().enumerate() {
             let parent_session = parent.session.clone();
@@ -143,6 +216,20 @@ impl Observer {
         // Acquisition completion order is intentionally unordered. Re-establish the renderer's
         // stitch order here so assembly can reverse it exactly as the serialized implementation did.
         acquired.sort_by_key(|child| child.stitch_index);
+        let outcome = if acquired.len() == stitches.len()
+            && acquired.iter().all(|child| child.result.is_ok())
+        {
+            "success"
+        } else {
+            "partial"
+        };
+        trace_stage(
+            &context.trace,
+            parent.runtime_frame_id.as_ref(),
+            SnapshotStage::SiblingAcquisition,
+            started,
+            outcome,
+        );
         acquired
     }
 }
@@ -153,15 +240,37 @@ async fn acquire_frame_data(
     root_session: &ProtocolSession,
     frame_documents: &HashMap<Option<FrameId>, DocumentId>,
     budget: &SnapshotBudget,
+    trace: Option<&CaptureTrace>,
 ) -> Result<AcquiredFrame, CoreError> {
     let acquired_frame_id = frame_id.clone();
-    let ax_tree = budget.send::<AxTreeResult>(
+    let ax_tree = async {
+        let started = Instant::now();
+        let result = budget
+            .send::<AxTreeResult>(
+                &target.session,
+                "Accessibility.getFullAXTree",
+                target.ax_params.clone(),
+            )
+            .await;
+        if let Some(trace) = trace {
+            trace_stage(
+                trace,
+                acquired_frame_id.as_ref(),
+                SnapshotStage::Ax,
+                started,
+                if result.is_ok() { "success" } else { "failure" },
+            );
+        }
+        result
+    };
+    let cursor_hits = find_cursor_hits_with_trace(
         &target.session,
-        "Accessibility.getFullAXTree",
-        target.ax_params.clone(),
+        target.runtime_frame_id.as_ref(),
+        budget,
+        trace,
     );
-    let cursor_hits = find_cursor_hits(&target.session, target.runtime_frame_id.as_ref(), budget);
-    let document_id = stable_document_id_for_frame(root_session, frame_id, frame_documents, budget);
+    let document_id =
+        stable_document_id_for_frame(root_session, frame_id, frame_documents, budget, trace);
     // These stages are independent after target resolution. AX failure remains fatal, while
     // cursor and document identity retain their existing best-effort fallback semantics.
     let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
@@ -201,18 +310,47 @@ async fn stable_document_id_for_frame(
     frame_id: Option<FrameId>,
     frame_documents: &HashMap<Option<FrameId>, DocumentId>,
     budget: &SnapshotBudget,
+    trace: Option<&CaptureTrace>,
 ) -> Option<DocumentId> {
+    let started = Instant::now();
     let before = frame_documents.get(&frame_id).cloned();
     if frame_id.is_none() || before.is_none() {
+        if let Some(trace) = trace {
+            trace_stage(
+                trace,
+                frame_id.as_ref(),
+                SnapshotStage::DocumentValidation,
+                started,
+                "cached",
+            );
+        }
         return before;
     }
-    let latest = budget
+    let latest_result = budget
         .send::<GetFrameTreeResult>(root_session, "Page.getFrameTree", json!({}))
-        .await
+        .await;
+    let latest = latest_result
+        .as_ref()
         .ok()
         .map(|result| collect_frame_documents(&result.frame_tree));
     let after = latest.and_then(|latest| latest.get(&frame_id).cloned());
-    if after == before { before } else { None }
+    let stable = after == before;
+    if let Some(trace) = trace {
+        trace_stage(
+            trace,
+            frame_id.as_ref(),
+            SnapshotStage::DocumentValidation,
+            started,
+            if latest_result.is_err() {
+                "failure"
+            } else if stable {
+                "success"
+            } else {
+                "changed"
+            },
+        );
+    }
+    if stable { before } else { None }
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,17 +439,42 @@ impl Drop for CursorCleanup {
     }
 }
 
-pub(super) async fn find_cursor_hits(
+#[cfg(test)]
+async fn find_cursor_hits(
     session: &ProtocolSession,
     frame_id: Option<&FrameId>,
     budget: &SnapshotBudget,
+) -> Result<HashMap<i64, Vec<String>>, CoreError> {
+    find_cursor_hits_with_trace(session, frame_id, budget, None).await
+}
+
+async fn find_cursor_hits_with_trace(
+    session: &ProtocolSession,
+    frame_id: Option<&FrameId>,
+    budget: &SnapshotBudget,
+    trace: Option<&CaptureTrace>,
 ) -> Result<HashMap<i64, Vec<String>>, CoreError> {
     let namespace = NEXT_CURSOR_NAMESPACE.fetch_add(1, Ordering::Relaxed);
     // Overlapping captures share a document, so both marker cleanup and object release need a
     // capture-owned namespace. One capture must never remove another capture's temporary handles.
     let marker_attribute = format!("data-__bcid-{namespace}");
     let object_group = format!("browseros-snapshot-cursor-{namespace}");
-    let context_id = execution_context(session, frame_id, budget).await?;
+    let setup_started = Instant::now();
+    let context_id = match execution_context(session, frame_id, budget).await {
+        Ok(context_id) => context_id,
+        Err(error) => {
+            if let Some(trace) = trace {
+                trace_stage(
+                    trace,
+                    frame_id,
+                    SnapshotStage::CursorScan,
+                    setup_started,
+                    "failure",
+                );
+            }
+            return Err(error);
+        }
+    };
     let mut cleanup = CursorCleanup {
         session: session.clone(),
         budget: budget.clone(),
@@ -327,6 +490,8 @@ pub(super) async fn find_cursor_hits(
         &marker_attribute,
         &object_group,
         context_id,
+        frame_id,
+        trace,
     )
     .await;
     cleanup.finish().await;
@@ -360,65 +525,111 @@ async fn acquire_cursor_hits(
     marker_attribute: &str,
     object_group: &str,
     context_id: Option<i64>,
+    frame_id: Option<&FrameId>,
+    trace: Option<&CaptureTrace>,
 ) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    let marker_literal = serde_json::to_string(marker_attribute)
-        .map_err(|error| CoreError::Message(error.to_string()))?;
-    let scan_expression = CURSOR_SCAN_JS.replace("__BROWSEROS_CURSOR_MARKER__", &marker_literal);
-    let scan: RuntimeEvalResult = budget
-        .send(
-            session,
-            "Runtime.evaluate",
-            evaluate_params(scan_expression, true, None, context_id),
-        )
-        .await?;
-    let candidates = scan
-        .result
-        .value
-        .and_then(|value| serde_json::from_value::<Vec<CursorHit>>(value).ok())
-        .unwrap_or_default();
+    let scan_started = Instant::now();
+    let scan_result = async {
+        let marker_literal = serde_json::to_string(marker_attribute)
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+        let scan_expression =
+            CURSOR_SCAN_JS.replace("__BROWSEROS_CURSOR_MARKER__", &marker_literal);
+        let scan: RuntimeEvalResult = budget
+            .send(
+                session,
+                "Runtime.evaluate",
+                evaluate_params(scan_expression, true, None, context_id),
+            )
+            .await?;
+        let candidates = scan
+            .result
+            .value
+            .and_then(|value| serde_json::from_value::<Vec<CursorHit>>(value).ok())
+            .unwrap_or_default();
+        if candidates.is_empty() {
+            return Ok((candidates, Vec::new()));
+        }
+
+        // Marker values are original scan indexes. Preserve them as sparse array positions so a
+        // node that disappears before collection leaves a hole instead of shifting later reasons.
+        let collection_expression = format!(
+            "(function(a){{var out=[];document.querySelectorAll('['+a+']').forEach(function(e){{out[Number(e.getAttribute(a))]=e;}});return out;}})({marker_literal})"
+        );
+        let collection: RuntimeEvalResult = budget
+            .send(
+                session,
+                "Runtime.evaluate",
+                evaluate_params(collection_expression, false, Some(object_group), context_id),
+            )
+            .await?;
+        let Some(collection_id) = collection.result.object_id else {
+            return Ok((candidates, Vec::new()));
+        };
+        let properties: GetPropertiesResult = budget
+            .send(
+                session,
+                "Runtime.getProperties",
+                json!({
+                    "objectId": collection_id,
+                    "ownProperties": true
+                }),
+            )
+            .await?;
+        let mut handles = properties
+            .result
+            .into_iter()
+            .filter_map(|property| {
+                let index = property.name.parse::<usize>().ok()?;
+                let object_id = property.value?.object_id?;
+                (index < candidates.len()).then_some((index, object_id))
+            })
+            .collect::<Vec<_>>();
+        handles.sort_by_key(|(index, _object_id)| *index);
+        Ok::<_, CoreError>((candidates, handles))
+    }
+    .await;
+    let (candidates, handles) = match scan_result {
+        Ok(result) => {
+            if let Some(trace) = trace {
+                trace_stage(
+                    trace,
+                    frame_id,
+                    SnapshotStage::CursorScan,
+                    scan_started,
+                    "success",
+                );
+            }
+            result
+        }
+        Err(error) => {
+            if let Some(trace) = trace {
+                trace_stage(
+                    trace,
+                    frame_id,
+                    SnapshotStage::CursorScan,
+                    scan_started,
+                    "failure",
+                );
+            }
+            return Err(error);
+        }
+    };
     if candidates.is_empty() {
+        if let Some(trace) = trace {
+            trace_stage(
+                trace,
+                frame_id,
+                SnapshotStage::CursorDescribe,
+                Instant::now(),
+                "skipped",
+            );
+        }
         return Ok(HashMap::new());
     }
 
-    // Marker values are original scan indexes. Preserve them as sparse array positions so a node
-    // that disappears between the scan and this collection leaves a hole instead of shifting the
-    // reasons associated with every later candidate.
-    let collection_expression = format!(
-        "(function(a){{var out=[];document.querySelectorAll('['+a+']').forEach(function(e){{out[Number(e.getAttribute(a))]=e;}});return out;}})({marker_literal})"
-    );
-    let collection: RuntimeEvalResult = budget
-        .send(
-            session,
-            "Runtime.evaluate",
-            evaluate_params(collection_expression, false, Some(object_group), context_id),
-        )
-        .await?;
-    let Some(collection_id) = collection.result.object_id else {
-        return Ok(HashMap::new());
-    };
-    let properties: GetPropertiesResult = budget
-        .send(
-            session,
-            "Runtime.getProperties",
-            json!({
-                "objectId": collection_id,
-                "ownProperties": true
-            }),
-        )
-        .await?;
-    let mut handles = properties
-        .result
-        .into_iter()
-        .filter_map(|property| {
-            let index = property.name.parse::<usize>().ok()?;
-            let object_id = property.value?.object_id?;
-            (index < candidates.len()).then_some((index, object_id))
-        })
-        .collect::<Vec<_>>();
-    handles.sort_by_key(|(index, _object_id)| *index);
-
     // Chrome may answer these in any order. Store each result in its scan-index slot and pair
     // reasons only after the whole batch completes; renderer input is therefore deterministic.
+    let describe_started = Instant::now();
     let mut pending = FuturesUnordered::new();
     for (index, object_id) in handles {
         let session = session.clone();
@@ -449,6 +660,15 @@ async fn acquire_cursor_hits(
         if let Some(backend_node_id) = backend_node_id {
             hits.insert(backend_node_id, candidate.reasons);
         }
+    }
+    if let Some(trace) = trace {
+        trace_stage(
+            trace,
+            frame_id,
+            SnapshotStage::CursorDescribe,
+            describe_started,
+            "success",
+        );
     }
     Ok(hits)
 }
@@ -502,7 +722,7 @@ async fn cleanup_cursor(
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotBudget, find_cursor_hits};
+    use super::{SnapshotBudget, SnapshotStage, find_cursor_hits};
     use crate::{
         CoreError, FrameId, ProtocolSession, SessionId, connection::CdpConnection,
         frames::FrameTarget,
@@ -530,6 +750,35 @@ mod tests {
         fail_ax_tree: bool,
         fail_cursor_scan: bool,
         child_loader_id: &'static str,
+    }
+
+    #[test]
+    fn snapshot_trace_stages_are_distinct_and_complete() {
+        let stages = SnapshotStage::ALL
+            .iter()
+            .map(|stage| stage.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            stages,
+            vec![
+                "capture",
+                "ax",
+                "cursor_scan",
+                "cursor_describe",
+                "document_validation",
+                "sibling_acquisition",
+                "assembly",
+                "retry",
+            ]
+        );
+        assert_eq!(
+            stages
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            stages.len()
+        );
     }
 
     impl Default for CursorConnection {
@@ -726,6 +975,7 @@ mod tests {
             &session,
             &frame_documents,
             &SnapshotBudget::new(),
+            None,
         )
         .await?;
 
@@ -1299,6 +1549,7 @@ mod tests {
                 &session,
                 &frame_documents,
                 &SnapshotBudget::new(),
+                None,
             )
             .await
         });
@@ -1350,6 +1601,7 @@ mod tests {
             &ax_session,
             &frame_documents,
             &SnapshotBudget::new(),
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -1371,6 +1623,7 @@ mod tests {
             &optional_session,
             &frame_documents,
             &SnapshotBudget::new(),
+            None,
         )
         .await?;
         assert!(acquired.cursor_hits.is_empty());
