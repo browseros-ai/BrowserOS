@@ -1446,6 +1446,7 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             raw_args: json!({}),
             duration_ms: 1,
             dispatch_id: DispatchId::new(),
+            created_at: None,
             parent_dispatch_id: None,
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,

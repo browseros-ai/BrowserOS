@@ -48,6 +48,10 @@ pub struct RecordToolDispatchInput {
     pub title: Option<String>,
     pub raw_args: serde_json::Value,
     pub duration_ms: i64,
+    /// When the dispatch started, so a long-running script tool sorts before the
+    /// child primitives it recorded while executing. `None` falls back to the
+    /// write time (fine for fast granular tools and child rows).
+    pub created_at: Option<i64>,
     pub dispatch_id: DispatchId,
     /// Parent script dispatch when this row is a primitive executed inside a
     /// `run`/`execute` script; `None` for ordinary top-level tool dispatches.
@@ -248,7 +252,7 @@ impl AuditLog {
         let session_id = input.session_id.clone();
         let result = ToolDispatches::insert(tool_dispatches::ActiveModel {
             id: NotSet,
-            created_at: Set(now_epoch_ms()),
+            created_at: Set(input.created_at.unwrap_or_else(now_epoch_ms)),
             agent_id: Set(input.agent_id),
             slug: Set(input.slug),
             agent_label: Set(input.agent_label),
@@ -819,6 +823,7 @@ mod tests {
             raw_args: json!({ "url": url }),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
+            created_at: None,
             parent_dispatch_id: None,
             tool_input_token_estimate: 11,
             tool_output_token_estimate: 22,

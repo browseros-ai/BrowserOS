@@ -554,6 +554,7 @@ mod tests {
             raw_args: json!({}),
             duration_ms: 10,
             dispatch_id: DispatchId::new(),
+            created_at: None,
             parent_dispatch_id: None,
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,

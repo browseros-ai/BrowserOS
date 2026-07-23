@@ -54,7 +54,13 @@ impl InnerCallHook for ScriptInnerCallHook {
     }
 
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
-        let tool_name = record.method.to_owned();
+        // Strip the internal `tool:` routing prefix so the audit shows the plain
+        // capability (read, wait, screenshot) rather than a routing detail.
+        let tool_name = record
+            .method
+            .strip_prefix("tool:")
+            .unwrap_or(record.method)
+            .to_owned();
         let page = record.page;
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
@@ -103,6 +109,9 @@ impl InnerCallHook for ScriptInnerCallHook {
                 title: live.as_ref().map(|page| page.title.clone()),
                 raw_args: json!({ "page": page }),
                 duration_ms,
+                // None: child rows keep their completion time so they sort after
+                // the parent script dispatch, which is stamped with its start.
+                created_at: None,
                 dispatch_id: child_dispatch_id.clone(),
                 parent_dispatch_id: Some(self.call.dispatch_id.clone()),
                 // Inner-primitive token traffic is not measured; version 0 is
