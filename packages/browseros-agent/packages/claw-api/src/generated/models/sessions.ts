@@ -315,11 +315,43 @@ export interface SessionSummary {
      */
     latestScreenshotId?: number;
     /**
+     * Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions.
+     * @type {SessionTokenUsage}
+     * @memberof SessionSummary
+     */
+    tokenUsage?: SessionTokenUsage;
+    /**
      * Present only on summaries returned by an explicit `status=live` list query.
      * @type {LiveSessionState}
      * @memberof SessionSummary
      */
     live?: LiveSessionState;
+}
+
+/**
+ * Estimated token consumption of a session's MCP tool traffic, summed across every dispatch. Totals are JavaScript-safe integers.
+ * @export
+ * @interface SessionTokenUsage
+ */
+export interface SessionTokenUsage {
+    /**
+     * Estimated tokens for tool inputs (name + compact arguments), summed across dispatches.
+     * @type {number}
+     * @memberof SessionTokenUsage
+     */
+    inputTokenEstimate: number;
+    /**
+     * Estimated tokens for tool outputs (result content), summed across dispatches.
+     * @type {number}
+     * @memberof SessionTokenUsage
+     */
+    outputTokenEstimate: number;
+    /**
+     * inputTokenEstimate + outputTokenEstimate — the session's total estimated token consumption.
+     * @type {number}
+     * @memberof SessionTokenUsage
+     */
+    totalTokenEstimate: number;
 }
 
 /**

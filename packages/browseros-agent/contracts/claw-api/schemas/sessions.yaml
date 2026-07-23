@@ -54,6 +54,32 @@ LiveSessionState:
       type: array
       items:
         $ref: '#/SessionBrowserTab'
+SessionTokenUsage:
+  type: object
+  additionalProperties: false
+  required: [inputTokenEstimate, outputTokenEstimate, totalTokenEstimate]
+  description: >-
+    Estimated token consumption of a session's MCP tool traffic, summed across
+    every dispatch. Totals are JavaScript-safe integers.
+  properties:
+    inputTokenEstimate:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: Estimated tokens for tool inputs (name + compact arguments), summed across dispatches.
+    outputTokenEstimate:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: Estimated tokens for tool outputs (result content), summed across dispatches.
+    totalTokenEstimate:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: inputTokenEstimate + outputTokenEstimate — the session's total estimated token consumption.
 SessionSummary:
   type: object
   additionalProperties: false
@@ -113,6 +139,14 @@ SessionSummary:
       type: integer
       format: int64
       minimum: 1
+    tokenUsage:
+      allOf:
+        - $ref: '#/SessionTokenUsage'
+      description: >-
+        Estimated token consumption of this session's tool traffic, summed
+        across all dispatches and refreshed live as they land. Present only when
+        the session has dispatches and every one carries token-estimator v1;
+        absent for legacy or otherwise unmeasured sessions.
     live:
       allOf:
         - $ref: '#/LiveSessionState'

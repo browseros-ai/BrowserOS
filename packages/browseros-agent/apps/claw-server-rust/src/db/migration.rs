@@ -14,7 +14,212 @@ impl MigratorTrait for Migrator {
             Box::new(m0005_reclassify_task_status::Migration),
             Box::new(m0006_add_tool_token_estimates::Migration),
             Box::new(m0007_add_session_efficiency_stats::Migration),
+            Box::new(m0008_add_task_token_estimates::Migration),
         ]
+    }
+}
+
+mod m0008_add_task_token_estimates {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0008_add_task_token_estimates"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Zero/false defaults preserve existing rows; the backfill below refines them.
+            for column in ["tool_input_token_estimate", "tool_output_token_estimate"] {
+                if !manager.has_column("tasks", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tasks"))
+                                .add_column(
+                                    ColumnDef::new(Alias::new(column))
+                                        .big_integer()
+                                        .not_null()
+                                        .default(0),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            if !manager.has_column("tasks", "tokens_measured").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tasks"))
+                            .add_column(
+                                ColumnDef::new(Alias::new("tokens_measured"))
+                                    .boolean()
+                                    .not_null()
+                                    .default(false),
+                            )
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            // Backfill the materialized per-session totals from the source dispatches. `tokens_measured`
+            // mirrors the efficiency projection's eligibility: a session counts only when it has
+            // dispatches and every one carries token-estimator v1 (0 is legacy/unmeasured). The version
+            // literal is the value frozen at this migration, not a runtime constant.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE tasks SET
+                        tool_input_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_input_token_estimate, 0))
+                            FROM tool_dispatches d
+                            WHERE d.session_id = tasks.session_id
+                        ), 0),
+                        tool_output_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_output_token_estimate, 0))
+                            FROM tool_dispatches d
+                            WHERE d.session_id = tasks.session_id
+                        ), 0),
+                        tokens_measured = CASE
+                            WHEN EXISTS (
+                                SELECT 1 FROM tool_dispatches d
+                                WHERE d.session_id = tasks.session_id
+                            )
+                            AND NOT EXISTS (
+                                SELECT 1 FROM tool_dispatches d
+                                WHERE d.session_id = tasks.session_id
+                                  AND d.token_estimator_version != 1
+                            )
+                            THEN 1 ELSE 0 END
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for column in [
+                "tokens_measured",
+                "tool_output_token_estimate",
+                "tool_input_token_estimate",
+            ] {
+                if manager.has_column("tasks", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tasks"))
+                                .drop_column(Alias::new(column))
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        struct PreviousMigrator;
+
+        #[async_trait::async_trait]
+        impl MigratorTrait for PreviousMigrator {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                vec![
+                    Box::new(super::super::m0001_baseline::Migration),
+                    Box::new(super::super::m0002_add_recordings_and_claims::Migration),
+                    Box::new(super::super::m0003_document_recordings_and_tab_ownership::Migration),
+                    Box::new(super::super::m0004_atomic_recording_payloads::Migration),
+                    Box::new(super::super::m0005_reclassify_task_status::Migration),
+                    Box::new(super::super::m0006_add_tool_token_estimates::Migration),
+                    Box::new(super::super::m0007_add_session_efficiency_stats::Migration),
+                ]
+            }
+        }
+
+        async fn insert_dispatch(
+            conn: &DatabaseConnection,
+            session_id: &str,
+            input_tokens: i64,
+            output_tokens: i64,
+            version: i64,
+        ) -> Result<(), DbErr> {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, has_screenshot, tool_input_token_estimate, tool_output_token_estimate, token_estimator_version) VALUES (0, 'agent', 'agent', 'Agent', '{session_id}', 'navigate', 0, {input_tokens}, {output_tokens}, {version})"
+            ))
+            .await?;
+            Ok(())
+        }
+
+        async fn insert_task(
+            conn: &DatabaseConnection,
+            session_id: &str,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, 0, {dispatch_count}, '[]', 'done', 0, 0, 0, 0)"
+            ))
+            .await?;
+            Ok(())
+        }
+
+        async fn token_row(
+            conn: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64, bool), DbErr> {
+            let row = conn
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT tool_input_token_estimate, tool_output_token_estimate, tokens_measured FROM tasks WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_string()))?;
+            Ok((
+                row.try_get("", "tool_input_token_estimate")?,
+                row.try_get("", "tool_output_token_estimate")?,
+                row.try_get("", "tokens_measured")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn backfill_sums_tokens_and_marks_only_all_v1_sessions() -> anyhow::Result<()> {
+            let conn = SeaDatabase::connect("sqlite::memory:").await?;
+            PreviousMigrator::up(&conn, None).await?;
+
+            insert_task(&conn, "measured", 2).await?;
+            insert_dispatch(&conn, "measured", 10, 100, 1).await?;
+            insert_dispatch(&conn, "measured", 20, 200, 1).await?;
+
+            insert_task(&conn, "legacy", 1).await?;
+            insert_dispatch(&conn, "legacy", 0, 0, 0).await?;
+
+            // One legacy dispatch taints the session, but the sums still count every dispatch.
+            insert_task(&conn, "mixed", 2).await?;
+            insert_dispatch(&conn, "mixed", 5, 5, 1).await?;
+            insert_dispatch(&conn, "mixed", 5, 5, 0).await?;
+
+            insert_task(&conn, "empty", 0).await?;
+
+            super::super::Migrator::up(&conn, None).await?;
+
+            assert_eq!(token_row(&conn, "measured").await?, (30, 300, true));
+            assert_eq!(token_row(&conn, "legacy").await?, (0, 0, false));
+            assert_eq!(token_row(&conn, "mixed").await?, (10, 10, false));
+            assert_eq!(token_row(&conn, "empty").await?, (0, 0, false));
+            Ok(())
+        }
     }
 }
 

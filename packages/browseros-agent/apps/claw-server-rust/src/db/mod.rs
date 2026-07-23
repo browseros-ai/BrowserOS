@@ -245,6 +245,27 @@ mod tests {
             Some(1)
         );
 
+        let task_columns = db
+            .connection()
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA table_info(tasks)".to_string(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "name"))
+            .collect::<Result<HashSet<_>, sea_orm::DbErr>>()?;
+        for column in [
+            "tool_input_token_estimate",
+            "tool_output_token_estimate",
+            "tokens_measured",
+        ] {
+            assert!(
+                task_columns.contains(column),
+                "missing tasks column {column}"
+            );
+        }
+
         let migrations = db
             .connection()
             .query_all(Statement::from_string(
@@ -252,7 +273,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 7);
+        assert_eq!(migrations.len(), 8);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -322,7 +343,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 7);
+        assert_eq!(migrations.len(), 8);
         assert_eq!(
             migrations
                 .iter()
@@ -345,7 +366,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 7);
+        assert_eq!(migration_count, 8);
         Ok(())
     }
 
@@ -481,7 +502,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 7);
+        assert_eq!(migrations.len(), 8);
         Ok(())
     }
 

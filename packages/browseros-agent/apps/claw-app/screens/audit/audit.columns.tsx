@@ -6,6 +6,8 @@ import {
   abbreviateSequence,
   formatDuration,
   formatRelative,
+  formatTokensCompact,
+  formatTokensFull,
 } from './audit.helpers'
 
 /**
@@ -71,6 +73,15 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     enableSorting: true,
   },
   {
+    id: 'tokens',
+    header: 'Tokens',
+    // Unmeasured sessions sort as 0 so they sink to the bottom of a token sort.
+    accessorFn: (t) => t.tokenUsage?.totalTokenEstimate ?? 0,
+    cell: ({ row }) => <TokensCell task={row.original} />,
+    sortingFn: 'basic',
+    enableSorting: true,
+  },
+  {
     id: 'duration',
     header: 'Dur.',
     accessorFn: (t) => t.durationMs,
@@ -114,10 +125,38 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
  */
 export const NUMERIC_COLUMN_IDS = new Set([
   'tools',
+  'tokens',
   'duration',
   'when',
   'chevron',
 ])
+
+/**
+ * Session token consumption. Shows a compact total ("12.3k") with the exact
+ * count on hover; renders an em dash for legacy/unmeasured sessions whose wire
+ * payload omits `tokenUsage`.
+ */
+function TokensCell({ task }: { task: TaskSummary }) {
+  const usage = task.tokenUsage
+  if (!usage) {
+    return (
+      <span
+        className="font-mono text-[11.5px] text-ink-4 tabular-nums"
+        title="Token usage not measured for this session"
+      >
+        —
+      </span>
+    )
+  }
+  return (
+    <span
+      className="font-mono text-[11.5px] text-ink-2 tabular-nums"
+      title={`${formatTokensFull(usage.totalTokenEstimate)} tokens`}
+    >
+      {formatTokensCompact(usage.totalTokenEstimate)}
+    </span>
+  )
+}
 
 function LiveInlineChip() {
   return (

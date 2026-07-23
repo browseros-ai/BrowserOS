@@ -56,6 +56,11 @@ const sampleTask: TaskDetail = {
     status: 'done',
     errorCount: 0,
     latestScreenshotId: 20,
+    tokenUsage: {
+      inputTokenEstimate: 4200,
+      outputTokenEstimate: 8100,
+      totalTokenEstimate: 12300,
+    },
   },
   dispatches: [
     {
@@ -117,6 +122,26 @@ describe('TaskDetailPage', () => {
     expect(html).toContain('Screenshots')
     expect(html).toContain('Open final URL')
     expect(html).not.toContain('/audit/screenshot/2')
+  })
+
+  it('renders the total token consumption on the summary card', () => {
+    dataOverride = { ...baseData, detail: sampleTask }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).toContain('12,300')
+  })
+
+  it('renders an em dash when the session has no measured token usage', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, tokenUsage: undefined },
+      },
+    }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).not.toContain('12,300')
   })
 
   it('renders no-screenshots placeholder when there are none', () => {

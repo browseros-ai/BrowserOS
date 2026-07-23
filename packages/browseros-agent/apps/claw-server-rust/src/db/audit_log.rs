@@ -7,6 +7,7 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
+        session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
     },
     error::AppResult,
     ids::DispatchId,
@@ -141,6 +142,12 @@ pub struct TaskSummary {
     pub last_screenshot_dispatch_id: Option<i64>,
     pub cursor_id: i64,
     pub has_screenshots: bool,
+    /// Session totals of the per-dispatch semantic token estimates, trustworthy only when
+    /// `tokens_measured`. `tokens_measured` is true iff the session has dispatches and every one
+    /// carries token-estimator v1; legacy/unmeasured sessions leave it false and the sums at 0.
+    pub tool_input_token_estimate: i64,
+    pub tool_output_token_estimate: i64,
+    pub tokens_measured: bool,
 }
 
 impl From<tasks::Model> for TaskSummary {
@@ -164,6 +171,9 @@ impl From<tasks::Model> for TaskSummary {
             last_screenshot_dispatch_id: model.last_screenshot_dispatch_id,
             cursor_id: model.cursor_id,
             has_screenshots: model.has_screenshots,
+            tool_input_token_estimate: model.tool_input_token_estimate,
+            tool_output_token_estimate: model.tool_output_token_estimate,
+            tokens_measured: model.tokens_measured,
         }
     }
 }
@@ -600,6 +610,19 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         .map(|row| row.id)
         .collect();
     let last_screenshot_dispatch_id = screenshot_ids.last().copied();
+    // Materialize the live-updating token totals so the audit surfaces read one field instead of
+    // re-summing dispatches. `tokens_measured` matches the efficiency projection's eligibility, so a
+    // legacy/unmeasured session reports absent rather than a misleading zero downstream.
+    let tokens_measured = !dispatches.is_empty()
+        && dispatches
+            .iter()
+            .all(|row| row.token_estimator_version == ELIGIBLE_TOKEN_ESTIMATOR_VERSION);
+    let tool_input_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_input_token_estimate.max(0))
+    });
+    let tool_output_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_output_token_estimate.max(0))
+    });
     Tasks::insert(tasks::ActiveModel {
         session_id: Set(session_id.to_owned()),
         agent_id: Set(agent_id),
@@ -617,6 +640,9 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         last_screenshot_dispatch_id: Set(last_screenshot_dispatch_id),
         cursor_id: Set(cursor_id),
         has_screenshots: Set(!screenshot_ids.is_empty()),
+        tool_input_token_estimate: Set(tool_input_token_estimate),
+        tool_output_token_estimate: Set(tool_output_token_estimate),
+        tokens_measured: Set(tokens_measured),
         updated_at: Set(now_epoch_ms()),
     })
     .on_conflict(
@@ -637,6 +663,9 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
                 tasks::Column::LastScreenshotDispatchId,
                 tasks::Column::CursorId,
                 tasks::Column::HasScreenshots,
+                tasks::Column::ToolInputTokenEstimate,
+                tasks::Column::ToolOutputTokenEstimate,
+                tasks::Column::TokensMeasured,
                 tasks::Column::UpdatedAt,
             ])
             .to_owned(),
@@ -867,6 +896,45 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("task missing"))?;
         assert_eq!(task.dispatch_count, 2);
+        assert!(task.tokens_measured);
+        assert_eq!(task.tool_input_token_estimate, 68);
+        assert_eq!(task.tool_output_token_estimate, 112);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_summary_reports_unmeasured_for_any_legacy_dispatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // One v1 dispatch alone measures cleanly.
+        audit
+            .record_tool_dispatch(dispatch("solo-v1", "https://one.example.com", false))
+            .await?;
+        let measured = audit
+            .get_task_summary("solo-v1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert!(measured.tokens_measured);
+        assert_eq!(measured.tool_input_token_estimate, 11);
+        assert_eq!(measured.tool_output_token_estimate, 22);
+
+        // A single unmeasured (v0) dispatch taints the whole session, and a negative per-dispatch
+        // estimate never drags the materialized total below zero.
+        audit
+            .record_tool_dispatch(dispatch("mixed", "https://one.example.com", false))
+            .await?;
+        let mut legacy = dispatch("mixed", "https://two.example.com", false);
+        legacy.token_estimator_version = 0;
+        legacy.tool_input_token_estimate = -5;
+        legacy.tool_output_token_estimate = 7;
+        audit.record_tool_dispatch(legacy).await?;
+        let mixed = audit
+            .get_task_summary("mixed")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("mixed task missing"))?;
+        assert!(!mixed.tokens_measured);
+        assert_eq!(mixed.tool_input_token_estimate, 11);
+        assert_eq!(mixed.tool_output_token_estimate, 29);
         Ok(())
     }
 
