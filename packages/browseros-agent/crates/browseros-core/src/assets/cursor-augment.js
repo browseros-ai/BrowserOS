@@ -1,3 +1,5 @@
+/* deepscan-disable UNUSED_EXPR */
+// CDP Runtime.callFunctionOn consumes the final expression as its functionDeclaration; it must remain uninvoked in this source asset.
 // biome-ignore-all lint: Injected ES5 asset mirrors the TypeScript browser-core runtime string.
 // biome-ignore format: Keep injected script byte-oriented and close to the TypeScript source.
 (function(markerAttribute,markerToken){
