@@ -7,9 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "\
-Manage browser windows: list windows, create visible or hidden windows, \
-close or activate a window, and show or hide windows.";
+const DESCRIPTION: &str = "Manage browser windows: list, create, close, or activate windows.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -19,23 +17,16 @@ enum WindowsAction {
     Create,
     Close,
     Activate,
-    SetVisibility,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct WindowsArgs {
     #[serde(default)]
     action: WindowsAction,
-    /// Window id for close, activate, and set_visibility.
+    /// Window id for close and activate.
     #[serde(rename = "windowId")]
     window_id: Option<i64>,
-    /// Create a hidden window for action="create".
-    #[serde(default)]
-    hidden: bool,
-    /// Target visibility for action="set_visibility".
-    visible: Option<bool>,
-    /// Focus the window after making it visible.
-    activate: Option<bool>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -63,10 +54,9 @@ fn handler<'a>(
                 )
             }
             WindowsAction::Create => {
-                let window = ctx.session.windows.create(args.hidden).await?;
-                let hidden_marker = if !window.is_visible { " (hidden)" } else { "" };
+                let window = ctx.session.windows.create().await?;
                 text_result(
-                    format!("created window {}{hidden_marker}", window.window_id),
+                    format!("created window {}", window.window_id),
                     Some(json!({ "action": "create", "window": window })),
                 )
             }
@@ -92,41 +82,6 @@ fn handler<'a>(
                     Some(json!({ "action": "activate", "windowId": window_id })),
                 )
             }
-            WindowsAction::SetVisibility => {
-                let Some(window_id) = args.window_id else {
-                    return Ok(Some(error_result(
-                        "windows set_visibility: windowId is required.",
-                    )));
-                };
-                let Some(visible) = args.visible else {
-                    return Ok(Some(error_result(
-                        "windows set_visibility: visible is required.",
-                    )));
-                };
-                let result = ctx
-                    .session
-                    .windows
-                    .set_visibility(WindowId(window_id), visible, args.activate)
-                    .await?;
-                let state = if result.window.is_visible {
-                    "visible"
-                } else {
-                    "hidden"
-                };
-                text_result(
-                    format!(
-                        "set window {} {state}; new window id {}",
-                        result.previous_window_id.0, result.new_window_id.0
-                    ),
-                    Some(json!({
-                        "action": "set_visibility",
-                        "previousWindowId": result.previous_window_id.0,
-                        "newWindowId": result.new_window_id.0,
-                        "replaced": result.replaced,
-                        "window": result.window
-                    })),
-                )
-            }
         };
         Ok(Some(result))
     })
@@ -140,7 +95,7 @@ fn format_window_list(windows: &[browseros_core::windows::WindowInfo]) -> String
     for window in windows {
         let mut markers = Vec::new();
         if !window.is_visible {
-            markers.push("HIDDEN");
+            markers.push("NOT VISIBLE");
         }
         if window.is_active {
             markers.push("ACTIVE");

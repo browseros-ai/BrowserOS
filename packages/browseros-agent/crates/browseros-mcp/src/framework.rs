@@ -490,7 +490,6 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
         "isLoading": page.is_loading,
         "loadProgress": page.load_progress,
         "isPinned": page.is_pinned,
-        "isHidden": page.is_hidden,
     });
     if let Value::Object(object) = &mut value {
         if let Some(window_id) = &page.window_id {

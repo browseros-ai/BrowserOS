@@ -509,6 +509,9 @@ impl BrowserBridge {
             "pages.newPage" => {
                 let url = string_arg(&args, 0, "url")?;
                 let opts = optional_object_arg(&args, 1)?;
+                if opts.is_some_and(|options| options.contains_key("hidden")) {
+                    return Err("pages.newPage: hidden is no longer supported".to_string());
+                }
                 let window_id = optional_i64_field(opts, "windowId")?
                     .map(WindowId)
                     .or_else(|| self.defaults.default_window_id.clone());
@@ -520,7 +523,6 @@ impl BrowserBridge {
                         &url,
                         NewPageOptions {
                             background: optional_bool_field(opts, "background")?,
-                            hidden: optional_bool_field(opts, "hidden")?,
                             window_id,
                             tab_group_id,
                         },
@@ -1001,7 +1003,6 @@ mod tests {
     struct RunFakeState {
         create_tab_params: Vec<Value>,
         add_group_params: Vec<Value>,
-        get_windows_calls: usize,
     }
 
     impl RunFakeConnection {
@@ -1026,13 +1027,6 @@ mod tests {
                 .map(|state| state.add_group_params.clone())
                 .unwrap_or_default()
         }
-
-        fn get_windows_calls(&self) -> usize {
-            self.state
-                .lock()
-                .map(|state| state.get_windows_calls)
-                .unwrap_or_default()
-        }
     }
 
     impl CdpConnection for RunFakeConnection {
@@ -1048,14 +1042,6 @@ mod tests {
                     "Browser.getTabs" => Ok(json!({
                         "tabs": [fake_tab_json(7, "target-7", "https://example.com", "Example", 1, 0)]
                     })),
-                    "Browser.getWindows" => {
-                        if let Ok(mut state) = state.lock() {
-                            state.get_windows_calls += 1;
-                        }
-                        Ok(json!({
-                            "windows": [fake_window_json(88, false)]
-                        }))
-                    }
                     "Browser.hang" => {
                         futures_util::future::pending::<Result<Value, CdpError>>().await
                     }
@@ -1383,33 +1369,17 @@ try {
 
     #[tokio::test]
     async fn run_proxies_browser_pages_list() -> anyhow::Result<()> {
-        let result = run_tool(
-            r#"
-const pages = await browser.pages.list();
-return pages.map((page) => ({
-  pageId: page.pageId,
-  tabId: page.tabId,
-  url: page.url,
-  title: page.title,
-}));
-"#,
-            None,
-        )
-        .await?;
+        let result = run_tool("return await browser.pages.list()", None).await?;
         assert!(!result.is_error);
-        assert_eq!(
-            result.structured_content,
-            Some(json!({
-                "ok": true,
-                "value": [{
-                    "pageId": 1,
-                    "tabId": 7,
-                    "url": "https://example.com",
-                    "title": "Example"
-                }],
-                "logs": []
-            }))
-        );
+        let page = result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.pointer("/value/0"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow::anyhow!("missing page value"))?;
+        assert_eq!(page.get("pageId"), Some(&json!(1)));
+        assert_eq!(page.get("tabId"), Some(&json!(7)));
+        assert!(!page.contains_key("isHidden"));
         Ok(())
     }
 
@@ -1507,7 +1477,6 @@ return { pageId: page.pageId, tabId: page.tabId, url: page.url, title: page.titl
         let result = run_tool_with_ctx(
             r#"
 return await browser.pages.newPage('https://new.example', {
-  hidden: true,
   background: true,
   windowId: 88,
   tabGroupId: 'group-opts',
@@ -1528,7 +1497,6 @@ return await browser.pages.newPage('https://new.example', {
         );
 
         let create_params = connection.create_tab_params();
-        assert_eq!(connection.get_windows_calls(), 1);
         assert_eq!(create_params.len(), 1);
         assert_eq!(
             create_params.first().and_then(|params| params.get("url")),
@@ -1546,6 +1514,12 @@ return await browser.pages.newPage('https://new.example', {
                 .and_then(|params| params.get("windowId")),
             Some(&json!(88))
         );
+        assert!(
+            create_params
+                .first()
+                .and_then(|params| params.get("hidden"))
+                .is_none()
+        );
 
         let group_params = connection.add_group_params();
         assert_eq!(group_params.len(), 1);
@@ -1555,6 +1529,23 @@ return await browser.pages.newPage('https://new.example', {
                 .and_then(|params| params.get("groupId")),
             Some(&json!("group-opts"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_pages_new_page_rejects_hidden_option() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        let result = run_tool_with_ctx(
+            "return await browser.pages.newPage('https://new.example', { hidden: true })",
+            None,
+            &ctx,
+        )
+        .await?;
+
+        assert!(result.is_error);
+        assert!(result_text(&result)?.contains("pages.newPage: hidden is no longer supported"));
+        assert!(connection.create_tab_params().is_empty());
         Ok(())
     }
 
@@ -1662,17 +1653,6 @@ return seen;
             "isHidden": false,
             "windowId": window_id,
             "index": index
-        })
-    }
-
-    fn fake_window_json(window_id: i64, is_visible: bool) -> Value {
-        json!({
-            "windowId": window_id,
-            "windowType": "normal",
-            "bounds": {},
-            "isActive": !is_visible,
-            "isVisible": is_visible,
-            "tabCount": 0
         })
     }
 }

@@ -448,8 +448,32 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
 }
 
 #[test]
+fn tab_and_window_schemas_omit_hidden_controls() {
+    let tabs = tool_by_name("tabs");
+    let tabs_schema = Value::Object(tabs.input_schema.as_ref().clone());
+    assert!(tabs_schema.pointer("/properties/hidden").is_none());
+
+    let windows = tool_by_name("windows");
+    let windows_schema = Value::Object(windows.input_schema.as_ref().clone());
+    assert_eq!(
+        windows_schema.pointer("/properties/action/enum"),
+        Some(&json!(["list", "create", "close", "activate"]))
+    );
+    for property in ["hidden", "visible", "activate"] {
+        assert!(
+            windows_schema
+                .pointer(&format!("/properties/{property}"))
+                .is_none(),
+            "windows schema still exposes {property}"
+        );
+    }
+    assert!(!windows.description.contains("hidden"));
+}
+
+#[test]
 fn instructions_do_not_request_manual_tab_grouping() {
     assert!(!BROWSER_MCP_INSTRUCTIONS.contains("tab_groups"));
+    assert!(!BROWSER_MCP_INSTRUCTIONS.contains("hidden window"));
     assert!(BROWSER_MCP_INSTRUCTIONS.contains("Close your tabs when done."));
 }
 
@@ -699,6 +723,25 @@ async fn invalid_arguments_are_tool_error_results() {
             .text
             .starts_with("Invalid arguments for tabs: page:")
     }));
+}
+
+#[tokio::test]
+async fn retired_hidden_inputs_are_rejected() {
+    for name in ["tabs", "windows"] {
+        let tool = tool_by_name(name);
+        let result = execute_tool(
+            &tool,
+            json!({ "action": "list", "hidden": true }),
+            &fake_ctx(),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+        assert!(result.is_error);
+        assert!(
+            result_text(&result).starts_with(&format!("Invalid arguments for {name}:")),
+            "{name} accepted retired hidden input"
+        );
+    }
 }
 
 #[tokio::test]
