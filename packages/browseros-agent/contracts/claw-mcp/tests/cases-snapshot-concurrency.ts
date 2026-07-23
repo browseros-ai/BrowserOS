@@ -5,7 +5,7 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { expectOk, waitUntil } from './helpers'
+import { expectOk, parsePageId, waitUntil } from './helpers'
 
 const CURSOR_STABLE_LABELS = [
   'Cursor candidate 00',
@@ -20,6 +20,24 @@ const CURSOR_REASON_LABELS = [
   'Tabindex target',
 ] as const
 
+const FRAME_REF_LABELS = [
+  'Parent action ready',
+  'Frame A action ready',
+  'Frame A cursor ready',
+  'Grandchild action ready',
+  'Frame B action ready',
+  'Frame B cursor ready',
+] as const
+
+const FRAME_TEXT_ORDER = [
+  'Parent action ready',
+  'Frame A action ready',
+  'Frame A cursor ready',
+  'Grandchild action ready',
+  'Frame B action ready',
+  'Frame B cursor ready',
+] as const
+
 interface CursorProbeState {
   candidateCount: number
   activeMarkerNamespaces: number
@@ -27,6 +45,11 @@ interface CursorProbeState {
   maxActiveMarkerNamespaces: number
   sentinelPresent: boolean
   vanishingCandidatePresent: boolean
+}
+
+interface FrameProbeState {
+  frames: string[]
+  ready: boolean
 }
 
 function snapshotLine(snapshot: string, label: string): string | undefined {
@@ -51,6 +74,27 @@ function selectedRefs(
   return Object.fromEntries(
     labels.map((label) => [label, refFor(snapshot, label)]),
   )
+}
+
+function requireLabels(snapshot: string, labels: readonly string[]): void {
+  const missing = labels.filter((label) => !snapshot.includes(label))
+  if (missing.length > 0) {
+    throw new Error(
+      `snapshot is missing ${missing.join(', ')}:\n${snapshot.slice(0, 1200)}`,
+    )
+  }
+}
+
+function requireSameRefs(
+  actual: Record<string, string>,
+  expected: Record<string, string>,
+  context: string,
+): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `${context} changed selected refs:\nexpected ${JSON.stringify(expected)}\nactual ${JSON.stringify(actual)}`,
+    )
+  }
 }
 
 async function evaluateText(
@@ -90,6 +134,77 @@ async function cursorProbeState(
     'return JSON.stringify(window.snapshotCursorFixture.state())',
   )
   return parseJsonObject<CursorProbeState>(text, 'cursor fixture state')
+}
+
+function mixedFrameUrl(ctx: CaseContext): string {
+  const url = new URL(ctx.fixture('/snapshot-frame-tree.html'))
+  url.searchParams.set('childOrigin', new URL(ctx.fixture2('/')).origin)
+  return url.toString()
+}
+
+async function frameProbeState(
+  ctx: CaseContext,
+  page: number,
+): Promise<FrameProbeState> {
+  const text = await evaluateText(
+    ctx,
+    page,
+    'return JSON.stringify(window.snapshotFrameFixture.state())',
+  )
+  return parseJsonObject<FrameProbeState>(text, 'frame fixture state')
+}
+
+async function waitForFrameSnapshot(
+  ctx: CaseContext,
+  page: number,
+  labels: readonly string[] = FRAME_REF_LABELS,
+): Promise<string> {
+  let snapshot = ''
+  await waitUntil(
+    async () => {
+      const state = await frameProbeState(ctx, page)
+      if (!state.ready) return false
+      const result = await ctx.mcp.callTool('snapshot', { page })
+      if (result.isError) return false
+      snapshot = expectOk(result, 'settled mixed-frame snapshot')
+      return labels.every((label) => snapshot.includes(label))
+    },
+    `the mixed-frame snapshot to contain ${labels.join(', ')}`,
+    { timeoutMs: 30_000 },
+  )
+  return snapshot
+}
+
+async function waitForSnapshotLabels(
+  ctx: CaseContext,
+  page: number,
+  labels: readonly string[],
+): Promise<string> {
+  let snapshot = ''
+  await waitUntil(
+    async () => {
+      const result = await ctx.mcp.callTool('snapshot', { page })
+      if (result.isError) return false
+      snapshot = expectOk(result, 'snapshot while waiting for labels')
+      return labels.every((label) => snapshot.includes(label))
+    },
+    `the snapshot to contain ${labels.join(', ')}`,
+    { timeoutMs: 30_000 },
+  )
+  return snapshot
+}
+
+function requireFrameTextOrder(snapshot: string): void {
+  let previousIndex = -1
+  for (const label of FRAME_TEXT_ORDER) {
+    const index = snapshot.indexOf(label, previousIndex + 1)
+    if (index === -1) {
+      throw new Error(
+        `mixed-frame text is not in DOM stitch order at "${label}":\n${snapshot.slice(0, 1400)}`,
+      )
+    }
+    previousIndex = index
+  }
 }
 
 async function waitForCursorFixture(
@@ -213,6 +328,117 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         'contenteditable cursor ref to receive text',
       )
       await requireCleanCursorProbe(ctx, page)
+    },
+  },
+  {
+    name: 'snapshot concurrency: mixed frames keep stitch and ref order',
+    async run(ctx) {
+      const page = await ctx.openPage(mixedFrameUrl(ctx))
+      const first = await waitForFrameSnapshot(ctx, page)
+      requireFrameTextOrder(first)
+      const firstRefs = selectedRefs(first, FRAME_REF_LABELS)
+
+      const frameARef = Number(firstRefs['Frame A action ready'].slice(1))
+      const frameBRef = Number(firstRefs['Frame B action ready'].slice(1))
+      if (frameBRef >= frameARef) {
+        throw new Error(
+          `reverse sibling ref allocation changed: frame B=${frameBRef}, frame A=${frameARef}`,
+        )
+      }
+
+      const second = await waitForFrameSnapshot(ctx, page)
+      requireFrameTextOrder(second)
+      requireSameRefs(
+        selectedRefs(second, FRAME_REF_LABELS),
+        firstRefs,
+        'second settled mixed-frame snapshot',
+      )
+    },
+  },
+  {
+    name: 'snapshot concurrency: refs act across every frame session',
+    async run(ctx) {
+      const page = await ctx.openPage(mixedFrameUrl(ctx))
+      const initial = await waitForFrameSnapshot(ctx, page)
+
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'click',
+          ref: refFor(initial, 'Frame A action ready'),
+        }),
+        'click same-process frame ref',
+      )
+      const afterFrameA = await waitForSnapshotLabels(ctx, page, [
+        'Frame A action clicked',
+        'Frame B action ready',
+        'Grandchild action ready',
+      ])
+      requireLabels(afterFrameA, [
+        'Parent action ready',
+        'Frame B cursor ready',
+      ])
+
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'click',
+          ref: refFor(initial, 'Frame B action ready'),
+        }),
+        'click cross-origin frame ref',
+      )
+      const afterFrameB = await waitForSnapshotLabels(ctx, page, [
+        'Frame A action clicked',
+        'Frame B action clicked',
+        'Grandchild action ready',
+      ])
+      requireLabels(afterFrameB, [
+        'Parent action ready',
+        'Frame A cursor ready',
+      ])
+
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'click',
+          ref: refFor(initial, 'Grandchild action ready'),
+        }),
+        'click nested grandchild frame ref',
+      )
+      const final = await waitForSnapshotLabels(ctx, page, [
+        'Frame A action clicked',
+        'Frame B action clicked',
+        'Grandchild action clicked',
+      ])
+      requireLabels(final, [
+        'Parent action ready',
+        'Frame A cursor ready',
+        'Frame B cursor ready',
+      ])
+    },
+  },
+  {
+    name: 'snapshot concurrency: tabs new returns complete frame auto-context',
+    async run(ctx) {
+      let page: number | undefined
+      try {
+        const result = await ctx.mcp.callTool('tabs', {
+          action: 'new',
+          url: mixedFrameUrl(ctx),
+          background: false,
+        })
+        const text = expectOk(result, 'tabs new mixed-frame auto-context')
+        page = parsePageId(result)
+        requireLabels(text, FRAME_REF_LABELS)
+        selectedRefs(text, FRAME_REF_LABELS)
+        requireFrameTextOrder(text)
+      } finally {
+        if (page !== undefined) {
+          await ctx.mcp
+            .callTool('tabs', { action: 'close', page })
+            .catch(() => {})
+        }
+      }
     },
   },
 ]
