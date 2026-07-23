@@ -384,6 +384,7 @@ struct CreateIsolatedWorldResult {
 
 #[derive(Debug, Deserialize)]
 struct CursorHit {
+    marker: String,
     reasons: Vec<String>,
 }
 
@@ -550,8 +551,11 @@ async fn acquire_cursor_hits(
             return Ok((candidates, Vec::new()));
         }
 
-        // Marker values are original scan indexes. Preserve them as sparse array positions so a
-        // node that disappears before collection leaves a hole instead of shifting later reasons.
+        // Markers are indexes in the full DOM scan, while `candidates` is compacted to matching
+        // elements. Preserve the sparse markers in the remote array, then translate property names
+        // back through each candidate's marker; otherwise skipped DOM nodes would mis-pair handles
+        // and reasons. A node that disappears before collection leaves a hole instead of shifting
+        // later candidates.
         let collection_expression = format!(
             "(function(a){{var out=[];document.querySelectorAll('['+a+']').forEach(function(e){{out[Number(e.getAttribute(a))]=e;}});return out;}})({marker_literal})"
         );
@@ -575,13 +579,18 @@ async fn acquire_cursor_hits(
                 }),
             )
             .await?;
+        let candidate_indexes = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| (candidate.marker.as_str(), index))
+            .collect::<HashMap<_, _>>();
         let mut handles = properties
             .result
             .into_iter()
             .filter_map(|property| {
-                let index = property.name.parse::<usize>().ok()?;
+                let index = *candidate_indexes.get(property.name.as_str())?;
                 let object_id = property.value?.object_id?;
-                (index < candidates.len()).then_some((index, object_id))
+                Some((index, object_id))
             })
             .collect::<Vec<_>>();
         handles.sort_by_key(|(index, _object_id)| *index);
@@ -745,6 +754,7 @@ mod tests {
 
     struct CursorConnection {
         calls: Mutex<Vec<Call>>,
+        candidate_markers: [usize; 3],
         omitted_candidate: Option<usize>,
         failed_candidate: Option<usize>,
         fail_ax_tree: bool,
@@ -785,6 +795,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                candidate_markers: [0, 1, 2],
                 omitted_candidate: None,
                 failed_candidate: None,
                 fail_ax_tree: false,
@@ -835,9 +846,9 @@ mod tests {
                             "result": {
                                 "type": "object",
                                 "value": [
-                                    {"marker": "0", "reasons": ["cursor:pointer"]},
-                                    {"marker": "1", "reasons": ["onclick"]},
-                                    {"marker": "2", "reasons": ["contenteditable"]}
+                                    {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
+                                    {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
+                                    {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
                                 ]
                             }
                         }))
@@ -858,15 +869,15 @@ mod tests {
                     "Runtime.getProperties" => {
                         let mut properties = vec![
                             json!({
-                                "name": "2",
+                                "name": self.candidate_markers[2].to_string(),
                                 "value": {"type": "object", "objectId": "candidate-2"}
                             }),
                             json!({
-                                "name": "0",
+                                "name": self.candidate_markers[0].to_string(),
                                 "value": {"type": "object", "objectId": "candidate-0"}
                             }),
                             json!({
-                                "name": "1",
+                                "name": self.candidate_markers[1].to_string(),
                                 "value": {"type": "object", "objectId": "candidate-1"}
                             }),
                             json!({
@@ -875,7 +886,7 @@ mod tests {
                             }),
                         ];
                         if let Some(index) = self.omitted_candidate {
-                            let name = index.to_string();
+                            let name = self.candidate_markers[index].to_string();
                             properties.retain(|property| property["name"] != name);
                         }
                         Ok(json!({ "result": properties }))
@@ -1359,6 +1370,22 @@ mod tests {
                 .and_then(Value::as_str)
                 .is_none_or(|expression| !expression.contains("document.querySelector('"))
         }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sparse_cursor_markers_restore_compact_candidate_order() -> Result<(), CoreError> {
+        let connection = Arc::new(CursorConnection {
+            candidate_markers: [12, 37, 90],
+            ..CursorConnection::default()
+        });
+        let session = ProtocolSession::root(connection);
+
+        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
+
+        assert_eq!(hits.get(&100), Some(&vec!["cursor:pointer".to_string()]));
+        assert_eq!(hits.get(&101), Some(&vec!["onclick".to_string()]));
+        assert_eq!(hits.get(&102), Some(&vec!["contenteditable".to_string()]));
         Ok(())
     }
 
