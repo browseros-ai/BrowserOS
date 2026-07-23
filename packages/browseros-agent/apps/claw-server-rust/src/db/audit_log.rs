@@ -660,6 +660,10 @@ async fn query_dispatches_for_session<C: ConnectionTrait>(
 ) -> AppResult<Vec<ToolDispatchRow>> {
     Ok(ToolDispatches::find()
         .filter(tool_dispatches::Column::SessionId.eq(session_id))
+        // created_at first so a script tool (stamped with its start) sorts
+        // before the child primitives it recorded while executing; id breaks
+        // ties for rows written in the same millisecond.
+        .order_by_asc(tool_dispatches::Column::CreatedAt)
         .order_by_asc(tool_dispatches::Column::Id)
         .all(conn)
         .await?)
