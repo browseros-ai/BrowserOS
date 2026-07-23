@@ -26,6 +26,10 @@ pub struct Model {
     pub token_estimator_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatch_id: Option<String>,
+    /// Set on rows recorded for a primitive that ran inside a script tool
+    /// (`run`/`execute`); points at that script dispatch's `dispatch_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_dispatch_id: Option<String>,
     pub has_screenshot: bool,
 }
 

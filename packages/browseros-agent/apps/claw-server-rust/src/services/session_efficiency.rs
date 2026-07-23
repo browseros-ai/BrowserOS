@@ -458,6 +458,7 @@ mod tests {
             tool_output_token_estimate: output_tokens,
             token_estimator_version: estimator_version,
             dispatch_id: None,
+            parent_dispatch_id: None,
             has_screenshot: false,
         }
     }
@@ -553,6 +554,7 @@ mod tests {
             raw_args: json!({}),
             duration_ms: 10,
             dispatch_id: DispatchId::new(),
+            parent_dispatch_id: None,
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,
             token_estimator_version: version,

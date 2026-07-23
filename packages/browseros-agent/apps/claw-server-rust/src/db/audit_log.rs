@@ -49,6 +49,9 @@ pub struct RecordToolDispatchInput {
     pub raw_args: serde_json::Value,
     pub duration_ms: i64,
     pub dispatch_id: DispatchId,
+    /// Parent script dispatch when this row is a primitive executed inside a
+    /// `run`/`execute` script; `None` for ordinary top-level tool dispatches.
+    pub parent_dispatch_id: Option<DispatchId>,
     /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
     pub tool_input_token_estimate: i64,
     /// Approximate semantic content returned by BrowserClaw after result effects.
@@ -263,6 +266,7 @@ impl AuditLog {
             tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
             token_estimator_version: Set(input.token_estimator_version.max(0)),
             dispatch_id: Set(Some(input.dispatch_id.into_inner())),
+            parent_dispatch_id: Set(input.parent_dispatch_id.map(DispatchId::into_inner)),
             has_screenshot: Set(false),
         })
         .exec(&txn)
@@ -815,6 +819,7 @@ mod tests {
             raw_args: json!({ "url": url }),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
+            parent_dispatch_id: None,
             tool_input_token_estimate: 11,
             tool_output_token_estimate: 22,
             token_estimator_version: 1,

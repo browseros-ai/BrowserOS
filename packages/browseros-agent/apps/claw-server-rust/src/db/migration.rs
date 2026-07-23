@@ -14,7 +14,60 @@ impl MigratorTrait for Migrator {
             Box::new(m0005_reclassify_task_status::Migration),
             Box::new(m0006_add_tool_token_estimates::Migration),
             Box::new(m0007_add_session_efficiency_stats::Migration),
+            Box::new(m0008_add_parent_dispatch_id::Migration),
         ]
+    }
+}
+
+mod m0008_add_parent_dispatch_id {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0008_add_parent_dispatch_id"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Nullable: only primitives run inside a `run`/`execute` script carry a parent.
+            if !manager
+                .has_column("tool_dispatches", "parent_dispatch_id")
+                .await?
+            {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tool_dispatches"))
+                            .add_column(
+                                ColumnDef::new(Alias::new("parent_dispatch_id")).string(),
+                            )
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            if manager
+                .has_column("tool_dispatches", "parent_dispatch_id")
+                .await?
+            {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tool_dispatches"))
+                            .drop_column(Alias::new("parent_dispatch_id"))
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
     }
 }
 
