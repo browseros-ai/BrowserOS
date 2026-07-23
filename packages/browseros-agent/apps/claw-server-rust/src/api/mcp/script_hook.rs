@@ -119,21 +119,24 @@ mod tests {
     use crate::api::mcp::test_support::tool_call;
     use crate::db::audit_log::ListDispatchesQuery;
 
-    fn hook_for(call: &ToolCall) -> ScriptInnerCallHook {
-        let identity = call.identity.as_ref().expect("identity");
-        ScriptInnerCallHook::new(
+    fn hook_for(call: &ToolCall) -> anyhow::Result<ScriptInnerCallHook> {
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        Ok(ScriptInnerCallHook::new(
             call.state.clone(),
             call.browser_session.clone(),
             identity,
             call.session_id.as_str().to_string(),
             call.dispatch_id.clone(),
-        )
+        ))
     }
 
     #[tokio::test]
     async fn authorize_rejects_foreign_owned_pages_only() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
-        let hook = hook_for(&call);
+        let hook = hook_for(&call)?;
 
         // A page owned by another conversation is rejected.
         call.state
@@ -149,7 +152,12 @@ mod tests {
         assert!(hook.authorize(None).await.is_ok());
 
         // A page owned by the caller's own conversation is allowed.
-        let mine = call.identity.as_ref().unwrap().ownership_key.clone();
+        let mine = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
         call.state
             .sessions
             .ownership()
@@ -162,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn record_writes_child_row_linked_to_parent() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
-        let hook = hook_for(&call);
+        let hook = hook_for(&call)?;
 
         hook.record(InnerCallRecord {
             method: "input.click",
@@ -184,7 +192,7 @@ mod tests {
         let child = rows
             .iter()
             .find(|row| row.tool_name == "input.click")
-            .expect("child row recorded");
+            .ok_or_else(|| anyhow::anyhow!("child row recorded"))?;
         assert_eq!(
             child.parent_dispatch_id.as_deref(),
             Some(call.dispatch_id.as_str())

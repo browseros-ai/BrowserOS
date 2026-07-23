@@ -1239,7 +1239,7 @@ mod tests {
 
     impl InnerCallHook for MockHook {
         fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
-            let mut log = self.0.lock().expect("hook log poisoned");
+            let mut log = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             log.authorized.push(page);
             let result = match &log.reject {
                 Some(message) => Err(message.clone()),
@@ -1250,8 +1250,7 @@ mod tests {
 
         fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
             self.0
-                .lock()
-                .expect("hook log poisoned")
+                .lock().unwrap_or_else(std::sync::PoisonError::into_inner)
                 .recorded
                 .push((record.method.to_owned(), record.page, record.is_error));
             Box::pin(async move {})
@@ -1270,7 +1269,7 @@ mod tests {
         let ctx = ctx_with_hook(log.clone());
         let result = run_tool_with_ctx("return await browser.pages.getInfo(1)", None, &ctx).await?;
         assert!(!result.is_error);
-        let log = log.lock().expect("hook log poisoned");
+        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.authorized, vec![Some(1)]);
         assert_eq!(
             log.recorded,
@@ -1290,7 +1289,7 @@ mod tests {
         assert!(result.is_error);
         let text = result_text(&result)?;
         assert!(text.contains("not owned by this agent"));
-        let log = log.lock().expect("hook log poisoned");
+        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.authorized, vec![Some(1)]);
         // Rejected before dispatch, so nothing is recorded.
         assert!(log.recorded.is_empty());
