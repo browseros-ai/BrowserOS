@@ -45,9 +45,14 @@ mod m0009_sum_session_efficiency_durations {
                     r#"
                     SELECT stats.session_id, dispatch.duration_ms
                     FROM session_efficiency_stats AS stats
-                    LEFT JOIN tool_dispatches AS dispatch
+                    JOIN tool_dispatches AS dispatch
                         ON dispatch.session_id = stats.session_id
                     WHERE stats.efficiency_estimator_version < ?
+                        AND stats.dispatch_count = (
+                            SELECT COUNT(*)
+                            FROM tool_dispatches AS retained
+                            WHERE retained.session_id = stats.session_id
+                        )
                     "#,
                     [EFFICIENCY_ESTIMATOR_VERSION.into()],
                 ))
@@ -63,7 +68,7 @@ mod m0009_sum_session_efficiency_durations {
                 *sum = sum.saturating_add(duration_ms);
             }
 
-            // A source already removed by audit retention has no execution duration left to sum.
+            // Retention can remove a v1 source, so only complete dispatch sets can be reprojected.
             for (session_id, active_duration_ms) in duration_sums {
                 connection
                     .execute(Statement::from_sql_and_values(
@@ -101,10 +106,13 @@ mod m0009_sum_session_efficiency_durations {
             for statement in [
                 "INSERT INTO session_efficiency_stats VALUES ('gap', 0, 2, 100, 0, 0, 0, 1, 0)",
                 "INSERT INTO session_efficiency_stats VALUES ('overlap', 0, 2, 700, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('partial', 0, 2, 300, 0, 0, 0, 1, 0)",
                 "INSERT INTO session_efficiency_stats VALUES ('precise', 0, 2, 1, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('retained', 0, 1, 250, 0, 0, 0, 1, 0)",
                 "INSERT INTO session_efficiency_stats VALUES ('saturated', 0, 2, 1, 0, 0, 0, 1, 0)",
                 "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'gap', 'navigate', NULL, 0), (1, 'agent', 'agent', 'Agent', 'gap', 'click', -10, 0)",
                 "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'overlap', 'navigate', 500, 0), (1, 'agent', 'agent', 'Agent', 'overlap', 'click', 400, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'partial', 'navigate', 10, 0)",
                 "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'precise', 'navigate', 9007199254740992, 0), (1, 'agent', 'agent', 'Agent', 'precise', 'click', 1, 0)",
                 "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'saturated', 'navigate', 9223372036854775807, 0), (1, 'agent', 'agent', 'Agent', 'saturated', 'click', 1, 0)",
             ] {
@@ -128,7 +136,9 @@ mod m0009_sum_session_efficiency_durations {
                 [
                     ("gap".to_owned(), 0, 2),
                     ("overlap".to_owned(), 900, 2),
+                    ("partial".to_owned(), 300, 1),
                     ("precise".to_owned(), 9_007_199_254_740_993, 2),
+                    ("retained".to_owned(), 250, 1),
                     ("saturated".to_owned(), i64::MAX, 2)
                 ]
             );
