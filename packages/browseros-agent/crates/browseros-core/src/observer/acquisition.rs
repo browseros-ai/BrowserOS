@@ -19,20 +19,13 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 const MAX_IN_FLIGHT_REQUESTS: usize = 8;
+const MAX_MARKER_COLLISION_RETRIES: usize = 3;
 const CURSOR_SCAN_JS: &str = include_str!("../assets/cursor-augment.js");
-const CURSOR_WORLD_NAME: &str = "browseros-snapshot-cursor";
-static NEXT_CURSOR_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
 pub(super) enum SnapshotStage {
@@ -158,15 +151,22 @@ impl Observer {
     pub(super) async fn acquire_frame(
         &self,
         frame_id: Option<FrameId>,
+        runtime_document_id: Option<i64>,
         context: &CaptureContext,
     ) -> Result<AcquiredFrame, CoreError> {
         let target = self
             .frames
             .resolve_frame_target(self.page_id.clone(), frame_id.clone())
             .await?;
+        let runtime_document_id = if target.cursor_uses_session_default {
+            None
+        } else {
+            runtime_document_id
+        };
         acquire_frame_data(
             target,
             frame_id,
+            runtime_document_id,
             &context.root_session,
             &context.frame_documents,
             &context.budget,
@@ -178,6 +178,7 @@ impl Observer {
     pub(super) async fn acquire_child_frames(
         &self,
         parent: &FrameTarget,
+        parent_frame_id: Option<&FrameId>,
         stitches: &[IframeStitch],
         visited: &[FrameId],
         context: &CaptureContext,
@@ -189,16 +190,19 @@ impl Observer {
             let visited = visited.to_vec();
             let context = context.clone();
             pending.push(async move {
-                let child_frame_id = resolve_child_frame_id(
-                    &parent_session,
-                    stitch.backend_node_id,
-                    &context.budget,
-                )
-                .await?;
-                if visited.contains(&child_frame_id) {
+                let child_frame =
+                    resolve_child_frame(&parent_session, stitch.backend_node_id, &context.budget)
+                        .await?;
+                if visited.contains(&child_frame.frame_id) {
                     return None;
                 }
-                let result = self.acquire_frame(Some(child_frame_id), &context).await;
+                let result = self
+                    .acquire_frame(
+                        Some(child_frame.frame_id),
+                        child_frame.runtime_document_id,
+                        &context,
+                    )
+                    .await;
                 Some(AcquiredChild {
                     stitch,
                     result,
@@ -225,7 +229,7 @@ impl Observer {
         };
         trace_stage(
             &context.trace,
-            parent.runtime_frame_id.as_ref(),
+            parent_frame_id,
             SnapshotStage::SiblingAcquisition,
             started,
             outcome,
@@ -237,12 +241,20 @@ impl Observer {
 async fn acquire_frame_data(
     target: FrameTarget,
     frame_id: Option<FrameId>,
+    runtime_document_id: Option<i64>,
     root_session: &ProtocolSession,
     frame_documents: &HashMap<Option<FrameId>, DocumentId>,
     budget: &SnapshotBudget,
     trace: Option<&CaptureTrace>,
 ) -> Result<AcquiredFrame, CoreError> {
     let acquired_frame_id = frame_id.clone();
+    let cursor_document = if target.cursor_uses_session_default {
+        CursorDocument::SessionDefault
+    } else if let Some(backend_node_id) = runtime_document_id {
+        CursorDocument::BackendNode(backend_node_id)
+    } else {
+        CursorDocument::Unavailable
+    };
     let ax_tree = async {
         let started = Instant::now();
         let result = budget
@@ -265,7 +277,8 @@ async fn acquire_frame_data(
     };
     let cursor_hits = find_cursor_hits_with_trace(
         &target.session,
-        target.runtime_frame_id.as_ref(),
+        cursor_document,
+        acquired_frame_id.as_ref(),
         budget,
         trace,
     );
@@ -284,11 +297,16 @@ async fn acquire_frame_data(
     })
 }
 
-async fn resolve_child_frame_id(
+struct ResolvedChildFrame {
+    frame_id: FrameId,
+    runtime_document_id: Option<i64>,
+}
+
+async fn resolve_child_frame(
     session: &ProtocolSession,
     backend_node_id: i64,
     budget: &SnapshotBudget,
-) -> Option<FrameId> {
+) -> Option<ResolvedChildFrame> {
     let described = budget
         .send::<DescribeNodeResult>(
             session,
@@ -297,12 +315,18 @@ async fn resolve_child_frame_id(
         )
         .await
         .ok()?;
-    described
-        .node
-        .content_document
+    let content_document = described.node.content_document;
+    let runtime_document_id = content_document
+        .as_ref()
+        .and_then(|node| node.backend_node_id);
+    let frame_id = content_document
         .and_then(|node| node.frame_id)
         .or(described.node.frame_id)
-        .map(FrameId)
+        .map(FrameId)?;
+    Some(ResolvedChildFrame {
+        frame_id,
+        runtime_document_id,
+    })
 }
 
 async fn stable_document_id_for_frame(
@@ -377,9 +401,21 @@ struct PropertyDescriptor {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateIsolatedWorldResult {
-    execution_context_id: i64,
+struct ResolveNodeResult {
+    object: RemoteObject,
+}
+
+#[derive(Clone, Copy)]
+enum CursorDocument {
+    SessionDefault,
+    BackendNode(i64),
+    Unavailable,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CursorScanResult {
+    collision: bool,
+    candidates: Vec<CursorHit>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -391,22 +427,39 @@ struct CursorHit {
 struct CursorCleanup {
     session: ProtocolSession,
     budget: SnapshotBudget,
-    marker_attribute: String,
+    marker_attribute: Option<String>,
+    marker_token: Option<String>,
     object_group: String,
-    context_id: Option<i64>,
+    document_object_id: Option<String>,
     armed: bool,
 }
 
 impl CursorCleanup {
+    fn arm_marker(&mut self, marker_attribute: String, marker_token: String) {
+        self.marker_attribute = Some(marker_attribute);
+        self.marker_token = Some(marker_token);
+    }
+
+    async fn clear_marker(&mut self) {
+        if let (Some(marker_attribute), Some(marker_token)) =
+            (&self.marker_attribute, &self.marker_token)
+        {
+            cleanup_cursor_marker(
+                &self.session,
+                &self.budget,
+                marker_attribute,
+                marker_token,
+                self.document_object_id.as_deref(),
+            )
+            .await;
+            self.marker_attribute = None;
+            self.marker_token = None;
+        }
+    }
+
     async fn finish(&mut self) {
-        cleanup_cursor(
-            &self.session,
-            &self.budget,
-            &self.marker_attribute,
-            &self.object_group,
-            self.context_id,
-        )
-        .await;
+        self.clear_marker().await;
+        release_cursor_objects(&self.session, &self.budget, &self.object_group).await;
         self.armed = false;
     }
 }
@@ -422,20 +475,25 @@ impl Drop for CursorCleanup {
         let session = self.session.clone();
         let budget = self.budget.clone();
         let marker_attribute = self.marker_attribute.clone();
+        let marker_token = self.marker_token.clone();
         let object_group = self.object_group.clone();
-        let context_id = self.context_id;
+        let document_object_id = self.document_object_id.clone();
 
-        // Cancellation skips the async epilogue, so detach one idempotent cleanup
-        // task for the capture namespace. Candidate requests are never spawned.
+        // Cancellation skips the async epilogue, so detach one idempotent cleanup task for the
+        // capture token. Cleanup matches both attribute and token, preserving page-owned values
+        // even if a generated attribute name collides.
         drop(handle.spawn(async move {
-            cleanup_cursor(
-                &session,
-                &budget,
-                &marker_attribute,
-                &object_group,
-                context_id,
-            )
-            .await;
+            if let (Some(marker_attribute), Some(marker_token)) = (marker_attribute, marker_token) {
+                cleanup_cursor_marker(
+                    &session,
+                    &budget,
+                    &marker_attribute,
+                    &marker_token,
+                    document_object_id.as_deref(),
+                )
+                .await;
+            }
+            release_cursor_objects(&session, &budget, &object_group).await;
         }));
     }
 }
@@ -443,112 +501,156 @@ impl Drop for CursorCleanup {
 #[cfg(test)]
 async fn find_cursor_hits(
     session: &ProtocolSession,
-    frame_id: Option<&FrameId>,
+    runtime_document_id: Option<i64>,
     budget: &SnapshotBudget,
 ) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    find_cursor_hits_with_trace(session, frame_id, budget, None).await
+    let document =
+        runtime_document_id.map_or(CursorDocument::SessionDefault, CursorDocument::BackendNode);
+    find_cursor_hits_with_trace(session, document, None, budget, None).await
 }
 
 async fn find_cursor_hits_with_trace(
     session: &ProtocolSession,
+    document: CursorDocument,
     frame_id: Option<&FrameId>,
     budget: &SnapshotBudget,
     trace: Option<&CaptureTrace>,
 ) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    let namespace = NEXT_CURSOR_NAMESPACE.fetch_add(1, Ordering::Relaxed);
-    // Overlapping captures share a document, so both marker cleanup and object release need a
-    // capture-owned namespace. One capture must never remove another capture's temporary handles.
-    let marker_attribute = format!("data-__bcid-{namespace}");
-    let object_group = format!("browseros-snapshot-cursor-{namespace}");
     let setup_started = Instant::now();
-    let context_id = match execution_context(session, frame_id, budget).await {
-        Ok(context_id) => context_id,
-        Err(error) => {
-            if let Some(trace) = trace {
-                trace_stage(
-                    trace,
-                    frame_id,
-                    SnapshotStage::CursorScan,
-                    setup_started,
-                    "failure",
-                );
-            }
-            return Err(error);
-        }
-    };
+    let capture_id = Uuid::new_v4().simple().to_string();
+    let object_group = format!("browseros-snapshot-cursor-{capture_id}");
+    // Arm object-group release before resolving a document wrapper: cancellation can arrive after
+    // Chrome creates that remote object but before its response reaches this future.
     let mut cleanup = CursorCleanup {
         session: session.clone(),
         budget: budget.clone(),
-        marker_attribute: marker_attribute.clone(),
+        marker_attribute: None,
+        marker_token: None,
         object_group: object_group.clone(),
-        context_id,
+        document_object_id: None,
         armed: true,
     };
-
-    let result = acquire_cursor_hits(
-        session,
-        budget,
-        &marker_attribute,
-        &object_group,
-        context_id,
-        frame_id,
-        trace,
-    )
-    .await;
+    let document_object_id =
+        match resolve_cursor_document(session, budget, document, &object_group).await {
+            Ok(document_object_id) => document_object_id,
+            Err(error) => {
+                if let Some(trace) = trace {
+                    trace_stage(
+                        trace,
+                        frame_id,
+                        SnapshotStage::CursorScan,
+                        setup_started,
+                        "failure",
+                    );
+                }
+                return Err(error);
+            }
+        };
+    cleanup.document_object_id = document_object_id;
+    for _attempt in 0..MAX_MARKER_COLLISION_RETRIES {
+        // The random attribute isolates overlapping captures; the separate token lets cancellation
+        // cleanup prove ownership before removing anything from the inspected document.
+        let marker_token = Uuid::new_v4().simple().to_string();
+        let marker_attribute = format!("data-__bcid-{marker_token}");
+        cleanup.arm_marker(marker_attribute.clone(), marker_token.clone());
+        let acquisition = CursorAcquisitionContext {
+            marker_attribute: &marker_attribute,
+            marker_token: &marker_token,
+            object_group: &object_group,
+            document_object_id: cleanup.document_object_id.as_deref(),
+            frame_id,
+            trace,
+        };
+        let result = acquire_cursor_hits(session, budget, &acquisition).await;
+        cleanup.clear_marker().await;
+        match result? {
+            CursorAcquisition::Complete(hits) => {
+                cleanup.finish().await;
+                return Ok(hits);
+            }
+            CursorAcquisition::MarkerCollision => continue,
+        }
+    }
     cleanup.finish().await;
-    result
+    Err(CoreError::Message(
+        "Could not reserve a cursor marker namespace".to_string(),
+    ))
 }
 
-async fn execution_context(
+async fn resolve_cursor_document(
     session: &ProtocolSession,
-    frame_id: Option<&FrameId>,
     budget: &SnapshotBudget,
-) -> Result<Option<i64>, CoreError> {
-    let Some(frame_id) = frame_id else {
-        return Ok(None);
-    };
-    let result: CreateIsolatedWorldResult = budget
-        .send(
-            session,
-            "Page.createIsolatedWorld",
-            json!({
-                "frameId": frame_id.0,
-                "worldName": CURSOR_WORLD_NAME
-            }),
-        )
-        .await?;
-    Ok(Some(result.execution_context_id))
+    document: CursorDocument,
+    object_group: &str,
+) -> Result<Option<String>, CoreError> {
+    match document {
+        CursorDocument::SessionDefault => Ok(None),
+        CursorDocument::Unavailable => Err(CoreError::Message(
+            "Child frame document was unavailable for cursor acquisition".to_string(),
+        )),
+        CursorDocument::BackendNode(backend_node_id) => {
+            // Resolving the child Document without an execution-context override returns its
+            // default-world wrapper. Calling the scan on that object keeps page-assigned
+            // `onclick` properties visible while still targeting the exact same-process frame.
+            let resolved: ResolveNodeResult = budget
+                .send(
+                    session,
+                    "DOM.resolveNode",
+                    json!({
+                        "backendNodeId": backend_node_id,
+                        "objectGroup": object_group
+                    }),
+                )
+                .await?;
+            resolved.object.object_id.map(Some).ok_or_else(|| {
+                CoreError::Message("Resolved frame document had no remote object".to_string())
+            })
+        }
+    }
+}
+
+enum CursorAcquisition {
+    Complete(HashMap<i64, Vec<String>>),
+    MarkerCollision,
+}
+
+struct CursorAcquisitionContext<'a> {
+    marker_attribute: &'a str,
+    marker_token: &'a str,
+    object_group: &'a str,
+    document_object_id: Option<&'a str>,
+    frame_id: Option<&'a FrameId>,
+    trace: Option<&'a CaptureTrace>,
 }
 
 async fn acquire_cursor_hits(
     session: &ProtocolSession,
     budget: &SnapshotBudget,
-    marker_attribute: &str,
-    object_group: &str,
-    context_id: Option<i64>,
-    frame_id: Option<&FrameId>,
-    trace: Option<&CaptureTrace>,
-) -> Result<HashMap<i64, Vec<String>>, CoreError> {
+    context: &CursorAcquisitionContext<'_>,
+) -> Result<CursorAcquisition, CoreError> {
     let scan_started = Instant::now();
     let scan_result = async {
-        let marker_literal = serde_json::to_string(marker_attribute)
-            .map_err(|error| CoreError::Message(error.to_string()))?;
-        let scan_expression =
-            CURSOR_SCAN_JS.replace("__BROWSEROS_CURSOR_MARKER__", &marker_literal);
-        let scan: RuntimeEvalResult = budget
-            .send(
-                session,
-                "Runtime.evaluate",
-                evaluate_params(scan_expression, true, None, context_id),
-            )
-            .await?;
-        let candidates = scan
+        let scan = call_document_function(
+            session,
+            budget,
+            context.document_object_id,
+            CURSOR_SCAN_JS,
+            &[context.marker_attribute, context.marker_token],
+            true,
+            None,
+        )
+        .await?;
+        let scan = scan
             .result
             .value
-            .and_then(|value| serde_json::from_value::<Vec<CursorHit>>(value).ok())
+            .and_then(|value| serde_json::from_value::<CursorScanResult>(value).ok())
             .unwrap_or_default();
+        if scan.collision {
+            return Ok(CursorScanBatch::MarkerCollision);
+        }
+        let candidates = scan.candidates;
         if candidates.is_empty() {
-            return Ok((candidates, Vec::new()));
+            return Ok(CursorScanBatch::Candidates(candidates, Vec::new()));
         }
 
         // Markers are indexes in the full DOM scan, while `candidates` is compacted to matching
@@ -556,18 +658,18 @@ async fn acquire_cursor_hits(
         // back through each candidate's marker; otherwise skipped DOM nodes would mis-pair handles
         // and reasons. A node that disappears before collection leaves a hole instead of shifting
         // later candidates.
-        let collection_expression = format!(
-            "(function(a){{var out=[];document.querySelectorAll('['+a+']').forEach(function(e){{out[Number(e.getAttribute(a))]=e;}});return out;}})({marker_literal})"
-        );
-        let collection: RuntimeEvalResult = budget
-            .send(
-                session,
-                "Runtime.evaluate",
-                evaluate_params(collection_expression, false, Some(object_group), context_id),
-            )
-            .await?;
+        let collection = call_document_function(
+            session,
+            budget,
+            context.document_object_id,
+            "function(a,t){var out=[],p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)out[Number(v.slice(p.length))]=e;});return out;}",
+            &[context.marker_attribute, context.marker_token],
+            false,
+            Some(context.object_group),
+        )
+        .await?;
         let Some(collection_id) = collection.result.object_id else {
-            return Ok((candidates, Vec::new()));
+            return Ok(CursorScanBatch::Candidates(candidates, Vec::new()));
         };
         let properties: GetPropertiesResult = budget
             .send(
@@ -594,27 +696,39 @@ async fn acquire_cursor_hits(
             })
             .collect::<Vec<_>>();
         handles.sort_by_key(|(index, _object_id)| *index);
-        Ok::<_, CoreError>((candidates, handles))
+        Ok::<_, CoreError>(CursorScanBatch::Candidates(candidates, handles))
     }
     .await;
     let (candidates, handles) = match scan_result {
-        Ok(result) => {
-            if let Some(trace) = trace {
+        Ok(CursorScanBatch::Candidates(candidates, handles)) => {
+            if let Some(trace) = context.trace {
                 trace_stage(
                     trace,
-                    frame_id,
+                    context.frame_id,
                     SnapshotStage::CursorScan,
                     scan_started,
                     "success",
                 );
             }
-            result
+            (candidates, handles)
         }
-        Err(error) => {
-            if let Some(trace) = trace {
+        Ok(CursorScanBatch::MarkerCollision) => {
+            if let Some(trace) = context.trace {
                 trace_stage(
                     trace,
-                    frame_id,
+                    context.frame_id,
+                    SnapshotStage::CursorScan,
+                    scan_started,
+                    "marker_collision",
+                );
+            }
+            return Ok(CursorAcquisition::MarkerCollision);
+        }
+        Err(error) => {
+            if let Some(trace) = context.trace {
+                trace_stage(
+                    trace,
+                    context.frame_id,
                     SnapshotStage::CursorScan,
                     scan_started,
                     "failure",
@@ -624,16 +738,16 @@ async fn acquire_cursor_hits(
         }
     };
     if candidates.is_empty() {
-        if let Some(trace) = trace {
+        if let Some(trace) = context.trace {
             trace_stage(
                 trace,
-                frame_id,
+                context.frame_id,
                 SnapshotStage::CursorDescribe,
                 Instant::now(),
                 "skipped",
             );
         }
-        return Ok(HashMap::new());
+        return Ok(CursorAcquisition::Complete(HashMap::new()));
     }
 
     // Chrome may answer these in any order. Store each result in its scan-index slot and pair
@@ -670,56 +784,85 @@ async fn acquire_cursor_hits(
             hits.insert(backend_node_id, candidate.reasons);
         }
     }
-    if let Some(trace) = trace {
+    if let Some(trace) = context.trace {
         trace_stage(
             trace,
-            frame_id,
+            context.frame_id,
             SnapshotStage::CursorDescribe,
             describe_started,
             "success",
         );
     }
-    Ok(hits)
+    Ok(CursorAcquisition::Complete(hits))
 }
 
-fn evaluate_params(
-    expression: String,
+enum CursorScanBatch {
+    Candidates(Vec<CursorHit>, Vec<(usize, String)>),
+    MarkerCollision,
+}
+
+async fn call_document_function(
+    session: &ProtocolSession,
+    budget: &SnapshotBudget,
+    document_object_id: Option<&str>,
+    function_declaration: &str,
+    arguments: &[&str],
     return_by_value: bool,
     object_group: Option<&str>,
-    context_id: Option<i64>,
-) -> Value {
-    let mut params = json!({
-        "expression": expression,
-        "returnByValue": return_by_value
-    });
+) -> Result<RuntimeEvalResult, CoreError> {
+    let mut params = if let Some(object_id) = document_object_id {
+        json!({
+            "functionDeclaration": function_declaration,
+            "objectId": object_id,
+            "arguments": arguments
+                .iter()
+                .map(|value| json!({ "value": value }))
+                .collect::<Vec<_>>(),
+            "returnByValue": return_by_value
+        })
+    } else {
+        let arguments = serde_json::to_string(arguments)
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+        json!({
+            "expression": format!("({function_declaration}).apply(document,{arguments})"),
+            "returnByValue": return_by_value
+        })
+    };
     if let Some(object_group) = object_group {
         params["objectGroup"] = Value::String(object_group.to_string());
     }
-    if let Some(context_id) = context_id {
-        params["contextId"] = Value::Number(context_id.into());
-    }
-    params
+    let method = if document_object_id.is_some() {
+        "Runtime.callFunctionOn"
+    } else {
+        "Runtime.evaluate"
+    };
+    budget.send(session, method, params).await
 }
 
-async fn cleanup_cursor(
+async fn cleanup_cursor_marker(
     session: &ProtocolSession,
     budget: &SnapshotBudget,
     marker_attribute: &str,
-    object_group: &str,
-    context_id: Option<i64>,
+    marker_token: &str,
+    document_object_id: Option<&str>,
 ) {
-    if let Ok(marker_literal) = serde_json::to_string(marker_attribute) {
-        let expression = format!(
-            "(function(a){{document.querySelectorAll('['+a+']').forEach(function(e){{e.removeAttribute(a);}});}})({marker_literal})"
-        );
-        let _ = budget
-            .send::<Value>(
-                session,
-                "Runtime.evaluate",
-                evaluate_params(expression, true, None, context_id),
-            )
-            .await;
-    }
+    let _ = call_document_function(
+        session,
+        budget,
+        document_object_id,
+        "function(a,t){var p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)e.removeAttribute(a);});}",
+        &[marker_attribute, marker_token],
+        true,
+        None,
+    )
+    .await;
+}
+
+async fn release_cursor_objects(
+    session: &ProtocolSession,
+    budget: &SnapshotBudget,
+    object_group: &str,
+) {
     let _ = budget
         .send::<Value>(
             session,
@@ -755,6 +898,7 @@ mod tests {
     struct CursorConnection {
         calls: Mutex<Vec<Call>>,
         candidate_markers: [usize; 3],
+        marker_collisions_remaining: AtomicUsize,
         omitted_candidate: Option<usize>,
         failed_candidate: Option<usize>,
         fail_ax_tree: bool,
@@ -796,6 +940,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 candidate_markers: [0, 1, 2],
+                marker_collisions_remaining: AtomicUsize::new(0),
                 omitted_candidate: None,
                 failed_candidate: None,
                 fail_ax_tree: false,
@@ -811,6 +956,14 @@ mod tests {
                 .lock()
                 .map(|calls| calls.clone())
                 .unwrap_or_default()
+        }
+
+        fn take_marker_collision(&self) -> bool {
+            self.marker_collisions_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
         }
     }
 
@@ -842,14 +995,25 @@ mod tests {
                                 message: "cursor scan failed".to_string(),
                             });
                         }
+                        if self.take_marker_collision() {
+                            return Ok(json!({
+                                "result": {
+                                    "type": "object",
+                                    "value": {"collision": true, "candidates": []}
+                                }
+                            }));
+                        }
                         Ok(json!({
                             "result": {
                                 "type": "object",
-                                "value": [
-                                    {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
-                                    {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
-                                    {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
-                                ]
+                                "value": {
+                                    "collision": false,
+                                    "candidates": [
+                                        {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
+                                        {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
+                                        {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
+                                    ]
+                                }
                             }
                         }))
                     }
@@ -863,6 +1027,56 @@ mod tests {
                             }
                         }))
                     }
+                    "Runtime.callFunctionOn"
+                        if params
+                            .get("functionDeclaration")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
+                    {
+                        if self.fail_cursor_scan {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "cursor scan failed".to_string(),
+                            });
+                        }
+                        if self.take_marker_collision() {
+                            return Ok(json!({
+                                "result": {
+                                    "type": "object",
+                                    "value": {"collision": true, "candidates": []}
+                                }
+                            }));
+                        }
+                        Ok(json!({
+                            "result": {
+                                "type": "object",
+                                "value": {
+                                    "collision": false,
+                                    "candidates": [
+                                        {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
+                                        {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
+                                        {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
+                                    ]
+                                }
+                            }
+                        }))
+                    }
+                    "Runtime.callFunctionOn"
+                        if params.get("returnByValue") == Some(&Value::Bool(false)) =>
+                    {
+                        Ok(json!({
+                            "result": {
+                                "type": "object",
+                                "objectId": "candidate-array"
+                            }
+                        }))
+                    }
+                    "Runtime.callFunctionOn" => Ok(json!({
+                        "result": {"type": "undefined"}
+                    })),
+                    "DOM.resolveNode" => Ok(json!({
+                        "object": {"type": "object", "objectId": "document-object"}
+                    })),
                     "Runtime.evaluate" => Ok(json!({
                         "result": {"type": "undefined"}
                     })),
@@ -934,7 +1148,6 @@ mod tests {
                             }]
                         }
                     })),
-                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
                     _ => Ok(json!({})),
                 }
@@ -973,7 +1186,7 @@ mod tests {
         let target = FrameTarget {
             session: session.clone(),
             ax_params: json!({"frameId": frame_id.0}),
-            runtime_frame_id: Some(frame_id.clone()),
+            cursor_uses_session_default: false,
         };
         let frame_documents = std::collections::HashMap::from([(
             Some(frame_id.clone()),
@@ -983,6 +1196,7 @@ mod tests {
         let acquired = super::acquire_frame_data(
             target,
             Some(frame_id),
+            Some(901),
             &session,
             &frame_documents,
             &SnapshotBudget::new(),
@@ -1066,7 +1280,27 @@ mod tests {
                         Ok(json!({
                             "result": {
                                 "type": "object",
-                                "value": []
+                                "value": {
+                                    "collision": false,
+                                    "candidates": []
+                                }
+                            }
+                        }))
+                    }
+                    "Runtime.callFunctionOn"
+                        if params
+                            .get("functionDeclaration")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
+                    {
+                        self.mark_and_wait(0b010, self.cursor_gate.clone()).await?;
+                        Ok(json!({
+                            "result": {
+                                "type": "object",
+                                "value": {
+                                    "collision": false,
+                                    "candidates": []
+                                }
                             }
                         }))
                     }
@@ -1090,7 +1324,10 @@ mod tests {
                             }
                         }))
                     }
-                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
+                    "DOM.resolveNode" => Ok(json!({
+                        "object": {"type": "object", "objectId": "document-object"}
+                    })),
+                    "Runtime.callFunctionOn" => Ok(json!({"result": {"type": "undefined"}})),
                     "Runtime.evaluate" => Ok(json!({"result": {"type": "undefined"}})),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
                     _ => Ok(json!({})),
@@ -1132,6 +1369,9 @@ mod tests {
         cleanup_evaluations: AtomicUsize,
         released_groups: AtomicUsize,
         cleaned: Notify,
+        document_resolve_gate: Arc<Semaphore>,
+        document_resolve_calls: AtomicUsize,
+        document_resolve_started: Notify,
     }
 
     impl GatedCursorConnection {
@@ -1149,6 +1389,9 @@ mod tests {
                 cleanup_evaluations: AtomicUsize::new(0),
                 released_groups: AtomicUsize::new(0),
                 cleaned: Notify::new(),
+                document_resolve_gate: Arc::new(Semaphore::new(0)),
+                document_resolve_calls: AtomicUsize::new(0),
+                document_resolve_started: Notify::new(),
             }
         }
 
@@ -1182,6 +1425,16 @@ mod tests {
             loop {
                 let notified = self.cleaned.notified();
                 if self.released_groups.load(Ordering::SeqCst) > 0 {
+                    return;
+                }
+                notified.await;
+            }
+        }
+
+        async fn wait_for_document_resolve(&self) {
+            loop {
+                let notified = self.document_resolve_started.notified();
+                if self.document_resolve_calls.load(Ordering::SeqCst) > 0 {
                     return;
                 }
                 notified.await;
@@ -1222,7 +1475,10 @@ mod tests {
                         Ok(json!({
                             "result": {
                                 "type": "object",
-                                "value": candidates
+                                "value": {
+                                    "collision": false,
+                                    "candidates": candidates
+                                }
                             }
                         }))
                     }
@@ -1291,6 +1547,23 @@ mod tests {
                         }
                         self.completed.notify_waiters();
                         Ok(json!({"node": {"backendNodeId": index as i64 + 100}}))
+                    }
+                    "DOM.resolveNode" => {
+                        self.document_resolve_calls.fetch_add(1, Ordering::SeqCst);
+                        self.document_resolve_started.notify_waiters();
+                        let permit = self
+                            .document_resolve_gate
+                            .clone()
+                            .acquire_owned()
+                            .await
+                            .map_err(|error| CdpError::Protocol {
+                                code: -1,
+                                message: error.to_string(),
+                            })?;
+                        permit.forget();
+                        Ok(json!({
+                            "object": {"type": "object", "objectId": "document-object"}
+                        }))
                     }
                     "Runtime.releaseObjectGroup" => {
                         self.released_groups.fetch_add(1, Ordering::SeqCst);
@@ -1364,12 +1637,13 @@ mod tests {
         assert!(calls.iter().all(
             |call| call.session.as_ref().map(|session| session.0.as_str()) == Some("page-session")
         ));
-        assert!(calls.iter().all(|call| {
-            call.params
-                .get("expression")
-                .and_then(Value::as_str)
-                .is_none_or(|expression| !expression.contains("document.querySelector('"))
-        }));
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.method == "Runtime.evaluate")
+                .count(),
+            3
+        );
         Ok(())
     }
 
@@ -1452,36 +1726,126 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn child_cursor_scan_uses_frame_context_in_target_session() -> Result<(), CoreError> {
+    async fn colliding_page_marker_is_preserved_and_retried() -> Result<(), CoreError> {
+        let connection = Arc::new(CursorConnection {
+            marker_collisions_remaining: AtomicUsize::new(1),
+            ..CursorConnection::default()
+        });
+        let session = ProtocolSession::root(connection.clone());
+
+        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
+
+        assert_eq!(hits.len(), 3);
+        let calls = connection.calls();
+        let scans = calls
+            .iter()
+            .filter(|call| {
+                call.method == "Runtime.evaluate"
+                    && call
+                        .params
+                        .get("expression")
+                        .and_then(Value::as_str)
+                        .is_some_and(|expression| expression.contains("interactiveTags"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(scans.len(), 2);
+        assert_ne!(scans[0].params["expression"], scans[1].params["expression"]);
+        let cleanups = calls
+            .iter()
+            .filter_map(|call| {
+                call.params
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .filter(|expression| expression.contains("removeAttribute(a)"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cleanups.len(), 2);
+        assert!(
+            cleanups
+                .iter()
+                .all(|expression| expression.contains("v.indexOf(p)===0"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_cursor_scan_uses_main_world_document_in_target_session() -> Result<(), CoreError>
+    {
+        let connection = Arc::new(CursorConnection::default());
+        let session = ProtocolSession::for_session(
+            connection.clone(),
+            SessionId::from("page-session".to_string()),
+        );
+
+        let _hits = find_cursor_hits(&session, Some(901), &SnapshotBudget::new()).await?;
+
+        let calls = connection.calls();
+        let resolved_document = calls.iter().find(|call| call.method == "DOM.resolveNode");
+        assert_eq!(
+            resolved_document.and_then(|call| call.params.get("backendNodeId")),
+            Some(&json!(901))
+        );
+        assert!(calls.iter().all(|call| {
+            call.session
+                .as_ref()
+                .is_some_and(|session| session.0 == "page-session")
+        }));
+        let scan = calls.iter().find(|call| {
+            call.method == "Runtime.callFunctionOn"
+                && call
+                    .params
+                    .get("functionDeclaration")
+                    .and_then(Value::as_str)
+                    .is_some_and(|function| function.contains("interactiveTags"))
+        });
+        assert_eq!(
+            scan.and_then(|call| call.params.get("objectId")),
+            Some(&json!("document-object"))
+        );
+        assert!(
+            scan.and_then(|call| call.params.get("functionDeclaration"))
+                .and_then(Value::as_str)
+                .is_some_and(|function| function.contains("el.onclick!==null"))
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.method != "Page.createIsolatedWorld")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oopif_cursor_scan_uses_target_session_default_main_world() -> Result<(), CoreError> {
         let connection = Arc::new(CursorConnection::default());
         let session = ProtocolSession::for_session(
             connection.clone(),
             SessionId::from("oopif-session".to_string()),
         );
 
-        let _hits = find_cursor_hits(
-            &session,
-            Some(&crate::FrameId("child-frame".to_string())),
-            &SnapshotBudget::new(),
-        )
-        .await?;
+        let _hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
 
         let calls = connection.calls();
-        let create_world = calls
-            .iter()
-            .find(|call| call.method == "Page.createIsolatedWorld");
+        let scan = calls.iter().find(|call| {
+            call.method == "Runtime.evaluate"
+                && call
+                    .params
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .is_some_and(|expression| expression.contains("interactiveTags"))
+        });
+        assert!(scan.is_some());
         assert_eq!(
-            create_world.and_then(|call| call.params.get("frameId")),
-            Some(&json!("child-frame"))
+            scan.and_then(|call| call.session.as_ref())
+                .map(|session| session.0.as_str()),
+            Some("oopif-session")
         );
-        assert!(calls.iter().all(|call| {
-            call.session
-                .as_ref()
-                .is_some_and(|session| session.0 == "oopif-session")
-        }));
-        assert!(calls.iter().all(|call| {
-            call.method != "Runtime.evaluate" || call.params.get("contextId") == Some(&json!(7))
-        }));
+        assert!(calls.iter().all(|call| call.method != "DOM.resolveNode"));
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.params.get("contextId").is_none())
+        );
         Ok(())
     }
 
@@ -1556,6 +1920,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_document_resolution_still_releases_its_object_group()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(GatedCursorConnection::new(1));
+        let session = ProtocolSession::root(connection.clone());
+        let task = tokio::spawn(async move {
+            find_cursor_hits(&session, Some(901), &SnapshotBudget::new()).await
+        });
+
+        connection.wait_for_document_resolve().await;
+        task.abort();
+        assert!(task.await.is_err());
+        connection.wait_for_cleanup().await;
+        assert_eq!(connection.cleanup_evaluations.load(Ordering::SeqCst), 0);
+        assert_eq!(connection.released_groups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn frame_ax_cursor_and_document_acquisition_overlap() -> Result<(), CoreError> {
         let connection = Arc::new(StageOverlapConnection::new());
         let session = ProtocolSession::root(connection.clone());
@@ -1563,7 +1945,7 @@ mod tests {
         let target = FrameTarget {
             session: session.clone(),
             ax_params: json!({"frameId": frame_id.0}),
-            runtime_frame_id: Some(frame_id.clone()),
+            cursor_uses_session_default: false,
         };
         let frame_documents = std::collections::HashMap::from([(
             Some(frame_id.clone()),
@@ -1573,6 +1955,7 @@ mod tests {
             super::acquire_frame_data(
                 target,
                 Some(frame_id),
+                Some(901),
                 &session,
                 &frame_documents,
                 &SnapshotBudget::new(),
@@ -1620,11 +2003,12 @@ mod tests {
         let ax_target = FrameTarget {
             session: ax_session.clone(),
             ax_params: json!({"frameId": frame_id.0}),
-            runtime_frame_id: Some(frame_id.clone()),
+            cursor_uses_session_default: false,
         };
         let result = super::acquire_frame_data(
             ax_target,
             Some(frame_id.clone()),
+            Some(901),
             &ax_session,
             &frame_documents,
             &SnapshotBudget::new(),
@@ -1642,11 +2026,12 @@ mod tests {
         let optional_target = FrameTarget {
             session: optional_session.clone(),
             ax_params: json!({"frameId": frame_id.0}),
-            runtime_frame_id: Some(frame_id.clone()),
+            cursor_uses_session_default: false,
         };
         let acquired = super::acquire_frame_data(
             optional_target,
             Some(frame_id),
+            Some(901),
             &optional_session,
             &frame_documents,
             &SnapshotBudget::new(),

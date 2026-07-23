@@ -248,7 +248,7 @@ impl Observer {
                 visited.push(frame_id.clone());
             }
 
-            let acquired = self.acquire_frame(frame_id, &context).await?;
+            let acquired = self.acquire_frame(frame_id, None, &context).await?;
             self.assemble_acquired_frame(acquired, refs, base_depth, visited, context)
                 .await
         })
@@ -300,7 +300,13 @@ impl Observer {
                     .collect::<Vec<_>>()
             };
             let children = self
-                .acquire_child_frames(&target, &rendered.iframes, &visited, &context)
+                .acquire_child_frames(
+                    &target,
+                    frame_id.as_ref(),
+                    &rendered.iframes,
+                    &visited,
+                    &context,
+                )
                 .await;
             // `acquire_child_frames` restores original stitch order after unordered completion.
             // Reverse it here because refs and line insertion have historically followed reverse
