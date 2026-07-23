@@ -151,16 +151,53 @@ impl SkillReconciler {
             }
         }
 
-        let recorded_targets = records.keys().cloned().collect::<Vec<_>>();
-        for target in recorded_targets {
-            let Some(record) = records.get(&target) else {
-                continue;
-            };
-            if record.skill_name != spec.name || desired.contains_key(&target) {
+        let mut cleanup_targets = records.keys().cloned().collect::<BTreeSet<_>>();
+        for agent in AgentId::ALL {
+            if resolve_harness_definition(agent).skill.is_some() {
+                cleanup_targets.insert(resolve_agent_skill_target(agent, &spec.name, environment)?);
+            }
+        }
+        for target in cleanup_targets {
+            if desired.contains_key(&target) {
                 continue;
             }
-            match fs::symlink_metadata(&target) {
-                Ok(_) => match remove_path(&target) {
+            let record_controls = records
+                .get(&target)
+                .is_some_and(|record| record.skill_name == spec.name);
+            let metadata = match fs::symlink_metadata(&target) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => {
+                    outcome.warnings.push(SkillWarning {
+                        target: target.clone(),
+                        message: format!("Could not inspect stale managed skill: {error}"),
+                    });
+                    continue;
+                }
+            };
+            let marker_controls = if record_controls {
+                false
+            } else if metadata.as_ref().is_some_and(|value| value.is_dir()) {
+                match read_marker(&target) {
+                    Ok(marker) => marker
+                        .as_ref()
+                        .is_some_and(|marker| marker.controls(&spec.name)),
+                    Err(error) => {
+                        outcome.warnings.push(SkillWarning {
+                            target: target.clone(),
+                            message: error.to_string(),
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                false
+            };
+            if !record_controls && !marker_controls {
+                continue;
+            }
+            match metadata {
+                Some(_) => match remove_path(&target) {
                     Ok(()) => {
                         outcome.removed += 1;
                         records.remove(&target);
@@ -170,13 +207,9 @@ impl SkillReconciler {
                         message: format!("Could not remove managed skill: {error}"),
                     }),
                 },
-                Err(error) if error.kind() == ErrorKind::NotFound => {
+                None => {
                     records.remove(&target);
                 }
-                Err(error) => outcome.warnings.push(SkillWarning {
-                    target: target.clone(),
-                    message: format!("Could not inspect stale managed skill: {error}"),
-                }),
             }
         }
 
@@ -278,7 +311,7 @@ fn replace_managed_directory_with(
     fs::write(temporary.path().join(MARKER_FILE), marker)?;
     let prepared = temporary.keep();
     let backup = sibling_backup_path(target);
-    let result = swap_directories_with(&prepared, target, &backup, rename);
+    let result = swap_directories_with(&prepared, target, &backup, rename, remove_path);
     if result.is_err() && fs::symlink_metadata(&prepared).is_ok() {
         let _ = remove_path(&prepared);
     }
@@ -290,6 +323,7 @@ fn swap_directories_with(
     target: &Path,
     backup: &Path,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     let target_exists = fs::symlink_metadata(target).is_ok();
     if target_exists {
@@ -306,8 +340,26 @@ fn swap_directories_with(
             ))),
         };
     }
-    if target_exists {
-        remove_path(backup)?;
+    if target_exists && let Err(cleanup_error) = remove(backup) {
+        // The prior target stays authoritative until its backup is gone so
+        // a reported failure cannot leave the filesystem ahead of the ledger.
+        if let Err(move_new_error) = rename(target, prepared) {
+            return Err(std::io::Error::other(format!(
+                "backup cleanup failed: {cleanup_error}; could not prepare rollback: {move_new_error}"
+            )));
+        }
+        if let Err(restore_error) = rename(backup, target) {
+            let reapply = rename(prepared, target);
+            return Err(std::io::Error::other(match reapply {
+                Ok(()) => format!(
+                    "backup cleanup failed: {cleanup_error}; restore failed: {restore_error}; replacement was reapplied"
+                ),
+                Err(reapply_error) => format!(
+                    "backup cleanup failed: {cleanup_error}; restore failed: {restore_error}; reapplying replacement failed: {reapply_error}"
+                ),
+            }));
+        }
+        return Err(cleanup_error);
     }
     Ok(())
 }
@@ -376,18 +428,62 @@ mod tests {
         fs::write(target.join("SKILL.md"), "old")?;
         fs::write(prepared.join("SKILL.md"), "new")?;
         let mut calls = 0;
-        let error = swap_directories_with(&prepared, &target, &backup, |from, to| {
-            calls += 1;
-            if calls == 2 {
-                Err(std::io::Error::other("injected replace failure"))
-            } else {
-                fs::rename(from, to)
-            }
-        })
+        let error = swap_directories_with(
+            &prepared,
+            &target,
+            &backup,
+            |from, to| {
+                calls += 1;
+                if calls == 2 {
+                    Err(std::io::Error::other("injected replace failure"))
+                } else {
+                    fs::rename(from, to)
+                }
+            },
+            super::remove_path,
+        )
         .err()
         .ok_or_else(|| std::io::Error::other("swap unexpectedly succeeded"))?;
         assert!(error.to_string().contains("injected replace failure"));
         assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, "old");
+        assert!(!backup.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_backup_cleanup_restores_the_previous_target() -> std::io::Result<()> {
+        let root = tempdir()?;
+        let target = root.path().join("browserclaw");
+        let prepared = root.path().join("prepared");
+        let backup = root.path().join("backup");
+        fs::create_dir_all(&target)?;
+        fs::create_dir_all(&prepared)?;
+        fs::write(target.join("SKILL.md"), "old")?;
+        fs::write(prepared.join("SKILL.md"), "new")?;
+
+        let error = swap_directories_with(
+            &prepared,
+            &target,
+            &backup,
+            |from, to| fs::rename(from, to),
+            |path| {
+                if path == backup {
+                    Err(std::io::Error::other("injected backup cleanup failure"))
+                } else {
+                    super::remove_path(path)
+                }
+            },
+        )
+        .err()
+        .ok_or_else(|| std::io::Error::other("swap unexpectedly succeeded"))?;
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected backup cleanup failure")
+        );
+        assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, "old");
+        assert_eq!(fs::read_to_string(prepared.join("SKILL.md"))?, "new");
         assert!(!backup.exists());
         Ok(())
     }

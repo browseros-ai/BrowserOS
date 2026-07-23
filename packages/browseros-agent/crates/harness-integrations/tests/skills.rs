@@ -134,6 +134,29 @@ fn either_manifest_or_marker_recovers_ownership() -> Result<(), Box<dyn std::err
 }
 
 #[test]
+fn marker_only_target_is_removed_after_the_last_disconnect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let environment = SkillEnvironment::new(root.path().join("home"), TargetPlatform::Linux);
+    let state = root.path().join("state");
+    let reconciler = SkillReconciler::new(&state);
+    let target = resolve_agent_skill_target(AgentId::Cursor, "browserclaw", &environment)?;
+
+    reconciler.reconcile(
+        &spec("managed\n")?,
+        &agents(&[AgentId::Cursor]),
+        &environment,
+    )?;
+    fs::remove_file(state.join("skills.json"))?;
+
+    let removed = reconciler.reconcile(&spec("managed\n")?, &BTreeSet::new(), &environment)?;
+
+    assert_eq!(removed.removed, 1);
+    assert!(!target.exists());
+    Ok(())
+}
+
+#[test]
 fn shared_consumers_keep_the_target_until_the_last_disconnect()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
