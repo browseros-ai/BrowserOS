@@ -1,7 +1,10 @@
 use crate::{
     AppState, VERSION,
     api::mcp::{
-        dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
+        dispatch::{
+            ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token,
+            operator_cancellation_result,
+        },
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
@@ -115,8 +118,13 @@ impl ClawMcpService {
         let rename = match rename_session(Some(started.session.as_ref()), raw_args).await {
             Ok(rename) => rename,
             Err(message) => {
-                started.session.finish_dispatch(&dispatch_id).await;
-                return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
+                return finish_local_dispatch(
+                    started.session.as_ref(),
+                    &dispatch_id,
+                    ToolResult::error(message),
+                )
+                .await
+                .into_call_tool_result();
             }
         };
         let browser = self.state.browser.session().await;
@@ -145,8 +153,9 @@ impl ClawMcpService {
         {
             warn!(error = %error, "local tool audit submission failed");
         }
-        started.session.finish_dispatch(&dispatch_id).await;
-        result.into_call_tool_result()
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
     }
 
     async fn set_client_info(&self, request: &InitializeRequestParams) {
@@ -479,6 +488,18 @@ fn clean_client_field(value: &str, fallback: &str) -> String {
     }
 }
 
+async fn finish_local_dispatch(
+    session: &Session,
+    dispatch_id: &DispatchId,
+    result: ToolResult,
+) -> ToolResult {
+    if !session.finish_dispatch(dispatch_id).await && session.operator_stop_requested() {
+        operator_cancellation_result()
+    } else {
+        result
+    }
+}
+
 fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<SessionId> {
     extensions
         .get::<axum::http::request::Parts>()
@@ -544,6 +565,40 @@ mod tests {
         assert_eq!(snapshot.dispatch_count, 1);
         assert_eq!(snapshot.tools[0].tool_name, "name_session");
         assert_eq!(snapshot.tools[0].max_duration_ms, 12);
+    }
+
+    #[tokio::test]
+    async fn local_tool_returns_cancellation_when_operator_stop_wins() -> anyhow::Result<()> {
+        let session = usage_session();
+        let dispatch_id = DispatchId::new();
+        assert!(
+            session
+                .try_register_dispatch(dispatch_id.clone(), CancellationToken::new())
+                .await
+        );
+        session.request_operator_stop();
+        assert_eq!(session.stop_dispatches().await, 1);
+
+        let result = finish_local_dispatch(
+            session.as_ref(),
+            &dispatch_id,
+            ToolResult::text("renamed", None),
+        )
+        .await;
+
+        assert!(result.is_error);
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value["cancellationKind"].as_str()),
+            Some("cockpit.operator-cancelled")
+        );
+        assert_eq!(
+            session.pending_operator_cancellation_audits().await,
+            [dispatch_id]
+        );
+        Ok(())
     }
 
     #[tokio::test(start_paused = true)]

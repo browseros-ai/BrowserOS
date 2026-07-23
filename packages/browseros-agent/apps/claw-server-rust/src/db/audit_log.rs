@@ -30,6 +30,7 @@ const ARGS_JSON_MAX: usize = 4096;
 const RESULT_META_MAX: usize = 4096;
 const RESULT_STRUCTURED_KEY_MAX: usize = 128;
 const RESULT_STRUCTURED_KEYS_MAX: usize = 16;
+const RESULT_JSON_STRING_MAX: usize = 192;
 const SUSTAINED_ERROR_TAIL: usize = 3;
 const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
 
@@ -798,7 +799,7 @@ pub fn result_meta(
         .map(|obj| {
             obj.keys()
                 .take(RESULT_STRUCTURED_KEYS_MAX)
-                .map(|key| truncate_utf8(key, RESULT_STRUCTURED_KEY_MAX))
+                .map(|key| bounded_json_string(key))
                 .collect()
         })
         .unwrap_or_default();
@@ -812,12 +813,33 @@ pub fn result_meta(
         .get("cancellationKind")
         .and_then(serde_json::Value::as_str)
     {
-        summary["cancellationKind"] =
-            json!(truncate_utf8(cancellation_kind, RESULT_STRUCTURED_KEY_MAX));
+        summary["cancellationKind"] = json!(bounded_json_string(cancellation_kind));
     }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
     serialized
+}
+
+fn bounded_json_string(value: &str) -> String {
+    let value = truncate_utf8(value, RESULT_STRUCTURED_KEY_MAX);
+    if serde_json::to_string(&value).map_or(usize::MAX, |encoded| encoded.len())
+        <= RESULT_JSON_STRING_MAX
+    {
+        return value;
+    }
+    let mut end = value.len().saturating_sub(1);
+    loop {
+        while !value.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        let candidate = format!("{}~", &value[..end]);
+        if serde_json::to_string(&candidate).map_or(usize::MAX, |encoded| encoded.len())
+            <= RESULT_JSON_STRING_MAX
+        {
+            return candidate;
+        }
+        end = end.saturating_sub(1);
+    }
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
@@ -868,6 +890,27 @@ mod tests {
             tool_output_token_estimate: 22,
             token_estimator_version: 1,
         }
+    }
+
+    #[test]
+    fn result_metadata_bounds_json_escaped_strings() -> anyhow::Result<()> {
+        let mut structured = serde_json::Map::new();
+        for index in 0..16 {
+            structured.insert(
+                format!("{}-{index:02}", "\0".repeat(124)),
+                serde_json::Value::Null,
+            );
+        }
+        structured.insert(
+            "cancellationKind".to_string(),
+            serde_json::Value::String("\0".repeat(1024)),
+        );
+
+        let meta = result_meta(false, false, &serde_json::Value::Object(structured), 1);
+
+        assert!(meta.len() <= 4096);
+        serde_json::from_str::<serde_json::Value>(&meta)?;
+        Ok(())
     }
 
     #[tokio::test]

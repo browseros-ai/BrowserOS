@@ -22,6 +22,7 @@ use std::{
 use tokio::{sync::Mutex, time::timeout};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
+const CAPTURE_TASK_CONCURRENCY_LIMIT: usize = 2;
 
 #[derive(Clone)]
 struct CaptureCandidate {
@@ -38,7 +39,11 @@ struct InFlightCaptures {
 
 impl InFlightCaptures {
     async fn begin(&self, page_id: u32) -> bool {
-        self.page_ids.lock().await.insert(page_id)
+        let mut page_ids = self.page_ids.lock().await;
+        if page_ids.len() >= CAPTURE_TASK_CONCURRENCY_LIMIT {
+            return false;
+        }
+        page_ids.insert(page_id)
     }
 
     async fn finish(&self, page_id: u32) {
@@ -52,8 +57,8 @@ pub struct SessionVisualService {
     session_tabs: Arc<SessionTabLedger>,
     browser: Arc<BrowserService>,
     tab_activity: Arc<TabActivityService>,
-    /// Page IDs stay present until the underlying CDP task resolves, even when
-    /// its caller times out, so polling cannot queue work behind a stuck capture.
+    /// Entries retain the process-wide capture slot until the underlying CDP task resolves, even
+    /// after caller timeout, so stuck tasks cannot escape the concurrency bound.
     in_flight: Arc<InFlightCaptures>,
 }
 
@@ -242,8 +247,10 @@ mod tests {
         let captures = InFlightCaptures::default();
         assert!(captures.begin(7).await);
         assert!(!captures.begin(7).await);
+        assert!(captures.begin(8).await);
+        assert!(!captures.begin(9).await);
 
         captures.finish(7).await;
-        assert!(captures.begin(7).await);
+        assert!(captures.begin(9).await);
     }
 }

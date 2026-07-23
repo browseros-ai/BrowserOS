@@ -428,7 +428,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     })
 }
 
-fn operator_cancellation_result() -> ToolResult {
+pub(super) fn operator_cancellation_result() -> ToolResult {
     ToolResult {
         content: vec![ContentBlock::text(CANCELLATION_REASON)],
         is_error: true,

@@ -387,23 +387,23 @@ impl AuditActor {
     }
 
     fn settle_flushes(&mut self) {
-        for state in self.sessions.values_mut() {
+        self.sessions.retain(|_, state| {
             if state.preview_in_flight || state.pending_preview.is_some() || state.preview_queued {
-                continue;
+                return true;
             }
             let waiters = std::mem::take(&mut state.flush_waiters);
             if waiters.is_empty() {
-                continue;
+                return true;
             }
             let error = (!state.errors.is_empty()).then(|| state.errors.join("; "));
-            state.errors.clear();
             for waiter in waiters {
                 let result = error
                     .as_ref()
                     .map_or_else(|| Ok(()), |error| Err(AppError::Internal(error.clone())));
                 let _ = waiter.send(result);
             }
-        }
+            false
+        });
     }
 
     fn has_preview_in_flight(&self) -> bool {
@@ -628,6 +628,37 @@ mod tests {
             Box::pin(async move { Ok(lease.upgrade().is_some()) })
         }));
         event
+    }
+
+    #[tokio::test]
+    async fn settled_flush_evicts_session_state() -> anyhow::Result<()> {
+        let (_command_sender, receiver) = mpsc::channel(1);
+        let (preview_sender, preview_receiver) = mpsc::channel(1);
+        let (reply, result) = oneshot::channel();
+        let mut actor = AuditActor {
+            receiver,
+            preview_sender,
+            preview_receiver,
+            store: TestStore::new(1, None),
+            preview_concurrency: 1,
+            active_previews: 0,
+            ready_previews: VecDeque::new(),
+            sessions: HashMap::from([(
+                "settled".to_string(),
+                SessionWork {
+                    flush_waiters: vec![reply],
+                    ..SessionWork::default()
+                },
+            )]),
+            shutdown_reply: None,
+            command_channel_open: true,
+        };
+
+        actor.settle_flushes();
+
+        assert!(actor.sessions.is_empty());
+        result.await??;
+        Ok(())
     }
 
     #[tokio::test]
