@@ -65,13 +65,6 @@
     >
       Zero-sized excluded target
     </span>
-    <div
-      id="vanishing-candidate"
-      role="group"
-      aria-label="Vanishing cursor target"
-    >
-      Vanishing cursor target
-    </div>
     <div id="page-owned-marker" data-__bcid-page-owned="fixture-owned">
       Page-owned marker sentinel
     </div>
@@ -146,6 +139,15 @@
 
       window.snapshotCursorFixture = {
         ready: true,
+        armVanishingCandidate() {
+          if (document.getElementById('vanishing-candidate')) return
+          const candidate = document.createElement('div')
+          candidate.id = 'vanishing-candidate'
+          candidate.setAttribute('role', 'group')
+          candidate.setAttribute('aria-label', 'Vanishing cursor target')
+          candidate.textContent = 'Vanishing cursor target'
+          generatedBatch.children[16].before(candidate)
+        },
         resetProbe() {
           seenMarkerNamespaces.clear()
           maxActiveMarkerNamespaces = 0

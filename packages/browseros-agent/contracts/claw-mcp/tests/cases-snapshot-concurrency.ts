@@ -222,6 +222,21 @@ async function waitForCursorFixture(
   }, 'the cursor concurrency fixture to be ready')
 }
 
+async function armVanishingCandidate(
+  ctx: CaseContext,
+  page: number,
+): Promise<void> {
+  await evaluateText(
+    ctx,
+    page,
+    'window.snapshotCursorFixture.armVanishingCandidate(); return "armed"',
+  )
+  await waitUntil(async () => {
+    const state = await cursorProbeState(ctx, page)
+    return state.vanishingCandidatePresent
+  }, 'the vanishing cursor candidate to be armed')
+}
+
 async function requireCleanCursorProbe(
   ctx: CaseContext,
   page: number,
@@ -249,6 +264,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         ctx.fixture('/snapshot-cursor-concurrency.html'),
       )
       await waitForCursorFixture(ctx, page)
+      await armVanishingCandidate(ctx, page)
 
       const snapshot = expectOk(
         await ctx.mcp.callTool('snapshot', { page }),
@@ -261,6 +277,12 @@ export const snapshotConcurrencyCases: ContractCase[] = [
       if (zeroSizedLine?.includes('[ref=')) {
         throw new Error(
           `zero-sized cursor candidate received a ref: ${zeroSizedLine}`,
+        )
+      }
+      const vanishingLine = snapshotLine(snapshot, 'Vanishing cursor target')
+      if (vanishingLine?.includes('[ref=')) {
+        throw new Error(
+          `vanished cursor candidate received a ref: ${vanishingLine}`,
         )
       }
       const state = await requireCleanCursorProbe(ctx, page)

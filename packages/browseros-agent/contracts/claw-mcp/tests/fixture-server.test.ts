@@ -101,6 +101,7 @@ describe('fixture server', () => {
     expect(cursorConcurrency).toInclude('data-__bcid-page-owned')
     expect(cursorConcurrency).toInclude('Cursor candidate 63')
     expect(cursorConcurrency).toInclude('zero-sized-excluded')
+    expect(cursorConcurrency).toInclude('armVanishingCandidate')
 
     const frameTree = await read('snapshot-frame-tree.html')
     expect(frameTree).toInclude('snapshotFrameFixture')
