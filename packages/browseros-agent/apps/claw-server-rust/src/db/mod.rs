@@ -273,7 +273,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 9);
+        assert_eq!(migrations.len(), 10);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -301,6 +301,18 @@ mod tests {
         assert_eq!(
             migrations[6].try_get::<String>("", "version")?,
             "m0007_add_session_efficiency_stats"
+        );
+        assert_eq!(
+            migrations[7].try_get::<String>("", "version")?,
+            "m0008_add_task_token_estimates"
+        );
+        assert_eq!(
+            migrations[8].try_get::<String>("", "version")?,
+            "m0009_rebase_screenshot_baseline"
+        );
+        assert_eq!(
+            migrations[9].try_get::<String>("", "version")?,
+            "m0010_sum_session_efficiency_durations"
         );
         Ok(())
     }
@@ -343,7 +355,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 9);
+        assert_eq!(migrations.len(), 10);
         assert_eq!(
             migrations
                 .iter()
@@ -366,7 +378,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 9);
+        assert_eq!(migration_count, 10);
         Ok(())
     }
 
@@ -502,7 +514,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 9);
+        assert_eq!(migrations.len(), 10);
         Ok(())
     }
 

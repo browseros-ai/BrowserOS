@@ -714,8 +714,8 @@ async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::
     assert_eq!(status, StatusCode::OK);
     let measured_window = json!({
         "browserClawTokenEstimate": 2_001,
-        "screenshotFirstTokenEstimate": 1_537,
-        "rawTokenSavingsEstimate": -464,
+        "screenshotFirstTokenEstimate": 3_001,
+        "rawTokenSavingsEstimate": 1_000,
         "humanTimeSavedMs": 5,
         "sessionCount": 1,
         "toolCallCount": 1,
