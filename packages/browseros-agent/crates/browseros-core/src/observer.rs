@@ -15,7 +15,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
 mod acquisition;
-use acquisition::{SnapshotBudget, find_cursor_hits};
+use acquisition::{AcquiredFrame, SnapshotBudget};
 
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
@@ -193,25 +193,12 @@ impl Observer {
                 visited.push(frame_id.clone());
             }
 
-            let target = self
-                .frames
-                .resolve_frame_target(self.page_id.clone(), frame_id.clone())
-                .await?;
-            let nodes = fetch_ax_tree(&target.session, target.ax_params.clone()).await?;
-            let cursor_hits = find_cursor_hits(
-                &target.session,
-                target.runtime_frame_id.as_ref(),
-                &context.budget,
-            )
-            .await
-            .unwrap_or_default();
-            let document_id = self
-                .stable_document_id_for_frame(
-                    &context.root_session,
-                    frame_id.clone(),
-                    &context.frame_documents,
-                )
-                .await;
+            let AcquiredFrame {
+                target,
+                nodes,
+                cursor_hits,
+                document_id,
+            } = self.acquire_frame(frame_id.clone(), &context).await?;
             let mut render_opts = RenderOptions {
                 refs: &mut refs,
                 frame_id: frame_id.clone(),
@@ -312,29 +299,6 @@ impl Observer {
             .flatten()
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    async fn stable_document_id_for_frame(
-        &self,
-        root_session: &ProtocolSession,
-        frame_id: Option<FrameId>,
-        frame_documents: &HashMap<Option<FrameId>, DocumentId>,
-    ) -> Option<DocumentId> {
-        let before = frame_documents.get(&frame_id).cloned();
-        if frame_id.is_none() || before.is_none() {
-            return before;
-        }
-        let latest = self.read_frame_documents(root_session).await.ok();
-        let after = latest.and_then(|latest| latest.get(&frame_id).cloned());
-        if after == before { before } else { None }
-    }
-
-    async fn read_frame_documents(
-        &self,
-        session: &ProtocolSession,
-    ) -> Result<HashMap<Option<FrameId>, DocumentId>, CoreError> {
-        let result: GetFrameTreeResult = session.send("Page.getFrameTree", json!({})).await?;
-        Ok(collect_frame_documents(&result.frame_tree))
     }
 }
 
@@ -829,7 +793,9 @@ mod tests {
         child_nodes: Vec<AxNode>,
         fail_ax_tree: bool,
         frame_tree_reads: usize,
+        ax_tree_reads: usize,
         change_child_loader_on_second_read: bool,
+        main_loader_changes_remaining: usize,
     }
 
     struct HarnessConnection {
@@ -870,9 +836,16 @@ mod tests {
                         if state.change_child_loader_on_second_read && state.frame_tree_reads == 2 {
                             state.child_loader_id = Some("child-loader-2".to_string());
                         }
+                        if state.frame_tree_reads % 2 == 0
+                            && state.main_loader_changes_remaining > 0
+                        {
+                            state.loader_id = format!("loader-{}", state.frame_tree_reads);
+                            state.main_loader_changes_remaining -= 1;
+                        }
                         Ok(json!({ "frameTree": frame_tree_value(&state) }))
                     }
                     "Accessibility.getFullAXTree" => {
+                        state.ax_tree_reads += 1;
                         if state.fail_ax_tree {
                             return Err(CdpError::Protocol {
                                 code: -32000,
@@ -988,7 +961,9 @@ mod tests {
             child_nodes: Vec::new(),
             fail_ax_tree: false,
             frame_tree_reads: 0,
+            ax_tree_reads: 0,
             change_child_loader_on_second_read: false,
+            main_loader_changes_remaining: 0,
         }
     }
 
@@ -1054,6 +1029,55 @@ mod tests {
                 .map(|entry| entry.backend_node_id),
             Some(1)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_retries_once_when_main_document_changes() -> Result<(), CoreError> {
+        let mut state = harness_state(vec![root_with(&["2"]), ax_button("2", "A", 1)]);
+        state.main_loader_changes_remaining = 1;
+        let (connection, observer) = observer_harness(state).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(snapshot.text, "- button \"A\" [ref=e1]");
+        let (frame_tree_reads, ax_tree_reads) = connection
+            .state
+            .lock()
+            .map(|state| (state.frame_tree_reads, state.ax_tree_reads))
+            .unwrap_or_default();
+        assert_eq!(frame_tree_reads, 4);
+        assert_eq!(ax_tree_reads, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_document_change_exhaustion_keeps_committed_refs() -> Result<(), CoreError> {
+        let state = harness_state(vec![root_with(&["2"]), ax_button("2", "A", 1)]);
+        let (connection, observer) = observer_harness(state).await?;
+        let _snapshot = observer.snapshot().await?;
+        if let Ok(mut state) = connection.state.lock() {
+            state.nodes = vec![root_with(&["3"]), ax_button("3", "B", 2)];
+            state.frame_tree_reads = 0;
+            state.ax_tree_reads = 0;
+            state.main_loader_changes_remaining = 3;
+        }
+
+        let result = observer.snapshot().await;
+
+        assert!(matches!(result, Err(CoreError::DocumentChanged)));
+        let refs = observer.last_refs().await;
+        assert_eq!(
+            refs.get(&crate::Ref("e1".to_string()))
+                .map(|entry| entry.backend_node_id),
+            Some(1)
+        );
+        let ax_tree_reads = connection
+            .state
+            .lock()
+            .map(|state| state.ax_tree_reads)
+            .unwrap_or_default();
+        assert_eq!(ax_tree_reads, 3);
         Ok(())
     }
 

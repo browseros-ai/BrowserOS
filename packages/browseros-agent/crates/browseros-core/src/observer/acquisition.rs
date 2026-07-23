@@ -5,8 +5,15 @@
 //! acquisition stage in one capture so concurrency is bounded without scheduling CDP work onto a
 //! separate runtime or throttling unrelated browser commands.
 
-use super::DescribeNodeResult;
-use crate::{CoreError, FrameId, ProtocolSession};
+use super::{
+    AxTreeResult, CaptureContext, DescribeNodeResult, GetFrameTreeResult, Observer,
+    collect_frame_documents,
+};
+use crate::{
+    CoreError, FrameId, ProtocolSession,
+    frames::FrameTarget,
+    snapshot::{AxNode, DocumentId},
+};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -58,6 +65,81 @@ impl SnapshotBudget {
         drop(permit);
         result
     }
+}
+
+/// Immutable Chrome inputs for one frame. Rendering receives this only after acquisition
+/// completes, so no concurrent future can observe or mutate the capture's `RefMap`.
+pub(super) struct AcquiredFrame {
+    pub(super) target: FrameTarget,
+    pub(super) nodes: Vec<AxNode>,
+    pub(super) cursor_hits: HashMap<i64, Vec<String>>,
+    pub(super) document_id: Option<DocumentId>,
+}
+
+impl Observer {
+    pub(super) async fn acquire_frame(
+        &self,
+        frame_id: Option<FrameId>,
+        context: &CaptureContext,
+    ) -> Result<AcquiredFrame, CoreError> {
+        let target = self
+            .frames
+            .resolve_frame_target(self.page_id.clone(), frame_id.clone())
+            .await?;
+        acquire_frame_data(
+            target,
+            frame_id,
+            &context.root_session,
+            &context.frame_documents,
+            &context.budget,
+        )
+        .await
+    }
+}
+
+async fn acquire_frame_data(
+    target: FrameTarget,
+    frame_id: Option<FrameId>,
+    root_session: &ProtocolSession,
+    frame_documents: &HashMap<Option<FrameId>, DocumentId>,
+    budget: &SnapshotBudget,
+) -> Result<AcquiredFrame, CoreError> {
+    let ax_tree = budget.send::<AxTreeResult>(
+        &target.session,
+        "Accessibility.getFullAXTree",
+        target.ax_params.clone(),
+    );
+    let cursor_hits = find_cursor_hits(&target.session, target.runtime_frame_id.as_ref(), budget);
+    let document_id = stable_document_id_for_frame(root_session, frame_id, frame_documents, budget);
+    // These stages are independent after target resolution. AX failure remains fatal, while
+    // cursor and document identity retain their existing best-effort fallback semantics.
+    let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
+
+    Ok(AcquiredFrame {
+        target,
+        nodes: nodes?.nodes,
+        cursor_hits: cursor_hits.unwrap_or_default(),
+        document_id,
+    })
+}
+
+async fn stable_document_id_for_frame(
+    root_session: &ProtocolSession,
+    frame_id: Option<FrameId>,
+    frame_documents: &HashMap<Option<FrameId>, DocumentId>,
+    budget: &SnapshotBudget,
+) -> Option<DocumentId> {
+    let before = frame_documents.get(&frame_id).cloned();
+    if frame_id.is_none() || before.is_none() {
+        return before;
+    }
+    let latest = budget
+        .send::<GetFrameTreeResult>(root_session, "Page.getFrameTree", json!({}))
+        .await
+        .ok()
+        .map(|result| collect_frame_documents(&result.frame_tree));
+    let after = latest.and_then(|latest| latest.get(&frame_id).cloned());
+    if after == before { before } else { None }
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,13 +430,16 @@ async fn cleanup_cursor(
 #[cfg(test)]
 mod tests {
     use super::{SnapshotBudget, find_cursor_hits};
-    use crate::{CoreError, ProtocolSession, SessionId, connection::CdpConnection};
+    use crate::{
+        CoreError, FrameId, ProtocolSession, SessionId, connection::CdpConnection,
+        frames::FrameTarget,
+    };
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     };
     use tokio::sync::{Notify, Semaphore, broadcast};
 
@@ -369,6 +454,9 @@ mod tests {
         calls: Mutex<Vec<Call>>,
         omitted_candidate: Option<usize>,
         failed_candidate: Option<usize>,
+        fail_ax_tree: bool,
+        fail_cursor_scan: bool,
+        child_loader_id: &'static str,
     }
 
     impl Default for CursorConnection {
@@ -377,6 +465,9 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 omitted_candidate: None,
                 failed_candidate: None,
+                fail_ax_tree: false,
+                fail_cursor_scan: false,
+                child_loader_id: "child-loader",
             }
         }
     }
@@ -412,6 +503,12 @@ mod tests {
                             .and_then(Value::as_str)
                             .is_some_and(|expression| expression.contains("interactiveTags")) =>
                     {
+                        if self.fail_cursor_scan {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "cursor scan failed".to_string(),
+                            });
+                        }
                         Ok(json!({
                             "result": {
                                 "type": "object",
@@ -479,7 +576,188 @@ mod tests {
                             }
                         }))
                     }
+                    "Accessibility.getFullAXTree" => {
+                        if self.fail_ax_tree {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "AX tree failed".to_string(),
+                            });
+                        }
+                        Ok(json!({"nodes": []}))
+                    }
+                    "Page.getFrameTree" => Ok(json!({
+                        "frameTree": {
+                            "frame": {
+                                "id": "main",
+                                "loaderId": "main-loader",
+                                "url": "https://example.com/"
+                            },
+                            "childFrames": [{
+                                "frame": {
+                                    "id": "child-frame",
+                                    "loaderId": self.child_loader_id,
+                                    "url": "https://example.com/frame"
+                                }
+                            }]
+                        }
+                    })),
                     "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
+                    "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    _ => Ok(json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn acquired_frame_contains_only_raw_inputs() -> Result<(), CoreError> {
+        let connection = Arc::new(CursorConnection::default());
+        let session =
+            ProtocolSession::for_session(connection, SessionId::from("page-session".to_string()));
+        let frame_id = FrameId("child-frame".to_string());
+        let target = FrameTarget {
+            session: session.clone(),
+            ax_params: json!({"frameId": frame_id.0}),
+            runtime_frame_id: Some(frame_id.clone()),
+        };
+        let frame_documents = std::collections::HashMap::from([(
+            Some(frame_id.clone()),
+            "child-frame:child-loader".to_string(),
+        )]);
+
+        let acquired = super::acquire_frame_data(
+            target,
+            Some(frame_id),
+            &session,
+            &frame_documents,
+            &SnapshotBudget::new(),
+        )
+        .await?;
+
+        assert!(acquired.nodes.is_empty());
+        assert_eq!(acquired.cursor_hits.len(), 3);
+        assert_eq!(
+            acquired.document_id.as_deref(),
+            Some("child-frame:child-loader")
+        );
+        Ok(())
+    }
+
+    struct StageOverlapConnection {
+        started: AtomicU8,
+        started_changed: Notify,
+        ax_gate: Arc<Semaphore>,
+        cursor_gate: Arc<Semaphore>,
+        document_gate: Arc<Semaphore>,
+    }
+
+    impl StageOverlapConnection {
+        fn new() -> Self {
+            Self {
+                started: AtomicU8::new(0),
+                started_changed: Notify::new(),
+                ax_gate: Arc::new(Semaphore::new(0)),
+                cursor_gate: Arc::new(Semaphore::new(0)),
+                document_gate: Arc::new(Semaphore::new(0)),
+            }
+        }
+
+        async fn mark_and_wait(&self, bit: u8, gate: Arc<Semaphore>) -> Result<(), CdpError> {
+            self.started.fetch_or(bit, Ordering::SeqCst);
+            self.started_changed.notify_waiters();
+            let permit = gate
+                .acquire_owned()
+                .await
+                .map_err(|error| CdpError::Protocol {
+                    code: -1,
+                    message: error.to_string(),
+                })?;
+            permit.forget();
+            Ok(())
+        }
+
+        async fn wait_for_all_stages(&self) {
+            loop {
+                let notified = self.started_changed.notified();
+                if self.started.load(Ordering::SeqCst) == 0b111 {
+                    return;
+                }
+                notified.await;
+            }
+        }
+    }
+
+    impl CdpConnection for StageOverlapConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Accessibility.getFullAXTree" => {
+                        self.mark_and_wait(0b001, self.ax_gate.clone()).await?;
+                        Ok(json!({"nodes": []}))
+                    }
+                    "Runtime.evaluate"
+                        if params
+                            .get("expression")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
+                    {
+                        self.mark_and_wait(0b010, self.cursor_gate.clone()).await?;
+                        Ok(json!({
+                            "result": {
+                                "type": "object",
+                                "value": []
+                            }
+                        }))
+                    }
+                    "Page.getFrameTree" => {
+                        self.mark_and_wait(0b100, self.document_gate.clone())
+                            .await?;
+                        Ok(json!({
+                            "frameTree": {
+                                "frame": {
+                                    "id": "main",
+                                    "loaderId": "main-loader",
+                                    "url": "https://example.com/"
+                                },
+                                "childFrames": [{
+                                    "frame": {
+                                        "id": "child-frame",
+                                        "loaderId": "child-loader",
+                                        "url": "https://example.com/frame"
+                                    }
+                                }]
+                            }
+                        }))
+                    }
+                    "Page.createIsolatedWorld" => Ok(json!({"executionContextId": 7})),
+                    "Runtime.evaluate" => Ok(json!({"result": {"type": "undefined"}})),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
                     _ => Ok(json!({})),
                 }
@@ -765,9 +1043,9 @@ mod tests {
     async fn cursor_resolution_omits_vanished_candidates_and_cleans_its_namespace()
     -> Result<(), CoreError> {
         let connection = Arc::new(CursorConnection {
-            calls: Mutex::new(Vec::new()),
             omitted_candidate: Some(1),
             failed_candidate: Some(2),
+            ..CursorConnection::default()
         });
         let session = ProtocolSession::root(connection.clone());
 
@@ -924,6 +1202,106 @@ mod tests {
         connection.wait_for_cleanup().await;
         assert_eq!(connection.cleanup_evaluations.load(Ordering::SeqCst), 1);
         assert_eq!(connection.released_groups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn frame_ax_cursor_and_document_acquisition_overlap() -> Result<(), CoreError> {
+        let connection = Arc::new(StageOverlapConnection::new());
+        let session = ProtocolSession::root(connection.clone());
+        let frame_id = FrameId("child-frame".to_string());
+        let target = FrameTarget {
+            session: session.clone(),
+            ax_params: json!({"frameId": frame_id.0}),
+            runtime_frame_id: Some(frame_id.clone()),
+        };
+        let frame_documents = std::collections::HashMap::from([(
+            Some(frame_id.clone()),
+            "child-frame:child-loader".to_string(),
+        )]);
+        let task = tokio::spawn(async move {
+            super::acquire_frame_data(
+                target,
+                Some(frame_id),
+                &session,
+                &frame_documents,
+                &SnapshotBudget::new(),
+            )
+            .await
+        });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_all_stages(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        connection.ax_gate.add_permits(1);
+        connection.cursor_gate.add_permits(1);
+        connection.document_gate.add_permits(1);
+
+        let acquired = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+        assert!(acquired.nodes.is_empty());
+        assert!(acquired.cursor_hits.is_empty());
+        assert_eq!(
+            acquired.document_id.as_deref(),
+            Some("child-frame:child-loader")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn frame_acquisition_preserves_required_and_best_effort_failures() -> Result<(), CoreError>
+    {
+        let frame_id = FrameId("child-frame".to_string());
+        let frame_documents = std::collections::HashMap::from([(
+            Some(frame_id.clone()),
+            "child-frame:child-loader".to_string(),
+        )]);
+
+        let ax_failure = Arc::new(CursorConnection {
+            fail_ax_tree: true,
+            ..CursorConnection::default()
+        });
+        let ax_session = ProtocolSession::root(ax_failure);
+        let ax_target = FrameTarget {
+            session: ax_session.clone(),
+            ax_params: json!({"frameId": frame_id.0}),
+            runtime_frame_id: Some(frame_id.clone()),
+        };
+        let result = super::acquire_frame_data(
+            ax_target,
+            Some(frame_id.clone()),
+            &ax_session,
+            &frame_documents,
+            &SnapshotBudget::new(),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let optional_failures = Arc::new(CursorConnection {
+            fail_cursor_scan: true,
+            child_loader_id: "changed-loader",
+            ..CursorConnection::default()
+        });
+        let optional_session = ProtocolSession::root(optional_failures);
+        let optional_target = FrameTarget {
+            session: optional_session.clone(),
+            ax_params: json!({"frameId": frame_id.0}),
+            runtime_frame_id: Some(frame_id.clone()),
+        };
+        let acquired = super::acquire_frame_data(
+            optional_target,
+            Some(frame_id),
+            &optional_session,
+            &frame_documents,
+            &SnapshotBudget::new(),
+        )
+        .await?;
+        assert!(acquired.cursor_hits.is_empty());
+        assert!(acquired.document_id.is_none());
         Ok(())
     }
 }
