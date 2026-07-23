@@ -1,4 +1,5 @@
-import { useId, useState } from 'react'
+import { useState } from 'react'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
 export interface CockpitStatsWindow {
@@ -41,27 +42,18 @@ const wholeNumberFormat = new Intl.NumberFormat('en-US', {
 
 export function SavedStatsBand({ stats }: SavedStatsBandProps) {
   const [selectedWindow, setSelectedWindow] = useState<WindowKey>('allTime')
-  const componentId = useId()
-  const windowDefinition = WINDOWS.find(
-    ({ key }) => key === selectedWindow,
-  ) as (typeof WINDOWS)[number]
-  const windowStats = stats[selectedWindow]
-  const visibleSavings = Math.max(0, windowStats.rawTokenSavingsEstimate)
-  const savingsRatio = boundedRatio(
-    windowStats.rawTokenSavingsEstimate,
-    windowStats.screenshotFirstTokenEstimate,
-  )
-  const usedRatio = boundedRatio(
-    windowStats.browserClawTokenEstimate,
-    windowStats.screenshotFirstTokenEstimate,
-  )
-  const selectedTabId = `${componentId}-${selectedWindow}-tab`
-  const panelId = `${componentId}-panel`
 
   if (!stats.hasMeasuredStats) return null
 
   return (
-    <section className="flex min-w-0 flex-col gap-4">
+    <Tabs
+      className="min-w-0 gap-4"
+      onValueChange={(value) => {
+        if (isWindowKey(value)) setSelectedWindow(value)
+      }}
+      render={<section />}
+      value={selectedWindow}
+    >
       <header className="flex flex-wrap items-center gap-3">
         <h2 className="font-semibold text-ink text-lg">Since you started</h2>
         <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em]">
@@ -71,151 +63,171 @@ export function SavedStatsBand({ stats }: SavedStatsBandProps) {
           />
           nothing running
         </span>
-        <div
+        <TabsList
+          activateOnFocus
           aria-label="Saved stats window"
-          className="ml-auto inline-flex rounded-lg bg-card-tint p-1"
-          role="tablist"
+          className="ml-auto h-auto bg-card-tint p-1"
         >
-          {WINDOWS.map(({ key, tabLabel }) => {
-            const selected = key === selectedWindow
-            return (
-              <button
-                aria-controls={panelId}
-                aria-selected={selected}
-                className={cn(
-                  'rounded-md px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.06em] transition-[background-color,color,box-shadow] motion-reduce:transition-none',
-                  selected
-                    ? 'bg-card font-semibold text-accent-ink shadow-sm'
-                    : 'text-ink-3 hover:text-ink',
-                )}
-                id={`${componentId}-${key}-tab`}
-                key={key}
-                onClick={() => setSelectedWindow(key)}
-                role="tab"
-                tabIndex={selected ? 0 : -1}
-                type="button"
-              >
-                {tabLabel}
-              </button>
-            )
-          })}
-        </div>
+          {WINDOWS.map(({ key, tabLabel }) => (
+            <TabsTrigger
+              className="h-auto flex-none rounded-md border-0 px-3 py-1.5 font-mono font-normal text-[11px] text-ink-3 uppercase tracking-[0.06em] shadow-none transition-[background-color,color,box-shadow] hover:text-ink data-active:bg-card data-active:font-semibold data-active:text-accent-ink data-active:shadow-sm motion-reduce:transition-none"
+              key={key}
+              value={key}
+            >
+              {tabLabel}
+            </TabsTrigger>
+          ))}
+        </TabsList>
       </header>
 
-      <div
-        aria-labelledby={selectedTabId}
-        className="flex min-w-0 flex-col items-stretch gap-6 rounded-2xl border border-border-2 bg-card px-5 py-6 shadow-card md:flex-row md:items-center md:gap-8 md:px-7"
-        data-saved-stats-card
-        id={panelId}
-        role="tabpanel"
-      >
-        <div className="min-w-0 flex-[2]">
-          <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2">
-            <div>
-              <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.12em]">
-                Tokens saved · {windowDefinition.valueLabel}
-              </div>
-              <div
-                className="font-extrabold text-[46px] text-ink tabular-nums leading-none tracking-[-0.03em]"
-                data-stat="tokens-saved"
-              >
-                {formatCompact(visibleSavings)}
-              </div>
+      {WINDOWS.map((windowDefinition) => (
+        <TabsContent
+          className="flex min-w-0 flex-col items-stretch gap-6 rounded-2xl border border-border-2 bg-card px-5 py-6 shadow-card md:flex-row md:items-center md:gap-8 md:px-7"
+          data-saved-stats-card
+          key={windowDefinition.key}
+          value={windowDefinition.key}
+        >
+          <SavedStatsPanel
+            windowDefinition={windowDefinition}
+            windowStats={stats[windowDefinition.key]}
+          />
+        </TabsContent>
+      ))}
+    </Tabs>
+  )
+}
+
+interface SavedStatsPanelProps {
+  windowDefinition: (typeof WINDOWS)[number]
+  windowStats: CockpitStatsWindow
+}
+
+function SavedStatsPanel({
+  windowDefinition,
+  windowStats,
+}: SavedStatsPanelProps) {
+  const visibleSavings = Math.max(0, windowStats.rawTokenSavingsEstimate)
+  const savingsRatio = boundedRatio(
+    windowStats.rawTokenSavingsEstimate,
+    windowStats.screenshotFirstTokenEstimate,
+  )
+  const usedRatio = boundedRatio(
+    windowStats.browserClawTokenEstimate,
+    windowStats.screenshotFirstTokenEstimate,
+  )
+
+  return (
+    <>
+      <div className="min-w-0 flex-[2]">
+        <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2">
+          <div>
+            <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.12em]">
+              Tokens saved · {windowDefinition.valueLabel}
             </div>
-            <div className="inline-flex items-baseline gap-1.5 rounded-full border border-accent-tint-2 bg-accent-tint px-3 py-1">
-              <span
-                className="font-extrabold text-accent-ink text-sm tabular-nums"
-                data-stat="percentage"
-              >
-                {Math.round(savingsRatio * 100)}%
-              </span>
-              <span className="font-mono text-[10px] text-accent-ink uppercase tracking-[0.06em]">
-                fewer tokens
-              </span>
+            <div
+              className="font-extrabold text-[46px] text-ink tabular-nums leading-none tracking-[-0.03em]"
+              data-stat="tokens-saved"
+            >
+              {formatCompact(visibleSavings)}
             </div>
           </div>
-
-          <div
-            className="relative h-12 min-w-0 overflow-hidden rounded-xl bg-[repeating-linear-gradient(135deg,var(--color-card-tint),var(--color-card-tint)_9px,var(--color-card)_9px,var(--color-card)_10px)] shadow-[inset_0_0_0_1px_var(--color-border-2)]"
-            data-budget-track
-          >
-            <div
-              aria-hidden
-              className="absolute inset-y-0 left-0 rounded-r-sm rounded-l-xl bg-gradient-to-r from-accent to-accent-2 shadow-[0_2px_10px_color-mix(in_srgb,var(--color-accent)_45%,transparent)] transition-[width] duration-300 motion-reduce:transition-none"
-              style={{ width: `${usedRatio * 100}%` }}
-            />
-            <div
-              className={cn(
-                'absolute inset-y-0 z-10 flex items-center gap-2',
-                usedRatio > 0.7 && '-translate-x-full flex-row-reverse',
-              )}
-              data-used-marker
-              style={{ left: `${usedRatio * 100}%` }}
+          <div className="inline-flex items-baseline gap-1.5 rounded-full border border-accent-tint-2 bg-accent-tint px-3 py-1">
+            <span
+              className="font-extrabold text-accent-ink text-sm tabular-nums"
+              data-stat="percentage"
             >
-              <span className="relative size-2.5 shrink-0">
-                <span
-                  aria-hidden
-                  className="absolute inset-0 animate-ping rounded-full bg-accent/50 motion-reduce:animate-none"
-                  data-used-marker-ping
-                />
-                <span
-                  aria-hidden
-                  className="absolute inset-0 rounded-full bg-accent ring-2 ring-card"
-                />
-              </span>
+              {Math.round(savingsRatio * 100)}%
+            </span>
+            <span className="font-mono text-[10px] text-accent-ink uppercase tracking-[0.06em]">
+              fewer tokens
+            </span>
+          </div>
+        </div>
+
+        <div
+          className="relative h-12 min-w-0 overflow-hidden rounded-xl bg-[repeating-linear-gradient(135deg,var(--color-card-tint),var(--color-card-tint)_9px,var(--color-card)_9px,var(--color-card)_10px)] shadow-[inset_0_0_0_1px_var(--color-border-2)]"
+          data-budget-track
+        >
+          <div
+            aria-hidden
+            className="absolute inset-y-0 left-0 rounded-r-sm rounded-l-xl bg-gradient-to-r from-accent to-accent-2 shadow-[0_2px_10px_color-mix(in_srgb,var(--color-accent)_45%,transparent)] transition-[width] duration-300 motion-reduce:transition-none"
+            style={{ width: `${usedRatio * 100}%` }}
+          />
+          <div
+            className={cn(
+              'absolute inset-y-0 z-10 flex items-center gap-2',
+              usedRatio > 0.7 && '-translate-x-full flex-row-reverse',
+            )}
+            data-used-marker
+            style={{ left: `${usedRatio * 100}%` }}
+          >
+            <span className="relative size-2.5 shrink-0">
               <span
-                className="whitespace-nowrap font-mono font-semibold text-[11px] text-accent-ink tracking-[0.04em]"
-                data-stat="browserclaw-tokens"
-              >
-                used {formatCompact(windowStats.browserClawTokenEstimate)}
-              </span>
-            </div>
-            <span className="absolute inset-y-0 right-3 z-10 flex max-w-[58%] items-center justify-end text-right font-mono text-[9px] text-ink-3 leading-3 tracking-[0.02em] sm:text-[11px] sm:leading-4 sm:tracking-[0.04em]">
-              a screenshot-first agent would spend{' '}
-              <span className="ml-1 tabular-nums" data-stat="comparison-tokens">
-                {formatCompact(windowStats.screenshotFirstTokenEstimate)}
+                aria-hidden
+                className="absolute inset-0 animate-ping rounded-full bg-accent/50 motion-reduce:animate-none"
+                data-used-marker-ping
+              />
+              <span
+                aria-hidden
+                className="absolute inset-0 rounded-full bg-accent ring-2 ring-card"
+              />
+            </span>
+            <span
+              className="whitespace-nowrap font-mono font-semibold text-[11px] text-accent-ink tracking-[0.04em]"
+              data-stat="browserclaw-tokens"
+            >
+              used {formatCompact(windowStats.browserClawTokenEstimate)}
+            </span>
+          </div>
+          <span className="absolute inset-y-0 right-3 z-10 flex max-w-[58%] items-center justify-end text-right font-mono text-[9px] text-ink-3 leading-3 tracking-[0.02em] sm:text-[11px] sm:leading-4 sm:tracking-[0.04em]">
+            a screenshot-first agent would spend{' '}
+            <span className="ml-1 tabular-nums" data-stat="comparison-tokens">
+              {formatCompact(windowStats.screenshotFirstTokenEstimate)}
+            </span>
+          </span>
+        </div>
+        <p className="mt-2.5 font-mono text-[10.5px] text-ink-4 tracking-[0.04em]">
+          compact DOM &amp; tool responses instead of a screenshot per call
+        </p>
+      </div>
+
+      <div aria-hidden className="h-px w-full bg-border md:h-auto md:w-px" />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-5">
+        <div>
+          <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
+            Human time saved
+          </div>
+          <div
+            className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]"
+            data-stat="human-time"
+          >
+            {formatHumanTime(windowStats.humanTimeSavedMs)}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
+            Sessions · tool calls
+          </div>
+          <div className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]">
+            <span data-stat="sessions">
+              {formatWhole(windowStats.sessionCount)}
+            </span>{' '}
+            <span className="font-bold text-base text-ink-4">
+              ·{' '}
+              <span data-stat="tool-calls">
+                {formatWhole(windowStats.toolCallCount)}
               </span>
             </span>
           </div>
-          <p className="mt-2.5 font-mono text-[10.5px] text-ink-4 tracking-[0.04em]">
-            compact DOM &amp; tool responses instead of a screenshot per call
-          </p>
-        </div>
-
-        <div aria-hidden className="h-px w-full bg-border md:h-auto md:w-px" />
-
-        <div className="flex min-w-0 flex-1 flex-col gap-5">
-          <div>
-            <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
-              Human time saved
-            </div>
-            <div
-              className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]"
-              data-stat="human-time"
-            >
-              {formatHumanTime(windowStats.humanTimeSavedMs)}
-            </div>
-          </div>
-          <div>
-            <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
-              Sessions · tool calls
-            </div>
-            <div className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]">
-              <span data-stat="sessions">
-                {formatWhole(windowStats.sessionCount)}
-              </span>{' '}
-              <span className="font-bold text-base text-ink-4">
-                ·{' '}
-                <span data-stat="tool-calls">
-                  {formatWhole(windowStats.toolCallCount)}
-                </span>
-              </span>
-            </div>
-          </div>
         </div>
       </div>
-    </section>
+    </>
   )
+}
+
+function isWindowKey(value: unknown): value is WindowKey {
+  return WINDOWS.some(({ key }) => key === value)
 }
 
 function boundedRatio(value: number, total: number): number {

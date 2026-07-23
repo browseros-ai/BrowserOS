@@ -2,20 +2,27 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import {
-  type CockpitStats,
-  type CockpitStatsWindow,
-  SavedStatsBand,
-} from './SavedStatsBand'
+import type { CockpitStats, CockpitStatsWindow } from './SavedStatsBand'
 
 const globalDescriptors = new Map(
-  ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
-    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
-  ),
+  [
+    'window',
+    'document',
+    'navigator',
+    'Element',
+    'HTMLElement',
+    'Node',
+    'Event',
+    'getComputedStyle',
+    'requestAnimationFrame',
+    'cancelAnimationFrame',
+  ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
 )
 
 let root: Root
 let container: HTMLElement
+let restoreFocus: (() => void) | undefined
+let SavedStatsBand: typeof import('./SavedStatsBand').SavedStatsBand
 
 function statsWindow(
   over: Partial<CockpitStatsWindow> = {},
@@ -59,13 +66,30 @@ beforeEach(async () => {
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
+  let nextFrameId = 0
+  const cancelledFrames = new Set<number>()
   const globals = {
     window: dom.window,
     document: dom.document,
     navigator: dom.window.navigator,
+    Element: dom.window.Element,
     HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node,
     Event: dom.window.Event,
+    getComputedStyle: () => ({
+      direction: 'ltr',
+      getPropertyValue: () => '',
+    }),
+    requestAnimationFrame: (callback: FrameRequestCallback) => {
+      const frameId = ++nextFrameId
+      queueMicrotask(() => {
+        if (!cancelledFrames.has(frameId)) callback(performance.now())
+      })
+      return frameId
+    },
+    cancelAnimationFrame: (frameId: number) => {
+      cancelledFrames.add(frameId)
+    },
   }
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, {
@@ -74,6 +98,40 @@ beforeEach(async () => {
       value,
     })
   }
+
+  // linkedom does not track activeElement or dispatch focus events;
+  // Base UI's roving focus needs both.
+  let activeElement: Element | null = null
+  Object.defineProperty(dom.document, 'activeElement', {
+    configurable: true,
+    get: () => activeElement,
+  })
+  const focusDescriptor = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLElement.prototype,
+    'focus',
+  )
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'focus', {
+    configurable: true,
+    value(this: HTMLElement) {
+      if (activeElement === this) return
+      activeElement?.dispatchEvent(
+        new dom.window.Event('focusout', { bubbles: true }),
+      )
+      activeElement = this
+      this.dispatchEvent(new dom.window.Event('focusin', { bubbles: true }))
+    },
+  })
+  restoreFocus = () => {
+    if (focusDescriptor) {
+      Object.defineProperty(
+        dom.window.HTMLElement.prototype,
+        'focus',
+        focusDescriptor,
+      )
+    } else {
+      Reflect.deleteProperty(dom.window.HTMLElement.prototype, 'focus')
+    }
+  }
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
     configurable: true,
     writable: true,
@@ -81,11 +139,17 @@ beforeEach(async () => {
   })
   container = dom.document.getElementById('root') as unknown as HTMLElement
   const { createRoot } = await import('react-dom/client')
+  // Base UI selects its layout-effect implementation at import time,
+  // so load it only after installing DOM globals.
+  const savedStatsModule = await import('./SavedStatsBand')
+  SavedStatsBand = savedStatsModule.SavedStatsBand
   root = createRoot(container)
 })
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  restoreFocus?.()
+  restoreFocus = undefined
   for (const [name, descriptor] of globalDescriptors) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
     else Reflect.deleteProperty(globalThis, name)
@@ -97,17 +161,39 @@ async function render(value: CockpitStats = stats()): Promise<void> {
   await act(async () => root.render(<SavedStatsBand stats={value} />))
 }
 
-function tab(label: string): Element {
+function tab(label: string): HTMLElement {
   const match = [...container.querySelectorAll('[role="tab"]')].find(
     (candidate) => candidate.textContent === label,
   )
   if (!match) throw new Error(`${label} tab missing`)
-  return match
+  return match as HTMLElement
 }
 
 async function selectTab(label: string): Promise<void> {
   await act(async () => {
     tab(label).dispatchEvent(new window.Event('click', { bubbles: true }))
+  })
+}
+
+async function pressKey(target: HTMLElement, key: string): Promise<void> {
+  await act(async () => {
+    target.focus()
+  })
+  await act(async () => {
+    const event = new window.Event('keydown', {
+      bubbles: true,
+      cancelable: true,
+    })
+    Object.defineProperties(event, {
+      altKey: { value: false },
+      ctrlKey: { value: false },
+      getModifierState: { value: () => false },
+      key: { value: key },
+      metaKey: { value: false },
+      shiftKey: { value: false },
+    })
+    target.dispatchEvent(event)
+    await Promise.resolve()
   })
 }
 
@@ -118,7 +204,7 @@ function displayedNumbers(): string[] {
 }
 
 describe('SavedStatsBand', () => {
-  it('selects All time by default and switches every displayed number', async () => {
+  it('selects All time by default and switches with arrow keys and click', async () => {
     await render()
 
     const allTime = tab('All time')
@@ -127,10 +213,16 @@ describe('SavedStatsBand', () => {
     expect(tab('7 days').getAttribute('aria-selected')).toBe('false')
     expect(container.querySelector('[role="tablist"]')).not.toBeNull()
     expect(container.querySelector('[role="tabpanel"]')).not.toBeNull()
+    expect(
+      [...container.querySelectorAll('[role="tab"]')].map((item) =>
+        item.getAttribute('tabindex'),
+      ),
+    ).toEqual(['0', '-1', '-1'])
 
     const allValues = displayedNumbers()
-    await selectTab('30 days')
+    await pressKey(allTime, 'ArrowRight')
     const monthValues = displayedNumbers()
+    expect(document.activeElement?.textContent).toBe('30 days')
     expect(tab('30 days').getAttribute('aria-selected')).toBe('true')
     expect(
       monthValues.every((value, index) => value !== allValues[index]),
