@@ -484,6 +484,11 @@ impl Sessions {
         kind: &str,
         audit_result: AppResult<()>,
     ) -> AppResult<()> {
+        if audit_result.is_ok()
+            && let Some(hook) = self.completion_hook.get()
+        {
+            hook(session.id().as_str().to_owned());
+        }
         let usage = session.usage_snapshot().await;
         let key = session.convo_id().clone();
         self.retained.write().await.insert(
@@ -518,9 +523,6 @@ impl Sessions {
             }),
         );
         audit_result?;
-        if let Some(hook) = self.completion_hook.get() {
-            hook(session.id().as_str().to_owned());
-        }
         Ok(())
     }
 
@@ -1254,6 +1256,60 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec!["durable".to_string()]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn durable_completion_hook_precedes_retained_group_work() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let collapse_entered = Arc::new(tokio::sync::Notify::new());
+        let release_collapse = Arc::new(tokio::sync::Notify::new());
+        registry.set_retained_group_hook(Arc::new({
+            let collapse_entered = collapse_entered.clone();
+            let release_collapse = release_collapse.clone();
+            move |_, _, _| {
+                let collapse_entered = collapse_entered.clone();
+                let release_collapse = release_collapse.clone();
+                Box::pin(async move {
+                    collapse_entered.notify_one();
+                    release_collapse.notified().await;
+                    true
+                })
+            }
+        }));
+        let completion_called = Arc::new(AtomicBool::new(false));
+        registry.set_completion_hook(Arc::new({
+            let completion_called = completion_called.clone();
+            move |_| completion_called.store(true, Ordering::SeqCst)
+        }));
+        let session = Session::new(
+            SessionId::new("durable-before-collapse"),
+            ClientIdentity::Ephemeral {
+                slug: "agent".to_string(),
+                label: "Agent".to_string(),
+            },
+            ConversationIdentity::new("agent", "durable-before-collapse-label".to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        );
+
+        let teardown = tokio::spawn({
+            let registry = registry.clone();
+            async move { registry.finish_teardown(session, "closed", Ok(())).await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), collapse_entered.notified()).await?;
+        assert!(completion_called.load(Ordering::SeqCst));
+        assert!(!teardown.is_finished());
+        release_collapse.notify_one();
+        teardown.await??;
         Ok(())
     }
 

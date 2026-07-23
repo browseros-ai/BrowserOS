@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use syn::{
-    ItemMod, ItemUse, UseTree,
+    ItemMod, ItemStruct, ItemUse, UseTree,
     visit::{self, Visit},
 };
 
@@ -46,6 +46,7 @@ enum Target {
 struct DependencyVisitor {
     paths: BTreeSet<Vec<String>>,
     modules: BTreeSet<String>,
+    serialized_structs: BTreeSet<String>,
 }
 
 impl<'ast> Visit<'ast> for DependencyVisitor {
@@ -67,6 +68,26 @@ impl<'ast> Visit<'ast> for DependencyVisitor {
     fn visit_item_mod(&mut self, node: &'ast ItemMod) {
         self.modules.insert(node.ident.to_string());
         visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
+        for attribute in &node.attrs {
+            if !attribute.path().is_ident("derive") {
+                continue;
+            }
+            let _ = attribute.parse_nested_meta(|meta| {
+                if meta
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Serialize")
+                {
+                    self.serialized_structs.insert(node.ident.to_string());
+                }
+                Ok(())
+            });
+        }
+        visit::visit_item_struct(self, node);
     }
 }
 
@@ -142,6 +163,25 @@ fn sea_orm_is_rejected_outside_db() {
         "use sea_orm::EntityTrait;",
     );
     assert!(errors.iter().any(|error| error.contains("sea_orm")));
+}
+
+#[test]
+fn api_http_cannot_define_manual_serialized_response_dtos() {
+    let errors = violations(
+        "api/http/example.rs",
+        "#[derive(serde::Serialize)] struct ManualResponse { value: bool }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("manual serialized response DTO"))
+    );
+    let errors = violations("api/http/cockpit.rs", "fn handler() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("claw_api::models::CockpitStats"))
+    );
 }
 
 #[test]
@@ -222,6 +262,25 @@ fn check_source(relative: &Path, source: &str) -> Result<(), Vec<String>> {
                 "{display}: deleted root module `{module}` is declared"
             ));
         }
+    }
+
+    if layer == Layer::ApiHttp {
+        for name in &visitor.serialized_structs {
+            failures.push(format!(
+                "{display}: manual serialized response DTO `{name}` is forbidden; use claw_api::models"
+            ));
+        }
+    }
+    if display == "api/http/cockpit.rs"
+        && !visitor.paths.contains(&vec![
+            "claw_api".to_string(),
+            "models".to_string(),
+            "CockpitStats".to_string(),
+        ])
+    {
+        failures.push(format!(
+            "{display}: Cockpit responses must use claw_api::models::CockpitStats"
+        ));
     }
 
     for path in visitor.paths {

@@ -92,7 +92,9 @@ impl AppState {
         );
         sessions.set_completion_hook(Arc::new({
             let session_efficiency = session_efficiency.clone();
-            move |session_id| session_efficiency.queue_finalize(session_id)
+            move |session_id| {
+                let _ = session_efficiency.queue_finalize(session_id);
+            }
         }));
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =

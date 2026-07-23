@@ -10,7 +10,7 @@ use crate::{
 };
 use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
@@ -57,6 +57,8 @@ pub struct SessionEfficiencyService {
     repository: SessionEfficiencyStatsRepository,
     analytics: Arc<dyn AnalyticsSink>,
     finalizers: TaskTracker,
+    // TaskTracker::close permits later spawns, so enqueue and close need their own boundary.
+    finalizer_gate: Arc<Mutex<()>>,
 }
 
 impl SessionEfficiencyService {
@@ -71,22 +73,37 @@ impl SessionEfficiencyService {
             repository: SessionEfficiencyStatsRepository::new(db),
             analytics,
             finalizers: TaskTracker::new(),
+            finalizer_gate: Arc::new(Mutex::new(())),
         }
     }
 
     /// Queues projection work without extending the durable session-end path.
-    pub fn queue_finalize(self: &Arc<Self>, session_id: String) {
+    pub fn queue_finalize(self: &Arc<Self>, session_id: String) -> bool {
+        let _gate = self
+            .finalizer_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.finalizers.is_closed() {
+            return false;
+        }
         let service = Arc::clone(self);
         self.finalizers.spawn(async move {
             if let Err(error) = service.finalize_session(&session_id).await {
                 warn!(error = %error, "session efficiency finalization failed");
             }
         });
+        true
     }
 
     /// Closes the shutdown barrier and waits for every tracked finalizer to finish.
     pub async fn drain(&self) {
-        self.finalizers.close();
+        {
+            let _gate = self
+                .finalizer_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.finalizers.close();
+        }
         self.finalizers.wait().await;
     }
 
@@ -336,7 +353,10 @@ mod tests {
     };
     use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
     use serde_json::{Value, json};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tempfile::{TempDir, tempdir};
     use tokio_util::sync::CancellationToken;
 
@@ -363,6 +383,19 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone()
+        }
+    }
+
+    struct CancelOnFirstCapture {
+        cancel: CancellationToken,
+        captures: AtomicUsize,
+    }
+
+    impl AnalyticsSink for CancelOnFirstCapture {
+        fn capture(&self, _event: EventDefinition, _properties: Value) {
+            if self.captures.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.cancel.cancel();
+            }
         }
     }
 
@@ -723,13 +756,48 @@ mod tests {
         start(&audit, "unused").await?;
         audit.record_session_end("unused", "closed", None).await?;
 
-        service.queue_finalize("queued".to_owned());
-        service.queue_finalize("unused".to_owned());
+        assert!(service.queue_finalize("queued".to_owned()));
+        assert!(service.queue_finalize("unused".to_owned()));
         service.drain().await;
 
         assert!(repository.find("queued").await?.is_some());
         assert!(repository.find("unused").await?.is_none());
         assert_eq!(analytics.events().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completion_notification_after_drain_is_refused_and_remains_reconcilable()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let repository = SessionEfficiencyStatsRepository::new(db.clone());
+        let service = Arc::new(SessionEfficiencyService::new(db));
+        start(&audit, "late-completion").await?;
+        audit
+            .record_tool_dispatch(dispatch_input(
+                "late-completion",
+                "navigate",
+                1,
+                2,
+                1,
+                false,
+                false,
+            ))
+            .await?;
+        audit
+            .record_session_end("late-completion", "closed", None)
+            .await?;
+
+        service.drain().await;
+        assert!(!service.queue_finalize("late-completion".to_owned()));
+
+        assert!(repository.find("late-completion").await?.is_none());
+        assert_eq!(
+            service.reconciliation_candidates().await?,
+            ["late-completion"]
+        );
         Ok(())
     }
 
@@ -762,6 +830,44 @@ mod tests {
         assert!(repository.find("first").await?.is_some());
         assert!(repository.find("second").await?.is_some());
         assert_eq!(analytics.events().len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconciliation_cancellation_stops_after_partial_progress_and_resumes()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let repository = SessionEfficiencyStatsRepository::new(db.clone());
+        let cancel = CancellationToken::new();
+        let analytics = Arc::new(CancelOnFirstCapture {
+            cancel: cancel.clone(),
+            captures: AtomicUsize::new(0),
+        });
+        let service = SessionEfficiencyService::new_with_analytics(db, analytics.clone());
+        for session_id in ["first", "second", "third"] {
+            start(&audit, session_id).await?;
+            audit
+                .record_tool_dispatch(dispatch_input(
+                    session_id, "navigate", 1, 2, 1, false, false,
+                ))
+                .await?;
+            audit.record_session_end(session_id, "closed", None).await?;
+        }
+
+        assert_eq!(service.reconcile(cancel).await?, 1);
+        assert!(repository.find("first").await?.is_some());
+        assert!(repository.find("second").await?.is_none());
+        assert!(repository.find("third").await?.is_none());
+        assert_eq!(
+            service.reconciliation_candidates().await?,
+            ["second", "third"]
+        );
+
+        assert_eq!(service.reconcile(CancellationToken::new()).await?, 2);
+        assert!(service.reconciliation_candidates().await?.is_empty());
+        assert_eq!(analytics.captures.load(Ordering::SeqCst), 3);
         Ok(())
     }
 
