@@ -1758,3 +1758,86 @@ async fn live_projection_drops_disconnect_during_reconciliation() -> anyhow::Res
     assert!(session_item(&body, fixture.primary.id().as_str()).is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn audit_storage_reports_usage_and_default_retention() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, _, bytes) =
+        request(&app.router, "GET", "/api/v1/audit/storage", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["usage"]["recordingBytes"], 0);
+    assert_eq!(body["usage"]["screenshotBytes"], 0);
+    assert_eq!(body["usage"]["totalBytes"], 0);
+    assert_eq!(body["retention"]["mode"], "deleteAfterDays");
+    assert_eq!(body["retention"]["days"], 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/audit/retention",
+        Some("application/json"),
+        Body::from(json!({ "mode": "keepForever" }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["mode"], "keepForever");
+
+    let (status, _, bytes) =
+        request(&app.router, "GET", "/api/v1/audit/storage", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["retention"]["mode"], "keepForever");
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/audit/retention",
+        Some("application/json"),
+        Body::from(json!({ "mode": "deleteAfterDays", "days": 30 }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["days"], 30);
+
+    // Missing days for deleteAfterDays is rejected.
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/audit/retention",
+        Some("application/json"),
+        Body::from(json!({ "mode": "deleteAfterDays" }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+
+    // Zero days is rejected.
+    let (status, _, _) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/audit/retention",
+        Some("application/json"),
+        Body::from(json!({ "mode": "deleteAfterDays", "days": 0 }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, _, bytes) =
+        request(&app.router, "POST", "/api/v1/audit/cleanup", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["sessionsDeleted"], 0);
+    assert!(body["usage"]["totalBytes"].is_number());
+    Ok(())
+}

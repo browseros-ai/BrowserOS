@@ -1275,6 +1275,18 @@ impl AuditLog {
         })
     }
 
+    /// Every dispatch id that currently owns a screenshot on disk. The orphan
+    /// sweep treats any screenshot file whose id is absent here as removable.
+    pub async fn screenshot_dispatch_ids(&self) -> AppResult<Vec<i64>> {
+        Ok(ToolDispatches::find()
+            .select_only()
+            .column(tool_dispatches::Column::Id)
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .into_tuple::<i64>()
+            .all(self.db.connection())
+            .await?)
+    }
+
     /// Returns freed database pages to the OS. New databases open in incremental
     /// auto-vacuum mode, where this is a cheap `incremental_vacuum`. Legacy
     /// databases are converted once (set incremental + full `VACUUM`) so later
