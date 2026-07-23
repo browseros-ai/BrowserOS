@@ -134,9 +134,95 @@ mod tests {
     use crate::api::mcp::test_support::tool_call;
     use crate::db::audit_log::ListDispatchesQuery;
     use crate::ids::ConvoId;
+    use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
+    use futures_util::future::BoxFuture;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
 
     fn hook_for(call: &crate::api::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
         ScriptInnerCallHook::new(call.clone())
+    }
+
+    /// Minimal browser connection exposing one page (tab 11), enough for
+    /// `pages.get_info` so the hook can open a session-tab window.
+    struct OnePageConnection {
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl OnePageConnection {
+        fn new() -> Arc<Self> {
+            let (events, _) = broadcast::channel(1);
+            Arc::new(Self { events })
+        }
+    }
+
+    impl CdpConnection for OnePageConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            _params: Value,
+            _session: Option<&'a CdpSessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Browser.getTabs" => Ok(json!({ "tabs": [{
+                        "tabId": 11, "targetId": "target-a", "url": "https://example.com",
+                        "title": "Example", "isActive": true, "isLoading": false,
+                        "loadProgress": 1.0, "isPinned": false, "isHidden": false,
+                        "windowId": 1, "index": 0
+                    }] })),
+                    _ => Ok(json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a CdpSessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn on_page_created_opens_the_session_tab_window_for_replay() -> anyhow::Result<()> {
+        let browser = BrowserSession::new(OnePageConnection::new(), BrowserSessionHooks::default());
+        assert_eq!(browser.pages.list().await?.len(), 1);
+        let mut call = tool_call("run", json!({ "code": "return 1" })).await?;
+        call.browser_session = Some(browser);
+        call.started_at_ms = 123;
+        let hook = ScriptInnerCallHook::new(call.clone());
+
+        // The session-tab ownership window is what replay attribution and
+        // per-tab screenshot selection join on; a code-mode tab must open it.
+        hook.on_page_created(1).await;
+        call.state.session_tabs.drain_writes().await;
+        let claim = call
+            .state
+            .session_tabs
+            .first_session_tab()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("session-tab window not opened"))?;
+        assert_eq!(claim.tab_id, 11);
+        assert_eq!(claim.opened_target_id.as_deref(), Some("target-a"));
+        assert_eq!(claim.claimed_at, 123);
+        assert!(claim.released_at.is_none());
+        Ok(())
     }
 
     #[tokio::test]
