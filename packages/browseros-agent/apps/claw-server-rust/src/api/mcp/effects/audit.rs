@@ -4,7 +4,7 @@ use crate::{
         ToolCall, ToolEffect, ToolEffectContext, extract_page_id, result_page_id,
     },
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
-    ids::{DispatchId, SessionId},
+    ids::DispatchId,
     services::sessions::Session,
 };
 use browseros_core::PageId;
@@ -47,9 +47,9 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         };
         persist_screenshot(
             &context.call.state,
-            &context.call.session_id,
+            context.call.session_id.as_str(),
             &context.call.dispatch_id,
-            record,
+            record.row_id,
         )
         .await;
         Ok(None)
@@ -167,13 +167,16 @@ fn result_summary(result: &ToolResult, cancelled: bool) -> DispatchResultSummary
     }
 }
 
-async fn persist_screenshot(
+/// Captures a screenshot of the session's active owned tab and attaches it to
+/// the given audit row. Shared by the audit effect and the code-mode script
+/// hook so a script's primitives get per-step screenshots like granular tools.
+pub(crate) async fn persist_screenshot(
     state: &AppState,
-    session_id: &SessionId,
+    session_id: &str,
     dispatch_id: &DispatchId,
-    record: AuditRecord,
+    row_id: i64,
 ) {
-    let bytes = match state.visuals.capture(session_id.as_str()).await {
+    let bytes = match state.visuals.capture(session_id).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return,
         Err(error) => {
@@ -181,15 +184,11 @@ async fn persist_screenshot(
             return;
         }
     };
-    if let Err(error) = state
-        .screenshots
-        .write(session_id.as_str(), record.row_id, &bytes)
-        .await
-    {
+    if let Err(error) = state.screenshots.write(session_id, row_id, &bytes).await {
         warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
         return;
     }
-    if let Err(error) = state.audit_log.mark_screenshot(record.row_id).await {
+    if let Err(error) = state.audit_log.mark_screenshot(row_id).await {
         warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
     }
 }

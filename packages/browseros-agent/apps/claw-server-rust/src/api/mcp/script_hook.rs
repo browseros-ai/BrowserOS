@@ -66,6 +66,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 (Some(browser), Some(page)) => browser.pages.get_info(PageId(page)).await,
                 _ => None,
             };
+            let child_dispatch_id = DispatchId::new();
             let input = RecordToolDispatchInput {
                 agent_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
@@ -81,7 +82,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 title: live.as_ref().map(|page| page.title.clone()),
                 raw_args: json!({ "page": page }),
                 duration_ms,
-                dispatch_id: DispatchId::new(),
+                dispatch_id: child_dispatch_id.clone(),
                 parent_dispatch_id: Some(self.call.dispatch_id.clone()),
                 // Inner-primitive token traffic is not measured; version 0 is
                 // the reserved unmeasured marker.
@@ -95,8 +96,25 @@ impl InnerCallHook for ScriptInnerCallHook {
                     content: json!([]),
                 },
             };
-            if let Err(error) = self.call.state.audit_log.record_tool_dispatch(input).await {
-                warn!(error = %error, "script inner-call audit write failed");
+            match self.call.state.audit_log.record_tool_dispatch(input).await {
+                Ok(row_id) => {
+                    // Attach a per-step screenshot, keyed to this child row, so
+                    // code-mode audits show each primitive like granular tools.
+                    // Only for page-targeting primitives; page-less ones (windows,
+                    // tab groups) have nothing meaningful to shoot.
+                    if page.is_some() {
+                        crate::api::mcp::effects::audit::persist_screenshot(
+                            &self.call.state,
+                            self.call.session_id.as_str(),
+                            &child_dispatch_id,
+                            row_id,
+                        )
+                        .await;
+                    }
+                }
+                Err(error) => {
+                    warn!(error = %error, "script inner-call audit write failed");
+                }
             }
         })
     }
