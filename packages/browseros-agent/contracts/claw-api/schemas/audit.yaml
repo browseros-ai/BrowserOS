@@ -1,0 +1,86 @@
+AuditRetentionMode:
+  type: string
+  enum: [keepForever, deleteAfterDays]
+  description: >-
+    keepForever never deletes audit data automatically; deleteAfterDays removes
+    audit data older than the accompanying days value.
+AuditRetention:
+  type: object
+  additionalProperties: false
+  required: [mode]
+  properties:
+    mode:
+      $ref: '#/AuditRetentionMode'
+    days:
+      type: integer
+      format: int32
+      minimum: 1
+      description: >-
+        Delete audit data older than this many days. Present and required when
+        mode is deleteAfterDays; absent when mode is keepForever.
+AuditStorageUsage:
+  type: object
+  additionalProperties: false
+  required: [recordingBytes, screenshotBytes, totalBytes]
+  properties:
+    recordingBytes:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Bytes of rrweb recording payloads stored in the database.
+    screenshotBytes:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Bytes of screenshot files on disk.
+    totalBytes:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Sum of recordingBytes and screenshotBytes.
+AuditStorageState:
+  type: object
+  additionalProperties: false
+  required: [usage, retention]
+  properties:
+    usage:
+      $ref: '#/AuditStorageUsage'
+    retention:
+      $ref: '#/AuditRetention'
+SetAuditRetentionRequest:
+  type: object
+  additionalProperties: false
+  required: [mode]
+  properties:
+    mode:
+      $ref: '#/AuditRetentionMode'
+    days:
+      type: integer
+      format: int32
+      minimum: 1
+      description: Required when mode is deleteAfterDays.
+AuditCleanupResult:
+  type: object
+  additionalProperties: false
+  required:
+    [sessionsDeleted, screenshotsDeleted, recordingsDeleted, bytesReclaimed, usage]
+  properties:
+    sessionsDeleted:
+      type: integer
+      format: int64
+      minimum: 0
+    screenshotsDeleted:
+      type: integer
+      format: int64
+      minimum: 0
+    recordingsDeleted:
+      type: integer
+      format: int64
+      minimum: 0
+    bytesReclaimed:
+      type: integer
+      format: int64
+      minimum: 0
+      description: On-disk bytes reclaimed by the sweep, including database file shrink.
+    usage:
+      $ref: '#/AuditStorageUsage'

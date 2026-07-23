@@ -38,6 +38,12 @@ paths:
     $ref: ./paths/connections.yaml#/collection
   /api/v1/connections/{harness}:
     $ref: ./paths/connections.yaml#/harness
+  /api/v1/audit/storage:
+    $ref: ./paths/audit.yaml#/storage
+  /api/v1/audit/retention:
+    $ref: ./paths/audit.yaml#/retention
+  /api/v1/audit/cleanup:
+    $ref: ./paths/audit.yaml#/cleanup
 components:
   parameters:
     SessionId:
@@ -124,3 +130,15 @@ components:
       $ref: ./schemas/connections.yaml#/Connection
     ConnectionList:
       $ref: ./schemas/connections.yaml#/ConnectionList
+    AuditRetentionMode:
+      $ref: ./schemas/audit.yaml#/AuditRetentionMode
+    AuditRetention:
+      $ref: ./schemas/audit.yaml#/AuditRetention
+    AuditStorageUsage:
+      $ref: ./schemas/audit.yaml#/AuditStorageUsage
+    AuditStorageState:
+      $ref: ./schemas/audit.yaml#/AuditStorageState
+    SetAuditRetentionRequest:
+      $ref: ./schemas/audit.yaml#/SetAuditRetentionRequest
+    AuditCleanupResult:
+      $ref: ./schemas/audit.yaml#/AuditCleanupResult
