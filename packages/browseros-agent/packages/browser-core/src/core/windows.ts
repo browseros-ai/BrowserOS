@@ -3,13 +3,6 @@ import type { CdpConnection } from './connection'
 
 export type { WindowInfo }
 
-export interface SetWindowVisibilityResult {
-  window: WindowInfo
-  replaced: boolean
-  previousWindowId: number
-  newWindowId: number
-}
-
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -23,11 +16,9 @@ export class WindowManager {
     return result.windows as WindowInfo[]
   }
 
-  async create(opts?: { hidden?: boolean }): Promise<WindowInfo> {
+  async create(): Promise<WindowInfo> {
     await this.ensureConnected()
-    const result = await this.cdp.Browser.createWindow({
-      hidden: opts?.hidden ?? false,
-    })
+    const result = await this.cdp.Browser.createWindow()
     return result.window as WindowInfo
   }
 
@@ -39,26 +30,6 @@ export class WindowManager {
   async activate(windowId: number): Promise<void> {
     await this.ensureConnected()
     await this.cdp.Browser.activateWindow({ windowId })
-  }
-
-  /** Changes visibility and returns the replacement window ID when BrowserOS swaps windows. */
-  async setVisibility(
-    windowId: number,
-    opts: { visible: boolean; activate?: boolean },
-  ): Promise<SetWindowVisibilityResult> {
-    await this.ensureConnected()
-    const result = await this.cdp.Browser.setWindowVisibility({
-      windowId,
-      visible: opts.visible,
-      ...(opts.activate !== undefined && { activate: opts.activate }),
-    })
-    const window = result.window as WindowInfo
-    return {
-      window,
-      replaced: result.replaced,
-      previousWindowId: result.previousWindowId,
-      newWindowId: window.windowId,
-    }
   }
 
   private async ensureConnected(): Promise<void> {
