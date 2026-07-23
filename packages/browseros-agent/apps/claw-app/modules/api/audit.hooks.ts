@@ -15,19 +15,27 @@
  */
 
 import {
+  type AuditCleanupResult,
+  type AuditRetention,
+  type AuditStorageState,
   type Dispatch,
   type SessionDetail,
   type SessionList,
   type SessionScreenshotList,
   SessionStatus,
   type SessionSummary,
+  type SetAuditRetentionRequest,
 } from '@browseros/claw-api'
 import {
   buildSessionPreviewUrl,
   buildSessionScreenshotUrl,
 } from '@browseros/claw-api-client'
 import { useEffect, useState } from 'react'
-import { createInfiniteQuery, createQuery } from 'react-query-kit'
+import {
+  createInfiniteQuery,
+  createMutation,
+  createQuery,
+} from 'react-query-kit'
 import { apiBaseUrl, apiClient, resolveApiBaseUrl } from './client'
 
 // The screens speak task-*; the contract speaks session-*. Aliased here
@@ -149,3 +157,26 @@ export function useSessionPreviewUrl(
     ? null
     : sessionPreviewUrl(sessionId, refresh, baseUrl)
 }
+
+/**
+ * Audit storage usage + the active retention policy for the "Manage audit
+ * files" dialog. Polled so the numbers stay fresh while the dialog is open.
+ */
+export const useAuditStorage = createQuery<AuditStorageState>({
+  queryKey: ['api', 'audit', 'storage'],
+  fetcher: async () => (await apiClient()).getAuditStorage(),
+  refetchInterval: 30000,
+})
+
+/** Persist the retention policy. Callers invalidate `useAuditStorage`. */
+export const useSetAuditRetention = createMutation<
+  AuditRetention,
+  SetAuditRetentionRequest
+>({
+  mutationFn: async (body) => (await apiClient()).setAuditRetention(body),
+})
+
+/** Apply the current policy immediately and reclaim disk. */
+export const useRunAuditCleanup = createMutation<AuditCleanupResult, void>({
+  mutationFn: async () => (await apiClient()).runAuditCleanup(),
+})

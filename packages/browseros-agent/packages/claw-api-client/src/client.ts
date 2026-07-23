@@ -1,5 +1,8 @@
 import type {
   AppendRecordingEventsResponse,
+  AuditCleanupResult,
+  AuditRetention,
+  AuditStorageState,
   CancelSessionResponse,
   CockpitStats,
   Connection,
@@ -9,6 +12,7 @@ import type {
   SessionDetail,
   SessionList,
   SessionScreenshotList,
+  SetAuditRetentionRequest,
   ShutdownResponse,
   SystemInfo,
   TelemetryState,
@@ -100,6 +104,22 @@ export class ClawApiClient {
 
   async getTelemetry(): Promise<TelemetryState> {
     return this.unwrap(await this.client.GET('/api/v1/settings/telemetry'))
+  }
+
+  async getAuditStorage(): Promise<AuditStorageState> {
+    return this.unwrap(await this.client.GET('/api/v1/audit/storage'))
+  }
+
+  async setAuditRetention(
+    body: SetAuditRetentionRequest,
+  ): Promise<AuditRetention> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/audit/retention', { body }),
+    )
+  }
+
+  async runAuditCleanup(): Promise<AuditCleanupResult> {
+    return this.unwrap(await this.client.POST('/api/v1/audit/cleanup'))
   }
 
   async updateTelemetry(
