@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot cursor concurrency fixture</title>
+    <style>
+      .cursor-candidate,
+      #pointer-only,
+      #vanishing-candidate {
+        cursor: pointer;
+      }
+      #editable-target {
+        border: 1px dashed #666;
+        min-height: 24px;
+        width: 320px;
+      }
+      #zero-sized-excluded {
+        display: inline-block;
+        width: 0;
+        height: 0;
+        overflow: visible;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Snapshot cursor concurrency fixture</h1>
+    <div
+      id="generated-batch"
+      data-first-label="Cursor candidate 00"
+      data-middle-label="Cursor candidate 32"
+      data-last-label="Cursor candidate 63"
+    ></div>
+
+    <div id="pointer-only">Pointer-only target</div>
+    <div id="assigned-onclick">Assigned onclick target</div>
+    <div id="editable-target" contenteditable="true">
+      Editable target ready
+    </div>
+    <span id="tabindex-target" tabindex="0">Tabindex target</span>
+    <span id="zero-sized-excluded">Zero-sized excluded target</span>
+    <div id="vanishing-candidate">Vanishing cursor target</div>
+    <div id="page-owned-marker" data-__bcid-page-owned="fixture-owned">
+      Page-owned marker sentinel
+    </div>
+    <output id="cursor-action-result">Cursor action untouched</output>
+
+    <script>
+      const internalMarkerPrefix = 'data-__bcid-'
+      const pageOwnedMarker = 'data-__bcid-page-owned'
+      const seenMarkerNamespaces = new Set()
+      let maxActiveMarkerNamespaces = 0
+
+      function activeMarkerNamespaces() {
+        const active = new Set()
+        for (const element of document.querySelectorAll('*')) {
+          for (const name of element.getAttributeNames()) {
+            if (
+              name.startsWith(internalMarkerPrefix) &&
+              name !== pageOwnedMarker
+            ) {
+              active.add(name)
+            }
+          }
+        }
+        return active
+      }
+
+      function sampleMarkers() {
+        const active = activeMarkerNamespaces()
+        for (const name of active) seenMarkerNamespaces.add(name)
+        maxActiveMarkerNamespaces = Math.max(
+          maxActiveMarkerNamespaces,
+          active.size,
+        )
+        return active
+      }
+
+      const markerObserver = new MutationObserver((records) => {
+        for (const record of records) {
+          if (
+            record.type === 'attributes' &&
+            record.target.id === 'vanishing-candidate' &&
+            record.attributeName?.startsWith(internalMarkerPrefix)
+          ) {
+            record.target.remove()
+          }
+        }
+        sampleMarkers()
+      })
+      markerObserver.observe(document.documentElement, {
+        attributes: true,
+        subtree: true,
+      })
+
+      const generatedBatch = document.getElementById('generated-batch')
+      for (let index = 0; index < 64; index += 1) {
+        const candidate = document.createElement('div')
+        candidate.className = 'cursor-candidate'
+        candidate.textContent = `Cursor candidate ${String(index).padStart(2, '0')}`
+        generatedBatch.append(candidate)
+      }
+
+      document.getElementById('pointer-only').addEventListener('click', () => {
+        document.getElementById('cursor-action-result').textContent =
+          'Pointer-only target clicked'
+      })
+      document.getElementById('assigned-onclick').onclick = () => {
+        document.getElementById('cursor-action-result').textContent =
+          'Assigned onclick target clicked'
+      }
+
+      window.snapshotCursorFixture = {
+        ready: true,
+        resetProbe() {
+          seenMarkerNamespaces.clear()
+          maxActiveMarkerNamespaces = 0
+          sampleMarkers()
+        },
+        state() {
+          const active = sampleMarkers()
+          const sentinel = document.getElementById('page-owned-marker')
+          return {
+            candidateCount:
+              document.querySelectorAll('.cursor-candidate').length,
+            activeMarkerNamespaces: active.size,
+            distinctMarkerNamespaces: seenMarkerNamespaces.size,
+            maxActiveMarkerNamespaces,
+            sentinelPresent:
+              sentinel?.getAttribute(pageOwnedMarker) === 'fixture-owned',
+            vanishingCandidatePresent: Boolean(
+              document.getElementById('vanishing-candidate'),
+            ),
+          }
+        },
+      }
+    </script>
+  </body>
+</html>
