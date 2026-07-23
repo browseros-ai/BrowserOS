@@ -116,8 +116,7 @@ impl AppState {
             browser.clone(),
             tab_activity.clone(),
         );
-        let audit_worker =
-            AuditWorker::new(audit_log.clone(), screenshots.clone(), visuals.clone());
+        let audit_worker = AuditWorker::new(audit_log.clone());
         sessions.set_audit_flush_hook(Arc::new({
             let audit_worker = Arc::downgrade(&audit_worker);
             move |session_id| {

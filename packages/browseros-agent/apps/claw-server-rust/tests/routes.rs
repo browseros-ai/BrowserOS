@@ -514,6 +514,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         format!("renamed to codex/invoice-processing (was codex/{generated})")
     );
     assert_eq!(session.label().await, "invoice-processing");
+    app.state.audit_worker.flush_session(&session_id).await?;
     let first_task = app
         .state
         .audit_log
@@ -547,6 +548,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         body["result"]["content"][0]["text"],
         "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
     );
+    app.state.audit_worker.flush_session(&session_id).await?;
     assert_eq!(
         app.state
             .audit_log
@@ -738,6 +740,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(wait_body["result"]["isError"], false);
+    app.state.audit_worker.flush_session(&session_id).await?;
 
     let dispatches = app
         .state

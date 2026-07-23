@@ -153,6 +153,7 @@ impl AppRuntime {
                 )))
             }
         };
+        let audit_result = self.state.audit_worker.shutdown().await;
         // Session teardown enqueues final ownership releases; wait for the FIFO barrier before
         // shutdown returns.
         self.state.session_tabs.drain_writes().await;
@@ -162,6 +163,7 @@ impl AppRuntime {
         self.state.session_efficiency.drain().await;
         self.state.analytics.shutdown().await;
         let drained = session_result?;
+        audit_result?;
         info!(drained, "drained sessions during shutdown");
         Ok(())
     }
@@ -196,11 +198,14 @@ mod tests {
         config::Config,
         db::{
             DATABASE_FILENAME, Database,
-            audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+            audit_log::{
+                ListDispatchesQuery, RecordToolDispatchInput, bounded_args_json, result_meta,
+            },
         },
         identity::{ClientIdentity, ConversationIdentity},
         ids::{DispatchId, SessionId},
         services::{
+            audit::AuditEvent,
             session_efficiency::SessionEfficiencyService,
             sessions::{Session, Sessions},
         },
@@ -255,6 +260,59 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), first).await??;
         tokio::time::timeout(Duration::from_secs(1), second).await??;
         shutdown.requested().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_shutdown_drains_accepted_audit_events() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config, root.path().join("home")).await?;
+        let audit_log = state.audit_log.clone();
+        let audit_worker = state.audit_worker.clone();
+        audit_worker
+            .submit(AuditEvent::without_preview(efficiency_dispatch(
+                "queued-shutdown",
+                "agent",
+            )))
+            .await?;
+
+        AppRuntime {
+            state,
+            tasks: Vec::new(),
+        }
+        .shutdown()
+        .await?;
+
+        let rows = audit_log
+            .list_dispatches(ListDispatchesQuery {
+                session_id: Some("queued-shutdown".to_string()),
+                ..ListDispatchesQuery::default()
+            })
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            audit_worker
+                .submit(AuditEvent::without_preview(efficiency_dispatch(
+                    "late-shutdown",
+                    "agent",
+                )))
+                .await
+                .is_err()
+        );
         Ok(())
     }
 

@@ -4,7 +4,7 @@ use crate::{
         dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{build_session_group_title, client_prefix_from_slug, normalize_small_name},
-        observers::audit::record_local_tool_dispatch,
+        observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
@@ -131,13 +131,15 @@ impl ClawMcpService {
         let result = ToolResult::text(rename.response, None);
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
-            &started.session,
-            &started.agent_label,
-            NAME_SESSION_TOOL_NAME,
-            raw_args,
-            &result,
-            i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
-            dispatch_id.clone(),
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: NAME_SESSION_TOOL_NAME,
+                raw_args,
+                result: &result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
         )
         .await
         {

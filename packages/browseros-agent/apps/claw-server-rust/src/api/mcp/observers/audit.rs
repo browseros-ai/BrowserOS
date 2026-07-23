@@ -5,7 +5,10 @@ use crate::{
     },
     db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     ids::DispatchId,
-    services::{audit::AuditEvent, sessions::Session},
+    services::{
+        audit::{AuditEvent, AuditPreview},
+        sessions::Session,
+    },
 };
 use browseros_core::PageId;
 use browseros_mcp::{
@@ -43,35 +46,45 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
     })
 }
 
+pub struct LocalToolDispatch<'a> {
+    pub session: &'a Arc<Session>,
+    pub agent_label: &'a str,
+    pub tool_name: &'a str,
+    pub raw_args: &'a Value,
+    pub result: &'a ToolResult,
+    pub duration_ms: i64,
+    pub dispatch_id: DispatchId,
+}
+
 pub async fn record_local_tool_dispatch(
     state: &AppState,
-    session: &Arc<Session>,
-    agent_label: &str,
-    tool_name: &str,
-    raw_args: &Value,
-    result: &ToolResult,
-    duration_ms: i64,
-    dispatch_id: DispatchId,
+    dispatch: LocalToolDispatch<'_>,
 ) -> anyhow::Result<()> {
     state
         .audit_worker
         .submit(AuditEvent::without_preview(RecordToolDispatchInput {
-            agent_id: bounded_text(session.convo_id().as_str(), AUDIT_IDENTITY_TEXT_MAX),
-            slug: bounded_text(session.agent().slug(), AUDIT_IDENTITY_TEXT_MAX),
-            agent_label: bounded_text(agent_label, AUDIT_IDENTITY_TEXT_MAX),
-            session_id: session.id().as_str().to_string(),
-            tool_name: bounded_text(tool_name, AUDIT_TOOL_NAME_MAX),
+            agent_id: bounded_text(
+                dispatch.session.convo_id().as_str(),
+                AUDIT_IDENTITY_TEXT_MAX,
+            ),
+            slug: bounded_text(dispatch.session.agent().slug(), AUDIT_IDENTITY_TEXT_MAX),
+            agent_label: bounded_text(dispatch.agent_label, AUDIT_IDENTITY_TEXT_MAX),
+            session_id: dispatch.session.id().as_str().to_string(),
+            tool_name: bounded_text(dispatch.tool_name, AUDIT_TOOL_NAME_MAX),
             page_id: None,
             tab_id: None,
             target_id: None,
             url: None,
             title: None,
-            args_json: bounded_args_json(raw_args),
-            result_meta: tool_result_meta(result, false),
-            duration_ms,
-            dispatch_id,
-            tool_input_token_estimate: estimate_tool_input_tokens(tool_name, raw_args),
-            tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
+            args_json: bounded_args_json(dispatch.raw_args),
+            result_meta: tool_result_meta(dispatch.result, false),
+            duration_ms: dispatch.duration_ms,
+            dispatch_id: dispatch.dispatch_id,
+            tool_input_token_estimate: estimate_tool_input_tokens(
+                dispatch.tool_name,
+                dispatch.raw_args,
+            ),
+            tool_output_token_estimate: estimate_tool_output_tokens(&dispatch.result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         }))
         .await?;
@@ -131,7 +144,30 @@ async fn build_event(
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         },
-        preview_session: Some(Arc::downgrade(&identity.session)),
+        preview: Some(preview_callback(call, &identity.session)),
+    })
+}
+
+fn preview_callback(call: &ToolCall, session: &Arc<Session>) -> AuditPreview {
+    let session = Arc::downgrade(session);
+    let visuals = Arc::downgrade(&call.state.visuals);
+    let screenshots = Arc::downgrade(&call.state.screenshots);
+    Arc::new(move |session_id, row_id| {
+        let session = session.clone();
+        let visuals = visuals.clone();
+        let screenshots = screenshots.clone();
+        Box::pin(async move {
+            let (Some(session), Some(visuals), Some(screenshots)) =
+                (session.upgrade(), visuals.upgrade(), screenshots.upgrade())
+            else {
+                return Ok(false);
+            };
+            let Some(bytes) = visuals.capture_for_session(&session).await? else {
+                return Ok(false);
+            };
+            screenshots.write(&session_id, row_id, &bytes).await?;
+            Ok(true)
+        })
     })
 }
 
@@ -268,13 +304,15 @@ mod tests {
 
         record_local_tool_dispatch(
             &call.state,
-            session,
-            "Codex",
-            "name_session",
-            &raw_args,
-            &result,
-            1,
-            DispatchId::new(),
+            LocalToolDispatch {
+                session,
+                agent_label: "Codex",
+                tool_name: "name_session",
+                raw_args: &raw_args,
+                result: &result,
+                duration_ms: 1,
+                dispatch_id: DispatchId::new(),
+            },
         )
         .await?;
         call.state
