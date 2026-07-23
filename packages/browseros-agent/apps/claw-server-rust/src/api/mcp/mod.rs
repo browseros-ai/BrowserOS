@@ -2,6 +2,7 @@ pub mod dispatch;
 pub mod effects;
 pub mod guards;
 pub mod naming;
+pub mod observers;
 mod prompt;
 mod service;
 mod timeouts;
