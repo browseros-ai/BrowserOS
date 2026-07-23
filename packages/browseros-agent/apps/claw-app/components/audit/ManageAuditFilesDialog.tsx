@@ -11,6 +11,7 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,6 +42,7 @@ import {
 import {
   useAuditStorage,
   useRunAuditCleanup,
+  useSessions,
   useSetAuditRetention,
 } from '@/modules/api/audit.hooks'
 import {
@@ -54,10 +56,17 @@ import {
 export function ManageAuditFilesDialog() {
   const storage = useAuditStorage()
   const queryClient = useQueryClient()
-  const refreshStorage = () =>
+  const [open, setOpen] = useState(false)
+  const invalidateStorage = () =>
     queryClient.invalidateQueries({ queryKey: useAuditStorage.getKey() })
-  const setRetention = useSetAuditRetention({ onSuccess: refreshStorage })
-  const runCleanup = useRunAuditCleanup({ onSuccess: refreshStorage })
+  const setRetention = useSetAuditRetention({ onSuccess: invalidateStorage })
+  const runCleanup = useRunAuditCleanup({
+    onSuccess: () => {
+      // Refresh both the usage numbers and the audit table the cleanup pruned.
+      invalidateStorage()
+      void queryClient.invalidateQueries({ queryKey: useSessions.getKey() })
+    },
+  })
 
   const server = choiceFromRetention(
     storage.data?.retention ?? { mode: 'keepForever' },
@@ -77,11 +86,25 @@ export function ManageAuditFilesDialog() {
     if (next !== 'custom') save(next, days)
   }
 
+  // Close the dialog immediately and hand feedback to a toast — the sweep can
+  // take a while, so we don't block the UI on it.
+  const onCleanup = () => {
+    setOpen(false)
+    toast.promise(runCleanup.mutateAsync(), {
+      loading: 'Cleaning up old audit files…',
+      success: (result) =>
+        `Removed ${result.sessionsDeleted} session${
+          result.sessionsDeleted === 1 ? '' : 's'
+        } and reclaimed ${formatBytes(result.bytesReclaimed)}.`,
+      error: 'Could not clean up audit files.',
+    })
+  }
+
   const usage = storage.data?.usage
   const retention = storage.data?.retention ?? { mode: 'keepForever' as const }
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
           <Button variant="outline" size="sm">
@@ -188,7 +211,7 @@ export function ManageAuditFilesDialog() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={() => runCleanup.mutate()}>
+              <AlertDialogAction onClick={onCleanup}>
                 Delete and reclaim
               </AlertDialogAction>
             </AlertDialogFooter>
