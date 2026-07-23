@@ -12,6 +12,8 @@ paths:
     $ref: ./paths/system.yaml#/shutdown
   /api/v1/system:
     $ref: ./paths/system.yaml#/info
+  /api/v1/cockpit/stats:
+    $ref: ./paths/cockpit.yaml#/stats
   /api/v1/settings/telemetry:
     $ref: ./paths/settings.yaml#/telemetry
   /api/v1/sessions:
@@ -76,6 +78,10 @@ components:
       $ref: ./schemas/system.yaml#/SystemInfo
     SystemCapabilities:
       $ref: ./schemas/system.yaml#/SystemCapabilities
+    CockpitStats:
+      $ref: ./schemas/cockpit.yaml#/CockpitStats
+    CockpitStatsWindow:
+      $ref: ./schemas/cockpit.yaml#/CockpitStatsWindow
     TelemetryState:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:

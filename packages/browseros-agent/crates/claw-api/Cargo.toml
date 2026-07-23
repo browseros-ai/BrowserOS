@@ -10,5 +10,8 @@ repository.workspace = true
 serde.workspace = true
 serde_repr.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

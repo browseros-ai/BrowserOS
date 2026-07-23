@@ -1,3 +1,5 @@
+pub mod cockpit;
+pub use self::cockpit::*;
 pub mod common;
 pub use self::common::*;
 pub mod connections;

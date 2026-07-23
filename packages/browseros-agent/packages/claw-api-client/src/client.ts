@@ -1,6 +1,7 @@
 import type {
   AppendRecordingEventsResponse,
   CancelSessionResponse,
+  CockpitStats,
   Connection,
   ConnectionList,
   HealthResponse,
@@ -91,6 +92,10 @@ export class ClawApiClient {
 
   async getSystemInfo(): Promise<SystemInfo> {
     return this.unwrap(await this.client.GET('/api/v1/system'))
+  }
+
+  async getCockpitStats(): Promise<CockpitStats> {
+    return this.unwrap(await this.client.GET('/api/v1/cockpit/stats'))
   }
 
   async getTelemetry(): Promise<TelemetryState> {

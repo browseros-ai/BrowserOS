@@ -9,6 +9,33 @@ import {
 
 const baseUrl = 'http://127.0.0.1:9511'
 const documentId = '33D25F3CF060E81B14070BC356FF1871'
+const cockpitStats = {
+  hasMeasuredStats: true,
+  allTime: {
+    browserClawTokenEstimate: 250_000,
+    screenshotFirstTokenEstimate: 240_000,
+    rawTokenSavingsEstimate: -10_000,
+    humanTimeSavedMs: 7_200_000,
+    sessionCount: 12,
+    toolCallCount: 200,
+  },
+  last30Days: {
+    browserClawTokenEstimate: 150_000,
+    screenshotFirstTokenEstimate: 180_000,
+    rawTokenSavingsEstimate: 30_000,
+    humanTimeSavedMs: 3_600_000,
+    sessionCount: 5,
+    toolCallCount: 100,
+  },
+  last7Days: {
+    browserClawTokenEstimate: 0,
+    screenshotFirstTokenEstimate: 0,
+    rawTokenSavingsEstimate: 0,
+    humanTimeSavedMs: 0,
+    sessionCount: 0,
+    toolCallCount: 0,
+  },
+}
 
 interface RecordedRequest {
   url: string
@@ -57,6 +84,43 @@ function responseFor(request: Request): Response {
 }
 
 describe('ClawApiClient', () => {
+  it('gets and unwraps cockpit stats from the exact route', async () => {
+    const requests: Request[] = []
+    const client = new ClawApiClient(`${baseUrl}/`, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json(cockpitStats)
+      },
+    })
+
+    await expect(client.getCockpitStats()).resolves.toEqual(cockpitStats)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('GET')
+    expect(new URL(requests[0]?.url ?? '').pathname).toBe(
+      '/api/v1/cockpit/stats',
+    )
+  })
+
+  it('preserves standard API errors for cockpit stats', async () => {
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async () =>
+        Response.json(
+          {
+            code: 'internal_error',
+            message: 'failed to aggregate cockpit stats',
+            requestId: 'request-stats',
+          },
+          { status: 500 },
+        ),
+    })
+
+    await expect(client.getCockpitStats()).rejects.toBeInstanceOf(
+      ApiResponseError,
+    )
+  })
+
   it('maps contract operations across JSON, NDJSON, text, blob, path, query, and headers', async () => {
     const requests: RecordedRequest[] = []
     const receivers: unknown[] = []
@@ -217,7 +281,7 @@ describe('ClawApiClient', () => {
     expect(clone).not.toHaveBeenCalled()
   })
 
-  it('exposes all 17 facade operations', () => {
+  it('exposes all 18 facade operations', () => {
     const client = new ClawApiClient(baseUrl, {
       fetch: async () => Response.json({}),
     })
@@ -225,6 +289,7 @@ describe('ClawApiClient', () => {
       'getHealth',
       'shutdown',
       'getSystemInfo',
+      'getCockpitStats',
       'getTelemetry',
       'updateTelemetry',
       'listSessions',
@@ -241,6 +306,7 @@ describe('ClawApiClient', () => {
       'disconnectHarness',
     ] as const
 
+    expect(methods).toHaveLength(18)
     for (const method of methods) expect(client[method]).toBeFunction()
   })
 })

@@ -53,6 +53,22 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/cockpit/stats': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getCockpitStats']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/settings/telemetry': {
     parameters: {
       query?: never
@@ -282,6 +298,26 @@ export interface components {
        * @description Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
        */
       recordingIngestMaxBytes?: number
+    }
+    CockpitStats: {
+      hasMeasuredStats: boolean
+      allTime: components['schemas']['CockpitStatsWindow']
+      last30Days: components['schemas']['CockpitStatsWindow']
+      last7Days: components['schemas']['CockpitStatsWindow']
+    }
+    CockpitStatsWindow: {
+      /** Format: int64 */
+      browserClawTokenEstimate: number
+      /** Format: int64 */
+      screenshotFirstTokenEstimate: number
+      /** Format: int64 */
+      rawTokenSavingsEstimate: number
+      /** Format: int64 */
+      humanTimeSavedMs: number
+      /** Format: int64 */
+      sessionCount: number
+      /** Format: int64 */
+      toolCallCount: number
     }
     TelemetryState: {
       distinctId: string
@@ -595,6 +631,27 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['SystemInfo']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  getCockpitStats: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Cockpit efficiency statistics for all supported windows. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['CockpitStats']
         }
       }
       500: components['responses']['InternalError']

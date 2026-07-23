@@ -454,6 +454,7 @@ name = "claw-api"
 version = "1.0.0"
 dependencies = [
  "serde",
+ "serde_json",
  "serde_repr",
 ]
 

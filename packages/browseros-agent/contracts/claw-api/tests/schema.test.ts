@@ -124,3 +124,94 @@ describe('session visual API schema', () => {
     })
   })
 })
+
+describe('cockpit stats API schema', () => {
+  test('registers one parameterless GET operation', () => {
+    const openapi = yaml('openapi.yaml') as {
+      paths: Record<string, unknown>
+      components: { schemas: Record<string, unknown> }
+    }
+    const paths = yaml('paths/cockpit.yaml') as Record<
+      string,
+      Record<string, unknown>
+    >
+
+    expect(openapi.paths['/api/v1/cockpit/stats']).toEqual({
+      $ref: './paths/cockpit.yaml#/stats',
+    })
+    expect(openapi.components.schemas).toMatchObject({
+      CockpitStats: { $ref: './schemas/cockpit.yaml#/CockpitStats' },
+      CockpitStatsWindow: {
+        $ref: './schemas/cockpit.yaml#/CockpitStatsWindow',
+      },
+    })
+    expect(Object.keys(paths.stats ?? {})).toEqual(['get'])
+    expect(paths.stats?.get).toMatchObject({
+      operationId: 'getCockpitStats',
+      responses: {
+        '200': {
+          content: {
+            'application/json': {
+              schema: { $ref: '../schemas/cockpit.yaml#/CockpitStats' },
+            },
+          },
+        },
+      },
+    })
+    expect(paths.stats?.get).not.toHaveProperty('parameters')
+  })
+
+  test('defines exact response fields with safe signed and unsigned integers', () => {
+    const schemas = yaml('schemas/cockpit.yaml') as Record<
+      string,
+      {
+        additionalProperties?: boolean
+        properties?: Record<string, unknown>
+        required?: string[]
+      }
+    >
+    const unsignedInteger = {
+      type: 'integer',
+      format: 'int64',
+      minimum: 0,
+      maximum: 9_007_199_254_740_991,
+    }
+
+    expect(schemas.CockpitStats).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      required: ['hasMeasuredStats', 'allTime', 'last30Days', 'last7Days'],
+      properties: {
+        hasMeasuredStats: { type: 'boolean' },
+        allTime: { $ref: '#/CockpitStatsWindow' },
+        last30Days: { $ref: '#/CockpitStatsWindow' },
+        last7Days: { $ref: '#/CockpitStatsWindow' },
+      },
+    })
+    expect(schemas.CockpitStatsWindow).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'browserClawTokenEstimate',
+        'screenshotFirstTokenEstimate',
+        'rawTokenSavingsEstimate',
+        'humanTimeSavedMs',
+        'sessionCount',
+        'toolCallCount',
+      ],
+      properties: {
+        browserClawTokenEstimate: unsignedInteger,
+        screenshotFirstTokenEstimate: unsignedInteger,
+        rawTokenSavingsEstimate: {
+          type: 'integer',
+          format: 'int64',
+          minimum: -9_007_199_254_740_991,
+          maximum: 9_007_199_254_740_991,
+        },
+        humanTimeSavedMs: unsignedInteger,
+        sessionCount: unsignedInteger,
+        toolCallCount: unsignedInteger,
+      },
+    })
+  })
+})
