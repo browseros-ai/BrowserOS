@@ -111,15 +111,19 @@ impl SkillReconciler {
                 content_hash: desired_hash.clone(),
                 consumers: desired_consumers,
             };
-            let actual_hash = match read_content_hash(&target.join("SKILL.md")) {
-                Ok(hash) => hash,
-                Err(error) => {
-                    outcome.warnings.push(SkillWarning {
-                        target: target.clone(),
-                        message: error.to_string(),
-                    });
-                    continue;
+            let actual_hash = if metadata.as_ref().is_some_and(|value| value.is_dir()) {
+                match read_content_hash(&target.join("SKILL.md")) {
+                    Ok(hash) => hash,
+                    Err(error) => {
+                        outcome.warnings.push(SkillWarning {
+                            target: target.clone(),
+                            message: error.to_string(),
+                        });
+                        continue;
+                    }
                 }
+            } else {
+                None
             };
             let marker_matches = marker.as_ref().is_some_and(|marker| {
                 marker.controls(&spec.name) && marker.content_hash == desired_hash
@@ -386,6 +390,12 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
 }
 
 fn read_content_hash(path: &Path) -> Result<Option<String>, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_file() => return Ok(None),
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::io("inspect", path, error)),
+    }
     match fs::read(path) {
         Ok(content) => Ok(Some(content_hash(&content))),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),

@@ -1,11 +1,18 @@
 use std::{fs, path::Path};
 
 use harness_integrations::SkillSpec;
+use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
 
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
     include_str!("../../resources/skills/browserclaw/SKILL.md");
+
+#[derive(Deserialize)]
+struct SkillFrontmatter {
+    name: String,
+    description: String,
+}
 
 /// Loads the active signed resource copy, falling back to the compiled asset when unavailable.
 pub fn load_browserclaw_skill(resources_dir: &Path) -> AppResult<SkillSpec> {
@@ -34,30 +41,24 @@ fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
     if lines.next() != Some("---") {
         return Err("frontmatter must begin with `---`".to_string());
     }
-    let mut name = None;
-    let mut description = None;
+    let mut frontmatter = Vec::new();
     let mut closed = false;
     for line in &mut lines {
         if line == "---" {
             closed = true;
             break;
         }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        match key.trim() {
-            "name" => name = Some(value.trim()),
-            "description" => description = Some(value.trim()),
-            _ => {}
-        }
+        frontmatter.push(line);
     }
     if !closed {
         return Err("frontmatter is missing its closing `---`".to_string());
     }
-    if name != Some("browserclaw") {
+    let frontmatter: SkillFrontmatter = serde_saphyr::from_str(&frontmatter.join("\n"))
+        .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
+    if frontmatter.name != "browserclaw" {
         return Err("frontmatter `name` must be `browserclaw`".to_string());
     }
-    if description.is_none_or(str::is_empty) {
+    if frontmatter.description.trim().is_empty() {
         return Err("frontmatter requires a non-empty `description`".to_string());
     }
     SkillSpec::new("browserclaw", content).map_err(|error| error.to_string())
@@ -119,6 +120,18 @@ mod tests {
         fs::remove_dir(&path)?;
 
         fs::write(&path, "---\nname: wrong\ndescription: Wrong name\n---\n")?;
+        assert_eq!(load_browserclaw_skill(root.path())?.content(), expected);
+
+        fs::write(
+            &path,
+            "---\nname: browserclaw\ndescription: [\n---\nmalformed\n",
+        )?;
+        assert_eq!(load_browserclaw_skill(root.path())?.content(), expected);
+
+        fs::write(
+            &path,
+            "---\nname: browserclaw\ndescription: |\n---\nempty description\n",
+        )?;
         assert_eq!(load_browserclaw_skill(root.path())?.content(), expected);
         Ok(())
     }

@@ -107,6 +107,29 @@ fn installs_updates_repairs_and_preserves_true_no_ops() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn controlled_invalid_filesystem_shapes_are_replaced() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let environment = SkillEnvironment::new(root.path().join("home"), TargetPlatform::Linux);
+    let reconciler = SkillReconciler::new(root.path().join("state"));
+    let target = resolve_agent_skill_target(AgentId::Cursor, "browserclaw", &environment)?;
+    let desired = agents(&[AgentId::Cursor]);
+    reconciler.reconcile(&spec("managed\n")?, &desired, &environment)?;
+
+    fs::remove_dir_all(&target)?;
+    fs::write(&target, "not a directory")?;
+    let repaired_target = reconciler.reconcile(&spec("managed\n")?, &desired, &environment)?;
+    assert_eq!(repaired_target.updated, 1);
+    assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, "managed\n");
+
+    fs::remove_file(target.join("SKILL.md"))?;
+    fs::create_dir(target.join("SKILL.md"))?;
+    let repaired_skill = reconciler.reconcile(&spec("managed\n")?, &desired, &environment)?;
+    assert_eq!(repaired_skill.updated, 1);
+    assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, "managed\n");
+    Ok(())
+}
+
+#[test]
 fn either_manifest_or_marker_recovers_ownership() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
     let environment = SkillEnvironment::new(root.path().join("home"), TargetPlatform::Darwin);
