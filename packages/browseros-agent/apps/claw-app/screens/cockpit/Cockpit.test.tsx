@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from 'bun:test'
+import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
@@ -33,6 +33,14 @@ mock.module('@/modules/api/audit.hooks', () => ({
 
 const connectionsHookResultKey = '__browserclawConnectionsHookResult'
 const cockpitDataResultKey = '__browserclawCockpitDataResult'
+const originalDev = process.env.DEV
+
+process.env.DEV = 'true'
+
+afterAll(() => {
+  if (originalDev === undefined) delete process.env.DEV
+  else process.env.DEV = originalDev
+})
 
 function connectionsHookState() {
   return globalThis as Record<string, unknown>
@@ -93,9 +101,12 @@ const { Cockpit } = await import('./Cockpit')
 function renderApp(
   options: {
     connections?: 'pending' | 'empty'
+    development?: boolean
     liveSessions?: LiveSessionCardRecord[]
   } = {},
 ): string {
+  if (options.development === false) delete process.env.DEV
+  else process.env.DEV = 'true'
   setCockpitSessions(options.liveSessions ?? [])
   if (options.connections === 'empty') {
     setConnectionsProbeEmpty()
@@ -116,10 +127,25 @@ function renderApp(
 }
 
 describe('Cockpit (v2)', () => {
-  it('renders the hero and activity header when connection probing is pending', () => {
+  it('renders the development idle band between the hero and recent activity', () => {
     const html = renderApp()
+
+    const heroIndex = html.indexOf('working on')
+    const savedStatsIndex = html.indexOf('Since you started')
+    const recentActivityIndex = html.indexOf('Recent activity')
+    expect(heroIndex).toBeGreaterThan(-1)
+    expect(savedStatsIndex).toBeGreaterThan(heroIndex)
+    expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
+    expect(html).toContain('nothing running')
+    expect(html).not.toContain('Running now')
+  })
+
+  it('keeps the production idle Cockpit unchanged', () => {
+    const html = renderApp({ development: false })
+
     expect(html).toContain('working on')
     expect(html).toContain('Recent activity')
+    expect(html).not.toContain('Since you started')
     expect(html).not.toContain('Running now')
   })
 
@@ -143,6 +169,7 @@ describe('Cockpit (v2)', () => {
     expect(html).toContain(
       'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
     )
+    expect(html).not.toContain('Since you started')
   })
 
   it('shows a connected zero-tab live session before configuration or activity', () => {
@@ -171,5 +198,6 @@ describe('Cockpit (v2)', () => {
     expect(html).toContain('data-stop-session="session-connected"')
     expect(html).not.toContain('You watch. Your agent')
     expect(html).not.toContain('Set up MCP endpoint')
+    expect(html).not.toContain('Since you started')
   })
 })
