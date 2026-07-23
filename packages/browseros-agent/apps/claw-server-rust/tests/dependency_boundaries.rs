@@ -155,6 +155,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "agent_session_started",
         "agent_session_ended",
         "agent_session_tool_usage",
+        "agent_session_efficiency_computed",
         "harness_connected",
         "harness_disconnected",
     ];
@@ -191,7 +192,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         );
     }
     assert_eq!(sdk_locations, ["analytics/service.rs"]);
-    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 6);
+    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 7);
     Ok(())
 }
 

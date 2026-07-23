@@ -13,6 +13,7 @@ use crate::{
         recordings::{RecordingIngestService, RecordingStore},
         replay::ReplayService,
         screenshots::ScreenshotService,
+        session_efficiency::SessionEfficiencyService,
         sessions::Sessions,
     },
     storage::JsonStore,
@@ -35,6 +36,7 @@ pub struct AppState {
     pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
+    pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
@@ -55,7 +57,7 @@ impl AppState {
         let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
         let audit_log = Arc::new(AuditLog::new(database.clone()));
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
-        let recording_index = Arc::new(RecordingIndex::new(database));
+        let recording_index = Arc::new(RecordingIndex::new(database.clone()));
         session_tabs.release_all_open().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
@@ -76,6 +78,10 @@ impl AppState {
             analytics_sink.clone(),
         ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
+        let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
+            database,
+            analytics_sink.clone(),
+        ));
         let sessions = Sessions::new_with_analytics(
             audit_log.clone(),
             session_tabs.clone(),
@@ -84,6 +90,10 @@ impl AppState {
             config.session_sweep_interval,
             analytics_sink,
         );
+        sessions.set_completion_hook(Arc::new({
+            let session_efficiency = session_efficiency.clone();
+            move |session_id| session_efficiency.queue_finalize(session_id)
+        }));
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
             BrowserService::new(config.cdp_port, sessions.ownership(), tab_registry.clone());
@@ -118,6 +128,7 @@ impl AppState {
             analytics,
             profiles,
             sessions,
+            session_efficiency,
             browser,
             visuals,
             cockpit,

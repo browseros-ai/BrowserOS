@@ -1,4 +1,5 @@
 use crate::{
+    analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     clock::now_epoch_ms,
     db::{
         Database, SessionEfficiencyStatsRepository,
@@ -8,6 +9,10 @@ use crate::{
     error::AppResult,
 };
 use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
+use serde_json::json;
+use std::sync::Arc;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::warn;
 
 pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 1;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
@@ -50,14 +55,39 @@ pub struct SessionEfficiencyWindow {
 #[derive(Clone)]
 pub struct SessionEfficiencyService {
     repository: SessionEfficiencyStatsRepository,
+    analytics: Arc<dyn AnalyticsSink>,
+    finalizers: TaskTracker,
 }
 
 impl SessionEfficiencyService {
     #[must_use]
     pub fn new(db: Database) -> Self {
+        Self::new_with_analytics(db, Arc::new(NoopAnalyticsSink))
+    }
+
+    #[must_use]
+    pub fn new_with_analytics(db: Database, analytics: Arc<dyn AnalyticsSink>) -> Self {
         Self {
             repository: SessionEfficiencyStatsRepository::new(db),
+            analytics,
+            finalizers: TaskTracker::new(),
         }
+    }
+
+    /// Queues projection work without extending the durable session-end path.
+    pub fn queue_finalize(self: &Arc<Self>, session_id: String) {
+        let service = Arc::clone(self);
+        self.finalizers.spawn(async move {
+            if let Err(error) = service.finalize_session(&session_id).await {
+                warn!(error = %error, "session efficiency finalization failed");
+            }
+        });
+    }
+
+    /// Closes the shutdown barrier and waits for every tracked finalizer to finish.
+    pub async fn drain(&self) {
+        self.finalizers.close();
+        self.finalizers.wait().await;
     }
 
     pub async fn finalize_session(
@@ -81,15 +111,35 @@ impl SessionEfficiencyService {
         if !self.repository.insert_if_absent(&stats).await? {
             return Ok(None);
         }
-        Ok(Some(FinalizedSessionEfficiency {
+        let finalized = FinalizedSessionEfficiency {
             stats,
             end_kind: source.end.kind,
             client_name: source.start.map(|start| start.client_name),
-        }))
+        };
+        self.emit_computed(&finalized);
+        Ok(Some(finalized))
     }
 
     pub async fn reconciliation_candidates(&self) -> AppResult<Vec<String>> {
         self.repository.reconciliation_candidates().await
+    }
+
+    pub async fn reconcile(&self, cancel: CancellationToken) -> AppResult<usize> {
+        let candidates = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Ok(0),
+            candidates = self.reconciliation_candidates() => candidates?,
+        };
+        let mut finalized = 0_usize;
+        for session_id in candidates {
+            if cancel.is_cancelled() {
+                break;
+            }
+            if self.finalize_session(&session_id).await?.is_some() {
+                finalized = finalized.saturating_add(1);
+            }
+        }
+        Ok(finalized)
     }
 
     pub async fn aggregate(&self) -> AppResult<Option<SessionEfficiencyAggregate>> {
@@ -99,6 +149,32 @@ impl SessionEfficiencyService {
     async fn aggregate_at(&self, now_ms: i64) -> AppResult<Option<SessionEfficiencyAggregate>> {
         let rows = self.repository.all_rows().await?;
         Ok(aggregate_rows(&rows, now_ms))
+    }
+
+    fn emit_computed(&self, finalized: &FinalizedSessionEfficiency) {
+        let stats = &finalized.stats;
+        let input = i128::from(stats.tool_input_token_estimate.max(0));
+        let output = i128::from(stats.tool_output_token_estimate.max(0));
+        let screenshot = i128::from(stats.screenshot_baseline_token_estimate.max(0));
+        self.analytics.capture(
+            events::AGENT_SESSION_EFFICIENCY_COMPUTED,
+            json!({
+                "kind": finalized.end_kind,
+                "client_name": finalized.client_name.as_deref().unwrap_or_default(),
+                "dispatch_count": js_safe_nonnegative(i128::from(stats.dispatch_count)),
+                "active_duration_ms": js_safe_nonnegative(i128::from(stats.active_duration_ms)),
+                "tool_input_token_estimate": js_safe_nonnegative(input),
+                "tool_output_token_estimate": js_safe_nonnegative(output),
+                "browserclaw_token_estimate": js_safe_nonnegative(input.saturating_add(output)),
+                "screenshot_baseline_token_estimate": js_safe_nonnegative(screenshot),
+                "screenshot_first_token_estimate": js_safe_nonnegative(input.saturating_add(screenshot)),
+                "raw_token_savings_estimate": js_safe_signed(screenshot.saturating_sub(output)),
+                "efficiency_estimator_version": EFFICIENCY_ESTIMATOR_VERSION,
+                "screenshot_baseline_width": SCREENSHOT_BASELINE_WIDTH,
+                "screenshot_baseline_height": SCREENSHOT_BASELINE_HEIGHT,
+                "screenshot_tokens_per_dispatch": screenshot_tokens_per_dispatch(),
+            }),
+        );
     }
 }
 
@@ -244,6 +320,10 @@ mod tests {
         SessionEfficiencyService, calculate_session_efficiency,
     };
     use crate::{
+        analytics::{
+            AnalyticsSink,
+            events::{self, EventDefinition},
+        },
         db::{
             AuditLog, DATABASE_FILENAME, Database, SessionEfficiencyStatsRepository,
             audit_log::{DispatchResultSummary, RecordToolDispatchInput},
@@ -255,11 +335,36 @@ mod tests {
         ids::DispatchId,
     };
     use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
-    use serde_json::json;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
     use tempfile::{TempDir, tempdir};
+    use tokio_util::sync::CancellationToken;
 
     const DAY_MS: i64 = 24 * 60 * 60 * 1000;
     const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: Mutex<Vec<(&'static str, Option<Value>)>>,
+    }
+
+    impl AnalyticsSink for RecordingAnalytics {
+        fn capture(&self, event: EventDefinition, properties: Value) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((event.name(), event.sanitize(&properties)));
+        }
+    }
+
+    impl RecordingAnalytics {
+        fn events(&self) -> Vec<(&'static str, Option<Value>)> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
 
     fn source(dispatches: Vec<tool_dispatches::Model>) -> SessionEfficiencySource {
         SessionEfficiencySource {
@@ -544,6 +649,155 @@ mod tests {
         let winners = [left?, right?].into_iter().filter(Option::is_some).count();
         assert_eq!(winners, 1);
         assert!(repository.find("race").await?.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn only_the_winning_finalizer_emits_the_bounded_efficiency_event() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service = SessionEfficiencyService::new_with_analytics(db, analytics.clone());
+        audit
+            .record_session_start("negative", "agent", "agent", "Agent", "Claude Code", "1")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch_input(
+                "negative", "navigate", 30, 4_000, 1, true, false,
+            ))
+            .await?;
+        audit
+            .record_session_end("negative", "errored", None)
+            .await?;
+
+        let (left, right) = tokio::join!(
+            service.finalize_session_at("negative", 1),
+            service.finalize_session_at("negative", 2),
+        );
+        assert_eq!(
+            [left?, right?].into_iter().filter(Option::is_some).count(),
+            1
+        );
+        assert_eq!(
+            analytics.events(),
+            vec![(
+                events::AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
+                Some(json!({
+                    "kind": "errored",
+                    "client_name": "claude-code",
+                    "dispatch_count": 1,
+                    "active_duration_ms": 10,
+                    "tool_input_token_estimate": 30,
+                    "tool_output_token_estimate": 4_000,
+                    "browserclaw_token_estimate": 4_030,
+                    "screenshot_baseline_token_estimate": 1_536,
+                    "screenshot_first_token_estimate": 1_566,
+                    "raw_token_savings_estimate": -2_464,
+                    "efficiency_estimator_version": 1,
+                    "screenshot_baseline_width": 1_920,
+                    "screenshot_baseline_height": 1_080,
+                    "screenshot_tokens_per_dispatch": 1_536,
+                })),
+            )]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tracked_finalizers_drain_without_emitting_for_unused_sessions() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let repository = SessionEfficiencyStatsRepository::new(db.clone());
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service = Arc::new(SessionEfficiencyService::new_with_analytics(
+            db,
+            analytics.clone(),
+        ));
+        start(&audit, "queued").await?;
+        audit
+            .record_tool_dispatch(dispatch_input("queued", "navigate", 1, 2, 1, false, false))
+            .await?;
+        audit.record_session_end("queued", "closed", None).await?;
+        start(&audit, "unused").await?;
+        audit.record_session_end("unused", "closed", None).await?;
+
+        service.queue_finalize("queued".to_owned());
+        service.queue_finalize("unused".to_owned());
+        service.drain().await;
+
+        assert!(repository.find("queued").await?.is_some());
+        assert!(repository.find("unused").await?.is_none());
+        assert_eq!(analytics.events().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_reconciliation_resumes_from_the_idempotent_insert_boundary()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let repository = SessionEfficiencyStatsRepository::new(db.clone());
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service = SessionEfficiencyService::new_with_analytics(db, analytics.clone());
+        for session_id in ["first", "second"] {
+            start(&audit, session_id).await?;
+            audit
+                .record_tool_dispatch(dispatch_input(
+                    session_id, "navigate", 1, 2, 1, false, false,
+                ))
+                .await?;
+            audit.record_session_end(session_id, "closed", None).await?;
+        }
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(service.reconcile(cancelled).await?, 0);
+        assert!(repository.find("first").await?.is_none());
+        assert!(repository.find("second").await?.is_none());
+
+        assert_eq!(service.reconcile(CancellationToken::new()).await?, 2);
+        assert!(repository.find("first").await?.is_some());
+        assert!(repository.find("second").await?.is_some());
+        assert_eq!(analytics.events().len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconciliation_and_live_finalization_share_one_insert_and_event() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let audit = AuditLog::new(db.clone());
+        let repository = SessionEfficiencyStatsRepository::new(db.clone());
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service = SessionEfficiencyService::new_with_analytics(db, analytics.clone());
+        start(&audit, "reconcile-race").await?;
+        audit
+            .record_tool_dispatch(dispatch_input(
+                "reconcile-race",
+                "navigate",
+                1,
+                2,
+                1,
+                false,
+                false,
+            ))
+            .await?;
+        audit
+            .record_session_end("reconcile-race", "closed", None)
+            .await?;
+
+        let (live, reconciled) = tokio::join!(
+            service.finalize_session("reconcile-race"),
+            service.reconcile(CancellationToken::new()),
+        );
+        let winners = usize::from(live?.is_some()).saturating_add(reconciled?);
+        assert_eq!(winners, 1);
+        assert!(repository.find("reconcile-race").await?.is_some());
+        assert_eq!(analytics.events().len(), 1);
         Ok(())
     }
 

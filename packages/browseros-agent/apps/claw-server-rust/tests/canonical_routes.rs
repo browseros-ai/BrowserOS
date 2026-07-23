@@ -536,6 +536,15 @@ async fn unknown_path_preflight_remains_no_content() -> anyhow::Result<()> {
 }
 
 async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
+    seed_dispatch_with_estimates(app, session_id, 1, 0).await
+}
+
+async fn seed_dispatch_with_estimates(
+    app: &TestApp,
+    session_id: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> anyhow::Result<i64> {
     Ok(app
         .state
         .audit_log
@@ -553,8 +562,8 @@ async fn seed_dispatch(app: &TestApp, session_id: &str) -> anyhow::Result<i64> {
             raw_args: json!({}),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
-            tool_input_token_estimate: 1,
-            tool_output_token_estimate: 0,
+            tool_input_token_estimate: input_tokens,
+            tool_output_token_estimate: output_tokens,
             token_estimator_version: 1,
             result: DispatchResultSummary {
                 is_error: false,
@@ -637,6 +646,89 @@ async fn canonical_control_settings_and_empty_lists() -> anyhow::Result<()> {
         request(&app.router, "POST", "/system/shutdown", None, Body::empty()).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&bytes)?, json!({ "status": "ok" }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let zero_window = json!({
+        "browserClawTokenEstimate": 0,
+        "screenshotFirstTokenEstimate": 0,
+        "rawTokenSavingsEstimate": 0,
+        "humanTimeSavedMs": 0,
+        "sessionCount": 0,
+        "toolCallCount": 0,
+    });
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/cockpit/stats",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({
+            "hasMeasuredStats": false,
+            "allTime": zero_window,
+            "last30Days": zero_window,
+            "last7Days": zero_window,
+        })
+    );
+
+    app.state
+        .audit_log
+        .record_session_start(
+            "stats-session",
+            "codex-research-browserclaw",
+            "codex",
+            "Codex",
+            "Codex",
+            "1",
+        )
+        .await?;
+    seed_dispatch_with_estimates(&app, "stats-session", 1, 2_000).await?;
+    app.state
+        .audit_log
+        .record_session_end("stats-session", "closed", None)
+        .await?;
+    assert!(
+        app.state
+            .session_efficiency
+            .finalize_session("stats-session")
+            .await?
+            .is_some()
+    );
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/cockpit/stats",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let measured_window = json!({
+        "browserClawTokenEstimate": 2_001,
+        "screenshotFirstTokenEstimate": 1_537,
+        "rawTokenSavingsEstimate": -464,
+        "humanTimeSavedMs": 5,
+        "sessionCount": 1,
+        "toolCallCount": 1,
+    });
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({
+            "hasMeasuredStats": true,
+            "allTime": measured_window,
+            "last30Days": measured_window,
+            "last7Days": measured_window,
+        })
+    );
     Ok(())
 }
 

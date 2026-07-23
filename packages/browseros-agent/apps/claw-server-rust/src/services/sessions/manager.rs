@@ -38,6 +38,9 @@ pub type RetainedGroupHook = Arc<
         + Sync,
 >;
 
+/// Receives a session only after its end audit row is durable.
+pub type SessionCompletionHook = Arc<dyn Fn(String) + Send + Sync>;
+
 struct RetainedSession {
     ended_at: Instant,
 }
@@ -100,6 +103,7 @@ pub struct Sessions {
     /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
     cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
+    completion_hook: OnceLock<SessionCompletionHook>,
     idle_after: Duration,
     retention: Duration,
     sweep_interval: Duration,
@@ -145,6 +149,7 @@ impl Sessions {
             reaping_keys: Mutex::new(HashSet::new()),
             cancellation_transitions: Mutex::new(HashMap::new()),
             retained_group_hook: OnceLock::new(),
+            completion_hook: OnceLock::new(),
             idle_after,
             retention,
             sweep_interval,
@@ -159,6 +164,11 @@ impl Sessions {
     /// Installs browser-backed retained-group collapse and close operations.
     pub fn set_retained_group_hook(&self, hook: RetainedGroupHook) {
         let _ = self.retained_group_hook.set(hook);
+    }
+
+    /// Installs the non-blocking notification that follows durable session completion.
+    pub fn set_completion_hook(&self, hook: SessionCompletionHook) {
+        let _ = self.completion_hook.set(hook);
     }
 
     pub async fn mint(
@@ -508,6 +518,9 @@ impl Sessions {
             }),
         );
         audit_result?;
+        if let Some(hook) = self.completion_hook.get() {
+            hook(session.id().as_str().to_owned());
+        }
         Ok(())
     }
 
@@ -1183,6 +1196,63 @@ mod tests {
                     "max_concurrent_used_sessions": 0,
                 }),
             )]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completion_hook_runs_only_after_a_durable_end() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let completed = Arc::new(StdMutex::new(Vec::new()));
+        registry.set_completion_hook(Arc::new({
+            let completed = completed.clone();
+            move |session_id| {
+                completed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(session_id);
+            }
+        }));
+
+        let session = |id: &'static str| {
+            Session::new(
+                SessionId::new(id),
+                ClientIdentity::Ephemeral {
+                    slug: "agent".to_string(),
+                    label: "Agent".to_string(),
+                },
+                ConversationIdentity::new("agent", format!("{id}-label")),
+                "Codex".to_string(),
+                Instant::now(),
+            )
+        };
+        assert!(
+            registry
+                .finish_teardown(
+                    session("failed"),
+                    "errored",
+                    Err(crate::error::AppError::Internal("audit failed".to_string())),
+                )
+                .await
+                .is_err()
+        );
+        registry
+            .finish_teardown(session("durable"), "closed", Ok(()))
+            .await?;
+
+        assert_eq!(
+            *completed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec!["durable".to_string()]
         );
         Ok(())
     }

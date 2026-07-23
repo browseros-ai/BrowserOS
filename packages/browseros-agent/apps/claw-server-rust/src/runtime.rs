@@ -68,6 +68,24 @@ impl AppRuntime {
                     .clone()
                     .spawn_retention(state.config.replay_retention_days, shutdown.child_token()),
             },
+            BackgroundTask {
+                name: "session efficiency reconciliation",
+                handle: tokio::spawn({
+                    let session_efficiency = state.session_efficiency.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        match session_efficiency.reconcile(cancel).await {
+                            Ok(finalized) if finalized > 0 => {
+                                info!(finalized, "reconciled session efficiency projections");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                warn!(error = %error, "session efficiency reconciliation failed");
+                            }
+                        }
+                    }
+                }),
+            },
         ];
         Self { state, tasks }
     }
@@ -114,6 +132,7 @@ impl AppRuntime {
         self.state.recordings.close().await;
         self.state.browser.stop();
         self.join_tasks().await;
+        self.state.session_efficiency.drain().await;
         self.state.analytics.shutdown().await;
         let drained = session_result?;
         info!(drained, "drained sessions during shutdown");
@@ -148,9 +167,16 @@ mod tests {
         AppState,
         analytics::{AnalyticsService, events},
         config::Config,
+        db::{
+            DATABASE_FILENAME, Database,
+            audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+        },
         identity::{ClientIdentity, ConversationIdentity},
-        ids::SessionId,
-        services::sessions::{Session, Sessions},
+        ids::{DispatchId, SessionId},
+        services::{
+            session_efficiency::SessionEfficiencyService,
+            sessions::{Session, Sessions},
+        },
     };
     use axum::{Router, body::Bytes, routing::any};
     use serde_json::{Value, json};
@@ -161,6 +187,33 @@ mod tests {
         sync::{Notify, mpsc},
         time::Instant,
     };
+
+    fn efficiency_dispatch(session_id: &str, agent_id: &str) -> RecordToolDispatchInput {
+        RecordToolDispatchInput {
+            agent_id: agent_id.to_string(),
+            slug: "agent".to_string(),
+            agent_label: "Agent".to_string(),
+            session_id: session_id.to_string(),
+            tool_name: "navigate".to_string(),
+            page_id: None,
+            tab_id: None,
+            target_id: None,
+            url: None,
+            title: None,
+            raw_args: json!({}),
+            duration_ms: 5,
+            dispatch_id: DispatchId::new(),
+            tool_input_token_estimate: 1,
+            tool_output_token_estimate: 0,
+            token_estimator_version: 1,
+            result: DispatchResultSummary {
+                is_error: false,
+                cancelled: false,
+                structured_content: json!({}),
+                content: json!([]),
+            },
+        }
+    }
 
     #[tokio::test]
     async fn repeated_requests_wake_every_shutdown_waiter() -> anyhow::Result<()> {
@@ -180,6 +233,58 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), first).await??;
         tokio::time::timeout(Duration::from_secs(1), second).await??;
         shutdown.requested().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_reconciles_eligible_ended_sessions_on_startup() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config, root.path().join("home")).await?;
+        state
+            .audit_log
+            .record_session_start(
+                "reconcile-on-start",
+                "agent",
+                "agent",
+                "Agent",
+                "Codex",
+                "1",
+            )
+            .await?;
+        state
+            .audit_log
+            .record_tool_dispatch(efficiency_dispatch("reconcile-on-start", "agent"))
+            .await?;
+        state
+            .audit_log
+            .record_session_end("reconcile-on-start", "closed", None)
+            .await?;
+        let session_efficiency = state.session_efficiency.clone();
+
+        let runtime = AppRuntime::start(state);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if session_efficiency.aggregate().await?.is_some() {
+                    return Ok::<(), crate::error::AppError>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        runtime.shutdown().await?;
         Ok(())
     }
 
@@ -221,7 +326,11 @@ mod tests {
                 .await?,
         );
         state.analytics = analytics.clone();
-        state.sessions = Sessions::new_with_analytics(
+        let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
+            Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?,
+            analytics.clone(),
+        ));
+        let sessions = Sessions::new_with_analytics(
             state.audit_log.clone(),
             state.session_tabs.clone(),
             config.session_idle,
@@ -229,37 +338,84 @@ mod tests {
             config.session_sweep_interval,
             analytics.clone(),
         );
-        state
+        sessions.set_completion_hook(Arc::new({
+            let session_efficiency = session_efficiency.clone();
+            move |session_id| session_efficiency.queue_finalize(session_id)
+        }));
+        state.session_efficiency = session_efficiency;
+        state.sessions = sessions;
+        let session = state
             .sessions
-            .insert_for_testing(Session::new(
+            .mint_with_id(
                 SessionId::new("shutdown-session"),
                 ClientIdentity::Ephemeral {
                     slug: "agent".to_string(),
                     label: "Agent".to_string(),
                 },
-                ConversationIdentity::new("agent", "shutdown-label".to_string()),
-                "Codex".to_string(),
-                Instant::now(),
+                crate::identity::ClientInfo {
+                    name: "Codex".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                },
+            )
+            .await?;
+        state
+            .audit_log
+            .record_tool_dispatch(efficiency_dispatch(
+                session.id().as_str(),
+                session.convo_id().as_str(),
             ))
+            .await?;
+        session
+            .record_tool_usage("navigate", Duration::from_millis(5), 1)
             .await;
 
         AppRuntime::start(state).shutdown().await?;
         assert_eq!(analytics.shutdown_calls_for_testing(), 1);
-        let request = tokio::time::timeout(Duration::from_secs(2), requests.recv())
-            .await?
+        let mut captured = Vec::new();
+        while let Ok(request) = requests.try_recv() {
+            captured.extend(request["batch"].as_array().into_iter().flatten().cloned());
+        }
+        let ended = captured
+            .iter()
+            .find(|event| event["event"] == events::AGENT_SESSION_ENDED.name())
             .ok_or_else(|| anyhow::anyhow!("session-end event was not drained"))?;
         assert_eq!(
-            request["batch"][0]["event"],
-            events::AGENT_SESSION_ENDED.name()
-        );
-        assert_eq!(
-            request["batch"][0]["properties"],
+            ended["properties"],
             json!({
                 "kind": "closed",
                 "client_name": "codex",
-                "dispatch_count": 0,
-                "distinct_tool_count": 0,
-                "max_concurrent_used_sessions": 0,
+                "dispatch_count": 1,
+                "distinct_tool_count": 1,
+                "max_concurrent_used_sessions": 1,
+                "server_version": env!("CARGO_PKG_VERSION"),
+                "os_platform": events::platform_token(),
+                "$process_person_profile": false,
+                "$geoip_disable": true,
+                "$is_server": true,
+            })
+        );
+        let efficiency = captured
+            .iter()
+            .find(|event| event["event"] == events::AGENT_SESSION_EFFICIENCY_COMPUTED.name())
+            .ok_or_else(|| anyhow::anyhow!("session-efficiency event was not drained"))?;
+        assert_eq!(
+            efficiency["properties"],
+            json!({
+                "kind": "closed",
+                "client_name": "codex",
+                "dispatch_count": 1,
+                "active_duration_ms": 5,
+                "tool_input_token_estimate": 1,
+                "tool_output_token_estimate": 0,
+                "browserclaw_token_estimate": 1,
+                "screenshot_baseline_token_estimate": 1_536,
+                "screenshot_first_token_estimate": 1_537,
+                "raw_token_savings_estimate": 1_536,
+                "efficiency_estimator_version": 1,
+                "screenshot_baseline_width": 1_920,
+                "screenshot_baseline_height": 1_080,
+                "screenshot_tokens_per_dispatch": 1_536,
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,

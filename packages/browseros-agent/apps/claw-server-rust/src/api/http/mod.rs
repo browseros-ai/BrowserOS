@@ -17,6 +17,7 @@ use std::time::Instant;
 use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
+mod cockpit;
 mod connections;
 mod previews;
 mod recordings;
@@ -35,6 +36,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/system/health", get(system::health))
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))
+        .route("/api/v1/cockpit/stats", get(cockpit::stats))
         .route(
             "/api/v1/settings/telemetry",
             get(settings::telemetry).put(settings::update_telemetry),

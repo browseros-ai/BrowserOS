@@ -19,6 +19,17 @@ const DISTINCT_TOOL_COUNT: &str = "distinct_tool_count";
 const MAX_CONCURRENT_USED_SESSIONS: &str = "max_concurrent_used_sessions";
 const TOTAL_DURATION_MS: &str = "total_duration_ms";
 const MAX_DURATION_MS: &str = "max_duration_ms";
+const ACTIVE_DURATION_MS: &str = "active_duration_ms";
+const TOOL_INPUT_TOKEN_ESTIMATE: &str = "tool_input_token_estimate";
+const TOOL_OUTPUT_TOKEN_ESTIMATE: &str = "tool_output_token_estimate";
+const BROWSERCLAW_TOKEN_ESTIMATE: &str = "browserclaw_token_estimate";
+const SCREENSHOT_BASELINE_TOKEN_ESTIMATE: &str = "screenshot_baseline_token_estimate";
+const SCREENSHOT_FIRST_TOKEN_ESTIMATE: &str = "screenshot_first_token_estimate";
+const RAW_TOKEN_SAVINGS_ESTIMATE: &str = "raw_token_savings_estimate";
+const EFFICIENCY_ESTIMATOR_VERSION: &str = "efficiency_estimator_version";
+const SCREENSHOT_BASELINE_WIDTH: &str = "screenshot_baseline_width";
+const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
+const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -58,6 +69,7 @@ enum PropertyKind {
     EndKind,
     ToolName,
     UnsignedInteger,
+    SignedInteger,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +97,10 @@ impl PropertyDefinition {
             PropertyKind::UnsignedInteger => value
                 .as_u64()
                 .filter(|value| *value <= MAX_SAFE_INTEGER)
+                .map(Value::from),
+            PropertyKind::SignedInteger => value
+                .as_i64()
+                .filter(|value| value.unsigned_abs() <= MAX_SAFE_INTEGER)
                 .map(Value::from),
         }
     }
@@ -197,14 +213,43 @@ pub const AGENT_SESSION_TOOL_USAGE: EventDefinition = EventDefinition::new(
         PropertyDefinition::new(MAX_DURATION_MS, PropertyKind::UnsignedInteger),
     ],
 );
+pub const AGENT_SESSION_EFFICIENCY_COMPUTED: EventDefinition = EventDefinition::new(
+    "agent_session_efficiency_computed",
+    &[
+        PropertyDefinition::new(KIND, PropertyKind::EndKind),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::new(DISPATCH_COUNT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(ACTIVE_DURATION_MS, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(TOOL_INPUT_TOKEN_ESTIMATE, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(TOOL_OUTPUT_TOKEN_ESTIMATE, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(BROWSERCLAW_TOKEN_ESTIMATE, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(
+            SCREENSHOT_BASELINE_TOKEN_ESTIMATE,
+            PropertyKind::UnsignedInteger,
+        ),
+        PropertyDefinition::new(
+            SCREENSHOT_FIRST_TOKEN_ESTIMATE,
+            PropertyKind::UnsignedInteger,
+        ),
+        PropertyDefinition::new(RAW_TOKEN_SAVINGS_ESTIMATE, PropertyKind::SignedInteger),
+        PropertyDefinition::new(EFFICIENCY_ESTIMATOR_VERSION, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(SCREENSHOT_BASELINE_WIDTH, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(SCREENSHOT_BASELINE_HEIGHT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(
+            SCREENSHOT_TOKENS_PER_DISPATCH,
+            PropertyKind::UnsignedInteger,
+        ),
+    ],
+);
 
-pub const ALL: [EventDefinition; 6] = [
+pub const ALL: [EventDefinition; 7] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_ENDED,
     HARNESS_CONNECTED,
     HARNESS_DISCONNECTED,
     AGENT_SESSION_TOOL_USAGE,
+    AGENT_SESSION_EFFICIENCY_COMPUTED,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -253,7 +298,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 6);
+        assert_eq!(ALL.len(), 7);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -263,6 +308,7 @@ mod tests {
                 HARNESS_CONNECTED.name(),
                 HARNESS_DISCONNECTED.name(),
                 AGENT_SESSION_TOOL_USAGE.name(),
+                AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
             ]
         );
         assert_eq!(
@@ -283,6 +329,25 @@ mod tests {
                 "dispatch_count",
                 "total_duration_ms",
                 "max_duration_ms",
+            ]
+        );
+        assert_eq!(
+            AGENT_SESSION_EFFICIENCY_COMPUTED.property_names(),
+            vec![
+                "kind",
+                "client_name",
+                "dispatch_count",
+                "active_duration_ms",
+                "tool_input_token_estimate",
+                "tool_output_token_estimate",
+                "browserclaw_token_estimate",
+                "screenshot_baseline_token_estimate",
+                "screenshot_first_token_estimate",
+                "raw_token_savings_estimate",
+                "efficiency_estimator_version",
+                "screenshot_baseline_width",
+                "screenshot_baseline_height",
+                "screenshot_tokens_per_dispatch",
             ]
         );
     }
@@ -500,6 +565,83 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[test]
+    fn session_efficiency_preserves_signed_savings_and_rejects_content() {
+        let properties = json!({
+            "kind": "errored",
+            "client_name": "Claude Code",
+            "dispatch_count": 2,
+            "active_duration_ms": 420,
+            "tool_input_token_estimate": 30,
+            "tool_output_token_estimate": 4_000,
+            "browserclaw_token_estimate": 4_030,
+            "screenshot_baseline_token_estimate": 3_072,
+            "screenshot_first_token_estimate": 3_102,
+            "raw_token_savings_estimate": -928,
+            "efficiency_estimator_version": 1,
+            "screenshot_baseline_width": 1_920,
+            "screenshot_baseline_height": 1_080,
+            "screenshot_tokens_per_dispatch": 1_536,
+            "session_id": "secret",
+            "url": "https://private.example",
+            "prompt": "private",
+            "arguments": { "label": "private" },
+            "result": "private",
+            "screenshot": "/private/screenshot.png",
+            "path": "/private/data",
+            "email": "person@example.com",
+        });
+
+        assert_eq!(
+            AGENT_SESSION_EFFICIENCY_COMPUTED.sanitize(&properties),
+            Some(json!({
+                "kind": "errored",
+                "client_name": "claude-code",
+                "dispatch_count": 2,
+                "active_duration_ms": 420,
+                "tool_input_token_estimate": 30,
+                "tool_output_token_estimate": 4_000,
+                "browserclaw_token_estimate": 4_030,
+                "screenshot_baseline_token_estimate": 3_072,
+                "screenshot_first_token_estimate": 3_102,
+                "raw_token_savings_estimate": -928,
+                "efficiency_estimator_version": 1,
+                "screenshot_baseline_width": 1_920,
+                "screenshot_baseline_height": 1_080,
+                "screenshot_tokens_per_dispatch": 1_536,
+            }))
+        );
+
+        for invalid in [
+            json!(-(MAX_SAFE_INTEGER as i64) - 1),
+            json!(MAX_SAFE_INTEGER + 1),
+            json!(1.5),
+            json!("-1"),
+        ] {
+            let mut invalid_properties = properties.clone();
+            invalid_properties["raw_token_savings_estimate"] = invalid;
+            assert_eq!(
+                AGENT_SESSION_EFFICIENCY_COMPUTED.sanitize(&invalid_properties),
+                None
+            );
+        }
+
+        let mut negative_unsigned = properties.clone();
+        negative_unsigned["active_duration_ms"] = json!(-1);
+        assert_eq!(
+            AGENT_SESSION_EFFICIENCY_COMPUTED.sanitize(&negative_unsigned),
+            None
+        );
+        let mut missing = properties;
+        assert!(
+            missing
+                .as_object_mut()
+                .and_then(|properties| properties.remove("dispatch_count"))
+                .is_some()
+        );
+        assert_eq!(AGENT_SESSION_EFFICIENCY_COMPUTED.sanitize(&missing), None);
     }
 
     #[test]
