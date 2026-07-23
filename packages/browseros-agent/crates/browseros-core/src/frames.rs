@@ -16,6 +16,7 @@ pub struct FrameTarget {
 
 pub struct FrameRegistry {
     cdp: Arc<dyn CdpConnection>,
+    connection_epoch: Mutex<u64>,
     oopif_sessions: Mutex<HashMap<FrameId, SessionId>>,
     same_process_sessions: Mutex<HashMap<FrameId, SessionId>>,
     page_sessions: Mutex<HashMap<PageId, SessionId>>,
@@ -24,8 +25,10 @@ pub struct FrameRegistry {
 impl FrameRegistry {
     #[must_use]
     pub fn new(cdp: Arc<dyn CdpConnection>) -> Arc<Self> {
+        let connection_epoch = cdp.connection_epoch();
         let registry = Arc::new(Self {
             cdp,
+            connection_epoch: Mutex::new(connection_epoch),
             oopif_sessions: Mutex::new(HashMap::new()),
             same_process_sessions: Mutex::new(HashMap::new()),
             page_sessions: Mutex::new(HashMap::new()),
@@ -40,6 +43,7 @@ impl FrameRegistry {
         page_id: PageId,
         session_id: SessionId,
     ) -> Result<(), CoreError> {
+        self.clear_sessions_from_prior_connection().await;
         self.page_sessions.lock().await.insert(page_id, session_id);
         let _ = page_session
             .send::<_, Value>(
@@ -60,6 +64,7 @@ impl FrameRegistry {
         frame_id: Option<FrameId>,
         same_process_parent: Option<&ProtocolSession>,
     ) -> Result<FrameTarget, CoreError> {
+        self.clear_sessions_from_prior_connection().await;
         let page_session_id = self
             .page_sessions
             .lock()
@@ -108,6 +113,20 @@ impl FrameRegistry {
         })
     }
 
+    async fn clear_sessions_from_prior_connection(&self) {
+        let current_epoch = self.cdp.connection_epoch();
+        let mut cached_epoch = self.connection_epoch.lock().await;
+        if *cached_epoch == current_epoch {
+            return;
+        }
+        // Flattened target session ids are scoped to one CDP websocket. A reconnect can reuse
+        // frame ids while every cached page, OOPIF, and inherited session id is already invalid.
+        self.oopif_sessions.lock().await.clear();
+        self.same_process_sessions.lock().await.clear();
+        self.page_sessions.lock().await.clear();
+        *cached_epoch = current_epoch;
+    }
+
     fn spawn_event_listener(registry: Arc<Self>) {
         let mut events = registry.cdp.events();
         tokio::spawn(async move {
@@ -143,6 +162,7 @@ impl FrameRegistry {
         if params.target_info.r#type != "iframe" {
             return;
         }
+        self.clear_sessions_from_prior_connection().await;
         let frame_id = FrameId(params.target_info.target_id);
         let session_id = SessionId::from(params.session_id);
         self.oopif_sessions
@@ -172,6 +192,7 @@ impl FrameRegistry {
     }
 
     async fn on_detached(&self, session_id: &SessionId) {
+        self.clear_sessions_from_prior_connection().await;
         self.oopif_sessions
             .lock()
             .await
@@ -190,10 +211,23 @@ mod tests {
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
     use tokio::sync::broadcast;
 
-    struct NoopConnection;
+    struct NoopConnection {
+        epoch: AtomicU64,
+    }
+
+    impl Default for NoopConnection {
+        fn default() -> Self {
+            Self {
+                epoch: AtomicU64::new(1),
+            }
+        }
+    }
 
     impl CdpConnection for NoopConnection {
         fn send<'a>(
@@ -224,14 +258,14 @@ mod tests {
         }
 
         fn connection_epoch(&self) -> u64 {
-            1
+            self.epoch.load(Ordering::SeqCst)
         }
     }
 
     #[tokio::test]
     async fn same_process_child_inherits_and_caches_its_oopif_parent_session()
     -> Result<(), crate::CoreError> {
-        let cdp = Arc::new(NoopConnection);
+        let cdp = Arc::new(NoopConnection::default());
         let registry = FrameRegistry::new(cdp.clone());
         let page_id = PageId(1);
         registry
@@ -267,6 +301,54 @@ mod tests {
             cdp,
             SessionId::from("page-session".to_string())
         )));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconnect_discards_inherited_sessions_from_the_prior_connection()
+    -> Result<(), crate::CoreError> {
+        let cdp = Arc::new(NoopConnection::default());
+        let registry = FrameRegistry::new(cdp.clone());
+        let page_id = PageId(1);
+        let child_id = FrameId("child".to_string());
+        let first_page_session = ProtocolSession::for_session(
+            cdp.clone(),
+            SessionId::from("page-session-1".to_string()),
+        );
+        registry
+            .register_page(
+                first_page_session,
+                page_id.clone(),
+                SessionId::from("page-session-1".to_string()),
+            )
+            .await?;
+        let first_parent = ProtocolSession::for_session(
+            cdp.clone(),
+            SessionId::from("oopif-session-1".to_string()),
+        );
+        let first_child = registry
+            .resolve_frame_target(page_id.clone(), Some(child_id.clone()), Some(&first_parent))
+            .await?;
+        assert!(first_child.session.same_session(&first_parent));
+
+        cdp.epoch.store(2, Ordering::SeqCst);
+        let second_page_session = ProtocolSession::for_session(
+            cdp.clone(),
+            SessionId::from("page-session-2".to_string()),
+        );
+        registry
+            .register_page(
+                second_page_session.clone(),
+                page_id.clone(),
+                SessionId::from("page-session-2".to_string()),
+            )
+            .await?;
+
+        let reconnected_child = registry
+            .resolve_frame_target(page_id, Some(child_id), None)
+            .await?;
+        assert!(reconnected_child.session.same_session(&second_page_session));
+        assert!(!reconnected_child.session.same_session(&first_parent));
         Ok(())
     }
 }
