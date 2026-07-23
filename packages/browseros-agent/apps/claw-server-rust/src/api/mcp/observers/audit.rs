@@ -353,7 +353,6 @@ mod tests {
             is_loading: false,
             load_progress: 1.0,
             is_pinned: false,
-            is_hidden: false,
             window_id: None,
             index: None,
             group_id: None,
