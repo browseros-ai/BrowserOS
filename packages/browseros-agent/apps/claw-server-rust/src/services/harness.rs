@@ -5,12 +5,13 @@ use crate::{
 use harness_integrations::{
     AgentId, AgentScope, DisconnectInput, Error as ManagerError, LinkInput, ListLinksFilter,
     ManifestLinkEntry, ManifestServerEntry, McpManager, McpServer, McpServerSpec, ServerManifest,
-    is_installed, resolve_agent_mcp_config_path, resolve_agent_surface,
+    SkillEnvironment, SkillReconcileOutcome, SkillReconciler, SkillSpec, is_installed,
+    resolve_agent_mcp_config_path, resolve_agent_surface,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fmt, fs,
     io::{self, Write},
@@ -134,8 +135,16 @@ pub struct HarnessService {
     manager: McpManager,
     workspace_dir: PathBuf,
     home_dir: PathBuf,
+    managed_skill: Option<ManagedSkill>,
     mutex: Arc<Mutex<()>>,
     analytics: Arc<dyn AnalyticsSink>,
+}
+
+#[derive(Clone)]
+struct ManagedSkill {
+    reconciler: SkillReconciler,
+    spec: SkillSpec,
+    environment: SkillEnvironment,
 }
 
 impl HarnessService {
@@ -150,10 +159,36 @@ impl HarnessService {
         home_dir: PathBuf,
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
+        Self::build(workspace_dir, home_dir, analytics, None)
+    }
+
+    #[must_use]
+    pub fn new_with_managed_skill(
+        workspace_dir: PathBuf,
+        skill_workspace_dir: PathBuf,
+        home_dir: PathBuf,
+        spec: SkillSpec,
+        analytics: Arc<dyn AnalyticsSink>,
+    ) -> Self {
+        let managed_skill = ManagedSkill {
+            reconciler: SkillReconciler::new(skill_workspace_dir),
+            spec,
+            environment: SkillEnvironment::current(&home_dir),
+        };
+        Self::build(workspace_dir, home_dir, analytics, Some(managed_skill))
+    }
+
+    fn build(
+        workspace_dir: PathBuf,
+        home_dir: PathBuf,
+        analytics: Arc<dyn AnalyticsSink>,
+        managed_skill: Option<ManagedSkill>,
+    ) -> Self {
         Self {
             manager: McpManager::new(&workspace_dir),
             workspace_dir,
             home_dir,
+            managed_skill,
             mutex: Arc::new(Mutex::new(())),
             analytics,
         }
@@ -170,6 +205,7 @@ impl HarnessService {
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
+        let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
             let summary = relink_managed_server(
                 &manager,
@@ -179,15 +215,19 @@ impl HarnessService {
                 spec,
                 true,
             )?;
+            let skill_warning = managed_skill.as_ref().and_then(|managed_skill| {
+                reconcile_skill_warning(&manager, &workspace_dir, managed_skill)
+            });
             Ok((
                 summary.created,
                 resolve_agent_mcp_config_path(agent, AgentScope::System).ok(),
+                skill_warning,
             ))
         })
         .await?;
 
         match result {
-            Ok((created, config_path)) => {
+            Ok((created, config_path, skill_warning)) => {
                 tracing::info!(harness = %harness, agent = %agent, "connected BrowserClaw to harness");
                 if created {
                     self.analytics.capture(
@@ -200,7 +240,10 @@ impl HarnessService {
                     installed: true,
                     agent_id: agent,
                     config_path: tildify_home_path(config_path.as_deref(), &self.home_dir),
-                    message: format!("BrowserOS registered as an MCP server in {harness}."),
+                    message: with_skill_retry_message(
+                        format!("BrowserOS registered as an MCP server in {harness}."),
+                        skill_warning,
+                    ),
                 })
             }
             Err(error) => Ok(self.failure(harness, error, "connect")),
@@ -213,16 +256,21 @@ impl HarnessService {
         let agent = harness.agent_id();
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
+        let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
-            with_legacy_manifest_migration(&workspace_dir, || {
+            let summary = with_legacy_manifest_migration(&workspace_dir, || {
                 manager.disconnect(DisconnectInput::new(BROWSEROS_MCP_SERVER_NAME, agent))
             })
-            .map_err(HarnessOperationError::Manager)
+            .map_err(HarnessOperationError::Manager)?;
+            let skill_warning = managed_skill.as_ref().and_then(|managed_skill| {
+                reconcile_skill_warning(&manager, &workspace_dir, managed_skill)
+            });
+            Ok((summary, skill_warning))
         })
         .await?;
 
         match result {
-            Ok(summary) => {
+            Ok((summary, skill_warning)) => {
                 tracing::info!(
                     harness = %harness,
                     agent = %agent,
@@ -241,7 +289,10 @@ impl HarnessService {
                     installed: false,
                     agent_id: agent,
                     config_path: None,
-                    message: format!("BrowserOS unregistered from {harness}."),
+                    message: with_skill_retry_message(
+                        format!("BrowserOS unregistered from {harness}."),
+                        skill_warning,
+                    ),
                 })
             }
             Err(error) => Ok(self.failure(harness, error, "disconnect")),
@@ -325,6 +376,21 @@ impl HarnessService {
             .map_err(manager_app_error)
     }
 
+    /// Reconciles the product skill from the current MCP manifest links.
+    pub async fn run_skill_reconciliation(&self) -> AppResult<SkillReconcileOutcome> {
+        let _guard = self.mutex.lock().await;
+        let Some(managed_skill) = self.managed_skill.clone() else {
+            return Ok(SkillReconcileOutcome::default());
+        };
+        let manager = self.manager.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            reconcile_managed_skill(&manager, &workspace_dir, &managed_skill)
+        })
+        .await?
+        .map_err(manager_app_error)
+    }
+
     /// Re-links every connected harness to `target_mcp_url`. Called on boot so a
     /// proxy-port change (native re-resolves ports at app launch) re-points all
     /// already-connected agents at the new URL. Harnesses already on the URL are
@@ -393,6 +459,58 @@ impl HarnessService {
                 }
             }
         }
+    }
+}
+
+fn reconcile_managed_skill(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    managed_skill: &ManagedSkill,
+) -> Result<SkillReconcileOutcome, ManagerError> {
+    let consumers = with_legacy_manifest_migration(workspace_dir, || {
+        manager.list_links(ListLinksFilter {
+            server_names: Some(vec![BROWSEROS_MCP_SERVER_NAME.to_string()]),
+            agents: None,
+        })
+    })?
+    .into_iter()
+    .map(|link| link.agent)
+    .collect::<BTreeSet<_>>();
+    managed_skill
+        .reconciler
+        .reconcile(&managed_skill.spec, &consumers, &managed_skill.environment)
+}
+
+fn reconcile_skill_warning(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    managed_skill: &ManagedSkill,
+) -> Option<String> {
+    match reconcile_managed_skill(manager, workspace_dir, managed_skill) {
+        Ok(outcome) if outcome.warnings.is_empty() => None,
+        Ok(outcome) => {
+            let message = outcome
+                .warnings
+                .into_iter()
+                .map(|warning| format!("{}: {}", warning.target.display(), warning.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            tracing::warn!(warning = %message, "harness skill reconciliation needs a retry");
+            Some(message)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "harness skill reconciliation needs a retry");
+            Some(error.to_string())
+        }
+    }
+}
+
+fn with_skill_retry_message(message: String, warning: Option<String>) -> String {
+    match warning {
+        Some(warning) => format!(
+            "{message} BrowserClaw skill reconciliation needs a retry on restart or reconnect: {warning}"
+        ),
+        None => message,
     }
 }
 

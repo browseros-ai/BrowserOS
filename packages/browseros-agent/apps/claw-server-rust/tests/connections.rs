@@ -11,7 +11,7 @@ use claw_server_rust::{
     services::harness::{Harness, HarnessService},
 };
 use harness_integrations::{
-    AgentId, AgentScope, LinkInput, McpManager, McpServer, McpServerSpec,
+    AgentId, AgentScope, LinkInput, McpManager, McpServer, McpServerSpec, SkillSpec,
     resolve_agent_mcp_config_path,
 };
 use serde_json::{Value, json};
@@ -89,9 +89,11 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("missing test home"))?;
     let browserclaw_dir = home.join("claw");
     let analytics = Arc::new(RecordingAnalytics::default());
-    let service = HarnessService::new_with_analytics(
+    let service = HarnessService::new_with_managed_skill(
         browserclaw_dir.join("mcp-manager"),
+        browserclaw_dir.join("harness-integrations"),
         home.clone(),
+        SkillSpec::new("browserclaw", "managed skill v1\n")?,
         analytics.clone(),
     );
     let paths = config_paths()?;
@@ -150,10 +152,31 @@ async fn run_connections_case() -> anyhow::Result<()> {
         claude.message,
         "BrowserOS registered as an MCP server in Claude Code."
     );
+    let claude_skill = home.join("skills/browserclaw");
+    assert_eq!(
+        fs::read_to_string(claude_skill.join("SKILL.md"))?,
+        "managed skill v1\n"
+    );
 
     let codex = service.connect_browseros(Harness::Codex, MCP_URL).await?;
     let zed = service.connect_browseros(Harness::Zed, MCP_URL).await?;
     assert!(codex.installed && zed.installed);
+    let shared_skill = home.join(".agents/skills/browserclaw");
+    assert_eq!(
+        fs::read_to_string(shared_skill.join("SKILL.md"))?,
+        "managed skill v1\n"
+    );
+    let skill_manifest_path = browserclaw_dir.join("harness-integrations/skills.json");
+    let skill_manifest: Value = serde_json::from_str(&fs::read_to_string(&skill_manifest_path)?)?;
+    let shared_record = skill_manifest["targets"]
+        .as_array()
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|target| target["targetPath"] == shared_skill.display().to_string())
+        })
+        .ok_or_else(|| anyhow::anyhow!("missing shared skill target"))?;
+    assert_eq!(shared_record["consumers"], json!(["codex", "zed"]));
 
     let claude_json: Value = serde_json::from_str(&fs::read_to_string(claude_path)?)?;
     assert_eq!(
@@ -198,6 +221,51 @@ async fn run_connections_case() -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
         [Harness::ClaudeCode, Harness::Codex, Harness::Zed]
     );
+    let manifest_before_list = fs::read(&skill_manifest_path)?;
+    let manifest_mtime_before_list = fs::metadata(&skill_manifest_path)?.modified()?;
+    let skill_mtime_before_list = fs::metadata(shared_skill.join("SKILL.md"))?.modified()?;
+    service.list_browseros_connections().await?;
+    assert_eq!(fs::read(&skill_manifest_path)?, manifest_before_list);
+    assert_eq!(
+        fs::metadata(&skill_manifest_path)?.modified()?,
+        manifest_mtime_before_list
+    );
+    assert_eq!(
+        fs::metadata(shared_skill.join("SKILL.md"))?.modified()?,
+        skill_mtime_before_list
+    );
+
+    fs::write(shared_skill.join("SKILL.md"), "edited")?;
+    let reconnected = service.connect_browseros(Harness::Codex, MCP_URL).await?;
+    assert!(reconnected.installed);
+    assert_eq!(
+        fs::read_to_string(shared_skill.join("SKILL.md"))?,
+        "managed skill v1\n"
+    );
+
+    fs::remove_dir_all(&shared_skill)?;
+    let boot_repair = service.run_skill_reconciliation().await?;
+    assert_eq!(boot_repair.installed, 1);
+    assert_eq!(
+        fs::read_to_string(shared_skill.join("SKILL.md"))?,
+        "managed skill v1\n"
+    );
+
+    let ota_service = HarnessService::new_with_managed_skill(
+        browserclaw_dir.join("mcp-manager"),
+        browserclaw_dir.join("harness-integrations"),
+        home.clone(),
+        SkillSpec::new("browserclaw", "managed skill v2\n")?,
+        analytics.clone(),
+    );
+    let ota_update = ota_service.run_skill_reconciliation().await?;
+    assert_eq!(ota_update.updated, 2);
+    assert_eq!(
+        fs::read_to_string(shared_skill.join("SKILL.md"))?,
+        "managed skill v2\n"
+    );
+    let restored_skill = service.run_skill_reconciliation().await?;
+    assert_eq!(restored_skill.updated, 2);
 
     // Proxy port moved on this launch: migrating re-links every connected
     // harness to the new URL and rewrites their config files + the manifest.
@@ -261,6 +329,17 @@ async fn run_connections_case() -> anyhow::Result<()> {
     assert!(!disconnected.installed);
     assert_eq!(disconnected.message, "BrowserOS unregistered from Codex.");
     assert!(!fs::read_to_string(path_for(&paths, AgentId::Codex)?)?.contains("BrowserClaw"));
+    assert!(shared_skill.exists());
+    let skill_manifest: Value = serde_json::from_str(&fs::read_to_string(&skill_manifest_path)?)?;
+    let shared_record = skill_manifest["targets"]
+        .as_array()
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|target| target["targetPath"] == shared_skill.display().to_string())
+        })
+        .ok_or_else(|| anyhow::anyhow!("missing shared skill target after Codex disconnect"))?;
+    assert_eq!(shared_record["consumers"], json!(["zed"]));
     let after_disconnect = service.list_browseros_connections().await?;
     let codex = after_disconnect
         .iter()
@@ -268,6 +347,69 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("missing Codex row"))?;
     assert!(!codex.installed);
     assert_eq!(codex.message, "Codex is not configured.");
+
+    let antigravity_skill = home.join(".gemini/config/skills/browserclaw");
+    fs::create_dir_all(&antigravity_skill)?;
+    fs::write(antigravity_skill.join("SKILL.md"), "foreign skill")?;
+    fs::write(antigravity_skill.join("keep.txt"), "keep")?;
+    let antigravity = service
+        .connect_browseros(Harness::Antigravity, MCP_URL)
+        .await?;
+    assert!(antigravity.installed);
+    assert!(
+        antigravity
+            .message
+            .contains("skill reconciliation needs a retry")
+    );
+    assert_eq!(
+        fs::read_to_string(antigravity_skill.join("SKILL.md"))?,
+        "foreign skill"
+    );
+    assert_eq!(
+        fs::read_to_string(antigravity_skill.join("keep.txt"))?,
+        "keep"
+    );
+    let listed = service.list_browseros_connections().await?;
+    assert!(
+        listed
+            .iter()
+            .any(|state| state.harness == Harness::Antigravity && state.installed)
+    );
+
+    fs::remove_dir_all(&antigravity_skill)?;
+    let antigravity = service
+        .connect_browseros(Harness::Antigravity, MCP_URL)
+        .await?;
+    assert!(antigravity.installed);
+    assert_eq!(
+        antigravity.message,
+        "BrowserOS registered as an MCP server in Antigravity."
+    );
+    assert_eq!(
+        fs::read_to_string(antigravity_skill.join("SKILL.md"))?,
+        "managed skill v1\n"
+    );
+
+    let valid_skill_manifest = fs::read(&skill_manifest_path)?;
+    fs::write(&skill_manifest_path, "{ broken")?;
+    let antigravity = service.disconnect_browseros(Harness::Antigravity).await?;
+    assert!(!antigravity.installed);
+    assert!(
+        antigravity
+            .message
+            .contains("skill reconciliation needs a retry")
+    );
+    assert!(antigravity_skill.exists());
+    let listed = service.list_browseros_connections().await?;
+    assert!(
+        listed
+            .iter()
+            .all(|state| state.harness != Harness::Antigravity || !state.installed)
+    );
+    fs::write(&skill_manifest_path, valid_skill_manifest)?;
+    let cleanup_retry = service.run_skill_reconciliation().await?;
+    assert_eq!(cleanup_retry.removed, 1);
+    assert!(!antigravity_skill.exists());
 
     let router = test_router(&browserclaw_dir, &home).await?;
     let (status, listed) = request_json(&router, "GET", "/api/v1/connections").await?;

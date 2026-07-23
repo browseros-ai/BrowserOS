@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
 };
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -150,7 +150,7 @@ async fn serve_with_boot_task(
         claw_server_rust::services::runtime_file::write(&runtime_dir, &runtime_url).await;
     });
     let shutdown = runtime.state().shutdown;
-    runtime.spawn_task("MCP config integrity scan", boot_task);
+    runtime.spawn_task("harness integration reconciliation", boot_task);
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await
@@ -204,6 +204,22 @@ async fn heal_boot_config(state: &AppState) {
             "completed MCP config integrity scan"
         ),
         Err(err) => error!(error = %err, "MCP config integrity scan failed"),
+    }
+    match state.harness.run_skill_reconciliation().await {
+        Ok(outcome) => {
+            for warning in &outcome.warnings {
+                warn!(target = %warning.target.display(), warning = %warning.message, "harness skill reconciliation needs a retry");
+            }
+            info!(
+                installed = outcome.installed,
+                updated = outcome.updated,
+                removed = outcome.removed,
+                unchanged = outcome.unchanged,
+                warnings = outcome.warnings.len(),
+                "completed harness skill reconciliation"
+            );
+        }
+        Err(err) => error!(error = %err, "harness skill reconciliation failed"),
     }
 }
 

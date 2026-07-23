@@ -9,6 +9,7 @@ use crate::{
         browser::{BrowserService, TabRegistry},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
+        harness_skills::load_browserclaw_skill,
         profiles::ProfileService,
         recordings::{RecordingIngestService, RecordingStore},
         replay::ReplayService,
@@ -68,9 +69,12 @@ impl AppState {
         ));
         let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
-        let harness = Arc::new(HarnessService::new_with_analytics(
+        let skill = load_browserclaw_skill(&config.resources_dir)?;
+        let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
+            config.browserclaw_dir.join("harness-integrations"),
             home_dir,
+            skill,
             analytics_sink.clone(),
         ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
