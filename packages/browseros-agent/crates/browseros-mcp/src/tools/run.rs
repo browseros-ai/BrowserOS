@@ -1,6 +1,6 @@
 use crate::framework::{
-    BrowserToolDefaults, ToolCtx, ToolError, ToolExecResult, ToolResult, page_json, parse_args,
-    text_result,
+    BrowserToolDefaults, InnerCallHook, InnerCallRecord, ToolCtx, ToolError, ToolExecResult,
+    ToolResult, page_json, parse_args, text_result,
 };
 use browseros_core::{
     PageId, Ref, SessionId, WindowId, input::ScrollDirection, pages::NewPageOptions,
@@ -235,6 +235,7 @@ struct BrowserBridge {
     session: Arc<browseros_core::BrowserSession>,
     defaults: BrowserToolDefaults,
     control: RunControl,
+    hook: Option<Arc<dyn InnerCallHook>>,
 }
 
 enum BrowserCallValue {
@@ -333,6 +334,7 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         ctx.defaults.clone(),
         logs.clone(),
         control.clone(),
+        ctx.inner_call_hook.clone(),
         duration,
     );
     tokio::select! {
@@ -348,6 +350,7 @@ async fn execute_quickjs(
     defaults: BrowserToolDefaults,
     logs: SharedLogs,
     control: RunControl,
+    hook: Option<Arc<dyn InnerCallHook>>,
     duration: Duration,
 ) -> Result<RunOutcome, RunError> {
     let runtime = AsyncRuntime::new().map_err(engine_error)?;
@@ -363,7 +366,7 @@ async fn execute_quickjs(
     let context = AsyncContext::full(&runtime).await.map_err(engine_error)?;
     let result = context
         .async_with(async |ctx| {
-            install_globals(&ctx, session, defaults, logs.clone(), control.clone())?;
+            install_globals(&ctx, session, defaults, logs.clone(), control.clone(), hook)?;
             ctx.eval::<(), _>(BOOTSTRAP_JS).catch(&ctx).map_err(|err| {
                 RunError::Engine(format!(
                     "failed to initialize run runtime: {}",
@@ -462,11 +465,13 @@ fn install_globals<'js>(
     defaults: BrowserToolDefaults,
     logs: SharedLogs,
     control: RunControl,
+    hook: Option<Arc<dyn InnerCallHook>>,
 ) -> Result<(), RunError> {
     let bridge = BrowserBridge {
         session,
         defaults,
         control,
+        hook,
     };
     let call_bridge = {
         let bridge = bridge.clone();
@@ -499,6 +504,25 @@ fn install_globals<'js>(
 impl BrowserBridge {
     async fn call(&self, method: &str, args_json: &str) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
+        let page = target_page(method, &args);
+        if let Some(hook) = &self.hook {
+            hook.authorize(page).await?;
+        }
+        let started = Instant::now();
+        let outcome = self.dispatch(method, args).await;
+        if let Some(hook) = &self.hook {
+            hook.record(InnerCallRecord {
+                method,
+                page,
+                is_error: outcome.is_err(),
+                duration_ms: started.elapsed().as_millis() as i64,
+            })
+            .await;
+        }
+        outcome
+    }
+
+    async fn dispatch(&self, method: &str, args: Vec<Value>) -> Result<BrowserCallValue, String> {
         match method {
             "pages.list" => {
                 let pages = self.control.race(self.session.pages.list()).await?;
@@ -687,6 +711,23 @@ impl BrowserBridge {
 fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
     serde_json::from_str::<Vec<Value>>(args_json)
         .map_err(|err| format!("Invalid browser call arguments: {err}"))
+}
+
+/// The page a bridge primitive targets, for the ownership hook. Page-scoped
+/// SDK helpers (`observe`/`input`/`nav` and the page-first `pages`/`cdp`
+/// variants) carry the page id as their first argument; the rest address no
+/// specific page.
+fn target_page(method: &str, args: &[Value]) -> Option<u32> {
+    let page_first = method.starts_with("observe.")
+        || method.starts_with("input.")
+        || method.starts_with("nav.")
+        || matches!(method, "pages.close" | "pages.getInfo" | "cdpJsonForPage");
+    if !page_first {
+        return None;
+    }
+    args.first()
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
 }
 
 fn page_arg(args: &[Value], index: usize) -> Result<PageId, String> {
@@ -1185,6 +1226,75 @@ mod tests {
         execute_tool(&def, args, ctx)
             .await
             .map_err(|err| anyhow::anyhow!(err.to_string()))
+    }
+
+    #[derive(Default)]
+    struct HookLog {
+        authorized: Vec<Option<u32>>,
+        recorded: Vec<(String, Option<u32>, bool)>,
+        reject: Option<String>,
+    }
+
+    struct MockHook(Arc<Mutex<HookLog>>);
+
+    impl InnerCallHook for MockHook {
+        fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
+            let mut log = self.0.lock().expect("hook log poisoned");
+            log.authorized.push(page);
+            let result = match &log.reject {
+                Some(message) => Err(message.clone()),
+                None => Ok(()),
+            };
+            Box::pin(async move { result })
+        }
+
+        fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
+            self.0
+                .lock()
+                .expect("hook log poisoned")
+                .recorded
+                .push((record.method.to_owned(), record.page, record.is_error));
+            Box::pin(async move {})
+        }
+    }
+
+    fn ctx_with_hook(log: Arc<Mutex<HookLog>>) -> ToolCtx {
+        let mut ctx = test_ctx();
+        ctx.inner_call_hook = Some(Arc::new(MockHook(log)));
+        ctx
+    }
+
+    #[tokio::test]
+    async fn run_hook_authorizes_and_records_page_scoped_primitive() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx("return await browser.pages.getInfo(1)", None, &ctx).await?;
+        assert!(!result.is_error);
+        let log = log.lock().expect("hook log poisoned");
+        assert_eq!(log.authorized, vec![Some(1)]);
+        assert_eq!(
+            log.recorded,
+            vec![("pages.getInfo".to_owned(), Some(1), false)]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_hook_rejection_blocks_primitive_before_dispatch() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog {
+            reject: Some("page 1 is not owned by this agent".to_owned()),
+            ..HookLog::default()
+        }));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx("return await browser.pages.getInfo(1)", None, &ctx).await?;
+        assert!(result.is_error);
+        let text = result_text(&result)?;
+        assert!(text.contains("not owned by this agent"));
+        let log = log.lock().expect("hook log poisoned");
+        assert_eq!(log.authorized, vec![Some(1)]);
+        // Rejected before dispatch, so nothing is recorded.
+        assert!(log.recorded.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
