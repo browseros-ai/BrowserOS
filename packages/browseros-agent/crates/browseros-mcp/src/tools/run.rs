@@ -46,9 +46,9 @@ Observe / act (refs eN come from a snapshot's text/refs):
   browser.input(pageId).click(ref) / fill(ref,value) / type(text) / press(key) / hover(ref) / selectOption(ref,value) / scroll(dir,amount,ref?)
   browser.nav(pageId).goto(url) / back() / forward() / reload()
 Read / wait / capture:
-  browser.read(pageId)               -> the page as a markdown STRING
-  browser.grep(pageId, { pattern })  -> matching lines
-  browser.wait(pageId, { text } | { selector } | { ms })  -> resolves when ready
+  browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
+  browser.grep(pageId, { pattern })  -> matching lines as a STRING
+  browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready (default is a timed pause of `value` ms). There is no `ms` option; a plain pause is { value: 3000 }.
   browser.screenshot(pageId) / evaluate(pageId, { code }) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
@@ -738,6 +738,14 @@ impl BrowserBridge {
             .map_err(|err| err.to_string())?;
         if result.is_error {
             return Err(tool_result_text(&result));
+        }
+        // Text-producing primitives return their text, not the metadata: a
+        // script wants the markdown from read and the matching lines from grep,
+        // not { format, path, contentLength }.
+        if matches!(tool_name, "read" | "grep") {
+            return Ok(BrowserCallValue::Json(Value::String(tool_result_text(
+                &result,
+            ))));
         }
         Ok(match result.structured_content {
             Some(value) => BrowserCallValue::Json(value),
