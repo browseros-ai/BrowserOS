@@ -16,7 +16,7 @@ use sea_orm::{
     QueryOrder, Statement, sea_query::OnConflict,
 };
 
-/// Audit estimator version accepted by efficiency v1; version 0 is unmeasured legacy data.
+/// Audit estimator version accepted by efficiency projections; version 0 is unmeasured legacy data.
 pub(crate) const ELIGIBLE_TOKEN_ESTIMATOR_VERSION: i64 = 1;
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub(crate) struct SessionEfficiencySource {
     pub dispatches: Vec<tool_dispatches::Model>,
 }
 
-/// Database boundary for immutable efficiency projections and their source audit rows.
+/// Database boundary for insert-once efficiency projections and their source audit rows.
 #[derive(Clone)]
 pub struct SessionEfficiencyStatsRepository {
     db: Database,

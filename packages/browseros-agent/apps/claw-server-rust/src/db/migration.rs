@@ -15,7 +15,133 @@ impl MigratorTrait for Migrator {
             Box::new(m0006_add_tool_token_estimates::Migration),
             Box::new(m0007_add_session_efficiency_stats::Migration),
             Box::new(m0008_add_task_token_estimates::Migration),
+            Box::new(m0009_rebase_screenshot_baseline::Migration),
         ]
+    }
+}
+
+mod m0009_rebase_screenshot_baseline {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0009_rebase_screenshot_baseline"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // These formula versions and token baselines are frozen migration values, not
+            // mutable runtime constants. The cap mirrors the projection's saturating multiply.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE session_efficiency_stats SET
+                        screenshot_baseline_token_estimate = CASE
+                            WHEN dispatch_count <= 0 THEN 0
+                            WHEN dispatch_count > 3074457345618258 THEN 9223372036854775807
+                            ELSE dispatch_count * 3000
+                        END,
+                        efficiency_estimator_version = 2
+                    WHERE efficiency_estimator_version = 1
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE session_efficiency_stats SET
+                        screenshot_baseline_token_estimate = CASE
+                            WHEN dispatch_count <= 0 THEN 0
+                            WHEN dispatch_count > 6004799503160661 THEN 9223372036854775807
+                            ELSE dispatch_count * 1536
+                        END,
+                        efficiency_estimator_version = 1
+                    WHERE efficiency_estimator_version = 2
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DbBackend, Statement,
+        };
+
+        struct PreviousMigrator;
+
+        #[async_trait::async_trait]
+        impl MigratorTrait for PreviousMigrator {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                super::super::Migrator::migrations()
+                    .into_iter()
+                    .take(8)
+                    .collect()
+            }
+        }
+
+        async fn insert_projection(
+            connection: &sea_orm_migration::sea_orm::DatabaseConnection,
+            session_id: &str,
+            dispatch_count: i64,
+            screenshot_tokens: i64,
+            version: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats (session_id, ended_at, dispatch_count, active_duration_ms, tool_input_token_estimate, tool_output_token_estimate, screenshot_baseline_token_estimate, efficiency_estimator_version, computed_at) VALUES ('{session_id}', 1, {dispatch_count}, 1, 1, 1, {screenshot_tokens}, {version}, 1)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &sea_orm_migration::sea_orm::DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT screenshot_baseline_token_estimate, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "screenshot_baseline_token_estimate")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn backfill_rebases_only_v1_projections_and_saturates() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            PreviousMigrator::up(&connection, None).await?;
+            insert_projection(&connection, "v1", 2, 3_072, 1).await?;
+            insert_projection(&connection, "v2", 2, 6_000, 2).await?;
+            insert_projection(&connection, "saturated", i64::MAX, i64::MAX, 1).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(projection(&connection, "v1").await?, (6_000, 2));
+            assert_eq!(projection(&connection, "v2").await?, (6_000, 2));
+            assert_eq!(projection(&connection, "saturated").await?, (i64::MAX, 2));
+            Ok(())
+        }
     }
 }
 

@@ -8,22 +8,27 @@ use crate::{
     },
     error::AppResult,
 };
-use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 1;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 2;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// Returns the fixed screenshot-first v1 cost through the shared live image estimator.
+/// Fixed provider-neutral baseline for one 1920x1080 screenshot. Anthropic documents
+/// 2,691 visual tokens for Claude Sonnet 5 at this resolution and a 4,784-token
+/// high-resolution ceiling; OpenAI's GPT-5.5 high/original rules retain all 2,040
+/// 32px patches at this resolution within their documented patch budgets.
+///
+/// Anthropic: https://platform.claude.com/docs/en/build-with-claude/vision#resolution-and-token-cost
+/// OpenAI: https://developers.openai.com/api/docs/guides/images-vision#calculating-costs
 #[must_use]
-pub fn screenshot_tokens_per_dispatch() -> i64 {
-    estimate_image_tokens_from_dimensions(SCREENSHOT_BASELINE_WIDTH, SCREENSHOT_BASELINE_HEIGHT)
+pub const fn screenshot_tokens_per_dispatch() -> i64 {
+    3_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,7 +339,7 @@ fn js_safe_signed(value: i128) -> i64 {
 mod tests {
     use super::{
         EFFICIENCY_ESTIMATOR_VERSION, SCREENSHOT_BASELINE_HEIGHT, SCREENSHOT_BASELINE_WIDTH,
-        SessionEfficiencyService, calculate_session_efficiency,
+        SessionEfficiencyService, calculate_session_efficiency, screenshot_tokens_per_dispatch,
     };
     use crate::{
         analytics::{
@@ -351,7 +356,6 @@ mod tests {
         },
         ids::DispatchId,
     };
-    use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
     use serde_json::{Value, json};
     use std::sync::{
         Arc, Mutex,
@@ -477,8 +481,8 @@ mod tests {
         assert_eq!(stats.active_duration_ms, 700);
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
-        assert_eq!(stats.screenshot_baseline_token_estimate, 3_072);
-        assert_eq!(stats.efficiency_estimator_version, 1);
+        assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
+        assert_eq!(stats.efficiency_estimator_version, 2);
         assert_eq!(stats.computed_at, 12_000);
         Ok(())
     }
@@ -608,7 +612,7 @@ mod tests {
         assert_eq!(finalized.stats.tool_output_token_estimate, 60);
         assert_eq!(
             finalized.stats.screenshot_baseline_token_estimate,
-            3 * 1_536
+            3 * 3_000
         );
         assert_eq!(finalized.stats.computed_at, 50_000);
         assert_eq!(repository.find("eligible").await?, Some(finalized.stats));
@@ -724,13 +728,13 @@ mod tests {
                     "tool_input_token_estimate": 30,
                     "tool_output_token_estimate": 4_000,
                     "browserclaw_token_estimate": 4_030,
-                    "screenshot_baseline_token_estimate": 1_536,
-                    "screenshot_first_token_estimate": 1_566,
-                    "raw_token_savings_estimate": -2_464,
-                    "efficiency_estimator_version": 1,
+                    "screenshot_baseline_token_estimate": 3_000,
+                    "screenshot_first_token_estimate": 3_030,
+                    "raw_token_savings_estimate": -1_000,
+                    "efficiency_estimator_version": 2,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
-                    "screenshot_tokens_per_dispatch": 1_536,
+                    "screenshot_tokens_per_dispatch": 3_000,
                 })),
             )]
         );
@@ -1052,13 +1056,9 @@ mod tests {
     }
 
     #[test]
-    fn baseline_dimensions_share_the_live_image_estimator() {
-        assert_eq!(
-            estimate_image_tokens_from_dimensions(
-                SCREENSHOT_BASELINE_WIDTH,
-                SCREENSHOT_BASELINE_HEIGHT,
-            ),
-            1_536
-        );
+    fn baseline_is_fixed_for_1080p_screenshots() {
+        assert_eq!(SCREENSHOT_BASELINE_WIDTH, 1_920);
+        assert_eq!(SCREENSHOT_BASELINE_HEIGHT, 1_080);
+        assert_eq!(screenshot_tokens_per_dispatch(), 3_000);
     }
 }
