@@ -8,16 +8,18 @@ export interface Playback {
   isPlaying: boolean
   /** Multiplier applied to wall-clock deltas and the visible rrweb player. */
   speed: number
+  /**
+   * Cumulative wall milliseconds actually played. Camera dwell consumes its
+   * delta so speed changes never distort the human viewing window.
+   */
+  playedRealMs: number
   setSpeed: (next: number) => void
+  /** Freezes at the current monotonic instant and returns that exact position. */
+  pause: () => number
   /** Toggles play/pause. Restarts from 0 if the transport already finished. */
   togglePlay: () => void
   /** Jumps the playhead to `seconds`, pauses, and returns the clamped value. */
   seek: (seconds: number) => number
-  /**
-   * Compatibility predicate for viewport orchestration. rrweb time is ignored:
-   * the renderer is a visual sink and may never write BrowserClaw's clock.
-   */
-  syncFromPlayer: (seconds: number) => boolean
 }
 
 function clampTime(seconds: number, totalSeconds: number): number {
@@ -33,11 +35,13 @@ export function usePlayback(totalSeconds: number): Playback {
   const [time, setTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(true)
   const [speed, setSpeed] = useState<number>(DEFAULT_PLAYBACK_SPEED)
+  const [playedRealMs, setPlayedRealMs] = useState(0)
   const timeRef = useRef(0)
   const isPlayingRef = useRef(true)
   const speedRef = useRef<number>(DEFAULT_PLAYBACK_SPEED)
   const totalSecondsRef = useRef(totalSeconds)
   const lastNowMsRef = useRef<number | null>(null)
+  const playedRealMsRef = useRef(0)
 
   const writeTime = useCallback((next: number) => {
     timeRef.current = next
@@ -63,6 +67,10 @@ export function usePlayback(totalSeconds: number): Playback {
       }
 
       const elapsedMs = Math.max(0, nowMs - previousNowMs)
+      if (elapsedMs > 0) {
+        playedRealMsRef.current += elapsedMs
+        setPlayedRealMs(playedRealMsRef.current)
+      }
       const next = clampTime(
         timeRef.current + (elapsedMs / 1000) * speedRef.current,
         totalSecondsRef.current,
@@ -117,18 +125,25 @@ export function usePlayback(totalSeconds: number): Playback {
     [advanceTo],
   )
 
+  const pause = useCallback(() => {
+    const pausedAt = isPlayingRef.current
+      ? advanceTo(performance.now())
+      : timeRef.current
+    writePlaying(false)
+    lastNowMsRef.current = null
+    return pausedAt
+  }, [advanceTo, writePlaying])
+
   const togglePlay = useCallback(() => {
     if (isPlayingRef.current) {
-      advanceTo(performance.now())
-      writePlaying(false)
-      lastNowMsRef.current = null
+      pause()
       return
     }
 
     if (timeRef.current >= totalSecondsRef.current) writeTime(0)
     lastNowMsRef.current = performance.now()
     writePlaying(totalSecondsRef.current > 0)
-  }, [advanceTo, writePlaying, writeTime])
+  }, [pause, writePlaying, writeTime])
 
   const seek = useCallback(
     (seconds: number) => {
@@ -141,17 +156,14 @@ export function usePlayback(totalSeconds: number): Playback {
     [writePlaying, writeTime],
   )
 
-  const syncFromPlayer = useCallback((_seconds: number) => {
-    return isPlayingRef.current
-  }, [])
-
   return {
     time,
     isPlaying,
     speed,
+    playedRealMs,
     setSpeed: setPlaybackSpeed,
+    pause,
     togglePlay,
     seek,
-    syncFromPlayer,
   }
 }

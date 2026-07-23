@@ -245,9 +245,11 @@ describe('ReplayViewport', () => {
       standbyTrack: null,
       activeTimeMs: 5_000,
       standbyTimeMs: 0,
+      syncKey: 1,
     })
 
     expect(tabOnePlayer?.handle.running).toBe(false)
+    expect(tabOnePlayer?.handle.seekCalls).not.toContain(5_000)
     expect(tabTwoPlayer?.handle.seekCalls).toContain(5_000)
     expect(tabTwoPlayer?.handle.running).toBe(true)
     expect(

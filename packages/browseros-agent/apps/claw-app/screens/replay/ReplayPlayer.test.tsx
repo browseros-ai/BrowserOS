@@ -204,18 +204,21 @@ describe('ReplayPlayer', () => {
   })
 
   it('exposes clamped seek, play, pause, speed, and current-time controls', async () => {
-    let handle: ReplayPlayerHandle | null = null
+    const handles: Array<ReplayPlayerHandle | null> = []
     const { ReplayPlayer } = await import('./ReplayPlayer')
     await act(async () => {
       root?.render(
         <ReplayPlayer
           events={events}
           onReady={(nextHandle) => {
-            handle = nextHandle
+            handles.push(nextHandle)
           }}
         />,
       )
     })
+    const handle = handles.find(
+      (candidate): candidate is ReplayPlayerHandle => candidate !== null,
+    )
     if (!handle) throw new Error('expected ReplayPlayer handle')
 
     handle.seek(0)

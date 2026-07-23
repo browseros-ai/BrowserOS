@@ -22,6 +22,7 @@ function TransportHarness() {
       totalSeconds={10}
       frames={[]}
       onSeek={playback.seek}
+      transportLabel="Session playback"
     />
   )
 }
@@ -81,6 +82,15 @@ describe('PlaybackTransport', () => {
     expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
     expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('true')
     expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('false')
+    expect(
+      container.querySelector('[aria-label="Pause Session playback"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[aria-label="Session playback position"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[aria-label="Session playback speed"]'),
+    ).not.toBeNull()
 
     await act(async () => {
       speedButton('1×')?.dispatchEvent(

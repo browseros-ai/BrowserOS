@@ -2,6 +2,11 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Session replay orchestration. BrowserClaw owns one global clock and a pure
+ * semantic camera; rrweb players are bounded visual sinks for the selected
+ * per-tab streams. Manual inspection deliberately switches to an independent
+ * local transport without rewriting the preserved session position.
  */
 
 import { ArrowLeft, History } from 'lucide-react'
@@ -13,155 +18,30 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { ReplayFrame } from '@/modules/api/replay.hooks'
 import { EventTimeline } from './EventTimeline'
 import { PlaybackTransport } from './PlaybackTransport'
-import { type ReplayPlayerHandle, ReplayViewport } from './ReplayViewport'
-import { buildTabView, EMPTY_TAB_VIEW, useReplayData } from './replay.data'
+import { ReplayViewport } from './ReplayViewport'
+import {
+  type ReplayData,
+  type UseReplayDataResult,
+  useReplayData,
+} from './replay.data'
 import { frameIndexAt } from './replay.helpers'
-import { tabSeekForFrame } from './tab-view'
+import {
+  createSessionCameraState,
+  type SessionCameraState,
+  sessionCameraReducer,
+} from './session-camera'
+import {
+  buildSessionReplayPlan,
+  projectGlobalTimeToTrack,
+  type SessionReplayPlan,
+  type TabTrack,
+} from './session-replay'
 import { usePlayback } from './use-playback'
 
-/** Renders the audit replay page and syncs rrweb playback to the transport UI. */
+/** Loads replay data, then keeps the stateful transport scoped to one session. */
 export function Replay() {
   const { replay, isLoading, navigate } = useReplayData()
   const location = useLocation()
-  const [selectedTabId, setSelectedTabId] = useState<number | null>(null)
-  const playerHandleRef = useRef<ReplayPlayerHandle | null>(null)
-  const playbackTimeRef = useRef(0)
-  const playbackSpeedRef = useRef(1)
-  const playbackIsPlayingRef = useRef(true)
-  const pendingTabSeekRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    if (!replay) return
-    const firstTab = replay.tabs[0]
-    if (!firstTab) {
-      if (selectedTabId !== null) {
-        pendingTabSeekRef.current = 0
-        setSelectedTabId(null)
-      }
-      return
-    }
-    const selectedTab = replay.tabs.find((tab) => tab.tabId === selectedTabId)
-    if (!selectedTab) {
-      if (selectedTabId !== null) pendingTabSeekRef.current = 0
-      setSelectedTabId(firstTab.tabId)
-    }
-  }, [replay, selectedTabId])
-
-  const tabViewInput = useMemo(
-    () =>
-      replay
-        ? {
-            frames: replay.frames,
-            tabs: replay.tabs,
-            eventsForTab: replay.eventsForTab,
-            startedAtMs: replay.startedAtMs,
-          }
-        : null,
-    [replay],
-  )
-  const perTabView = useMemo(
-    () =>
-      tabViewInput ? buildTabView(tabViewInput, selectedTabId) : EMPTY_TAB_VIEW,
-    [selectedTabId, tabViewInput],
-  )
-
-  const playbackTotalSeconds = perTabView.hasFullSnapshot
-    ? perTabView.totalSeconds
-    : 0
-  const playback = usePlayback(playbackTotalSeconds)
-
-  useEffect(() => {
-    playbackTimeRef.current = playback.time
-  }, [playback.time])
-
-  useEffect(() => {
-    playbackSpeedRef.current = playback.speed
-    playerHandleRef.current?.setSpeed(playback.speed)
-  }, [playback.speed])
-
-  useEffect(() => {
-    playbackIsPlayingRef.current = playback.isPlaying
-  }, [playback.isPlaying])
-
-  useEffect(() => {
-    if (!playerHandleRef.current) return
-    if (playback.isPlaying) {
-      playerHandleRef.current.play(playbackTimeRef.current * 1000)
-    } else {
-      playerHandleRef.current.pause()
-    }
-  }, [playback.isPlaying])
-
-  useEffect(() => {
-    if (!playback.isPlaying || playbackTotalSeconds === 0) return
-    let rafId = 0
-    let active = true
-    const sync = () => {
-      if (!active) return
-      const handle = playerHandleRef.current
-      const keepGoing = handle
-        ? playback.syncFromPlayer(handle.getCurrentTime() / 1000)
-        : true
-      if (keepGoing) rafId = window.requestAnimationFrame(sync)
-    }
-    rafId = window.requestAnimationFrame(sync)
-    return () => {
-      active = false
-      window.cancelAnimationFrame(rafId)
-    }
-  }, [playback.isPlaying, playback.syncFromPlayer, playbackTotalSeconds])
-
-  const seekTo = useCallback(
-    (seconds: number) => {
-      const next = playback.seek(seconds)
-      playbackTimeRef.current = next
-      playbackIsPlayingRef.current = false
-      playerHandleRef.current?.seek(next * 1000)
-    },
-    [playback.seek],
-  )
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tab changes must flush pending seeks even when consecutive tabs have the same duration.
-  useEffect(() => {
-    const pendingSeconds = pendingTabSeekRef.current
-    if (pendingSeconds === null) return
-    pendingTabSeekRef.current = null
-    seekTo(pendingSeconds)
-  }, [seekTo, selectedTabId])
-
-  const selectTab = useCallback(
-    (value: string) => {
-      const tabId = Number(value)
-      if (!replay || !Number.isSafeInteger(tabId)) return
-      if (tabId === selectedTabId) return
-      pendingTabSeekRef.current = 0
-      setSelectedTabId(tabId)
-    },
-    [replay, selectedTabId],
-  )
-
-  const selectFrame = useCallback(
-    (frame: ReplayFrame) => {
-      if (!tabViewInput) return
-      const tabSeek = tabSeekForFrame(tabViewInput, selectedTabId, frame)
-      if (tabSeek.tabId !== null && tabSeek.tabId !== selectedTabId) {
-        pendingTabSeekRef.current = tabSeek.seconds
-        setSelectedTabId(tabSeek.tabId)
-        return
-      }
-      seekTo(tabSeek.seconds)
-    },
-    [seekTo, selectedTabId, tabViewInput],
-  )
-
-  const onPlayerReady = useCallback((handle: ReplayPlayerHandle | null) => {
-    playerHandleRef.current = handle
-    if (!handle) return
-    const ms = playbackTimeRef.current * 1000
-    handle.setSpeed(playbackSpeedRef.current)
-    handle.seek(ms)
-    if (playbackIsPlayingRef.current) handle.play(ms)
-  }, [])
 
   if (isLoading || !replay) {
     return (
@@ -170,6 +50,251 @@ export function Replay() {
       </div>
     )
   }
+
+  return (
+    <ReplaySession
+      key={replay.sessionId}
+      replay={replay}
+      navigate={navigate}
+      location={location}
+    />
+  )
+}
+
+interface ReplaySessionProps {
+  replay: ReplayData
+  navigate: UseReplayDataResult['navigate']
+  location: ReturnType<typeof useLocation>
+}
+
+function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
+  const plan = useMemo(
+    () =>
+      buildSessionReplayPlan({
+        totalSeconds: replay.totalSeconds,
+        frames: replay.frames,
+        tabs: replay.tabs,
+        eventsForTab: replay.eventsForTab,
+        startedAtMs: replay.startedAtMs,
+      }),
+    [
+      replay.eventsForTab,
+      replay.frames,
+      replay.startedAtMs,
+      replay.tabs,
+      replay.totalSeconds,
+    ],
+  )
+  const globalPlayback = usePlayback(plan.totalSeconds)
+  const [camera, setCamera] = useState<SessionCameraState>(() =>
+    createSessionCameraState(plan),
+  )
+  const [syncKey, setSyncKey] = useState(0)
+  const lastSessionIdRef = useRef(replay.sessionId)
+  const lastGlobalPlayedRealMsRef = useRef(globalPlayback.playedRealMs)
+
+  /**
+   * Live audit polling may append semantic candidates without changing rrweb
+   * event identity. Keep the current dwell/camera when its track still exists;
+   * only initialize anew for a different session or a newly playable replay.
+   */
+  useEffect(() => {
+    const changedSession = lastSessionIdRef.current !== replay.sessionId
+    lastSessionIdRef.current = replay.sessionId
+    setCamera((current) => {
+      if (changedSession) return createSessionCameraState(plan)
+      const activeTrack =
+        current.activeTabId === null
+          ? undefined
+          : plan.tracksByTab.get(current.activeTabId)
+      if (
+        current.mode === 'inspect'
+          ? activeTrack !== undefined
+          : activeTrack?.hasFullSnapshot
+      ) {
+        return current
+      }
+      return createSessionCameraState(plan)
+    })
+  }, [plan, replay.sessionId])
+
+  /**
+   * The clock exposes cumulative real playing time alongside session seconds.
+   * Feeding the delta into the camera avoids a second animation loop and keeps
+   * ten seconds of dwell equal at 1x, 2x, and 4x. A final delta charged while
+   * pausing is applied before the state's visible playing flag is cleared.
+   */
+  useEffect(() => {
+    const realDeltaMs = Math.max(
+      0,
+      globalPlayback.playedRealMs - lastGlobalPlayedRealMsRef.current,
+    )
+    lastGlobalPlayedRealMsRef.current = globalPlayback.playedRealMs
+    setCamera((current) => {
+      if (current.mode !== 'follow') return current
+      const advanced = sessionCameraReducer(plan, current, {
+        type: 'tick',
+        globalSeconds: globalPlayback.time,
+        realDeltaMs,
+        playing: globalPlayback.isPlaying || realDeltaMs > 0,
+      })
+      return advanced.isPlaying === globalPlayback.isPlaying
+        ? advanced
+        : { ...advanced, isPlaying: globalPlayback.isPlaying }
+    })
+  }, [
+    globalPlayback.isPlaying,
+    globalPlayback.playedRealMs,
+    globalPlayback.time,
+    plan,
+  ])
+
+  const inspectedTrack =
+    camera.inspectTabId === null
+      ? undefined
+      : plan.tracksByTab.get(camera.inspectTabId)
+  const inspectPlayback = usePlayback(
+    camera.mode === 'inspect' && inspectedTrack?.hasFullSnapshot
+      ? inspectedTrack.totalSeconds
+      : 0,
+  )
+
+  const requestViewportSync = useCallback(() => {
+    setSyncKey((current) => current + 1)
+  }, [])
+
+  const seekGlobal = useCallback(
+    (seconds: number) => {
+      const applied = globalPlayback.seek(seconds)
+      setCamera((current) =>
+        sessionCameraReducer(plan, current, {
+          type: 'seek',
+          globalSeconds: applied,
+        }),
+      )
+      inspectPlayback.seek(0)
+      requestViewportSync()
+    },
+    [globalPlayback.seek, inspectPlayback.seek, plan, requestViewportSync],
+  )
+
+  const selectFrame = useCallback(
+    (frame: ReplayFrame) => {
+      const applied = globalPlayback.seek(frame.t)
+      setCamera((current) =>
+        sessionCameraReducer(plan, current, {
+          type: 'select-frame',
+          frame: { ...frame, t: applied },
+        }),
+      )
+      inspectPlayback.seek(0)
+      requestViewportSync()
+    },
+    [globalPlayback.seek, inspectPlayback.seek, plan, requestViewportSync],
+  )
+
+  const selectTab = useCallback(
+    (value: string) => {
+      const tabId = Number(value)
+      if (!Number.isSafeInteger(tabId) || !plan.tracksByTab.has(tabId)) return
+      if (camera.mode === 'inspect' && camera.inspectTabId === tabId) return
+      const preservedGlobalSeconds = globalPlayback.pause()
+      inspectPlayback.seek(0)
+      setCamera((current) =>
+        sessionCameraReducer(plan, current, {
+          type: 'inspect',
+          tabId,
+          globalSeconds: current.resumeGlobalSeconds ?? preservedGlobalSeconds,
+        }),
+      )
+      requestViewportSync()
+    },
+    [
+      camera.inspectTabId,
+      camera.mode,
+      globalPlayback.pause,
+      inspectPlayback.seek,
+      plan,
+      requestViewportSync,
+    ],
+  )
+
+  const resumeSession = useCallback(() => {
+    const resumed = sessionCameraReducer(plan, camera, { type: 'resume' })
+    globalPlayback.seek(resumed.globalSeconds)
+    inspectPlayback.seek(0)
+    setCamera(resumed)
+    requestViewportSync()
+  }, [
+    camera,
+    globalPlayback.seek,
+    inspectPlayback.seek,
+    plan,
+    requestViewportSync,
+  ])
+
+  const toggleGlobalPlayback = useCallback(() => {
+    if (plan.totalSeconds > 0 && globalPlayback.time >= plan.totalSeconds) {
+      setCamera((current) =>
+        sessionCameraReducer(plan, current, { type: 'restart' }),
+      )
+      requestViewportSync()
+    }
+    globalPlayback.togglePlay()
+  }, [
+    globalPlayback.time,
+    globalPlayback.togglePlay,
+    plan,
+    requestViewportSync,
+  ])
+
+  const sessionPlayback = useMemo(
+    () => ({ ...globalPlayback, togglePlay: toggleGlobalPlayback }),
+    [globalPlayback, toggleGlobalPlayback],
+  )
+
+  const activeTrack = trackForCamera(plan, camera)
+  const pendingTrack =
+    camera.mode === 'follow' && camera.pendingTabId !== null
+      ? plan.tracksByTab.get(camera.pendingTabId)
+      : undefined
+  const activeSeconds =
+    camera.mode === 'inspect'
+      ? inspectPlayback.time
+      : activeTrack
+        ? projectGlobalTimeToTrack(activeTrack, globalPlayback.time)
+        : 0
+  const pendingSeconds = pendingTrack
+    ? projectGlobalTimeToTrack(pendingTrack, globalPlayback.time)
+    : 0
+  const activeFrame = frameAt(activeTrack?.frames ?? [], activeSeconds)
+  const timelineSeconds =
+    camera.mode === 'inspect'
+      ? (camera.resumeGlobalSeconds ?? camera.globalSeconds)
+      : globalPlayback.time
+  const currentTimelineFrameIndex =
+    replay.frames.length === 0
+      ? -1
+      : frameIndexAt(replay.frames, timelineSeconds)
+  const transport =
+    camera.mode === 'inspect' ? inspectPlayback : sessionPlayback
+  const transportTotalSeconds =
+    camera.mode === 'inspect'
+      ? (activeTrack?.totalSeconds ?? 0)
+      : plan.totalSeconds
+  const transportFrames =
+    camera.mode === 'inspect' ? (activeTrack?.frames ?? []) : replay.frames
+  const transportLabel =
+    camera.mode === 'inspect'
+      ? `${tabLabel(plan, camera.activeTabId)} playback`
+      : 'Session playback'
+  const seekTransport =
+    camera.mode === 'inspect'
+      ? (seconds: number) => {
+          inspectPlayback.seek(seconds)
+          requestViewportSync()
+        }
+      : seekGlobal
 
   // navigate(-1) preserves task detail's original location.state.from
   // (the entry we're moving back to is re-focused, not re-created), so
@@ -190,14 +315,6 @@ export function Replay() {
     typeof (location.state as { from: unknown }).from === 'string'
   const back = () =>
     cameFromInAppFlow ? navigate(-1) : navigate(`/audit/${replay.sessionId}`)
-  const currentTabFrameIndex = frameIndexAt(perTabView.frames, playback.time)
-  const currentTabFrame = perTabView.frames[currentTabFrameIndex]
-  const currentTimelineFrameIndex =
-    currentTabFrame?.dispatchId !== undefined
-      ? replay.frames.findIndex(
-          (frame) => frame.dispatchId === currentTabFrame.dispatchId,
-        )
-      : -1
   const stats: { label: string; value: string }[] = [
     { label: 'Duration', value: replay.duration },
     { label: 'Steps', value: replay.steps },
@@ -245,28 +362,62 @@ export function Replay() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-          {replay.tabs.length > 1 && selectedTabId !== null && (
-            <Tabs value={selectedTabId.toString()} onValueChange={selectTab}>
-              <TabsList variant="line">
-                {replay.tabs.map(({ tabId }, idx) => (
-                  <TabsTrigger key={tabId} value={tabId.toString()}>
-                    Tab {idx + 1}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-          )}
-          {perTabView.incompleteUntilMs !== null && (
-            <div
-              role="status"
-              className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
-            >
-              Recording incomplete — playback starts at{' '}
-              {formatIncompleteOffset(perTabView.incompleteUntilMs)}
+          <div className="flex min-h-8 items-center justify-between gap-3">
+            {replay.tabs.length > 1 && camera.activeTabId !== null ? (
+              <Tabs
+                value={camera.activeTabId.toString()}
+                onValueChange={selectTab}
+              >
+                <TabsList variant="line">
+                  {replay.tabs.map(({ tabId }, index) => {
+                    const pinned =
+                      camera.mode === 'inspect' && camera.activeTabId === tabId
+                    return (
+                      <TabsTrigger
+                        key={tabId}
+                        value={tabId.toString()}
+                        aria-label={`Inspect Tab ${index + 1}`}
+                      >
+                        Tab {index + 1}
+                        {pinned ? ' · Pinned' : ''}
+                      </TabsTrigger>
+                    )
+                  })}
+                </TabsList>
+              </Tabs>
+            ) : (
+              <span />
+            )}
+            <div className="flex items-center gap-2">
+              <span role="status" className="font-semibold text-ink-3 text-xs">
+                {camera.mode === 'follow'
+                  ? 'Following session'
+                  : `Inspecting ${tabLabel(plan, camera.activeTabId)}`}
+              </span>
+              {camera.mode === 'inspect' && (
+                <button
+                  type="button"
+                  onClick={resumeSession}
+                  className="rounded-lg border border-border-2 bg-card px-2.5 py-1 font-semibold text-accent-ink text-xs hover:bg-accent-tint"
+                >
+                  Resume session
+                </button>
+              )}
             </div>
-          )}
-          {perTabView.incompleteUntilMs === null &&
-            perTabView.knownIncomplete && (
+          </div>
+
+          {activeTrack?.incompleteUntilMs !== null &&
+            activeTrack?.incompleteUntilMs !== undefined && (
+              <div
+                role="status"
+                className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
+              >
+                Recording incomplete — playback starts at{' '}
+                {formatIncompleteOffset(activeTrack.incompleteUntilMs)}
+              </div>
+            )}
+          {activeTrack?.incompleteUntilMs === null &&
+            activeTrack.knownIncomplete && (
               <div
                 role="status"
                 className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
@@ -274,19 +425,27 @@ export function Replay() {
                 Recording incomplete — this replay contains a known gap
               </div>
             )}
-          {perTabView.hasFullSnapshot ? (
+
+          {activeTrack?.hasFullSnapshot ? (
             <>
               <ReplayViewport
                 site={replay.site}
-                frame={currentTabFrame}
-                events={perTabView.events}
-                onPlayerReady={onPlayerReady}
+                frame={activeFrame}
+                activeTrack={activeTrack}
+                standbyTrack={pendingTrack ?? null}
+                activeTimeMs={activeSeconds * 1000}
+                standbyTimeMs={pendingSeconds * 1000}
+                isPlaying={transport.isPlaying}
+                speed={transport.speed}
+                syncKey={syncKey}
+                mode={camera.mode}
               />
               <PlaybackTransport
-                playback={playback}
-                totalSeconds={perTabView.totalSeconds}
-                frames={perTabView.frames}
-                onSeek={seekTo}
+                playback={transport}
+                totalSeconds={transportTotalSeconds}
+                frames={transportFrames}
+                onSeek={seekTransport}
+                transportLabel={transportLabel}
               />
             </>
           ) : (
@@ -303,6 +462,27 @@ export function Replay() {
       </div>
     </div>
   )
+}
+
+function trackForCamera(
+  plan: SessionReplayPlan,
+  camera: SessionCameraState,
+): TabTrack | undefined {
+  return camera.activeTabId === null
+    ? undefined
+    : plan.tracksByTab.get(camera.activeTabId)
+}
+
+function frameAt(
+  frames: readonly ReplayFrame[],
+  seconds: number,
+): ReplayFrame | undefined {
+  return frames.length === 0 ? undefined : frames[frameIndexAt(frames, seconds)]
+}
+
+function tabLabel(plan: SessionReplayPlan, tabId: number | null): string {
+  const index = plan.tracks.findIndex((track) => track.tabId === tabId)
+  return index === -1 ? 'tab' : `Tab ${index + 1}`
 }
 
 function formatIncompleteOffset(milliseconds: number): string {

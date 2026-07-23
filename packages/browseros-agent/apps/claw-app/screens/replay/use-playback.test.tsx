@@ -148,6 +148,21 @@ describe('usePlayback', () => {
     expect(playback.time).toBe(4)
   })
 
+  it('pauses at the exact monotonic instant between animation frames', async () => {
+    await render(100)
+    await advanceAnimationFrame(1_000)
+    nowMs = 1_250
+
+    let pausedAt = 0
+    await act(async () => {
+      pausedAt = playback.pause()
+    })
+
+    expect(pausedAt).toBe(2.5)
+    expect(playback.time).toBe(2.5)
+    expect(playback.isPlaying).toBe(false)
+  })
+
   it('clamps seeks, pauses, and returns the applied destination', async () => {
     await render(10)
 

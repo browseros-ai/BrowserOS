@@ -225,6 +225,40 @@ export function ReplayViewport({
     if (appliedSyncKeyRef.current === syncKey) return
     appliedSyncKeyRef.current = syncKey
     const current = stageRef.current
+    if (!sameTrack(current.slots[current.activeSlot].track, activeTrack)) {
+      const oldActiveHandle = handleForSlot(
+        current,
+        handlesRef.current,
+        current.activeSlot,
+      )
+      const desiredSlot = slotForTrack(current.slots, activeTrack)
+      const targetHandle = desiredSlot
+        ? handleForSlot(current, handlesRef.current, desiredSlot)
+        : null
+      oldActiveHandle?.pause()
+      targetHandle?.pause()
+      targetHandle?.seek(activeTimeMsRef.current)
+      lastDriftCheckMsRef.current = performance.now()
+      return
+    }
+    if (current.promoteSlot) {
+      const oldActiveHandle = handleForSlot(
+        current,
+        handlesRef.current,
+        current.activeSlot,
+      )
+      const targetHandle = handleForSlot(
+        current,
+        handlesRef.current,
+        current.promoteSlot,
+      )
+      oldActiveHandle?.pause()
+      targetHandle?.pause()
+      targetHandle?.seek(activeTimeMsRef.current)
+      promoteReadySlot(current.promoteSlot)
+      lastDriftCheckMsRef.current = performance.now()
+      return
+    }
     const activeHandle = handleForSlot(
       current,
       handlesRef.current,
@@ -242,7 +276,7 @@ export function ReplayViewport({
       activeHandle.play(activeTimeMsRef.current)
     }
     lastDriftCheckMsRef.current = performance.now()
-  }, [syncKey])
+  }, [activeTrack, promoteReadySlot, syncKey])
 
   useEffect(() => {
     if (!isPlaying) return
