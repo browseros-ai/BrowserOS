@@ -445,6 +445,56 @@ fn foreign_final_symlink_is_not_followed_or_replaced() -> Result<(), Box<dyn std
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn legacy_alias_record_does_not_claim_a_retargeted_foreign_destination()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let home = root.path().join("home");
+    let claude_root = home.join(".claude");
+    let old_root = home.join("old-skills");
+    let new_root = home.join("new-skills");
+    fs::create_dir_all(&claude_root)?;
+    fs::create_dir_all(&old_root)?;
+    fs::create_dir_all(&new_root)?;
+    let alias = claude_root.join("skills");
+    symlink(&old_root, &alias)?;
+
+    let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+    let state = root.path().join("state");
+    let manifest_path = state.join("skills.json");
+    let reconciler = SkillReconciler::new(&state);
+    let desired = agents(&[AgentId::ClaudeCode]);
+    reconciler.reconcile(&spec("managed\n")?, &desired, &environment)?;
+
+    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    manifest["targets"][0]["targetPath"] =
+        Value::String(alias.join("browserclaw").display().to_string());
+    let legacy_manifest = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(&manifest_path, &legacy_manifest)?;
+
+    fs::remove_file(&alias)?;
+    symlink(&new_root, &alias)?;
+    let foreign_target = new_root.join("browserclaw");
+    fs::create_dir_all(&foreign_target)?;
+    fs::write(foreign_target.join("SKILL.md"), "foreign\n")?;
+    fs::write(foreign_target.join("keep.txt"), "keep\n")?;
+
+    let outcome = reconciler.reconcile(&spec("managed\n")?, &desired, &environment)?;
+
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(
+        fs::read_to_string(foreign_target.join("SKILL.md"))?,
+        "foreign\n"
+    );
+    assert_eq!(
+        fs::read_to_string(foreign_target.join("keep.txt"))?,
+        "keep\n"
+    );
+    assert_eq!(fs::read(&manifest_path)?, legacy_manifest);
+    Ok(())
+}
+
 #[test]
 fn foreign_targets_and_corrupt_manifests_are_preserved() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;

@@ -79,7 +79,8 @@ impl SkillReconciler {
         for (target, target_consumers) in &plan.desired {
             let record_controls = records
                 .get(target)
-                .is_some_and(|record| record.skill_name == spec.name);
+                .is_some_and(|record| record.skill_name == spec.name)
+                && plan.manifest_controlled_targets.contains(target);
             let metadata = match fs::symlink_metadata(target) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -179,13 +180,15 @@ impl SkillReconciler {
             if plan.desired.contains_key(&target) {
                 continue;
             }
-            let record_controls = records
+            let record_matches_skill = records
                 .get(&target)
                 .is_some_and(|record| record.skill_name == spec.name);
-            if records.contains_key(&target) && !record_controls {
+            if records.contains_key(&target) && !record_matches_skill {
                 preserve_original_records.insert(target);
                 continue;
             }
+            let record_controls =
+                record_matches_skill && plan.manifest_controlled_targets.contains(&target);
             let metadata = match fs::symlink_metadata(&target) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -198,6 +201,10 @@ impl SkillReconciler {
                     continue;
                 }
             };
+            if metadata.is_none() && record_matches_skill {
+                records.remove(&target);
+                continue;
+            }
             let marker_controls = if record_controls {
                 false
             } else if metadata.as_ref().is_some_and(|value| value.is_dir()) {
@@ -270,6 +277,8 @@ struct ReconciliationPlan {
     desired: BTreeMap<PathBuf, BTreeSet<AgentId>>,
     records: BTreeMap<PathBuf, SkillManifestEntry>,
     original_records: BTreeMap<PathBuf, Vec<SkillManifestEntry>>,
+    /// Migrated aliases need a marker before they can control an existing destination.
+    manifest_controlled_targets: BTreeSet<PathBuf>,
     cleanup_targets: BTreeSet<PathBuf>,
 }
 
@@ -283,8 +292,12 @@ fn plan_reconciliation(
     let desired = desired_targets(consumers, &spec.name, environment, identity)?;
     let mut records = BTreeMap::<PathBuf, SkillManifestEntry>::new();
     let mut original_records = BTreeMap::<PathBuf, Vec<SkillManifestEntry>>::new();
+    let mut manifest_controlled_targets = BTreeSet::new();
     for original_entry in &original.targets {
         let target = identity(&original_entry.target_path)?;
+        if original_entry.target_path == target {
+            manifest_controlled_targets.insert(target.clone());
+        }
         original_records
             .entry(target.clone())
             .or_default()
@@ -343,6 +356,7 @@ fn plan_reconciliation(
         desired,
         records,
         original_records,
+        manifest_controlled_targets,
         cleanup_targets,
     })
 }
@@ -398,13 +412,20 @@ fn physical_skill_target(target: &Path) -> Result<PathBuf, Error> {
             ),
         )
     })?;
-    let mut ancestor = target.parent().map(Path::to_path_buf).ok_or_else(|| {
+    let root = target.parent().ok_or_else(|| {
         Error::io(
             "resolve filesystem identity for",
             target,
             std::io::Error::new(ErrorKind::InvalidInput, "skill target has no parent"),
         )
     })?;
+    let mut ancestor = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| Error::io("resolve filesystem identity for", target, error))?
+            .join(root)
+    };
     let mut missing = Vec::new();
 
     loop {
@@ -725,6 +746,22 @@ mod tests {
             fs::canonicalize(root.path())?.join("missing/nested/skills/browserclaw")
         );
         assert!(!missing_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn relative_skill_roots_resolve_from_the_process_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target = Path::new("relative-home/.agents/skills/browserclaw");
+
+        let physical = physical_skill_target(target)?;
+
+        assert_eq!(
+            physical,
+            fs::canonicalize(std::env::current_dir()?)?
+                .join("relative-home/.agents/skills/browserclaw")
+        );
+        assert!(!Path::new("relative-home").exists());
         Ok(())
     }
 
