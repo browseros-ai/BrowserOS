@@ -14,6 +14,7 @@ use crate::{
     frames::FrameTarget,
     snapshot::{AxNode, DocumentId, IframeStitch},
 };
+use browseros_cdp::runtime::GetPropertiesResult;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -191,11 +192,14 @@ impl Observer {
             let visited = visited.to_vec();
             let context = context.clone();
             pending.push(async move {
-                let child_frame =
+                let Some(child_frame) =
                     resolve_child_frame(&parent_session, stitch.backend_node_id, &context.budget)
-                        .await?;
+                        .await
+                else {
+                    return (None, false);
+                };
                 if visited.contains(&child_frame.frame_id) {
-                    return None;
+                    return (None, true);
                 }
                 let result = self
                     .acquire_frame(
@@ -205,16 +209,21 @@ impl Observer {
                         &context,
                     )
                     .await;
-                Some(AcquiredChild {
-                    stitch,
-                    result,
-                    stitch_index,
-                })
+                (
+                    Some(AcquiredChild {
+                        stitch,
+                        result,
+                        stitch_index,
+                    }),
+                    false,
+                )
             });
         }
 
         let mut acquired = Vec::with_capacity(stitches.len());
-        while let Some(child) = pending.next().await {
+        let mut cycle_skips = 0;
+        while let Some((child, skipped_cycle)) = pending.next().await {
+            cycle_skips += usize::from(skipped_cycle);
             if let Some(child) = child {
                 acquired.push(child);
             }
@@ -222,7 +231,8 @@ impl Observer {
         // Acquisition completion order is intentionally unordered. Re-establish the renderer's
         // stitch order here so assembly can reverse it exactly as the serialized implementation did.
         acquired.sort_by_key(|child| child.stitch_index);
-        let outcome = if acquired.len() == stitches.len()
+        let expected_children = stitches.len().saturating_sub(cycle_skips);
+        let outcome = if acquired.len() == expected_children
             && acquired.iter().all(|child| child.result.is_ok())
         {
             "success"
@@ -405,17 +415,6 @@ struct RemoteObject {
     value: Option<Value>,
     #[serde(rename = "objectId")]
     object_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GetPropertiesResult {
-    result: Vec<PropertyDescriptor>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PropertyDescriptor {
-    name: String,
-    value: Option<RemoteObject>,
 }
 
 #[derive(Debug, Deserialize)]
