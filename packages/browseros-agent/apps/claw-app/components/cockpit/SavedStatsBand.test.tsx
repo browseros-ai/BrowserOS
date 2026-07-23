@@ -329,8 +329,8 @@ describe('SavedStatsBand', () => {
       container.querySelector('[data-stat="percentage"]')?.textContent,
     ).toBe('0%')
     expect(
-      container.querySelector('[data-used-marker]')?.getAttribute('style'),
-    ).toContain('left:0%')
+      container.querySelector('[data-used-fill]')?.getAttribute('style'),
+    ).toContain('width:0%')
 
     await selectTab('30 days')
     expect(
@@ -340,17 +340,65 @@ describe('SavedStatsBand', () => {
       container.querySelector('[data-stat="percentage"]')?.textContent,
     ).toBe('0%')
     expect(
-      container.querySelector('[data-used-marker]')?.getAttribute('style'),
-    ).toContain('left:100%')
+      container.querySelector('[data-used-fill]')?.getAttribute('style'),
+    ).toContain('width:100%')
 
     await selectTab('7 days')
     expect(
       container.querySelector('[data-stat="percentage"]')?.textContent,
     ).toBe('100%')
     expect(
-      container.querySelector('[data-used-marker]')?.getAttribute('style'),
-    ).toContain('left:50%')
+      container.querySelector('[data-used-fill]')?.getAttribute('style'),
+    ).toContain('width:50%')
     expect(value.allTime.rawTokenSavingsEstimate).toBe(-50)
+  })
+
+  it('keeps both comparison labels outside the bounded bar at every ratio', async () => {
+    // The original overlap bug: both token labels were absolutely positioned
+    // inside the same overflow-hidden track and painted through each other in
+    // the mid-range. The fix moves them into a legend row that is a sibling of
+    // the bar, so no ratio can make them collide or clip. Assert the structural
+    // invariant that guarantees it — the track carries no text labels — across
+    // a low, mid, and full used ratio.
+    const value = stats({
+      allTime: statsWindow({
+        browserClawTokenEstimate: 63_200,
+        screenshotFirstTokenEstimate: 112_300,
+        rawTokenSavingsEstimate: 49_100,
+      }),
+      last30Days: statsWindow({
+        browserClawTokenEstimate: 2_000,
+        screenshotFirstTokenEstimate: 200_000,
+        rawTokenSavingsEstimate: 198_000,
+      }),
+      last7Days: statsWindow({
+        browserClawTokenEstimate: 500_000,
+        screenshotFirstTokenEstimate: 500_000,
+        rawTokenSavingsEstimate: 0,
+      }),
+    })
+    await render(value)
+
+    for (const label of ['All time', '30 days', '7 days']) {
+      await selectTab(label)
+      const track = container.querySelector('[data-budget-track]')
+      expect(track).not.toBeNull()
+      // Root-cause guard: nothing textual lives inside the bounded bar.
+      expect(track?.querySelector('[data-stat]')).toBeNull()
+      expect(track?.textContent?.trim()).toBe('')
+      // Both numbers still render, now in the legend, and no legend label is
+      // absolutely positioned (the property that let them overlap).
+      const browserclaw = container.querySelector(
+        '[data-stat="browserclaw-tokens"]',
+      )
+      const comparison = container.querySelector(
+        '[data-stat="comparison-tokens"]',
+      )
+      expect(browserclaw?.textContent?.trim().length).toBeGreaterThan(0)
+      expect(comparison?.textContent?.trim().length).toBeGreaterThan(0)
+      expect(browserclaw?.closest('[class*="absolute"]')).toBeNull()
+      expect(comparison?.closest('[class*="absolute"]')).toBeNull()
+    }
   })
 
   it('frames BrowserClaw against a screenshot-first agent', async () => {
