@@ -66,6 +66,27 @@ impl InnerCallHook for ScriptInnerCallHook {
                 (Some(browser), Some(page)) => browser.pages.get_info(PageId(page)).await,
                 _ => None,
             };
+            // Liveness: keep the idle clock fresh so the cockpit shows the
+            // session progressing rather than stuck; the hard session-end path
+            // is unchanged.
+            identity.session.touch(tokio::time::Instant::now()).await;
+            // Record tab activity for the touched page so the cockpit ranks and
+            // shows it, and the screenshot below selects it.
+            if let (Some(info), Some(page_id)) = (&live, page) {
+                self.call
+                    .state
+                    .tab_activity
+                    .record_tool(crate::services::cockpit::RecordToolInput {
+                        target_id: info.target_id.clone(),
+                        tab_id: info.tab_id.0,
+                        page_id,
+                        session_id: self.call.session_id.as_str().to_string(),
+                        agent_id: identity.session.convo_id().as_str().to_string(),
+                        slug: identity.agent.slug().to_string(),
+                        tool_name: tool_name.clone(),
+                    })
+                    .await;
+            }
             let child_dispatch_id = DispatchId::new();
             let input = RecordToolDispatchInput {
                 agent_id: identity.session.convo_id().as_str().to_string(),
@@ -296,6 +317,42 @@ mod tests {
             Some(mine)
         );
         assert!(hook.authorize(Some(5)).await.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_reports_tab_activity_so_the_session_shows_progress() -> anyhow::Result<()> {
+        let browser = BrowserSession::new(OnePageConnection::new(), BrowserSessionHooks::default());
+        assert_eq!(browser.pages.list().await?.len(), 1);
+        let mut call = tool_call("run", json!({ "code": "return 1" })).await?;
+        call.browser_session = Some(browser);
+        let hook = ScriptInnerCallHook::new(call.clone());
+
+        // A code-mode session showed Idle with zero tabs because tab activity is
+        // populated only by the bypassed effects; the hook now records it, so
+        // the cockpit sees the tab and the session as progressing.
+        assert!(
+            call.state
+                .tab_activity
+                .snapshot(call.browser_session.as_deref())
+                .await
+                .is_empty()
+        );
+        hook.record(InnerCallRecord {
+            method: "input.click",
+            page: Some(1),
+            is_error: false,
+            duration_ms: 3,
+        })
+        .await;
+        assert!(
+            !call
+                .state
+                .tab_activity
+                .snapshot(call.browser_session.as_deref())
+                .await
+                .is_empty()
+        );
         Ok(())
     }
 
