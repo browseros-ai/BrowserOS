@@ -170,10 +170,44 @@ jobs:
         working-directory: packages/browseros-agent
         run: cargo test --workspace --locked
 
+  harness-integrations-test:
+    needs: release
+    if: needs.release.outputs.version != ''
+    name: Harness integrations / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+          - runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Test native harness filesystem reconciliation
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: cargo test --locked -p harness-integrations
+
   build:
     needs:
       - release
       - cargo-test
+      - harness-integrations-test
     if: needs.release.outputs.version != ''
     name: Build / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -338,6 +372,9 @@ jobs:
           binary_path = agent / "target" / rust_target / "release" / binary_name
           if not binary_path.is_file():
               raise SystemExit(f"Missing compiled binary: {binary_path}")
+          source_resources = agent / "apps/claw-server-rust/resources"
+          if not source_resources.is_dir():
+              raise SystemExit(f"Missing server resources: {source_resources}")
 
           dist_root = agent / "dist/prod/claw-server-rust"
           stage_root = dist_root / target
@@ -348,6 +385,7 @@ jobs:
           shutil.copy2(binary_path, staged_binary)
           if binary_ext != ".exe":
               staged_binary.chmod(0o755)
+          shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)
 
           files = sorted(
               path
@@ -403,16 +441,19 @@ jobs:
           zip_path = Path(os.environ["ZIP_PATH"])
           target = os.environ["BROWSEROS_TARGET"]
           binary_ext = os.environ["BINARY_EXT"]
-          expected = f"resources/bin/browseros-claw-server{binary_ext}"
+          expected = sorted([
+              f"resources/bin/browseros-claw-server{binary_ext}",
+              "resources/skills/browserclaw/SKILL.md",
+          ])
           with tempfile.TemporaryDirectory() as tmp:
               destination = Path(tmp) / target
               extracted = extract_artifact_zip(zip_path, destination)
               extracted_rel = sorted(
                   path.relative_to(destination).as_posix() for path in extracted
               )
-              if extracted_rel != [expected]:
+              if extracted_rel != expected:
                   raise SystemExit(
-                      f"Expected extracted files {[expected]}, got {extracted_rel}"
+                      f"Expected extracted files {expected}, got {extracted_rel}"
                   )
           PY
         env:

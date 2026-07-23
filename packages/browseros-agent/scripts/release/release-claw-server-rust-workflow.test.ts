@@ -11,6 +11,13 @@ const browserClawWorkflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
   'utf8',
 )
+const localStaging = readFileSync(
+  resolve(
+    repoRoot,
+    'packages/browseros-agent/scripts/build/claw-server-rust-local.sh',
+  ),
+  'utf8',
+)
 const shellChannelPlaceholder = '$' + '{channel}'
 const shellTargetPlaceholder = '$' + '{target}'
 const shellAssetsPlaceholder = '$' + '{assets[@]}'
@@ -88,6 +95,19 @@ describe('release-claw-server-rust workflow', () => {
     expect(workflow).not.toContain('patch-windows-exe')
   })
 
+  it('runs the filesystem reconciliation suite natively on macOS and Windows', () => {
+    expect(workflow).toContain('harness-integrations-test:')
+    expect(workflow).toContain(
+      'name: Harness integrations / ${{ matrix.runner }}',
+    )
+    expect(workflow).toContain('runner: macos-14')
+    expect(workflow).toContain('runner: windows-latest')
+    expect(workflow).toContain('cargo test --locked -p harness-integrations')
+    expect(workflow).toMatch(
+      /build:[\s\S]*needs:[\s\S]*- harness-integrations-test/,
+    )
+  })
+
   it('embeds and verifies the production analytics project key', () => {
     const buildStep = buildRustBinaryStep()
     expect(workflow).toMatch(/CLAW_POSTHOG_KEY:\n\s+required: true/)
@@ -138,7 +158,28 @@ describe('release-claw-server-rust workflow', () => {
       'runtime_binary_name = f"browseros-claw-server{binary_ext}"',
     )
     expect(workflow).toContain(
-      'expected = f"resources/bin/browseros-claw-server{binary_ext}"',
+      'source_resources = agent / "apps/claw-server-rust/resources"',
+    )
+    expect(workflow).toContain(
+      'shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)',
+    )
+    for (const expected of [
+      'f"resources/bin/browseros-claw-server{binary_ext}"',
+      '"resources/skills/browserclaw/SKILL.md"',
+    ]) {
+      expect(workflow).toContain(expected)
+      expect(localStaging).toContain(
+        expected.replace(
+          'f"resources/bin/browseros-claw-server{binary_ext}"',
+          'f"resources/bin/{runtime_binary}"',
+        ),
+      )
+    }
+    expect(localStaging).toContain(
+      'source_resources = agent_root / "apps/claw-server-rust/resources"',
+    )
+    expect(localStaging).toContain(
+      'shutil.copytree(source_resources, destination / "resources", dirs_exist_ok=True)',
     )
   })
 

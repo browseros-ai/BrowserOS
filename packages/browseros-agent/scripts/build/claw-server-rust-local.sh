@@ -107,6 +107,7 @@ from pathlib import Path
 from bos_build.steps.storage.download import extract_artifact_zip
 
 browseros_root = Path(os.environ["BROWSEROS_ROOT"])
+agent_root = Path(os.environ["BROWSEROS_AGENT_ROOT"])
 target = os.environ["BROWSEROS_TARGET"]
 binary_path = Path(os.environ["BROWSEROS_RUST_BINARY"])
 runtime_binary = os.environ["BROWSEROS_RUST_RUNTIME_BINARY"]
@@ -116,12 +117,16 @@ destination = (
     / target
 )
 stage_binary = destination / "resources/bin" / runtime_binary
+source_resources = agent_root / "apps/claw-server-rust/resources"
 
 if destination.exists():
     shutil.rmtree(destination)
+if not source_resources.is_dir():
+    raise SystemExit(f"Missing server resources: {source_resources}")
 stage_binary.parent.mkdir(parents=True, exist_ok=True)
 shutil.copy2(binary_path, stage_binary)
 stage_binary.chmod(0o755)
+shutil.copytree(source_resources, destination / "resources", dirs_exist_ok=True)
 
 files = sorted(
     path
@@ -161,7 +166,10 @@ with tempfile.TemporaryDirectory() as tmp:
     extracted_rel = sorted(
         path.relative_to(validate_destination).as_posix() for path in extracted
     )
-    expected = [f"resources/bin/{runtime_binary}"]
+    expected = sorted([
+        f"resources/bin/{runtime_binary}",
+        "resources/skills/browserclaw/SKILL.md",
+    ])
     if extracted_rel != expected:
         raise SystemExit(
             f"Expected extracted files {expected}, got {extracted_rel}"
