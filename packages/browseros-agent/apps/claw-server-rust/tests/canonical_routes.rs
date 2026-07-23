@@ -690,6 +690,13 @@ async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::
         .audit_log
         .record_session_end("stats-session", "closed", None)
         .await?;
+    let task_duration_ms = app
+        .state
+        .audit_log
+        .get_task_summary("stats-session")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
+        .duration_ms;
     assert!(
         app.state
             .session_efficiency
@@ -711,7 +718,7 @@ async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::
         "browserClawTokenEstimate": 2_001,
         "screenshotFirstTokenEstimate": 3_001,
         "rawTokenSavingsEstimate": 1_000,
-        "humanTimeSavedMs": 5,
+        "humanTimeSavedMs": task_duration_ms,
         "sessionCount": 1,
         "toolCallCount": 1,
     });

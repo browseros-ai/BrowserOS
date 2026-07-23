@@ -490,6 +490,7 @@ mod tests {
         }));
         state.session_efficiency = session_efficiency;
         state.sessions = sessions;
+        let audit_log = state.audit_log.clone();
         let session = state
             .sessions
             .mint_with_id(
@@ -517,6 +518,11 @@ mod tests {
             .await;
 
         AppRuntime::start(state).shutdown().await?;
+        let task_duration_ms = audit_log
+            .get_task_summary("shutdown-session")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
+            .duration_ms;
         assert_eq!(analytics.shutdown_calls_for_testing(), 1);
         let mut captured = Vec::new();
         while let Ok(request) = requests.try_recv() {
@@ -551,14 +557,14 @@ mod tests {
                 "kind": "closed",
                 "client_name": "codex",
                 "dispatch_count": 1,
-                "active_duration_ms": 5,
+                "active_duration_ms": task_duration_ms,
                 "tool_input_token_estimate": 1,
                 "tool_output_token_estimate": 0,
                 "browserclaw_token_estimate": 1,
                 "screenshot_baseline_token_estimate": 3_000,
                 "screenshot_first_token_estimate": 3_001,
                 "raw_token_savings_estimate": 3_000,
-                "efficiency_estimator_version": 3,
+                "efficiency_estimator_version": 4,
                 "screenshot_baseline_width": 1_920,
                 "screenshot_baseline_height": 1_080,
                 "screenshot_tokens_per_dispatch": 3_000,
