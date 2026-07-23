@@ -3,6 +3,7 @@ pub mod effects;
 pub mod guards;
 pub mod naming;
 mod prompt;
+pub mod script_hook;
 mod service;
 mod timeouts;
 
