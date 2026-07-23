@@ -372,13 +372,15 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body["result"]["tools"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tools not array"))?
-            .len(),
-        17
-    );
+    // Code mode advertises only the script tool plus name_session; the granular
+    // tools stay callable by name (exercised below) but are not listed.
+    let listed: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools not array"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(listed, vec!["run", "name_session"]);
 
     let blocked = json!({
         "jsonrpc": "2.0",
@@ -1477,7 +1479,7 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     assert_eq!(body["result"]["serverInfo"]["title"], "BrowserClaw");
     assert!(
         body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserClaw — the browser for agents")
+            |instructions| instructions.starts_with("BrowserClaw, the browser for agents")
         )
     );
     let session_id = headers
