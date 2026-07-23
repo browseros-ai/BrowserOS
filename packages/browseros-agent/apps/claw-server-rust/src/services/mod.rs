@@ -3,6 +3,7 @@ pub mod browser;
 pub mod cockpit;
 pub mod harness;
 pub mod harness_skills;
+pub mod helpers;
 pub mod profiles;
 pub mod recordings;
 pub mod replay;
