@@ -126,22 +126,19 @@ describe('Audit screen', () => {
     // no visible 'Done' text renders here anymore.
   })
 
-  it('renders a compact token total for measured sessions', () => {
-    dataOverride = { ...baseData, tasks: [sampleTask] }
-    const html = renderApp()
-    expect(html).toContain('12.3k')
-    // Exact count surfaces on hover.
-    expect(html).toContain('12,300 tokens')
-  })
-
-  it('renders an em dash for sessions without measured token usage', () => {
+  it('hides token usage from the task list', () => {
     dataOverride = {
       ...baseData,
-      tasks: [{ ...sampleTask, tokenUsage: undefined }],
+      tasks: [
+        sampleTask,
+        { ...sampleTask, sessionId: 'sess-2', tokenUsage: undefined },
+      ],
     }
     const html = renderApp()
-    expect(html).toContain('Token usage not measured')
+    expect(html).not.toContain('Tokens')
     expect(html).not.toContain('12.3k')
+    expect(html).not.toContain('12,300 tokens')
+    expect(html).not.toContain('Token usage not measured')
   })
 
   it('renders the Load older tasks button when hasNextPage is true', () => {
