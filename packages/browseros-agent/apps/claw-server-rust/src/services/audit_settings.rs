@@ -116,7 +116,10 @@ mod tests {
     async fn missing_config_defaults_to_seven_days() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let store = AuditSettingsStore::new(dir.path()).await;
-        assert_eq!(store.get().await, AuditRetention::DeleteAfterDays { days: 7 });
+        assert_eq!(
+            store.get().await,
+            AuditRetention::DeleteAfterDays { days: 7 }
+        );
         Ok(())
     }
 
@@ -130,7 +133,9 @@ mod tests {
         let reopened = AuditSettingsStore::new(dir.path()).await;
         assert_eq!(reopened.get().await, AuditRetention::KeepForever);
 
-        store.set(AuditRetention::DeleteAfterDays { days: 30 }).await?;
+        store
+            .set(AuditRetention::DeleteAfterDays { days: 30 })
+            .await?;
         assert_eq!(
             AuditSettingsStore::new(dir.path()).await.get().await,
             AuditRetention::DeleteAfterDays { days: 30 }
@@ -150,6 +155,9 @@ mod tests {
     #[test]
     fn days_accessor_maps_variants() {
         assert_eq!(AuditRetention::KeepForever.days(), None);
-        assert_eq!(AuditRetention::DeleteAfterDays { days: 15 }.days(), Some(15));
+        assert_eq!(
+            AuditRetention::DeleteAfterDays { days: 15 }.days(),
+            Some(15)
+        );
     }
 }

@@ -57,7 +57,12 @@ pub(super) async fn set_retention(
         )
     })?;
     let policy = policy_from_request(&payload).map_err(|message| {
-        error(&request_id, StatusCode::BAD_REQUEST, "invalid_request", message)
+        error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            message,
+        )
     })?;
     let saved = state
         .audit_settings
@@ -129,7 +134,10 @@ pub(crate) async fn sweep_audit_retention(state: &AppState, now: i64) -> AppResu
     // window (u64::MAX for keep-forever prunes only orphans, never claimed
     // streams). This unifies recording retention under the user policy.
     let recording_days = policy.days().map_or(u64::MAX, u64::from);
-    let recordings = state.recordings.sweep_retention(recording_days, now).await?;
+    let recordings = state
+        .recordings
+        .sweep_retention(recording_days, now)
+        .await?;
     report.recordings_deleted = i64::try_from(recordings.recordings_deleted).unwrap_or(i64::MAX);
 
     // Orphan screenshot files whose dispatch row is gone (partial-failure drift
@@ -152,8 +160,7 @@ pub(crate) async fn sweep_audit_retention(state: &AppState, now: i64) -> AppResu
 
 async fn audit_usage(state: &AppState) -> AppResult<AuditStorageUsage> {
     let recording_bytes = state.recordings.recording_bytes_total().await?;
-    let screenshot_bytes =
-        dir_file_bytes(&state.config.browserclaw_dir.join("screenshots")).await;
+    let screenshot_bytes = dir_file_bytes(&state.config.browserclaw_dir.join("screenshots")).await;
     Ok(AuditStorageUsage::new(
         recording_bytes,
         screenshot_bytes,
@@ -227,11 +234,7 @@ async fn subdir_file_bytes(dir: &Path) -> i64 {
 /// Best-effort sweep of screenshot files (nested `s-<session>/<id>.jpg` and
 /// legacy flat `<id>.jpg`) whose integer id is not in `known`. Returns
 /// `(files_deleted, bytes_freed)`. Never throws; skips foreign files.
-async fn sweep_orphan_screenshots(
-    state: &AppState,
-    known: &HashSet<i64>,
-    now: i64,
-) -> (i64, i64) {
+async fn sweep_orphan_screenshots(state: &AppState, known: &HashSet<i64>, now: i64) -> (i64, i64) {
     let root = state.config.browserclaw_dir.join("screenshots");
     let mut result = (0i64, 0i64);
     let mut scanned = 0usize;
@@ -317,9 +320,7 @@ fn to_api_retention(policy: AuditRetention) -> ApiRetention {
     }
 }
 
-fn policy_from_request(
-    request: &SetAuditRetentionRequest,
-) -> Result<AuditRetention, &'static str> {
+fn policy_from_request(request: &SetAuditRetentionRequest) -> Result<AuditRetention, &'static str> {
     match request.mode {
         AuditRetentionMode::KeepForever => Ok(AuditRetention::KeepForever),
         AuditRetentionMode::DeleteAfterDays => {

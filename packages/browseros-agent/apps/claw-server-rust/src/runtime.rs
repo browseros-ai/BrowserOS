@@ -68,8 +68,7 @@ impl AppRuntime {
                     let cancel = shutdown.child_token();
                     async move {
                         let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
-                        ticker
-                            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         loop {
                             tokio::select! {
                                 () = cancel.cancelled() => return,

@@ -1762,8 +1762,14 @@ async fn live_projection_drops_disconnect_during_reconciliation() -> anyhow::Res
 #[tokio::test]
 async fn audit_storage_reports_usage_and_default_retention() -> anyhow::Result<()> {
     let app = test_app().await?;
-    let (status, _, bytes) =
-        request(&app.router, "GET", "/api/v1/audit/storage", None, Body::empty()).await?;
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/audit/storage",
+        None,
+        Body::empty(),
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
     let body = json_body(&bytes)?;
     assert_eq!(body["usage"]["recordingBytes"], 0);
@@ -1789,8 +1795,14 @@ async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&bytes)?["mode"], "keepForever");
 
-    let (status, _, bytes) =
-        request(&app.router, "GET", "/api/v1/audit/storage", None, Body::empty()).await?;
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/audit/storage",
+        None,
+        Body::empty(),
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&bytes)?["retention"]["mode"], "keepForever");
 
@@ -1833,8 +1845,14 @@ async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
 #[tokio::test]
 async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
     let app = test_app().await?;
-    let (status, _, bytes) =
-        request(&app.router, "POST", "/api/v1/audit/cleanup", None, Body::empty()).await?;
+    let (status, _, bytes) = request(
+        &app.router,
+        "POST",
+        "/api/v1/audit/cleanup",
+        None,
+        Body::empty(),
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
     let body = json_body(&bytes)?;
     assert_eq!(body["sessionsDeleted"], 0);
