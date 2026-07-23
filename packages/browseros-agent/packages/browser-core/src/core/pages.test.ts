@@ -12,11 +12,44 @@ function tab(targetId: string, url: string) {
     isLoading: false,
     loadProgress: 1,
     isPinned: false,
-    isHidden: false,
+    isHidden: true,
   }
 }
 
-describe('PageManager refresh', () => {
+describe('PageManager', () => {
+  it('projects protocol tabs into the owned page model', async () => {
+    const getTabsCalls: unknown[][] = []
+    const cdp = {
+      Browser: {
+        getTabs: async (...args: unknown[]) => {
+          getTabsCalls.push(args)
+          return { tabs: [tab('target-a', 'https://a.example')] }
+        },
+      },
+      connectionEpoch: () => 1,
+      isConnected: () => true,
+    } as unknown as CdpConnection
+    const pages = new PageManager(cdp)
+
+    const listed = await pages.list()
+
+    expect(getTabsCalls).toEqual([[]])
+    expect(listed).toEqual([
+      {
+        pageId: 1,
+        targetId: 'target-a',
+        tabId: 42,
+        url: 'https://a.example',
+        title: 'target-a',
+        isActive: true,
+        isLoading: false,
+        loadProgress: 1,
+        isPinned: false,
+      },
+    ])
+    expect(listed[0]).not.toHaveProperty('isHidden')
+  })
+
   it('does not overwrite a newer page rebind with a stale response', async () => {
     let tabs = [tab('target-a', 'https://a.example')]
     let releaseRefresh: (value: { tab: ReturnType<typeof tab> }) => void = () =>

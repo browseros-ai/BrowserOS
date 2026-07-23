@@ -38,7 +38,7 @@ All standard Chrome DevTools Protocol domains are supported:
 | **Security** | Security, WebAuthn, FedCm |
 | **Storage** | IndexedDB, Storage, FileSystem |
 | **Other** | Accessibility, Animation, Audits, Autofill, BackgroundService, BluetoothEmulation, EventBreakpoints, HeadlessExperimental, LayerTree, Log, Preload, Schema, SystemInfo, Tethering |
-| **BrowserOS Custom** | Bookmarks, History |
+| **BrowserOS Custom** | Bookmarks, CrashReportContext, History, WebMCP |
 
 ## Structure
 

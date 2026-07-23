@@ -45,13 +45,55 @@ export interface Protocol {
   domains: ProtocolDomain[]
 }
 
-export async function parseProtocol(path: string): Promise<Protocol> {
-  const file = Bun.file(path)
-  const data = (await file.json()) as Protocol
-
-  if (!data.version || !Array.isArray(data.domains)) {
-    throw new Error(`Invalid protocol JSON: missing version or domains`)
+export function parseProtocol(source: string): Protocol {
+  let data: unknown
+  try {
+    data = JSON.parse(source)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Invalid protocol JSON: ${message}`)
   }
 
-  return data
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    !('version' in data) ||
+    !('domains' in data) ||
+    !Array.isArray(data.domains)
+  ) {
+    throw new Error('Invalid protocol JSON: missing version or domains')
+  }
+
+  const version = data.version
+  if (
+    typeof version !== 'object' ||
+    version === null ||
+    !('major' in version) ||
+    typeof version.major !== 'string' ||
+    !('minor' in version) ||
+    typeof version.minor !== 'string'
+  ) {
+    throw new Error('Invalid protocol JSON: invalid version')
+  }
+
+  const domainNames = new Set<string>()
+  for (const domain of data.domains) {
+    if (
+      typeof domain !== 'object' ||
+      domain === null ||
+      !('domain' in domain) ||
+      typeof domain.domain !== 'string' ||
+      domain.domain.length === 0
+    ) {
+      throw new Error('Invalid protocol JSON: invalid domain')
+    }
+    if (domainNames.has(domain.domain)) {
+      throw new Error(
+        `Invalid protocol JSON: duplicate domain ${domain.domain}`,
+      )
+    }
+    domainNames.add(domain.domain)
+  }
+
+  return data as Protocol
 }

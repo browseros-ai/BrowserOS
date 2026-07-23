@@ -117,6 +117,7 @@
         "callFunctionOn",
         "enable",
         "evaluate",
+        "getProperties",
         "releaseObject",
         "releaseObjectGroup",
         "runIfWaitingForDebugger"

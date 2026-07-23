@@ -62,7 +62,6 @@ describe('createBrowserMcpServer', () => {
       url: string
       opts?: {
         background?: boolean
-        hidden?: boolean
         windowId?: number
         tabGroupId?: string
       }
@@ -79,7 +78,6 @@ describe('createBrowserMcpServer', () => {
               url: string,
               opts?: {
                 background?: boolean
-                hidden?: boolean
                 windowId?: number
                 tabGroupId?: string
               },
@@ -112,7 +110,6 @@ describe('createBrowserMcpServer', () => {
         url: 'https://example.com',
         opts: {
           background: true,
-          hidden: false,
           windowId: 7,
           tabGroupId: 'group-a',
         },
@@ -139,7 +136,6 @@ describe('createBrowserMcpServer', () => {
       isLoading: false,
       loadProgress: 1,
       isPinned: false,
-      isHidden: false,
     }
     const server = inspect(
       createBrowserMcpServer({

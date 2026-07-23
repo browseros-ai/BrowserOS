@@ -18,7 +18,7 @@ interface MockAgent {
 
 interface StoredSession {
   agent: MockAgent
-  hiddenPageId?: number
+  scheduledPageId?: number
 }
 
 interface StreamResponseOptions {
@@ -224,8 +224,8 @@ describe('ChatService activity tracking', () => {
   })
 })
 
-describe('ChatService scheduled task hidden page lifecycle', () => {
-  it('creates and cleans up a hidden page without creating a hidden window', async () => {
+describe('ChatService scheduled task page lifecycle', () => {
+  it('creates and cleans up a background page without creating a window', async () => {
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
     streamResponseHandler = async ({ onFinish, uiMessages }) => {
@@ -276,7 +276,6 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     )
 
     expect(browser.newPage).toHaveBeenCalledWith('about:blank', {
-      hidden: true,
       background: true,
     })
     expect(browser.createWindow).not.toHaveBeenCalled()
@@ -307,7 +306,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     expect(createArgs.browserContext?.enabledMcpServers).toEqual(['slack'])
   })
 
-  it('deleteSession closes the tracked hidden page', async () => {
+  it('deleteSession closes the tracked scheduled page', async () => {
     const fakeAgent = createFakeAgent()
     const sessionStore = createSessionStore()
     const browser = {
@@ -317,7 +316,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
 
     sessionStore.set(conversationId, {
       agent: fakeAgent,
-      hiddenPageId: 33,
+      scheduledPageId: 33,
     })
 
     const service = new ChatService({
@@ -334,7 +333,7 @@ describe('ChatService scheduled task hidden page lifecycle', () => {
     expect(fakeAgent.dispose).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the scheduled hidden page context when metadata lookup fails', async () => {
+  it('keeps the scheduled page context when metadata lookup fails', async () => {
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
     streamResponseHandler = async ({ onFinish, uiMessages }) => {

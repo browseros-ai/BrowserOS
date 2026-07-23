@@ -1,6 +1,10 @@
+/* deepscan-disable UNUSED_EXPR */
+// CDP Runtime.callFunctionOn consumes the final expression as its functionDeclaration; it must remain uninvoked in this source asset.
 // biome-ignore-all lint: Injected ES5 asset mirrors the TypeScript browser-core runtime string.
 // biome-ignore format: Keep injected script byte-oriented and close to the TypeScript source.
-(function(){
+(function(markerAttribute,markerToken){
+  var document=this;
+  if(document.querySelector('['+markerAttribute+']'))return{collision:true,candidates:[]};
   var interactiveTags=new Set(['a','button','input','select','textarea','details','summary']);
   var interactiveRoles=new Set(['button','link','textbox','checkbox','radio','combobox','listbox',
     'menuitem','menuitemcheckbox','menuitemradio','option','searchbox','slider','spinbutton','switch','tab','treeitem']);
@@ -24,7 +28,7 @@
     }
     var rect=el.getBoundingClientRect();
     if(rect.width===0||rect.height===0)continue;
-    el.setAttribute('data-__bcid',String(i));
+    el.setAttribute(markerAttribute,markerToken+':'+String(i));
     var reasons=[];
     if(hasCursor)reasons.push('cursor:pointer');
     if(hasOnClick)reasons.push('onclick');
@@ -32,5 +36,5 @@
     if(editable)reasons.push('contenteditable');
     out.push({marker:String(i),reasons:reasons});
   }
-  return out;
-})()
+  return{collision:false,candidates:out};
+})

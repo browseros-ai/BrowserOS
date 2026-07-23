@@ -47,9 +47,8 @@ export class Browser {
 
   async newPage(
     url: string,
-    opts?: { hidden?: boolean; background?: boolean; windowId?: number },
+    opts?: { background?: boolean; windowId?: number },
   ): Promise<number> {
-    if (opts?.hidden) return this.core.pages.newPage(url, opts)
     const windowId = await this.resolveVisibleWindowId(opts?.windowId)
     return this.core.pages.newPage(url, {
       background: opts?.background,
@@ -77,6 +76,6 @@ export class Browser {
     if (visibleWindow) return visibleWindow.windowId
 
     logger.warn('No visible browser window found; creating one for new page')
-    return (await this.core.windows.create({ hidden: false })).windowId
+    return (await this.core.windows.create()).windowId
   }
 }

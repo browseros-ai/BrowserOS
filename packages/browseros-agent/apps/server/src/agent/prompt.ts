@@ -48,7 +48,7 @@ You do not have a filesystem workspace in this session. Return all results direc
   // Mode-aware framing
   if (options?.isScheduledTask) {
     role +=
-      '\n\nYou are running as a scheduled background task on a system-managed hidden page. Complete the task autonomously and report results.'
+      '\n\nYou are running as a scheduled background task on a system-managed page opened in the background. Complete the task autonomously and report results.'
   } else if (options?.chatMode) {
     role +=
       '\n\nYou are in read-only chat mode. You can observe pages but cannot interact with them or modify files.'
@@ -130,8 +130,8 @@ function getCapabilities(
 ### Browser Control (11 tools)
 You control a Chromium browser through a compact tool surface:
 
-- \`tabs\` → list pages, open background/hidden pages, close pages
-- \`windows\` → list, create, close, focus, show, and hide browser windows
+- \`tabs\` → list pages, open background pages, close pages
+- \`windows\` → list, create, close, and activate browser windows
 - \`navigate\` → go to URL, back, forward, reload; returns a fresh snapshot
 - \`snapshot\` → accessibility tree with refs like [ref=e12] for acting
 - \`diff\` → what changed since the last snapshot/diff
@@ -225,9 +225,7 @@ When a task requires working on multiple pages simultaneously:
 4. **Narrate progress in chat** — keep the user informed: "Checking Vercel pricing... Now checking Netlify..."
 5. **Report results in chat** — summarize findings so the user doesn't need to switch tabs. Leave tabs open for the user to browse later.
 6. **Never force-switch the user's active tab.** If you need user interaction on a background tab (e.g., login, CAPTCHA), tell the user which tab needs attention and let them switch manually.
-7. **Never navigate the user's current tab** during a multi-tab task. The current tab is the user's anchor — use it only for reading (snapshots, content extraction). All navigation should happen on background tabs.
-
-**Do NOT use hidden=true for user-requested tasks.** Hidden pages are invisible to the user and do not appear in the user's tab strip. Use background tabs instead. Reserve hidden pages for automated/scheduled runs only.`
+7. **Never navigate the user's current tab** during a multi-tab task. The current tab is the user's anchor — use it only for reading (snapshots, content extraction). All navigation should happen on background tabs.`
 
   if (!isNewTab) {
     executionContent += `
@@ -567,7 +565,7 @@ function getUserContext(
 
     if (options?.isScheduledTask) {
       pageCtx +=
-        '\nYou are running as a **scheduled background task** on a system-managed hidden page.'
+        '\nYou are running as a **scheduled background task** on a system-managed page opened in the background.'
     }
 
     pageCtx +=
@@ -577,12 +575,12 @@ function getUserContext(
       const pageRef = options.scheduledTaskPageId
         ? `\`${options.scheduledTaskPageId}\``
         : 'the page ID from the Browser Context'
-      pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, prefer \`tabs\` action="new" with hidden=true so the work stays invisible to the user.`
+      pageCtx += `\n2. **Use starting page ID ${pageRef} directly.** For additional browsing, use \`tabs\` action="new" with background=true so the work does not steal focus.`
       pageCtx +=
-        '\n3. **Do NOT close your starting hidden page** (via `tabs` action="close" on that page ID). It is managed by the system and will be cleaned up automatically.'
-      pageCtx += '\n4. **Do NOT create windows.** Use hidden pages instead.'
+        '\n3. **Do NOT close your starting page** (via `tabs` action="close" on that page ID). It is managed by the system and will be cleaned up automatically.'
+      pageCtx += '\n4. **Do NOT create windows.** Use background pages instead.'
       pageCtx +=
-        '\n5. **Close extra hidden pages when you are done with them** using `tabs` action="close".'
+        '\n5. **Close extra background pages when you are done with them** using `tabs` action="close".'
       pageCtx += '\n6. Complete the task end-to-end and report results.'
     }
 

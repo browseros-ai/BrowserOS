@@ -7,7 +7,9 @@ export function emitProtocolApiFile(domains: ProtocolDomain[]): string {
   const sorted = [...domains].sort((a, b) => {
     const aPath = domainToKebab(a.domain)
     const bPath = domainToKebab(b.domain)
-    return aPath.localeCompare(bPath)
+    if (aPath < bPath) return -1
+    if (aPath > bPath) return 1
+    return 0
   })
 
   lines.push('// ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──')
