@@ -15,10 +15,6 @@ export const tabs = defineTool({
       .boolean()
       .default(true)
       .describe('Open without stealing focus for action="new".'),
-    hidden: z
-      .boolean()
-      .default(false)
-      .describe('Create in a hidden window for action="new".'),
     page: z.number().int().optional().describe('Page id for action="close".'),
   }),
   annotations: {
@@ -54,7 +50,6 @@ export const tabs = defineTool({
           args.url ?? 'about:blank',
           {
             background: args.background,
-            hidden: args.hidden,
             windowId: ctx.defaultWindowId,
             tabGroupId: ctx.defaultTabGroupId,
           },
