@@ -36,6 +36,7 @@ export interface PreloadingAttemptKey {
   loaderId: LoaderId
   action: SpeculationAction
   url: string
+  formSubmission?: boolean
   targetHint?: SpeculationTargetHint
 }
 
@@ -122,6 +123,7 @@ export type PrerenderFinalStatus =
   | 'PrerenderFailedDuringPrefetch'
   | 'BrowsingDataRemoved'
   | 'PrerenderHostReused'
+  | 'FormSubmitWhenPrerendering'
 
 export type PreloadingStatus =
   | 'Pending'

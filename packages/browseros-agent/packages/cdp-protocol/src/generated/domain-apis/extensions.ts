@@ -2,6 +2,7 @@
 
 import type {
   ClearStorageItemsParams,
+  GetExtensionsResult,
   GetStorageItemsParams,
   GetStorageItemsResult,
   LoadUnpackedParams,
@@ -17,6 +18,7 @@ export interface ExtensionsApi {
 
   triggerAction(params: TriggerActionParams): Promise<void>
   loadUnpacked(params: LoadUnpackedParams): Promise<LoadUnpackedResult>
+  getExtensions(): Promise<GetExtensionsResult>
   uninstall(params: UninstallParams): Promise<void>
   getStorageItems(params: GetStorageItemsParams): Promise<GetStorageItemsResult>
   removeStorageItems(params: RemoveStorageItemsParams): Promise<void>

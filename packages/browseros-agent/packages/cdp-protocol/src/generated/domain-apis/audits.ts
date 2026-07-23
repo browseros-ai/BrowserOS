@@ -1,7 +1,6 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
 import type {
-  CheckContrastParams,
   CheckFormsIssuesResult,
   GetEncodedResponseParams,
   GetEncodedResponseResult,
@@ -16,7 +15,6 @@ export interface AuditsApi {
   ): Promise<GetEncodedResponseResult>
   disable(): Promise<void>
   enable(): Promise<void>
-  checkContrast(params?: CheckContrastParams): Promise<void>
   checkFormsIssues(): Promise<CheckFormsIssuesResult>
 
   // ── Events ──

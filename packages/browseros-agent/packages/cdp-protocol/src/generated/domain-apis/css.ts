@@ -43,6 +43,8 @@ import type {
   SetLocalFontsEnabledParams,
   SetMediaTextParams,
   SetMediaTextResult,
+  SetNavigationTextParams,
+  SetNavigationTextResult,
   SetPropertyRulePropertyNameParams,
   SetPropertyRulePropertyNameResult,
   SetRuleSelectorParams,
@@ -131,6 +133,9 @@ export interface CSSApi {
     params: SetContainerQueryTextParams,
   ): Promise<SetContainerQueryTextResult>
   setSupportsText(params: SetSupportsTextParams): Promise<SetSupportsTextResult>
+  setNavigationText(
+    params: SetNavigationTextParams,
+  ): Promise<SetNavigationTextResult>
   setScopeText(params: SetScopeTextParams): Promise<SetScopeTextResult>
   setRuleSelector(params: SetRuleSelectorParams): Promise<SetRuleSelectorResult>
   setStyleSheetText(
