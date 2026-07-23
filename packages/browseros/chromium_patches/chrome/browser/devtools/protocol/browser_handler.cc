@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 30bd52d09c3fc65f429f4de24bf054822243a68b..0dca7750a703ed6494a17a7e7d5e8a4006429edf 100644
+index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf30626ecb 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
 @@ -8,19 +8,32 @@
@@ -496,7 +496,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..0dca7750a703ed6494a17a7e7d5e8a40
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +743,655 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -297,3 +743,657 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -582,7 +582,9 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..0dca7750a703ed6494a17a7e7d5e8a40
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
-+  bwi->GetTabStripModel()->CloseAllTabs();
++  // BrowserWindow::Close owns the full Browser/TabStripModel teardown. Calling
++  // CloseAllTabs() first can synchronously start native-window destruction; a
++  // second close against the same BrowserWindowInterface crashes on macOS.
 +  bwi->GetWindow()->Close();
 +  return Response::Success();
 +}

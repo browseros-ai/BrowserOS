@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..f8b8cb3572a382aa657712ce21c41373b37727af 100644
+index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406ccd52432e 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 @@ -21,6 +21,7 @@
@@ -35,7 +35,7 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..f8b8cb3572a382aa657712ce21c41373
  #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
  #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
  #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
-@@ -2121,6 +2126,171 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+@@ -2121,6 +2126,215 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
    SendCommandSync("Target.getTargets");
    EXPECT_EQ(2u, result()->FindList("targetInfos")->size());
  }
@@ -53,6 +53,27 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..f8b8cb3572a382aa657712ce21c41373
 +  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
 +  EXPECT_EQ("Hidden windows are no longer supported.",
 +            *error()->FindString("message"));
++  EXPECT_EQ(initial_browser_count, chrome::GetTotalBrowserCount());
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, BrowserCloseWindowClosesOnce) {
++  AttachToBrowserTarget();
++  const size_t initial_browser_count = chrome::GetTotalBrowserCount();
++
++  const base::DictValue* result = SendCommandSync(
++      "Browser.createWindow", base::DictValue().Set("url", "about:blank"));
++  ASSERT_TRUE(result);
++  const base::DictValue* window = result->FindDict("window");
++  ASSERT_TRUE(window);
++  const std::optional<int> window_id = window->FindInt("windowId");
++  ASSERT_TRUE(window_id.has_value());
++  ASSERT_EQ(initial_browser_count + 1, chrome::GetTotalBrowserCount());
++
++  ui_test_utils::BrowserDestroyedObserver observer;
++  SendCommandSync("Browser.closeWindow",
++                  base::DictValue().Set("windowId", *window_id));
++  ASSERT_FALSE(error());
++  observer.Wait();
 +  EXPECT_EQ(initial_browser_count, chrome::GetTotalBrowserCount());
 +}
 +
@@ -116,6 +137,29 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..f8b8cb3572a382aa657712ce21c41373
 +    EXPECT_TRUE(tab.FindInt("windowId").has_value());
 +    EXPECT_TRUE(tab.FindInt("index").has_value());
 +  }
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserShowTabRejectsWithoutMutation) {
++  AttachToBrowserTarget();
++  const int initial_tab_count = browser()->tab_strip_model()->count();
++
++  const base::DictValue* tabs_result = SendCommandSync("Browser.getTabs");
++  ASSERT_TRUE(tabs_result);
++  const base::ListValue* tabs = tabs_result->FindList("tabs");
++  ASSERT_TRUE(tabs);
++  ASSERT_FALSE(tabs->empty());
++  const std::optional<int> tab_id = tabs->front().GetDict().FindInt("tabId");
++  ASSERT_TRUE(tab_id.has_value());
++
++  SendCommandSync("Browser.showTab",
++                  base::DictValue().Set("tabId", *tab_id));
++
++  ASSERT_TRUE(error());
++  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
++  EXPECT_EQ("Hidden tabs are no longer supported.",
++            *error()->FindString("message"));
++  EXPECT_EQ(initial_tab_count, browser()->tab_strip_model()->count());
 +}
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
