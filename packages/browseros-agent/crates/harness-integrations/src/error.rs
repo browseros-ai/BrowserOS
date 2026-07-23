@@ -2,7 +2,7 @@ use std::{io, path::PathBuf};
 
 use thiserror::Error;
 
-use crate::{AgentId, McpTransport};
+use crate::catalog::{AgentId, McpTransport};
 
 #[derive(Debug, Error)]
 pub enum Error {

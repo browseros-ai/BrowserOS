@@ -4,9 +4,9 @@ use crate::{
     AgentId, AgentScope, DisconnectInput, DisconnectSummary, Error, LinkInput, LinkSummary,
     ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServerSpec, McpTransport, RescanEntry,
     RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
-    catalog::resolve_agent_surface,
     emitter::Emitter,
     io::{AgentFileState, FsOp, Plan, State, serialize_manifest},
+    mcp::paths::resolve_agent_surface,
 };
 
 pub(crate) struct PlannedLink {

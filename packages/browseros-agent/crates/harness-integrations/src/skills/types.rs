@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::Error;
+use crate::error::Error;
 
 /// Product-owned skill content and the directory name used by each harness.
 #[derive(Debug, Clone, PartialEq, Eq)]

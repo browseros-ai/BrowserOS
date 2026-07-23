@@ -12,8 +12,9 @@ use serde_json::Value;
 
 use crate::{
     AgentId, AgentScope, Error, ServerManifest,
-    catalog::{ensure_system_scope, has_install_fingerprint, resolve_agent_mcp_config_path},
-    paths::path_exists,
+    mcp::paths::{
+        ensure_system_scope, has_install_fingerprint, path_exists, resolve_agent_mcp_config_path,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

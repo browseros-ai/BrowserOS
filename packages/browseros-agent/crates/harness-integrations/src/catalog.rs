@@ -1,9 +1,83 @@
-use std::path::PathBuf;
+use std::{fmt, str::FromStr};
 
-use crate::{
-    AgentId, AgentInfo, AgentScope, Error, McpTransport,
-    paths::{any_exists, pick_config_path, selected_os_paths},
-};
+use serde::{Deserialize, Serialize};
+
+use crate::error::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentId {
+    ClaudeCode,
+    Codex,
+    Cursor,
+    #[serde(rename = "opencode")]
+    OpenCode,
+    Antigravity,
+    #[serde(rename = "vscode")]
+    VsCode,
+    Zed,
+}
+
+impl AgentId {
+    pub const ALL: [Self; 7] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::Cursor,
+        Self::OpenCode,
+        Self::Antigravity,
+        Self::VsCode,
+        Self::Zed,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+            Self::Cursor => "cursor",
+            Self::OpenCode => "opencode",
+            Self::Antigravity => "antigravity",
+            Self::VsCode => "vscode",
+            Self::Zed => "zed",
+        }
+    }
+}
+
+impl fmt::Display for AgentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AgentId {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|agent| agent.as_str() == value)
+            .ok_or_else(|| Error::AgentNotSupported {
+                agent: value.to_string(),
+            })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    Stdio,
+    Sse,
+    Http,
+}
+
+impl fmt::Display for McpTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio => formatter.write_str("stdio"),
+            Self::Sse => formatter.write_str("sse"),
+            Self::Http => formatter.write_str("http"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerOsPaths {
@@ -95,15 +169,6 @@ pub struct SkillSurface {
     pub global_roots: PerOsPaths,
     pub first_party: &'static str,
     pub verified: &'static str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentSurface {
-    pub harness: &'static HarnessDefinition,
-    pub mcp: &'static McpSurface,
-    pub supported_transports: &'static [McpTransport],
-    pub stdio: StdioShape,
-    pub http: Option<HttpShape>,
 }
 
 const SMITHERY_URL: &str = "https://github.com/smithery-ai/cli/blob/main/src/config/clients.ts";
@@ -613,71 +678,7 @@ pub(crate) fn get_catalog_entry(agent: AgentId) -> &'static HarnessDefinition {
     }
 }
 
-/// Resolves the active configuration shape and transport set for an agent.
-pub fn resolve_agent_surface(agent: AgentId, scope: AgentScope) -> Result<AgentSurface, Error> {
-    ensure_system_scope(agent, scope)?;
-    let harness = get_catalog_entry(agent);
-    Ok(AgentSurface {
-        harness,
-        mcp: &harness.mcp,
-        supported_transports: harness.mcp.system_transports,
-        stdio: harness.mcp.stdio,
-        http: harness.mcp.http,
-    })
-}
-
 /// Returns the common harness definition and its separate integration surfaces.
 pub fn resolve_harness_definition(agent: AgentId) -> &'static HarnessDefinition {
     get_catalog_entry(agent)
-}
-
-/// Resolves the first existing system config candidate, or the first resolvable candidate.
-pub fn resolve_agent_mcp_config_path(agent: AgentId, scope: AgentScope) -> Result<PathBuf, Error> {
-    ensure_system_scope(agent, scope)?;
-    let candidates = selected_os_paths(&get_catalog_entry(agent).mcp.system_paths);
-    if candidates.is_empty() {
-        return Err(Error::UnresolvedConfigPath {
-            agent,
-            reason: format!(
-                "no system config path configured for OS {}",
-                std::env::consts::OS
-            ),
-        });
-    }
-    pick_config_path(candidates)?.ok_or_else(|| Error::UnresolvedConfigPath {
-        agent,
-        reason: "no system config path resolves (env vars unset?)".to_string(),
-    })
-}
-
-pub(crate) fn has_install_fingerprint(agent: AgentId) -> Result<bool, Error> {
-    let checks = selected_os_paths(&get_catalog_entry(agent).install_check_paths);
-    any_exists(checks)
-}
-
-/// Reports catalog install checks separately from config-path writability.
-pub fn detect_installed_agents() -> Result<Vec<AgentInfo>, Error> {
-    CATALOG
-        .iter()
-        .map(|entry| {
-            let installed = has_install_fingerprint(entry.id)?;
-            let config_path = resolve_agent_mcp_config_path(entry.id, AgentScope::System).ok();
-            Ok(AgentInfo {
-                id: entry.id,
-                display_name: entry.display_name.to_string(),
-                config_path,
-                installed,
-            })
-        })
-        .collect()
-}
-
-pub(crate) fn ensure_system_scope(agent: AgentId, scope: AgentScope) -> Result<(), Error> {
-    if scope == AgentScope::System {
-        return Ok(());
-    }
-    Err(Error::UnresolvedConfigPath {
-        agent,
-        reason: "project scope is not supported; only system scope is implemented".to_string(),
-    })
 }

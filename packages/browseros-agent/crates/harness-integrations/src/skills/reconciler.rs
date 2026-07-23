@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use tempfile::Builder;
 
 use crate::{
-    AgentId, Error,
-    catalog::{PerOsPaths, resolve_harness_definition},
+    catalog::{AgentId, PerOsPaths, resolve_harness_definition},
+    error::Error,
 };
 
 use super::{

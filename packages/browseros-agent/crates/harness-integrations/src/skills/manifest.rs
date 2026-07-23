@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tempfile::NamedTempFile;
 
-use crate::{AgentId, Error};
+use crate::{catalog::AgentId, error::Error};
 
 pub(crate) const MANIFEST_FILE: &str = "skills.json";
 pub(crate) const MARKER_FILE: &str = ".browserclaw-managed.json";

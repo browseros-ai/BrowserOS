@@ -1,65 +1,8 @@
-use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr};
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::Error;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentId {
-    ClaudeCode,
-    Codex,
-    Cursor,
-    #[serde(rename = "opencode")]
-    OpenCode,
-    Antigravity,
-    #[serde(rename = "vscode")]
-    VsCode,
-    Zed,
-}
-
-impl AgentId {
-    pub const ALL: [Self; 7] = [
-        Self::ClaudeCode,
-        Self::Codex,
-        Self::Cursor,
-        Self::OpenCode,
-        Self::Antigravity,
-        Self::VsCode,
-        Self::Zed,
-    ];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude-code",
-            Self::Codex => "codex",
-            Self::Cursor => "cursor",
-            Self::OpenCode => "opencode",
-            Self::Antigravity => "antigravity",
-            Self::VsCode => "vscode",
-            Self::Zed => "zed",
-        }
-    }
-}
-
-impl fmt::Display for AgentId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl FromStr for AgentId {
-    type Err = Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|agent| agent.as_str() == value)
-            .ok_or_else(|| Error::AgentNotSupported {
-                agent: value.to_string(),
-            })
-    }
-}
+use crate::catalog::{AgentId, HarnessDefinition, HttpShape, McpSurface, McpTransport, StdioShape};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,24 +17,6 @@ impl fmt::Display for AgentScope {
         match self {
             Self::System => formatter.write_str("system"),
             Self::Project => formatter.write_str("project"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum McpTransport {
-    Stdio,
-    Sse,
-    Http,
-}
-
-impl fmt::Display for McpTransport {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Stdio => formatter.write_str("stdio"),
-            Self::Sse => formatter.write_str("sse"),
-            Self::Http => formatter.write_str("http"),
         }
     }
 }
@@ -280,6 +205,15 @@ pub struct RescanReport {
     pub verified: Vec<ListedLink>,
     pub drifted: Vec<RescanEntry>,
     pub missing: Vec<RescanEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentSurface {
+    pub harness: &'static HarnessDefinition,
+    pub mcp: &'static McpSurface,
+    pub supported_transports: &'static [McpTransport],
+    pub stdio: StdioShape,
+    pub http: Option<HttpShape>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

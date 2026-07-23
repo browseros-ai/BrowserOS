@@ -6,9 +6,76 @@ use std::{
 };
 
 use crate::{
-    AgentId, AgentScope, Error, PerOsPaths,
-    catalog::{has_install_fingerprint, resolve_agent_mcp_config_path},
+    catalog::{AgentId, PerOsPaths, get_catalog_entry, list_supported_agents},
+    error::Error,
 };
+
+use super::types::{AgentInfo, AgentScope, AgentSurface};
+
+/// Resolves the active configuration shape and transport set for an agent.
+pub fn resolve_agent_surface(agent: AgentId, scope: AgentScope) -> Result<AgentSurface, Error> {
+    ensure_system_scope(agent, scope)?;
+    let harness = get_catalog_entry(agent);
+    Ok(AgentSurface {
+        harness,
+        mcp: &harness.mcp,
+        supported_transports: harness.mcp.system_transports,
+        stdio: harness.mcp.stdio,
+        http: harness.mcp.http,
+    })
+}
+
+/// Resolves the first existing system config candidate, or the first resolvable candidate.
+pub fn resolve_agent_mcp_config_path(agent: AgentId, scope: AgentScope) -> Result<PathBuf, Error> {
+    ensure_system_scope(agent, scope)?;
+    let candidates = selected_os_paths(&get_catalog_entry(agent).mcp.system_paths);
+    if candidates.is_empty() {
+        return Err(Error::UnresolvedConfigPath {
+            agent,
+            reason: format!(
+                "no system config path configured for OS {}",
+                std::env::consts::OS
+            ),
+        });
+    }
+    pick_config_path(candidates)?.ok_or_else(|| Error::UnresolvedConfigPath {
+        agent,
+        reason: "no system config path resolves (env vars unset?)".to_string(),
+    })
+}
+
+pub(crate) fn has_install_fingerprint(agent: AgentId) -> Result<bool, Error> {
+    let checks = selected_os_paths(&get_catalog_entry(agent).install_check_paths);
+    any_exists(checks)
+}
+
+/// Reports catalog install checks separately from config-path writability.
+pub fn detect_installed_agents() -> Result<Vec<AgentInfo>, Error> {
+    list_supported_agents()
+        .into_iter()
+        .map(|agent| {
+            let harness = get_catalog_entry(agent);
+            let installed = has_install_fingerprint(agent)?;
+            let config_path = resolve_agent_mcp_config_path(agent, AgentScope::System).ok();
+            Ok(AgentInfo {
+                id: agent,
+                display_name: harness.display_name.to_string(),
+                config_path,
+                installed,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn ensure_system_scope(agent: AgentId, scope: AgentScope) -> Result<(), Error> {
+    if scope == AgentScope::System {
+        return Ok(());
+    }
+    Err(Error::UnresolvedConfigPath {
+        agent,
+        reason: "project scope is not supported; only system scope is implemented".to_string(),
+    })
+}
 
 pub(crate) fn selected_os_paths(paths: &PerOsPaths) -> &'static [&'static str] {
     match env::consts::OS {
