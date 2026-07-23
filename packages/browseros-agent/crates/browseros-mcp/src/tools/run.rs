@@ -30,23 +30,31 @@ const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
-const DESCRIPTION: &str = r#"Do multi-step flows - pagination, bulk extraction, repeated act/read loops - in ONE call: JavaScript against the `browser` SDK in the server runtime. `console.log` is captured; `return` a value to read it back; exceptions come back as a result, not thrown.
+const DESCRIPTION: &str = r#"Do multi-step flows - pagination, bulk extraction, repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able.
 
-Available as `browser`:
-  browser.pages.list() / newPage(url) / close(pageId) / getInfo(pageId)
-  browser.observe(pageId).snapshot()  -> { text, refs }
-  browser.observe(pageId).diff()      -> { text, added, removed, changed }
-  browser.observe(pageId).resolveRef(ref)
+The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps, and close a page with browser.pages.close(pageId) when you are done with it.
+
+Pages (pageId is a NUMBER):
+  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object.
+  browser.pages.close(pageId)  -> undefined. Call this when finished with a page.
+  browser.pages.list()         -> [{ pageId, url, title, tabId, ... }]
+  browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
+Observe / act (refs eN come from a snapshot's text/refs):
+  browser.observe(pageId).snapshot() -> { text, refs, url }
+  browser.observe(pageId).diff()     -> { text, added, removed, changed }
+  browser.observe(pageId).resolveRef(ref) -> { backendNodeId, sessionId }
   browser.input(pageId).click(ref) / fill(ref,value) / type(text) / press(key) / hover(ref) / selectOption(ref,value) / scroll(dir,amount,ref?)
   browser.nav(pageId).goto(url) / back() / forward() / reload()
-  browser.cdp(method, params?, sessionId?)   // raw CDP escape hatch
-  browser.cdpJsonForPage(pageId, method, paramsJson) // page-scoped raw CDP with validated JSON params
-  browser.read(pageId, opts?) / grep(pageId, opts?) / wait(pageId, opts?)
-  browser.screenshot(pageId, opts?) / evaluate(pageId, opts?) / pdf(pageId, opts?)
-  browser.download(pageId, opts?) / upload(pageId, opts?)
-  browser.tabGroups(opts?) / windows(opts?)
-opts mirrors the same-named tool's arguments (page is supplied for you).
-Refs (eN) come from a snapshot's text/refs."#;
+Read / wait / capture:
+  browser.read(pageId)               -> the page as a markdown STRING
+  browser.grep(pageId, { pattern })  -> matching lines
+  browser.wait(pageId, { text } | { selector } | { ms })  -> resolves when ready
+  browser.screenshot(pageId) / evaluate(pageId, { code }) / pdf(pageId)
+  browser.download(pageId, opts) / upload(pageId, opts)
+  browser.tabGroups(opts) / windows(opts)
+Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
+
+Parallelize independent work: await Promise.all([...]) runs primitives concurrently (for example, read several pages at once). Keep steps on the same page sequential."#;
 
 const BOOTSTRAP_JS: &str = r#"
 (() => {
