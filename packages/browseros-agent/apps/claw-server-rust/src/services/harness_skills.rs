@@ -86,8 +86,9 @@ mod tests {
         assert!(content.contains("task-owned tabs"));
         assert!(content.contains("snapshot -> act -> verify"));
         assert!(content.contains("untrusted data"));
-        assert!(content.contains("MCP initialize instructions"));
-        assert!(content.lines().count() < 30);
+        assert!(content.contains("name_session"));
+        assert!(content.contains("unprompted"));
+        assert!(content.lines().count() < 60);
         Ok(())
     }
 
