@@ -1101,19 +1101,27 @@ mod tests {
                         let mut properties = vec![
                             json!({
                                 "name": self.candidate_markers[2].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-2"}
+                                "value": {"type": "object", "objectId": "candidate-2"},
+                                "configurable": true,
+                                "enumerable": true
                             }),
                             json!({
                                 "name": self.candidate_markers[0].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-0"}
+                                "value": {"type": "object", "objectId": "candidate-0"},
+                                "configurable": true,
+                                "enumerable": true
                             }),
                             json!({
                                 "name": self.candidate_markers[1].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-1"}
+                                "value": {"type": "object", "objectId": "candidate-1"},
+                                "configurable": true,
+                                "enumerable": true
                             }),
                             json!({
                                 "name": "length",
-                                "value": {"type": "number", "value": 3}
+                                "value": {"type": "number", "value": 3},
+                                "configurable": false,
+                                "enumerable": false
                             }),
                         ];
                         if let Some(index) = self.omitted_candidate {
@@ -1555,7 +1563,9 @@ mod tests {
                                     "value": {
                                         "type": "object",
                                         "objectId": format!("candidate-{index}")
-                                    }
+                                    },
+                                    "configurable": true,
+                                    "enumerable": true
                                 })
                             })
                             .collect::<Vec<_>>();
