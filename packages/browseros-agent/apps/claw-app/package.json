@@ -9,7 +9,7 @@
     "dev:web": "serve dist/chrome-mv3-dev -p 5174 --no-clipboard",
     "build": "wxt build",
     "build:dev": "bun --env-file=../../.env.development wxt build --mode development",
-    "test": "bun run ../../scripts/run-bun-test.ts ./apps/claw-app",
+    "test": "wxt prepare && bun run ../../scripts/run-bun-test.ts ./apps/claw-app",
     "zip": "wxt zip",
     "compile": "wxt prepare && tsc --noEmit",
     "typecheck": "wxt prepare && tsc --noEmit",
