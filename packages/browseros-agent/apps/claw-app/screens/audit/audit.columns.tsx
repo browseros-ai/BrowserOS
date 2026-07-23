@@ -75,9 +75,12 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
   {
     id: 'tokens',
     header: 'Tokens',
-    // Unmeasured sessions sort as 0 so they sink to the bottom of a token sort.
-    accessorFn: (t) => t.tokenUsage?.totalTokenEstimate ?? 0,
+    // Unmeasured sessions have no total; returning undefined + `sortUndefined: 'last'`
+    // sinks them to the bottom in BOTH sort directions instead of masquerading as 0
+    // (which would surface them first on an ascending sort).
+    accessorFn: (t) => t.tokenUsage?.totalTokenEstimate,
     cell: ({ row }) => <TokensCell task={row.original} />,
+    sortUndefined: 'last',
     sortingFn: 'basic',
     enableSorting: true,
   },
