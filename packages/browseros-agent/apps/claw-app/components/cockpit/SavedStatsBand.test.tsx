@@ -51,12 +51,12 @@ function stats(over: Partial<CockpitStats> = {}): CockpitStats {
       toolCallCount: 20,
     }),
     last7Days: statsWindow({
-      browserClawTokenEstimate: 300,
-      screenshotFirstTokenEstimate: 1_500,
-      rawTokenSavingsEstimate: 600,
-      humanTimeSavedMs: 3 * 60 * 60 * 1_000,
-      sessionCount: 3,
-      toolCallCount: 30,
+      browserClawTokenEstimate: 0,
+      screenshotFirstTokenEstimate: 0,
+      rawTokenSavingsEstimate: 0,
+      humanTimeSavedMs: 0,
+      sessionCount: 0,
+      toolCallCount: 0,
     }),
     ...over,
   }
@@ -204,7 +204,7 @@ function displayedNumbers(): string[] {
 }
 
 describe('SavedStatsBand', () => {
-  it('selects All time by default and switches with arrow keys and click', async () => {
+  it('switches with arrow keys and click, including a zero recent window', async () => {
     await render()
 
     const allTime = tab('All time')
@@ -231,6 +231,12 @@ describe('SavedStatsBand', () => {
     await selectTab('7 days')
     const weekValues = displayedNumbers()
     expect(tab('7 days').getAttribute('aria-selected')).toBe('true')
+    expect(
+      container.querySelector('[data-stat="tokens-saved"]')?.textContent,
+    ).toBe('0')
+    expect(container.querySelector('[data-stat="sessions"]')?.textContent).toBe(
+      '0',
+    )
     expect(
       weekValues.every((value, index) => value !== monthValues[index]),
     ).toBe(true)

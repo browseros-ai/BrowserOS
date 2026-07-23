@@ -1,23 +1,9 @@
+import type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 import { useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
-export interface CockpitStatsWindow {
-  browserClawTokenEstimate: number
-  screenshotFirstTokenEstimate: number
-  /** Signed comparison delta; the product presentation clamps negatives. */
-  rawTokenSavingsEstimate: number
-  humanTimeSavedMs: number
-  sessionCount: number
-  toolCallCount: number
-}
-
-export interface CockpitStats {
-  hasMeasuredStats: boolean
-  allTime: CockpitStatsWindow
-  last30Days: CockpitStatsWindow
-  last7Days: CockpitStatsWindow
-}
+export type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 
 interface SavedStatsBandProps {
   stats: CockpitStats
