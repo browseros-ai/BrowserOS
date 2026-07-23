@@ -138,7 +138,12 @@ async function cursorProbeState(
 
 function mixedFrameUrl(ctx: CaseContext): string {
   const url = new URL(ctx.fixture('/snapshot-frame-tree.html'))
-  url.searchParams.set('childOrigin', new URL(ctx.fixture2('/')).origin)
+  const childOrigin = new URL(ctx.fixture2('/'))
+  // Ports separate origins, but Chromium isolates by site. A loopback hostname
+  // boundary makes frame B an OOPIF while preserving the secondary server.
+  childOrigin.hostname =
+    url.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
+  url.searchParams.set('childOrigin', childOrigin.origin)
   return url.toString()
 }
 
@@ -515,12 +520,6 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         )
       }
 
-      const final = await waitForFrameSnapshot(ctx, page)
-      requireSameRefs(
-        selectedRefs(final, FRAME_REF_LABELS),
-        expectedRefs,
-        'final mixed-frame snapshot after overlap',
-      )
       const diffResult = await ctx.mcp.callTool('diff', { page })
       const diffText = expectOk(diffResult, 'diff after overlapping snapshots')
       const structured = diffResult.structuredContent as
@@ -534,6 +533,13 @@ export const snapshotConcurrencyCases: ContractCase[] = [
           `overlapping snapshot commits poisoned the diff baseline: ${diffText.slice(0, 400)}`,
         )
       }
+
+      const final = await waitForFrameSnapshot(ctx, page)
+      requireSameRefs(
+        selectedRefs(final, FRAME_REF_LABELS),
+        expectedRefs,
+        'final mixed-frame snapshot after overlap',
+      )
     },
   },
 ]
