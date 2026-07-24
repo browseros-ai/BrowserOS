@@ -110,6 +110,7 @@ fn fake_ctx() -> ToolCtx {
         cancel: CancellationToken::new(),
         output_files: create_browser_output_file_access(),
         inner_call_hook: None,
+        preloaded_helpers: Vec::new(),
     })
 }
 
@@ -361,6 +362,7 @@ async fn harness_ctx() -> (ToolCtx, Arc<HarnessConnection>, u32) {
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
             inner_call_hook: None,
+            preloaded_helpers: Vec::new(),
         }),
         connection,
         page,

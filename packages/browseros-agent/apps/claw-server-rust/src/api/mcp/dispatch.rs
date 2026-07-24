@@ -393,8 +393,9 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             // session, bypassing the guards and audit effect the pipeline runs
             // per tool. Inject a hook so each primitive is ownership-checked and
             // recorded as a child of this script's dispatch.
+            let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
             let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
-                if ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name) && call.identity.is_some() {
+                if is_script && call.identity.is_some() {
                     Some(
                         Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
                             call.clone(),
@@ -403,6 +404,19 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 } else {
                     None
                 };
+            // Hot-load the helpers the agent's owned-tab hosts make relevant, so
+            // the script can call them by name. Cheap-gated when no helpers exist.
+            let preloaded_helpers = match &call.identity {
+                Some(identity) if is_script => {
+                    crate::api::mcp::helper_runtime::preload_helpers(
+                        &call.state,
+                        &identity.ownership_key,
+                        browser_session,
+                    )
+                    .await
+                }
+                _ => Vec::new(),
+            };
             let ctx = ToolCtx::new(BrowserToolOptions {
                 session: browser_session.clone(),
                 defaults: BrowserToolDefaults {
@@ -412,6 +426,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 cancel: call.cancel.clone(),
                 output_files: call.output_files.clone(),
                 inner_call_hook,
+                preloaded_helpers,
             });
             match execute_tool(call.tool(), call.raw_args.clone(), &ctx).await {
                 Ok(result) => result,

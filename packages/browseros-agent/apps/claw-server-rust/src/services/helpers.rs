@@ -162,6 +162,15 @@ pub fn read_helper_source(browserclaw_dir: &Path, host: &str, name: &str) -> Opt
     read_helper(browserclaw_dir, host, name).map(|content| parse_helper(&content).1)
 }
 
+/// Cheap check for whether any helper exists at all, so the hot-load path can
+/// skip a page scan when there is nothing to load.
+#[must_use]
+pub fn has_any_helpers(browserclaw_dir: &Path) -> bool {
+    fs::read_dir(browserclaw_dir.join(HELPERS_DIR))
+        .map(|mut entries| entries.any(|entry| entry.is_ok()))
+        .unwrap_or(false)
+}
+
 /// Lists helpers for a host with their parsed provenance, sorted by name. A file
 /// missing a header still lists, with default provenance.
 #[must_use]
@@ -298,6 +307,15 @@ mod tests {
         };
         let huge = "a".repeat(MAX_HELPER_BYTES + 1);
         assert!(save_helper(dir.path(), &meta, &huge).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn has_any_helpers_gates_on_a_populated_helpers_root() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        assert!(!has_any_helpers(dir.path()));
+        write_helper(dir.path(), "example.com", "x", "async () => {}")?;
+        assert!(has_any_helpers(dir.path()));
         Ok(())
     }
 

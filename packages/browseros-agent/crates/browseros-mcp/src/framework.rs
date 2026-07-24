@@ -24,6 +24,14 @@ pub struct BrowserToolDefaults {
     pub default_tab_group_id: Option<String>,
 }
 
+/// A saved helper the host hot-loads into a script's runtime so the agent can
+/// call it by name. `source` is a bare function expression (header stripped).
+#[derive(Debug, Clone)]
+pub struct HelperSource {
+    pub name: String,
+    pub source: String,
+}
+
 #[derive(Clone)]
 pub struct BrowserToolOptions {
     pub session: Arc<BrowserSession>,
@@ -33,6 +41,9 @@ pub struct BrowserToolOptions {
     /// Host hook a script tool invokes around each primitive; `None` outside
     /// the host (unit tests, non-host callers), which disables the hook.
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// Helpers the host loads into the script runtime before the agent's code
+    /// runs, exposed as `helpers.<name>`. Empty outside the host.
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 #[derive(Clone)]
@@ -43,6 +54,8 @@ pub struct ToolCtx {
     pub output_files: OutputFileAccess,
     /// See [`BrowserToolOptions::inner_call_hook`].
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// See [`BrowserToolOptions::preloaded_helpers`].
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 impl ToolCtx {
@@ -54,6 +67,7 @@ impl ToolCtx {
             cancel: options.cancel,
             output_files: options.output_files,
             inner_call_hook: options.inner_call_hook,
+            preloaded_helpers: options.preloaded_helpers,
         }
     }
 

@@ -175,6 +175,7 @@ impl BrowserMcpService {
             cancel,
             output_files: self.output_files.clone(),
             inner_call_hook: None,
+            preloaded_helpers: Vec::new(),
         })
     }
 

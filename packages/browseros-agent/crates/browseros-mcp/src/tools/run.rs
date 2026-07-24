@@ -1,6 +1,6 @@
 use crate::framework::{
-    InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult, execute_tool,
-    page_json, parse_args, text_result,
+    HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
+    execute_tool, page_json, parse_args, text_result,
 };
 use browseros_core::{
     PageId, Ref, SessionId, WindowId, input::ScrollDirection, pages::NewPageOptions,
@@ -385,13 +385,34 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
     }
 }
 
+/// Loads the host-provided helpers into the script context as `helpers.<name>`
+/// after the SDK bootstrap. A broken helper is contained by its try/catch and
+/// reported through the captured console; it never fails the run.
+fn load_preloaded_helpers(ctx: &Ctx<'_>, helpers: &[HelperSource]) {
+    if helpers.is_empty() {
+        return;
+    }
+    let _ = ctx
+        .eval::<(), _>("globalThis.helpers = globalThis.helpers || {};")
+        .catch(ctx);
+    for helper in helpers {
+        let name = serde_json::to_string(&helper.name).unwrap_or_else(|_| "\"helper\"".to_string());
+        let snippet = format!(
+            "try {{ helpers[{name}] = (\n{source}\n); }} catch (e) {{ console.log('helper load failed: ' + {name} + ': ' + e); }}",
+            source = helper.source,
+        );
+        let _ = ctx.eval::<(), _>(snippet).catch(ctx);
+    }
+}
+
 async fn execute_quickjs(
     code: String,
-    tool_ctx: ToolCtx,
+    mut tool_ctx: ToolCtx,
     logs: SharedLogs,
     control: RunControl,
     duration: Duration,
 ) -> Result<RunOutcome, RunError> {
+    let preloaded_helpers = std::mem::take(&mut tool_ctx.preloaded_helpers);
     let runtime = AsyncRuntime::new().map_err(engine_error)?;
     runtime.set_memory_limit(RUN_MEMORY_LIMIT_BYTES).await;
     runtime.set_max_stack_size(RUN_STACK_SIZE_BYTES).await;
@@ -412,6 +433,7 @@ async fn execute_quickjs(
                     js_error_message(&ctx, err)
                 ))
             })?;
+            load_preloaded_helpers(&ctx, &preloaded_helpers);
 
             let make_run: Function<'_> = ctx
                 .globals()
@@ -1390,6 +1412,7 @@ mod tests {
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
             inner_call_hook: None,
+            preloaded_helpers: Vec::new(),
         })
     }
 
@@ -1512,6 +1535,35 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.inner_call_hook = Some(Arc::new(MockHook(log)));
         ctx
+    }
+
+    #[tokio::test]
+    async fn run_hot_loads_preloaded_helpers_and_skips_a_broken_one() -> anyhow::Result<()> {
+        let mut ctx = test_ctx();
+        ctx.preloaded_helpers = vec![
+            HelperSource {
+                name: "double".to_string(),
+                source: "async (x) => x * 2".to_string(),
+            },
+            // A syntax-broken helper must be skipped without failing the run.
+            HelperSource {
+                name: "broken".to_string(),
+                source: "async (x) => {".to_string(),
+            },
+        ];
+        let result = run_tool_with_ctx(
+            "const ok = typeof helpers.broken; return { doubled: await helpers.double(21), broken: ok };",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["doubled"], json!(42));
+        assert_eq!(structured["value"]["broken"], json!("undefined"));
+        Ok(())
     }
 
     #[tokio::test]
