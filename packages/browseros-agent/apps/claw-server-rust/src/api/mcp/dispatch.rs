@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards, observers},
+    api::mcp::{effects, guards, helper_runtime, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -22,7 +22,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -199,6 +199,10 @@ const EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "session-naming",
         run: effects::session_naming::apply,
+    },
+    NamedToolEffect {
+        name: "helper-discovery",
+        run: helper_runtime::discovery,
     },
 ];
 
@@ -1095,6 +1099,7 @@ mod tests {
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
+                "helper-discovery",
             ]
         );
         assert_eq!(

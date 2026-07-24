@@ -225,18 +225,8 @@ impl InnerCallHook for ScriptInnerCallHook {
         Box::pin(async move {
             let now = now_epoch_ms();
             helpers::list_helper_meta(&self.call.state.config.browserclaw_dir, host)
-                .into_iter()
-                .map(|meta| {
-                    // Age is a soft staleness signal; absent when never stamped.
-                    let age_days = (meta.last_verified > 0)
-                        .then(|| (now - meta.last_verified).max(0) / 86_400_000);
-                    json!({
-                        "name": meta.name,
-                        "ageDays": age_days,
-                        "candidate": meta.candidate,
-                        "agent": meta.agent,
-                    })
-                })
+                .iter()
+                .map(|meta| super::helper_runtime::helper_info_json(meta, now))
                 .collect()
         })
     }
