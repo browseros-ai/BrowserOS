@@ -54,7 +54,12 @@ Read / wait / capture:
   browser.tabGroups(opts) / windows(opts)
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
 
-Parallelize independent work: await Promise.all([...]) runs primitives concurrently (for example, read several pages at once). Keep steps on the same page sequential."#;
+Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. Efficient pattern:
+  const ids = await Promise.all(urls.map(u => browser.pages.newPage(u)));
+  await Promise.all(ids.map(id => browser.wait(id, { value: 2500 })));
+  const docs = await Promise.all(ids.map(id => browser.read(id)));
+  await Promise.all(ids.map(id => browser.pages.close(id)));
+  return docs;"#;
 
 const BOOTSTRAP_JS: &str = r#"
 (() => {
