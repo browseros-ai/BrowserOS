@@ -46,6 +46,12 @@ interface ReplayViewportProps {
    */
   syncKey: number
   mode: 'follow' | 'inspect'
+  /**
+   * Reports the track whose ready player actually owns the visible slot.
+   * Replay keeps the selected chip, warning, URL, and caption on this committed
+   * presentation until a delayed standby promotion is complete.
+   */
+  onPresentedTrackChange: (tabId: number) => void
 }
 
 type SlotId = 'a' | 'b'
@@ -86,6 +92,7 @@ export function ReplayViewport({
   speed,
   syncKey,
   mode,
+  onPresentedTrackChange,
 }: ReplayViewportProps) {
   const [stage, setStage] = useState<StageState>(() =>
     initialStage(activeTrack, standbyTrack),
@@ -100,6 +107,8 @@ export function ReplayViewport({
   const isPlayingRef = useRef(isPlaying)
   const speedRef = useRef(speed)
   const modeRef = useRef(mode)
+  const desiredTrackRef = useRef(activeTrack)
+  const onPresentedTrackChangeRef = useRef(onPresentedTrackChange)
   const lastDriftCheckMsRef = useRef(performance.now())
   const appliedSyncKeyRef = useRef<number | null>(null)
   stageRef.current = stage
@@ -108,6 +117,8 @@ export function ReplayViewport({
   isPlayingRef.current = isPlaying
   speedRef.current = speed
   modeRef.current = mode
+  desiredTrackRef.current = activeTrack
+  onPresentedTrackChangeRef.current = onPresentedTrackChange
 
   const writeStage = useCallback(
     (update: (current: StageState) => StageState) => {
@@ -168,6 +179,10 @@ export function ReplayViewport({
         handle.seek(activeTimeMsRef.current)
         if (isPlayingRef.current) handle.play(activeTimeMsRef.current)
         else handle.pause()
+        const track = current.slots[slot].track
+        if (track && sameTrack(track, desiredTrackRef.current)) {
+          onPresentedTrackChangeRef.current(track.tabId)
+        }
       } else {
         // Standby readiness is never permission to run. It is prepared at the
         // best projection known now and re-seeked immediately before promotion.
@@ -208,9 +223,19 @@ export function ReplayViewport({
         : null
     inactiveHandle?.pause()
     if (!activeHandle) return
+    const committedTrack = stageRef.current.slots[activeSlot].track
+    if (!sameTrack(committedTrack, desiredTrackRef.current)) {
+      // The requested camera has not finished mounting. Freeze the prior
+      // visual rather than applying the new tab's local clock to the old DOM.
+      activeHandle.pause()
+      return
+    }
     activeHandle.setSpeed(speed)
     if (isPlaying) activeHandle.play(activeTimeMsRef.current)
     else activeHandle.pause()
+    if (committedTrack) {
+      onPresentedTrackChangeRef.current(committedTrack.tabId)
+    }
     lastDriftCheckMsRef.current = performance.now()
   }, [
     activeGeneration,
@@ -284,6 +309,7 @@ export function ReplayViewport({
     if (nowMs - lastDriftCheckMsRef.current < DRIFT_CHECK_INTERVAL_MS) return
     lastDriftCheckMsRef.current = nowMs
     const current = stageRef.current
+    if (!sameTrack(current.slots[current.activeSlot].track, activeTrack)) return
     const handle = handleForSlot(
       current,
       handlesRef.current,
@@ -297,7 +323,7 @@ export function ReplayViewport({
     }
     handle.seek(activeTimeMs)
     handle.play(activeTimeMs)
-  }, [activeTimeMs, isPlaying])
+  }, [activeTimeMs, activeTrack, isPlaying])
 
   useEffect(
     () => () => {

@@ -207,6 +207,7 @@ async function renderViewport(
     speed: 2,
     syncKey: 0,
     mode: 'follow',
+    onPresentedTrackChange: () => {},
     ...overrides,
   }
   await act(async () => root?.render(<ReplayViewport {...props} />))
@@ -320,6 +321,52 @@ describe('ReplayViewport', () => {
         .querySelector('[data-replay-slot-active="true"]')
         ?.getAttribute('data-replay-tab-id'),
     ).toBe('3')
+  })
+
+  it('keeps presentation and drift ownership on the old slot until delayed promotion commits', async () => {
+    immediatelyReadyTabs.add(1)
+    const presentedTabs: number[] = []
+    const onPresentedTrackChange = (tabId: number) => {
+      presentedTabs.push(tabId)
+    }
+    await renderViewport({ onPresentedTrackChange })
+    const tabOnePlayer = fakePlayers.find(
+      ({ tabId, destroyed }) => tabId === 1 && !destroyed,
+    )
+    const tabTwoPlayer = fakePlayers.find(
+      ({ tabId, destroyed }) => tabId === 2 && !destroyed,
+    )
+    if (!tabOnePlayer || !tabTwoPlayer) {
+      throw new Error('expected active and delayed standby')
+    }
+    expect(presentedTabs.at(-1)).toBe(1)
+
+    nowMs = 2_000
+    await renderViewport({
+      activeTrack: tabTwo,
+      standbyTrack: null,
+      activeTimeMs: 8_000,
+      onPresentedTrackChange,
+    })
+
+    expect(tabOnePlayer.handle.running).toBe(true)
+    expect(tabOnePlayer.handle.seekCalls).not.toContain(8_000)
+    expect(presentedTabs.at(-1)).toBe(1)
+    expect(
+      container
+        .querySelector('[data-replay-slot-active="true"]')
+        ?.getAttribute('data-replay-tab-id'),
+    ).toBe('1')
+
+    await act(async () => tabTwoPlayer.ready())
+    expect(presentedTabs.at(-1)).toBe(2)
+    expect(tabOnePlayer.handle.running).toBe(false)
+    expect(tabTwoPlayer.handle.seekCalls).toContain(8_000)
+    expect(
+      container
+        .querySelector('[data-replay-slot-active="true"]')
+        ?.getAttribute('data-replay-tab-id'),
+    ).toBe('2')
   })
 
   it('keeps rapid pending churn within two live player instances', async () => {

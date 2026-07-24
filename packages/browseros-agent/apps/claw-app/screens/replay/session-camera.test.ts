@@ -8,6 +8,7 @@ import { describe, expect, it } from 'bun:test'
 import type { ReplayFrame } from '@/modules/api/replay.hooks'
 import {
   createSessionCameraState,
+  rebaseSessionCameraState,
   sessionCameraReducer,
 } from './session-camera'
 import type {
@@ -308,5 +309,42 @@ describe('sessionCameraReducer', () => {
     })
 
     expect(restarted).toEqual(initial)
+  })
+
+  it('rebases a live candidate inserted before the prior cursor without replaying old work', () => {
+    const replayPlan = plan(
+      [track(1, 0, 100), track(2, 0, 100), track(3, 0, 100)],
+      [candidate(1, 2, 2)],
+    )
+    const promoted = tick(
+      replayPlan,
+      createSessionCameraState(replayPlan),
+      10,
+      10_000,
+    )
+    expect(promoted).toMatchObject({
+      activeTabId: 2,
+      candidateCursor: 1,
+      candidateWindowStartCursor: 1,
+      pendingTabId: null,
+    })
+
+    const refreshedPlan = plan(
+      [...replayPlan.tracks],
+      [candidate(0.5, 3, 3), candidate(1, 2, 2)],
+    )
+    const rebased = rebaseSessionCameraState(
+      replayPlan,
+      refreshedPlan,
+      promoted,
+    )
+    expect(rebased).toMatchObject({
+      activeTabId: 2,
+      candidateCursor: 2,
+      candidateWindowStartCursor: 2,
+      pendingTabId: 3,
+    })
+
+    expect(tick(refreshedPlan, rebased, 11, 10_000).activeTabId).toBe(3)
   })
 })

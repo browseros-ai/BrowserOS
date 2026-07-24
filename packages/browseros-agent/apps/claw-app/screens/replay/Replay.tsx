@@ -27,6 +27,7 @@ import {
 import { frameIndexAt } from './replay.helpers'
 import {
   createSessionCameraState,
+  rebaseSessionCameraState,
   type SessionCameraState,
   sessionCameraReducer,
 } from './session-camera'
@@ -89,34 +90,23 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
   const [camera, setCamera] = useState<SessionCameraState>(() =>
     createSessionCameraState(plan),
   )
+  const [presentedTabId, setPresentedTabId] = useState(camera.activeTabId)
   const [syncKey, setSyncKey] = useState(0)
-  const lastSessionIdRef = useRef(replay.sessionId)
+  const lastPlanRef = useRef(plan)
   const lastGlobalPlayedRealMsRef = useRef(globalPlayback.playedRealMs)
 
   /**
-   * Live audit polling may append semantic candidates without changing rrweb
-   * event identity. Keep the current dwell/camera when its track still exists;
-   * only initialize anew for a different session or a newly playable replay.
+   * Live polling rebuilds an immutable plan. Camera cursors cannot be copied as
+   * raw indexes because a newly completed long dispatch can sort before them;
+   * rebasing translates the consumed window and admits newly observed work.
    */
   useEffect(() => {
-    const changedSession = lastSessionIdRef.current !== replay.sessionId
-    lastSessionIdRef.current = replay.sessionId
-    setCamera((current) => {
-      if (changedSession) return createSessionCameraState(plan)
-      const activeTrack =
-        current.activeTabId === null
-          ? undefined
-          : plan.tracksByTab.get(current.activeTabId)
-      if (
-        current.mode === 'inspect'
-          ? activeTrack !== undefined
-          : activeTrack?.hasFullSnapshot
-      ) {
-        return current
-      }
-      return createSessionCameraState(plan)
-    })
-  }, [plan, replay.sessionId])
+    const previousPlan = lastPlanRef.current
+    lastPlanRef.current = plan
+    setCamera((current) =>
+      rebaseSessionCameraState(previousPlan, plan, current),
+    )
+  }, [plan])
 
   /**
    * The clock exposes cumulative real playing time alongside session seconds.
@@ -253,7 +243,14 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
     [globalPlayback, toggleGlobalPlayback],
   )
 
-  const activeTrack = trackForCamera(plan, camera)
+  const cameraTrack = trackForCamera(plan, camera)
+  const presentedTrack =
+    presentedTabId === null ? undefined : plan.tracksByTab.get(presentedTabId)
+  useEffect(() => {
+    if (!cameraTrack?.hasFullSnapshot) {
+      setPresentedTabId(camera.activeTabId)
+    }
+  }, [camera.activeTabId, cameraTrack])
   const pendingTrack =
     camera.mode === 'follow' && camera.pendingTabId !== null
       ? plan.tracksByTab.get(camera.pendingTabId)
@@ -261,13 +258,19 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
   const activeSeconds =
     camera.mode === 'inspect'
       ? inspectPlayback.time
-      : activeTrack
-        ? projectGlobalTimeToTrack(activeTrack, globalPlayback.time)
+      : cameraTrack
+        ? projectGlobalTimeToTrack(cameraTrack, globalPlayback.time)
+        : 0
+  const presentedSeconds =
+    camera.mode === 'inspect' && presentedTabId === camera.activeTabId
+      ? inspectPlayback.time
+      : presentedTrack
+        ? projectGlobalTimeToTrack(presentedTrack, globalPlayback.time)
         : 0
   const pendingSeconds = pendingTrack
     ? projectGlobalTimeToTrack(pendingTrack, globalPlayback.time)
     : 0
-  const activeFrame = frameAt(activeTrack?.frames ?? [], activeSeconds)
+  const presentedFrame = frameAt(presentedTrack?.frames ?? [], presentedSeconds)
   const timelineSeconds =
     camera.mode === 'inspect'
       ? (camera.resumeGlobalSeconds ?? camera.globalSeconds)
@@ -280,10 +283,10 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
     camera.mode === 'inspect' ? inspectPlayback : sessionPlayback
   const transportTotalSeconds =
     camera.mode === 'inspect'
-      ? (activeTrack?.totalSeconds ?? 0)
+      ? (cameraTrack?.totalSeconds ?? 0)
       : plan.totalSeconds
   const transportFrames =
-    camera.mode === 'inspect' ? (activeTrack?.frames ?? []) : replay.frames
+    camera.mode === 'inspect' ? (cameraTrack?.frames ?? []) : replay.frames
   const transportLabel =
     camera.mode === 'inspect'
       ? `${tabLabel(plan, camera.activeTabId)} playback`
@@ -362,76 +365,22 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-          <div className="flex min-h-8 items-center justify-between gap-3">
-            {replay.tabs.length > 1 && camera.activeTabId !== null ? (
-              <Tabs
-                value={camera.activeTabId.toString()}
-                onValueChange={selectTab}
-              >
-                <TabsList variant="line">
-                  {replay.tabs.map(({ tabId }, index) => {
-                    const pinned =
-                      camera.mode === 'inspect' && camera.activeTabId === tabId
-                    return (
-                      <TabsTrigger
-                        key={tabId}
-                        value={tabId.toString()}
-                        aria-label={`Inspect Tab ${index + 1}`}
-                      >
-                        Tab {index + 1}
-                        {pinned ? ' · Pinned' : ''}
-                      </TabsTrigger>
-                    )
-                  })}
-                </TabsList>
-              </Tabs>
-            ) : (
-              <span />
-            )}
-            <div className="flex items-center gap-2">
-              <span role="status" className="font-semibold text-ink-3 text-xs">
-                {camera.mode === 'follow'
-                  ? 'Following session'
-                  : `Inspecting ${tabLabel(plan, camera.activeTabId)}`}
-              </span>
-              {camera.mode === 'inspect' && (
-                <button
-                  type="button"
-                  onClick={resumeSession}
-                  className="rounded-lg border border-border-2 bg-card px-2.5 py-1 font-semibold text-accent-ink text-xs hover:bg-accent-tint"
-                >
-                  Resume session
-                </button>
-              )}
-            </div>
-          </div>
+          <ReplayModeBar
+            tabs={replay.tabs}
+            plan={plan}
+            camera={camera}
+            presentedTabId={presentedTabId}
+            onSelectTab={selectTab}
+            onResume={resumeSession}
+          />
+          <RecordingWarning track={presentedTrack} />
 
-          {activeTrack?.incompleteUntilMs !== null &&
-            activeTrack?.incompleteUntilMs !== undefined && (
-              <div
-                role="status"
-                className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
-              >
-                Recording incomplete — playback starts at{' '}
-                {formatIncompleteOffset(activeTrack.incompleteUntilMs)}
-              </div>
-            )}
-          {activeTrack?.incompleteUntilMs === null &&
-            activeTrack.knownIncomplete && (
-              <div
-                role="status"
-                className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
-              >
-                Recording incomplete — this replay contains a known gap
-              </div>
-            )}
-
-          {activeTrack?.hasFullSnapshot ? (
+          {cameraTrack?.hasFullSnapshot ? (
             <>
               <ReplayViewport
                 site={replay.site}
-                frame={activeFrame}
-                activeTrack={activeTrack}
+                frame={presentedFrame}
+                activeTrack={cameraTrack}
                 standbyTrack={pendingTrack ?? null}
                 activeTimeMs={activeSeconds * 1000}
                 standbyTimeMs={pendingSeconds * 1000}
@@ -439,6 +388,7 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
                 speed={transport.speed}
                 syncKey={syncKey}
                 mode={camera.mode}
+                onPresentedTrackChange={setPresentedTabId}
               />
               <PlaybackTransport
                 playback={transport}
@@ -460,6 +410,95 @@ function ReplaySession({ replay, navigate, location }: ReplaySessionProps) {
           onSelectFrame={selectFrame}
         />
       </div>
+    </div>
+  )
+}
+
+interface ReplayModeBarProps {
+  tabs: ReplayData['tabs']
+  plan: SessionReplayPlan
+  camera: SessionCameraState
+  presentedTabId: number | null
+  onSelectTab: (tabId: string) => void
+  onResume: () => void
+}
+
+function ReplayModeBar({
+  tabs,
+  plan,
+  camera,
+  presentedTabId,
+  onSelectTab,
+  onResume,
+}: ReplayModeBarProps) {
+  return (
+    <div className="flex min-h-8 items-center justify-between gap-3">
+      {tabs.length > 1 && presentedTabId !== null ? (
+        <Tabs
+          value={presentedTabId.toString()}
+          onValueChange={(tabId) => {
+            if (tabId !== presentedTabId.toString()) onSelectTab(tabId)
+          }}
+        >
+          <TabsList variant="line">
+            {tabs.map(({ tabId }, index) => {
+              const pinned =
+                camera.mode === 'inspect' && camera.activeTabId === tabId
+              return (
+                <TabsTrigger
+                  key={tabId}
+                  value={tabId.toString()}
+                  aria-label={`Inspect Tab ${index + 1}`}
+                  // Base UI emits no value change for its selected trigger.
+                  // That click is still an inspection command in follow mode.
+                  onClick={
+                    camera.mode === 'follow' && presentedTabId === tabId
+                      ? () => onSelectTab(tabId.toString())
+                      : undefined
+                  }
+                >
+                  Tab {index + 1}
+                  {pinned ? ' · Pinned' : ''}
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+        </Tabs>
+      ) : (
+        <span />
+      )}
+      <div className="flex items-center gap-2">
+        <span role="status" className="font-semibold text-ink-3 text-xs">
+          {camera.mode === 'follow'
+            ? 'Following session'
+            : `Inspecting ${tabLabel(plan, presentedTabId)}`}
+        </span>
+        {camera.mode === 'inspect' && (
+          <button
+            type="button"
+            onClick={onResume}
+            className="rounded-lg border border-border-2 bg-card px-2.5 py-1 font-semibold text-accent-ink text-xs hover:bg-accent-tint"
+          >
+            Resume session
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RecordingWarning({ track }: { track: TabTrack | undefined }) {
+  if (!track?.knownIncomplete) return null
+  const message =
+    track.incompleteUntilMs === null
+      ? 'Recording incomplete — this replay contains a known gap'
+      : `Recording incomplete — playback starts at ${formatIncompleteOffset(track.incompleteUntilMs)}`
+  return (
+    <div
+      role="status"
+      className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
+    >
+      {message}
     </div>
   )
 }

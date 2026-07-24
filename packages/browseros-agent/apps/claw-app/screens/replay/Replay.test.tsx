@@ -6,7 +6,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { parseHTML } from 'linkedom'
-import { act, createContext, type ReactNode, useContext } from 'react'
+import {
+  act,
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+} from 'react'
 import type { Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
@@ -15,6 +21,8 @@ import { buildReplayEventCatalog } from './replay-events'
 import type { Playback } from './use-playback'
 
 let replayResult: replayDataModule.UseReplayDataResult
+let autoCommitPresentedTrack = true
+let commitPresentedTrack: ((tabId: number) => void) | null = null
 
 mock.module('./replay.data', () => ({
   ...replayDataModule,
@@ -28,28 +36,38 @@ mock.module('./ReplayViewport', () => ({
     activeTimeMs,
     frame,
     mode,
+    onPresentedTrackChange,
   }: {
     activeTrack: { tabId: number; events: readonly ReplayEvent[] }
     standbyTrack: { tabId: number } | null
     activeTimeMs: number
     frame: ReplayFrame | undefined
     mode: string
-  }) => (
-    <div
-      data-active-tab={activeTrack.tabId}
-      data-standby-tab={standbyTrack?.tabId}
-      data-player-documents={activeTrack.events
-        .map((event) => event.documentId)
-        .join(',')}
-      data-player-types={activeTrack.events
-        .map((event) => event.type)
-        .join(',')}
-      data-player-time={activeTimeMs / 1000}
-      data-player-mode={mode}
-      data-player-caption={frame?.caption}
-      data-player-url={frame?.url}
-    />
-  ),
+    onPresentedTrackChange: (tabId: number) => void
+  }) => {
+    useEffect(() => {
+      commitPresentedTrack = onPresentedTrackChange
+      if (autoCommitPresentedTrack) {
+        onPresentedTrackChange(activeTrack.tabId)
+      }
+    }, [activeTrack.tabId, onPresentedTrackChange])
+    return (
+      <div
+        data-active-tab={activeTrack.tabId}
+        data-standby-tab={standbyTrack?.tabId}
+        data-player-documents={activeTrack.events
+          .map((event) => event.documentId)
+          .join(',')}
+        data-player-types={activeTrack.events
+          .map((event) => event.type)
+          .join(',')}
+        data-player-time={activeTimeMs / 1000}
+        data-player-mode={mode}
+        data-player-caption={frame?.caption}
+        data-player-url={frame?.url}
+      />
+    )
+  },
 }))
 
 mock.module('./PlaybackTransport', () => ({
@@ -110,7 +128,10 @@ mock.module('./EventTimeline', () => ({
   ),
 }))
 
-const TabSelectContext = createContext<(tabId: string) => void>(() => {})
+const TabSelectContext = createContext<{
+  selected: string
+  select: (tabId: string) => void
+}>({ selected: '', select: () => {} })
 
 mock.module('@/components/ui/tabs', () => ({
   Tabs: ({
@@ -122,7 +143,9 @@ mock.module('@/components/ui/tabs', () => ({
     onValueChange: (tabId: string) => void
     children: ReactNode
   }) => (
-    <TabSelectContext.Provider value={onValueChange}>
+    <TabSelectContext.Provider
+      value={{ selected: value, select: onValueChange }}
+    >
       <div data-selected-tab={value}>{children}</div>
     </TabSelectContext.Provider>
   ),
@@ -130,18 +153,23 @@ mock.module('@/components/ui/tabs', () => ({
   TabsTrigger: ({
     value,
     children,
+    onClick,
     ...props
   }: {
     value: string
     children: ReactNode
     'aria-label'?: string
+    onClick?: () => void
   }) => {
-    const selectTab = useContext(TabSelectContext)
+    const tabs = useContext(TabSelectContext)
     return (
       <button
         type="button"
         data-tab-chip={value}
-        onClick={() => selectTab(value)}
+        onClick={() => {
+          onClick?.()
+          if (value !== tabs.selected) tabs.select(value)
+        }}
         {...props}
       >
         {children}
@@ -314,6 +342,8 @@ beforeEach(async () => {
   nowMs = 0
   nextAnimationFrameId = 1
   animationFrames = new Map()
+  autoCommitPresentedTrack = true
+  commitPresentedTrack = null
   const requestAnimationFrame = (callback: FrameRequestCallback): number => {
     const id = nextAnimationFrameId
     nextAnimationFrameId += 1
@@ -435,6 +465,35 @@ describe('Replay', () => {
     expect(container.querySelectorAll('[data-frame-tab="3"]')).toHaveLength(1)
   })
 
+  it('keeps the chip, URL, and caption on the committed player until promotion is ready', async () => {
+    autoCommitPresentedTrack = false
+    await renderReplay()
+
+    await advanceClock(10_000)
+    expect(viewport().getAttribute('data-active-tab')).toBe('2')
+    expect(
+      container
+        .querySelector('[data-selected-tab]')
+        ?.getAttribute('data-selected-tab'),
+    ).toBe('1')
+    expect(viewport().getAttribute('data-player-url')).not.toBe(
+      'https://two.example/result',
+    )
+
+    await act(async () => commitPresentedTrack?.(2))
+    expect(
+      container
+        .querySelector('[data-selected-tab]')
+        ?.getAttribute('data-selected-tab'),
+    ).toBe('2')
+    expect(viewport().getAttribute('data-player-caption')).toBe(
+      'Return to tab two',
+    )
+    expect(viewport().getAttribute('data-player-url')).toBe(
+      'https://two.example/result',
+    )
+  })
+
   it('globally seeks, prefers a selected timeline tab, and ignores a selected no-visual tab', async () => {
     await renderReplay()
 
@@ -519,6 +578,18 @@ describe('Replay', () => {
         .querySelector('[data-playback-playing]')
         ?.getAttribute('data-playback-playing'),
     ).toBe('false')
+  })
+
+  it('enters inspection when the already-selected follow chip is clicked', async () => {
+    await renderReplay()
+
+    await click('[data-tab-chip="1"]')
+
+    expect(viewport().getAttribute('data-active-tab')).toBe('1')
+    expect(viewport().getAttribute('data-player-mode')).toBe('inspect')
+    expect(viewport().getAttribute('data-player-time')).toBe('0')
+    expect(container.textContent).toContain('Inspecting Tab 1')
+    expect(container.textContent).toContain('Tab 1 · Pinned')
   })
 
   it('switches before ten real seconds when the active track ends', async () => {

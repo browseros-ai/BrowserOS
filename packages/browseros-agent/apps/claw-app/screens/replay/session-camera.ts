@@ -9,7 +9,11 @@
  */
 
 import type { ReplayFrame } from '@/modules/api/replay.hooks'
-import { isTrackPlayableAt, type SessionReplayPlan } from './session-replay'
+import {
+  type CameraCandidate,
+  isTrackPlayableAt,
+  type SessionReplayPlan,
+} from './session-replay'
 
 export const CAMERA_DWELL_MS = 10_000
 const TIME_EPSILON_SECONDS = 0.001
@@ -96,6 +100,91 @@ export function sessionCameraReducer(
   }
 }
 
+/**
+ * Carries camera state across a live replay-plan refresh. Cursors are indexes
+ * into an immutable snapshot, so reusing them against a newly sorted array can
+ * skip a long-running dispatch whose completion arrived late but whose
+ * completion-minus-duration start sorts before the old cursor.
+ *
+ * Existing dwell history is translated through stable candidate identities.
+ * A genuinely new, already-crossed candidate is retained as pending even when
+ * its semantic start belongs before that translated window; subsequent ticks
+ * preserve it until it expires, is superseded, or is promoted.
+ */
+export function rebaseSessionCameraState(
+  previousPlan: SessionReplayPlan,
+  plan: SessionReplayPlan,
+  state: SessionCameraState,
+): SessionCameraState {
+  const activeTrack =
+    state.activeTabId === null
+      ? undefined
+      : plan.tracksByTab.get(state.activeTabId)
+  const activeStillValid =
+    state.mode === 'inspect'
+      ? activeTrack !== undefined
+      : activeTrack?.hasFullSnapshot === true
+  if (!activeStillValid) {
+    const resolved = resolveFollowAt(plan, state.globalSeconds)
+    return { ...resolved, isPlaying: state.isPlaying }
+  }
+
+  const candidateCursor = candidateCursorAt(plan, state.globalSeconds)
+  const candidateWindowStartCursor = Math.min(
+    candidateCursor,
+    translateWindowStart(previousPlan, plan, state.candidateWindowStartCursor),
+  )
+  let pendingTabId = resolvePendingFromWindow(
+    plan,
+    state.activeTabId,
+    candidateWindowStartCursor,
+    candidateCursor,
+    state.globalSeconds,
+  )
+
+  if (
+    pendingTabId === null &&
+    state.pendingTabId !== null &&
+    state.pendingTabId !== state.activeTabId
+  ) {
+    const priorPendingTrack = plan.tracksByTab.get(state.pendingTabId)
+    if (
+      priorPendingTrack &&
+      isTrackPlayableAt(priorPendingTrack, state.globalSeconds)
+    ) {
+      pendingTabId = state.pendingTabId
+    }
+  }
+
+  if (pendingTabId === null) {
+    const previousCandidates = new Set(
+      previousPlan.cameraCandidates.map(candidateIdentity),
+    )
+    for (let index = candidateCursor - 1; index >= 0; index -= 1) {
+      const candidate = plan.cameraCandidates[index]
+      if (
+        !candidate ||
+        previousCandidates.has(candidateIdentity(candidate)) ||
+        candidate.tabId === state.activeTabId
+      ) {
+        continue
+      }
+      const track = plan.tracksByTab.get(candidate.tabId)
+      if (track && isTrackPlayableAt(track, state.globalSeconds)) {
+        pendingTabId = candidate.tabId
+        break
+      }
+    }
+  }
+
+  return {
+    ...state,
+    candidateCursor,
+    candidateWindowStartCursor,
+    pendingTabId,
+  }
+}
+
 function tickCamera(
   plan: SessionReplayPlan,
   state: SessionCameraState,
@@ -122,13 +211,24 @@ function tickCamera(
         state.dwellMs + usableRealDelta(action.realDeltaMs),
       )
     : state.dwellMs
-  const pendingTabId = resolvePendingFromWindow(
+  const windowPendingTabId = resolvePendingFromWindow(
     plan,
     state.activeTabId,
     state.candidateWindowStartCursor,
     candidateCursor,
     globalSeconds,
   )
+  const retainedPendingTrack =
+    state.pendingTabId === null
+      ? undefined
+      : plan.tracksByTab.get(state.pendingTabId)
+  const pendingTabId =
+    windowPendingTabId ??
+    (state.pendingTabId !== state.activeTabId &&
+    retainedPendingTrack &&
+    isTrackPlayableAt(retainedPendingTrack, globalSeconds)
+      ? state.pendingTabId
+      : null)
   const activeTrack =
     state.activeTabId === null
       ? undefined
@@ -296,4 +396,40 @@ function clampGlobal(plan: SessionReplayPlan, seconds: number): number {
 
 function usableRealDelta(milliseconds: number): number {
   return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : 0
+}
+
+function translateWindowStart(
+  previousPlan: SessionReplayPlan,
+  plan: SessionReplayPlan,
+  previousWindowStart: number,
+): number {
+  for (
+    let index = Math.min(
+      previousWindowStart - 1,
+      previousPlan.cameraCandidates.length - 1,
+    );
+    index >= 0;
+    index -= 1
+  ) {
+    const boundary = previousPlan.cameraCandidates[index]
+    if (!boundary) continue
+    const identity = candidateIdentity(boundary)
+    const translatedIndex = plan.cameraCandidates.findIndex(
+      (candidate) => candidateIdentity(candidate) === identity,
+    )
+    if (translatedIndex !== -1) return translatedIndex + 1
+  }
+  return 0
+}
+
+function candidateIdentity(candidate: CameraCandidate): string {
+  return candidate.dispatchId !== null
+    ? `dispatch:${candidate.dispatchId}`
+    : [
+        'legacy',
+        candidate.tabId,
+        candidate.cameraT,
+        candidate.completionT,
+        candidate.sourceIndex,
+      ].join(':')
 }
