@@ -25,8 +25,10 @@ import { frameIndexAt } from './replay.helpers'
 import { usePlayback } from './use-playback'
 
 const CHAPTER_TRANSITION_MS = 1_000
+const STATIC_CHAPTER_SECONDS = 0.001
 
 interface ChapterTransition {
+  kind: 'chapter' | 'empty'
   title: string
   skipped: string | null
 }
@@ -48,6 +50,7 @@ export function Replay() {
   const transitionTokenRef = useRef(0)
   const activeSessionRef = useRef<string | null>(null)
   const autoStartedSessionRef = useRef<string | null>(null)
+  const operatorControlledSessionRef = useRef<string | null>(null)
 
   const tabViewInput = useMemo(
     () =>
@@ -82,9 +85,7 @@ export function Replay() {
     [chapterViews],
   )
 
-  const playbackTotalSeconds = isPlayableChapter(perTabView)
-    ? perTabView.totalSeconds
-    : 0
+  const playbackTotalSeconds = chapterPlaybackSeconds(perTabView)
   const playback = usePlayback(playbackTotalSeconds)
   const playbackPlayRef = useRef(playback.play)
 
@@ -193,12 +194,81 @@ export function Replay() {
     [playback.pause, seekTo, selectedTabId],
   )
 
+  const initializeEmptyReplay = useCallback(
+    (
+      currentReplay: ReplayData,
+      firstTabId: number,
+      hasSelectedTab: boolean,
+    ) => {
+      if (!hasSelectedTab) resetTab(firstTabId, false)
+      if (
+        !shouldCompleteNoVisualReplay(
+          currentReplay,
+          autoStartedSessionRef.current,
+        )
+      ) {
+        return
+      }
+      autoStartedSessionRef.current = currentReplay.sessionId
+      scheduleTransition(
+        {
+          kind: 'empty',
+          title: 'No visual recordings → Replay complete',
+          skipped: skippedChapterSummary(
+            currentReplay.tabs.map((_, index) => index),
+          ),
+        },
+        () => setSequenceComplete(true),
+      )
+    },
+    [resetTab, scheduleTransition],
+  )
+
+  const startInitialChapter = useCallback(
+    (
+      currentReplay: ReplayData,
+      firstTabId: number,
+      firstPlayableIndex: number,
+      hasSelectedTab: boolean,
+    ) => {
+      autoStartedSessionRef.current = currentReplay.sessionId
+      if (operatorControlledSessionRef.current === currentReplay.sessionId) {
+        if (!hasSelectedTab) resetTab(firstTabId, false)
+        return
+      }
+      if (firstPlayableIndex === 0) {
+        resetTab(firstTabId, true)
+        return
+      }
+
+      resetTab(
+        currentReplay.tabs[firstPlayableIndex]?.tabId ?? firstTabId,
+        false,
+      )
+      scheduleTransition(
+        {
+          kind: 'chapter',
+          title: `Starting replay → Opening ${chapterName(currentReplay, firstPlayableIndex)}`,
+          skipped: skippedChapterSummary(
+            Array.from({ length: firstPlayableIndex }, (_, index) => index),
+          ),
+        },
+        () => {
+          playbackIsPlayingRef.current = true
+          playbackPlayRef.current()
+        },
+      )
+    },
+    [resetTab, scheduleTransition],
+  )
+
   useEffect(() => {
     if (!replay) return
     const sessionChanged = activeSessionRef.current !== replay.sessionId
     if (sessionChanged) {
       activeSessionRef.current = replay.sessionId
       autoStartedSessionRef.current = null
+      operatorControlledSessionRef.current = null
       cancelTransition()
       setSequenceComplete(false)
     }
@@ -220,65 +290,49 @@ export function Replay() {
       ? undefined
       : replay.tabs.find((tab) => tab.tabId === selectedTabId)
     const firstPlayableIndex = playableChapterIndices[0]
+    const invalidEmptyTransition =
+      transition?.kind === 'empty' &&
+      (firstPlayableIndex !== undefined ||
+        !replay.eventsLoaded ||
+        replay.complete !== true)
+    if (invalidEmptyTransition) {
+      cancelTransition()
+      autoStartedSessionRef.current = null
+      setSequenceComplete(false)
+    }
     if (firstPlayableIndex === undefined) {
-      if (!selectedTab) resetTab(firstTab.tabId, false)
-      if (shouldCompleteNoVisualReplay(replay, autoStartedSessionRef.current)) {
-        autoStartedSessionRef.current = replay.sessionId
-        scheduleTransition(
-          {
-            title: 'No visual recordings → Replay complete',
-            skipped: skippedChapterSummary(
-              replay.tabs.map((_, index) => index),
-            ),
-          },
-          () => setSequenceComplete(true),
-        )
-      }
+      initializeEmptyReplay(replay, firstTab.tabId, selectedTab !== undefined)
       return
     }
 
     if (autoStartedSessionRef.current !== replay.sessionId) {
-      autoStartedSessionRef.current = replay.sessionId
-      if (firstPlayableIndex > 0) {
-        resetTab(
-          replay.tabs[firstPlayableIndex]?.tabId ?? firstTab.tabId,
-          false,
-        )
-        scheduleTransition(
-          {
-            title: `Starting replay → Opening ${chapterName(replay, firstPlayableIndex)}`,
-            skipped: skippedChapterSummary(
-              Array.from({ length: firstPlayableIndex }, (_, index) => index),
-            ),
-          },
-          () => {
-            playbackIsPlayingRef.current = true
-            playbackPlayRef.current()
-          },
-        )
-        return
-      }
-      if (!selectedTab) {
-        resetTab(firstTab.tabId, true)
-        return
-      }
+      startInitialChapter(
+        replay,
+        firstTab.tabId,
+        firstPlayableIndex,
+        selectedTab !== undefined,
+      )
+      return
     }
 
     if (!selectedTab) resetTab(firstTab.tabId, false)
   }, [
     cancelTransition,
+    initializeEmptyReplay,
     playableChapterIndices,
     playback.pause,
     replay,
     resetTab,
-    scheduleTransition,
     selectedTabId,
+    startInitialChapter,
+    transition,
   ])
 
   const selectTab = useCallback(
     (value: string) => {
       const tabId = Number(value)
       if (!replay || !Number.isSafeInteger(tabId)) return
+      operatorControlledSessionRef.current = replay.sessionId
       cancelTransition()
       setSequenceComplete(false)
       resetTab(tabId, false)
@@ -289,10 +343,11 @@ export function Replay() {
   const selectFrame = useCallback(
     (frame: ReplayFrame) => {
       if (transition) return
+      if (replay) operatorControlledSessionRef.current = replay.sessionId
       setSequenceComplete(false)
       seekTo(frame.t)
     },
-    [seekTo, transition],
+    [replay, seekTo, transition],
   )
 
   const onPlayerReady = useCallback((handle: ReplayPlayerHandle | null) => {
@@ -321,6 +376,7 @@ export function Replay() {
       resetTab(nextTab.tabId, false)
       scheduleTransition(
         {
+          kind: 'chapter',
           title: `Tab ${selectedTabIndex + 1} complete → Opening ${chapterName(replay, nextPlayableIndex)}`,
           skipped: skippedChapterSummary(skippedIndices),
         },
@@ -343,6 +399,7 @@ export function Replay() {
     if (trailingSkippedIndices.length > 0) {
       scheduleTransition(
         {
+          kind: 'chapter',
           title: `Tab ${selectedTabIndex + 1} complete → Replay complete`,
           skipped: skippedChapterSummary(trailingSkippedIndices),
         },
@@ -417,10 +474,11 @@ export function Replay() {
   const seekFromTransport = useCallback(
     (seconds: number) => {
       if (transition) return
+      if (replay) operatorControlledSessionRef.current = replay.sessionId
       setSequenceComplete(false)
       seekTo(seconds)
     },
-    [seekTo, transition],
+    [replay, seekTo, transition],
   )
 
   if (isLoading || !replay) {
@@ -575,7 +633,7 @@ export function Replay() {
             {isPlayableChapter(perTabView) && (
               <PlaybackTransport
                 playback={transportPlayback}
-                totalSeconds={perTabView.totalSeconds}
+                totalSeconds={playbackTotalSeconds}
                 frames={perTabView.frames}
                 onSeek={seekFromTransport}
               />
@@ -616,9 +674,12 @@ function formatIncompleteOffset(milliseconds: number): string {
 }
 
 function isPlayableChapter(view: TabView): boolean {
-  return (
-    view.hasFullSnapshot && view.events.length >= 2 && view.totalSeconds > 0
-  )
+  return view.hasFullSnapshot && view.events.length >= 2
+}
+
+function chapterPlaybackSeconds(view: TabView): number {
+  if (!isPlayableChapter(view)) return 0
+  return Math.max(view.totalSeconds, STATIC_CHAPTER_SECONDS)
 }
 
 function chapterName(replay: ReplayData, chapterIndex: number): string {

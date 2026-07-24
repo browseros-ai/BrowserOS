@@ -5,7 +5,7 @@
  */
 
 import type { RecordingMetadata } from '@browseros/claw-api'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
 import {
@@ -69,7 +69,7 @@ export interface ReplayData {
   frames: ReplayFrame[]
   complete: boolean | null
   tabs: ReplayTabData[]
-  /** True once the downloadable event snapshot has resolved, including 404-empty. */
+  /** True once events for the current metadata revision resolve, including 404-empty. */
   eventsLoaded: boolean
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
@@ -108,15 +108,31 @@ export function useReplayData(): UseReplayDataResult {
     enabled: sessionId.length > 0,
   })
   const metadataRevision = replayEventsRevision(metadataQuery.data)
+  const sessionRevision =
+    metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
   const requestedRevision = useRef<string | null>(null)
+  const [resolvedEventsRevision, setResolvedEventsRevision] = useState<
+    string | null
+  >(null)
   useEffect(() => {
-    if (metadataRevision === null) return
-    const sessionRevision = `${sessionId}:${metadataRevision}`
-    if (requestedRevision.current === sessionRevision) return
+    if (
+      sessionRevision === null ||
+      requestedRevision.current === sessionRevision
+    ) {
+      return
+    }
     requestedRevision.current = sessionRevision
-    void eventsQuery.refetch()
-  }, [eventsQuery.refetch, metadataRevision, sessionId])
-  const events = eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS
+    void eventsQuery.refetch().then((result) => {
+      if (result.isSuccess && requestedRevision.current === sessionRevision) {
+        setResolvedEventsRevision(sessionRevision)
+      }
+    })
+  }, [eventsQuery.refetch, sessionRevision])
+  const eventsLoaded =
+    sessionRevision !== null && resolvedEventsRevision === sessionRevision
+  const events = eventsLoaded
+    ? (eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS)
+    : EMPTY_REPLAY_EVENTS
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
@@ -124,9 +140,9 @@ export function useReplayData(): UseReplayDataResult {
       taskQuery.data,
       eventCatalog,
       metadataQuery.data,
-      eventsQuery.data !== undefined,
+      eventsLoaded,
     )
-  }, [taskQuery.data, eventCatalog, eventsQuery.data, metadataQuery.data])
+  }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
 
   return {
     replay,

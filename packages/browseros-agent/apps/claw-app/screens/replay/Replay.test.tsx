@@ -370,6 +370,30 @@ function visualEvents(
   ]
 }
 
+function staticVisualEvents(tabId: number, atMs: number): ReplayEvent[] {
+  const documentId = `document-${tabId}`
+  return [
+    {
+      sessionId: 'session-1',
+      documentId,
+      targetId: `target-${tabId}`,
+      tabId,
+      ts: atMs,
+      type: 4,
+      data: { width: 1280, height: 720 },
+    },
+    {
+      sessionId: 'session-1',
+      documentId,
+      targetId: `target-${tabId}`,
+      tabId,
+      ts: atMs,
+      type: 2,
+      data: {},
+    },
+  ]
+}
+
 function noVisualEvent(tabId: number, atMs: number): ReplayEvent {
   return {
     sessionId: 'session-1',
@@ -992,6 +1016,140 @@ describe('Replay', () => {
     await fireNextTransition()
     expect(container.textContent).toContain('Replay complete')
     expect(container.querySelector('[data-playback-toggle]')).toBeNull()
+  })
+
+  it('autoplays when the first playable snapshot arrives after metadata', async () => {
+    const loadingReplay = replayData(
+      [],
+      [1],
+      [chapterFrame(1, 1, 'first.example')],
+    )
+    loadingReplay.eventsLoaded = false
+    replayResult = { ...replayResult, replay: loadingReplay }
+    await renderReplay()
+
+    expect(container.textContent).toContain('No visual recording for this tab')
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        visualEvents(1, 1_000),
+        [1],
+        [chapterFrame(1, 1, 'first.example')],
+      ),
+    }
+    await renderReplay()
+
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+  })
+
+  it('preserves a manual chapter choice while visual events are loading', async () => {
+    const loadingReplay = replayData(
+      [],
+      [1, 2],
+      [chapterFrame(1, 1), chapterFrame(2, 2)],
+    )
+    loadingReplay.eventsLoaded = false
+    replayResult = { ...replayResult, replay: loadingReplay }
+    await renderReplay()
+    await click('[data-target-chip="2"]')
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+        [1, 2],
+        [chapterFrame(1, 1), chapterFrame(2, 11)],
+      ),
+    }
+    await renderReplay()
+
+    expect(
+      container
+        .querySelector('[data-selected-target]')
+        ?.getAttribute('data-selected-target'),
+    ).toBe('2')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('false')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+  })
+
+  it('cancels an empty-replay transition when a playable snapshot arrives', async () => {
+    const emptyReplay = replayData(
+      [noVisualEvent(1, 1_000)],
+      [1],
+      [chapterFrame(1, 1, 'first.example')],
+    )
+    replayResult = { ...replayResult, replay: emptyReplay }
+    await renderReplay()
+
+    const staleTransition = [...transitionTimers.values()][0]?.callback
+    expect(container.textContent).toContain(
+      'No visual recordings → Replay complete',
+    )
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        visualEvents(1, 1_000),
+        [1],
+        [chapterFrame(1, 1, 'first.example')],
+      ),
+    }
+    await renderReplay()
+
+    expect(transitionTimers.size).toBe(0)
+    expect(container.textContent).not.toContain('No visual recordings')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+
+    await act(async () => {
+      if (typeof staleTransition === 'function') staleTransition()
+    })
+    expect(container.textContent).not.toContain('Replay complete')
+  })
+
+  it('plays a static visual snapshot before advancing', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [...staticVisualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+        [1, 2],
+        [chapterFrame(1, 1), chapterFrame(2, 11)],
+      ),
+    }
+    await renderReplay()
+
+    expect(container.querySelector('[data-player-types]')).not.toBeNull()
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+
+    await completeCurrentChapter(0)
+    expect(container.textContent).toContain(
+      'Tab 1 complete → Opening Tab 2 · tab-2.example',
+    )
   })
 
   it('resets selection, transport, and stale transitions when the session changes', async () => {
