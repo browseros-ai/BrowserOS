@@ -52,6 +52,9 @@ Read / wait / capture:
   browser.screenshot(pageId) / evaluate(pageId, { code }) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
+Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page).
+  browser.saveHelper(name, source, { page } | { host }) - source is a function expression, e.g. async (browser, page) => { ... }
+  browser.listHelpers({ page } | { host }) -> { host, helpers: [{ name, ageDays, candidate }] }; browser.readHelper(name, { page } | { host }) -> source string
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. Efficient pattern:

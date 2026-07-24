@@ -61,6 +61,18 @@ independent primitives with Promise.all; across a large workload, split it over
 subagents when your harness supports them, since each gets isolated tabs here.
 Keep to about 5 concurrent tabs per agent unless the user asks for more.
 
+Reuse what already works. A run's result may include helpersAvailable: saved
+helpers for the hosts your tabs are on, each with an ageDays freshness signal.
+browser.listHelpers({ page }) lists them and browser.readHelper(name, { page })
+shows one; read the relevant helper before inventing an approach, and call a
+hot-loaded one by name as helpers.<name>(browser, page). When a multi-step flow
+works, save it with browser.saveHelper(name, source, { page }) where source is a
+function expression like async (browser, page) => { ... }; a proven run is also
+distilled into a candidate helper for you automatically. Treat a stale helper
+(high ageDays) as a hint, not a guarantee: cross-check it against the live page
+before trusting it, then re-save. Keep personal data out of saved helpers, they
+are shared across your sessions on that host.
+
 browser.windows(opts) opens a separate window when a task needs isolation from
 the user's and other agents' work.
 
