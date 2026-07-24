@@ -8,11 +8,7 @@ import {
   Send,
   Type,
 } from 'lucide-react'
-import type {
-  ReplayFrame,
-  ReplayKind,
-  ReplayVerb,
-} from '@/modules/api/replay.hooks'
+import type { ReplayKind, ReplayVerb } from '@/modules/api/replay.hooks'
 
 export interface VerbMeta {
   label: string
@@ -68,18 +64,6 @@ export function formatTime(seconds: number): string {
   const m = Math.floor(safe / 60)
   const s = Math.floor(safe % 60)
   return `${m}:${String(s).padStart(2, '0')}`
-}
-
-/** Last frame whose `t` is at or before `time`. Falls back to 0. */
-export function frameIndexAt(
-  frames: readonly ReplayFrame[],
-  time: number,
-): number {
-  let idx = 0
-  for (let i = 0; i < frames.length; i++) {
-    if (frames[i].t <= time + 0.001) idx = i
-  }
-  return idx
 }
 
 export const PLAYBACK_SPEEDS: readonly number[] = [1, 2, 4]

@@ -2,28 +2,29 @@ import { Pause, Play, RotateCcw } from 'lucide-react'
 import type { ChangeEvent } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import type { ReplayFrame } from '@/modules/api/replay.hooks'
 import { formatTime, KIND_STYLE, PLAYBACK_SPEEDS } from './replay.helpers'
+import type { ReplayAction } from './session-replay'
 import type { Playback } from './use-playback'
 
 const SCRUBBER_STEP = 0.1
 
 interface PlaybackTransportProps {
   playback: Playback
+  /** Replayable activity for the whole session, not one tab's recording. */
   totalSeconds: number
-  frames: readonly ReplayFrame[]
+  actions: readonly ReplayAction[]
   onSeek: (seconds: number) => void
 }
 
 /**
- * Play / pause + scrubber + speed picker. Non-action frames render as
- * coloured bookmarks on the scrubber so the user can jump straight to
- * a block or done moment.
+ * Play / pause + scrubber + speed picker for global activity time.
+ * Non-action tools render as coloured bookmarks on the scrubber so the user
+ * can jump straight to a block or done moment.
  */
 export function PlaybackTransport({
   playback,
   totalSeconds,
-  frames,
+  actions,
   onSeek,
 }: PlaybackTransportProps) {
   const { time, isPlaying, speed, setSpeed, togglePlay } = playback
@@ -62,20 +63,19 @@ export function PlaybackTransport({
             className="absolute left-0 h-1.5 rounded-full bg-accent transition-[width] duration-100"
             style={{ width: `${progress}%` }}
           />
-          {frames.map((frame, index) => {
+          {actions.map((action) => {
+            const { frame } = action
             if (frame.kind === 'action') return null
-            const pct = totalSeconds === 0 ? 0 : (frame.t / totalSeconds) * 100
+            const pct =
+              totalSeconds === 0 ? 0 : (action.startAt / totalSeconds) * 100
             const kind = KIND_STYLE[frame.kind]
             return (
               <button
                 type="button"
-                key={
-                  frame.dispatchId ??
-                  `bookmark-${frame.kind}-${frame.t}-${index}`
-                }
+                key={frame.dispatchId ?? `bookmark-${action.sourceIndex}`}
                 title={frame.caption}
                 aria-label={`Jump to ${frame.caption}`}
-                onClick={() => onSeek(frame.t)}
+                onClick={() => onSeek(action.startAt)}
                 style={{ left: `${pct}%` }}
                 className={cn(
                   'absolute z-10 size-2.5 -translate-x-1/2 rounded-full border-2 border-card shadow-sm',

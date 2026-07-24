@@ -4,13 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
+import type { ReplayEvent } from '@/modules/api/replay.hooks'
 import type { ReplayTabData } from './replay.data'
 
 export interface TabView {
-  frames: ReplayFrame[]
   /** Every playable document lifecycle from one Chrome tab. */
   events: readonly ReplayEvent[]
+  /**
+   * Absolute epoch ms of the first and last playable event. Null when the
+   * tab recorded nothing renderable. `session-replay.ts` anchors the global
+   * activity window on these, so they stay absolute rather than rebased.
+   */
+  originMs: number | null
+  endMs: number | null
+  /** Length of this tab's own rrweb stream. */
   totalSeconds: number
   hasFullSnapshot: boolean
   knownIncomplete: boolean
@@ -19,8 +26,9 @@ export interface TabView {
 }
 
 export const EMPTY_TAB_VIEW: TabView = {
-  frames: [],
   events: [],
+  originMs: null,
+  endMs: null,
   totalSeconds: 0,
   hasFullSnapshot: false,
   knownIncomplete: false,
@@ -54,13 +62,11 @@ interface DocumentState {
 }
 
 export interface BuildTabViewInput {
-  frames: ReplayFrame[]
-  tabs: ReplayTabData[]
+  tabs: readonly ReplayTabData[]
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
-  startedAtMs: number
 }
 
-/** Projects one continuous player and action clock for a persisted Chrome tab. */
+/** Projects one continuous rrweb track for a persisted Chrome tab. */
 export function buildTabView(
   input: BuildTabViewInput,
   tabId: number | null,
@@ -71,27 +77,23 @@ export function buildTabView(
 
   const rawEvents = input.eventsForTab(tabId)
   const stream = playableTabStream(rawEvents)
-  const rawFrames = input.frames.filter((frame) => frame.tabId === tabId)
-  if (rawFrames.length === 0 && rawEvents.length === 0) return EMPTY_TAB_VIEW
-
   const hasFullSnapshot = stream.events.some((event) => event.type === 2)
+  // Without a snapshot nothing is renderable, so the raw stream still
+  // describes when the tab was alive for the incomplete-recording notice.
   const timingEvents = hasFullSnapshot ? stream.events : rawEvents
-  const originMs =
-    timingEvents[0]?.ts ?? input.startedAtMs + (rawFrames[0]?.t ?? 0) * 1000
-  const endMs =
-    timingEvents.at(-1)?.ts ??
-    input.startedAtMs + (rawFrames.at(-1)?.t ?? 0) * 1000
-  const originT = (originMs - input.startedAtMs) / 1000
+  const originMs = timingEvents[0]?.ts ?? null
+  const endMs = timingEvents.at(-1)?.ts ?? null
   const hasCatalogedGap =
     tab.complete === false ||
     tab.segments.some((segment) => segment.hasGap || segment.legacy)
   return {
-    frames: rawFrames.map((frame) => ({
-      ...frame,
-      t: Math.max(0, frame.t - originT),
-    })),
     events: stream.events,
-    totalSeconds: Math.max(0, (endMs - originMs) / 1000),
+    originMs,
+    endMs,
+    totalSeconds:
+      originMs === null || endMs === null
+        ? 0
+        : Math.max(0, (endMs - originMs) / 1000),
     hasFullSnapshot,
     knownIncomplete: hasCatalogedGap || stream.hasOmittedEvents,
     incompleteUntilMs:
@@ -101,28 +103,9 @@ export function buildTabView(
   }
 }
 
-export interface TabSeek {
-  tabId: number | null
-  seconds: number
-}
-
-/** Resolves an audit frame to its persisted Chrome tab and continuous clock. */
-export function tabSeekForFrame(
-  input: BuildTabViewInput,
-  selectedTabId: number | null,
-  frame: ReplayFrame,
-): TabSeek {
-  const tabId = frame.tabId ?? selectedTabId
-  if (tabId === null) return { tabId, seconds: frame.t }
-
-  const view = buildTabView(input, tabId)
-  const originMs =
-    view.events[0]?.ts ?? input.eventsForTab(tabId)[0]?.ts ?? input.startedAtMs
-  const timestamp = input.startedAtMs + frame.t * 1000
-  return {
-    tabId,
-    seconds: Math.max(0, (timestamp - originMs) / 1000),
-  }
+/** True when rrweb can reconstruct this tab: a snapshot plus something after it. */
+export function isPlayableTabView(view: TabView): boolean {
+  return view.hasFullSnapshot && view.events.length >= 2
 }
 
 function playableTabStream(

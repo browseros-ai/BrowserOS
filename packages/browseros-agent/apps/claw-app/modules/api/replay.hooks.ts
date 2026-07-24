@@ -25,8 +25,16 @@ export type ReplayVerb =
 export type ReplayKind = 'action' | 'block' | 'done'
 
 export interface ReplayFrame {
-  /** Seconds into the session. */
+  /** Seconds into the session, at which this dispatch completed. */
   t: number
+  /**
+   * How long the tool ran, from the source dispatch row. `session-replay.ts`
+   * subtracts it from `t` to approximate when the action began, which is when
+   * the replay starts treating it as current. Absent on rows recorded before
+   * durations were persisted; negative and non-finite values fall back to the
+   * completion time.
+   */
+  durationMs?: number | null
   kind: ReplayKind
   verb: ReplayVerb
   /** Short node label, e.g. the page title or a focused element. */

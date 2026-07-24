@@ -6,24 +6,16 @@ import {
   type ReactNode,
   StrictMode,
   useContext,
-  useEffect,
 } from 'react'
 import type { Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
 import * as replayDataModule from './replay.data'
 import { buildReplayEventCatalog } from './replay-events'
+import type { ReplayAction } from './session-replay'
 import type { Playback } from './use-playback'
 
 let replayResult: replayDataModule.UseReplayDataResult
-let playerTimeMs = 0
-let activePlayers = 0
-let maxActivePlayers = 0
-const playerCalls: Array<{
-  kind: 'seek' | 'play' | 'pause' | 'speed'
-  tabId: number
-  value?: number
-}> = []
 
 mock.module('./replay.data', () => ({
   ...replayDataModule,
@@ -32,56 +24,35 @@ mock.module('./replay.data', () => ({
 
 mock.module('./ReplayViewport', () => ({
   ReplayViewport: ({
+    action,
+    url,
     events,
-    onPlayerReady,
+    trackTime,
+    live,
+    isPlaying,
+    speed,
   }: {
+    action: ReplayFrame | undefined
+    url: string | null
     events: readonly ReplayEvent[]
-    onPlayerReady: (
-      handle: {
-        seek: (ms: number) => void
-        play: (ms: number) => void
-        pause: () => void
-        setSpeed: (speed: number) => void
-        getCurrentTime: () => number
-      } | null,
-    ) => void
-  }) => {
-    const tabId = events[0]?.tabId ?? -1
-    // biome-ignore lint/correctness/useExhaustiveDependencies: event-array replacement remounts the real ReplayViewport player.
-    useEffect(() => {
-      activePlayers += 1
-      maxActivePlayers = Math.max(maxActivePlayers, activePlayers)
-      onPlayerReady({
-        seek: (ms) => {
-          playerTimeMs = ms
-          playerCalls.push({ kind: 'seek', tabId, value: ms })
-        },
-        play: (ms) => {
-          playerTimeMs = ms
-          playerCalls.push({ kind: 'play', tabId, value: ms })
-        },
-        pause: () => {
-          playerCalls.push({ kind: 'pause', tabId })
-        },
-        setSpeed: (speed) => {
-          playerCalls.push({ kind: 'speed', tabId, value: speed })
-        },
-        getCurrentTime: () => playerTimeMs,
-      })
-      return () => {
-        activePlayers -= 1
-        onPlayerReady(null)
-      }
-    }, [events, onPlayerReady, tabId])
-    return (
-      <div
-        data-player-documents={events
-          .map((event) => event.documentId)
-          .join(',')}
-        data-player-types={events.map((event) => event.type).join(',')}
-      />
-    )
-  },
+    trackTime: number
+    live: boolean
+    isPlaying: boolean
+    speed: number
+  }) => (
+    <div
+      data-viewport-tab={events[0]?.tabId ?? -1}
+      data-viewport-documents={events
+        .map((event) => event.documentId)
+        .join(',')}
+      data-viewport-track-time={trackTime}
+      data-viewport-live={live}
+      data-viewport-playing={isPlaying}
+      data-viewport-speed={speed}
+      data-viewport-url={url ?? ''}
+      data-viewport-caption={action?.caption ?? ''}
+    />
+  ),
 }))
 
 mock.module('./PlaybackTransport', () => ({
@@ -100,6 +71,7 @@ mock.module('./PlaybackTransport', () => ({
         data-playback-time={playback.time}
         data-playback-playing={playback.isPlaying}
         data-playback-speed={playback.speed}
+        data-playback-total={totalSeconds}
       >
         <button
           type="button"
@@ -125,13 +97,16 @@ mock.module('./PlaybackTransport', () => ({
             {speed}×
           </button>
         ))}
-        <button
-          type="button"
-          data-playback-seek-middle
-          onClick={() => onSeek(totalSeconds / 2)}
-        >
-          Seek middle
-        </button>
+        {seekTargets.map((seconds) => (
+          <button
+            type="button"
+            key={seconds}
+            data-playback-seek={seconds}
+            onClick={() => onSeek(seconds)}
+          >
+            Seek {seconds}
+          </button>
+        ))}
       </div>
     )
   },
@@ -139,34 +114,38 @@ mock.module('./PlaybackTransport', () => ({
 
 mock.module('./EventTimeline', () => ({
   EventTimeline: ({
-    frames,
-    onSelectFrame,
+    actions,
+    currentIndex,
+    onSelectAction,
   }: {
-    frames: readonly ReplayFrame[]
-    onSelectFrame: (frame: ReplayFrame) => void
+    actions: readonly ReplayAction[]
+    currentIndex: number
+    onSelectAction: (action: ReplayAction) => void
   }) => (
-    <div data-event-timeline>
-      {frames.map((frame) => (
+    <div data-event-timeline data-current-index={currentIndex}>
+      {actions.map((action, index) => (
         <button
           type="button"
-          key={frame.dispatchId}
-          data-frame-tab={frame.tabId}
-          onClick={() => onSelectFrame(frame)}
+          key={action.frame.dispatchId ?? action.sourceIndex}
+          data-action-dispatch={action.frame.dispatchId}
+          data-action-start={action.startAt}
+          data-action-current={index === currentIndex}
+          onClick={() => onSelectAction(action)}
         >
-          {frame.caption}
+          {action.frame.caption}
         </button>
       ))}
     </div>
   ),
 }))
 
-const TargetSelectContext = createContext<{
-  selectedTarget: string
-  selectTarget: (targetId: string) => void
-}>({
-  selectedTarget: '',
-  selectTarget: () => {},
-})
+/** Scrub destinations the fake transport exposes as buttons. */
+const seekTargets = [0, 3, 9, 14, 16, 24.225, 26.717, 38.321]
+
+const TabSelectContext = createContext<{
+  selected: string
+  select: (value: string) => void
+}>({ selected: '', select: () => {} })
 
 mock.module('@/components/ui/tabs', () => ({
   Tabs: ({
@@ -175,14 +154,14 @@ mock.module('@/components/ui/tabs', () => ({
     children,
   }: {
     value: string
-    onValueChange: (targetId: string) => void
+    onValueChange: (value: string) => void
     children: ReactNode
   }) => (
-    <TargetSelectContext.Provider
-      value={{ selectedTarget: value, selectTarget: onValueChange }}
+    <TabSelectContext.Provider
+      value={{ selected: value, select: onValueChange }}
     >
-      <div data-selected-target={value}>{children}</div>
-    </TargetSelectContext.Provider>
+      <div data-selected-tab={value}>{children}</div>
+    </TabSelectContext.Provider>
   ),
   TabsList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   TabsTrigger: ({
@@ -194,14 +173,14 @@ mock.module('@/components/ui/tabs', () => ({
     children: ReactNode
     onClick?: () => void
   }) => {
-    const { selectedTarget, selectTarget } = useContext(TargetSelectContext)
+    const { selected, select } = useContext(TabSelectContext)
     return (
       <button
         type="button"
-        data-target-chip={value}
+        data-tab-chip={value}
         onClick={() => {
           onClick?.()
-          if (value !== selectedTarget) selectTarget(value)
+          if (value !== selected) select(value)
         }}
       >
         {children}
@@ -210,129 +189,7 @@ mock.module('@/components/ui/tabs', () => ({
   },
 }))
 
-const events: ReplayEvent[] = [
-  {
-    sessionId: 'session-1',
-    documentId: 'document-a',
-    targetId: 'target-a',
-    tabId: 1,
-    ts: 1_000,
-    type: 4,
-    data: { width: 1280, height: 720 },
-  },
-  {
-    sessionId: 'session-1',
-    documentId: 'document-a',
-    targetId: 'target-a',
-    tabId: 1,
-    ts: 1_001,
-    type: 2,
-    data: {},
-  },
-  {
-    sessionId: 'session-1',
-    documentId: 'document-a',
-    targetId: 'target-a',
-    tabId: 1,
-    ts: 5_000,
-    type: 3,
-    data: {},
-  },
-  {
-    sessionId: 'session-1',
-    documentId: 'document-b',
-    targetId: 'target-b',
-    tabId: 2,
-    ts: 10_000,
-    type: 4,
-    data: { width: 1280, height: 720 },
-  },
-  {
-    sessionId: 'session-1',
-    documentId: 'document-b',
-    targetId: 'target-b',
-    tabId: 2,
-    ts: 10_001,
-    type: 2,
-    data: {},
-  },
-  {
-    sessionId: 'session-1',
-    documentId: 'document-b',
-    targetId: 'target-b',
-    tabId: 2,
-    ts: 15_000,
-    type: 3,
-    data: {},
-  },
-]
-
-const frames: ReplayFrame[] = [
-  {
-    t: 1,
-    kind: 'action',
-    verb: 'read',
-    node: 'A',
-    caption: 'Read target A',
-    tabId: 1,
-    targetId: 'target-a',
-    dispatchId: 1,
-    url: 'https://first.example/products',
-  },
-  {
-    t: 12,
-    kind: 'action',
-    verb: 'click',
-    node: 'B',
-    caption: 'Click target B',
-    tabId: 2,
-    targetId: 'target-b',
-    dispatchId: 2,
-    url: 'https://second.example/checkout',
-  },
-]
-
-function replayData(
-  replayEvents: readonly ReplayEvent[],
-  tabOrder?: number[],
-  replayFrames: ReplayFrame[] = frames,
-): replayDataModule.ReplayData {
-  const eventCatalog = buildReplayEventCatalog(replayEvents)
-  const tabs = (tabOrder ?? eventCatalog.tabIds).map((tabId) => ({
-    tabId,
-    complete: true,
-    segments: eventCatalog.documentIdsForTab(tabId).map((documentId) => {
-      const documentEvents = eventCatalog.eventsForDocument(documentId)
-      return {
-        documentId,
-        targetId: documentEvents.find((event) => event.targetId)?.targetId,
-        firstEventAt: documentEvents[0]?.ts ?? 0,
-        lastEventAt: documentEvents.at(-1)?.ts ?? 0,
-        hasGap: false,
-        legacy: false,
-      }
-    }),
-  }))
-  return {
-    sessionId: 'session-1',
-    agentLabel: 'Codex',
-    taskTitle: 'Replay test',
-    harness: 'Codex',
-    status: 'done' as const,
-    site: 'example.com',
-    startedAt: 'Jul 18, 2026',
-    startedAtMs: 0,
-    duration: '0:15',
-    tokens: '-',
-    steps: '2',
-    totalSeconds: 15,
-    frames: replayFrames,
-    complete: true,
-    tabs,
-    eventsLoaded: true,
-    eventsForTab: eventCatalog.eventsForTab,
-  }
-}
+const SESSION_START_MS = 0
 
 function visualEvents(
   tabId: number,
@@ -371,30 +228,6 @@ function visualEvents(
   ]
 }
 
-function staticVisualEvents(tabId: number, atMs: number): ReplayEvent[] {
-  const documentId = `document-${tabId}`
-  return [
-    {
-      sessionId: 'session-1',
-      documentId,
-      targetId: `target-${tabId}`,
-      tabId,
-      ts: atMs,
-      type: 4,
-      data: { width: 1280, height: 720 },
-    },
-    {
-      sessionId: 'session-1',
-      documentId,
-      targetId: `target-${tabId}`,
-      tabId,
-      ts: atMs,
-      type: 2,
-      data: {},
-    },
-  ]
-}
-
 function noVisualEvent(tabId: number, atMs: number): ReplayEvent {
   return {
     sessionId: 'session-1',
@@ -407,21 +240,64 @@ function noVisualEvent(tabId: number, atMs: number): ReplayEvent {
   }
 }
 
-function chapterFrame(
-  tabId: number,
+function toolFrame(
+  tabId: number | null,
   atSeconds: number,
-  domain = `tab-${tabId}.example`,
+  extra: Partial<ReplayFrame> = {},
 ): ReplayFrame {
   return {
     t: atSeconds,
     kind: 'action',
     verb: 'read',
-    node: `Tab ${tabId}`,
-    caption: `Action on Tab ${tabId}`,
+    node: tabId === null ? 'session' : `Tab ${tabId}`,
+    caption: tabId === null ? 'name_session' : `Action on Tab ${tabId}`,
     tabId,
-    targetId: `target-${tabId}`,
-    dispatchId: tabId,
-    url: `https://${domain}/path`,
+    targetId: tabId === null ? undefined : `target-${tabId}`,
+    dispatchId: Math.round(atSeconds * 1000),
+    url: tabId === null ? null : `https://tab-${tabId}.example/path`,
+    ...extra,
+  }
+}
+
+function replayData(
+  replayEvents: readonly ReplayEvent[],
+  tabOrder?: number[],
+  replayFrames: ReplayFrame[] = [],
+): replayDataModule.ReplayData {
+  const eventCatalog = buildReplayEventCatalog(replayEvents)
+  const tabs = (tabOrder ?? eventCatalog.tabIds).map((tabId) => ({
+    tabId,
+    complete: true,
+    segments: eventCatalog.documentIdsForTab(tabId).map((documentId) => {
+      const documentEvents = eventCatalog.eventsForDocument(documentId)
+      return {
+        documentId,
+        targetId: documentEvents.find((event) => event.targetId)?.targetId,
+        firstEventAt: documentEvents[0]?.ts ?? 0,
+        lastEventAt: documentEvents.at(-1)?.ts ?? 0,
+        hasGap: false,
+        legacy: false,
+      }
+    }),
+  }))
+  return {
+    sessionId: 'session-1',
+    agentLabel: 'Codex',
+    taskTitle: 'Replay test',
+    harness: 'Codex',
+    status: 'done' as const,
+    site: 'example.com',
+    startedAt: 'Jul 18, 2026',
+    startedAtMs: SESSION_START_MS,
+    duration: '0:40',
+    tokens: '-',
+    steps: String(replayFrames.length),
+    totalSeconds: 40,
+    frames: replayFrames,
+    complete: true,
+    tabs,
+    eventsLoaded: true,
+    eventsForTab: eventCatalog.eventsForTab,
   }
 }
 
@@ -433,25 +309,12 @@ const globalDescriptors = new Map(
 
 let root: Root
 let container: HTMLElement
-let nextAnimationFrameId = 1
-let nextTimerId = 1
-const animationFrames = new Map<number, FrameRequestCallback>()
-const transitionTimers = new Map<
-  number,
-  { callback: TimerHandler; delay: number | undefined }
->()
-const clearedTimerIds: number[] = []
+let nextFrameId = 1
+let frames = new Map<number, FrameRequestCallback>()
 
 beforeEach(async () => {
-  playerTimeMs = 0
-  activePlayers = 0
-  maxActivePlayers = 0
-  playerCalls.length = 0
-  nextAnimationFrameId = 1
-  nextTimerId = 1
-  animationFrames.clear()
-  transitionTimers.clear()
-  clearedTimerIds.length = 0
+  nextFrameId = 1
+  frames = new Map()
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -472,21 +335,12 @@ beforeEach(async () => {
   }
   Object.assign(dom.window, {
     requestAnimationFrame: (callback: FrameRequestCallback) => {
-      const id = nextAnimationFrameId++
-      animationFrames.set(id, callback)
+      const id = nextFrameId++
+      frames.set(id, callback)
       return id
     },
     cancelAnimationFrame: (id: number) => {
-      animationFrames.delete(id)
-    },
-    setTimeout: (callback: TimerHandler, delay?: number) => {
-      const id = nextTimerId++
-      transitionTimers.set(id, { callback, delay })
-      return id
-    },
-    clearTimeout: (id: number) => {
-      clearedTimerIds.push(id)
-      transitionTimers.delete(id)
+      frames.delete(id)
     },
   })
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
@@ -527,776 +381,457 @@ async function renderReplay() {
   })
 }
 
-async function completeCurrentChapter(totalMs: number) {
-  playerTimeMs = totalMs
-  const callbacks = [...animationFrames.values()]
-  animationFrames.clear()
+/** Drives the global clock to an explicit animation-frame timestamp. */
+async function advanceTo(wallMs: number) {
+  const pending = [...frames.values()]
+  frames.clear()
   await act(async () => {
-    for (const callback of callbacks) callback(performance.now())
+    for (const callback of pending) callback(wallMs)
   })
 }
 
-async function fireNextTransition() {
-  const entry = transitionTimers.entries().next().value as
-    | [number, { callback: TimerHandler; delay: number | undefined }]
-    | undefined
-  if (!entry) throw new Error('transition timer missing')
-  transitionTimers.delete(entry[0])
+/** Plays from a standing start to `seconds` of activity at 1x. */
+async function playTo(seconds: number) {
   await act(async () => {
-    if (typeof entry[1].callback === 'function') entry[1].callback()
+    click('[data-playback-speed-option="1"]')
   })
+  await advanceTo(0)
+  await advanceTo(seconds * 1000)
 }
 
-async function click(selector: string) {
+function click(selector: string) {
   const target = container.querySelector(selector)
   if (!target) throw new Error(`missing target: ${selector}`)
-  await act(async () => {
-    target.dispatchEvent(new window.Event('click', { bubbles: true }))
-  })
+  target.dispatchEvent(new window.Event('click', { bubbles: true }))
 }
 
-describe('Replay', () => {
-  it('discovers logical tabs and keeps frame selection tab-local', async () => {
+async function clickAct(selector: string) {
+  await act(async () => click(selector))
+}
+
+function attr(selector: string, name: string): string | null | undefined {
+  return container.querySelector(selector)?.getAttribute(name)
+}
+
+function viewport(name: string): string | null | undefined {
+  return attr('[data-viewport-tab]', `data-viewport-${name}`)
+}
+
+function timelineCaptions(): string[] {
+  return [...container.querySelectorAll('[data-action-dispatch]')].map(
+    (row) => row.textContent ?? '',
+  )
+}
+
+function currentCaption(): string | undefined {
+  return [...container.querySelectorAll('[data-action-dispatch]')].find(
+    (row) => row.getAttribute('data-action-current') === 'true',
+  )?.textContent
+}
+
+describe('Replay auto-follow', () => {
+  it('starts on the first playable tab and autoplays global activity', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
     await renderReplay()
 
-    expect(
-      [...container.querySelectorAll('[data-target-chip]')].map(
-        (chip) => chip.textContent,
-      ),
-    ).toEqual([])
-    expect(container.textContent).toContain('No visual recording for this tab')
-    expect(container.querySelector('[data-player-targets]')).toBeNull()
-
-    replayResult = { ...replayResult, replay: replayData(events) }
-    await renderReplay()
-
-    expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-a,document-a,document-a')
-    expect(
-      [...container.querySelectorAll('[data-target-chip]')].map(
-        (chip) => chip.textContent,
-      ),
-    ).toEqual(['Tab 1', 'Tab 2'])
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-
-    expect(container.querySelector('[data-frame-tab="2"]')).toBeNull()
-    await click('[data-target-chip="2"]')
-
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-b,document-b,document-b')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-
-    const targetBFrame = container.querySelector('[data-frame-tab="2"]')
-    if (!targetBFrame) throw new Error('tab 2 frame missing')
-    await act(async () => {
-      targetBFrame.dispatchEvent(new window.Event('click', { bubbles: true }))
-    })
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('2')
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(events, [1]),
-    }
-    await renderReplay()
-
-    expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-a,document-a,document-a')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
+    expect(attr('[data-selected-tab]', 'data-selected-tab')).toBe('1')
+    expect(viewport('tab')).toBe('1')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+    // Activity spans the first checkpoint (1s) to the last rrweb event (14s).
+    expect(attr('[data-playback-time]', 'data-playback-total')).toBe('13')
+    expect(currentCaption()).toBeUndefined()
   })
 
-  it('merges navigation lifecycles into one tab-level replay', async () => {
-    const navigationEvents: ReplayEvent[] = [
-      ...events.slice(0, 3),
-      ...events.slice(3).map((candidate) => ({
-        ...candidate,
-        tabId: 1,
-        documentId: 'document-b',
+  it('switches tabs as chronological tool activity crosses the playhead', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
+    await renderReplay()
+    await playTo(2)
+
+    expect(currentCaption()).toBe('Action on Tab 1')
+    expect(viewport('tab')).toBe('1')
+    expect(attr('[data-selected-tab]', 'data-selected-tab')).toBe('1')
+
+    await advanceTo(11_000)
+
+    expect(currentCaption()).toBe('Action on Tab 2')
+    expect(viewport('tab')).toBe('2')
+    expect(attr('[data-selected-tab]', 'data-selected-tab')).toBe('2')
+    expect(viewport('url')).toBe('https://tab-2.example/path')
+    // The global playhead never restarted for the switch.
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('11')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+  })
+
+  it('keeps every tool in one global timeline regardless of tab', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2, 3],
+      [toolFrame(1, 3), toolFrame(null, 6), toolFrame(3, 8), toolFrame(2, 12)],
+    )
+    await renderReplay()
+
+    expect(timelineCaptions()).toEqual([
+      'Action on Tab 1',
+      'name_session',
+      'Action on Tab 3',
+      'Action on Tab 2',
+    ])
+  })
+
+  it('keeps an untabbed tool current without moving the camera', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 20_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(null, 6), toolFrame(2, 22)],
+    )
+    await renderReplay()
+    await playTo(5)
+
+    expect(currentCaption()).toBe('name_session')
+    expect(viewport('caption')).toBe('name_session')
+    expect(viewport('tab')).toBe('1')
+    // An untabbed tool has no URL of its own; the tab's chrome must survive.
+    expect(viewport('url')).toBe('https://tab-1.example/path')
+  })
+
+  it('keeps a no-visual tab tool current without blanking the viewport', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), noVisualEvent(3, 8_000)],
+      [1, 3],
+      [toolFrame(1, 3), toolFrame(3, 8)],
+    )
+    await renderReplay()
+    await playTo(7)
+
+    expect(currentCaption()).toBe('Action on Tab 3')
+    expect(viewport('tab')).toBe('1')
+    expect(container.textContent).not.toContain('No visual recording')
+  })
+
+  it('collapses several crossed actions into one switch to the latest tab', async () => {
+    replayResult.replay = replayData(
+      [
+        ...visualEvents(1, 1_000),
+        ...visualEvents(2, 6_000),
+        ...visualEvents(3, 12_000),
+      ],
+      [1, 2, 3],
+      [toolFrame(1, 3), toolFrame(2, 7), toolFrame(null, 9), toolFrame(3, 14)],
+    )
+    await renderReplay()
+    await playTo(13)
+
+    expect(viewport('tab')).toBe('3')
+    expect(currentCaption()).toBe('Action on Tab 3')
+  })
+
+  it('resolves the same state seeking backward as forward', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
+    await renderReplay()
+
+    await clickAct('[data-playback-seek="9"]')
+    const forward = {
+      tab: viewport('tab'),
+      caption: currentCaption(),
+      trackTime: viewport('track-time'),
+      live: viewport('live'),
+    }
+
+    await clickAct('[data-playback-seek="0"]')
+    expect(viewport('tab')).toBe('1')
+    expect(currentCaption()).toBeUndefined()
+
+    await clickAct('[data-playback-seek="14"]')
+    await clickAct('[data-playback-seek="9"]')
+
+    expect({
+      tab: viewport('tab'),
+      caption: currentCaption(),
+      trackTime: viewport('track-time'),
+      live: viewport('live'),
+    }).toEqual(forward)
+  })
+
+  it('pauses and seeks to an action start when its timeline row is clicked', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12, { durationMs: 2_000 })],
+    )
+    await renderReplay()
+    await clickAct('[data-action-dispatch="12000"]')
+
+    // 12s completion minus a 2s tool, rebased on the 1s activity origin.
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('9')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'false',
+    )
+    expect(viewport('tab')).toBe('2')
+    expect(currentCaption()).toBe('Action on Tab 2')
+  })
+})
+
+describe('Replay manual control', () => {
+  const twoTabs = () =>
+    replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
+
+  it('pins a clicked tab at the unchanged global time', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await playTo(3)
+    expect(viewport('tab')).toBe('1')
+
+    await clickAct('[data-tab-chip="2"]')
+
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('3')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'false',
+    )
+    expect(viewport('tab')).toBe('2')
+    // Tab 2 has not started recording at 3s, so it holds its first frame.
+    expect(viewport('track-time')).toBe('0')
+    expect(viewport('live')).toBe('false')
+    expect(container.querySelector('[data-resume-follow]')).not.toBeNull()
+  })
+
+  it('keeps projecting a pinned tab while scrubbing', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await clickAct('[data-tab-chip="2"]')
+
+    // Tab 2 records from 9s to 13s of activity; the pin projects global time
+    // into that window and clamps outside it.
+    await clickAct('[data-playback-seek="9"]')
+    expect(viewport('tab')).toBe('2')
+    expect(viewport('track-time')).toBe('0')
+    expect(viewport('live')).toBe('true')
+
+    await clickAct('[data-playback-seek="14"]')
+    expect(viewport('tab')).toBe('2')
+    expect(viewport('track-time')).toBe('4')
+    expect(viewport('live')).toBe('false')
+    expect(currentCaption()).toBe('Action on Tab 2')
+  })
+
+  it('clears the pin on Resume follow without moving the playhead', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await playTo(3)
+    await clickAct('[data-tab-chip="2"]')
+
+    await clickAct('[data-resume-follow]')
+
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('3')
+    expect(viewport('tab')).toBe('1')
+    expect(container.querySelector('[data-resume-follow]')).toBeNull()
+  })
+
+  it('resumes automatic following when Play is pressed while pinned', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await playTo(3)
+    await clickAct('[data-tab-chip="2"]')
+    expect(viewport('tab')).toBe('2')
+
+    await clickAct('[data-playback-toggle]')
+
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+    expect(viewport('tab')).toBe('1')
+    expect(container.querySelector('[data-resume-follow]')).toBeNull()
+  })
+
+  it('shows the no-recording state for a pinned tab without visuals', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), noVisualEvent(3, 8_000)],
+      [1, 3],
+      [toolFrame(1, 3), toolFrame(3, 8)],
+    )
+    await renderReplay()
+    await clickAct('[data-tab-chip="3"]')
+
+    expect(container.textContent).toContain('No visual recording for this tab')
+    expect(timelineCaptions()).toEqual(['Action on Tab 1', 'Action on Tab 3'])
+    expect(container.querySelector('[data-playback-toggle]')).not.toBeNull()
+  })
+
+  it('restarts global activity from zero after completion', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await playTo(20)
+
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('13')
+    expect(attr('[data-playback-toggle]', 'aria-label')).toBe(
+      'Restart playback',
+    )
+
+    await clickAct('[data-playback-toggle]')
+
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('0')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+    expect(viewport('tab')).toBe('1')
+  })
+
+  it('preserves the chosen speed across automatic switches', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    await clickAct('[data-playback-speed-option="4"]')
+    await advanceTo(0)
+    await advanceTo(3_000)
+
+    expect(attr('[data-playback-speed]', 'data-playback-speed')).toBe('4')
+    expect(viewport('tab')).toBe('2')
+    expect(viewport('speed')).toBe('4')
+  })
+})
+
+describe('Replay recording states', () => {
+  it('merges same-tab navigations into one visual track', async () => {
+    const navigationEvents = [
+      ...visualEvents(1, 1_000),
+      ...visualEvents(1, 10_000).map((event) => ({
+        ...event,
+        documentId: 'document-1b',
       })),
     ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(navigationEvents),
-    }
-
+    replayResult.replay = replayData(navigationEvents, [1], [toolFrame(1, 12)])
     await renderReplay()
 
-    expect(container.textContent).not.toContain('Navigation 1')
-    expect(container.textContent).not.toContain('Navigation 2')
-    expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-a,document-a,document-a,document-b,document-b,document-b')
-    expect(
-      container.querySelector('[data-target-chip="document-b"]'),
-    ).toBeNull()
+    expect(viewport('documents')).toBe(
+      'document-1,document-1,document-1,document-1b,document-1b,document-1b',
+    )
+    expect(container.querySelector('[data-tab-chip="document-1b"]')).toBeNull()
   })
 
-  it('slices orphan mutations and explains where visual playback starts', async () => {
-    const incompleteEvents: ReplayEvent[] = [
-      {
-        sessionId: 'session-1',
-        documentId: 'document-a',
-        targetId: 'target-a',
-        tabId: 1,
-        ts: 1_000,
-        type: 3,
-        data: {},
-      },
-      {
-        sessionId: 'session-1',
-        documentId: 'document-a',
-        targetId: 'target-a',
-        tabId: 1,
-        ts: 4_000,
-        type: 2,
-        data: {},
-      },
-      {
-        sessionId: 'session-1',
-        documentId: 'document-a',
-        targetId: 'target-a',
-        tabId: 1,
-        ts: 5_000,
-        type: 3,
-        data: {},
-      },
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(incompleteEvents),
-    }
-
+  it('keeps the incomplete-prefix warning for the visible tab', async () => {
+    replayResult.replay = replayData(
+      [
+        noVisualEvent(1, 1_000),
+        ...visualEvents(1, 4_000).slice(1),
+        ...visualEvents(2, 20_000),
+      ],
+      [1, 2],
+      [toolFrame(1, 5)],
+    )
     await renderReplay()
 
-    expect(
-      container
-        .querySelector('[data-player-types]')
-        ?.getAttribute('data-player-types'),
-    ).toBe('2,3')
     expect(container.textContent).toContain(
       'Recording incomplete — playback starts at 0:03',
     )
   })
 
-  it("keeps the selected tab's prefix warning when another tab has a gap", async () => {
-    const partialReplay = replayData([
-      { ...events[0], ts: 0, type: 3 },
-      ...events,
-    ])
-    partialReplay.complete = false
-    const secondTab = partialReplay.tabs[1]
-    if (secondTab) {
-      secondTab.complete = false
-      const firstSegment = secondTab.segments[0]
-      if (firstSegment) firstSegment.hasGap = true
-    }
-    replayResult = { ...replayResult, replay: partialReplay }
-
-    await renderReplay()
-
-    expect(container.textContent).toContain(
-      'Recording incomplete — playback starts at 0:01',
-    )
-    expect(container.textContent).not.toContain(
-      'this replay contains a known gap',
-    )
-  })
-
-  it("does not leak another tab's gap into the selected tab", async () => {
-    const partialReplay = replayData(events)
-    partialReplay.complete = false
-    const secondTab = partialReplay.tabs[1]
-    if (secondTab) {
-      secondTab.complete = false
-      const firstSegment = secondTab.segments[0]
-      if (firstSegment) firstSegment.hasGap = true
-    }
-    replayResult = { ...replayResult, replay: partialReplay }
-
-    await renderReplay()
-
-    expect(container.textContent).not.toContain('Recording incomplete')
-  })
-
-  it('plays each chapter fully, waits one wall-clock second, and preserves speed', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      ...visualEvents(2, 10_000, 5_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2],
-        [
-          chapterFrame(1, 2, 'first.example'),
-          chapterFrame(2, 12, 'second.example'),
-        ],
-      ),
-    }
-    await renderReplay()
-
-    expect(container.textContent).toContain('Tab 1 of 2')
-    expect(container.querySelector('[data-event-timeline]')?.textContent).toBe(
-      'Action on Tab 1',
-    )
-    await click('[data-playback-speed-option="4"]')
-    await completeCurrentChapter(4_000)
-
-    expect(container.textContent).toContain(
-      'Tab 1 complete → Opening Tab 2 · second.example',
-    )
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-    expect(container.textContent).toContain('Tab 2 of 2')
-    expect(container.querySelector('[data-event-timeline]')?.textContent).toBe(
-      'Action on Tab 2',
-    )
-    expect([...transitionTimers.values()].map(({ delay }) => delay)).toEqual([
-      1_000,
-    ])
-    expect(
-      playerCalls.some(
-        (call) => call.kind === 'play' && call.tabId === 2 && call.value === 0,
-      ),
-    ).toBe(false)
-
-    await fireNextTransition()
-
-    expect(container.textContent).not.toContain('Tab 1 complete')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-    expect(
-      container
-        .querySelector('[data-playback-speed]')
-        ?.getAttribute('data-playback-speed'),
-    ).toBe('4')
-    expect(
-      playerCalls.some(
-        (call) => call.kind === 'play' && call.tabId === 2 && call.value === 0,
-      ),
-    ).toBe(true)
-    expect(maxActivePlayers).toBe(1)
-  })
-
-  it('changes the warning, viewport, timeline, and local clock as one chapter', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      ...visualEvents(2, 10_000),
-    ]
-    const chapterReplay = replayData(
-      chapterEvents,
+  it("does not leak another tab's gap into the visible tab", async () => {
+    const withGap = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
       [1, 2],
-      [chapterFrame(1, 2), chapterFrame(2, 11)],
+      [toolFrame(1, 3), toolFrame(2, 12)],
     )
-    const secondTab = chapterReplay.tabs[1]
+    const secondTab = withGap.tabs[1]
     if (!secondTab) throw new Error('tab 2 metadata missing')
     secondTab.complete = false
-    const secondSegment = secondTab.segments[0]
-    if (!secondSegment) throw new Error('tab 2 segment missing')
-    secondSegment.hasGap = true
-    replayResult = { ...replayResult, replay: chapterReplay }
+    const segment = secondTab.segments[0]
+    if (segment) segment.hasGap = true
+    replayResult.replay = withGap
     await renderReplay()
 
     expect(container.textContent).not.toContain('Recording incomplete')
-    await completeCurrentChapter(4_000)
 
-    expect(container.textContent).toContain('Tab 2 of 2')
+    await clickAct('[data-tab-chip="2"]')
     expect(container.textContent).toContain(
       'Recording incomplete — this replay contains a known gap',
     )
-    expect(
-      container
-        .querySelector('[data-player-documents]')
-        ?.getAttribute('data-player-documents'),
-    ).toBe('document-2,document-2,document-2')
-    expect(container.querySelector('[data-event-timeline]')?.textContent).toBe(
-      'Action on Tab 2',
-    )
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
   })
 
-  it('summarizes consecutive middle and trailing no-visual chapters', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      noVisualEvent(2, 6_000),
-      noVisualEvent(3, 7_000),
-      ...visualEvents(4, 10_000),
-      noVisualEvent(5, 16_000),
-      noVisualEvent(6, 17_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2, 3, 4, 5, 6],
-        [
-          chapterFrame(1, 2),
-          chapterFrame(2, 6),
-          chapterFrame(3, 7),
-          chapterFrame(4, 11, 'fourth.example'),
-          chapterFrame(5, 16),
-          chapterFrame(6, 17),
-        ],
-      ),
-    }
-    await renderReplay()
-
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain(
-      'Tab 1 complete → Opening Tab 4 · fourth.example',
-    )
-    expect(container.textContent).toContain(
-      'Skipped Tabs 2–3 — no visual recordings',
-    )
-    expect(container.textContent).toContain('Tab 4 of 6')
-
-    await fireNextTransition()
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain('Tab 4 complete → Replay complete')
-    expect(container.textContent).toContain(
-      'Skipped Tabs 5–6 — no visual recordings',
-    )
-    expect(container.textContent).not.toContain(
-      'Replay completeReplay complete',
-    )
-
-    await fireNextTransition()
-    expect(container.textContent).toContain('Replay complete')
-    expect(transitionTimers.size).toBe(0)
-  })
-
-  it('explains leading skipped chapters before autoplaying the first playable tab', async () => {
-    const chapterEvents = [
-      noVisualEvent(1, 1_000),
-      noVisualEvent(2, 2_000),
-      ...visualEvents(3, 3_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2, 3],
-        [
-          chapterFrame(1, 1),
-          chapterFrame(2, 2),
-          chapterFrame(3, 3, 'playable.example'),
-        ],
-      ),
-    }
-    await renderReplay()
-
-    expect(container.textContent).toContain(
-      'Starting replay → Opening Tab 3 · playable.example',
-    )
-    expect(container.textContent).toContain(
-      'Skipped Tabs 1–2 — no visual recordings',
-    )
-    expect(container.textContent).toContain('Tab 3 of 3')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-
-    await fireNextTransition()
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-  })
-
-  it('waits for event loading before completing an all-no-visual replay', async () => {
-    const noVisualReplay = replayData(
-      [noVisualEvent(1, 1_000), noVisualEvent(2, 2_000)],
-      [1, 2],
-      [chapterFrame(1, 1), chapterFrame(2, 2)],
-    )
-    noVisualReplay.eventsLoaded = false
-    replayResult = { ...replayResult, replay: noVisualReplay }
-    await renderReplay()
-
-    expect(container.textContent).toContain('Tab 1 of 2')
-    expect(container.textContent).not.toContain('No visual recordings')
-    expect(transitionTimers.size).toBe(0)
-
-    noVisualReplay.eventsLoaded = true
-    replayResult = { ...replayResult, replay: { ...noVisualReplay } }
-    await renderReplay()
-
-    expect(container.textContent).toContain(
-      'No visual recordings → Replay complete',
-    )
-    expect(container.textContent).toContain(
-      'Skipped Tabs 1–2 — no visual recordings',
-    )
-    expect([...transitionTimers.values()][0]?.delay).toBe(1_000)
-
-    await fireNextTransition()
-    expect(container.textContent).toContain('Replay complete')
-    expect(container.querySelector('[data-playback-toggle]')).toBeNull()
-  })
-
-  it('does not complete an all-no-visual replay while the session is live', async () => {
-    const liveReplay = replayData(
-      [noVisualEvent(1, 1_000)],
-      [1],
-      [chapterFrame(1, 1)],
-    )
-    liveReplay.status = 'running'
-    replayResult = { ...replayResult, replay: liveReplay }
-    await renderReplay()
-
-    expect(container.textContent).not.toContain(
-      'No visual recordings → Replay complete',
-    )
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(transitionTimers.size).toBe(0)
-  })
-
-  it('autoplays when the first playable snapshot arrives after metadata', async () => {
-    const loadingReplay = replayData(
-      [],
-      [1],
-      [chapterFrame(1, 1, 'first.example')],
-    )
-    loadingReplay.eventsLoaded = false
-    replayResult = { ...replayResult, replay: loadingReplay }
+  it('offers no transport until a playable recording resolves', async () => {
+    const loading = replayData([], [1], [toolFrame(1, 3)])
+    loading.eventsLoaded = false
+    replayResult.replay = loading
     await renderReplay()
 
     expect(container.textContent).toContain('No visual recording for this tab')
+    expect(container.querySelector('[data-playback-toggle]')).toBeNull()
+    expect(timelineCaptions()).toEqual(['Action on Tab 1'])
 
     replayResult = {
       ...replayResult,
-      replay: replayData(
-        visualEvents(1, 1_000),
-        [1],
-        [chapterFrame(1, 1, 'first.example')],
-      ),
+      replay: replayData(visualEvents(1, 1_000), [1], [toolFrame(1, 3)]),
     }
     await renderReplay()
 
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-  })
-
-  it('preserves a manual chapter choice while visual events are loading', async () => {
-    const loadingReplay = replayData(
-      [],
-      [1, 2],
-      [chapterFrame(1, 1), chapterFrame(2, 2)],
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
     )
-    loadingReplay.eventsLoaded = false
-    replayResult = { ...replayResult, replay: loadingReplay }
-    await renderReplay()
-    await click('[data-target-chip="2"]')
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
-        [1, 2],
-        [chapterFrame(1, 1), chapterFrame(2, 11)],
-      ),
-    }
-    await renderReplay()
-
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('0')
   })
 
-  it('cancels an empty-replay transition when a playable snapshot arrives', async () => {
-    const emptyReplay = replayData(
-      [noVisualEvent(1, 1_000)],
-      [1],
-      [chapterFrame(1, 1, 'first.example')],
-    )
-    replayResult = { ...replayResult, replay: emptyReplay }
-    await renderReplay()
-
-    const staleTransition = [...transitionTimers.values()][0]?.callback
-    expect(container.textContent).toContain(
-      'No visual recordings → Replay complete',
-    )
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        visualEvents(1, 1_000),
-        [1],
-        [chapterFrame(1, 1, 'first.example')],
-      ),
-    }
-    await renderReplay()
-
-    expect(transitionTimers.size).toBe(0)
-    expect(container.textContent).not.toContain('No visual recordings')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-
-    await act(async () => {
-      if (typeof staleTransition === 'function') staleTransition()
-    })
-    expect(container.textContent).not.toContain('Replay complete')
-  })
-
-  it('starts a playable snapshot that arrives after empty-replay completion', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [noVisualEvent(1, 1_000), noVisualEvent(2, 2_000)],
-        [1, 2],
-        [chapterFrame(1, 1), chapterFrame(2, 2, 'second.example')],
-      ),
-    }
-    await renderReplay()
-    await fireNextTransition()
-    expect(container.textContent).toContain('Replay complete')
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [noVisualEvent(1, 1_000), ...visualEvents(2, 2_000)],
-        [1, 2],
-        [chapterFrame(1, 1), chapterFrame(2, 2, 'second.example')],
-      ),
-    }
-    await renderReplay()
-
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(container.textContent).toContain(
-      'Starting replay → Opening Tab 2 · second.example',
-    )
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-
-    await fireNextTransition()
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-  })
-
-  it('continues into a later chapter that becomes playable after completion', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [...visualEvents(1, 1_000), noVisualEvent(2, 7_000)],
-        [1, 2],
-        [chapterFrame(1, 2), chapterFrame(2, 7, 'second.example')],
-      ),
-    }
-    await renderReplay()
-    await completeCurrentChapter(4_000)
-    await fireNextTransition()
-    expect(container.textContent).toContain('Replay complete')
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
-        [1, 2],
-        [chapterFrame(1, 2), chapterFrame(2, 11, 'second.example')],
-      ),
-    }
-    await renderReplay()
-
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(container.textContent).toContain(
-      'Tab 1 complete → Opening Tab 2 · second.example',
-    )
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-
-    await fireNextTransition()
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-  })
-
-  it("resumes when the completed chapter's recording grows", async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(visualEvents(1, 1_000), [1], [chapterFrame(1, 2)]),
-    }
-    await renderReplay()
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain('Replay complete')
-
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        visualEvents(1, 1_000, 6_000),
-        [1],
-        [chapterFrame(1, 2)],
-      ),
-    }
-    await renderReplay()
-
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('4')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-
-    await completeCurrentChapter(6_000)
-    expect(container.textContent).toContain('Replay complete')
-  })
-
-  it('waits for the current event revision before finalizing the sequence', async () => {
-    const refreshingReplay = replayData(
+  it('extends a live replay without rewinding accepted activity', async () => {
+    replayResult.replay = replayData(
       visualEvents(1, 1_000),
       [1],
-      [chapterFrame(1, 2)],
+      [toolFrame(1, 3)],
     )
-    refreshingReplay.eventsLoaded = false
-    replayResult = { ...replayResult, replay: refreshingReplay }
     await renderReplay()
-    await completeCurrentChapter(4_000)
+    await playTo(9)
 
-    expect(container.textContent).not.toContain('Replay complete')
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('4')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'false',
+    )
 
-    replayResult = {
-      ...replayResult,
-      replay: { ...refreshingReplay, eventsLoaded: true },
-    }
-    await renderReplay()
-
-    expect(container.textContent).toContain('Replay complete')
-  })
-
-  it('plays a static visual snapshot before advancing', async () => {
     replayResult = {
       ...replayResult,
       replay: replayData(
-        [...staticVisualEvents(1, 1_000), ...visualEvents(2, 10_000)],
-        [1, 2],
-        [chapterFrame(1, 1), chapterFrame(2, 11)],
+        visualEvents(1, 1_000, 10_000),
+        [1],
+        [toolFrame(1, 3)],
       ),
     }
     await renderReplay()
 
-    expect(container.querySelector('[data-player-types]')).not.toBeNull()
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-
-    await completeCurrentChapter(0)
-    expect(container.textContent).toContain(
-      'Tab 1 complete → Opening Tab 2 · tab-2.example',
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('4')
+    expect(attr('[data-playback-total]', 'data-playback-total')).toBe('10')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
     )
   })
 
-  it('resets selection, transport, and stale transitions when the session changes', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
-        [1, 2],
-        [chapterFrame(1, 2), chapterFrame(2, 11)],
-      ),
-    }
+  it('resets the pin and the clock when the session changes', async () => {
+    replayResult.replay = replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
     await renderReplay()
-    await completeCurrentChapter(4_000)
-    const staleTransition = [...transitionTimers.values()][0]?.callback
+    await playTo(3)
+    await clickAct('[data-tab-chip="2"]')
 
     const nextSession = replayData(
       [...visualEvents(2, 1_000), ...visualEvents(3, 10_000)],
       [2, 3],
-      [chapterFrame(2, 2), chapterFrame(3, 11)],
+      [toolFrame(2, 3), toolFrame(3, 12)],
     )
     nextSession.sessionId = 'session-2'
     replayResult = {
@@ -1306,283 +841,106 @@ describe('Replay', () => {
     }
     await renderReplay()
 
-    expect(transitionTimers.size).toBe(0)
-    expect(container.textContent).not.toContain('Tab 1 complete')
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(container.textContent).toContain('Tab 1 of 2')
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-
-    await act(async () => {
-      if (typeof staleTransition === 'function') staleTransition()
-    })
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('2')
-  })
-
-  it('cancels a pending transition and invalidates its callback on manual selection', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      ...visualEvents(2, 10_000),
-      ...visualEvents(3, 20_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2, 3],
-        [chapterFrame(1, 2), chapterFrame(2, 11), chapterFrame(3, 21)],
-      ),
-    }
-    await renderReplay()
-    await completeCurrentChapter(4_000)
-
-    const pending = [...transitionTimers.values()][0]?.callback
-    await click('[data-target-chip="3"]')
-
-    expect(transitionTimers.size).toBe(0)
-    expect(clearedTimerIds).toHaveLength(1)
-    expect(container.textContent).not.toContain('Tab 1 complete')
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('3')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-
-    await act(async () => {
-      if (typeof pending === 'function') pending()
-    })
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('3')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-  })
-
-  it('lets the active destination chip cancel its transition and continue forward', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [
-          ...visualEvents(1, 1_000),
-          ...visualEvents(2, 10_000),
-          ...visualEvents(3, 20_000),
-        ],
-        [1, 2, 3],
-        [chapterFrame(1, 2), chapterFrame(2, 11), chapterFrame(3, 21)],
-      ),
-    }
-    await renderReplay()
-    await completeCurrentChapter(4_000)
-
-    expect(container.textContent).toContain('Tab 1 complete')
-    await click('[data-target-chip="2"]')
-
-    expect(transitionTimers.size).toBe(0)
-    expect(container.textContent).not.toContain('Tab 1 complete')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('false')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-
-    await click('[data-playback-toggle]')
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain(
-      'Tab 2 complete → Opening Tab 3 · tab-3.example',
+    expect(container.querySelector('[data-resume-follow]')).toBeNull()
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('0')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
     )
+    expect(viewport('tab')).toBe('2')
   })
 
-  it('keeps a manually selected no-visual chapter paused and tab-local', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      noVisualEvent(2, 7_000),
-      ...visualEvents(3, 10_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2, 3],
-        [chapterFrame(1, 2), chapterFrame(2, 7), chapterFrame(3, 11)],
-      ),
-    }
-    await renderReplay()
-    await click('[data-target-chip="2"]')
-
-    expect(container.textContent).toContain('No visual recording for this tab')
-    expect(container.textContent).toContain('Tab 2 of 3')
-    expect(container.querySelector('[data-event-timeline]')?.textContent).toBe(
-      'Action on Tab 2',
+  it('keeps a single-tab session on the same global model', async () => {
+    replayResult.replay = replayData(
+      visualEvents(1, 1_000),
+      [1],
+      [toolFrame(1, 3)],
     )
-    expect(container.querySelector('[data-playback-toggle]')).toBeNull()
-    expect(transitionTimers.size).toBe(0)
-  })
-
-  it('restarts a completed sequence from the first playable tab', async () => {
-    const chapterEvents = [
-      ...visualEvents(1, 1_000),
-      ...visualEvents(2, 10_000),
-    ]
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        chapterEvents,
-        [1, 2],
-        [chapterFrame(1, 2), chapterFrame(2, 11)],
-      ),
-    }
-    await renderReplay()
-    await click('[data-playback-speed-option="4"]')
-    await completeCurrentChapter(4_000)
-    await fireNextTransition()
-    await completeCurrentChapter(4_000)
-
-    expect(container.textContent).toContain('Replay complete')
-    expect(
-      container
-        .querySelector('[data-playback-toggle]')
-        ?.getAttribute('aria-label'),
-    ).toBe('Restart playback')
-
-    await click('[data-playback-toggle]')
-
-    expect(
-      container
-        .querySelector('[data-selected-target]')
-        ?.getAttribute('data-selected-target'),
-    ).toBe('1')
-    expect(container.textContent).toContain('Tab 1 of 2')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('0')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-    expect(
-      container
-        .querySelector('[data-playback-speed]')
-        ?.getAttribute('data-playback-speed'),
-    ).toBe('4')
-  })
-
-  it('keeps a single playable tab unchanged apart from chapter progress', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(visualEvents(1, 1_000), [1], [chapterFrame(1, 2)]),
-    }
     await renderReplay()
 
-    expect(container.textContent).toContain('Tab 1 of 1')
-    expect(container.querySelector('[data-selected-target]')).toBeNull()
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
+    expect(container.querySelector('[data-selected-tab]')).toBeNull()
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
 
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain('Replay complete')
-    expect(transitionTimers.size).toBe(0)
+    await playTo(9)
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('4')
+    expect(viewport('tab')).toBe('1')
   })
 
-  it('resumes from a manual seek after sequence completion', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(visualEvents(1, 1_000), [1], [chapterFrame(1, 2)]),
-    }
+  it('cancels the animation loop when the replay unmounts', async () => {
+    replayResult.replay = replayData(
+      visualEvents(1, 1_000),
+      [1],
+      [toolFrame(1, 3)],
+    )
     await renderReplay()
-    await completeCurrentChapter(4_000)
-    expect(container.textContent).toContain('Replay complete')
-
-    await click('[data-playback-seek-middle]')
-
-    expect(container.textContent).not.toContain('Replay complete')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-playback-toggle]')
-        ?.getAttribute('aria-label'),
-    ).toBe('Play')
-
-    await click('[data-playback-toggle]')
-    expect(
-      container
-        .querySelector('[data-playback-time]')
-        ?.getAttribute('data-playback-time'),
-    ).toBe('2')
-    expect(
-      container
-        .querySelector('[data-playback-playing]')
-        ?.getAttribute('data-playback-playing'),
-    ).toBe('true')
-  })
-
-  it('clears the transition timer when the replay unmounts', async () => {
-    replayResult = {
-      ...replayResult,
-      replay: replayData(
-        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
-        [1, 2],
-        [chapterFrame(1, 2), chapterFrame(2, 11)],
-      ),
-    }
-    await renderReplay()
-    await completeCurrentChapter(4_000)
-    const pending = [...transitionTimers.values()][0]?.callback
+    await advanceTo(0)
+    expect(frames.size).toBe(1)
 
     await act(async () => root.render(<div data-unmounted />))
 
-    expect(transitionTimers.size).toBe(0)
-    expect(clearedTimerIds).toHaveLength(1)
-    await act(async () => {
-      if (typeof pending === 'function') pending()
-    })
+    expect(frames.size).toBe(0)
     expect(container.querySelector('[data-unmounted]')).not.toBeNull()
+  })
+})
+
+describe('Replay Trendshift regression', () => {
+  // Tab 1 stops emitting DOM events at 9.003s but keeps receiving tool calls
+  // out to 38.321s. Chapter playback ended at 9.003s and could never reach them.
+  const TAB_1_VISUAL_END_MS = 9_003
+  const trendshift = () =>
+    replayData(
+      [
+        ...visualEvents(1, 0, TAB_1_VISUAL_END_MS),
+        ...visualEvents(2, 12_000, 6_000),
+      ],
+      [1, 2],
+      [
+        toolFrame(1, 2.053),
+        toolFrame(null, 14),
+        toolFrame(2, 16),
+        toolFrame(1, 24.225),
+        toolFrame(1, 26.717),
+        toolFrame(1, 38.321),
+      ],
+    )
+
+  it('reaches every late tool while holding the final recorded frame', async () => {
+    replayResult.replay = trendshift()
+    await renderReplay()
+
+    expect(attr('[data-playback-time]', 'data-playback-total')).toBe('38.321')
+
+    for (const seconds of [24.225, 26.717, 38.321]) {
+      await clickAct(`[data-playback-seek="${seconds}"]`)
+      expect(currentCaption()).toBe('Action on Tab 1')
+      expect(viewport('tab')).toBe('1')
+      expect(viewport('track-time')).toBe(String(TAB_1_VISUAL_END_MS / 1000))
+      expect(viewport('live')).toBe('false')
+    }
+  })
+
+  it('still visits tab 2 in tool order between tab 1 tools', async () => {
+    replayResult.replay = trendshift()
+    await renderReplay()
+
+    await clickAct('[data-playback-seek="16"]')
+    expect(viewport('tab')).toBe('2')
+    expect(currentCaption()).toBe('Action on Tab 2')
+
+    await clickAct('[data-playback-seek="24.225"]')
+    expect(viewport('tab')).toBe('1')
+  })
+
+  it('keeps the untabbed name_session visible and current', async () => {
+    replayResult.replay = trendshift()
+    await renderReplay()
+    await clickAct('[data-playback-seek="14"]')
+
+    expect(currentCaption()).toBe('name_session')
+    expect(viewport('caption')).toBe('name_session')
+    expect(viewport('tab')).toBe('1')
+    expect(timelineCaptions()).toContain('name_session')
   })
 })
 

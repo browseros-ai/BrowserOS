@@ -3,6 +3,7 @@ import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { PlaybackTransport } from './PlaybackTransport'
+import type { ReplayAction } from './session-replay'
 import { usePlayback } from './use-playback'
 
 const globalDescriptors = new Map(
@@ -14,6 +15,37 @@ const globalDescriptors = new Map(
 let root: Root
 let container: HTMLElement
 
+const bookmarks: ReplayAction[] = [
+  {
+    frame: {
+      t: 6,
+      kind: 'block',
+      verb: 'read',
+      node: 'blocked',
+      caption: 'read: blocked',
+      dispatchId: 7,
+    },
+    startAt: 4,
+    completionAt: 6,
+    trackTabId: null,
+    sourceIndex: 0,
+  },
+  {
+    frame: {
+      t: 8,
+      kind: 'action',
+      verb: 'read',
+      node: 'plain',
+      caption: 'read: plain',
+      dispatchId: 8,
+    },
+    startAt: 8,
+    completionAt: 8,
+    trackTabId: null,
+    sourceIndex: 1,
+  },
+]
+
 function TransportHarness() {
   const playback = usePlayback(10)
   return (
@@ -21,7 +53,7 @@ function TransportHarness() {
       <PlaybackTransport
         playback={playback}
         totalSeconds={10}
-        frames={[]}
+        actions={bookmarks}
         onSeek={playback.seek}
       />
       <button type="button" data-command-pause onClick={playback.pause}>
@@ -33,7 +65,7 @@ function TransportHarness() {
       <button
         type="button"
         data-command-finish
-        onClick={() => playback.syncFromPlayer(10)}
+        onClick={() => playback.seek(10)}
       >
         Finish
       </button>
@@ -60,6 +92,12 @@ beforeEach(async () => {
       value,
     })
   }
+  // linkedom ships no animation-frame API; the global clock needs one to run.
+  // Never fired here — these tests only exercise the transport's controls.
+  Object.assign(dom.window, {
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+  })
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
     configurable: true,
     writable: true,
@@ -144,5 +182,23 @@ describe('PlaybackTransport', () => {
     expect(toggle()).toBe('Pause')
     expect(container.textContent).toContain('0:00 / 0:10')
     expect(fourTimes?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('bookmarks non-action tools at their activity start', async () => {
+    await act(async () => root.render(<TransportHarness />))
+
+    const marks = [...container.querySelectorAll('button[aria-label^="Jump"]')]
+    expect(marks.map((mark) => mark.getAttribute('aria-label'))).toEqual([
+      'Jump to read: blocked',
+    ])
+    // startAt 4 of 10 seconds, not the completion at 6.
+    expect(marks[0]?.getAttribute('style')?.replace(/\s/g, '')).toContain(
+      'left:40%',
+    )
+
+    await act(async () => {
+      marks[0]?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('0:04 / 0:10')
   })
 })

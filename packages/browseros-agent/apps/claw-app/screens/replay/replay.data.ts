@@ -319,7 +319,12 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   evaluate: 'type',
 }
 
-function mapDispatchToFrame(
+/**
+ * One audit row as a replay frame. `t` is completion; `durationMs` rides along
+ * untouched so `session-replay.ts` can approximate when the tool began without
+ * a second source of truth for timing.
+ */
+export function mapDispatchToFrame(
   row: ToolDispatchRow,
   sessionStartMs: number,
   targetTabs: ReadonlyMap<string, number>,
@@ -336,6 +341,7 @@ function mapDispatchToFrame(
   const caption = buildCaption(row, verb, isError, cancelled)
   return {
     t,
+    durationMs: row.durationMs,
     kind,
     verb,
     node,
