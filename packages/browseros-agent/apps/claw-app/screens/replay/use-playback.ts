@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from './replay.helpers'
 
 export interface Playback {
-  /** Seconds elapsed in the session. */
+  /** Seconds elapsed in the selected tab's local recording. */
   time: number
   /** True while rrweb's internal timer should be running. */
   isPlaying: boolean
@@ -13,7 +13,7 @@ export interface Playback {
   play: () => void
   /** Pauses playback without moving the local playhead. */
   pause: () => void
-  /** Toggles play/pause. Restarts from 0 if the session already finished. */
+  /** Toggles play/pause. Restarts from 0 if the chapter already finished. */
   togglePlay: () => void
   /** Jumps the playhead to `seconds` and pauses. */
   seek: (seconds: number) => number

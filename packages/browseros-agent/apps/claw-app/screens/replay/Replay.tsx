@@ -46,6 +46,7 @@ export function Replay() {
   const pendingTabPlaybackRef = useRef<'pause' | 'play'>('pause')
   const transitionTimerRef = useRef<number | null>(null)
   const transitionTokenRef = useRef(0)
+  const activeSessionRef = useRef<string | null>(null)
   const autoStartedSessionRef = useRef<string | null>(null)
 
   const tabViewInput = useMemo(
@@ -171,35 +172,77 @@ export function Replay() {
     }
   }, [seekTo, selectedTabId])
 
+  const resetTab = useCallback(
+    (tabId: number, autoplay: boolean) => {
+      playback.pause()
+      playbackTimeRef.current = 0
+      playbackIsPlayingRef.current = false
+      playerHandleRef.current?.pause()
+      if (tabId === selectedTabId) {
+        seekTo(0)
+        if (autoplay) {
+          playbackIsPlayingRef.current = true
+          playbackPlayRef.current()
+        }
+        return
+      }
+      pendingTabSeekRef.current = 0
+      pendingTabPlaybackRef.current = autoplay ? 'play' : 'pause'
+      setSelectedTabId(tabId)
+    },
+    [playback.pause, seekTo, selectedTabId],
+  )
+
   useEffect(() => {
     if (!replay) return
+    const sessionChanged = activeSessionRef.current !== replay.sessionId
+    if (sessionChanged) {
+      activeSessionRef.current = replay.sessionId
+      autoStartedSessionRef.current = null
+      cancelTransition()
+      setSequenceComplete(false)
+    }
+
     const firstTab = replay.tabs[0]
     if (!firstTab) {
       if (selectedTabId !== null) {
-        cancelTransition()
+        playback.pause()
+        playbackTimeRef.current = 0
+        playbackIsPlayingRef.current = false
+        playerHandleRef.current?.pause()
         pendingTabSeekRef.current = 0
         setSelectedTabId(null)
       }
       return
     }
 
-    const selectedTab = replay.tabs.find((tab) => tab.tabId === selectedTabId)
+    const selectedTab = sessionChanged
+      ? undefined
+      : replay.tabs.find((tab) => tab.tabId === selectedTabId)
     const firstPlayableIndex = playableChapterIndices[0]
     if (firstPlayableIndex === undefined) {
-      if (!selectedTab) setSelectedTabId(firstTab.tabId)
+      if (!selectedTab) resetTab(firstTab.tabId, false)
+      if (shouldCompleteNoVisualReplay(replay, autoStartedSessionRef.current)) {
+        autoStartedSessionRef.current = replay.sessionId
+        scheduleTransition(
+          {
+            title: 'No visual recordings → Replay complete',
+            skipped: skippedChapterSummary(
+              replay.tabs.map((_, index) => index),
+            ),
+          },
+          () => setSequenceComplete(true),
+        )
+      }
       return
     }
 
     if (autoStartedSessionRef.current !== replay.sessionId) {
       autoStartedSessionRef.current = replay.sessionId
       if (firstPlayableIndex > 0) {
-        playback.pause()
-        playbackIsPlayingRef.current = false
-        playerHandleRef.current?.pause()
-        pendingTabSeekRef.current = 0
-        pendingTabPlaybackRef.current = 'pause'
-        setSelectedTabId(
+        resetTab(
           replay.tabs[firstPlayableIndex]?.tabId ?? firstTab.tabId,
+          false,
         )
         scheduleTransition(
           {
@@ -215,20 +258,19 @@ export function Replay() {
         )
         return
       }
+      if (!selectedTab) {
+        resetTab(firstTab.tabId, true)
+        return
+      }
     }
 
-    if (!selectedTab) {
-      if (selectedTabId !== null) {
-        pendingTabSeekRef.current = 0
-        pendingTabPlaybackRef.current = 'pause'
-      }
-      setSelectedTabId(firstTab.tabId)
-    }
+    if (!selectedTab) resetTab(firstTab.tabId, false)
   }, [
     cancelTransition,
     playableChapterIndices,
     playback.pause,
     replay,
+    resetTab,
     scheduleTransition,
     selectedTabId,
   ])
@@ -239,23 +281,15 @@ export function Replay() {
       if (!replay || !Number.isSafeInteger(tabId)) return
       cancelTransition()
       setSequenceComplete(false)
-      playback.pause()
-      playbackIsPlayingRef.current = false
-      playerHandleRef.current?.pause()
-      if (tabId === selectedTabId) {
-        seekTo(0)
-        return
-      }
-      pendingTabSeekRef.current = 0
-      pendingTabPlaybackRef.current = 'pause'
-      setSelectedTabId(tabId)
+      resetTab(tabId, false)
     },
-    [cancelTransition, playback.pause, replay, seekTo, selectedTabId],
+    [cancelTransition, replay, resetTab],
   )
 
   const selectFrame = useCallback(
     (frame: ReplayFrame) => {
       if (transition) return
+      setSequenceComplete(false)
       seekTo(frame.t)
     },
     [seekTo, transition],
@@ -272,9 +306,6 @@ export function Replay() {
 
   const advanceChapter = useCallback(() => {
     if (!replay || selectedTabIndex < 0) return
-    playback.pause()
-    playbackIsPlayingRef.current = false
-    playerHandleRef.current?.pause()
 
     const nextPlayableIndex = playableChapterIndices.find(
       (index) => index > selectedTabIndex,
@@ -285,9 +316,9 @@ export function Replay() {
         (_, offset) => selectedTabIndex + offset + 1,
       )
       setSequenceComplete(false)
-      pendingTabSeekRef.current = 0
-      pendingTabPlaybackRef.current = 'pause'
-      setSelectedTabId(replay.tabs[nextPlayableIndex]?.tabId ?? null)
+      const nextTab = replay.tabs[nextPlayableIndex]
+      if (!nextTab) return
+      resetTab(nextTab.tabId, false)
       scheduleTransition(
         {
           title: `Tab ${selectedTabIndex + 1} complete → Opening ${chapterName(replay, nextPlayableIndex)}`,
@@ -322,8 +353,8 @@ export function Replay() {
     }
   }, [
     playableChapterIndices,
-    playback.pause,
     replay,
+    resetTab,
     scheduleTransition,
     selectedTabIndex,
   ])
@@ -367,26 +398,14 @@ export function Replay() {
     if (!replay || firstPlayableIndex === undefined) return
     cancelTransition()
     setSequenceComplete(false)
-    playback.pause()
-    playbackIsPlayingRef.current = false
-    playerHandleRef.current?.pause()
-    const firstPlayableTabId = replay.tabs[firstPlayableIndex]?.tabId ?? null
-    if (firstPlayableTabId === selectedTabId) {
-      seekTo(0)
-      playbackIsPlayingRef.current = true
-      playback.play()
-      return
-    }
-    pendingTabSeekRef.current = 0
-    pendingTabPlaybackRef.current = 'play'
-    setSelectedTabId(firstPlayableTabId)
+    const firstPlayableTab = replay.tabs[firstPlayableIndex]
+    if (firstPlayableTab) resetTab(firstPlayableTab.tabId, true)
   }, [
     cancelTransition,
     playableChapterIndices,
     playback,
     replay,
-    seekTo,
-    selectedTabId,
+    resetTab,
     sequenceComplete,
     transition,
   ])
@@ -397,7 +416,9 @@ export function Replay() {
   )
   const seekFromTransport = useCallback(
     (seconds: number) => {
-      if (!transition) seekTo(seconds)
+      if (transition) return
+      setSequenceComplete(false)
+      seekTo(seconds)
     },
     [seekTo, transition],
   )
@@ -487,7 +508,15 @@ export function Replay() {
                 >
                   <TabsList variant="line">
                     {replay.tabs.map(({ tabId }, idx) => (
-                      <TabsTrigger key={tabId} value={tabId.toString()}>
+                      <TabsTrigger
+                        key={tabId}
+                        value={tabId.toString()}
+                        onClick={
+                          tabId === selectedTabId
+                            ? () => selectTab(tabId.toString())
+                            : undefined
+                        }
+                      >
                         Tab {idx + 1}
                       </TabsTrigger>
                     ))}
@@ -594,7 +623,9 @@ function isPlayableChapter(view: TabView): boolean {
 
 function chapterName(replay: ReplayData, chapterIndex: number): string {
   const tabId = replay.tabs[chapterIndex]?.tabId
-  const tabUrl = replay.frames.find((frame) => frame.tabId === tabId)?.url
+  const tabUrl = replay.frames.find(
+    (frame) => frame.tabId === tabId && frame.url,
+  )?.url
   return `Tab ${chapterIndex + 1} · ${displayHost(tabUrl ?? replay.site)}`
 }
 
@@ -615,4 +646,15 @@ function skippedChapterSummary(indices: readonly number[]): string | null {
     return `Skipped Tab ${(indices[0] ?? 0) + 1} — no visual recording`
   }
   return `Skipped Tabs ${(indices[0] ?? 0) + 1}–${(indices.at(-1) ?? 0) + 1} — no visual recordings`
+}
+
+function shouldCompleteNoVisualReplay(
+  replay: ReplayData,
+  autoStartedSessionId: string | null,
+): boolean {
+  return (
+    replay.complete === true &&
+    replay.eventsLoaded &&
+    autoStartedSessionId !== replay.sessionId
+  )
 }

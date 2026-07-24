@@ -87,9 +87,11 @@ mock.module('./PlaybackTransport', () => ({
   PlaybackTransport: ({
     playback,
     totalSeconds,
+    onSeek,
   }: {
     playback: Playback
     totalSeconds: number
+    onSeek: (seconds: number) => void
   }) => {
     const finished = playback.time >= totalSeconds
     return (
@@ -122,6 +124,13 @@ mock.module('./PlaybackTransport', () => ({
             {speed}×
           </button>
         ))}
+        <button
+          type="button"
+          data-playback-seek-middle
+          onClick={() => onSeek(totalSeconds / 2)}
+        >
+          Seek middle
+        </button>
       </div>
     )
   },
@@ -150,7 +159,13 @@ mock.module('./EventTimeline', () => ({
   ),
 }))
 
-const TargetSelectContext = createContext<(targetId: string) => void>(() => {})
+const TargetSelectContext = createContext<{
+  selectedTarget: string
+  selectTarget: (targetId: string) => void
+}>({
+  selectedTarget: '',
+  selectTarget: () => {},
+})
 
 mock.module('@/components/ui/tabs', () => ({
   Tabs: ({
@@ -162,7 +177,9 @@ mock.module('@/components/ui/tabs', () => ({
     onValueChange: (targetId: string) => void
     children: ReactNode
   }) => (
-    <TargetSelectContext.Provider value={onValueChange}>
+    <TargetSelectContext.Provider
+      value={{ selectedTarget: value, selectTarget: onValueChange }}
+    >
       <div data-selected-target={value}>{children}</div>
     </TargetSelectContext.Provider>
   ),
@@ -170,16 +187,21 @@ mock.module('@/components/ui/tabs', () => ({
   TabsTrigger: ({
     value,
     children,
+    onClick,
   }: {
     value: string
     children: ReactNode
+    onClick?: () => void
   }) => {
-    const selectTarget = useContext(TargetSelectContext)
+    const { selectedTarget, selectTarget } = useContext(TargetSelectContext)
     return (
       <button
         type="button"
         data-target-chip={value}
-        onClick={() => selectTarget(value)}
+        onClick={() => {
+          onClick?.()
+          if (value !== selectedTarget) selectTarget(value)
+        }}
       >
         {children}
       </button>
@@ -306,6 +328,7 @@ function replayData(
     frames: replayFrames,
     complete: true,
     tabs,
+    eventsLoaded: true,
     eventsForTab: eventCatalog.eventsForTab,
   }
 }
@@ -940,6 +963,93 @@ describe('Replay', () => {
     ).toBe('true')
   })
 
+  it('waits for event loading before completing an all-no-visual replay', async () => {
+    const noVisualReplay = replayData(
+      [noVisualEvent(1, 1_000), noVisualEvent(2, 2_000)],
+      [1, 2],
+      [chapterFrame(1, 1), chapterFrame(2, 2)],
+    )
+    noVisualReplay.eventsLoaded = false
+    replayResult = { ...replayResult, replay: noVisualReplay }
+    await renderReplay()
+
+    expect(container.textContent).toContain('Tab 1 of 2')
+    expect(container.textContent).not.toContain('No visual recordings')
+    expect(transitionTimers.size).toBe(0)
+
+    noVisualReplay.eventsLoaded = true
+    replayResult = { ...replayResult, replay: { ...noVisualReplay } }
+    await renderReplay()
+
+    expect(container.textContent).toContain(
+      'No visual recordings → Replay complete',
+    )
+    expect(container.textContent).toContain(
+      'Skipped Tabs 1–2 — no visual recordings',
+    )
+    expect([...transitionTimers.values()][0]?.delay).toBe(1_000)
+
+    await fireNextTransition()
+    expect(container.textContent).toContain('Replay complete')
+    expect(container.querySelector('[data-playback-toggle]')).toBeNull()
+  })
+
+  it('resets selection, transport, and stale transitions when the session changes', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+        [1, 2],
+        [chapterFrame(1, 2), chapterFrame(2, 11)],
+      ),
+    }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+    const staleTransition = [...transitionTimers.values()][0]?.callback
+
+    const nextSession = replayData(
+      [...visualEvents(2, 1_000), ...visualEvents(3, 10_000)],
+      [2, 3],
+      [chapterFrame(2, 2), chapterFrame(3, 11)],
+    )
+    nextSession.sessionId = 'session-2'
+    replayResult = {
+      ...replayResult,
+      sessionId: 'session-2',
+      replay: nextSession,
+    }
+    await renderReplay()
+
+    expect(transitionTimers.size).toBe(0)
+    expect(container.textContent).not.toContain('Tab 1 complete')
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(container.textContent).toContain('Tab 1 of 2')
+    expect(
+      container
+        .querySelector('[data-selected-target]')
+        ?.getAttribute('data-selected-target'),
+    ).toBe('2')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+
+    await act(async () => {
+      if (typeof staleTransition === 'function') staleTransition()
+    })
+    expect(
+      container
+        .querySelector('[data-selected-target]')
+        ?.getAttribute('data-selected-target'),
+    ).toBe('2')
+  })
+
   it('cancels a pending transition and invalidates its callback on manual selection', async () => {
     const chapterEvents = [
       ...visualEvents(1, 1_000),
@@ -992,6 +1102,45 @@ describe('Replay', () => {
         .querySelector('[data-playback-playing]')
         ?.getAttribute('data-playback-playing'),
     ).toBe('false')
+  })
+
+  it('lets the active destination chip cancel its transition and continue forward', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [
+          ...visualEvents(1, 1_000),
+          ...visualEvents(2, 10_000),
+          ...visualEvents(3, 20_000),
+        ],
+        [1, 2, 3],
+        [chapterFrame(1, 2), chapterFrame(2, 11), chapterFrame(3, 21)],
+      ),
+    }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+
+    expect(container.textContent).toContain('Tab 1 complete')
+    await click('[data-target-chip="2"]')
+
+    expect(transitionTimers.size).toBe(0)
+    expect(container.textContent).not.toContain('Tab 1 complete')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('false')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+
+    await click('[data-playback-toggle]')
+    await completeCurrentChapter(4_000)
+    expect(container.textContent).toContain(
+      'Tab 2 complete → Opening Tab 3 · tab-3.example',
+    )
   })
 
   it('keeps a manually selected no-visual chapter paused and tab-local', async () => {
@@ -1089,6 +1238,42 @@ describe('Replay', () => {
     await completeCurrentChapter(4_000)
     expect(container.textContent).toContain('Replay complete')
     expect(transitionTimers.size).toBe(0)
+  })
+
+  it('resumes from a manual seek after sequence completion', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(visualEvents(1, 1_000), [1], [chapterFrame(1, 2)]),
+    }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+    expect(container.textContent).toContain('Replay complete')
+
+    await click('[data-playback-seek-middle]')
+
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('2')
+    expect(
+      container
+        .querySelector('[data-playback-toggle]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Play')
+
+    await click('[data-playback-toggle]')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('2')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
   })
 
   it('clears the transition timer when the replay unmounts', async () => {

@@ -69,6 +69,8 @@ export interface ReplayData {
   frames: ReplayFrame[]
   complete: boolean | null
   tabs: ReplayTabData[]
+  /** True once the downloadable event snapshot has resolved, including 404-empty. */
+  eventsLoaded: boolean
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
@@ -118,8 +120,13 @@ export function useReplayData(): UseReplayDataResult {
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
-    return buildReplayData(taskQuery.data, eventCatalog, metadataQuery.data)
-  }, [taskQuery.data, eventCatalog, metadataQuery.data])
+    return buildReplayData(
+      taskQuery.data,
+      eventCatalog,
+      metadataQuery.data,
+      eventsQuery.data !== undefined,
+    )
+  }, [taskQuery.data, eventCatalog, eventsQuery.data, metadataQuery.data])
 
   return {
     replay,
@@ -134,6 +141,7 @@ function buildReplayData(
   detail: TaskDetail,
   eventCatalog: ReplayEventCatalog,
   metadata: RecordingMetadata | undefined,
+  eventsLoaded: boolean,
 ): ReplayData {
   const { session: task, dispatches } = detail
   const sessionStartMs = task.startedAt
@@ -172,6 +180,7 @@ function buildReplayData(
     frames,
     complete: metadata?.complete ?? null,
     tabs,
+    eventsLoaded,
     eventsForTab: eventCatalog.eventsForTab,
   }
 }
