@@ -179,6 +179,9 @@ export function buildSessionReplayPlan(
   }
 
   const firstPlayableTabId = first?.tabId ?? null
+  // With nothing playable anywhere, still name a tab so the page keeps a chip
+  // selected and shows that tab's no-recording state rather than no tab at all.
+  const cameraFallbackTabId = firstPlayableTabId ?? input.tabs[0]?.tabId ?? null
   const trackFor = (tabId: number | null): ReplayTrack | null =>
     tabId === null ? null : (tracksByTab.get(tabId) ?? null)
   const stateAt = (time: number): ReplayState => {
@@ -188,7 +191,7 @@ export function buildSessionReplayPlan(
       currentAction: actions[currentIndex] ?? null,
       tabId:
         (currentIndex < 0 ? null : cameraTabByIndex[currentIndex]) ??
-        firstPlayableTabId,
+        cameraFallbackTabId,
     }
   }
 

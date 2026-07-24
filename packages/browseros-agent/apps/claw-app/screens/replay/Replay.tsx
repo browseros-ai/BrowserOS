@@ -81,11 +81,7 @@ export function Replay() {
     [seek],
   )
 
-  const transportPlayback = useMemo(
-    () => ({ ...playback, togglePlay }),
-    [playback, togglePlay],
-  )
-
+  const transportPlayback = { ...playback, togglePlay }
   const state = plan.stateAt(playback.time)
   const visibleTabId = pinnedTabId ?? state.tabId
   const track = plan.trackFor(visibleTabId)

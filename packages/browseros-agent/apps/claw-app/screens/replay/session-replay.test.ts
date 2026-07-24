@@ -130,6 +130,9 @@ describe('activity bounds', () => {
     expect(plan.firstPlayableTabId).toBeNull()
     // The global timeline still lists everything, timed from session start.
     expect(plan.actions.map(({ startAt }) => startAt)).toEqual([4, 9])
+    // The camera still names a tab so the page can show its no-recording state.
+    expect(plan.stateAt(0).tabId).toBe(1)
+    expect(plan.trackFor(1)).toBeNull()
   })
 })
 
