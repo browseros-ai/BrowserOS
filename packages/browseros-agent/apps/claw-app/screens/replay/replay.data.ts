@@ -30,6 +30,8 @@ import {
   type ReplayEventCatalog,
 } from './replay-events'
 
+const EVENT_SNAPSHOT_RETRY_MS = 10_000
+
 export interface ReplaySegmentData {
   documentId: string
   targetId?: string | null
@@ -112,11 +114,25 @@ export function useReplayData(): UseReplayDataResult {
     metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
   const requestedRevision = useRef<string | null>(null)
   const refreshChainRef = useRef<Promise<void>>(Promise.resolve())
+  const retryTimerRef = useRef<number | null>(null)
+  const mountedRef = useRef(false)
+  const [refreshAttempt, setRefreshAttempt] = useState(0)
   const [resolvedEventSnapshot, setResolvedEventSnapshot] = useState<{
     sessionId: string
     revision: string
     events: readonly ReplayEvent[]
   } | null>(null)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshAttempt re-arms the same revision after query retries are exhausted.
   useEffect(() => {
     if (
       sessionRevision === null ||
@@ -124,27 +140,44 @@ export function useReplayData(): UseReplayDataResult {
     ) {
       return
     }
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
     requestedRevision.current = sessionRevision
     // Metadata owns event downloads so each accepted payload can be attributed
     // to the exact revision that requested it, even when revisions race.
     refreshChainRef.current = refreshChainRef.current
       .then(async () => {
         if (requestedRevision.current !== sessionRevision) return
-        const result = await eventsQuery.refetch()
+        try {
+          const result = await eventsQuery.refetch()
+          if (
+            result.isSuccess &&
+            result.data &&
+            requestedRevision.current === sessionRevision
+          ) {
+            setResolvedEventSnapshot({
+              sessionId,
+              revision: sessionRevision,
+              events: result.data.events,
+            })
+            return
+          }
+        } catch {}
         if (
-          result.isSuccess &&
-          result.data &&
+          mountedRef.current &&
           requestedRevision.current === sessionRevision
         ) {
-          setResolvedEventSnapshot({
-            sessionId,
-            revision: sessionRevision,
-            events: result.data.events,
-          })
+          requestedRevision.current = null
+          retryTimerRef.current = window.setTimeout(() => {
+            retryTimerRef.current = null
+            setRefreshAttempt((attempt) => attempt + 1)
+          }, EVENT_SNAPSHOT_RETRY_MS)
         }
       })
       .catch(() => undefined)
-  }, [eventsQuery.refetch, sessionId, sessionRevision])
+  }, [eventsQuery.refetch, refreshAttempt, sessionId, sessionRevision])
   const hasCurrentSessionSnapshot =
     resolvedEventSnapshot?.sessionId === sessionId
   const eventsLoaded =

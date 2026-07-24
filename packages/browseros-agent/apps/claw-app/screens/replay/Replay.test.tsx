@@ -296,7 +296,7 @@ function replayData(
   replayEvents: readonly ReplayEvent[],
   tabOrder?: number[],
   replayFrames: ReplayFrame[] = frames,
-) {
+): replayDataModule.ReplayData {
   const eventCatalog = buildReplayEventCatalog(replayEvents)
   const tabs = (tabOrder ?? eventCatalog.tabIds).map((tabId) => ({
     tabId,
@@ -1110,9 +1110,9 @@ describe('Replay', () => {
     replayResult = {
       ...replayResult,
       replay: replayData(
-        [noVisualEvent(1, 1_000)],
-        [1],
-        [chapterFrame(1, 1, 'first.example')],
+        [noVisualEvent(1, 1_000), noVisualEvent(2, 2_000)],
+        [1, 2],
+        [chapterFrame(1, 1), chapterFrame(2, 2, 'second.example')],
       ),
     }
     await renderReplay()
@@ -1122,14 +1122,29 @@ describe('Replay', () => {
     replayResult = {
       ...replayResult,
       replay: replayData(
-        visualEvents(1, 1_000),
-        [1],
-        [chapterFrame(1, 1, 'first.example')],
+        [noVisualEvent(1, 1_000), ...visualEvents(2, 2_000)],
+        [1, 2],
+        [chapterFrame(1, 1), chapterFrame(2, 2, 'second.example')],
       ),
     }
     await renderReplay()
 
     expect(container.textContent).not.toContain('Replay complete')
+    expect(container.textContent).toContain(
+      'Starting replay → Opening Tab 2 · second.example',
+    )
+    expect(
+      container
+        .querySelector('[data-selected-target]')
+        ?.getAttribute('data-selected-target'),
+    ).toBe('2')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('false')
+
+    await fireNextTransition()
     expect(
       container
         .querySelector('[data-playback-playing]')
@@ -1182,6 +1197,63 @@ describe('Replay', () => {
         .querySelector('[data-playback-playing]')
         ?.getAttribute('data-playback-playing'),
     ).toBe('true')
+  })
+
+  it("resumes when the completed chapter's recording grows", async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(visualEvents(1, 1_000), [1], [chapterFrame(1, 2)]),
+    }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+    expect(container.textContent).toContain('Replay complete')
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        visualEvents(1, 1_000, 6_000),
+        [1],
+        [chapterFrame(1, 2)],
+      ),
+    }
+    await renderReplay()
+
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('4')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+
+    await completeCurrentChapter(6_000)
+    expect(container.textContent).toContain('Replay complete')
+  })
+
+  it('waits for the current event revision before finalizing the sequence', async () => {
+    const refreshingReplay = replayData(
+      visualEvents(1, 1_000),
+      [1],
+      [chapterFrame(1, 2)],
+    )
+    refreshingReplay.eventsLoaded = false
+    replayResult = { ...replayResult, replay: refreshingReplay }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+
+    expect(container.textContent).not.toContain('Replay complete')
+
+    replayResult = {
+      ...replayResult,
+      replay: { ...refreshingReplay, eventsLoaded: true },
+    }
+    await renderReplay()
+
+    expect(container.textContent).toContain('Replay complete')
   })
 
   it('plays a static visual snapshot before advancing', async () => {
