@@ -9,7 +9,7 @@ use crate::{
 use browseros_core::PageId;
 use browseros_mcp::{InnerCallHook, InnerCallRecord};
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
@@ -66,6 +66,7 @@ impl InnerCallHook for ScriptInnerCallHook {
         let page = record.page;
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
+        let raw_args = record.args.clone();
         Box::pin(async move {
             let Some(identity) = self.identity() else {
                 return;
@@ -109,7 +110,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                     .map(|page| page.target_id.as_str().to_string()),
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
-                args_json: bounded_args_json(&json!({ "page": page })),
+                args_json: bounded_args_json(&raw_args),
                 result_meta: result_meta(is_error, false, &Value::Null, 0),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
@@ -247,6 +248,7 @@ mod tests {
     use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
+    use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
@@ -458,6 +460,7 @@ mod tests {
         hook.record(InnerCallRecord {
             method: "input.click",
             page: Some(1),
+            args: &json!([1, "e5"]),
             is_error: false,
             duration_ms: 3,
         })
@@ -481,6 +484,7 @@ mod tests {
         hook.record(InnerCallRecord {
             method: "input.click",
             page: Some(4),
+            args: &json!([4, "e5"]),
             is_error: false,
             duration_ms: 12,
         })

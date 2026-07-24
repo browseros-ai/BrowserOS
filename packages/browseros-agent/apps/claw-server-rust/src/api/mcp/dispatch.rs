@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards, helper_runtime, observers},
+    api::mcp::{distill, effects, guards, helper_runtime, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -206,10 +206,16 @@ const EFFECTS: &[NamedToolEffect] = &[
     },
 ];
 
-const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
-    name: "audit",
-    run: observers::audit::apply,
-}];
+const OBSERVERS: &[NamedToolObserver] = &[
+    NamedToolObserver {
+        name: "audit",
+        run: observers::audit::apply,
+    },
+    NamedToolObserver {
+        name: "distill",
+        run: distill::distill,
+    },
+];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -1107,7 +1113,7 @@ mod tests {
                 .iter()
                 .map(|observer| observer.name)
                 .collect::<Vec<_>>(),
-            ["audit"]
+            ["audit", "distill"]
         );
     }
 

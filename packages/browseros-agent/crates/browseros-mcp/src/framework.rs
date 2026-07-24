@@ -148,6 +148,9 @@ pub struct InnerCallRecord<'a> {
     pub method: &'a str,
     /// Target page id, when the primitive addressed a specific page.
     pub page: Option<u32>,
+    /// The primitive's arguments as a JSON array, so the audit shows what ran
+    /// and the self-healing distiller can replay the sequence.
+    pub args: &'a Value,
     /// Whether the primitive failed.
     pub is_error: bool,
     /// Wall-clock duration of the primitive in milliseconds.

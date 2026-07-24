@@ -562,6 +562,9 @@ impl BrowserBridge {
     async fn call(&self, method: &str, args_json: &str) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
+        // Kept for the audit record and the self-healing distiller; dispatch
+        // consumes the owned args below.
+        let recorded_args = Value::Array(args.clone());
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
@@ -577,6 +580,7 @@ impl BrowserBridge {
             hook.record(InnerCallRecord {
                 method,
                 page,
+                args: &recorded_args,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
             })

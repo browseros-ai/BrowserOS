@@ -347,6 +347,20 @@ impl AuditLog {
         mark_screenshot(self.db.connection(), dispatch_id).await
     }
 
+    /// Reads the child primitives recorded inside a script dispatch, in run
+    /// order, so the self-healing distiller can replay the sequence.
+    pub async fn dispatches_with_parent(
+        &self,
+        parent_dispatch_id: &str,
+    ) -> AppResult<Vec<ToolDispatchRow>> {
+        Ok(ToolDispatches::find()
+            .filter(tool_dispatches::Column::ParentDispatchId.eq(parent_dispatch_id))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?)
+    }
+
     /// Records a session start and refreshes its task summary atomically.
     pub async fn record_session_start(
         &self,
