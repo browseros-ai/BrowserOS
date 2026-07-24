@@ -808,6 +808,47 @@ describe('Replay', () => {
     expect(maxActivePlayers).toBe(1)
   })
 
+  it('changes the warning, viewport, timeline, and local clock as one chapter', async () => {
+    const chapterEvents = [
+      ...visualEvents(1, 1_000),
+      ...visualEvents(2, 10_000),
+    ]
+    const chapterReplay = replayData(
+      chapterEvents,
+      [1, 2],
+      [chapterFrame(1, 2), chapterFrame(2, 11)],
+    )
+    const secondTab = chapterReplay.tabs[1]
+    if (!secondTab) throw new Error('tab 2 metadata missing')
+    secondTab.complete = false
+    const secondSegment = secondTab.segments[0]
+    if (!secondSegment) throw new Error('tab 2 segment missing')
+    secondSegment.hasGap = true
+    replayResult = { ...replayResult, replay: chapterReplay }
+    await renderReplay()
+
+    expect(container.textContent).not.toContain('Recording incomplete')
+    await completeCurrentChapter(4_000)
+
+    expect(container.textContent).toContain('Tab 2 of 2')
+    expect(container.textContent).toContain(
+      'Recording incomplete — this replay contains a known gap',
+    )
+    expect(
+      container
+        .querySelector('[data-player-documents]')
+        ?.getAttribute('data-player-documents'),
+    ).toBe('document-2,document-2,document-2')
+    expect(container.querySelector('[data-event-timeline]')?.textContent).toBe(
+      'Action on Tab 2',
+    )
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+  })
+
   it('summarizes consecutive middle and trailing no-visual chapters', async () => {
     const chapterEvents = [
       ...visualEvents(1, 1_000),
