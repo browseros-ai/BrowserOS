@@ -4,6 +4,7 @@ import {
   act,
   createContext,
   type ReactNode,
+  StrictMode,
   useContext,
   useEffect,
 } from 'react'
@@ -517,9 +518,11 @@ afterEach(async () => {
 async function renderReplay() {
   await act(async () => {
     root.render(
-      <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-        <Replay />
-      </MemoryRouter>,
+      <StrictMode>
+        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
+          <Replay />
+        </MemoryRouter>
+      </StrictMode>,
     )
   })
 }
@@ -554,13 +557,7 @@ async function click(selector: string) {
 
 describe('Replay', () => {
   it('discovers logical tabs and keeps frame selection tab-local', async () => {
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(
       [...container.querySelectorAll('[data-target-chip]')].map(
@@ -571,13 +568,7 @@ describe('Replay', () => {
     expect(container.querySelector('[data-player-targets]')).toBeNull()
 
     replayResult = { ...replayResult, replay: replayData(events) }
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(
       container
@@ -629,13 +620,7 @@ describe('Replay', () => {
       ...replayResult,
       replay: replayData(events, [1]),
     }
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(
       container
@@ -663,13 +648,7 @@ describe('Replay', () => {
       replay: replayData(navigationEvents),
     }
 
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(container.textContent).not.toContain('Navigation 1')
     expect(container.textContent).not.toContain('Navigation 2')
@@ -718,13 +697,7 @@ describe('Replay', () => {
       replay: replayData(incompleteEvents),
     }
 
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(
       container
@@ -750,13 +723,7 @@ describe('Replay', () => {
     }
     replayResult = { ...replayResult, replay: partialReplay }
 
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(container.textContent).toContain(
       'Recording incomplete — playback starts at 0:01',
@@ -777,13 +744,7 @@ describe('Replay', () => {
     }
     replayResult = { ...replayResult, replay: partialReplay }
 
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
-        </MemoryRouter>,
-      )
-    })
+    await renderReplay()
 
     expect(container.textContent).not.toContain('Recording incomplete')
   })
@@ -1018,6 +979,23 @@ describe('Replay', () => {
     expect(container.querySelector('[data-playback-toggle]')).toBeNull()
   })
 
+  it('does not complete an all-no-visual replay while the session is live', async () => {
+    const liveReplay = replayData(
+      [noVisualEvent(1, 1_000)],
+      [1],
+      [chapterFrame(1, 1)],
+    )
+    liveReplay.status = 'running'
+    replayResult = { ...replayResult, replay: liveReplay }
+    await renderReplay()
+
+    expect(container.textContent).not.toContain(
+      'No visual recordings → Replay complete',
+    )
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(transitionTimers.size).toBe(0)
+  })
+
   it('autoplays when the first playable snapshot arrives after metadata', async () => {
     const loadingReplay = replayData(
       [],
@@ -1126,6 +1104,84 @@ describe('Replay', () => {
       if (typeof staleTransition === 'function') staleTransition()
     })
     expect(container.textContent).not.toContain('Replay complete')
+  })
+
+  it('starts a playable snapshot that arrives after empty-replay completion', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [noVisualEvent(1, 1_000)],
+        [1],
+        [chapterFrame(1, 1, 'first.example')],
+      ),
+    }
+    await renderReplay()
+    await fireNextTransition()
+    expect(container.textContent).toContain('Replay complete')
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        visualEvents(1, 1_000),
+        [1],
+        [chapterFrame(1, 1, 'first.example')],
+      ),
+    }
+    await renderReplay()
+
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
+    expect(
+      container
+        .querySelector('[data-playback-time]')
+        ?.getAttribute('data-playback-time'),
+    ).toBe('0')
+  })
+
+  it('continues into a later chapter that becomes playable after completion', async () => {
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [...visualEvents(1, 1_000), noVisualEvent(2, 7_000)],
+        [1, 2],
+        [chapterFrame(1, 2), chapterFrame(2, 7, 'second.example')],
+      ),
+    }
+    await renderReplay()
+    await completeCurrentChapter(4_000)
+    await fireNextTransition()
+    expect(container.textContent).toContain('Replay complete')
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(
+        [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+        [1, 2],
+        [chapterFrame(1, 2), chapterFrame(2, 11, 'second.example')],
+      ),
+    }
+    await renderReplay()
+
+    expect(container.textContent).not.toContain('Replay complete')
+    expect(container.textContent).toContain(
+      'Tab 1 complete → Opening Tab 2 · second.example',
+    )
+    expect(
+      container
+        .querySelector('[data-selected-target]')
+        ?.getAttribute('data-selected-target'),
+    ).toBe('2')
+
+    await fireNextTransition()
+    expect(
+      container
+        .querySelector('[data-playback-playing]')
+        ?.getAttribute('data-playback-playing'),
+    ).toBe('true')
   })
 
   it('plays a static visual snapshot before advancing', async () => {

@@ -28,7 +28,7 @@ const CHAPTER_TRANSITION_MS = 1_000
 const STATIC_CHAPTER_SECONDS = 0.001
 
 interface ChapterTransition {
-  kind: 'chapter' | 'empty'
+  kind: 'advance' | 'complete' | 'empty'
   title: string
   skipped: string | null
 }
@@ -51,6 +51,7 @@ export function Replay() {
   const activeSessionRef = useRef<string | null>(null)
   const autoStartedSessionRef = useRef<string | null>(null)
   const operatorControlledSessionRef = useRef<string | null>(null)
+  const emptySequenceSessionRef = useRef<string | null>(null)
 
   const tabViewInput = useMemo(
     () =>
@@ -123,6 +124,12 @@ export function Replay() {
   useEffect(
     () => () => {
       invalidateTransition()
+      activeSessionRef.current = null
+      autoStartedSessionRef.current = null
+      operatorControlledSessionRef.current = null
+      emptySequenceSessionRef.current = null
+      pendingTabSeekRef.current = null
+      pendingTabPlaybackRef.current = 'pause'
     },
     [invalidateTransition],
   )
@@ -210,6 +217,7 @@ export function Replay() {
         return
       }
       autoStartedSessionRef.current = currentReplay.sessionId
+      emptySequenceSessionRef.current = currentReplay.sessionId
       scheduleTransition(
         {
           kind: 'empty',
@@ -247,7 +255,7 @@ export function Replay() {
       )
       scheduleTransition(
         {
-          kind: 'chapter',
+          kind: 'advance',
           title: `Starting replay → Opening ${chapterName(currentReplay, firstPlayableIndex)}`,
           skipped: skippedChapterSummary(
             Array.from({ length: firstPlayableIndex }, (_, index) => index),
@@ -269,6 +277,7 @@ export function Replay() {
       activeSessionRef.current = replay.sessionId
       autoStartedSessionRef.current = null
       operatorControlledSessionRef.current = null
+      emptySequenceSessionRef.current = null
       cancelTransition()
       setSequenceComplete(false)
     }
@@ -291,12 +300,13 @@ export function Replay() {
       : replay.tabs.find((tab) => tab.tabId === selectedTabId)
     const firstPlayableIndex = playableChapterIndices[0]
     const invalidEmptyTransition =
-      transition?.kind === 'empty' &&
+      emptySequenceSessionRef.current === replay.sessionId &&
       (firstPlayableIndex !== undefined ||
         !replay.eventsLoaded ||
-        replay.complete !== true)
+        replay.status === 'running')
     if (invalidEmptyTransition) {
       cancelTransition()
+      emptySequenceSessionRef.current = null
       autoStartedSessionRef.current = null
       setSequenceComplete(false)
     }
@@ -325,7 +335,6 @@ export function Replay() {
     resetTab,
     selectedTabId,
     startInitialChapter,
-    transition,
   ])
 
   const selectTab = useCallback(
@@ -376,7 +385,7 @@ export function Replay() {
       resetTab(nextTab.tabId, false)
       scheduleTransition(
         {
-          kind: 'chapter',
+          kind: 'advance',
           title: `Tab ${selectedTabIndex + 1} complete → Opening ${chapterName(replay, nextPlayableIndex)}`,
           skipped: skippedChapterSummary(skippedIndices),
         },
@@ -399,7 +408,7 @@ export function Replay() {
     if (trailingSkippedIndices.length > 0) {
       scheduleTransition(
         {
-          kind: 'chapter',
+          kind: 'complete',
           title: `Tab ${selectedTabIndex + 1} complete → Replay complete`,
           skipped: skippedChapterSummary(trailingSkippedIndices),
         },
@@ -414,6 +423,27 @@ export function Replay() {
     resetTab,
     scheduleTransition,
     selectedTabIndex,
+  ])
+
+  useEffect(() => {
+    if (!replay || selectedTabIndex < 0) return
+    const hasNewLaterChapter = playableChapterIndices.some(
+      (index) => index > selectedTabIndex,
+    )
+    const sequenceWasFinished =
+      sequenceComplete || transition?.kind === 'complete'
+    if (!hasNewLaterChapter || !sequenceWasFinished) return
+    cancelTransition()
+    setSequenceComplete(false)
+    advanceChapter()
+  }, [
+    advanceChapter,
+    cancelTransition,
+    playableChapterIndices,
+    replay,
+    selectedTabIndex,
+    sequenceComplete,
+    transition,
   ])
 
   useEffect(() => {
@@ -714,7 +744,7 @@ function shouldCompleteNoVisualReplay(
   autoStartedSessionId: string | null,
 ): boolean {
   return (
-    replay.complete === true &&
+    replay.status !== 'running' &&
     replay.eventsLoaded &&
     autoStartedSessionId !== replay.sessionId
   )

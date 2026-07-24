@@ -105,15 +105,18 @@ export function useReplayData(): UseReplayDataResult {
   })
   const eventsQuery = useReplayEvents({
     variables: { sessionId },
-    enabled: sessionId.length > 0,
+    enabled: false,
   })
   const metadataRevision = replayEventsRevision(metadataQuery.data)
   const sessionRevision =
     metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
   const requestedRevision = useRef<string | null>(null)
-  const [resolvedEventsRevision, setResolvedEventsRevision] = useState<
-    string | null
-  >(null)
+  const refreshChainRef = useRef<Promise<void>>(Promise.resolve())
+  const [resolvedEventSnapshot, setResolvedEventSnapshot] = useState<{
+    sessionId: string
+    revision: string
+    events: readonly ReplayEvent[]
+  } | null>(null)
   useEffect(() => {
     if (
       sessionRevision === null ||
@@ -122,16 +125,34 @@ export function useReplayData(): UseReplayDataResult {
       return
     }
     requestedRevision.current = sessionRevision
-    void eventsQuery.refetch().then((result) => {
-      if (result.isSuccess && requestedRevision.current === sessionRevision) {
-        setResolvedEventsRevision(sessionRevision)
-      }
-    })
-  }, [eventsQuery.refetch, sessionRevision])
+    // Metadata owns event downloads so each accepted payload can be attributed
+    // to the exact revision that requested it, even when revisions race.
+    refreshChainRef.current = refreshChainRef.current
+      .then(async () => {
+        if (requestedRevision.current !== sessionRevision) return
+        const result = await eventsQuery.refetch()
+        if (
+          result.isSuccess &&
+          result.data &&
+          requestedRevision.current === sessionRevision
+        ) {
+          setResolvedEventSnapshot({
+            sessionId,
+            revision: sessionRevision,
+            events: result.data.events,
+          })
+        }
+      })
+      .catch(() => undefined)
+  }, [eventsQuery.refetch, sessionId, sessionRevision])
+  const hasCurrentSessionSnapshot =
+    resolvedEventSnapshot?.sessionId === sessionId
   const eventsLoaded =
-    sessionRevision !== null && resolvedEventsRevision === sessionRevision
-  const events = eventsLoaded
-    ? (eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS)
+    sessionRevision !== null &&
+    hasCurrentSessionSnapshot &&
+    resolvedEventSnapshot?.revision === sessionRevision
+  const events = hasCurrentSessionSnapshot
+    ? resolvedEventSnapshot.events
     : EMPTY_REPLAY_EVENTS
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
