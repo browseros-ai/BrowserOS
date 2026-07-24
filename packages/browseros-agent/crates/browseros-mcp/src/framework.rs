@@ -94,6 +94,37 @@ pub trait InnerCallHook: Send + Sync {
     fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
         Box::pin(async move { pages.to_vec() })
     }
+
+    /// Resolve a page id to its helper host bucket (hostname minus a leading
+    /// `www.`). `browseros-mcp` cannot read a page's URL from ownership state,
+    /// so the host does it. The default has no host.
+    fn resolve_host<'a>(&'a self, _page: u32) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
+
+    /// Persist a reusable helper for a host under `helpers/<host>/<name>.js` with
+    /// a provenance header. `Err(reason)` is surfaced to the script. The default
+    /// reports that persistence is unavailable (no host attached).
+    fn save_helper<'a>(
+        &'a self,
+        _host: &'a str,
+        _name: &'a str,
+        _source: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { Err("helpers are not available in this context".to_string()) })
+    }
+
+    /// List a host's saved helpers with provenance for discovery. Each value is
+    /// `{ name, ageDays, candidate, agent }`. The default has none.
+    fn list_helpers<'a>(&'a self, _host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { Vec::new() })
+    }
+
+    /// Read a helper's source body (provenance header stripped), ready to eval.
+    /// The default has none.
+    fn read_helper<'a>(&'a self, _host: &'a str, _name: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
 }
 
 /// A completed inner primitive handed to [`InnerCallHook::record`].

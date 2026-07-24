@@ -1,8 +1,10 @@
 use crate::{
     api::mcp::dispatch::{ToolCall, ToolIdentity},
     api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
+    clock::now_epoch_ms,
     db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     ids::DispatchId,
+    services::helpers,
 };
 use browseros_core::PageId;
 use browseros_mcp::{InnerCallHook, InnerCallRecord};
@@ -185,6 +187,63 @@ impl InnerCallHook for ScriptInnerCallHook {
                 "pageId",
             )
             .await
+        })
+    }
+
+    fn resolve_host<'a>(&'a self, page: u32) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let browser = self.call.browser_session.as_ref()?;
+            let info = browser.pages.get_info(PageId(page)).await?;
+            helpers::host_bucket(&info.url)
+        })
+    }
+
+    fn save_helper<'a>(
+        &'a self,
+        host: &'a str,
+        name: &'a str,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let Some(identity) = self.identity() else {
+                return Err("no agent identity for this script".to_string());
+            };
+            let meta = helpers::HelperMeta {
+                name: name.to_string(),
+                host: host.to_string(),
+                last_verified: now_epoch_ms(),
+                agent: identity.agent.slug().to_string(),
+                candidate: false,
+                deps: String::new(),
+            };
+            helpers::save_helper(&self.call.state.config.browserclaw_dir, &meta, source)
+                .map_err(|error| format!("could not save helper: {error}"))
+        })
+    }
+
+    fn list_helpers<'a>(&'a self, host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move {
+            let now = now_epoch_ms();
+            helpers::list_helper_meta(&self.call.state.config.browserclaw_dir, host)
+                .into_iter()
+                .map(|meta| {
+                    // Age is a soft staleness signal; absent when never stamped.
+                    let age_days = (meta.last_verified > 0)
+                        .then(|| (now - meta.last_verified).max(0) / 86_400_000);
+                    json!({
+                        "name": meta.name,
+                        "ageDays": age_days,
+                        "candidate": meta.candidate,
+                        "agent": meta.agent,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn read_helper<'a>(&'a self, host: &'a str, name: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            helpers::read_helper_source(&self.call.state.config.browserclaw_dir, host, name)
         })
     }
 }
@@ -455,6 +514,31 @@ mod tests {
             Some(call.dispatch_id.as_str())
         );
         assert_eq!(child.page_id, Some(4));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_helper_writes_provenance_and_lists_and_reads_back() -> anyhow::Result<()> {
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let hook = hook_for(&call);
+        hook.save_helper("linkedin.com", "greet", "async (browser, page) => 1")
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+
+        // Lists with provenance: a fresh save reads back candidate=false, ageDays 0.
+        let listed = hook.list_helpers("linkedin.com").await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["name"], json!("greet"));
+        assert_eq!(listed[0]["candidate"], json!(false));
+        assert_eq!(listed[0]["ageDays"], json!(0));
+
+        // Reads back the source body with the provenance header stripped.
+        assert_eq!(
+            hook.read_helper("linkedin.com", "greet").await.as_deref(),
+            Some("async (browser, page) => 1")
+        );
+        // A distinct host does not collide.
+        assert!(hook.list_helpers("docs.google.com").await.is_empty());
         Ok(())
     }
 }

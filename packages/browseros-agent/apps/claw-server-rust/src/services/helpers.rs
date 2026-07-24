@@ -131,7 +131,10 @@ pub fn format_helper(meta: &HelperMeta, source: &str) -> String {
 pub fn parse_helper(content: &str) -> (Option<HelperMeta>, String) {
     if let Some(rest) = content.strip_prefix(HEADER_PREFIX) {
         let (line, body) = rest.split_once('\n').unwrap_or((rest, ""));
-        return (serde_json::from_str::<HelperMeta>(line.trim()).ok(), body.to_string());
+        return (
+            serde_json::from_str::<HelperMeta>(line.trim()).ok(),
+            body.to_string(),
+        );
     }
     (None, content.to_string())
 }
@@ -233,10 +236,22 @@ mod tests {
 
     #[test]
     fn host_bucket_strips_scheme_www_path_and_port() {
-        assert_eq!(host_bucket("https://www.linkedin.com/feed").as_deref(), Some("linkedin.com"));
-        assert_eq!(host_bucket("https://docs.google.com/document/1").as_deref(), Some("docs.google.com"));
-        assert_eq!(host_bucket("http://localhost:3000/app").as_deref(), Some("localhost"));
-        assert_eq!(host_bucket("https://user@example.com:8443/x").as_deref(), Some("example.com"));
+        assert_eq!(
+            host_bucket("https://www.linkedin.com/feed").as_deref(),
+            Some("linkedin.com")
+        );
+        assert_eq!(
+            host_bucket("https://docs.google.com/document/1").as_deref(),
+            Some("docs.google.com")
+        );
+        assert_eq!(
+            host_bucket("http://localhost:3000/app").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(
+            host_bucket("https://user@example.com:8443/x").as_deref(),
+            Some("example.com")
+        );
         assert_eq!(host_bucket("about:blank"), None);
         assert_eq!(host_bucket("chrome://newtab"), None);
     }
