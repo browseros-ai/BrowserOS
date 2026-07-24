@@ -35,7 +35,7 @@ const DESCRIPTION: &str = r#"Do multi-step flows - pagination, bulk extraction, 
 The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps, and close a page with browser.pages.close(pageId) when you are done with it.
 
 Pages (pageId is a NUMBER):
-  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object.
+  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Opens in the background so it does not steal the user's focus; pass { background: false } only when the user asks to bring the tab to the front.
   browser.pages.close(pageId)  -> undefined. Call this when finished with a page.
   browser.pages.list()         -> [{ pageId, url, title, tabId, ... }]
   browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
@@ -559,7 +559,12 @@ impl BrowserBridge {
                     .race(self.ctx.session.pages.new_page(
                         &url,
                         NewPageOptions {
-                            background: optional_bool_field(opts, "background")?,
+                            // Default to a background tab so a working agent does
+                            // not steal the user's focus, matching the granular
+                            // tabs-new default. An explicit background:false opens
+                            // it active, which the agent should do only when the
+                            // user asks to bring a tab to the front.
+                            background: optional_bool_field(opts, "background")?.or(Some(true)),
                             hidden: optional_bool_field(opts, "hidden")?,
                             window_id,
                             tab_group_id,
