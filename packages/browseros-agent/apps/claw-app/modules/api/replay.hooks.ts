@@ -92,6 +92,8 @@ export const useReplayMetadata = createQuery<
 
 export interface UseReplayEventsVariables {
   sessionId: string
+  /** Metadata revision used only to isolate client-side query snapshots. */
+  revision?: string
 }
 
 /** Changes only when replay metadata says the downloadable event set changed. */
