@@ -1,6 +1,6 @@
 use crate::{
     api::mcp::dispatch::{ToolCall, ToolIdentity},
-    api::mcp::effects::{ownership_claims, tab_groups},
+    api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
     db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
     ids::DispatchId,
 };
@@ -174,6 +174,24 @@ impl InnerCallHook for ScriptInnerCallHook {
             ));
         })
     }
+
+    fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move {
+            let Some(identity) = self.identity() else {
+                return pages.to_vec();
+            };
+            // Same tri-bucket ownership view the granular `tabs list` returns, so
+            // a code-mode script can tell its own tabs from the user's and other
+            // agents' tabs. Code-mode `page_json` keys the id as `pageId`.
+            tabs_list_view::annotate_pages_with_ownership(
+                &self.call.state,
+                &identity.ownership_key,
+                pages,
+                "pageId",
+            )
+            .await
+        })
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +322,52 @@ mod tests {
             .claim_page(mine, PageId(3))
             .await;
         assert!(hook.authorize(Some(3)).await.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn annotate_pages_tags_pageid_keyed_pages_into_ownership_buckets() -> anyhow::Result<()> {
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let mine = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(mine, PageId(3))
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(ConvoId::new("other"), PageId(7))
+            .await;
+        let hook = hook_for(&call);
+
+        // Code-mode pages key the id as `pageId` (not `page`); the hook must tag
+        // each with its ownership bucket so the script can tell tabs apart.
+        let annotated = hook
+            .annotate_pages(&[
+                json!({ "pageId": 1, "url": "https://user.test" }),
+                json!({ "pageId": 3, "url": "https://mine.test" }),
+                json!({ "pageId": 7, "url": "https://other.test" }),
+            ])
+            .await;
+        let bucket = |page: &Value| {
+            page.get("ownership")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(bucket(&annotated[0]), "user");
+        assert_eq!(bucket(&annotated[1]), "mine");
+        assert_eq!(bucket(&annotated[2]), "other-agent");
+        assert_eq!(
+            annotated[2].get("ownerAgentId").and_then(Value::as_str),
+            Some("other")
+        );
         Ok(())
     }
 

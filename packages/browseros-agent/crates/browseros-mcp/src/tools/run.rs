@@ -36,8 +36,8 @@ The return shapes below are stable. Do NOT probe them at runtime (no typeof / Ob
 
 Pages (pageId is a NUMBER):
   browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Opens in the background so it does not steal the user's focus; pass { background: false } only when the user asks to bring the tab to the front.
-  browser.pages.close(pageId)  -> undefined. Call this when finished with a page.
-  browser.pages.list()         -> [{ pageId, url, title, tabId, ... }]
+  browser.pages.close(pageId)  -> undefined. Call this when finished with a page. Close ONLY tabs you own (ownership "mine"); never close the user's or another agent's tabs.
+  browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act on and clean up only your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one. When you loop to close tabs, filter to ownership === "mine" first.
   browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
 Observe / act (refs eN come from a snapshot's text/refs):
   browser.observe(pageId).snapshot() -> { text, refs, url }
@@ -547,9 +547,11 @@ impl BrowserBridge {
         match method {
             "pages.list" => {
                 let pages = self.control.race(self.ctx.session.pages.list()).await?;
-                Ok(BrowserCallValue::Json(Value::Array(
-                    pages.iter().map(page_json).collect(),
-                )))
+                let mut values: Vec<Value> = pages.iter().map(page_json).collect();
+                if let Some(hook) = &self.ctx.inner_call_hook {
+                    values = hook.annotate_pages(&values).await;
+                }
+                Ok(BrowserCallValue::Json(Value::Array(values)))
             }
             "pages.newPage" => {
                 let url = string_arg(&args, 0, "url")?;
@@ -1348,6 +1350,7 @@ mod tests {
         recorded: Vec<(String, Option<u32>, bool)>,
         created: Vec<u32>,
         reject: Option<String>,
+        annotated: usize,
     }
 
     struct MockHook(Arc<Mutex<HookLog>>);
@@ -1378,6 +1381,24 @@ mod tests {
                 .created
                 .push(page_id);
             Box::pin(async move {})
+        }
+
+        fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .annotated += 1;
+            let tagged = pages
+                .iter()
+                .map(|page| {
+                    let mut page = page.clone();
+                    if let Value::Object(fields) = &mut page {
+                        fields.insert("ownership".to_owned(), Value::String("mine".to_owned()));
+                    }
+                    page
+                })
+                .collect();
+            Box::pin(async move { tagged })
         }
     }
 
@@ -1666,6 +1687,28 @@ return pages.map((page) => ({
                 }],
                 "logs": []
             }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_pages_list_routes_through_the_hook_annotation() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "const pages = await browser.pages.list(); return pages.map((p) => p.ownership);",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        assert_eq!(
+            result.structured_content,
+            Some(json!({ "ok": true, "value": ["mine"], "logs": [] }))
+        );
+        assert_eq!(
+            log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).annotated,
+            1
         );
         Ok(())
     }

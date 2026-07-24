@@ -38,13 +38,18 @@ Core loop inside a script: snapshot -> act -> verify.
   bulk, branch on what you find. That is the point of run.
 
 Shared with other agents:
-- Open your own tab with browser.pages.newPage(url). Pages you do not own are
-  rejected; browser.pages.list() shows what exists.
+- Open your own tab with browser.pages.newPage(url). browser.pages.list()
+  returns every open tab tagged with ownership "mine" | "user" | "other-agent",
+  so you always know which tabs are yours, the user's, and other agents'.
+- Work in your own ("mine") tabs. Act on and close only those. Leave the user's
+  and other agents' tabs alone by default: never close or disrupt them as part
+  of your own cleanup. A close-all loop must filter to ownership === "mine".
 - This browser is built for several agents at once: each agent, including a
-  subagent, gets its own isolated tabs and tab group, so parallel agents never
-  collide or disturb the user's own tabs.
-- If the user points you at a tab you do not own, open its URL in your own tab
-  and work on that copy; leave the original untouched.
+  subagent, gets its own isolated tabs and tab group, so parallel agents work
+  side by side without stepping on each other or the user's tabs.
+- If the user explicitly asks you to work on one of their existing tabs, you may
+  act on that "user" tab directly; otherwise leave it untouched. Another agent's
+  tab is off limits: open its URL in your own tab if you need the same page.
 - Rename your session early with name_session using a 2-3 word task label;
   tabs group as <client>/<name>.
 - The user oversees this browser from the BrowserClaw cockpit (live view,

@@ -85,6 +85,15 @@ pub trait InnerCallHook: Send + Sync {
     /// it exactly as a `tabs new` would, so a script's tabs get the agent's
     /// tab group, ownership, and the cockpit ownership window.
     fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()>;
+
+    /// Tag each page from a `pages.list` result with its ownership bucket so the
+    /// script can tell its own tabs from the user's and other agents' tabs, the
+    /// same tri-bucket view the granular `tabs list` tool returns. `browseros-mcp`
+    /// cannot compute ownership, so the host annotates. The default returns the
+    /// pages unchanged, which is correct when no host is attached.
+    fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { pages.to_vec() })
+    }
 }
 
 /// A completed inner primitive handed to [`InnerCallHook::record`].
