@@ -25,7 +25,6 @@ import { createNudgeMcpRoute } from './nudge-mcp'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
-import { createScreencastRoute } from './screencast'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
 
@@ -113,7 +112,6 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           activity,
         }),
       )
-      .route('/screencast', createScreencastRoute({ browser }))
       .route('/agents', protectedAgentRoutes(config, turnRegistry, agentRoutes))
   )
 }

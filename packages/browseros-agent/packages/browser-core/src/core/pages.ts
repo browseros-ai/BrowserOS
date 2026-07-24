@@ -141,22 +141,6 @@ export class PageManager {
     return this.findByTarget(tab.targetId) ?? null
   }
 
-  async getActiveSessionForWindow(windowId: number): Promise<PageSession> {
-    await this.ensureConnected()
-    const result = await this.cdp.Browser.getActiveTab({ windowId })
-    const tab = result.tab as ProtocolTabInfo | undefined
-    if (!tab) throw new Error(`No active tab in window ${windowId}`)
-
-    const pageId = await this.ensurePageIdForTarget(tab.targetId)
-    const sessionId = await this.attach(tab.targetId, pageId)
-    return {
-      targetId: tab.targetId,
-      sessionId,
-      session: this.cdp.session(sessionId),
-      url: tab.url,
-    }
-  }
-
   async refresh(pageId: number): Promise<PageInfo | undefined> {
     await this.ensureConnected()
     let info = this.pages.get(pageId)
@@ -322,17 +306,6 @@ export class PageManager {
       await delay(50)
     }
     if (!this.cdp.isConnected()) throw new Error('CDP not connected')
-  }
-
-  private async ensurePageIdForTarget(targetId: string): Promise<number> {
-    const existing = this.findByTarget(targetId)
-    if (existing) return existing.pageId
-
-    await this.list()
-    const found = this.findByTarget(targetId)
-    if (found) return found.pageId
-
-    throw new Error(`Could not resolve pageId for target ${targetId}`)
   }
 
   private findByTarget(targetId: string): PageInfo | undefined {
