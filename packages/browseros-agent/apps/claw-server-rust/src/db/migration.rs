@@ -42,9 +42,7 @@ mod m0008_add_parent_dispatch_id {
                     .alter_table(
                         Table::alter()
                             .table(Alias::new("tool_dispatches"))
-                            .add_column(
-                                ColumnDef::new(Alias::new("parent_dispatch_id")).string(),
-                            )
+                            .add_column(ColumnDef::new(Alias::new("parent_dispatch_id")).string())
                             .to_owned(),
                     )
                     .await?;

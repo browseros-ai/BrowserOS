@@ -71,12 +71,7 @@ pub fn read_helper(browserclaw_dir: &Path, host: &str, name: &str) -> Option<Str
 
 /// Writes a helper's source, creating the host directory. Errors on an unsafe
 /// host or name.
-pub fn write_helper(
-    browserclaw_dir: &Path,
-    host: &str,
-    name: &str,
-    code: &str,
-) -> io::Result<()> {
+pub fn write_helper(browserclaw_dir: &Path, host: &str, name: &str, code: &str) -> io::Result<()> {
     let path = helper_path(browserclaw_dir, host, name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsafe helper host or name"))?;
     if let Some(parent) = path.parent() {
@@ -94,7 +89,12 @@ mod tests {
     fn write_then_read_round_trips_and_lists() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let root = dir.path();
-        write_helper(root, "linkedin.com", "accept-invites", "export const x = 1;")?;
+        write_helper(
+            root,
+            "linkedin.com",
+            "accept-invites",
+            "export const x = 1;",
+        )?;
         write_helper(root, "linkedin.com", "messages", "export const y = 2;")?;
 
         assert_eq!(

@@ -357,7 +357,13 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         deadline,
         timeout_message: timeout_message.clone(),
     };
-    let run = execute_quickjs(args.code, ctx.clone(), logs.clone(), control.clone(), duration);
+    let run = execute_quickjs(
+        args.code,
+        ctx.clone(),
+        logs.clone(),
+        control.clone(),
+        duration,
+    );
     tokio::select! {
         () = ctx.cancel.cancelled() => Err(RunError::Cancelled),
         () = sleep_until(deadline) => Ok(RunOutcome::failure(timeout_message.to_string(), logs_snapshot(&logs))),
@@ -582,7 +588,9 @@ impl BrowserBridge {
             }
             "pages.close" => {
                 let page_id = page_arg(&args, 0)?;
-                self.control.race(self.ctx.session.pages.close(page_id)).await?;
+                self.control
+                    .race(self.ctx.session.pages.close(page_id))
+                    .await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "pages.getInfo" => {
@@ -724,7 +732,8 @@ impl BrowserBridge {
                 let raw = self
                     .control
                     .race(
-                        self.ctx.session
+                        self.ctx
+                            .session
                             .cdp_json_for_page(page_id, &method, &params_json),
                     )
                     .await?;
@@ -1357,7 +1366,10 @@ mod tests {
 
     impl InnerCallHook for MockHook {
         fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
-            let mut log = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut log = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             log.authorized.push(page);
             let result = match &log.reject {
                 Some(message) => Err(message.clone()),
@@ -1368,7 +1380,8 @@ mod tests {
 
         fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
             self.0
-                .lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .recorded
                 .push((record.method.to_owned(), record.page, record.is_error));
             Box::pin(async move {})
@@ -1414,7 +1427,9 @@ mod tests {
         let ctx = ctx_with_hook(log.clone());
         let result = run_tool_with_ctx("return await browser.pages.getInfo(1)", None, &ctx).await?;
         assert!(!result.is_error);
-        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.authorized, vec![Some(1)]);
         assert_eq!(
             log.recorded,
@@ -1434,7 +1449,9 @@ mod tests {
         assert!(result.is_error);
         let text = result_text(&result)?;
         assert!(text.contains("not owned by this agent"));
-        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.authorized, vec![Some(1)]);
         // Rejected before dispatch, so nothing is recorded.
         assert!(log.recorded.is_empty());
@@ -1458,7 +1475,9 @@ mod tests {
         // The windows tool ran and its structured output is the script's return value.
         assert_eq!(structured["value"]["action"], json!("list"));
         // A page-less tool primitive authorizes with no page and is recorded.
-        let log = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.authorized, vec![None]);
         assert_eq!(log.recorded, vec![("tool:windows".to_owned(), None, false)]);
         Ok(())
@@ -1707,7 +1726,9 @@ return pages.map((page) => ({
             Some(json!({ "ok": true, "value": ["mine"], "logs": [] }))
         );
         assert_eq!(
-            log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).annotated,
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .annotated,
             1
         );
         Ok(())
