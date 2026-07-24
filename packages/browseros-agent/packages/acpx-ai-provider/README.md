@@ -1,9 +1,14 @@
-# acpx-ai-provider
+# @browseros/acpx-ai-provider
 
 > Vercel AI SDK provider on top of [`acpx/runtime`](https://www.npmjs.com/package/acpx).
 > One install, any ACP agent — Claude Code, Codex, Gemini, Copilot, Cursor, Pi, and more.
 
-[![npm](https://img.shields.io/npm/v/acpx-ai-provider.svg)](https://www.npmjs.com/package/acpx-ai-provider)
+> [!NOTE]
+> This is BrowserOS's in-repo fork of
+> [`acpx-ai-provider`](https://github.com/DaniAkash/agent-toolkit/tree/acpx-ai-provider-v0.0.6/packages/acpx-ai-provider).
+> Internal consumers use the scoped workspace package. See
+> [PROVENANCE.md](./PROVENANCE.md) for the pinned upstream revision and local
+> adaptations.
 
 > [!WARNING]
 > **Alpha software.** Both this package and its underlying runtime
@@ -21,7 +26,7 @@ bridges Vercel AI SDK to the Agent Client Protocol via the bare
 install each agent's CLI and write their own `{ command, args }`
 spawn config.
 
-`acpx-ai-provider` sits one level higher — on top of `acpx/runtime` — so:
+`@browseros/acpx-ai-provider` sits one level higher — on top of `acpx/runtime` — so:
 
 - **Zero extra installs.** `acpx` resolves and `npx`-spawns built-in
   agents (Claude, Codex, Gemini, Copilot, Cursor, Pi, etc.) on first
@@ -33,10 +38,14 @@ spawn config.
 
 ## Install
 
-```bash
-bun add acpx-ai-provider acpx ai
-# or
-npm i acpx-ai-provider acpx ai
+```json
+{
+  "dependencies": {
+    "@browseros/acpx-ai-provider": "workspace:*",
+    "acpx": "^0.12.0",
+    "ai": "6.0.230"
+  }
+}
 ```
 
 `acpx` and `ai` are peer dependencies. Use `ai` ≥ 6, `acpx` ≥ 0.6.
@@ -44,7 +53,7 @@ npm i acpx-ai-provider acpx ai
 ## Quickstart
 
 ```ts
-import { createAcpxProvider } from 'acpx-ai-provider'
+import { createAcpxProvider } from '@browseros/acpx-ai-provider'
 import { generateText } from 'ai'
 
 const provider = createAcpxProvider({
@@ -66,7 +75,7 @@ adapter on first run; subsequent runs are warm.
 ### Streaming
 
 ```ts
-import { createAcpxProvider } from 'acpx-ai-provider'
+import { createAcpxProvider } from '@browseros/acpx-ai-provider'
 import { streamText } from 'ai'
 
 const provider = createAcpxProvider({ agent: 'claude' })
@@ -584,7 +593,7 @@ import {
   AcpxAgentNotFoundError,
   AcpxAuthRequiredError,
   AcpxTurnTimeoutError,
-} from 'acpx-ai-provider'
+} from '@browseros/acpx-ai-provider'
 ```
 
 Catch `AcpxError` for the broad case; the three subclasses cover the
@@ -593,7 +602,10 @@ class with the runtime's `code` preserved.
 
 ## Repository
 
-Source, issues, and roadmap: <https://github.com/DaniAkash/acpx>.
+BrowserOS source and issues live in the
+[BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/packages/browseros-agent/packages/acpx-ai-provider).
+The pinned upstream source lives in
+[`DaniAkash/agent-toolkit`](https://github.com/DaniAkash/agent-toolkit/tree/acpx-ai-provider-v0.0.6/packages/acpx-ai-provider).
 
 ## License
 
