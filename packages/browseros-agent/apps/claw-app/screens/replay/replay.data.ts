@@ -239,12 +239,25 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   evaluate: 'type',
 }
 
-function mapDispatchToFrame(
+/**
+ * Keeps the audit timeline on persisted completion time while giving the
+ * camera the best start approximation available in the existing contract.
+ * Invalid durations deliberately collapse to completion so old recordings
+ * remain deterministic without a schema migration.
+ */
+export function mapDispatchToFrame(
   row: ToolDispatchRow,
   sessionStartMs: number,
   targetTabs: ReadonlyMap<string, number>,
 ): ReplayFrame {
   const t = Math.max(0, (row.createdAt - sessionStartMs) / 1000)
+  const usableDurationMs =
+    typeof row.durationMs === 'number' &&
+    Number.isFinite(row.durationMs) &&
+    row.durationMs >= 0
+      ? row.durationMs
+      : 0
+  const cameraT = Math.max(0, t - usableDurationMs / 1000)
   const meta = row.resultMeta ? safeParse(row.resultMeta) : null
   const isError = meta?.isError === true
   const cancellationKind = meta?.cancellationKind
@@ -256,6 +269,7 @@ function mapDispatchToFrame(
   const caption = buildCaption(row, verb, isError, cancelled)
   return {
     t,
+    cameraT,
     kind,
     verb,
     node,

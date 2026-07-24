@@ -13,6 +13,8 @@ interface PlaybackTransportProps {
   totalSeconds: number
   frames: readonly ReplayFrame[]
   onSeek: (seconds: number) => void
+  /** Distinguishes the global session transport from pinned tab inspection. */
+  transportLabel?: string
 }
 
 /**
@@ -25,6 +27,7 @@ export function PlaybackTransport({
   totalSeconds,
   frames,
   onSeek,
+  transportLabel = 'playback',
 }: PlaybackTransportProps) {
   const { time, isPlaying, speed, setSpeed, togglePlay } = playback
   const finished = time >= totalSeconds
@@ -35,14 +38,15 @@ export function PlaybackTransport({
   }
 
   return (
-    <div className="rounded-2xl border border-border-2 bg-card p-3 shadow-sm">
+    <fieldset
+      aria-label={transportLabel}
+      className="m-0 min-w-0 rounded-2xl border border-border-2 bg-card p-3 shadow-sm"
+    >
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={togglePlay}
-          aria-label={
-            finished ? 'Restart playback' : isPlaying ? 'Pause' : 'Play'
-          }
+          aria-label={`${finished ? 'Restart' : isPlaying ? 'Pause' : 'Play'} ${transportLabel}`}
           className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow"
         >
           {finished ? (
@@ -91,7 +95,7 @@ export function PlaybackTransport({
           />
           <input
             type="range"
-            aria-label="Playback position"
+            aria-label={`${transportLabel} position`}
             aria-valuetext={`${formatTime(time)} of ${formatTime(totalSeconds)}`}
             min={0}
             max={totalSeconds}
@@ -102,6 +106,7 @@ export function PlaybackTransport({
           />
         </div>
         <ToggleGroup
+          aria-label={`${transportLabel} speed`}
           value={[String(speed)]}
           onValueChange={(values) => {
             const next = Number(values[0])
@@ -122,6 +127,6 @@ export function PlaybackTransport({
           ))}
         </ToggleGroup>
       </div>
-    </div>
+    </fieldset>
   )
 }

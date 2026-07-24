@@ -25,8 +25,18 @@ export type ReplayVerb =
 export type ReplayKind = 'action' | 'block' | 'done'
 
 export interface ReplayFrame {
-  /** Seconds into the session. */
+  /**
+   * Dispatch completion in seconds from session start. The timeline and audit
+   * highlight use completion because that is the timestamp persisted with the
+   * finished dispatch.
+   */
   t: number
+  /**
+   * Approximate dispatch start in session seconds, derived from completion
+   * minus duration. The automatic camera uses this separate clock so it can
+   * show a tab while work is happening without rewriting the audit timestamp.
+   */
+  cameraT: number
   kind: ReplayKind
   verb: ReplayVerb
   /** Short node label, e.g. the page title or a focused element. */

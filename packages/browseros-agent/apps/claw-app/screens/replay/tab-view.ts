@@ -11,6 +11,12 @@ export interface TabView {
   frames: ReplayFrame[]
   /** Every playable document lifecycle from one Chrome tab. */
   events: readonly ReplayEvent[]
+  /**
+   * Absolute bounds in session seconds for this tab's filtered rrweb stream.
+   * These remain global even though `frames[].t` and `totalSeconds` are local.
+   */
+  globalStartSeconds: number
+  globalEndSeconds: number
   totalSeconds: number
   hasFullSnapshot: boolean
   knownIncomplete: boolean
@@ -21,6 +27,8 @@ export interface TabView {
 export const EMPTY_TAB_VIEW: TabView = {
   frames: [],
   events: [],
+  globalStartSeconds: 0,
+  globalEndSeconds: 0,
   totalSeconds: 0,
   hasFullSnapshot: false,
   knownIncomplete: false,
@@ -91,6 +99,8 @@ export function buildTabView(
       t: Math.max(0, frame.t - originT),
     })),
     events: stream.events,
+    globalStartSeconds: originT,
+    globalEndSeconds: (endMs - input.startedAtMs) / 1000,
     totalSeconds: Math.max(0, (endMs - originMs) / 1000),
     hasFullSnapshot,
     knownIncomplete: hasCatalogedGap || stream.hasOmittedEvents,
@@ -99,6 +109,22 @@ export function buildTabView(
         ? null
         : stream.incompleteUntilMs,
   }
+}
+
+/**
+ * Projects the app-owned session clock into one rrweb stream. Absolute bounds
+ * matter here: subtracting a tab's duration or action time would drift after a
+ * same-tab navigation. Clamping holds the first/last drawable visual outside
+ * the tab's recorded interval instead of asking rrweb to seek out of range.
+ */
+export function projectGlobalTimeToTab(
+  view: Pick<TabView, 'globalStartSeconds' | 'totalSeconds'>,
+  globalSeconds: number,
+): number {
+  return Math.max(
+    0,
+    Math.min(view.totalSeconds, globalSeconds - view.globalStartSeconds),
+  )
 }
 
 export interface TabSeek {
@@ -116,12 +142,9 @@ export function tabSeekForFrame(
   if (tabId === null) return { tabId, seconds: frame.t }
 
   const view = buildTabView(input, tabId)
-  const originMs =
-    view.events[0]?.ts ?? input.eventsForTab(tabId)[0]?.ts ?? input.startedAtMs
-  const timestamp = input.startedAtMs + frame.t * 1000
   return {
     tabId,
-    seconds: Math.max(0, (timestamp - originMs) / 1000),
+    seconds: projectGlobalTimeToTab(view, frame.t),
   }
 }
 

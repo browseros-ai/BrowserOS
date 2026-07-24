@@ -1,84 +1,169 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from './replay.helpers'
 
 export interface Playback {
-  /** Seconds elapsed in the session. */
+  /** Seconds elapsed on this BrowserClaw-owned transport. */
   time: number
-  /** True while rrweb's internal timer should be running. */
+  /** True while the transport clock and visible rrweb sink should run. */
   isPlaying: boolean
-  /** Multiplier applied by rrweb's internal timer. */
+  /** Multiplier applied to wall-clock deltas and the visible rrweb player. */
   speed: number
+  /**
+   * Cumulative wall milliseconds actually played. Camera dwell consumes its
+   * delta so speed changes never distort the human viewing window.
+   */
+  playedRealMs: number
   setSpeed: (next: number) => void
-  /** Toggles play/pause. Restarts from 0 if the session already finished. */
+  /** Freezes at the current monotonic instant and returns that exact position. */
+  pause: () => number
+  /** Toggles play/pause. Restarts from 0 if the transport already finished. */
   togglePlay: () => void
-  /** Jumps the playhead to `seconds` and pauses. */
+  /** Jumps the playhead to `seconds`, pauses, and returns the clamped value. */
   seek: (seconds: number) => number
-  /** Updates display state from rrweb without seeking the player. */
-  syncFromPlayer: (seconds: number) => boolean
 }
 
-const END_EPSILON_SECONDS = 0.01
+function clampTime(seconds: number, totalSeconds: number): number {
+  return Math.max(0, Math.min(totalSeconds, seconds))
+}
 
-/** Owns replay transport state while rrweb owns the playback timer. */
+/**
+ * Owns replay time from one monotonic animation-frame loop. rrweb receives
+ * projected seeks/play commands elsewhere, but its per-tab timer cannot be the
+ * authority for a session clock that continues across player promotion.
+ */
 export function usePlayback(totalSeconds: number): Playback {
   const [time, setTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(true)
   const [speed, setSpeed] = useState<number>(DEFAULT_PLAYBACK_SPEED)
+  const [playedRealMs, setPlayedRealMs] = useState(0)
+  const timeRef = useRef(0)
+  const isPlayingRef = useRef(true)
+  const speedRef = useRef<number>(DEFAULT_PLAYBACK_SPEED)
+  const totalSecondsRef = useRef(totalSeconds)
+  const lastNowMsRef = useRef<number | null>(null)
+  const playedRealMsRef = useRef(0)
 
-  const clamp = useCallback(
-    (seconds: number) => Math.max(0, Math.min(totalSeconds, seconds)),
-    [totalSeconds],
+  const writeTime = useCallback((next: number) => {
+    timeRef.current = next
+    setTime(next)
+  }, [])
+
+  const writePlaying = useCallback((next: boolean) => {
+    isPlayingRef.current = next
+    setIsPlaying(next)
+  }, [])
+
+  /**
+   * Accounts for elapsed wall time exactly once before any discontinuity.
+   * Reusing this for frames, pause, and speed changes prevents stale closures
+   * from charging an interval at both its old and new speed.
+   */
+  const advanceTo = useCallback(
+    (nowMs: number): number => {
+      const previousNowMs = lastNowMsRef.current
+      lastNowMsRef.current = nowMs
+      if (!isPlayingRef.current || previousNowMs === null) {
+        return timeRef.current
+      }
+
+      const elapsedMs = Math.max(0, nowMs - previousNowMs)
+      if (elapsedMs > 0) {
+        playedRealMsRef.current += elapsedMs
+        setPlayedRealMs(playedRealMsRef.current)
+      }
+      const next = clampTime(
+        timeRef.current + (elapsedMs / 1000) * speedRef.current,
+        totalSecondsRef.current,
+      )
+      if (next !== timeRef.current) writeTime(next)
+      if (totalSecondsRef.current > 0 && next >= totalSecondsRef.current) {
+        writePlaying(false)
+      }
+      return next
+    },
+    [writePlaying, writeTime],
   )
 
   useEffect(() => {
-    setTime((prev) => clamp(prev))
-  }, [clamp])
+    totalSecondsRef.current = totalSeconds
+    const clamped = clampTime(timeRef.current, totalSeconds)
+    if (clamped !== timeRef.current) writeTime(clamped)
+    if (totalSeconds > 0 && clamped >= totalSeconds) writePlaying(false)
+  }, [totalSeconds, writePlaying, writeTime])
 
-  const setPlaybackSpeed = useCallback((next: number) => {
-    if (PLAYBACK_SPEEDS.includes(next)) setSpeed(next)
-  }, [])
+  useEffect(() => {
+    if (!isPlaying || totalSeconds <= 0) {
+      lastNowMsRef.current = null
+      return
+    }
+
+    let active = true
+    let animationFrameId = 0
+    lastNowMsRef.current = performance.now()
+    const tick = (nowMs: number): void => {
+      if (!active) return
+      advanceTo(nowMs)
+      if (isPlayingRef.current) {
+        animationFrameId = window.requestAnimationFrame(tick)
+      }
+    }
+    animationFrameId = window.requestAnimationFrame(tick)
+    return () => {
+      active = false
+      window.cancelAnimationFrame(animationFrameId)
+      lastNowMsRef.current = null
+    }
+  }, [advanceTo, isPlaying, totalSeconds])
+
+  const setPlaybackSpeed = useCallback(
+    (next: number) => {
+      if (!PLAYBACK_SPEEDS.includes(next) || next === speedRef.current) return
+      if (isPlayingRef.current) advanceTo(performance.now())
+      speedRef.current = next
+      setSpeed(next)
+    },
+    [advanceTo],
+  )
+
+  const pause = useCallback(() => {
+    const pausedAt = isPlayingRef.current
+      ? advanceTo(performance.now())
+      : timeRef.current
+    writePlaying(false)
+    lastNowMsRef.current = null
+    return pausedAt
+  }, [advanceTo, writePlaying])
 
   const togglePlay = useCallback(() => {
-    setIsPlaying((playing) => {
-      if (playing) return false
-      setTime((prev) => (prev >= totalSeconds ? 0 : prev))
-      return totalSeconds > 0
-    })
-  }, [totalSeconds])
+    if (isPlayingRef.current) {
+      pause()
+      return
+    }
+
+    if (timeRef.current >= totalSecondsRef.current) writeTime(0)
+    lastNowMsRef.current = performance.now()
+    writePlaying(totalSecondsRef.current > 0)
+  }, [pause, writePlaying, writeTime])
 
   const seek = useCallback(
     (seconds: number) => {
-      const clamped = clamp(seconds)
-      setTime(clamped)
-      setIsPlaying(false)
+      const clamped = clampTime(seconds, totalSecondsRef.current)
+      writeTime(clamped)
+      writePlaying(false)
+      lastNowMsRef.current = null
       return clamped
     },
-    [clamp],
-  )
-
-  const syncFromPlayer = useCallback(
-    (seconds: number) => {
-      const clamped = clamp(seconds)
-      const finished =
-        totalSeconds > 0 && clamped >= totalSeconds - END_EPSILON_SECONDS
-      if (finished) {
-        setTime(totalSeconds)
-        setIsPlaying(false)
-        return false
-      }
-      setTime(clamped)
-      return true
-    },
-    [clamp, totalSeconds],
+    [writePlaying, writeTime],
   )
 
   return {
     time,
     isPlaying,
     speed,
+    playedRealMs,
     setSpeed: setPlaybackSpeed,
+    pause,
     togglePlay,
     seek,
-    syncFromPlayer,
   }
 }
