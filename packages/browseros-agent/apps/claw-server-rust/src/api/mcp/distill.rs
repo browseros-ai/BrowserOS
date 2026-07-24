@@ -1,6 +1,6 @@
 //! Audit distillation: after a successful script run, turn the child primitive
 //! sequence recorded under it into a candidate helper, so a proven flow is saved
-//! for reuse with no agent writing. This is uniquely enabled by the Phase 1
+//! for reuse with no agent writing. This is uniquely enabled by the code-mode
 //! audit hierarchy.
 
 use crate::{
@@ -44,6 +44,14 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
             return Ok(());
         };
         let steps = source.matches("await browser").count();
+        let inputs = source.matches("inputs.field").count();
+        let deps = if inputs > 0 {
+            format!(
+                "distilled from {steps} recorded step(s); expects {inputs} input value(s) in `inputs`"
+            )
+        } else {
+            format!("distilled from {steps} recorded step(s)")
+        };
         let meta = HelperMeta {
             // Same flow hashes to the same name, so re-running overwrites rather
             // than accumulating a new candidate each time.
@@ -52,7 +60,7 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
             last_verified: now_epoch_ms(),
             agent: identity.agent.slug().to_string(),
             candidate: true,
-            deps: format!("distilled from {steps} recorded step(s)"),
+            deps,
         };
         if let Err(error) =
             helpers::save_helper(&context.call.state.config.browserclaw_dir, &meta, &source)
@@ -72,7 +80,15 @@ const _: ToolObserver = distill;
 pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u64)> {
     let mut lines = Vec::new();
     let mut pages = BTreeSet::new();
+    // Running index for value inputs, so typed values are read from `inputs`
+    // rather than embedded (no credentials or personal data in a shared helper).
+    let mut inputs = 0usize;
     for row in children {
+        // Only replay actions that actually succeeded: a caught-and-recovered
+        // failure must not enter a "successful" helper.
+        if row_failed(row) {
+            continue;
+        }
         let args: Vec<Value> = row
             .args_json
             .as_deref()
@@ -81,7 +97,7 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
         let Some(page) = args.first().and_then(Value::as_u64) else {
             continue;
         };
-        let Some(line) = emit_line(&row.tool_name, &args) else {
+        let Some(line) = emit_line(&row.tool_name, &args, &mut inputs) else {
             continue;
         };
         pages.insert(page);
@@ -91,17 +107,37 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
         return None;
     }
     let page = *pages.iter().next()?;
-    let source = format!("async (browser, page) => {{\n{}\n}}", lines.join("\n"));
+    let source = format!(
+        "async (browser, page, inputs = {{}}) => {{\n{}\n}}",
+        lines.join("\n")
+    );
     Some((source, page))
 }
 
+/// Whether a child's recorded result marked it an error, read from its
+/// `result_meta` summary.
+fn row_failed(row: &ToolDispatchRow) -> bool {
+    row.result_meta
+        .as_deref()
+        .and_then(|meta| serde_json::from_str::<Value>(meta).ok())
+        .and_then(|meta| meta.get("isError").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
 /// Maps one recorded driving primitive to its SDK call line, `page` standing in
-/// for the recorded page id. Returns `None` for anything not worth replaying
+/// for the recorded page id. Typed values (fill/type/selectOption) are read from
+/// `inputs.field<n>` rather than embedded, so a distilled helper never persists a
+/// credential or personal data. Returns `None` for anything not worth replaying
 /// (pure reads, page management, escape hatches).
-fn emit_line(tool: &str, args: &[Value]) -> Option<String> {
+fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
     let arg = |index: usize| {
         args.get(index)
             .map_or_else(|| "undefined".to_string(), Value::to_string)
+    };
+    let mut input = || {
+        let field = format!("inputs.field{inputs}");
+        *inputs += 1;
+        field
     };
     let line = match tool {
         "nav.goto" => format!("  await browser.nav(page).goto({});", arg(1)),
@@ -109,15 +145,15 @@ fn emit_line(tool: &str, args: &[Value]) -> Option<String> {
         "nav.forward" => "  await browser.nav(page).forward();".to_string(),
         "nav.reload" => "  await browser.nav(page).reload();".to_string(),
         "input.click" => format!("  await browser.input(page).click({});", arg(1)),
-        "input.fill" => format!("  await browser.input(page).fill({}, {});", arg(1), arg(2)),
-        "input.type" => format!("  await browser.input(page).type({});", arg(1)),
+        "input.fill" => format!("  await browser.input(page).fill({}, {});", arg(1), input()),
+        "input.type" => format!("  await browser.input(page).type({});", input()),
         "input.press" => format!("  await browser.input(page).press({});", arg(1)),
         "input.hover" => format!("  await browser.input(page).hover({});", arg(1)),
         "input.selectOption" => {
             format!(
                 "  await browser.input(page).selectOption({}, {});",
                 arg(1),
-                arg(2)
+                input()
             )
         }
         "input.scroll" => format!(
@@ -188,13 +224,41 @@ mod tests {
         let (source, page) = distill_source(&children)
             .ok_or_else(|| anyhow::anyhow!("expected a distilled macro"))?;
         assert_eq!(page, 3);
+        // The fill value is parameterized (inputs.field0), never embedded.
         assert_eq!(
             source,
-            "async (browser, page) => {\n  \
+            "async (browser, page, inputs = {}) => {\n  \
              await browser.nav(page).goto(\"https://example.com/login\");\n  \
-             await browser.input(page).fill(\"e5\", \"alice\");\n  \
+             await browser.input(page).fill(\"e5\", inputs.field0);\n  \
              await browser.input(page).click(\"e6\");\n}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn drops_failed_actions_and_never_embeds_typed_values() -> anyhow::Result<()> {
+        let mut failed_click = child("input.click", json!([3, "e9"]));
+        // A caught-and-recovered failure must not enter the helper.
+        failed_click.result_meta = Some(json!({ "isError": true }).to_string());
+        let children = [
+            child("nav.goto", json!([3, "https://example.com/login"])),
+            failed_click,
+            child("input.fill", json!([3, "e5", "s3cr3t-password"])),
+            child("input.type", json!([3, "also-secret"])),
+            child("input.click", json!([3, "e6"])),
+        ];
+        let (source, _) = distill_source(&children)
+            .ok_or_else(|| anyhow::anyhow!("expected a distilled macro"))?;
+        // The failed click is dropped.
+        assert!(!source.contains("e9"), "failed action leaked: {source}");
+        // Typed values are parameterized, never embedded.
+        assert!(
+            !source.contains("s3cr3t-password"),
+            "secret leaked: {source}"
+        );
+        assert!(!source.contains("also-secret"), "secret leaked: {source}");
+        assert!(source.contains("inputs.field0"));
+        assert!(source.contains("inputs.field1"));
         Ok(())
     }
 
