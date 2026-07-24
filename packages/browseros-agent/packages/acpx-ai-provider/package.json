@@ -1,7 +1,7 @@
 {
   "name": "@browseros/acpx-ai-provider",
   "version": "0.0.6",
-  "description": "Vercel AI SDK provider on top of the acpx ACP runtime. Inlined snapshot of acpx-ai-provider from DaniAkash/acpx.",
+  "description": "Vercel AI SDK provider on top of the acpx ACP runtime. Inlined snapshot of acpx-ai-provider from DaniAkash/agent-toolkit.",
   "license": "MIT",
   "author": "Dani Akash",
   "type": "module",
