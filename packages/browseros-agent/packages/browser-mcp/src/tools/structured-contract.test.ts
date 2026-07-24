@@ -17,7 +17,6 @@ const page = {
   isLoading: false,
   loadProgress: 1,
   isPinned: false,
-  isHidden: false,
 }
 
 const windowInfo: WindowInfo = {
@@ -127,12 +126,6 @@ function createContractSession(): BrowserSession {
       create: async () => windowInfo,
       close: async () => {},
       activate: async () => {},
-      setVisibility: async () => ({
-        previousWindowId: 7,
-        newWindowId: 8,
-        replaced: true,
-        window: { ...windowInfo, windowId: 8, isVisible: false },
-      }),
     },
     cdp: async (method: string) => {
       if (method === 'Browser.getTabGroups') {
@@ -262,11 +255,6 @@ describe('browser tool structured contract', () => {
           action: 'activate',
           windowId: 7,
         }),
-        'windows.set_visibility': await call('windows', {
-          action: 'set_visibility',
-          windowId: 7,
-          visible: false,
-        }),
         evaluate: await call('evaluate', {
           page: 1,
           code: 'return document.title',
@@ -300,13 +288,6 @@ describe('browser tool structured contract', () => {
         'windows.create': ['action', 'window'],
         'windows.close': ['action', 'windowId'],
         'windows.activate': ['action', 'windowId'],
-        'windows.set_visibility': [
-          'action',
-          'newWindowId',
-          'previousWindowId',
-          'replaced',
-          'window',
-        ],
         evaluate: ['page', 'value'],
         run: ['logs', 'ok', 'value'],
       })

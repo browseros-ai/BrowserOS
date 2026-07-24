@@ -214,12 +214,19 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 			CDP    int `json:"cdp"`
 			Proxy  int `json:"proxy"`
 		} `json:"ports"`
+		Directories struct {
+			Resources string `json:"resources"`
+			Execution string `json:"execution"`
+		} `json:"directories"`
 	}
 	if err := json.Unmarshal(raw, &sidecar); err != nil {
 		t.Fatalf("parsing sidecar: %v", err)
 	}
 	if sidecar.Ports.Server != ports.Server || sidecar.Ports.CDP != ports.CDP || sidecar.Ports.Proxy != ports.Server {
 		t.Fatalf("expected sidecar ports server=%d cdp=%d proxy=%d, got %+v", ports.Server, ports.CDP, ports.Server, sidecar.Ports)
+	}
+	if sidecar.Directories.Resources != filepath.Join(root, "apps/claw-server-rust/resources") || sidecar.Directories.Execution != userDataDir {
+		t.Fatalf("unexpected sidecar directories: %+v", sidecar.Directories)
 	}
 }
 

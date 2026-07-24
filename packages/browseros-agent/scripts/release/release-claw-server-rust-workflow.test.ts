@@ -186,7 +186,7 @@ describe('release-claw-server-rust workflow', () => {
   it('uses matching artifact actions without unused Python dependencies', () => {
     expect(workflow).toContain('uses: actions/upload-artifact@v7')
     expect(workflow).toContain('uses: actions/download-artifact@v7')
-    expect(workflow).toContain('uses: astral-sh/setup-uv@v8.2.0')
+    expect(workflow).toContain('uses: astral-sh/setup-uv@v8.3.2')
     expect(workflow).toContain('uv run --project packages/browseros python')
     expect(workflow).not.toContain('Install Python validation dependencies')
     expect(workflow).not.toContain('pip install ./packages/browseros')

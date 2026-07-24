@@ -14,19 +14,23 @@ impl MigratorTrait for Migrator {
             Box::new(m0005_reclassify_task_status::Migration),
             Box::new(m0006_add_tool_token_estimates::Migration),
             Box::new(m0007_add_session_efficiency_stats::Migration),
-            Box::new(m0008_add_parent_dispatch_id::Migration),
+            Box::new(m0008_add_task_token_estimates::Migration),
+            Box::new(m0009_rebase_screenshot_baseline::Migration),
+            Box::new(m0010_sum_session_efficiency_durations::Migration),
+            Box::new(m0011_use_session_durations_for_efficiency::Migration),
+            Box::new(m0012_add_parent_dispatch_id::Migration),
         ]
     }
 }
 
-mod m0008_add_parent_dispatch_id {
+mod m0012_add_parent_dispatch_id {
     use super::*;
 
     pub struct Migration;
 
     impl MigrationName for Migration {
         fn name(&self) -> &str {
-            "m0008_add_parent_dispatch_id"
+            "m0012_add_parent_dispatch_id"
         }
     }
 
@@ -64,6 +68,613 @@ mod m0008_add_parent_dispatch_id {
                     )
                     .await?;
             }
+            Ok(())
+        }
+    }
+}
+
+mod m0009_rebase_screenshot_baseline {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0009_rebase_screenshot_baseline"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // These formula versions and token baselines are frozen migration values, not
+            // mutable runtime constants. The cap mirrors the projection's saturating multiply.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE session_efficiency_stats SET
+                        screenshot_baseline_token_estimate = CASE
+                            WHEN dispatch_count <= 0 THEN 0
+                            WHEN dispatch_count > 3074457345618258 THEN 9223372036854775807
+                            ELSE dispatch_count * 3000
+                        END,
+                        efficiency_estimator_version = 2
+                    WHERE efficiency_estimator_version = 1
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE session_efficiency_stats SET
+                        screenshot_baseline_token_estimate = CASE
+                            WHEN dispatch_count <= 0 THEN 0
+                            WHEN dispatch_count > 6004799503160661 THEN 9223372036854775807
+                            ELSE dispatch_count * 1536
+                        END,
+                        efficiency_estimator_version = 1
+                    WHERE efficiency_estimator_version = 2
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DbBackend, Statement,
+        };
+
+        struct PreviousMigrator;
+
+        #[async_trait::async_trait]
+        impl MigratorTrait for PreviousMigrator {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                super::super::Migrator::migrations()
+                    .into_iter()
+                    .take(8)
+                    .collect()
+            }
+        }
+
+        async fn insert_projection(
+            connection: &sea_orm_migration::sea_orm::DatabaseConnection,
+            session_id: &str,
+            dispatch_count: i64,
+            screenshot_tokens: i64,
+            version: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats (session_id, ended_at, dispatch_count, active_duration_ms, tool_input_token_estimate, tool_output_token_estimate, screenshot_baseline_token_estimate, efficiency_estimator_version, computed_at) VALUES ('{session_id}', 1, {dispatch_count}, 1, 1, 1, {screenshot_tokens}, {version}, 1)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &sea_orm_migration::sea_orm::DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT screenshot_baseline_token_estimate, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "screenshot_baseline_token_estimate")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn backfill_rebases_only_v1_projections_and_saturates() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            PreviousMigrator::up(&connection, None).await?;
+            insert_projection(&connection, "v1", 2, 3_072, 1).await?;
+            insert_projection(&connection, "v2", 2, 6_000, 2).await?;
+            insert_projection(&connection, "saturated", i64::MAX, i64::MAX, 1).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(projection(&connection, "v1").await?, (6_000, 2));
+            assert_eq!(projection(&connection, "v2").await?, (6_000, 2));
+            assert_eq!(projection(&connection, "saturated").await?, (i64::MAX, 2));
+            Ok(())
+        }
+    }
+}
+
+mod m0010_sum_session_efficiency_durations {
+    use super::*;
+    use sea_orm_migration::sea_orm::{DbBackend, Statement};
+    use std::collections::BTreeMap;
+
+    const SOURCE_EFFICIENCY_ESTIMATOR_VERSION: i64 = 2;
+    const EFFICIENCY_ESTIMATOR_VERSION: i64 = 3;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0010_sum_session_efficiency_durations"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            let connection = manager.get_connection();
+            let source_rows = connection
+                .query_all(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    r#"
+                    SELECT stats.session_id, dispatch.duration_ms
+                    FROM session_efficiency_stats AS stats
+                    JOIN tool_dispatches AS dispatch
+                        ON dispatch.session_id = stats.session_id
+                        AND dispatch.created_at <= stats.ended_at
+                    WHERE stats.efficiency_estimator_version = ?
+                        AND stats.dispatch_count = (
+                            SELECT COUNT(*)
+                            FROM tool_dispatches AS retained
+                            WHERE retained.session_id = stats.session_id
+                                AND retained.created_at <= stats.ended_at
+                        )
+                    "#,
+                    [SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into()],
+                ))
+                .await?;
+            let mut duration_sums = BTreeMap::<String, i64>::new();
+            for row in source_rows {
+                let session_id = row.try_get("", "session_id")?;
+                let duration_ms = row
+                    .try_get::<Option<i64>>("", "duration_ms")?
+                    .unwrap_or_default()
+                    .max(0);
+                let sum = duration_sums.entry(session_id).or_default();
+                *sum = sum.saturating_add(duration_ms);
+            }
+
+            // Retention can remove a v2 source, and session IDs can be reused after it ends.
+            // Reproject only when the complete dispatch set from the original session remains.
+            for (session_id, active_duration_ms) in duration_sums {
+                connection
+                    .execute(Statement::from_sql_and_values(
+                        DbBackend::Sqlite,
+                        "UPDATE session_efficiency_stats SET active_duration_ms = ?, efficiency_estimator_version = ? WHERE session_id = ? AND efficiency_estimator_version = ?",
+                        [
+                            active_duration_ms.into(),
+                            EFFICIENCY_ESTIMATOR_VERSION.into(),
+                            session_id.into(),
+                            SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into(),
+                        ],
+                    ))
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Audit retention makes the original wall-clock span irrecoverable.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DbBackend, Statement,
+        };
+
+        #[tokio::test]
+        async fn upgrade_rewrites_v2_spans_as_saturating_duration_sums() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(8)).await?;
+            for statement in [
+                "INSERT INTO session_efficiency_stats VALUES ('gap', 10, 2, 100, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('overlap', 10, 2, 700, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('partial', 10, 2, 300, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('precise', 10, 2, 1, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('retained', 10, 1, 250, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('reused', 10, 2, 600, 0, 0, 0, 1, 0)",
+                "INSERT INTO session_efficiency_stats VALUES ('saturated', 10, 2, 1, 0, 0, 0, 1, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'gap', 'navigate', NULL, 0), (1, 'agent', 'agent', 'Agent', 'gap', 'click', -10, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'overlap', 'navigate', 500, 0), (1, 'agent', 'agent', 'Agent', 'overlap', 'click', 400, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'partial', 'navigate', 10, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'precise', 'navigate', 9007199254740992, 0), (1, 'agent', 'agent', 'Agent', 'precise', 'click', 1, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (20, 'agent', 'agent', 'Agent', 'reused', 'navigate', 10, 0), (21, 'agent', 'agent', 'Agent', 'reused', 'click', 20, 0)",
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, duration_ms, has_screenshot) VALUES (0, 'agent', 'agent', 'Agent', 'saturated', 'navigate', 9223372036854775807, 0), (1, 'agent', 'agent', 'Agent', 'saturated', 'click', 1, 0)",
+            ] {
+                connection.execute_unprepared(statement).await?;
+            }
+            super::super::Migrator::up(&connection, None).await?;
+            let rows = connection
+                .query_all(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT session_id, active_duration_ms, efficiency_estimator_version FROM session_efficiency_stats ORDER BY session_id",
+                ))
+                .await?;
+            assert_eq!(
+                rows.into_iter()
+                    .map(|row| Ok((
+                        row.try_get::<String>("", "session_id")?,
+                        row.try_get::<i64>("", "active_duration_ms")?,
+                        row.try_get::<i64>("", "efficiency_estimator_version")?,
+                    )))
+                    .collect::<Result<Vec<_>, DbErr>>()?,
+                [
+                    ("gap".to_owned(), 0, 3),
+                    ("overlap".to_owned(), 900, 3),
+                    ("partial".to_owned(), 300, 2),
+                    ("precise".to_owned(), 9_007_199_254_740_993, 3),
+                    ("retained".to_owned(), 250, 2),
+                    ("reused".to_owned(), 600, 2),
+                    ("saturated".to_owned(), i64::MAX, 3)
+                ]
+            );
+            Ok(())
+        }
+    }
+}
+
+mod m0011_use_session_durations_for_efficiency {
+    use super::*;
+    use sea_orm_migration::sea_orm::{DbBackend, Statement};
+
+    const SOURCE_EFFICIENCY_ESTIMATOR_VERSION: i64 = 3;
+    const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0011_use_session_durations_for_efficiency"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained projections can outlive tasks, and session IDs can be reused. The end
+            // timestamp and dispatch count identify the task materialized from the same audit rows.
+            manager
+                .get_connection()
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    r#"
+                    UPDATE session_efficiency_stats
+                    SET active_duration_ms = MAX((
+                            SELECT task.duration_ms
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        ), 0),
+                        efficiency_estimator_version = ?
+                    WHERE efficiency_estimator_version = ?
+                        AND EXISTS (
+                            SELECT 1
+                            FROM tasks AS task
+                            WHERE task.session_id = session_efficiency_stats.session_id
+                                AND task.ended_at = session_efficiency_stats.ended_at
+                                AND task.dispatch_count = session_efficiency_stats.dispatch_count
+                        )
+                    "#,
+                    [
+                        EFFICIENCY_ESTIMATOR_VERSION.into(),
+                        SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into(),
+                    ],
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Retained audit history cannot reconstruct the old summed-tool duration.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        async fn insert_projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats VALUES ('{session_id}', {ended_at}, {dispatch_count}, 900, 0, 0, 0, 3, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn insert_task(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            ended_at: i64,
+            dispatch_count: i64,
+            duration_ms: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, ended_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, {ended_at}, {duration_ms}, {dispatch_count}, '[]', 'done', 0, 0, 0, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT active_duration_ms, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "active_duration_ms")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn upgrade_uses_only_matching_task_durations() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(10)).await?;
+
+            insert_projection(&connection, "matching", 10, 2).await?;
+            insert_task(&connection, "matching", 10, 2, 1_234).await?;
+
+            insert_projection(&connection, "negative", 20, 1).await?;
+            insert_task(&connection, "negative", 20, 1, -5).await?;
+
+            insert_projection(&connection, "end-mismatch", 30, 1).await?;
+            insert_task(&connection, "end-mismatch", 31, 1, 300).await?;
+
+            insert_projection(&connection, "count-mismatch", 40, 2).await?;
+            insert_task(&connection, "count-mismatch", 40, 1, 400).await?;
+
+            insert_projection(&connection, "absent-task", 50, 1).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(projection(&connection, "matching").await?, (1_234, 4));
+            assert_eq!(projection(&connection, "negative").await?, (0, 4));
+            assert_eq!(projection(&connection, "end-mismatch").await?, (900, 3));
+            assert_eq!(projection(&connection, "count-mismatch").await?, (900, 3));
+            assert_eq!(projection(&connection, "absent-task").await?, (900, 3));
+            Ok(())
+        }
+    }
+}
+
+mod m0008_add_task_token_estimates {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0008_add_task_token_estimates"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Zero/false defaults preserve existing rows; the backfill below refines them.
+            for column in ["tool_input_token_estimate", "tool_output_token_estimate"] {
+                if !manager.has_column("tasks", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tasks"))
+                                .add_column(
+                                    ColumnDef::new(Alias::new(column))
+                                        .big_integer()
+                                        .not_null()
+                                        .default(0),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            if !manager.has_column("tasks", "tokens_measured").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tasks"))
+                            .add_column(
+                                ColumnDef::new(Alias::new("tokens_measured"))
+                                    .boolean()
+                                    .not_null()
+                                    .default(false),
+                            )
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            // Backfill the materialized per-session totals from the source dispatches. `tokens_measured`
+            // mirrors the efficiency projection's eligibility: a session counts only when it has
+            // dispatches and every one carries token-estimator v1 (0 is legacy/unmeasured). The version
+            // literal is the value frozen at this migration, not a runtime constant.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    r#"
+                    UPDATE tasks SET
+                        tool_input_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_input_token_estimate, 0))
+                            FROM tool_dispatches d
+                            WHERE d.session_id = tasks.session_id
+                        ), 0),
+                        tool_output_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_output_token_estimate, 0))
+                            FROM tool_dispatches d
+                            WHERE d.session_id = tasks.session_id
+                        ), 0),
+                        tokens_measured = CASE
+                            WHEN EXISTS (
+                                SELECT 1 FROM tool_dispatches d
+                                WHERE d.session_id = tasks.session_id
+                            )
+                            AND NOT EXISTS (
+                                SELECT 1 FROM tool_dispatches d
+                                WHERE d.session_id = tasks.session_id
+                                  AND d.token_estimator_version != 1
+                            )
+                            THEN 1 ELSE 0 END
+                    "#,
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for column in [
+                "tokens_measured",
+                "tool_output_token_estimate",
+                "tool_input_token_estimate",
+            ] {
+                if manager.has_column("tasks", column).await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new("tasks"))
+                                .drop_column(Alias::new(column))
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        struct PreviousMigrator;
+
+        #[async_trait::async_trait]
+        impl MigratorTrait for PreviousMigrator {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                vec![
+                    Box::new(super::super::m0001_baseline::Migration),
+                    Box::new(super::super::m0002_add_recordings_and_claims::Migration),
+                    Box::new(super::super::m0003_document_recordings_and_tab_ownership::Migration),
+                    Box::new(super::super::m0004_atomic_recording_payloads::Migration),
+                    Box::new(super::super::m0005_reclassify_task_status::Migration),
+                    Box::new(super::super::m0006_add_tool_token_estimates::Migration),
+                    Box::new(super::super::m0007_add_session_efficiency_stats::Migration),
+                ]
+            }
+        }
+
+        async fn insert_dispatch(
+            conn: &DatabaseConnection,
+            session_id: &str,
+            input_tokens: i64,
+            output_tokens: i64,
+            version: i64,
+        ) -> Result<(), DbErr> {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, has_screenshot, tool_input_token_estimate, tool_output_token_estimate, token_estimator_version) VALUES (0, 'agent', 'agent', 'Agent', '{session_id}', 'navigate', 0, {input_tokens}, {output_tokens}, {version})"
+            ))
+            .await?;
+            Ok(())
+        }
+
+        async fn insert_task(
+            conn: &DatabaseConnection,
+            session_id: &str,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO tasks (session_id, agent_id, slug, agent_label, title, started_at, duration_ms, dispatch_count, tool_sequence_json, status, error_count, cursor_id, has_screenshots, updated_at) VALUES ('{session_id}', 'agent', 'agent', 'Agent', 'Session', 0, 0, {dispatch_count}, '[]', 'done', 0, 0, 0, 0)"
+            ))
+            .await?;
+            Ok(())
+        }
+
+        async fn token_row(
+            conn: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64, bool), DbErr> {
+            let row = conn
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT tool_input_token_estimate, tool_output_token_estimate, tokens_measured FROM tasks WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_string()))?;
+            Ok((
+                row.try_get("", "tool_input_token_estimate")?,
+                row.try_get("", "tool_output_token_estimate")?,
+                row.try_get("", "tokens_measured")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn backfill_sums_tokens_and_marks_only_all_v1_sessions() -> anyhow::Result<()> {
+            let conn = SeaDatabase::connect("sqlite::memory:").await?;
+            PreviousMigrator::up(&conn, None).await?;
+
+            insert_task(&conn, "measured", 2).await?;
+            insert_dispatch(&conn, "measured", 10, 100, 1).await?;
+            insert_dispatch(&conn, "measured", 20, 200, 1).await?;
+
+            insert_task(&conn, "legacy", 1).await?;
+            insert_dispatch(&conn, "legacy", 0, 0, 0).await?;
+
+            // One legacy dispatch taints the session, but the sums still count every dispatch.
+            insert_task(&conn, "mixed", 2).await?;
+            insert_dispatch(&conn, "mixed", 5, 5, 1).await?;
+            insert_dispatch(&conn, "mixed", 5, 5, 0).await?;
+
+            insert_task(&conn, "empty", 0).await?;
+
+            super::super::Migrator::up(&conn, None).await?;
+
+            assert_eq!(token_row(&conn, "measured").await?, (30, 300, true));
+            assert_eq!(token_row(&conn, "legacy").await?, (0, 0, false));
+            assert_eq!(token_row(&conn, "mixed").await?, (10, 10, false));
+            assert_eq!(token_row(&conn, "empty").await?, (0, 0, false));
             Ok(())
         }
     }

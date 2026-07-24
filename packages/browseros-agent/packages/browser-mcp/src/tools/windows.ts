@@ -2,37 +2,19 @@ import type { WindowInfo } from '@browseros/browser-core/core/windows'
 import { z } from 'zod'
 import { defineTool, errorResult, textResult } from './framework'
 
-const ACTIONS = [
-  'list',
-  'create',
-  'close',
-  'activate',
-  'set_visibility',
-] as const
+const ACTIONS = ['list', 'create', 'close', 'activate'] as const
 
 export const windows = defineTool({
   name: 'windows',
   description:
-    'Manage browser windows: list windows, create visible or hidden windows, close or activate a window, and show or hide windows.',
+    'Manage browser windows: list, create, close, or activate a window.',
   input: z.object({
     action: z.enum(ACTIONS).default('list'),
     windowId: z
       .number()
       .int()
       .optional()
-      .describe('Window id for close, activate, and set_visibility.'),
-    hidden: z
-      .boolean()
-      .default(false)
-      .describe('Create a hidden window for action="create".'),
-    visible: z
-      .boolean()
-      .optional()
-      .describe('Target visibility for action="set_visibility".'),
-    activate: z
-      .boolean()
-      .optional()
-      .describe('Focus the window after making it visible.'),
+      .describe('Window id for close and activate.'),
   }),
   annotations: {
     title: 'Manage windows',
@@ -50,9 +32,8 @@ export const windows = defineTool({
         })
       }
       case 'create': {
-        const window = await ctx.session.windows.create({ hidden: args.hidden })
-        const hiddenMarker = !window.isVisible ? ' (hidden)' : ''
-        return textResult(`created window ${window.windowId}${hiddenMarker}`, {
+        const window = await ctx.session.windows.create()
+        return textResult(`created window ${window.windowId}`, {
           action: 'create',
           window,
         })
@@ -77,29 +58,6 @@ export const windows = defineTool({
           windowId: args.windowId,
         })
       }
-      case 'set_visibility': {
-        if (args.windowId === undefined) {
-          return errorResult('windows set_visibility: windowId is required.')
-        }
-        if (args.visible === undefined) {
-          return errorResult('windows set_visibility: visible is required.')
-        }
-        const result = await ctx.session.windows.setVisibility(args.windowId, {
-          visible: args.visible,
-          activate: args.activate,
-        })
-        const state = result.window.isVisible ? 'visible' : 'hidden'
-        return textResult(
-          `set window ${result.previousWindowId} ${state}; new window id ${result.newWindowId}`,
-          {
-            action: 'set_visibility',
-            previousWindowId: result.previousWindowId,
-            newWindowId: result.newWindowId,
-            replaced: result.replaced,
-            window: result.window,
-          },
-        )
-      }
       default:
         return errorResult('windows: unsupported action.')
     }
@@ -111,10 +69,7 @@ function formatWindowList(windows: WindowInfo[]): string {
 
   const lines = [`Found ${windows.length} windows:`, '']
   for (const window of windows) {
-    const markers: string[] = []
-    if (!window.isVisible) markers.push('HIDDEN')
-    if (window.isActive) markers.push('ACTIVE')
-    const suffix = markers.length > 0 ? ` [${markers.join(', ')}]` : ''
+    const suffix = window.isActive ? ' [ACTIVE]' : ''
     lines.push(
       `Window ${window.windowId} (${window.windowType}, ${window.tabCount} tabs)${suffix}`,
     )

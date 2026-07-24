@@ -6,10 +6,10 @@ import (
 	"browseros-dev/proc"
 )
 
-func writeServerSidecarConfig(path string, root string, executionDir string, p proc.Ports) error {
+func writeServerSidecarConfig(path string, resourcesDir string, executionDir string, p proc.Ports) error {
 	return proc.WriteSidecarConfig(path, proc.SidecarConfigOptions{
 		Ports:        p,
-		ResourcesDir: filepath.Join(root, "resources"),
+		ResourcesDir: resourcesDir,
 		ExecutionDir: executionDir,
 	})
 }

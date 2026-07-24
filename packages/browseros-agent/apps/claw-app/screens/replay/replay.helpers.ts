@@ -83,3 +83,4 @@ export function frameIndexAt(
 }
 
 export const PLAYBACK_SPEEDS: readonly number[] = [1, 2, 4]
+export const DEFAULT_PLAYBACK_SPEED = 2

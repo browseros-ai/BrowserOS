@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot frame tree fixture</title>
+    <script>
+      const readyFrames = new Set(['parent'])
+      window.addEventListener('message', (event) => {
+        if (event.data?.fixture === 'snapshot-frame-tree') {
+          readyFrames.add(event.data.ready)
+        }
+      })
+      window.snapshotFrameFixture = {
+        state() {
+          const frames = [...readyFrames]
+          return {
+            frames,
+            ready: ['parent', 'frame-a', 'frame-b', 'grandchild'].every(
+              (name) => readyFrames.has(name),
+            ),
+          }
+        },
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Snapshot frame tree fixture</h1>
+    <button id="parent-action" type="button">Parent action ready</button>
+    <iframe
+      id="frame-a"
+      title="Snapshot frame A"
+      src="/snapshot-frame-a.html"
+      width="600"
+      height="400"
+    ></iframe>
+    <iframe
+      id="frame-b"
+      title="Snapshot frame B"
+      width="600"
+      height="300"
+    ></iframe>
+    <script>
+      document.getElementById('parent-action').addEventListener('click', () => {
+        document.getElementById('parent-action').textContent =
+          'Parent action clicked'
+      })
+      const childOrigin = new URLSearchParams(location.search).get('childOrigin')
+      document.getElementById('frame-b').src =
+        `${childOrigin ?? location.origin}/snapshot-frame-b.html`
+    </script>
+  </body>
+</html>

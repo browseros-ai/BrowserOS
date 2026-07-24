@@ -156,8 +156,9 @@ describe('AcpxRuntime', () => {
 
     const expectedCwd = join(browserosDir, 'agents', 'harness', 'workspace')
     expect(calls[0]?.input).toMatchObject({ cwd: expectedCwd })
-    expect(calls[1]?.input).toMatchObject({ cwd: expectedCwd })
-    expect((calls[1]?.input as { sessionKey: string }).sessionKey).toMatch(
+    const startTurnInput = calls[1]?.input
+    expect(startTurnInput).toMatchObject({ cwd: expectedCwd })
+    expect((startTurnInput as { sessionKey: string }).sessionKey).toMatch(
       /^agent:agent-1:main:[a-f0-9]{16}$/,
     )
     const text = getStartTurnText(
@@ -199,8 +200,9 @@ describe('AcpxRuntime', () => {
     )
 
     expect(calls[0]?.input).toMatchObject({ cwd: selected })
-    expect(calls[1]?.input).toMatchObject({ cwd: selected })
-    expect((calls[1]?.input as { sessionKey: string }).sessionKey).toMatch(
+    const startTurnInput = calls[1]?.input
+    expect(startTurnInput).toMatchObject({ cwd: selected })
+    expect((startTurnInput as { sessionKey: string }).sessionKey).toMatch(
       /^agent:agent-1:main:[a-f0-9]{16}$/,
     )
   })

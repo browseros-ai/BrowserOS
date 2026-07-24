@@ -216,9 +216,7 @@ impl TabRegistry {
                 None,
             )
             .await?;
-        let value = session
-            .cdp("Browser.getTabs", json!({ "includeHidden": true }), None)
-            .await?;
+        let value = session.cdp("Browser.getTabs", json!({}), None).await?;
         let result = serde_json::from_value::<browser::GetTabsResult>(value)?;
         if self.current_epoch.load(Ordering::SeqCst) != epoch {
             return Ok(());
@@ -400,7 +398,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::{
         sync::{
-            Arc,
+            Arc, Mutex as StdMutex,
             atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
@@ -410,6 +408,7 @@ mod tests {
     struct TabListConnection {
         events: broadcast::Sender<CdpEvent>,
         list_calls: AtomicUsize,
+        list_params: StdMutex<Vec<Value>>,
     }
 
     impl TabListConnection {
@@ -418,7 +417,15 @@ mod tests {
             Arc::new(Self {
                 events,
                 list_calls: AtomicUsize::new(0),
+                list_params: StdMutex::new(Vec::new()),
             })
+        }
+
+        fn list_params(&self) -> Vec<Value> {
+            self.list_params
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
     }
 
@@ -426,13 +433,17 @@ mod tests {
         fn send<'a>(
             &'a self,
             method: &'a str,
-            _params: Value,
+            params: Value,
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
                 match method {
                     "Browser.getTabs" => {
                         self.list_calls.fetch_add(1, Ordering::SeqCst);
+                        self.list_params
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(params);
                         Ok(json!({
                             "tabs": [{
                                 "tabId": 11,
@@ -677,6 +688,7 @@ mod tests {
         assert_eq!(connection.list_calls.load(Ordering::SeqCst), 1);
         map.rebuild_from_session(&session, 1, true).await?;
         assert_eq!(connection.list_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(connection.list_params(), vec![json!({}), json!({})]);
         Ok(())
     }
 }

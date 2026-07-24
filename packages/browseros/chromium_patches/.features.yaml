@@ -39,6 +39,7 @@ features:
       - chrome/app/chrome_command_ids.h
       - chrome/browser/ui/actions/chrome_action_id.h
       - chrome/browser/ui/browser_actions.cc
+      - chrome/browser/ui/browser.cc
       - chrome/browser/ui/browser_command_controller.cc
       # Shared keyboard shortcut infra (llm-chat + keyboard-shortcuts)
       - chrome/browser/global_keyboard_shortcuts_mac.mm
@@ -350,32 +351,6 @@ features:
       - components/infobars/core/infobar_delegate.h
       - tools/metrics/histograms/metadata/browser/enums.xml
 
-  hidden-agent-windows:
-    description: "feat: hidden agent windows"
-    files:
-      - chrome/browser/sessions/session_service_base.cc
-      - chrome/browser/ui/browser.cc
-      - chrome/browser/ui/browser.h
-      - chrome/browser/ui/browser_finder.cc
-      - chrome/browser/ui/browser_list.cc
-      - chrome/browser/ui/browser_list.h
-      - chrome/browser/ui/browser_unittest.cc
-      - chrome/browser/ui/views/frame/browser_native_widget_ash.cc
-      - chrome/browser/ui/views/frame/browser_native_widget_aura.cc
-      - chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-      - components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
-      - components/remote_cocoa/common/native_widget_ns_window.mojom
-      - ui/ozone/platform/x11/x11_window.cc
-      - ui/ozone/platform/x11/x11_window.h
-      - ui/platform_window/platform_window_init_properties.h
-      - ui/views/cocoa/native_widget_mac_ns_window_host.mm
-      - ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
-      - ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
-      - ui/views/widget/desktop_aura/desktop_window_tree_host_win.h
-      - ui/views/widget/widget.h
-      - ui/views/widget/widget_hwnd_utils.cc
-      - ui/views/widget/widget_unittest.cc
-
   cdp-api:
     description: "feat: chrome devtools protocol API"
     files:
@@ -393,8 +368,6 @@ features:
       - chrome/browser/devtools/protocol/browser_handler.h
       - chrome/browser/devtools/protocol/browser_handler_android.cc
       - chrome/browser/devtools/protocol/browser_handler_android.h
-      - chrome/browser/devtools/protocol/browser_handler_mac.h
-      - chrome/browser/devtools/protocol/browser_handler_mac.mm
       - chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
       - chrome/browser/devtools/protocol/history_handler.cc
       - chrome/browser/devtools/protocol/history_handler.h

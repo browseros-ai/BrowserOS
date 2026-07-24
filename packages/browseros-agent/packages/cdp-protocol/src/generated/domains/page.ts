@@ -5,17 +5,13 @@ import type { BackendNodeId, Rect } from './dom'
 import type { ScreenOrientation } from './emulation'
 import type { StreamHandle } from './io'
 import type {
+  AdAncestry,
   LoaderId,
   MonotonicTime,
   ResourceType,
   TimeSinceEpoch,
 } from './network'
-import type {
-  ExecutionContextId,
-  ScriptId,
-  StackTrace,
-  UniqueDebuggerId,
-} from './runtime'
+import type { ExecutionContextId, StackTrace } from './runtime'
 
 // ══ Types ══
 
@@ -31,16 +27,6 @@ export type AdFrameExplanation =
 export interface AdFrameStatus {
   adFrameType: AdFrameType
   explanations?: AdFrameExplanation[]
-}
-
-export interface AdScriptId {
-  scriptId: ScriptId
-  debuggerId: UniqueDebuggerId
-}
-
-export interface AdScriptAncestry {
-  ancestryChain: AdScriptId[]
-  rootScriptFilterlistRule?: string
 }
 
 export type SecureContextType =
@@ -114,7 +100,6 @@ export type PermissionsPolicyFeature =
   | 'encrypted-media'
   | 'execution-while-out-of-viewport'
   | 'execution-while-not-rendered'
-  | 'fenced-unpartitioned-storage-read'
   | 'focus-without-user-activation'
   | 'fullscreen'
   | 'frobulate'
@@ -540,6 +525,7 @@ export type BackForwardCacheNotRestoredReason =
   | 'BackForwardCacheDisabledForPrerender'
   | 'UserAgentOverrideDiffers'
   | 'ForegroundCacheLimit'
+  | 'ForwardCacheDisabled'
   | 'BrowsingInstanceNotSwapped'
   | 'BackForwardCacheDisabledForDelegate'
   | 'UnloadHandlerExistsInMainFrame'
@@ -763,7 +749,7 @@ export interface GetAdScriptAncestryParams {
 }
 
 export interface GetAdScriptAncestryResult {
-  adScriptAncestry?: AdScriptAncestry
+  adScriptAncestry?: AdAncestry
 }
 
 export interface GetFrameTreeResult {

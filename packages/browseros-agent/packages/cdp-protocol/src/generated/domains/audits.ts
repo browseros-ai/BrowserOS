@@ -2,6 +2,7 @@
 
 import type { BackendNodeId } from './dom'
 import type {
+  AdAncestry,
   ClientSecurityState,
   CorsErrorStatus,
   IPAddressSpace,
@@ -9,7 +10,7 @@ import type {
   RequestId,
 } from './network'
 import type { FrameId } from './page'
-import type { ScriptId } from './runtime'
+import type { ScriptId, StackTrace } from './runtime'
 
 // ══ Types ══
 
@@ -74,6 +75,13 @@ export interface CookieIssueDetails {
   cookieUrl?: string
   request?: AffectedRequest
   insight?: CookieIssueInsight
+}
+
+export type PerformanceIssueType = 'DocumentCookie'
+
+export interface PerformanceIssueDetails {
+  performanceIssueType: PerformanceIssueType
+  sourceCodeLocation?: SourceCodeLocation
 }
 
 export type MixedContentResolutionStatus =
@@ -183,16 +191,6 @@ export interface SharedArrayBufferIssueDetails {
   sourceCodeLocation: SourceCodeLocation
   isWarning: boolean
   type: SharedArrayBufferIssueType
-}
-
-export interface LowTextContrastIssueDetails {
-  violatingNodeId: BackendNodeId
-  violatingNodeSelector: string
-  contrastRatio: number
-  thresholdAA: number
-  thresholdAAA: number
-  fontSize: string
-  fontWeight: string
 }
 
 export interface CorsIssueDetails {
@@ -350,6 +348,7 @@ export type GenericIssueErrorType =
   | 'AutofillAndManualTextPolicyControlledFeaturesInfo'
   | 'AutofillPolicyControlledFeatureInfo'
   | 'ManualTextPolicyControlledFeatureInfo'
+  | 'FormModelContextParameterMissingTitleAndDescription'
 
 export interface GenericIssueDetails {
   errorType: GenericIssueErrorType
@@ -398,10 +397,6 @@ export type FederatedAuthRequestIssueReason =
   | 'ConfigNoResponse'
   | 'ConfigInvalidResponse'
   | 'ConfigInvalidContentType'
-  | 'ClientMetadataHttpNotFound'
-  | 'ClientMetadataNoResponse'
-  | 'ClientMetadataInvalidResponse'
-  | 'ClientMetadataInvalidContentType'
   | 'IdpNotPotentiallyTrustworthy'
   | 'DisabledInSettings'
   | 'DisabledInFlags'
@@ -423,11 +418,9 @@ export type FederatedAuthRequestIssueReason =
   | 'Canceled'
   | 'RpPageNotVisible'
   | 'SilentMediationFailure'
-  | 'ThirdPartyCookiesBlocked'
   | 'NotSignedInWithIdp'
   | 'MissingTransientUserActivation'
   | 'ReplacedByActiveMode'
-  | 'InvalidFieldsSpecified'
   | 'RelyingPartyOriginIsOpaque'
   | 'TypeNotMatching'
   | 'UiDismissedNoEmbargo'
@@ -548,6 +541,12 @@ export interface PermissionElementIssueDetails {
   disableReason?: string
 }
 
+export interface SelectivePermissionsInterventionIssueDetails {
+  apiName: string
+  adAncestry: AdAncestry
+  stackTrace?: StackTrace
+}
+
 export type InspectorIssueCode =
   | 'CookieIssue'
   | 'MixedContentIssue'
@@ -555,7 +554,6 @@ export type InspectorIssueCode =
   | 'HeavyAdIssue'
   | 'ContentSecurityPolicyIssue'
   | 'SharedArrayBufferIssue'
-  | 'LowTextContrastIssue'
   | 'CorsIssue'
   | 'AttributionReportingIssue'
   | 'QuirksModeIssue'
@@ -577,6 +575,8 @@ export type InspectorIssueCode =
   | 'ConnectionAllowlistIssue'
   | 'UserReidentificationIssue'
   | 'PermissionElementIssue'
+  | 'PerformanceIssue'
+  | 'SelectivePermissionsInterventionIssue'
 
 export interface InspectorIssueDetails {
   cookieIssueDetails?: CookieIssueDetails
@@ -585,7 +585,6 @@ export interface InspectorIssueDetails {
   heavyAdIssueDetails?: HeavyAdIssueDetails
   contentSecurityPolicyIssueDetails?: ContentSecurityPolicyIssueDetails
   sharedArrayBufferIssueDetails?: SharedArrayBufferIssueDetails
-  lowTextContrastIssueDetails?: LowTextContrastIssueDetails
   corsIssueDetails?: CorsIssueDetails
   attributionReportingIssueDetails?: AttributionReportingIssueDetails
   quirksModeIssueDetails?: QuirksModeIssueDetails
@@ -607,6 +606,8 @@ export interface InspectorIssueDetails {
   connectionAllowlistIssueDetails?: ConnectionAllowlistIssueDetails
   userReidentificationIssueDetails?: UserReidentificationIssueDetails
   permissionElementIssueDetails?: PermissionElementIssueDetails
+  performanceIssueDetails?: PerformanceIssueDetails
+  selectivePermissionsInterventionIssueDetails?: SelectivePermissionsInterventionIssueDetails
 }
 
 export type IssueId = string
@@ -630,10 +631,6 @@ export interface GetEncodedResponseResult {
   body?: string
   originalSize: number
   encodedSize: number
-}
-
-export interface CheckContrastParams {
-  reportAAA?: boolean
 }
 
 export interface CheckFormsIssuesResult {

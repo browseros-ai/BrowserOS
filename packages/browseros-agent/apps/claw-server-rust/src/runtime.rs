@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const AUDIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -134,11 +135,15 @@ impl AppRuntime {
     }
 
     pub async fn shutdown(self) -> AppResult<()> {
-        self.shutdown_with_session_timeout(SESSION_SHUTDOWN_TIMEOUT)
+        self.shutdown_with_timeouts(SESSION_SHUTDOWN_TIMEOUT, AUDIT_SHUTDOWN_TIMEOUT)
             .await
     }
 
-    async fn shutdown_with_session_timeout(mut self, session_timeout: Duration) -> AppResult<()> {
+    async fn shutdown_with_timeouts(
+        mut self,
+        session_timeout: Duration,
+        audit_timeout: Duration,
+    ) -> AppResult<()> {
         self.state.shutdown.request();
         let session_result = match timeout(session_timeout, self.state.sessions.shutdown()).await {
             Ok(result) => result,
@@ -153,6 +158,19 @@ impl AppRuntime {
                 )))
             }
         };
+        let audit_result = match timeout(audit_timeout, self.state.audit_worker.shutdown()).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    timeout_ms = audit_timeout.as_millis(),
+                    "audit worker drain exceeded shutdown timeout"
+                );
+                Err(AppError::Internal(format!(
+                    "audit worker drain exceeded {} ms shutdown timeout",
+                    audit_timeout.as_millis()
+                )))
+            }
+        };
         // Session teardown enqueues final ownership releases; wait for the FIFO barrier before
         // shutdown returns.
         self.state.session_tabs.drain_writes().await;
@@ -162,6 +180,7 @@ impl AppRuntime {
         self.state.session_efficiency.drain().await;
         self.state.analytics.shutdown().await;
         let drained = session_result?;
+        audit_result?;
         info!(drained, "drained sessions during shutdown");
         Ok(())
     }
@@ -196,11 +215,14 @@ mod tests {
         config::Config,
         db::{
             DATABASE_FILENAME, Database,
-            audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+            audit_log::{
+                ListDispatchesQuery, RecordToolDispatchInput, bounded_args_json, result_meta,
+            },
         },
         identity::{ClientIdentity, ConversationIdentity},
         ids::{DispatchId, SessionId},
         services::{
+            audit::AuditEvent,
             session_efficiency::SessionEfficiencyService,
             sessions::{Session, Sessions},
         },
@@ -227,7 +249,8 @@ mod tests {
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
             created_at: None,
@@ -235,12 +258,6 @@ mod tests {
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         }
     }
 
@@ -262,6 +279,106 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), first).await??;
         tokio::time::timeout(Duration::from_secs(1), second).await??;
         shutdown.requested().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_shutdown_drains_accepted_audit_events() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config, root.path().join("home")).await?;
+        let audit_log = state.audit_log.clone();
+        let audit_worker = state.audit_worker.clone();
+        audit_worker
+            .submit(AuditEvent::without_preview(efficiency_dispatch(
+                "queued-shutdown",
+                "agent",
+            )))
+            .await?;
+
+        AppRuntime {
+            state,
+            tasks: Vec::new(),
+        }
+        .shutdown()
+        .await?;
+
+        let rows = audit_log
+            .list_dispatches(ListDispatchesQuery {
+                session_id: Some("queued-shutdown".to_string()),
+                ..ListDispatchesQuery::default()
+            })
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            audit_worker
+                .submit(AuditEvent::without_preview(efficiency_dispatch(
+                    "late-shutdown",
+                    "agent",
+                )))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_shutdown_bounds_a_stuck_audit_preview() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let config = Arc::new(Config {
+            server_port: 9200,
+            cdp_port: 49337,
+            proxy_port: None,
+            resources_dir: root.path().join("resources"),
+            browserclaw_dir: root.path().to_path_buf(),
+            session_idle: Duration::from_secs(300),
+            session_retention: Duration::from_secs(7_200),
+            session_sweep_interval: Duration::from_secs(60),
+            replay_retention_days: 7,
+            dev_mode: false,
+            auth_token: None,
+        });
+        let state = AppState::new_with_home(config, root.path().join("home")).await?;
+        let preview_started = Arc::new(Notify::new());
+        let mut event = AuditEvent::without_preview(efficiency_dispatch("stuck-preview", "agent"));
+        event.preview = Some(Arc::new({
+            let preview_started = preview_started.clone();
+            move |_, _| {
+                preview_started.notify_one();
+                Box::pin(pending())
+            }
+        }));
+        state.audit_worker.submit(event).await?;
+        tokio::time::timeout(Duration::from_secs(1), preview_started.notified()).await?;
+
+        let result = AppRuntime {
+            state,
+            tasks: Vec::new(),
+        }
+        .shutdown_with_timeouts(Duration::from_secs(1), Duration::from_millis(50))
+        .await;
+
+        let Err(error) = result else {
+            anyhow::bail!("stuck audit preview unexpectedly drained");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("audit worker drain exceeded 50 ms")
+        );
         Ok(())
     }
 
@@ -375,6 +492,7 @@ mod tests {
         }));
         state.session_efficiency = session_efficiency;
         state.sessions = sessions;
+        let audit_log = state.audit_log.clone();
         let session = state
             .sessions
             .mint_with_id(
@@ -402,6 +520,11 @@ mod tests {
             .await;
 
         AppRuntime::start(state).shutdown().await?;
+        let task_duration_ms = audit_log
+            .get_task_summary("shutdown-session")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
+            .duration_ms;
         assert_eq!(analytics.shutdown_calls_for_testing(), 1);
         let mut captured = Vec::new();
         while let Ok(request) = requests.try_recv() {
@@ -436,17 +559,17 @@ mod tests {
                 "kind": "closed",
                 "client_name": "codex",
                 "dispatch_count": 1,
-                "active_duration_ms": 5,
+                "active_duration_ms": task_duration_ms,
                 "tool_input_token_estimate": 1,
                 "tool_output_token_estimate": 0,
                 "browserclaw_token_estimate": 1,
-                "screenshot_baseline_token_estimate": 1_536,
-                "screenshot_first_token_estimate": 1_537,
-                "raw_token_savings_estimate": 1_536,
-                "efficiency_estimator_version": 1,
+                "screenshot_baseline_token_estimate": 3_000,
+                "screenshot_first_token_estimate": 3_001,
+                "raw_token_savings_estimate": 3_000,
+                "efficiency_estimator_version": 4,
                 "screenshot_baseline_width": 1_920,
                 "screenshot_baseline_height": 1_080,
-                "screenshot_tokens_per_dispatch": 1_536,
+                "screenshot_tokens_per_dispatch": 3_000,
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
@@ -531,7 +654,7 @@ mod tests {
             state,
             tasks: Vec::new(),
         }
-        .shutdown_with_session_timeout(Duration::from_millis(50))
+        .shutdown_with_timeouts(Duration::from_millis(50), Duration::from_secs(1))
         .await;
         let Err(error) = result else {
             anyhow::bail!("stuck teardown unexpectedly completed");

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { emitDomainApiFile } from './lib/domain-api-emitter'
 import { emitDomainFile } from './lib/domain-emitter'
 import { domainToKebab } from './lib/naming'
@@ -12,21 +13,43 @@ import { parseProtocol } from './lib/protocol-parser'
 function requireEnv(name: string): string {
   const value = process.env[name]
   if (!value) {
-    console.error(`Set ${name} to the path of browser_protocol.json`)
+    console.error(
+      `Set ${name} to Chromium's generated combined devtools_protocol/protocol.json`,
+    )
     process.exit(1)
   }
   return value
 }
 
-const PROTOCOL_PATH = requireEnv('CDP_PROTOCOL_JSON')
 const OUT_DIR = join(import.meta.dir, '../../packages/cdp-protocol')
 const GEN_DIR = join(OUT_DIR, 'src/generated')
 const DOMAINS_DIR = join(GEN_DIR, 'domains')
 const DOMAIN_APIS_DIR = join(GEN_DIR, 'domain-apis')
 
 async function main() {
-  console.log('Parsing protocol...')
-  const protocol = await parseProtocol(PROTOCOL_PATH)
+  const protocolPath = resolve(requireEnv('CDP_PROTOCOL_JSON'))
+  console.log(`CDP protocol source: ${protocolPath}`)
+
+  let source: string
+  try {
+    source = await Bun.file(protocolPath).text()
+  } catch (error) {
+    throw new Error(
+      `Failed to read CDP protocol source ${protocolPath}: ${errorMessage(error)}`,
+    )
+  }
+
+  const sourceHash = createHash('sha256').update(source).digest('hex')
+  console.log(`CDP protocol SHA-256: ${sourceHash}`)
+
+  let protocol: ReturnType<typeof parseProtocol>
+  try {
+    protocol = parseProtocol(source)
+  } catch (error) {
+    throw new Error(
+      `Failed to parse CDP protocol source ${protocolPath}: ${errorMessage(error)}`,
+    )
+  }
   console.log(
     `Found ${protocol.domains.length} domains (v${protocol.version.major}.${protocol.version.minor})`,
   )
@@ -64,12 +87,38 @@ async function main() {
   console.log('Generating package.json exports...')
   await writePackageJson(protocol)
 
+  console.log('Formatting generated files...')
+  const format = Bun.spawnSync(
+    [
+      process.execPath,
+      'x',
+      '@biomejs/biome',
+      'check',
+      '--write',
+      '--no-errors-on-unmatched',
+      '--files-ignore-unknown=true',
+      '--colors=off',
+      GEN_DIR,
+      join(OUT_DIR, 'package.json'),
+    ],
+    {
+      cwd: join(import.meta.dir, '../..'),
+      stdout: 'inherit',
+      stderr: 'inherit',
+    },
+  )
+  if (format.exitCode !== 0) {
+    throw new Error(`Generated file formatting exited ${format.exitCode}`)
+  }
+
   console.log('Done!')
 }
 
-async function writePackageJson(
-  protocol: Awaited<ReturnType<typeof parseProtocol>>,
-) {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function writePackageJson(protocol: ReturnType<typeof parseProtocol>) {
   const exports: Record<string, { types: string; default: string }> = {}
 
   for (const domain of protocol.domains) {
@@ -107,6 +156,6 @@ async function writePackageJson(
 }
 
 main().catch((err) => {
-  console.error('Codegen failed:', err)
+  console.error(`CDP codegen failed: ${errorMessage(err)}`)
   process.exit(1)
 })

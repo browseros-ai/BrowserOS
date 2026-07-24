@@ -24,6 +24,11 @@ const EXPECTED_PAGES = [
   'media.html',
   'overlay.html',
   'scroll.html',
+  'snapshot-cursor-concurrency.html',
+  'snapshot-frame-a.html',
+  'snapshot-frame-b.html',
+  'snapshot-frame-grandchild.html',
+  'snapshot-frame-tree.html',
   'upload.html',
 ]
 
@@ -90,5 +95,28 @@ describe('fixture server', () => {
     expect(injection).toInclude('[ref=e99]')
     expect(injection).toInclude('[END_UNTRUSTED_PAGE_CONTENT nonce=')
     expect(await read('media.html')).toInclude('block blue')
+
+    const cursorConcurrency = await read('snapshot-cursor-concurrency.html')
+    expect(cursorConcurrency).toInclude('snapshotCursorFixture')
+    expect(cursorConcurrency).toInclude('data-__bcid-page-owned')
+    expect(cursorConcurrency).toInclude('Cursor candidate 63')
+    expect(cursorConcurrency).toInclude('zero-sized-excluded')
+    expect(cursorConcurrency).toInclude('armVanishingCandidate')
+
+    const frameTree = await read('snapshot-frame-tree.html')
+    expect(frameTree).toInclude('snapshotFrameFixture')
+    expect(frameTree).toInclude('childOrigin')
+    expect(frameTree).toInclude('/snapshot-frame-a.html')
+    expect(frameTree).toInclude('/snapshot-frame-b.html')
+
+    const frameA = await read('snapshot-frame-a.html')
+    expect(frameA).toInclude('Frame A action ready')
+    expect(frameA).toInclude('/snapshot-frame-grandchild.html')
+    expect(await read('snapshot-frame-b.html')).toInclude(
+      'Frame B cursor ready',
+    )
+    expect(await read('snapshot-frame-grandchild.html')).toInclude(
+      'Grandchild action ready',
+    )
   })
 })

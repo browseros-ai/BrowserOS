@@ -30,29 +30,15 @@ function createConnection() {
         calls.push({ method: 'getWindows' })
         return { windows }
       },
-      createWindow: async (params?: { hidden?: boolean }) => {
+      createWindow: async (params?: unknown) => {
         calls.push({ method: 'createWindow', params })
-        return {
-          window: makeWindow(2, { isVisible: params?.hidden !== true }),
-        }
+        return { window: makeWindow(2) }
       },
       closeWindow: async (params: { windowId: number }) => {
         calls.push({ method: 'closeWindow', params })
       },
       activateWindow: async (params: { windowId: number }) => {
         calls.push({ method: 'activateWindow', params })
-      },
-      setWindowVisibility: async (params: {
-        windowId: number
-        visible: boolean
-        activate?: boolean
-      }) => {
-        calls.push({ method: 'setWindowVisibility', params })
-        return {
-          previousWindowId: params.windowId,
-          replaced: true,
-          window: makeWindow(3, { isVisible: params.visible }),
-        }
       },
     },
     Target: {
@@ -72,30 +58,18 @@ describe('WindowManager', () => {
     const manager = new WindowManager(connection)
 
     await expect(manager.list()).resolves.toEqual(windows)
-    await expect(manager.create({ hidden: true })).resolves.toMatchObject({
+    await expect(manager.create()).resolves.toMatchObject({
       windowId: 2,
-      isVisible: false,
+      isVisible: true,
     })
     await manager.close(7)
     await manager.activate(8)
-    await expect(
-      manager.setVisibility(9, { visible: true, activate: false }),
-    ).resolves.toMatchObject({
-      previousWindowId: 9,
-      newWindowId: 3,
-      replaced: true,
-      window: { windowId: 3, isVisible: true },
-    })
 
     expect(calls).toEqual([
       { method: 'getWindows' },
-      { method: 'createWindow', params: { hidden: true } },
+      { method: 'createWindow', params: undefined },
       { method: 'closeWindow', params: { windowId: 7 } },
       { method: 'activateWindow', params: { windowId: 8 } },
-      {
-        method: 'setWindowVisibility',
-        params: { windowId: 9, visible: true, activate: false },
-      },
     ])
   })
 })

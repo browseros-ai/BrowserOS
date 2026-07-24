@@ -30,6 +30,9 @@ import {
   orderByLiveThenRecency,
 } from './audit.helpers'
 
+/** Keeps the implemented token column dormant without discarding its sorting and cell behavior. */
+const SHOW_TOKEN_USAGE_COLUMN = false
+
 /**
  * Editorial audit screen. Preserves the tanstack-table + shadcn
  * Table primitives (sortable headers, keyboard nav, infinite
@@ -82,7 +85,13 @@ export function Audit() {
         : [],
     [sortId, sortDesc],
   )
-  const state = useMemo(() => ({ sorting }), [sorting])
+  const state = useMemo(
+    () => ({
+      sorting,
+      columnVisibility: { tokens: SHOW_TOKEN_USAGE_COLUMN },
+    }),
+    [sorting],
+  )
 
   const table = useReactTable<TaskSummary>({
     data: orderedTasks,

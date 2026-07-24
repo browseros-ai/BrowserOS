@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
-index 9603137595182..a784a545bda52 100644
+index 9603137595182b9f442bd54cd6711fffc1fe7af8..ef7b235234126d511921233b1579442c4d9598db 100644
 --- a/chrome/browser/ui/browser.cc
 +++ b/chrome/browser/ui/browser.cc
 @@ -45,6 +45,7 @@
@@ -10,15 +10,7 @@ index 9603137595182..a784a545bda52 100644
  #include "chrome/browser/buildflags.h"
  #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
  #include "chrome/browser/content_settings/mixed_content_settings_tab_helper.h"
-@@ -599,6 +600,7 @@ Browser::Browser(const CreateParams& params)
-       is_trusted_source_(params.trusted_source),
-       session_id_(SessionID::NewUnique()),
-       omit_from_session_restore_(params.omit_from_session_restore),
-+      is_hidden_(params.hidden),
-       should_trigger_session_restore_(params.should_trigger_session_restore),
-       cancel_download_confirmation_state_(
-           CancelDownloadConfirmationState::kNotPrompted),
-@@ -623,11 +625,17 @@ Browser::Browser(const CreateParams& params)
+@@ -623,11 +624,17 @@ Browser::Browser(const CreateParams& params)
  
    tab_strip_model_->AddObserver(this);
  
@@ -36,69 +28,7 @@ index 9603137595182..a784a545bda52 100644
  
    ProfileMetrics::LogProfileLaunch(profile_);
  
-@@ -685,6 +693,10 @@ Browser::Browser(const CreateParams& params)
- }
- 
- Browser::~Browser() {
-+  // Release capturer-count pins early so renderers see Visibility updates
-+  // before WebContents is torn down.
-+  hidden_tab_pins_.clear();
-+
-   if (!is_delete_scheduled_) {
-     // Guarantee the Browser has performed the necessary cleanup in the
-     // `OnWindowClosing()` lifecycle hook. This may not be invoked during
-@@ -1516,6 +1528,19 @@ WebContents* Browser::OpenURL(
- ///////////////////////////////////////////////////////////////////////////////
- // Browser, TabStripModelObserver implementation:
- 
-+void Browser::PinHiddenTabVisibility(content::WebContents* web_contents) {
-+  if (!web_contents || hidden_tab_pins_.contains(web_contents)) {
-+    return;
-+  }
-+  hidden_tab_pins_[web_contents] = web_contents->IncrementCapturerCount(
-+      gfx::Size(), /*stay_hidden=*/false, /*stay_awake=*/true,
-+      /*is_activity=*/true);
-+}
-+
-+void Browser::UnpinHiddenTabVisibility(content::WebContents* web_contents) {
-+  hidden_tab_pins_.erase(web_contents);
-+}
-+
- void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
-                                      const TabStripModelChange& change,
-                                      const TabStripSelectionChange& selection) {
-@@ -1533,6 +1558,9 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
-       }
-       for (const auto& contents : change.GetInsert()->contents) {
-         OnTabInsertedAt(contents.contents, contents.index);
-+        if (is_hidden_) {
-+          PinHiddenTabVisibility(contents.contents);
-+        }
-       }
-       break;
-     }
-@@ -1543,6 +1571,9 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
-         }
-         OnTabDetached(contents.contents,
-                       contents.contents == selection.old_contents);
-+        if (is_hidden_) {
-+          UnpinHiddenTabVisibility(contents.contents);
-+        }
-       }
-       break;
-     }
-@@ -1555,6 +1586,10 @@ void Browser::OnTabStripModelChanged(TabStripModel* tab_strip_model,
-       auto* replace = change.GetReplace();
-       OnTabReplacedAt(replace->old_contents, replace->new_contents,
-                       replace->index);
-+      if (is_hidden_) {
-+        UnpinHiddenTabVisibility(replace->old_contents);
-+        PinHiddenTabVisibility(replace->new_contents);
-+      }
-       break;
-     }
-     case TabStripModelChange::kSelectionOnly:
-@@ -2287,6 +2322,11 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
+@@ -2287,6 +2294,11 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
        source->GetController().GetPendingEntry()
            ? source->GetController().GetPendingEntry()
            : source->GetController().GetLastCommittedEntry();
@@ -110,7 +40,7 @@ index 9603137595182..a784a545bda52 100644
    if (entry) {
      const GURL& url = entry->GetURL();
      const GURL& virtual_url = entry->GetVirtualURL();
-@@ -2299,15 +2339,18 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
+@@ -2299,15 +2311,18 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
           url.host() == chrome::kChromeUINewTabHost) ||
          (virtual_url.SchemeIs(content::kChromeUIScheme) &&
           virtual_url.host() == chrome::kChromeUINewTabHost)) {

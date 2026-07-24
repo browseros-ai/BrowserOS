@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { PLAYBACK_SPEEDS } from './replay.helpers'
+import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from './replay.helpers'
 
 export interface Playback {
   /** Seconds elapsed in the session. */
@@ -23,7 +23,7 @@ const END_EPSILON_SECONDS = 0.01
 export function usePlayback(totalSeconds: number): Playback {
   const [time, setTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(true)
-  const [speed, setSpeed] = useState<number>(PLAYBACK_SPEEDS[0])
+  const [speed, setSpeed] = useState<number>(DEFAULT_PLAYBACK_SPEED)
 
   const clamp = useCallback(
     (seconds: number) => Math.max(0, Math.min(totalSeconds, seconds)),

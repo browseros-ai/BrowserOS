@@ -306,39 +306,21 @@ describe('registerBrowserTools', () => {
       isVisible: true,
       tabCount: 2,
     }
-    const hiddenWindow = {
-      ...window,
-      windowId: 8,
-      isActive: false,
-      isVisible: false,
-    }
     const session = {
       windows: {
         list: async () => {
           calls.push({ method: 'list' })
           return [window]
         },
-        create: async (args?: { hidden?: boolean }) => {
-          calls.push({ method: 'create', args })
-          return args?.hidden ? hiddenWindow : window
+        create: async () => {
+          calls.push({ method: 'create' })
+          return window
         },
         close: async (windowId: number) => {
           calls.push({ method: 'close', args: windowId })
         },
         activate: async (windowId: number) => {
           calls.push({ method: 'activate', args: windowId })
-        },
-        setVisibility: async (
-          windowId: number,
-          args: { visible: boolean; activate?: boolean },
-        ) => {
-          calls.push({ method: 'setVisibility', args: { windowId, ...args } })
-          return {
-            previousWindowId: windowId,
-            newWindowId: 9,
-            replaced: true,
-            window: { ...window, windowId: 9, isVisible: args.visible },
-          }
         },
       },
       pages: {
@@ -363,10 +345,10 @@ describe('registerBrowserTools', () => {
       }),
     ])
 
-    const create = await handler?.({ action: 'create', hidden: true })
+    const create = await handler?.({ action: 'create' })
     expect(create?.structuredContent).toEqual({
       action: 'create',
-      window: hiddenWindow,
+      window,
     })
 
     const close = await handler?.({ action: 'close', windowId: 7 })
@@ -378,29 +360,11 @@ describe('registerBrowserTools', () => {
       windowId: 8,
     })
 
-    const visibility = await handler?.({
-      action: 'set_visibility',
-      windowId: 8,
-      visible: true,
-      activate: false,
-    })
-    expect(visibility?.structuredContent).toEqual({
-      action: 'set_visibility',
-      previousWindowId: 8,
-      newWindowId: 9,
-      replaced: true,
-      window: { ...window, windowId: 9, isVisible: true },
-    })
-
     expect(calls).toEqual([
       { method: 'list' },
-      { method: 'create', args: { hidden: true } },
+      { method: 'create' },
       { method: 'close', args: 7 },
       { method: 'activate', args: 8 },
-      {
-        method: 'setVisibility',
-        args: { windowId: 8, visible: true, activate: false },
-      },
     ])
   })
 
@@ -423,28 +387,6 @@ describe('registerBrowserTools', () => {
         text: 'windows close: windowId is required.',
       }),
     ])
-
-    const visibilityWindow = await handler?.({
-      action: 'set_visibility',
-      visible: true,
-    })
-    expect(visibilityWindow?.isError).toBe(true)
-    expect(visibilityWindow?.content).toEqual([
-      expect.objectContaining({
-        text: 'windows set_visibility: windowId is required.',
-      }),
-    ])
-
-    const visibilityState = await handler?.({
-      action: 'set_visibility',
-      windowId: 7,
-    })
-    expect(visibilityState?.isError).toBe(true)
-    expect(visibilityState?.content).toEqual([
-      expect.objectContaining({
-        text: 'windows set_visibility: visible is required.',
-      }),
-    ])
   })
 
   it('applies scoped defaults when opening a new tab', async () => {
@@ -453,7 +395,6 @@ describe('registerBrowserTools', () => {
       url: string
       opts?: {
         background?: boolean
-        hidden?: boolean
         windowId?: number
         tabGroupId?: string
       }
@@ -464,7 +405,6 @@ describe('registerBrowserTools', () => {
           url: string,
           opts?: {
             background?: boolean
-            hidden?: boolean
             windowId?: number
             tabGroupId?: string
           },
@@ -492,7 +432,6 @@ describe('registerBrowserTools', () => {
         url: 'https://example.com',
         opts: {
           background: true,
-          hidden: false,
           windowId: 7,
           tabGroupId: 'group-a',
         },
@@ -1988,7 +1927,6 @@ describe('buildBrowserToolSet', () => {
       isLoading: false,
       loadProgress: 1,
       isPinned: false,
-      isHidden: false,
     }
     const session = {
       pages: {

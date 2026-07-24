@@ -247,6 +247,9 @@ pub struct SessionSummary {
     pub error_count: i64,
     #[serde(rename = "latestScreenshotId", skip_serializing_if = "Option::is_none")]
     pub latest_screenshot_id: Option<i64>,
+    /// Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions.
+    #[serde(rename = "tokenUsage", skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<Box<models::SessionTokenUsage>>,
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
@@ -282,7 +285,37 @@ impl SessionSummary {
             status,
             error_count,
             latest_screenshot_id: None,
+            token_usage: None,
             live: None,
+        }
+    }
+}
+
+/// SessionTokenUsage : Estimated token consumption of a session's MCP tool traffic, summed across every dispatch. Totals are JavaScript-safe integers.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionTokenUsage {
+    /// Estimated tokens for tool inputs (name + compact arguments), summed across dispatches.
+    #[serde(rename = "inputTokenEstimate")]
+    pub input_token_estimate: i64,
+    /// Estimated tokens for tool outputs (result content), summed across dispatches.
+    #[serde(rename = "outputTokenEstimate")]
+    pub output_token_estimate: i64,
+    /// inputTokenEstimate + outputTokenEstimate — the session's total estimated token consumption.
+    #[serde(rename = "totalTokenEstimate")]
+    pub total_token_estimate: i64,
+}
+
+impl SessionTokenUsage {
+    /// Estimated token consumption of a session's MCP tool traffic, summed across every dispatch. Totals are JavaScript-safe integers.
+    pub fn new(
+        input_token_estimate: i64,
+        output_token_estimate: i64,
+        total_token_estimate: i64,
+    ) -> SessionTokenUsage {
+        SessionTokenUsage {
+            input_token_estimate,
+            output_token_estimate,
+            total_token_estimate,
         }
     }
 }

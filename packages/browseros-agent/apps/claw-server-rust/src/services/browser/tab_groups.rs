@@ -1,9 +1,8 @@
 pub use crate::services::sessions::TabGroupColor;
 
-const TAB_GROUP_COLORS: [TabGroupColor; 9] = [
+const TAB_GROUP_COLORS: [TabGroupColor; 8] = [
     TabGroupColor::Grey,
     TabGroupColor::Blue,
-    TabGroupColor::Red,
     TabGroupColor::Yellow,
     TabGroupColor::Green,
     TabGroupColor::Pink,
@@ -65,17 +64,34 @@ fn fnv1a(input: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabGroupColor, color_for_slug};
+    use super::{TAB_GROUP_COLORS, TabGroupColor, color_for_slug};
+
+    #[test]
+    fn automatic_palette_excludes_red_and_keeps_order() {
+        assert_eq!(
+            TAB_GROUP_COLORS,
+            [
+                TabGroupColor::Grey,
+                TabGroupColor::Blue,
+                TabGroupColor::Yellow,
+                TabGroupColor::Green,
+                TabGroupColor::Pink,
+                TabGroupColor::Purple,
+                TabGroupColor::Cyan,
+                TabGroupColor::Orange,
+            ]
+        );
+    }
 
     #[test]
     fn color_for_slug_matches_tab_group_palette() {
-        assert_eq!(color_for_slug("codex"), TabGroupColor::Purple);
-        assert_eq!(color_for_slug("finance-ops"), TabGroupColor::Grey);
+        assert_eq!(color_for_slug("codex"), TabGroupColor::Pink);
+        assert_eq!(color_for_slug("support"), TabGroupColor::Grey);
     }
 
     #[test]
     fn hex_for_slug_matches_ts_tab_group_hex() {
-        assert_eq!(super::hex_for_slug("codex"), "#7A5AF8");
-        assert_eq!(super::hex_for_slug("finance-ops"), "#6B7280");
+        assert_eq!(super::hex_for_slug("codex"), "#DB2777");
+        assert_eq!(super::hex_for_slug("support"), "#6B7280");
     }
 }

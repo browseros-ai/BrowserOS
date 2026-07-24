@@ -94,6 +94,14 @@
       "types": "./src/generated/domain-apis/cast.ts",
       "default": "./src/generated/domain-apis/cast.ts"
     },
+    "./domains/crash-report-context": {
+      "types": "./src/generated/domains/crash-report-context.ts",
+      "default": "./src/generated/domains/crash-report-context.ts"
+    },
+    "./domain-apis/crash-report-context": {
+      "types": "./src/generated/domain-apis/crash-report-context.ts",
+      "default": "./src/generated/domain-apis/crash-report-context.ts"
+    },
     "./domains/dom": {
       "types": "./src/generated/domains/dom.ts",
       "default": "./src/generated/domains/dom.ts"
@@ -405,6 +413,14 @@
     "./domain-apis/web-authn": {
       "types": "./src/generated/domain-apis/web-authn.ts",
       "default": "./src/generated/domain-apis/web-authn.ts"
+    },
+    "./domains/web-mcp": {
+      "types": "./src/generated/domains/web-mcp.ts",
+      "default": "./src/generated/domains/web-mcp.ts"
+    },
+    "./domain-apis/web-mcp": {
+      "types": "./src/generated/domain-apis/web-mcp.ts",
+      "default": "./src/generated/domain-apis/web-mcp.ts"
     },
     "./domains/console": {
       "types": "./src/generated/domains/console.ts",

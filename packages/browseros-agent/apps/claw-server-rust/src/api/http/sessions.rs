@@ -23,7 +23,7 @@ use axum::{
 };
 use claw_api::models::{
     CancelSessionResponse, Dispatch, SessionBrowserTab, SessionDetail, SessionList, SessionStatus,
-    SessionSummary,
+    SessionSummary, SessionTokenUsage,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -196,6 +196,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         Some(session) => session.label().await,
         None => task.title.clone(),
     };
+    let token_usage = contract_token_usage(&task);
     let mut summary = SessionSummary::new(
         task.session_id,
         task.slug,
@@ -214,6 +215,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
     summary.site = task.site;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
+    summary.token_usage = token_usage;
     summary
 }
 
@@ -227,6 +229,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
         name,
         live,
     } = projection;
+    let token_usage = contract_token_usage(&task);
     let mut summary = SessionSummary::new(
         task.session_id,
         task.slug,
@@ -245,8 +248,28 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
     summary.site = task.site;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
+    summary.token_usage = token_usage;
     summary.live = Some(Box::new(contract_live_state(live)));
     summary
+}
+
+/// Builds the session's token-consumption DTO from the materialized totals, clamped into the
+/// JavaScript-safe range the contract promises. Returns `None` for legacy/unmeasured sessions so
+/// the wire omits the field entirely instead of reporting a misleading zero.
+fn contract_token_usage(task: &TaskSummary) -> Option<Box<SessionTokenUsage>> {
+    if !task.tokens_measured {
+        return None;
+    }
+    let input = js_safe_token_estimate(task.tool_input_token_estimate);
+    let output = js_safe_token_estimate(task.tool_output_token_estimate);
+    let total = js_safe_token_estimate(input.saturating_add(output));
+    Some(Box::new(SessionTokenUsage::new(input, output, total)))
+}
+
+/// Clamps a token total into `[0, 2^53-1]` so it survives a round trip through a JavaScript client.
+fn js_safe_token_estimate(value: i64) -> i64 {
+    const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    value.clamp(0, JS_SAFE_INTEGER)
 }
 
 fn contract_live_state(projection: LiveStateProjection) -> claw_api::models::LiveSessionState {

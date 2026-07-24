@@ -74,6 +74,16 @@ describe('registerBrowserTools', () => {
       BROWSER_TOOLS.map((tool) => tool.name),
     )
     expect(fake.configs.get('tabs')?.inputSchema).toBeDefined()
+    expect(
+      Object.keys(
+        fake.configs.get('tabs')?.inputSchema as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(['action', 'background', 'page', 'url'])
+    expect(
+      Object.keys(
+        fake.configs.get('windows')?.inputSchema as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(['action', 'windowId'])
     expect(fake.configs.get('snapshot')?.annotations).toEqual({
       title: 'Snapshot accessibility tree',
       readOnlyHint: true,

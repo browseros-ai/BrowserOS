@@ -73,6 +73,25 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${remMin}m`
 }
 
+const TOKEN_COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  compactDisplay: 'short',
+  maximumFractionDigits: 1,
+})
+const TOKEN_WHOLE_FORMAT = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+})
+
+/** Compact token count for dense rows: `948`, `12.3k`, `1.2m` (lowercase suffix). */
+export function formatTokensCompact(tokens: number): string {
+  return TOKEN_COMPACT_FORMAT.format(Math.max(0, tokens)).toLowerCase()
+}
+
+/** Grouped exact token count for the detail card: `12,345`. */
+export function formatTokensFull(tokens: number): string {
+  return TOKEN_WHOLE_FORMAT.format(Math.max(0, tokens))
+}
+
 /**
  * Short trail of tool names with an ellipsis when the sequence is
  * longer than `cap`. Mirrors the abbreviated trail shown on each

@@ -5,7 +5,7 @@ use crate::{
     services::{
         browser::BrowserService,
         cockpit::{TabActivityRecord, TabActivityService},
-        sessions::Sessions,
+        sessions::{Session, Sessions},
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -22,6 +22,7 @@ use std::{
 use tokio::{sync::Mutex, time::timeout};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
+const CAPTURE_TASK_CONCURRENCY_LIMIT: usize = 2;
 
 #[derive(Clone)]
 struct CaptureCandidate {
@@ -38,7 +39,11 @@ struct InFlightCaptures {
 
 impl InFlightCaptures {
     async fn begin(&self, page_id: u32) -> bool {
-        self.page_ids.lock().await.insert(page_id)
+        let mut page_ids = self.page_ids.lock().await;
+        if page_ids.len() >= CAPTURE_TASK_CONCURRENCY_LIMIT {
+            return false;
+        }
+        page_ids.insert(page_id)
     }
 
     async fn finish(&self, page_id: u32) {
@@ -52,8 +57,8 @@ pub struct SessionVisualService {
     session_tabs: Arc<SessionTabLedger>,
     browser: Arc<BrowserService>,
     tab_activity: Arc<TabActivityService>,
-    /// Page IDs stay present until the underlying CDP task resolves, even when
-    /// its caller times out, so polling cannot queue work behind a stuck capture.
+    /// Entries retain the process-wide capture slot until the underlying CDP task resolves, even
+    /// after caller timeout, so stuck tasks cannot escape the concurrency bound.
     in_flight: Arc<InFlightCaptures>,
 }
 
@@ -76,9 +81,23 @@ impl SessionVisualService {
 
     pub async fn capture(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
         let session_key = SessionId::new(session_id);
-        if !self.sessions.contains(&session_key).await {
+        let Some(session) = self.sessions.lookup(&session_key).await else {
             return Ok(None);
-        }
+        };
+        self.capture_with_session(&session, true).await
+    }
+
+    /// Captures through a teardown-owned session lease after live request resolution has stopped.
+    pub async fn capture_for_session(&self, session: &Arc<Session>) -> AppResult<Option<Vec<u8>>> {
+        self.capture_with_session(session, false).await
+    }
+
+    async fn capture_with_session(
+        &self,
+        session: &Arc<Session>,
+        require_live_at_end: bool,
+    ) -> AppResult<Option<Vec<u8>>> {
+        let session_id = session.id().as_str();
         self.session_tabs.drain_writes().await;
         let browser = match self.browser.session().await {
             Some(browser) => browser,
@@ -144,7 +163,9 @@ impl SessionVisualService {
             .open_session_tab(session_id, candidate.tab_id)
             .await?
             .is_some();
-        if !owns_tab || !self.sessions.contains(&session_key).await {
+        if !owns_tab
+            || (require_live_at_end && !self.sessions.contains(&SessionId::new(session_id)).await)
+        {
             return Ok(None);
         }
         Ok(Some(bytes))
@@ -226,8 +247,10 @@ mod tests {
         let captures = InFlightCaptures::default();
         assert!(captures.begin(7).await);
         assert!(!captures.begin(7).await);
+        assert!(captures.begin(8).await);
+        assert!(!captures.begin(9).await);
 
         captures.finish(7).await;
-        assert!(captures.begin(7).await);
+        assert!(captures.begin(9).await);
     }
 }

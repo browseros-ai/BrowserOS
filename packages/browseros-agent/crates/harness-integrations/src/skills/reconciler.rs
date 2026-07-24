@@ -52,23 +52,40 @@ impl SkillReconciler {
         environment: &SkillEnvironment,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
-        let original = read_manifest(&self.workspace_dir)?;
-        let mut records = original
-            .targets
-            .iter()
-            .cloned()
-            .map(|entry| (entry.target_path.clone(), entry))
-            .collect::<BTreeMap<_, _>>();
-        let desired_hash = content_hash(spec.content.as_bytes());
-        let desired = desired_targets(consumers, &spec.name, environment)?;
-        let mut outcome = SkillReconcileOutcome::default();
+        self.reconcile_with_identity(
+            spec,
+            consumers,
+            environment,
+            physical_skill_target,
+            &mut replace,
+        )
+    }
 
-        for (target, target_consumers) in &desired {
-            let record = records.get(target).cloned();
+    fn reconcile_with_identity(
+        &self,
+        spec: &SkillSpec,
+        consumers: &BTreeSet<AgentId>,
+        environment: &SkillEnvironment,
+        mut identity: impl FnMut(&Path) -> Result<PathBuf, Error>,
+        mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
+    ) -> Result<SkillReconcileOutcome, Error> {
+        let original = read_manifest(&self.workspace_dir)?;
+        let plan = plan_reconciliation(&original, spec, consumers, environment, &mut identity)?;
+        let mut records = plan.records;
+        let desired_hash = content_hash(spec.content.as_bytes());
+        let mut outcome = SkillReconcileOutcome::default();
+        let mut preserve_original_records = BTreeSet::new();
+
+        for (target, target_consumers) in &plan.desired {
+            let record_controls = records
+                .get(target)
+                .is_some_and(|record| record.skill_name == spec.name)
+                && plan.manifest_controlled_targets.contains(target);
             let metadata = match fs::symlink_metadata(target) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
                 Err(error) => {
+                    preserve_original_records.insert(target.clone());
                     outcome.warnings.push(SkillWarning {
                         target: target.clone(),
                         message: format!("Could not inspect managed skill target: {error}"),
@@ -80,6 +97,7 @@ impl SkillReconciler {
                 match read_marker(target) {
                     Ok(marker) => marker,
                     Err(error) => {
+                        preserve_original_records.insert(target.clone());
                         outcome.warnings.push(SkillWarning {
                             target: target.clone(),
                             message: error.to_string(),
@@ -93,7 +111,8 @@ impl SkillReconciler {
             let marker_controls = marker
                 .as_ref()
                 .is_some_and(|marker| marker.controls(&spec.name));
-            if metadata.is_some() && record.is_none() && !marker_controls {
+            if metadata.is_some() && !record_controls && !marker_controls {
+                preserve_original_records.insert(target.clone());
                 outcome.warnings.push(SkillWarning {
                     target: target.clone(),
                     message: format!(
@@ -115,6 +134,7 @@ impl SkillReconciler {
                 match read_content_hash(&target.join("SKILL.md")) {
                     Ok(hash) => hash,
                     Err(error) => {
+                        preserve_original_records.insert(target.clone());
                         outcome.warnings.push(SkillWarning {
                             target: target.clone(),
                             message: error.to_string(),
@@ -128,11 +148,9 @@ impl SkillReconciler {
             let marker_matches = marker.as_ref().is_some_and(|marker| {
                 marker.controls(&spec.name) && marker.content_hash == desired_hash
             });
-            let record_matches = record.as_ref().is_some_and(|record| record == &entry);
             let needs_replace = metadata.is_none()
                 || actual_hash.as_deref() != Some(desired_hash.as_str())
-                || !marker_matches
-                || (record.is_some() && !record_matches);
+                || !marker_matches;
 
             if needs_replace {
                 match replace(target, spec, &desired_hash) {
@@ -144,10 +162,13 @@ impl SkillReconciler {
                         }
                         records.insert(target.clone(), entry);
                     }
-                    Err(error) => outcome.warnings.push(SkillWarning {
-                        target: target.clone(),
-                        message: format!("Could not replace managed skill: {error}"),
-                    }),
+                    Err(error) => {
+                        preserve_original_records.insert(target.clone());
+                        outcome.warnings.push(SkillWarning {
+                            target: target.clone(),
+                            message: format!("Could not replace managed skill: {error}"),
+                        });
+                    }
                 }
             } else {
                 outcome.unchanged += 1;
@@ -155,23 +176,24 @@ impl SkillReconciler {
             }
         }
 
-        let mut cleanup_targets = records.keys().cloned().collect::<BTreeSet<_>>();
-        for agent in AgentId::ALL {
-            if resolve_harness_definition(agent).skill.is_some() {
-                cleanup_targets.insert(resolve_agent_skill_target(agent, &spec.name, environment)?);
-            }
-        }
-        for target in cleanup_targets {
-            if desired.contains_key(&target) {
+        for target in plan.cleanup_targets {
+            if plan.desired.contains_key(&target) {
                 continue;
             }
-            let record_controls = records
+            let record_matches_skill = records
                 .get(&target)
                 .is_some_and(|record| record.skill_name == spec.name);
+            if records.contains_key(&target) && !record_matches_skill {
+                preserve_original_records.insert(target);
+                continue;
+            }
+            let record_controls =
+                record_matches_skill && plan.manifest_controlled_targets.contains(&target);
             let metadata = match fs::symlink_metadata(&target) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
                 Err(error) => {
+                    preserve_original_records.insert(target.clone());
                     outcome.warnings.push(SkillWarning {
                         target: target.clone(),
                         message: format!("Could not inspect stale managed skill: {error}"),
@@ -179,6 +201,10 @@ impl SkillReconciler {
                     continue;
                 }
             };
+            if metadata.is_none() && record_matches_skill {
+                records.remove(&target);
+                continue;
+            }
             let marker_controls = if record_controls {
                 false
             } else if metadata.as_ref().is_some_and(|value| value.is_dir()) {
@@ -187,6 +213,7 @@ impl SkillReconciler {
                         .as_ref()
                         .is_some_and(|marker| marker.controls(&spec.name)),
                     Err(error) => {
+                        preserve_original_records.insert(target.clone());
                         outcome.warnings.push(SkillWarning {
                             target: target.clone(),
                             message: error.to_string(),
@@ -206,10 +233,13 @@ impl SkillReconciler {
                         outcome.removed += 1;
                         records.remove(&target);
                     }
-                    Err(error) => outcome.warnings.push(SkillWarning {
-                        target: target.clone(),
-                        message: format!("Could not remove managed skill: {error}"),
-                    }),
+                    Err(error) => {
+                        preserve_original_records.insert(target.clone());
+                        outcome.warnings.push(SkillWarning {
+                            target: target.clone(),
+                            message: format!("Could not remove managed skill: {error}"),
+                        });
+                    }
                 },
                 None => {
                     records.remove(&target);
@@ -217,15 +247,118 @@ impl SkillReconciler {
             }
         }
 
+        let mut targets = Vec::new();
+        for (target, record) in records {
+            if preserve_original_records.contains(&target)
+                && let Some(original_records) = plan.original_records.get(&target)
+            {
+                targets.extend(original_records.iter().cloned());
+                continue;
+            }
+            targets.push(record);
+        }
+        targets.sort_by(|left, right| {
+            left.target_path
+                .cmp(&right.target_path)
+                .then_with(|| left.skill_name.cmp(&right.skill_name))
+        });
         let next = SkillManifest {
             version: 1,
-            targets: records.into_values().collect(),
+            targets,
         };
         if next != original {
             write_manifest(&self.workspace_dir, &next)?;
         }
         Ok(outcome)
     }
+}
+
+struct ReconciliationPlan {
+    desired: BTreeMap<PathBuf, BTreeSet<AgentId>>,
+    records: BTreeMap<PathBuf, SkillManifestEntry>,
+    original_records: BTreeMap<PathBuf, Vec<SkillManifestEntry>>,
+    /// Migrated aliases need a marker before they can control an existing destination.
+    manifest_controlled_targets: BTreeSet<PathBuf>,
+    cleanup_targets: BTreeSet<PathBuf>,
+}
+
+fn plan_reconciliation(
+    original: &SkillManifest,
+    spec: &SkillSpec,
+    consumers: &BTreeSet<AgentId>,
+    environment: &SkillEnvironment,
+    identity: &mut impl FnMut(&Path) -> Result<PathBuf, Error>,
+) -> Result<ReconciliationPlan, Error> {
+    let desired = desired_targets(consumers, &spec.name, environment, identity)?;
+    let mut records = BTreeMap::<PathBuf, SkillManifestEntry>::new();
+    let mut original_records = BTreeMap::<PathBuf, Vec<SkillManifestEntry>>::new();
+    let mut manifest_controlled_targets = BTreeSet::new();
+    for original_entry in &original.targets {
+        let target = identity(&original_entry.target_path)?;
+        if original_entry.target_path == target {
+            manifest_controlled_targets.insert(target.clone());
+        }
+        original_records
+            .entry(target.clone())
+            .or_default()
+            .push(original_entry.clone());
+
+        let mut entry = original_entry.clone();
+        entry.target_path = target.clone();
+        entry.consumers.sort();
+        entry.consumers.dedup();
+        if let Some(existing) = records.get_mut(&target) {
+            if existing.skill_name != entry.skill_name
+                || existing.content_hash != entry.content_hash
+            {
+                return Err(Error::Manifest {
+                    message: format!(
+                        "Skill manifest contains conflicting records for physical target {}.",
+                        target.display()
+                    ),
+                });
+            }
+            let consumers = existing
+                .consumers
+                .iter()
+                .chain(&entry.consumers)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            existing.consumers = consumers.into_iter().collect();
+        } else {
+            records.insert(target, entry);
+        }
+    }
+
+    for target in desired.keys() {
+        if let Some(record) = records.get(target)
+            && record.skill_name != spec.name
+        {
+            return Err(Error::Manifest {
+                message: format!(
+                    "Skill manifest target {} belongs to skill {}; cannot reconcile {} there.",
+                    target.display(),
+                    record.skill_name,
+                    spec.name
+                ),
+            });
+        }
+    }
+
+    let mut cleanup_targets = records.keys().cloned().collect::<BTreeSet<_>>();
+    for agent in AgentId::ALL {
+        if resolve_harness_definition(agent).skill.is_some() {
+            let target = resolve_agent_skill_target(agent, &spec.name, environment)?;
+            cleanup_targets.insert(identity(&target)?);
+        }
+    }
+    Ok(ReconciliationPlan {
+        desired,
+        records,
+        original_records,
+        manifest_controlled_targets,
+        cleanup_targets,
+    })
 }
 
 /// Resolves one harness's preferred global directory for a named skill.
@@ -256,13 +389,77 @@ fn desired_targets(
     consumers: &BTreeSet<AgentId>,
     skill_name: &str,
     environment: &SkillEnvironment,
+    identity: &mut impl FnMut(&Path) -> Result<PathBuf, Error>,
 ) -> Result<BTreeMap<PathBuf, BTreeSet<AgentId>>, Error> {
     let mut targets = BTreeMap::<PathBuf, BTreeSet<AgentId>>::new();
     for consumer in consumers {
         let target = resolve_agent_skill_target(*consumer, skill_name, environment)?;
+        let target = identity(&target)?;
         targets.entry(target).or_default().insert(*consumer);
     }
     Ok(targets)
+}
+
+/// Follows aliases in the harness skill root without following the managed skill entry itself.
+fn physical_skill_target(target: &Path) -> Result<PathBuf, Error> {
+    let skill_name = target.file_name().ok_or_else(|| {
+        Error::io(
+            "resolve filesystem identity for",
+            target,
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "skill target has no final component",
+            ),
+        )
+    })?;
+    let root = target.parent().ok_or_else(|| {
+        Error::io(
+            "resolve filesystem identity for",
+            target,
+            std::io::Error::new(ErrorKind::InvalidInput, "skill target has no parent"),
+        )
+    })?;
+    let mut ancestor = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| Error::io("resolve filesystem identity for", target, error))?
+            .join(root)
+    };
+    let mut missing = Vec::new();
+
+    loop {
+        match fs::symlink_metadata(&ancestor) {
+            Ok(_) => {
+                let mut physical_root = fs::canonicalize(&ancestor)
+                    .map_err(|error| Error::io("resolve filesystem identity for", target, error))?;
+                for component in missing.iter().rev() {
+                    physical_root.push(component);
+                }
+                physical_root.push(skill_name);
+                return Ok(physical_root);
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let component = ancestor.file_name().map(ToOwned::to_owned).ok_or_else(|| {
+                    Error::io(
+                        "resolve filesystem identity for",
+                        target,
+                        std::io::Error::new(
+                            ErrorKind::NotFound,
+                            "no existing ancestor for skill root",
+                        ),
+                    )
+                })?;
+                missing.push(component);
+                if !ancestor.pop() {
+                    return Err(Error::io("resolve filesystem identity for", target, error));
+                }
+            }
+            Err(error) => {
+                return Err(Error::io("resolve filesystem identity for", target, error));
+            }
+        }
+    }
 }
 
 fn selected_paths(paths: &PerOsPaths, platform: TargetPlatform) -> &'static [&'static str] {
@@ -416,16 +613,157 @@ fn monotonic_nonce() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs};
+    use std::{collections::BTreeSet, fs, path::Path};
 
     use tempfile::tempdir;
 
     use crate::{AgentId, SkillEnvironment, SkillSpec, TargetPlatform};
 
     use super::{
-        SkillReconciler, replace_managed_directory_with, resolve_agent_skill_target,
-        swap_directories_with,
+        SkillReconciler, physical_skill_target, replace_managed_directory,
+        replace_managed_directory_with, resolve_agent_skill_target, swap_directories_with,
     };
+
+    #[test]
+    fn identity_planning_groups_aliases_without_platform_symlinks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+        let claude = resolve_agent_skill_target(AgentId::ClaudeCode, "browserclaw", &environment)?;
+        let agents = resolve_agent_skill_target(AgentId::Codex, "browserclaw", &environment)?;
+        let physical = home.join(".skills/browserclaw");
+        let identity = |target: &Path| {
+            Ok(if target == claude || target == agents {
+                physical.clone()
+            } else {
+                target.to_path_buf()
+            })
+        };
+        let spec = SkillSpec::new("browserclaw", "managed\n")?;
+
+        let installed = reconciler.reconcile_with_identity(
+            &spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+            identity,
+            replace_managed_directory,
+        )?;
+        assert_eq!(installed.installed, 1);
+        assert_eq!(installed.removed, 0);
+        let modified = fs::metadata(physical.join("SKILL.md"))?.modified()?;
+
+        let shared = reconciler.reconcile_with_identity(
+            &spec,
+            &BTreeSet::from([AgentId::ClaudeCode, AgentId::Codex]),
+            &environment,
+            |target| {
+                Ok(if target == claude || target == agents {
+                    physical.clone()
+                } else {
+                    target.to_path_buf()
+                })
+            },
+            replace_managed_directory,
+        )?;
+        assert_eq!(shared.unchanged, 1);
+        assert_eq!(
+            fs::metadata(physical.join("SKILL.md"))?.modified()?,
+            modified
+        );
+
+        let removed = reconciler.reconcile_with_identity(
+            &spec,
+            &BTreeSet::new(),
+            &environment,
+            |target| {
+                Ok(if target == claude || target == agents {
+                    physical.clone()
+                } else {
+                    target.to_path_buf()
+                })
+            },
+            replace_managed_directory,
+        )?;
+        assert_eq!(removed.removed, 1);
+        assert!(!physical.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn identity_failure_precedes_all_directory_mutation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempdir()?;
+        let environment = SkillEnvironment::new(root.path().join("home"), TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(root.path().join("state"));
+        let spec = SkillSpec::new("browserclaw", "managed\n")?;
+        let mut identity_calls = 0;
+        let mut replace_calls = 0;
+
+        let error = reconciler
+            .reconcile_with_identity(
+                &spec,
+                &BTreeSet::from([AgentId::Cursor]),
+                &environment,
+                |target| {
+                    identity_calls += 1;
+                    if identity_calls == 3 {
+                        return Err(crate::Error::io(
+                            "resolve filesystem identity for",
+                            target,
+                            std::io::Error::other("injected identity failure"),
+                        ));
+                    }
+                    Ok(target.to_path_buf())
+                },
+                |_, _, _| {
+                    replace_calls += 1;
+                    Ok(())
+                },
+            )
+            .err()
+            .ok_or("identity failure unexpectedly reconciled")?;
+
+        assert!(error.to_string().contains("injected identity failure"));
+        assert_eq!(replace_calls, 0);
+        assert!(!root.path().join("state/skills.json").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn missing_skill_roots_are_planned_without_creating_directories()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let missing_root = root.path().join("missing/nested/skills");
+        let target = missing_root.join("browserclaw");
+
+        let physical = physical_skill_target(&target)?;
+
+        assert_eq!(
+            physical,
+            fs::canonicalize(root.path())?.join("missing/nested/skills/browserclaw")
+        );
+        assert!(!missing_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn relative_skill_roots_resolve_from_the_process_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target = Path::new("relative-home/.agents/skills/browserclaw");
+
+        let physical = physical_skill_target(target)?;
+
+        assert_eq!(
+            physical,
+            fs::canonicalize(std::env::current_dir()?)?
+                .join("relative-home/.agents/skills/browserclaw")
+        );
+        assert!(!Path::new("relative-home").exists());
+        Ok(())
+    }
 
     #[test]
     fn failed_directory_swap_restores_the_previous_target() -> std::io::Result<()> {

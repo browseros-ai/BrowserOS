@@ -1,0 +1,146 @@
+{
+  "domains": [
+    {
+      "domain": "Accessibility",
+      "types": ["AXNode", "AXProperty", "AXValue"],
+      "commands": ["enable", "getFullAXTree"]
+    },
+    {
+      "domain": "Bookmarks",
+      "types": ["BookmarkNode"],
+      "commands": ["getBookmarks"]
+    },
+    {
+      "domain": "Browser",
+      "types": [
+        "Bounds",
+        "BrowserContextID",
+        "TabGroupInfo",
+        "TabID",
+        "TabInfo",
+        "WindowID",
+        "WindowInfo"
+      ],
+      "commands": [
+        "activateTab",
+        "activateWindow",
+        "addTabsToGroup",
+        "close",
+        "closeTab",
+        "closeTabGroup",
+        "closeWindow",
+        "createTab",
+        "createTabGroup",
+        "createWindow",
+        "getActiveTab",
+        "getActiveWindow",
+        "getTabGroups",
+        "getTabInfo",
+        "getTabs",
+        "getVersion",
+        "getWindows",
+        "moveTab",
+        "removeTabsFromGroup",
+        "setWindowVisibility",
+        "showTab",
+        "updateTabGroup"
+      ]
+    },
+    {
+      "domain": "DOM",
+      "types": ["BoxModel", "Node"],
+      "commands": [
+        "describeNode",
+        "enable",
+        "focus",
+        "getBoxModel",
+        "getContentQuads",
+        "getFrameOwner",
+        "pushNodesByBackendIdsToFrontend",
+        "resolveNode",
+        "scrollIntoViewIfNeeded",
+        "setFileInputFiles"
+      ]
+    },
+    {
+      "domain": "History",
+      "types": ["HistoryEntry"],
+      "commands": ["search"]
+    },
+    {
+      "domain": "Input",
+      "commands": ["dispatchKeyEvent", "dispatchMouseEvent"]
+    },
+    {
+      "domain": "Page",
+      "types": [
+        "Frame",
+        "FrameId",
+        "FrameTree",
+        "LayoutViewport",
+        "ScreencastFrameMetadata",
+        "Viewport",
+        "VisualViewport"
+      ],
+      "commands": [
+        "captureScreenshot",
+        "enable",
+        "getFrameTree",
+        "getLayoutMetrics",
+        "handleJavaScriptDialog",
+        "navigate",
+        "printToPDF",
+        "reload",
+        "screencastFrameAck",
+        "setDownloadBehavior",
+        "startScreencast",
+        "stopScreencast"
+      ],
+      "events": [
+        "downloadProgress",
+        "downloadWillBegin",
+        "javascriptDialogClosed",
+        "javascriptDialogOpening",
+        "screencastFrame"
+      ]
+    },
+    {
+      "domain": "Runtime",
+      "types": [
+        "CallArgument",
+        "CallFrame",
+        "ExceptionDetails",
+        "RemoteObject",
+        "StackTrace"
+      ],
+      "commands": [
+        "callFunctionOn",
+        "enable",
+        "evaluate",
+        "getProperties",
+        "releaseObject",
+        "releaseObjectGroup",
+        "runIfWaitingForDebugger"
+      ],
+      "events": ["consoleAPICalled", "exceptionThrown"]
+    },
+    {
+      "domain": "Target",
+      "types": ["FilterEntry", "TargetInfo"],
+      "commands": [
+        "attachToTarget",
+        "detachFromTarget",
+        "getTargets",
+        "setAutoAttach",
+        "setDiscoverTargets"
+      ],
+      "events": [
+        "attachedToTarget",
+        "detachedFromTarget",
+        "targetCreated",
+        "targetDestroyed",
+        "targetInfoChanged"
+      ]
+    }
+  ]
+}

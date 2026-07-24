@@ -20,6 +20,12 @@ pub struct Model {
     pub last_screenshot_dispatch_id: Option<i64>,
     pub cursor_id: i64,
     pub has_screenshots: bool,
+    /// Session totals of the per-dispatch semantic token estimates. Meaningful only when
+    /// `tokens_measured`; otherwise the session predates measurement and these are 0.
+    pub tool_input_token_estimate: i64,
+    pub tool_output_token_estimate: i64,
+    /// True iff the session has dispatches and every one carries token-estimator v1.
+    pub tokens_measured: bool,
     pub updated_at: i64,
 }
 

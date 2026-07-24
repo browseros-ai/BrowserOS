@@ -400,6 +400,24 @@ export interface components {
       toolCount: number
       recentTools: components['schemas']['ToolEvent'][]
     }
+    /** @description Estimated token consumption of a session's MCP tool traffic, summed across every dispatch. Totals are JavaScript-safe integers. */
+    SessionTokenUsage: {
+      /**
+       * Format: int64
+       * @description Estimated tokens for tool inputs (name + compact arguments), summed across dispatches.
+       */
+      inputTokenEstimate: number
+      /**
+       * Format: int64
+       * @description Estimated tokens for tool outputs (result content), summed across dispatches.
+       */
+      outputTokenEstimate: number
+      /**
+       * Format: int64
+       * @description inputTokenEstimate + outputTokenEstimate — the session's total estimated token consumption.
+       */
+      totalTokenEstimate: number
+    }
     SessionSummary: {
       sessionId: string
       profileId?: string
@@ -423,6 +441,8 @@ export interface components {
       errorCount: number
       /** Format: int64 */
       latestScreenshotId?: number
+      /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
+      tokenUsage?: components['schemas']['SessionTokenUsage']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }

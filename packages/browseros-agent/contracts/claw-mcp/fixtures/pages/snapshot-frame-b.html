@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot frame B</title>
+    <style>
+      #frame-b-cursor {
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="frame-b-action" type="button">Frame B action ready</button>
+    <div
+      id="frame-b-cursor"
+      role="group"
+      aria-label="Frame B cursor ready"
+    >
+      Frame B cursor ready
+    </div>
+    <script>
+      document
+        .getElementById('frame-b-action')
+        .addEventListener('click', () => {
+          document.getElementById('frame-b-action').textContent =
+            'Frame B action clicked'
+        })
+      parent.postMessage(
+        { fixture: 'snapshot-frame-tree', ready: 'frame-b' },
+        '*',
+      )
+    </script>
+  </body>
+</html>
