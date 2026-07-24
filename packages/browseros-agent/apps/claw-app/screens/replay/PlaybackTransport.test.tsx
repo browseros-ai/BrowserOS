@@ -17,12 +17,27 @@ let container: HTMLElement
 function TransportHarness() {
   const playback = usePlayback(10)
   return (
-    <PlaybackTransport
-      playback={playback}
-      totalSeconds={10}
-      frames={[]}
-      onSeek={playback.seek}
-    />
+    <>
+      <PlaybackTransport
+        playback={playback}
+        totalSeconds={10}
+        frames={[]}
+        onSeek={playback.seek}
+      />
+      <button type="button" data-command-pause onClick={playback.pause}>
+        Explicit pause
+      </button>
+      <button type="button" data-command-play onClick={playback.play}>
+        Explicit play
+      </button>
+      <button
+        type="button"
+        data-command-finish
+        onClick={() => playback.syncFromPlayer(10)}
+      >
+        Finish
+      </button>
+    </>
   )
 }
 
@@ -93,5 +108,41 @@ describe('PlaybackTransport', () => {
     })
     expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
     expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('supports explicit pause, resume, and restart without changing speed', async () => {
+    await act(async () => root.render(<TransportHarness />))
+
+    const click = async (selector: string) => {
+      await act(async () => {
+        container
+          .querySelector(selector)
+          ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+      })
+    }
+    const toggle = () =>
+      container.querySelector('button[aria-label]')?.getAttribute('aria-label')
+
+    const fourTimes = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === '4×',
+    )
+    await act(async () => {
+      fourTimes?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(toggle()).toBe('Pause')
+
+    await click('[data-command-pause]')
+    expect(toggle()).toBe('Play')
+
+    await click('[data-command-play]')
+    expect(toggle()).toBe('Pause')
+
+    await click('[data-command-finish]')
+    expect(toggle()).toBe('Restart playback')
+
+    await click('[data-command-play]')
+    expect(toggle()).toBe('Pause')
+    expect(container.textContent).toContain('0:00 / 0:10')
+    expect(fourTimes?.getAttribute('aria-pressed')).toBe('true')
   })
 })
