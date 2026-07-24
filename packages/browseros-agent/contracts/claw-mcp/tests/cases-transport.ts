@@ -7,29 +7,14 @@
 import type { ContractCase } from './cases'
 import { apiGet, waitUntil } from './helpers'
 
-const EXPECTED_TOOLS = [
-  'act',
-  'diff',
-  'download',
-  'evaluate',
-  'grep',
-  'name_session',
-  'navigate',
-  'pdf',
-  'read',
-  'run',
-  'screenshot',
-  'snapshot',
-  'tab_groups',
-  'tabs',
-  'upload',
-  'wait',
-  'windows',
-]
+// Code mode collapses the advertised surface to the single script tool plus
+// name_session; the granular tools stay callable by name for the bridge and
+// end-to-end tests but are hidden from the listed catalog.
+const EXPECTED_TOOLS = ['name_session', 'run']
 
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the full 17-tool catalog',
+    name: 'transport: tools/list exposes only the code-mode tool and name_session',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()

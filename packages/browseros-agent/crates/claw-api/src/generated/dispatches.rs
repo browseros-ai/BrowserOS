@@ -45,6 +45,10 @@ pub struct Dispatch {
     pub duration_ms: Option<i64>,
     #[serde(rename = "screenshotId", skip_serializing_if = "Option::is_none")]
     pub screenshot_id: Option<i64>,
+    #[serde(rename = "dispatchKey", skip_serializing_if = "Option::is_none")]
+    pub dispatch_key: Option<String>,
+    #[serde(rename = "parentDispatchId", skip_serializing_if = "Option::is_none")]
+    pub parent_dispatch_id: Option<String>,
 }
 
 impl Dispatch {
@@ -73,6 +77,8 @@ impl Dispatch {
             result_meta: None,
             duration_ms: None,
             screenshot_id: None,
+            dispatch_key: None,
+            parent_dispatch_id: None,
         }
     }
 }

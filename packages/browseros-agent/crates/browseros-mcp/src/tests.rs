@@ -109,6 +109,7 @@ fn fake_ctx() -> ToolCtx {
         defaults: BrowserToolDefaults::default(),
         cancel: CancellationToken::new(),
         output_files: create_browser_output_file_access(),
+        inner_call_hook: None,
     })
 }
 
@@ -359,6 +360,7 @@ async fn harness_ctx() -> (ToolCtx, Arc<HarnessConnection>, u32) {
             defaults: BrowserToolDefaults::default(),
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
+            inner_call_hook: None,
         }),
         connection,
         page,

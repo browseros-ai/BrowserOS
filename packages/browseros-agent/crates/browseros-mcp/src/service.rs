@@ -174,6 +174,7 @@ impl BrowserMcpService {
             defaults: self.defaults.clone(),
             cancel,
             output_files: self.output_files.clone(),
+            inner_call_hook: None,
         })
     }
 

@@ -21,40 +21,13 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         let Some(pages) = structured.get("pages").and_then(Value::as_array) else {
             return Ok(None);
         };
-        let live_page_ids = pages
-            .iter()
-            .filter_map(page_id)
-            .map(PageId)
-            .collect::<BTreeSet<_>>();
-        let ownership = context.call.state.sessions.ownership();
-        ownership.prune_missing_pages(&live_page_ids).await;
-        let labels = context
-            .call
-            .state
-            .sessions
-            .snapshot()
-            .await
-            .into_iter()
-            .map(|session| {
-                (
-                    session.convo_id().clone(),
-                    session.agent().label().to_string(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        let mut annotated = Vec::with_capacity(pages.len());
-        for page in pages {
-            let owner = match page_id(page) {
-                Some(page_id) => ownership.owner_of_page(&PageId(page_id)).await,
-                None => None,
-            };
-            annotated.push(annotate_page(
-                page,
-                owner.as_ref(),
-                &identity.ownership_key,
-                &labels,
-            ));
-        }
+        let annotated = annotate_pages_with_ownership(
+            &context.call.state,
+            &identity.ownership_key,
+            pages,
+            "page",
+        )
+        .await;
         Ok(Some(ToolResult {
             content: vec![ContentBlock::text(render_tabs(&annotated))],
             structured_content: Some(json!({ "pages": annotated })),
@@ -63,8 +36,49 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
     })
 }
 
-fn page_id(page: &Value) -> Option<u32> {
-    page.get("page")
+/// Tags each page with its ownership bucket ("mine" / "user" / "other-agent"),
+/// the owner's agent id, and the owner's label. Shared by the `tabs list`
+/// effect (`id_field = "page"`) and code-mode `browser.pages.list()`
+/// (`id_field = "pageId"`), so both surfaces classify identically. Prunes
+/// ownership claims for pages no longer live before annotating.
+pub(crate) async fn annotate_pages_with_ownership(
+    state: &crate::AppState,
+    caller: &crate::ids::ConvoId,
+    pages: &[Value],
+    id_field: &str,
+) -> Vec<Value> {
+    let live_page_ids = pages
+        .iter()
+        .filter_map(|page| page_id(page, id_field))
+        .map(PageId)
+        .collect::<BTreeSet<_>>();
+    let ownership = state.sessions.ownership();
+    ownership.prune_missing_pages(&live_page_ids).await;
+    let labels = state
+        .sessions
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|session| {
+            (
+                session.convo_id().clone(),
+                session.agent().label().to_string(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut annotated = Vec::with_capacity(pages.len());
+    for page in pages {
+        let owner = match page_id(page, id_field) {
+            Some(page_id) => ownership.owner_of_page(&PageId(page_id)).await,
+            None => None,
+        };
+        annotated.push(annotate_page(page, owner.as_ref(), caller, &labels));
+    }
+    annotated
+}
+
+fn page_id(page: &Value, id_field: &str) -> Option<u32> {
+    page.get(id_field)
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
 }
