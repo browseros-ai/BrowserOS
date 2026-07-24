@@ -99,14 +99,20 @@ describe('BrowserClawMcpBanner', () => {
     expect(html).not.toContain('Dismiss')
   })
 
+  // Stands alone rather than riding inside the click test below: this is the one
+  // assertion that ties the suite to the value analytics actually ships, so it
+  // should not disappear along with a behavior test someone reworks later.
+  it('pins the shipped event value', () => {
+    expect(BROWSERCLAW_MCP_BANNER_CLICKED_EVENT).toBe(
+      'settings.browserclaw_mcp_banner.clicked',
+    )
+  })
+
   it('opens browserclaw.ai and tracks the click', async () => {
     render()
 
     await renderedCtaClick?.()
 
-    expect(BROWSERCLAW_MCP_BANNER_CLICKED_EVENT).toBe(
-      'settings.browserclaw_mcp_banner.clicked',
-    )
     expect(trackedEvents).toEqual([BROWSERCLAW_MCP_BANNER_CLICKED_EVENT])
     expect(createdTabs).toEqual([{ url: 'https://browserclaw.ai' }])
     expect(capturedErrors).toEqual([])
@@ -118,6 +124,8 @@ describe('BrowserClawMcpBanner', () => {
 
     await renderedCtaClick?.()
 
-    expect(capturedErrors).toEqual([tabsCreateError])
+    expect(capturedErrors).toHaveLength(1)
+    expect(capturedErrors[0]).toBe(tabsCreateError)
+    expect(createdTabs).toEqual([])
   })
 })

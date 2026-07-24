@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
-import { createElement, type FC } from 'react'
+import { createElement, type FC, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+// Relative on purpose — see the note in BrowserClawMcpBanner.test.tsx. Nothing
+// here asserts on the value, but forwarding the real one keeps every test in this
+// folder honest about where the constant comes from.
+import { BROWSERCLAW_MCP_BANNER_CLICKED_EVENT } from '../../lib/constants/analyticsEvents'
 
 // The three sibling sections are stubbed so this exercises the page's own
 // composition; BrowserClawMcpBanner is deliberately left real, because the
@@ -22,8 +26,8 @@ mock.module('@/assets/browserclaw_logo.png', () => ({
 }))
 
 mock.module('@/components/ui/button', () => ({
-  Button: ({ children }: { children?: unknown }) =>
-    createElement('button', { type: 'button' }, children as never),
+  Button: ({ children }: { children?: ReactNode }) =>
+    createElement('button', { type: 'button' }, children),
 }))
 
 mock.module('@/lib/metrics/track', () => ({
@@ -35,8 +39,7 @@ mock.module('@/lib/sentry/sentry', () => ({
 }))
 
 mock.module('@/lib/constants/analyticsEvents', () => ({
-  BROWSERCLAW_MCP_BANNER_CLICKED_EVENT:
-    'settings.browserclaw_mcp_banner.clicked',
+  BROWSERCLAW_MCP_BANNER_CLICKED_EVENT,
 }))
 
 mock.module('@/lib/browseros/helpers', () => ({
@@ -59,8 +62,15 @@ describe('MCPSettingsPage', () => {
 
     expect(html).toContain('For better MCP support, use BrowserClaw')
 
+    // Pin the stub positions first: a missing stub would return -1 and turn the
+    // ordering bounds below into assertions that are trivially true.
+    const headerIndex = html.indexOf('server-header')
+    const integrationsIndex = html.indexOf('integrations')
+    expect(headerIndex).toBeGreaterThan(-1)
+    expect(integrationsIndex).toBeGreaterThan(-1)
+
     const bannerIndex = html.indexOf('For better MCP support')
-    expect(bannerIndex).toBeGreaterThan(html.indexOf('server-header'))
-    expect(bannerIndex).toBeLessThan(html.indexOf('integrations'))
+    expect(bannerIndex).toBeGreaterThan(headerIndex)
+    expect(bannerIndex).toBeLessThan(integrationsIndex)
   })
 })
