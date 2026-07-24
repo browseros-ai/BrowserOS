@@ -29,9 +29,13 @@ describe('mapDispatchToFrame', () => {
     expect(frame.cameraT).toBe(10)
   })
 
-  it.each([undefined, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    'falls back to completion for unusable duration %p',
-    (durationMs) => {
+  it('falls back to completion for every unusable duration', () => {
+    for (const durationMs of [
+      undefined,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
       const frame = mapDispatchToFrame(
         dispatch(15_000, durationMs),
         1_000,
@@ -40,8 +44,8 @@ describe('mapDispatchToFrame', () => {
 
       expect(frame.t).toBe(14)
       expect(frame.cameraT).toBe(14)
-    },
-  )
+    }
+  })
 
   it('clamps an operation start at the beginning of the session', () => {
     const frame = mapDispatchToFrame(dispatch(2_000, 5_000), 1_000, new Map())
