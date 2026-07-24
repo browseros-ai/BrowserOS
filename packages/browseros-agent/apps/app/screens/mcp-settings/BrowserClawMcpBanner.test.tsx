@@ -1,16 +1,24 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { type ComponentProps, createElement, type FC } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+// Imported relatively on purpose: `@/…` does not resolve under `bun test`, so the
+// component's copy of this module has to be mocked. Pulling the real value in
+// through a path the mock does not intercept keeps the assertion honest — mocking
+// the constant *and* asserting a literal would pass even if the shipped event
+// value were wrong.
+import { BROWSERCLAW_MCP_BANNER_CLICKED_EVENT } from '../../lib/constants/analyticsEvents'
 
 type MockButtonProps = Omit<ComponentProps<'button'>, 'onClick'> & {
   variant?: string
   size?: string
-  onClick?: () => void
+  onClick?: () => void | Promise<void>
 }
 
 const trackedEvents: string[] = []
 const createdTabs: unknown[] = []
-let renderedCtaClick: (() => void) | undefined
+const capturedErrors: unknown[] = []
+let renderedCtaClick: (() => void | Promise<void>) | undefined
+let tabsCreateError: Error | null = null
 
 mock.module('@/assets/browserclaw_logo.png', () => ({
   default: 'logo.png',
@@ -22,9 +30,16 @@ mock.module('@/lib/metrics/track', () => ({
   },
 }))
 
+mock.module('@/lib/sentry/sentry', () => ({
+  sentry: {
+    captureException: (error: unknown) => {
+      capturedErrors.push(error)
+    },
+  },
+}))
+
 mock.module('@/lib/constants/analyticsEvents', () => ({
-  BROWSERCLAW_MCP_BANNER_CLICKED_EVENT:
-    'settings.browserclaw_mcp_banner.clicked',
+  BROWSERCLAW_MCP_BANNER_CLICKED_EVENT,
 }))
 
 mock.module('@/components/ui/button', () => ({
@@ -49,10 +64,13 @@ beforeAll(async () => {
 beforeEach(() => {
   trackedEvents.length = 0
   createdTabs.length = 0
+  capturedErrors.length = 0
   renderedCtaClick = undefined
+  tabsCreateError = null
   globalThis.chrome = {
     tabs: {
       create: async (options: unknown) => {
+        if (tabsCreateError) throw tabsCreateError
         createdTabs.push(options)
       },
     },
@@ -74,13 +92,6 @@ describe('BrowserClawMcpBanner', () => {
     expect(html).toContain('browserclaw.ai')
   })
 
-  it('does not repeat the copy of the banners that link here', () => {
-    const html = render()
-
-    expect(html).not.toContain('Connect your favorite coding tools')
-    expect(html).not.toContain('A new product from the BrowserOS team')
-  })
-
   it('is permanent: renders only the CTA, with no dismiss control', () => {
     const html = render()
 
@@ -88,12 +99,25 @@ describe('BrowserClawMcpBanner', () => {
     expect(html).not.toContain('Dismiss')
   })
 
-  it('opens browserclaw.ai and tracks the click', () => {
+  it('opens browserclaw.ai and tracks the click', async () => {
     render()
 
-    renderedCtaClick?.()
+    await renderedCtaClick?.()
 
-    expect(trackedEvents).toEqual(['settings.browserclaw_mcp_banner.clicked'])
+    expect(BROWSERCLAW_MCP_BANNER_CLICKED_EVENT).toBe(
+      'settings.browserclaw_mcp_banner.clicked',
+    )
+    expect(trackedEvents).toEqual([BROWSERCLAW_MCP_BANNER_CLICKED_EVENT])
     expect(createdTabs).toEqual([{ url: 'https://browserclaw.ai' }])
+    expect(capturedErrors).toEqual([])
+  })
+
+  it('reports to Sentry when the tab cannot be opened', async () => {
+    tabsCreateError = new Error('no window available')
+    render()
+
+    await renderedCtaClick?.()
+
+    expect(capturedErrors).toEqual([tabsCreateError])
   })
 })

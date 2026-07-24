@@ -4,6 +4,7 @@ import BrowserClawLogo from '@/assets/browserclaw_logo.png'
 import { Button } from '@/components/ui/button'
 import { BROWSERCLAW_MCP_BANNER_CLICKED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { sentry } from '@/lib/sentry/sentry'
 
 const BROWSERCLAW_URL = 'https://browserclaw.ai'
 
@@ -19,9 +20,15 @@ const BROWSERCLAW_URL = 'https://browserclaw.ai'
  * promo; repeating it here would waste the one line this banner gets.
  */
 export const BrowserClawMcpBanner: FC = () => {
-  const handleClick = () => {
+  const handleClick = async () => {
     track(BROWSERCLAW_MCP_BANNER_CLICKED_EVENT)
-    chrome.tabs.create({ url: BROWSERCLAW_URL })
+    try {
+      await chrome.tabs.create({ url: BROWSERCLAW_URL })
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: { message: 'Failed to open BrowserClaw site from MCP settings' },
+      })
+    }
   }
 
   return (
