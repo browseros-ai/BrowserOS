@@ -189,50 +189,49 @@ export class ChatService {
 
     if (!session) {
       isNewSession = true
-      let hiddenPageId: number | undefined
+      let scheduledPageId: number | undefined
       let browserContext = await resolveBrowserContextPageIds(
         this.deps.browser,
         request.browserContext,
       )
       if (request.isScheduledTask) {
         try {
-          hiddenPageId = await this.deps.browser.newPage('about:blank', {
-            hidden: true,
+          scheduledPageId = await this.deps.browser.newPage('about:blank', {
             background: true,
           })
-          let hiddenWindowId: number | undefined
+          let scheduledWindowId: number | undefined
           try {
-            const hiddenPage = (await this.deps.browser.listPages()).find(
-              (page) => page.pageId === hiddenPageId,
+            const scheduledPage = (await this.deps.browser.listPages()).find(
+              (page) => page.pageId === scheduledPageId,
             )
-            hiddenWindowId = hiddenPage?.windowId
+            scheduledWindowId = scheduledPage?.windowId
           } catch (error) {
-            logger.warn('Failed to look up hidden page metadata', {
+            logger.warn('Failed to look up scheduled page metadata', {
               conversationId: request.conversationId,
-              pageId: hiddenPageId,
+              pageId: scheduledPageId,
               error: error instanceof Error ? error.message : String(error),
             })
           }
           browserContext = {
             ...browserContext,
-            windowId: hiddenWindowId,
+            windowId: scheduledWindowId,
             selectedTabs: undefined,
             tabs: undefined,
             activeTab: {
-              id: hiddenPageId,
-              pageId: hiddenPageId,
+              id: scheduledPageId,
+              pageId: scheduledPageId,
               url: 'about:blank',
               title: 'Scheduled Task',
             },
           }
-          logger.info('Created hidden page for scheduled task', {
+          logger.info('Created background page for scheduled task', {
             conversationId: request.conversationId,
-            pageId: hiddenPageId,
-            windowId: hiddenWindowId,
+            pageId: scheduledPageId,
+            windowId: scheduledWindowId,
           })
         } catch (error) {
           logger.warn(
-            'Failed to create hidden page, using default browser context',
+            'Failed to create scheduled page, using default browser context',
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -252,7 +251,7 @@ export class ChatService {
       })
       session = {
         agent,
-        hiddenPageId,
+        scheduledPageId,
         browserContext,
         mcpServerKey,
         workingDir: request.userWorkingDir,
@@ -397,10 +396,10 @@ export class ChatService {
           totalMessages: session.agent.messages.length,
         })
 
-        if (session?.hiddenPageId) {
-          const pageId = session.hiddenPageId
-          session.hiddenPageId = undefined
-          this.closeHiddenPage(pageId, request.conversationId)
+        if (session?.scheduledPageId) {
+          const pageId = session.scheduledPageId
+          session.scheduledPageId = undefined
+          this.closeScheduledPage(pageId, request.conversationId)
         }
       },
     })
@@ -414,18 +413,18 @@ export class ChatService {
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
     const session = this.deps.sessionStore.get(conversationId)
-    if (session?.hiddenPageId) {
-      const pageId = session.hiddenPageId
-      session.hiddenPageId = undefined
-      this.closeHiddenPage(pageId, conversationId)
+    if (session?.scheduledPageId) {
+      const pageId = session.scheduledPageId
+      session.scheduledPageId = undefined
+      this.closeScheduledPage(pageId, conversationId)
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
     return { deleted, sessionCount: this.deps.sessionStore.count() }
   }
 
-  private closeHiddenPage(pageId: number, conversationId: string): void {
+  private closeScheduledPage(pageId: number, conversationId: string): void {
     this.deps.browser.closePage(pageId).catch((error) => {
-      logger.warn('Failed to close hidden page', {
+      logger.warn('Failed to close scheduled page', {
         pageId,
         conversationId,
         error: error instanceof Error ? error.message : String(error),
@@ -466,7 +465,7 @@ export class ChatService {
     })
     const newSession: AgentSession = {
       agent,
-      hiddenPageId: session.hiddenPageId,
+      scheduledPageId: session.scheduledPageId,
       browserContext,
       mcpServerKey,
       workingDir: request.userWorkingDir,

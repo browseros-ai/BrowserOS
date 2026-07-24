@@ -8,22 +8,27 @@ use crate::{
     },
     error::AppResult,
 };
-use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 1;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// Returns the fixed screenshot-first v1 cost through the shared live image estimator.
+/// Fixed provider-neutral baseline for one 1920x1080 screenshot. Anthropic documents
+/// 2,691 visual tokens for Claude Sonnet 5 at this resolution and a 4,784-token
+/// high-resolution ceiling; OpenAI's GPT-5.5 high/original rules retain all 2,040
+/// 32px patches at this resolution within their documented patch budgets.
+///
+/// Anthropic: https://platform.claude.com/docs/en/build-with-claude/vision#resolution-and-token-cost
+/// OpenAI: https://developers.openai.com/api/docs/guides/images-vision#calculating-costs
 #[must_use]
-pub fn screenshot_tokens_per_dispatch() -> i64 {
-    estimate_image_tokens_from_dimensions(SCREENSHOT_BASELINE_WIDTH, SCREENSHOT_BASELINE_HEIGHT)
+pub const fn screenshot_tokens_per_dispatch() -> i64 {
+    3_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,24 +215,25 @@ fn calculate_session_efficiency(
 
     let mut tool_input_token_estimate = 0_i64;
     let mut tool_output_token_estimate = 0_i64;
-    let mut earliest_start = i64::MAX;
-    let mut latest_completion = i64::MIN;
     for dispatch in &source.dispatches {
         tool_input_token_estimate =
             tool_input_token_estimate.saturating_add(dispatch.tool_input_token_estimate.max(0));
         tool_output_token_estimate =
             tool_output_token_estimate.saturating_add(dispatch.tool_output_token_estimate.max(0));
-        let safe_duration = dispatch.duration_ms.unwrap_or_default().max(0);
-        earliest_start = earliest_start.min(dispatch.created_at.saturating_sub(safe_duration));
-        latest_completion = latest_completion.max(dispatch.created_at);
     }
 
+    let started_at = source
+        .start
+        .as_ref()
+        .map(|start| start.created_at)
+        .unwrap_or(source.dispatches[0].created_at);
+    let active_duration_ms = source.end.created_at.saturating_sub(started_at).max(0);
     let dispatch_count = i64::try_from(source.dispatches.len()).unwrap_or(i64::MAX);
     Some(session_efficiency_stats::Model {
         session_id: source.session_id.clone(),
         ended_at: source.end.created_at,
         dispatch_count,
-        active_duration_ms: latest_completion.saturating_sub(earliest_start).max(0),
+        active_duration_ms,
         tool_input_token_estimate,
         tool_output_token_estimate,
         screenshot_baseline_token_estimate: dispatch_count
@@ -334,7 +340,7 @@ fn js_safe_signed(value: i128) -> i64 {
 mod tests {
     use super::{
         EFFICIENCY_ESTIMATOR_VERSION, SCREENSHOT_BASELINE_HEIGHT, SCREENSHOT_BASELINE_WIDTH,
-        SessionEfficiencyService, calculate_session_efficiency,
+        SessionEfficiencyService, calculate_session_efficiency, screenshot_tokens_per_dispatch,
     };
     use crate::{
         analytics::{
@@ -343,7 +349,7 @@ mod tests {
         },
         db::{
             AuditLog, DATABASE_FILENAME, Database, SessionEfficiencyStatsRepository,
-            audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+            audit_log::RecordToolDispatchInput,
             entities::{
                 agent_session_ends, agent_session_starts, session_efficiency_stats, tool_dispatches,
             },
@@ -351,7 +357,6 @@ mod tests {
         },
         ids::DispatchId,
     };
-    use browseros_mcp::token_estimate::estimate_image_tokens_from_dimensions;
     use serde_json::{Value, json};
     use std::sync::{
         Arc, Mutex,
@@ -464,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn calculator_counts_every_v1_dispatch_and_uses_the_active_span() -> anyhow::Result<()> {
+    fn calculator_uses_elapsed_session_duration() -> anyhow::Result<()> {
         let source = source(vec![
             dispatch(1, 1_000, Some(500), 10, 100, 1),
             dispatch(2, 1_200, Some(400), 20, 200, 1),
@@ -475,28 +480,46 @@ mod tests {
         assert_eq!(stats.session_id, "session");
         assert_eq!(stats.ended_at, 10_000);
         assert_eq!(stats.dispatch_count, 2);
-        assert_eq!(stats.active_duration_ms, 700);
+        assert_eq!(stats.active_duration_ms, 10_000);
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
-        assert_eq!(stats.screenshot_baseline_token_estimate, 3_072);
-        assert_eq!(stats.efficiency_estimator_version, 1);
+        assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
+        assert_eq!(stats.efficiency_estimator_version, 4);
         assert_eq!(stats.computed_at, 12_000);
         Ok(())
     }
 
     #[test]
-    fn calculator_treats_missing_and_negative_durations_as_zero_and_saturates() -> anyhow::Result<()>
-    {
-        let source = source(vec![
+    fn calculator_uses_first_dispatch_when_start_is_missing() -> anyhow::Result<()> {
+        let mut source = source(vec![
             dispatch(1, 100, None, i64::MAX, i64::MAX, 1),
             dispatch(2, 200, Some(-10), 1, 1, 1),
         ]);
+        source.start = None;
 
         let stats = calculate_session_efficiency(&source, 300)
             .ok_or_else(|| anyhow::anyhow!("eligible session was skipped"))?;
-        assert_eq!(stats.active_duration_ms, 100);
+        assert_eq!(stats.active_duration_ms, 9_900);
         assert_eq!(stats.tool_input_token_estimate, i64::MAX);
         assert_eq!(stats.tool_output_token_estimate, i64::MAX);
+        Ok(())
+    }
+
+    #[test]
+    fn calculator_clamps_a_start_after_the_end_to_zero() -> anyhow::Result<()> {
+        let mut source = source(vec![
+            dispatch(1, 100, Some(i64::MAX), 0, 0, 1),
+            dispatch(2, 200, Some(1), 0, 0, 1),
+        ]);
+        source
+            .start
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("source start missing"))?
+            .created_at = 10_001;
+
+        let stats = calculate_session_efficiency(&source, 300)
+            .ok_or_else(|| anyhow::anyhow!("eligible session was skipped"))?;
+        assert_eq!(stats.active_duration_ms, 0);
         Ok(())
     }
 
@@ -551,7 +574,8 @@ mod tests {
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: crate::db::audit_log::bounded_args_json(&json!({})),
+            result_meta: crate::db::audit_log::result_meta(is_error, cancelled, &json!({}), 0),
             duration_ms: 10,
             dispatch_id: DispatchId::new(),
             created_at: None,
@@ -559,12 +583,6 @@ mod tests {
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,
             token_estimator_version: version,
-            result: DispatchResultSummary {
-                is_error,
-                cancelled,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         }
     }
 
@@ -611,7 +629,7 @@ mod tests {
         assert_eq!(finalized.stats.tool_output_token_estimate, 60);
         assert_eq!(
             finalized.stats.screenshot_baseline_token_estimate,
-            3 * 1_536
+            3 * 3_000
         );
         assert_eq!(finalized.stats.computed_at, 50_000);
         assert_eq!(repository.find("eligible").await?, Some(finalized.stats));
@@ -706,6 +724,11 @@ mod tests {
         audit
             .record_session_end("negative", "errored", None)
             .await?;
+        let task_duration_ms = audit
+            .get_task_summary("negative")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
+            .duration_ms;
 
         let (left, right) = tokio::join!(
             service.finalize_session_at("negative", 1),
@@ -723,17 +746,17 @@ mod tests {
                     "kind": "errored",
                     "client_name": "claude-code",
                     "dispatch_count": 1,
-                    "active_duration_ms": 10,
+                    "active_duration_ms": task_duration_ms,
                     "tool_input_token_estimate": 30,
                     "tool_output_token_estimate": 4_000,
                     "browserclaw_token_estimate": 4_030,
-                    "screenshot_baseline_token_estimate": 1_536,
-                    "screenshot_first_token_estimate": 1_566,
-                    "raw_token_savings_estimate": -2_464,
-                    "efficiency_estimator_version": 1,
+                    "screenshot_baseline_token_estimate": 3_000,
+                    "screenshot_first_token_estimate": 3_030,
+                    "raw_token_savings_estimate": -1_000,
+                    "efficiency_estimator_version": 4,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
-                    "screenshot_tokens_per_dispatch": 1_536,
+                    "screenshot_tokens_per_dispatch": 3_000,
                 })),
             )]
         );
@@ -977,7 +1000,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aggregation_uses_inclusive_windows_and_sums_session_spans() -> anyhow::Result<()> {
+    async fn aggregation_uses_inclusive_windows_and_sums_projected_durations() -> anyhow::Result<()>
+    {
         let (_dir, _audit, service, repository) = test_services().await?;
         let now = 40 * DAY_MS;
         for row in [
@@ -1055,13 +1079,9 @@ mod tests {
     }
 
     #[test]
-    fn baseline_dimensions_share_the_live_image_estimator() {
-        assert_eq!(
-            estimate_image_tokens_from_dimensions(
-                SCREENSHOT_BASELINE_WIDTH,
-                SCREENSHOT_BASELINE_HEIGHT,
-            ),
-            1_536
-        );
+    fn baseline_is_fixed_for_1080p_screenshots() {
+        assert_eq!(SCREENSHOT_BASELINE_WIDTH, 1_920);
+        assert_eq!(SCREENSHOT_BASELINE_HEIGHT, 1_080);
+        assert_eq!(screenshot_tokens_per_dispatch(), 3_000);
     }
 }

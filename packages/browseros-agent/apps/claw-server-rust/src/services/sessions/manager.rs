@@ -41,6 +41,9 @@ pub type RetainedGroupHook = Arc<
 /// Receives a session only after its end audit row is durable.
 pub type SessionCompletionHook = Arc<dyn Fn(String) + Send + Sync>;
 
+pub type SessionAuditFlushHook =
+    Arc<dyn Fn(String) -> BoxFuture<'static, AppResult<()>> + Send + Sync>;
+
 struct RetainedSession {
     ended_at: Instant,
 }
@@ -103,6 +106,7 @@ pub struct Sessions {
     /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
     cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
+    audit_flush_hook: OnceLock<SessionAuditFlushHook>,
     completion_hook: OnceLock<SessionCompletionHook>,
     idle_after: Duration,
     retention: Duration,
@@ -149,6 +153,7 @@ impl Sessions {
             reaping_keys: Mutex::new(HashSet::new()),
             cancellation_transitions: Mutex::new(HashMap::new()),
             retained_group_hook: OnceLock::new(),
+            audit_flush_hook: OnceLock::new(),
             completion_hook: OnceLock::new(),
             idle_after,
             retention,
@@ -169,6 +174,10 @@ impl Sessions {
     /// Installs the non-blocking notification that follows durable session completion.
     pub fn set_completion_hook(&self, hook: SessionCompletionHook) {
         let _ = self.completion_hook.set(hook);
+    }
+
+    pub fn set_audit_flush_hook(&self, hook: SessionAuditFlushHook) {
+        let _ = self.audit_flush_hook.set(hook);
     }
 
     pub async fn mint(
@@ -458,6 +467,9 @@ impl Sessions {
         };
         let cancelled_dispatches = session.stop_dispatches().await;
         session.wait_for_dispatches().await;
+        if let Some(hook) = self.audit_flush_hook.get() {
+            hook(session.id().as_str().to_string()).await?;
+        }
         if operator_stop_requested {
             for dispatch_id in session.pending_operator_cancellation_audits().await {
                 self.audit_log

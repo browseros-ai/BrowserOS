@@ -7,7 +7,7 @@ use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
     services::sessions::Session,
@@ -516,6 +516,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         format!("renamed to codex/invoice-processing (was codex/{generated})")
     );
     assert_eq!(session.label().await, "invoice-processing");
+    app.state.audit_worker.flush_session(&session_id).await?;
     let first_task = app
         .state
         .audit_log
@@ -549,6 +550,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         body["result"]["content"][0]["text"],
         "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
     );
+    app.state.audit_worker.flush_session(&session_id).await?;
     assert_eq!(
         app.state
             .audit_log
@@ -740,6 +742,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(wait_body["result"]["isError"], false);
+    app.state.audit_worker.flush_session(&session_id).await?;
 
     let dispatches = app
         .state
@@ -1443,7 +1446,8 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             target_id: None,
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 1,
             dispatch_id: DispatchId::new(),
             created_at: None,
@@ -1451,12 +1455,6 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         })
         .await?;
     Ok(())

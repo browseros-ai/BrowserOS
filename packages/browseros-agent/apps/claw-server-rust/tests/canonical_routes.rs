@@ -13,7 +13,7 @@ use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetI
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput, TaskStatus},
+    db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
     services::cockpit::RecordToolInput,
@@ -559,7 +559,8 @@ async fn seed_dispatch_with_estimates(
             target_id: Some("target-7".to_string()),
             url: None,
             title: None,
-            raw_args: json!({}),
+            args_json: bounded_args_json(&json!({})),
+            result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
             created_at: None,
@@ -567,12 +568,6 @@ async fn seed_dispatch_with_estimates(
             tool_input_token_estimate: input_tokens,
             tool_output_token_estimate: output_tokens,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error: false,
-                cancelled: false,
-                structured_content: json!({}),
-                content: json!([]),
-            },
         })
         .await?)
 }
@@ -697,6 +692,13 @@ async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::
         .audit_log
         .record_session_end("stats-session", "closed", None)
         .await?;
+    let task_duration_ms = app
+        .state
+        .audit_log
+        .get_task_summary("stats-session")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
+        .duration_ms;
     assert!(
         app.state
             .session_efficiency
@@ -716,9 +718,9 @@ async fn canonical_cockpit_stats_maps_no_data_and_measured_windows() -> anyhow::
     assert_eq!(status, StatusCode::OK);
     let measured_window = json!({
         "browserClawTokenEstimate": 2_001,
-        "screenshotFirstTokenEstimate": 1_537,
-        "rawTokenSavingsEstimate": -464,
-        "humanTimeSavedMs": 5,
+        "screenshotFirstTokenEstimate": 3_001,
+        "rawTokenSavingsEstimate": 1_000,
+        "humanTimeSavedMs": task_duration_ms,
         "sessionCount": 1,
         "toolCallCount": 1,
     });
@@ -1299,7 +1301,7 @@ async fn live_projection_hides_handshakes_and_keeps_dispatch_backed_zero_tab_ses
     assert_eq!(second["profileId"], primary["profileId"]);
     assert_ne!(second["sessionId"], primary["sessionId"]);
     assert_eq!(primary["harness"], "Codex");
-    assert_eq!(primary["color"], "#7A5AF8");
+    assert_eq!(primary["color"], "#DB2777");
     assert_eq!(primary["live"]["state"], "active");
     assert_eq!(primary["live"]["browserTabs"][0]["browserTabId"], 101);
     assert_eq!(primary["live"]["browserTabs"][0]["toolCount"], 1);

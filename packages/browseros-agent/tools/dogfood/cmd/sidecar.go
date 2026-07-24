@@ -42,7 +42,7 @@ func dogfoodSidecarConfigPath(cfg config.Config) string {
 	return filepath.Join(cfg.DevUserDataDir, "server-config.json")
 }
 
-func writeDogfoodSidecarConfig(path string, cfg config.Config, agentRoot string) error {
+func writeDogfoodSidecarConfig(path string, cfg config.Config, resourcesDir string) error {
 	if cfg.Ports.Server == 0 || cfg.Ports.CDP == 0 {
 		return fmt.Errorf("dogfood sidecar ports require non-zero server and cdp values")
 	}
@@ -56,7 +56,7 @@ func writeDogfoodSidecarConfig(path string, cfg config.Config, agentRoot string)
 			Proxy:  cfg.Ports.Server,
 		},
 		Directories: dogfoodSidecarDirectories{
-			Resources: filepath.Join(agentRoot, "resources"),
+			Resources: resourcesDir,
 			Execution: cfg.BrowserOSDir,
 		},
 		Flags: dogfoodSidecarFlags{

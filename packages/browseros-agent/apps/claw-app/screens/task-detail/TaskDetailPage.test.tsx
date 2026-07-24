@@ -56,6 +56,11 @@ const sampleTask: TaskDetail = {
     status: 'done',
     errorCount: 0,
     latestScreenshotId: 20,
+    tokenUsage: {
+      inputTokenEstimate: 4200,
+      outputTokenEstimate: 8100,
+      totalTokenEstimate: 12300,
+    },
   },
   dispatches: [
     {
@@ -119,6 +124,26 @@ describe('TaskDetailPage', () => {
     expect(html).not.toContain('/audit/screenshot/2')
   })
 
+  it('renders the total token consumption on the summary card', () => {
+    dataOverride = { ...baseData, detail: sampleTask }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).toContain('12,300')
+  })
+
+  it('renders an em dash when the session has no measured token usage', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, tokenUsage: undefined },
+      },
+    }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).not.toContain('12,300')
+  })
+
   it('renders no-screenshots placeholder when there are none', () => {
     const first = sampleTask.dispatches[0]
     if (!first) throw new Error('test fixture missing first dispatch')
@@ -131,32 +156,6 @@ describe('TaskDetailPage', () => {
     }
     const html = render()
     expect(html).toContain('No screenshots captured for this task.')
-  })
-
-  it('uses one compact selector for a twelve-tab session', () => {
-    const baseDispatch = sampleTask.dispatches[0]
-    if (!baseDispatch) throw new Error('test fixture missing first dispatch')
-    dataOverride = {
-      ...baseData,
-      detail: {
-        ...sampleTask,
-        session: { ...sampleTask.session, dispatchCount: 12 },
-        dispatches: Array.from({ length: 12 }, (_, index) => ({
-          ...baseDispatch,
-          dispatchId: index + 1,
-          pageId: index + 1,
-          createdAt: sampleTask.session.startedAt + index,
-        })),
-      },
-    }
-
-    const html = render()
-    expect(html).toContain('data-task-view-navigation="13"')
-    expect(html.match(/data-slot="select-trigger"/g)).toHaveLength(1)
-    expect(html).toContain('aria-label="Audit view"')
-    expect(html).toContain('Session')
-    expect(html).toContain('12')
-    expect(html).not.toContain('role="tablist"')
   })
 
   it('renders cancelled sessions as stopped', () => {
@@ -174,6 +173,5 @@ describe('TaskDetailPage', () => {
     const html = render()
     expect(html).toContain('Stopped')
     expect(html).toContain('session stopped')
-    expect(html).not.toContain('data-task-view-navigation')
   })
 })

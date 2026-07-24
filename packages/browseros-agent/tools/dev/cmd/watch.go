@@ -324,7 +324,7 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 		Restart: true,
 		Cmd:     []string{"bun", "--watch", "--env-file=../../.env.development", "src/index.ts", "--config", sidecarPath},
 		BeforeStart: func() error {
-			if err := writeServerSidecarConfig(sidecarPath, root, userDataDir, p); err != nil {
+			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "resources"), userDataDir, p); err != nil {
 				return err
 			}
 			return proc.KillPortAndWait(p.Server, 3*time.Second)
@@ -380,7 +380,7 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 		Restart: true,
 		Cmd:     []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
-			if err := writeServerSidecarConfig(sidecarPath, root, userDataDir, p); err != nil {
+			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "apps/claw-server-rust/resources"), userDataDir, p); err != nil {
 				return err
 			}
 			return killPort(p.Server, 3*time.Second)

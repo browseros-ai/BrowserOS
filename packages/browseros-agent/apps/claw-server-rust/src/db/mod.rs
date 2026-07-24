@@ -245,6 +245,27 @@ mod tests {
             Some(1)
         );
 
+        let task_columns = db
+            .connection()
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA table_info(tasks)".to_string(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "name"))
+            .collect::<Result<HashSet<_>, sea_orm::DbErr>>()?;
+        for column in [
+            "tool_input_token_estimate",
+            "tool_output_token_estimate",
+            "tokens_measured",
+        ] {
+            assert!(
+                task_columns.contains(column),
+                "missing tasks column {column}"
+            );
+        }
+
         let migrations = db
             .connection()
             .query_all(Statement::from_string(
@@ -252,7 +273,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 8);
+        assert_eq!(migrations.len(), 12);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -283,7 +304,23 @@ mod tests {
         );
         assert_eq!(
             migrations[7].try_get::<String>("", "version")?,
-            "m0008_add_parent_dispatch_id"
+            "m0008_add_task_token_estimates"
+        );
+        assert_eq!(
+            migrations[8].try_get::<String>("", "version")?,
+            "m0009_rebase_screenshot_baseline"
+        );
+        assert_eq!(
+            migrations[9].try_get::<String>("", "version")?,
+            "m0010_sum_session_efficiency_durations"
+        );
+        assert_eq!(
+            migrations[10].try_get::<String>("", "version")?,
+            "m0011_use_session_durations_for_efficiency"
+        );
+        assert_eq!(
+            migrations[11].try_get::<String>("", "version")?,
+            "m0012_add_parent_dispatch_id"
         );
         Ok(())
     }
@@ -326,7 +363,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 8);
+        assert_eq!(migrations.len(), 12);
         assert_eq!(
             migrations
                 .iter()
@@ -349,7 +386,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 8);
+        assert_eq!(migration_count, 12);
         Ok(())
     }
 
@@ -485,7 +522,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 8);
+        assert_eq!(migrations.len(), 12);
         Ok(())
     }
 

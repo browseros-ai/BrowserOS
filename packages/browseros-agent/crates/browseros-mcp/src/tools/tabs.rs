@@ -23,6 +23,7 @@ enum TabsAction {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct TabsArgs {
     #[serde(default)]
     action: TabsAction,
@@ -31,9 +32,6 @@ struct TabsArgs {
     /// Open without stealing focus for action="new".
     #[serde(default = "super::default_true")]
     background: bool,
-    /// Create in a hidden window for action="new".
-    #[serde(default)]
-    hidden: bool,
     /// Page id for action="close".
     page: Option<u32>,
 }
@@ -90,7 +88,6 @@ fn handler<'a>(
                         args.url.as_deref().unwrap_or("about:blank"),
                         NewPageOptions {
                             background: Some(args.background),
-                            hidden: Some(args.hidden),
                             window_id: ctx.defaults.default_window_id.clone(),
                             tab_group_id: ctx.defaults.default_tab_group_id.clone(),
                         },

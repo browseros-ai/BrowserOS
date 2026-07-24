@@ -1,7 +1,7 @@
 use crate::{
     api::mcp::dispatch::{ToolCall, ToolIdentity},
     api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
-    db::audit_log::{DispatchResultSummary, RecordToolDispatchInput},
+    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     ids::DispatchId,
 };
 use browseros_core::PageId;
@@ -107,7 +107,8 @@ impl InnerCallHook for ScriptInnerCallHook {
                     .map(|page| page.target_id.as_str().to_string()),
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
-                raw_args: json!({ "page": page }),
+                args_json: bounded_args_json(&json!({ "page": page })),
+                result_meta: result_meta(is_error, false, &Value::Null, 0),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
                 // the parent script dispatch, which is stamped with its start.
@@ -119,12 +120,6 @@ impl InnerCallHook for ScriptInnerCallHook {
                 tool_input_token_estimate: 0,
                 tool_output_token_estimate: 0,
                 token_estimator_version: 0,
-                result: DispatchResultSummary {
-                    is_error,
-                    cancelled: false,
-                    structured_content: Value::Null,
-                    content: json!([]),
-                },
             };
             match self.call.state.audit_log.record_tool_dispatch(input).await {
                 Ok(row_id) => {
@@ -133,7 +128,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                     // Only for page-targeting primitives; page-less ones (windows,
                     // tab groups) have nothing meaningful to shoot.
                     if page.is_some() {
-                        crate::api::mcp::effects::audit::persist_screenshot(
+                        crate::api::mcp::observers::audit::persist_screenshot(
                             &self.call.state,
                             self.call.session_id.as_str(),
                             &child_dispatch_id,

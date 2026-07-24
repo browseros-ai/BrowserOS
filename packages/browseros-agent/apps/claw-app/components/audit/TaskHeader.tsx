@@ -10,7 +10,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
 import { useReplayMetadata } from '@/modules/api/replay.hooks'
-import { formatDuration } from '@/screens/audit/audit.helpers'
+import { formatDuration, formatTokensFull } from '@/screens/audit/audit.helpers'
 import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
 
@@ -99,6 +99,21 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
           <div>
             <dt className="text-ink-3">Tools</dt>
             <dd className="font-mono text-ink-2">{task.dispatchCount}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-3">Tokens</dt>
+            <dd
+              className="font-mono text-ink-2"
+              title={
+                task.tokenUsage
+                  ? `${task.tokenUsage.inputTokenEstimate.toLocaleString()} in · ${task.tokenUsage.outputTokenEstimate.toLocaleString()} out`
+                  : undefined
+              }
+            >
+              {task.tokenUsage
+                ? formatTokensFull(task.tokenUsage.totalTokenEstimate)
+                : '—'}
+            </dd>
           </div>
           <div className="col-span-2">
             <dt className="text-ink-3">Site</dt>

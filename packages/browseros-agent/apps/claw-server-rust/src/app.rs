@@ -6,6 +6,7 @@ use crate::{
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
     services::{
+        audit::AuditWorker,
         browser::{BrowserService, TabRegistry},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
@@ -26,6 +27,7 @@ use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 pub struct AppState {
     pub config: Arc<Config>,
     pub audit_log: Arc<AuditLog>,
+    pub audit_worker: Arc<AuditWorker>,
     pub audit_settings: Arc<crate::services::audit_settings::AuditSettingsStore>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
@@ -114,6 +116,21 @@ impl AppState {
             browser.clone(),
             tab_activity.clone(),
         );
+        let audit_worker = AuditWorker::new(audit_log.clone());
+        sessions.set_audit_flush_hook(Arc::new({
+            let audit_worker = Arc::downgrade(&audit_worker);
+            move |session_id| {
+                let audit_worker = audit_worker.clone();
+                Box::pin(async move {
+                    let audit_worker = audit_worker.upgrade().ok_or_else(|| {
+                        AppError::Internal(
+                            "audit worker unavailable during session flush".to_string(),
+                        )
+                    })?;
+                    audit_worker.flush_session(&session_id).await
+                })
+            }
+        }));
         let cockpit = Arc::new(CockpitQuery::new(
             sessions.clone(),
             profiles.clone(),
@@ -125,6 +142,7 @@ impl AppState {
         Ok(Self {
             config,
             audit_log,
+            audit_worker,
             audit_settings,
             session_tabs,
             recordings,

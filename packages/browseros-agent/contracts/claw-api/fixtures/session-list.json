@@ -14,6 +14,11 @@
       "toolSequence": ["navigate", "snapshot"],
       "status": "live",
       "errorCount": 0,
+      "tokenUsage": {
+        "inputTokenEstimate": 120,
+        "outputTokenEstimate": 480,
+        "totalTokenEstimate": 600
+      },
       "live": {
         "state": "active",
         "browserTabs": [

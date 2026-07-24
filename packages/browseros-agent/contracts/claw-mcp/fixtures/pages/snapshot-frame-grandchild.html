@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot frame grandchild</title>
+  </head>
+  <body>
+    <button id="grandchild-action" type="button">
+      Grandchild action ready
+    </button>
+    <script>
+      document
+        .getElementById('grandchild-action')
+        .addEventListener('click', () => {
+          document.getElementById('grandchild-action').textContent =
+            'Grandchild action clicked'
+        })
+      parent.postMessage(
+        { fixture: 'snapshot-frame-tree', ready: 'grandchild' },
+        '*',
+      )
+    </script>
+  </body>
+</html>

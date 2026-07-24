@@ -1,7 +1,6 @@
 import type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 import { useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn } from '@/lib/utils'
 
 export type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 
@@ -130,23 +129,14 @@ function SavedStatsPanel({
           </div>
         </div>
 
-        <div
-          className="relative h-12 min-w-0 overflow-hidden rounded-xl bg-[repeating-linear-gradient(135deg,var(--color-card-tint),var(--color-card-tint)_9px,var(--color-card)_9px,var(--color-card)_10px)] shadow-[inset_0_0_0_1px_var(--color-border-2)]"
-          data-budget-track
-        >
-          <div
-            aria-hidden
-            className="absolute inset-y-0 left-0 rounded-r-sm rounded-l-xl bg-gradient-to-r from-accent to-accent-2 shadow-[0_2px_10px_color-mix(in_srgb,var(--color-accent)_45%,transparent)] transition-[width] duration-300 motion-reduce:transition-none"
-            style={{ width: `${usedRatio * 100}%` }}
-          />
-          <div
-            className={cn(
-              'absolute inset-y-0 z-10 flex items-center gap-2',
-              usedRatio > 0.7 && '-translate-x-full flex-row-reverse',
-            )}
-            data-used-marker
-            style={{ left: `${usedRatio * 100}%` }}
-          >
+        {/* Usage gauge. The full bar is what a screenshot-first agent would
+            spend; the accent fill is what BrowserClaw actually used. Both
+            numbers live in the legend row above the bar — never absolutely
+            positioned inside the bounded, overflow-hidden track — so they can
+            never overlap or clip, at any used/total ratio or label length. The
+            legend wraps to two lines before the labels would ever meet. */}
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono font-semibold text-[11px] text-accent-ink tracking-[0.04em]">
             <span className="relative size-2.5 shrink-0">
               <span
                 aria-hidden
@@ -158,19 +148,32 @@ function SavedStatsPanel({
                 className="absolute inset-0 rounded-full bg-accent ring-2 ring-card"
               />
             </span>
-            <span
-              className="whitespace-nowrap font-mono font-semibold text-[11px] text-accent-ink tracking-[0.04em]"
-              data-stat="browserclaw-tokens"
-            >
-              used {formatCompact(windowStats.browserClawTokenEstimate)}
+            used{' '}
+            <span className="tabular-nums" data-stat="browserclaw-tokens">
+              {formatCompact(windowStats.browserClawTokenEstimate)}
             </span>
-          </div>
-          <span className="absolute inset-y-0 right-3 z-10 flex max-w-[58%] items-center justify-end text-right font-mono text-[9px] text-ink-3 leading-3 tracking-[0.02em] sm:text-[11px] sm:leading-4 sm:tracking-[0.04em]">
+          </span>
+          <span className="font-mono text-[11px] text-ink-3 tracking-[0.04em]">
             a screenshot-first agent would spend{' '}
-            <span className="ml-1 tabular-nums" data-stat="comparison-tokens">
+            <span
+              className="text-ink-2 tabular-nums"
+              data-stat="comparison-tokens"
+            >
               {formatCompact(windowStats.screenshotFirstTokenEstimate)}
             </span>
           </span>
+        </div>
+
+        <div
+          aria-hidden
+          className="relative h-3 min-w-0 overflow-hidden rounded-full bg-[repeating-linear-gradient(135deg,var(--color-card-tint),var(--color-card-tint)_9px,var(--color-card)_9px,var(--color-card)_10px)] shadow-[inset_0_0_0_1px_var(--color-border-2)]"
+          data-budget-track
+        >
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-accent-2 shadow-[0_2px_10px_color-mix(in_srgb,var(--color-accent)_45%,transparent)] transition-[width] duration-300 motion-reduce:transition-none"
+            data-used-fill
+            style={{ width: `${usedRatio * 100}%` }}
+          />
         </div>
         <p className="mt-2.5 font-mono text-[10.5px] text-ink-4 tracking-[0.04em]">
           compact DOM &amp; tool responses instead of a screenshot per call

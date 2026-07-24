@@ -114,7 +114,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	proc.LogMsgf(proc.TagBrowser, "Created temp profile: %s", tempDir)
 
 	sidecarPath := filepath.Join(tempDir, "server-config.json")
-	if err := writeServerSidecarConfig(sidecarPath, root, tempDir, p); err != nil {
+	if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "resources"), tempDir, p); err != nil {
 		cleanup()
 		return fmt.Errorf("writing server config: %w", err)
 	}

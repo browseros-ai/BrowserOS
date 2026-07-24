@@ -8,6 +8,7 @@ import type {
   GetOverriddenSensorInformationResult,
   GetScreenInfosResult,
   RemoveScreenParams,
+  ScreenOrientationLockChangedEvent,
   SetAutoDarkModeOverrideParams,
   SetAutomationOverrideParams,
   SetCPUThrottlingRateParams,
@@ -32,6 +33,7 @@ import type {
   SetPressureDataOverrideParams,
   SetPressureSourceOverrideEnabledParams,
   SetPressureStateOverrideParams,
+  SetPrimaryScreenParams,
   SetSafeAreaInsetsOverrideParams,
   SetScriptExecutionDisabledParams,
   SetScrollbarsHiddenParams,
@@ -44,6 +46,8 @@ import type {
   SetVirtualTimePolicyParams,
   SetVirtualTimePolicyResult,
   SetVisibleSizeParams,
+  UpdateScreenParams,
+  UpdateScreenResult,
 } from '../domains/emulation'
 
 export interface EmulationApi {
@@ -132,9 +136,15 @@ export interface EmulationApi {
   ): Promise<void>
   getScreenInfos(): Promise<GetScreenInfosResult>
   addScreen(params: AddScreenParams): Promise<AddScreenResult>
+  updateScreen(params: UpdateScreenParams): Promise<UpdateScreenResult>
   removeScreen(params: RemoveScreenParams): Promise<void>
+  setPrimaryScreen(params: SetPrimaryScreenParams): Promise<void>
 
   // ── Events ──
 
   on(event: 'virtualTimeBudgetExpired', handler: () => void): () => void
+  on(
+    event: 'screenOrientationLockChanged',
+    handler: (params: ScreenOrientationLockChangedEvent) => void,
+  ): () => void
 }

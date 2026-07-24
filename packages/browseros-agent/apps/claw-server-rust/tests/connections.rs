@@ -166,6 +166,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         fs::read_to_string(shared_skill.join("SKILL.md"))?,
         "managed skill v1\n"
     );
+    let shared_target_path = fs::canonicalize(parent(&shared_skill)?)?.join("browserclaw");
     let skill_manifest_path = browserclaw_dir.join("harness-integrations/skills.json");
     let skill_manifest: Value = serde_json::from_str(&fs::read_to_string(&skill_manifest_path)?)?;
     let shared_record = skill_manifest["targets"]
@@ -173,7 +174,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .and_then(|targets| {
             targets
                 .iter()
-                .find(|target| target["targetPath"] == shared_skill.display().to_string())
+                .find(|target| target["targetPath"] == shared_target_path.display().to_string())
         })
         .ok_or_else(|| anyhow::anyhow!("missing shared skill target"))?;
     assert_eq!(shared_record["consumers"], json!(["codex", "zed"]));
@@ -336,7 +337,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .and_then(|targets| {
             targets
                 .iter()
-                .find(|target| target["targetPath"] == shared_skill.display().to_string())
+                .find(|target| target["targetPath"] == shared_target_path.display().to_string())
         })
         .ok_or_else(|| anyhow::anyhow!("missing shared skill target after Codex disconnect"))?;
     assert_eq!(shared_record["consumers"], json!(["zed"]));

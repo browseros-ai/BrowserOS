@@ -140,7 +140,7 @@ export interface ScreenInfo {
   id: ScreenId
 }
 
-export type DisabledImageType = 'avif' | 'webp'
+export type DisabledImageType = 'avif' | 'jxl' | 'webp'
 
 // ══ Commands ══
 
@@ -183,6 +183,8 @@ export interface SetDeviceMetricsOverrideParams {
   viewport?: Viewport
   displayFeature?: DisplayFeature
   devicePosture?: DevicePosture
+  scrollbarType?: 'overlay' | 'default'
+  screenOrientationLockEmulation?: boolean
 }
 
 export interface SetDevicePostureOverrideParams {
@@ -366,8 +368,35 @@ export interface AddScreenResult {
   screenInfo: ScreenInfo
 }
 
+export interface UpdateScreenParams {
+  screenId: ScreenId
+  left?: number
+  top?: number
+  width?: number
+  height?: number
+  workAreaInsets?: WorkAreaInsets
+  devicePixelRatio?: number
+  rotation?: number
+  colorDepth?: number
+  label?: string
+  isInternal?: boolean
+}
+
+export interface UpdateScreenResult {
+  screenInfo: ScreenInfo
+}
+
 export interface RemoveScreenParams {
   screenId: ScreenId
 }
 
+export interface SetPrimaryScreenParams {
+  screenId: ScreenId
+}
+
 // ══ Events ══
+
+export interface ScreenOrientationLockChangedEvent {
+  locked: boolean
+  orientation?: ScreenOrientation
+}

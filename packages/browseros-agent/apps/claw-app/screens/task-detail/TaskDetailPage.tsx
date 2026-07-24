@@ -4,11 +4,11 @@ import { ScreenshotLightbox } from '@/components/audit/ScreenshotLightbox'
 import { TaskHeader } from '@/components/audit/TaskHeader'
 import { EmptyState } from '@/components/cockpit/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TabView } from './TabView'
 import {
-  TaskViewNavigation,
-  type TaskViewNavigationItem,
-} from './TaskViewNavigation'
+  AutoHideTabs,
+  type AutoHideTabsItem,
+} from '@/components/ui/tabs-auto-hide'
+import { TabView } from './TabView'
 import { useTaskDetailScreenData } from './task-detail.data'
 import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
 
@@ -18,9 +18,10 @@ import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
  *
  *   - TaskHeader     header card with agent, status, timestamps,
  *                    primary actions
- *   - TaskViewNavigation  compact selector for the aggregate session
- *                         and each distinct pageId. A sole session
- *                         view renders directly without navigation.
+ *   - AutoHideTabs   one tab per distinct pageId plus a leftmost
+ *                    "Session" tab for pageId-less dispatches. When
+ *                    the task touched exactly one bucket the tab
+ *                    bar hides and the single view renders inline.
  *   - Lightbox       shadcn Dialog for the full-size screenshot
  */
 export function TaskDetailPage() {
@@ -81,10 +82,16 @@ export function TaskDetailPage() {
       }
     : null
 
-  const items: TaskViewNavigationItem[] = groups.map((g) => ({
+  const items: AutoHideTabsItem[] = groups.map((g) => ({
     id: g.id,
-    label: g.label,
-    count: g.dispatchCount,
+    label: (
+      <span className="inline-flex items-center gap-1.5">
+        <span>{g.label}</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-ink-3">
+          {g.dispatchCount}
+        </span>
+      </span>
+    ),
     content: (
       <TabView
         sessionId={sessionId}
@@ -99,10 +106,10 @@ export function TaskDetailPage() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
       <TaskHeader detail={detail} />
-      <TaskViewNavigation
-        key={sessionId}
+      <AutoHideTabs
         items={items}
         defaultId={pickDefaultTabId(groups)}
+        listVariant="line"
       />
       <ScreenshotLightbox
         sessionId={sessionId}

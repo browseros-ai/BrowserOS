@@ -2,6 +2,7 @@
 
 import type {
   AdoptedStyleSheetsModifiedEvent,
+  AdRelatedStateUpdatedEvent,
   AffectedByStartingStylesFlagUpdatedEvent,
   AttributeModifiedEvent,
   AttributeRemovedEvent,
@@ -233,6 +234,10 @@ export interface DOMApi {
   on(
     event: 'scrollableFlagUpdated',
     handler: (params: ScrollableFlagUpdatedEvent) => void,
+  ): () => void
+  on(
+    event: 'adRelatedStateUpdated',
+    handler: (params: AdRelatedStateUpdatedEvent) => void,
   ): () => void
   on(
     event: 'affectedByStartingStylesFlagUpdated',

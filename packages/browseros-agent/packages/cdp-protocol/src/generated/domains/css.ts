@@ -100,6 +100,7 @@ export interface CSSRule {
   scopes?: CSSScope[]
   ruleTypes?: CSSRuleType[]
   startingStyles?: CSSStartingStyle[]
+  navigations?: CSSNavigation[]
 }
 
 export type CSSRuleType =
@@ -110,6 +111,7 @@ export type CSSRuleType =
   | 'ScopeRule'
   | 'StyleRule'
   | 'StartingStyleRule'
+  | 'NavigationRule'
 
 export interface RuleUsage {
   styleSheetId: StyleSheetId
@@ -196,6 +198,13 @@ export interface CSSContainerQuery {
 export interface CSSSupports {
   text: string
   active: boolean
+  range?: SourceRange
+  styleSheetId?: StyleSheetId
+}
+
+export interface CSSNavigation {
+  text: string
+  active?: boolean
   range?: SourceRange
   styleSheetId?: StyleSheetId
 }
@@ -308,6 +317,7 @@ export interface CSSFunctionConditionNode {
   media?: CSSMedia
   containerQueries?: CSSContainerQuery
   supports?: CSSSupports
+  navigation?: CSSNavigation
   children: CSSFunctionNode[]
   conditionText: string
 }
@@ -323,6 +333,7 @@ export interface CSSFunctionRule {
   origin: StyleSheetOrigin
   parameters: CSSFunctionParameter[]
   children: CSSFunctionNode[]
+  originTreeScopeNodeId?: BackendNodeId
 }
 
 export interface CSSKeyframeRule {
@@ -565,6 +576,16 @@ export interface SetSupportsTextParams {
 
 export interface SetSupportsTextResult {
   supports: CSSSupports
+}
+
+export interface SetNavigationTextParams {
+  styleSheetId: StyleSheetId
+  range: SourceRange
+  text: string
+}
+
+export interface SetNavigationTextResult {
+  navigation: CSSNavigation
 }
 
 export interface SetScopeTextParams {

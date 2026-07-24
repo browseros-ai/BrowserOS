@@ -257,7 +257,7 @@ describe('workspace gating (P11)', () => {
 // from subtle cues (missing sections, restricted tools), which is unreliable.
 //
 // - Regular: no extra framing (default behavior)
-// - Scheduled: must know it's autonomous, on a hidden page, no user interaction
+// - Scheduled: must know it's autonomous, on a managed page, no user interaction
 // - Chat: must know it's read-only, cannot click/fill/write
 //
 // If mode framing breaks, scheduled tasks may try to ask the user questions,
@@ -334,11 +334,11 @@ describe('mode-aware framing', () => {
     expect(prompt).toContain('the page ID from the Browser Context')
   })
 
-  it('scheduled task includes hidden page management rules', () => {
+  it('scheduled task includes background page management rules', () => {
     const prompt = buildScheduled()
-    expect(prompt).toContain('Do NOT close your starting hidden page')
+    expect(prompt).toContain('Do NOT close your starting page')
     expect(prompt).toContain('Do NOT create windows')
-    expect(prompt).toContain('Close extra hidden pages')
+    expect(prompt).toContain('Close extra background pages')
   })
 })
 
@@ -899,15 +899,6 @@ describe('execution section', () => {
     const prompt = buildRegular()
     expect(prompt).toContain('Never navigate the user')
     expect(prompt).toContain('anchor')
-  })
-
-  it('prohibits hidden windows for user tasks', () => {
-    // Why: Run 2 used hidden windows instead of background tabs.
-    // Hidden pages are invisible to users, so user-requested work must stay on visible tabs.
-    const prompt = buildRegular()
-    expect(prompt).toContain('Do NOT use hidden=true')
-    expect(prompt).toContain('background tabs')
-    expect(prompt).not.toContain('cannot be screenshotted')
   })
 
   it('includes tab retry discipline', () => {

@@ -321,7 +321,7 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 	runtimeEnv := serverRuntimeEnv(os.Environ(), cfg)
 	serverDir := filepath.Join(agentRoot, "apps/server")
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, agentRoot); err != nil {
+	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "resources")); err != nil {
 		e.Stop()
 		e.Wait()
 		return nil, fmt.Errorf("write server config: %w", err)
@@ -367,7 +367,7 @@ func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot s
 	}
 
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, agentRoot); err != nil {
+	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "apps/claw-server-rust/resources")); err != nil {
 		e.Stop()
 		e.Wait()
 		return nil, fmt.Errorf("write Claw server config: %w", err)

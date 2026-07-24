@@ -96,6 +96,26 @@ describe('session visual API schema', () => {
     expect(schemas.SessionSummary?.properties).not.toHaveProperty(
       retiredLatestScreenshotKey,
     )
+    // Optional token-consumption totals: present on the summary shape, never required
+    // (absent for legacy/unmeasured sessions), each a JavaScript-safe unsigned integer.
+    const unsignedInteger = {
+      type: 'integer',
+      format: 'int64',
+      minimum: 0,
+      maximum: 9_007_199_254_740_991,
+    }
+    expect(schemas.SessionSummary?.properties).toHaveProperty('tokenUsage')
+    expect(schemas.SessionSummary?.required ?? []).not.toContain('tokenUsage')
+    expect(schemas.SessionTokenUsage?.required).toEqual([
+      'inputTokenEstimate',
+      'outputTokenEstimate',
+      'totalTokenEstimate',
+    ])
+    expect(schemas.SessionTokenUsage?.properties).toMatchObject({
+      inputTokenEstimate: unsignedInteger,
+      outputTokenEstimate: unsignedInteger,
+      totalTokenEstimate: unsignedInteger,
+    })
     expect(schemas.SessionBrowserTab?.properties).not.toHaveProperty(
       retiredPreviewTimestampKey,
     )

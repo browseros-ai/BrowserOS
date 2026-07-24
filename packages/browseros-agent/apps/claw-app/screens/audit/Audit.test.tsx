@@ -69,6 +69,11 @@ const sampleTask: TaskSummary = {
   status: 'done',
   errorCount: 0,
   latestScreenshotId: 7,
+  tokenUsage: {
+    inputTokenEstimate: 4200,
+    outputTokenEstimate: 8100,
+    totalTokenEstimate: 12300,
+  },
 }
 
 describe('Audit screen', () => {
@@ -119,6 +124,21 @@ describe('Audit screen', () => {
     // DONE is the silent default in the editorial cockpit; the row's
     // identity carries state (LIVE / FAILED / STOPPED render inline dots), so
     // no visible 'Done' text renders here anymore.
+  })
+
+  it('hides token usage from the task list', () => {
+    dataOverride = {
+      ...baseData,
+      tasks: [
+        sampleTask,
+        { ...sampleTask, sessionId: 'sess-2', tokenUsage: undefined },
+      ],
+    }
+    const html = renderApp()
+    expect(html).not.toContain('Tokens')
+    expect(html).not.toContain('12.3k')
+    expect(html).not.toContain('12,300 tokens')
+    expect(html).not.toContain('Token usage not measured')
   })
 
   it('renders the Load older tasks button when hasNextPage is true', () => {

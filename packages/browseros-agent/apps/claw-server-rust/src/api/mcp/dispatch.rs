@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards},
+    api::mcp::{effects, guards, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -158,17 +158,27 @@ pub struct NamedToolEffect {
     pub run: ToolEffect,
 }
 
+pub struct ToolObserverContext<'a> {
+    pub call: &'a ToolCall,
+    pub result: &'a ToolResult,
+    pub cancelled: bool,
+    pub duration_ms: i64,
+}
+
+pub type ToolObserver = for<'a> fn(ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>>;
+
+#[derive(Clone, Copy)]
+pub struct NamedToolObserver {
+    pub name: &'static str,
+    pub run: ToolObserver,
+}
+
 const GUARDS: &[ToolGuard] = &[
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
     guards::page_ownership::guard,
 ];
 
-/**
- * Result-mutating effects precede audit so the persisted estimate matches the wire content.
- * The full list still finishes before `finish_dispatch`, leaving a row for operator-stop
- * teardown to reconcile when cancellation wins after audit.
- */
 const EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "ownership-claims",
@@ -190,11 +200,12 @@ const EFFECTS: &[NamedToolEffect] = &[
         name: "session-naming",
         run: effects::session_naming::apply,
     },
-    NamedToolEffect {
-        name: "audit",
-        run: effects::audit::apply,
-    },
 ];
+
+const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
+    name: "audit",
+    run: observers::audit::apply,
+}];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -207,15 +218,16 @@ enum DispatchExecution {
     ProtocolCancelled,
 }
 
-/// Dispatches a tool through ordered guards, cancellation, and ordered effects.
+/// Dispatches a tool through guards, execution, ordered effects, and read-only observers.
 pub async fn dispatch_tool_call(call: ToolCall) -> Result<CallToolResult, McpError> {
-    dispatch_tool_call_with(call, GUARDS, EFFECTS).await
+    dispatch_tool_call_with(call, GUARDS, EFFECTS, OBSERVERS).await
 }
 
 async fn dispatch_tool_call_with(
     mut call: ToolCall,
     guards: &[ToolGuard],
     effects: &[NamedToolEffect],
+    observers: &[NamedToolObserver],
 ) -> Result<CallToolResult, McpError> {
     if let Some(identity) = &call.identity
         && !identity
@@ -264,7 +276,7 @@ async fn dispatch_tool_call_with(
                         "cockpit tool dispatch failed"
                     );
                 }
-                Ok(run_effects(
+                let result = run_effects(
                     ToolEffectContext {
                         call: &call,
                         result: &outcome.result,
@@ -273,7 +285,18 @@ async fn dispatch_tool_call_with(
                     },
                     effects,
                 )
-                .await)
+                .await;
+                run_observers(
+                    ToolObserverContext {
+                        call: &call,
+                        result: &result,
+                        cancelled: outcome.cancelled,
+                        duration_ms: outcome.duration_ms,
+                    },
+                    observers,
+                )
+                .await;
+                Ok(result)
             }
         }
     };
@@ -329,6 +352,27 @@ async fn run_effects(context: ToolEffectContext<'_>, effects: &[NamedToolEffect]
         }
     }
     result
+}
+
+async fn run_observers(context: ToolObserverContext<'_>, observers: &[NamedToolObserver]) {
+    for observer in observers {
+        if let Err(error) = (observer.run)(ToolObserverContext {
+            call: context.call,
+            result: context.result,
+            cancelled: context.cancelled,
+            duration_ms: context.duration_ms,
+        })
+        .await
+        {
+            warn!(
+                tool = context.call.tool().name,
+                session_id = %context.call.session_id,
+                observer = observer.name,
+                error = %error,
+                "cockpit tool dispatch observer failed"
+            );
+        }
+    }
 }
 
 async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
@@ -399,7 +443,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     })
 }
 
-fn operator_cancellation_result() -> ToolResult {
+pub(super) fn operator_cancellation_result() -> ToolResult {
     ToolResult {
         content: vec![ContentBlock::text(CANCELLATION_REASON)],
         is_error: true,
@@ -491,9 +535,15 @@ mod tests {
     use tokio::sync::Notify;
 
     static EFFECT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static GUARD_OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static CLIENT_OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
     static EFFECT_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static OBSERVED_RESULT: Mutex<Option<String>> = Mutex::new(None);
     static LATE_EFFECT_ENTERED: LazyLock<Notify> = LazyLock::new(Notify::new);
     static LATE_EFFECT_RELEASE: LazyLock<Notify> = LazyLock::new(Notify::new);
+    static FINISH_OBSERVER_ENTERED: LazyLock<Notify> = LazyLock::new(Notify::new);
+    static FINISH_OBSERVER_RELEASE: LazyLock<Notify> = LazyLock::new(Notify::new);
 
     fn record_effect(name: &'static str) {
         EFFECT_ORDER
@@ -547,14 +597,65 @@ mod tests {
         })
     }
 
-    fn audit_then_wait_effect(
-        context: ToolEffectContext<'_>,
-    ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
+    fn failing_observer(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<()>> {
         Box::pin(async move {
-            let replacement = effects::audit::apply(context).await?;
+            OBSERVER_CALLS.fetch_add(1, Ordering::SeqCst);
+            *OBSERVED_RESULT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                dispatch_error_text(context.result);
+            anyhow::bail!("observer failed")
+        })
+    }
+
+    fn counting_observer(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            OBSERVER_CALLS.fetch_add(1, Ordering::SeqCst);
+            *OBSERVED_RESULT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                dispatch_error_text(context.result);
+            Ok(())
+        })
+    }
+
+    fn blocking_observer(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            let _ = context;
+            FINISH_OBSERVER_ENTERED.notify_one();
+            FINISH_OBSERVER_RELEASE.notified().await;
+            Ok(())
+        })
+    }
+
+    fn guard_counting_observer(
+        context: ToolObserverContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            let _ = context;
+            GUARD_OBSERVER_CALLS.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn client_counting_observer(
+        context: ToolObserverContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            let _ = context;
+            CLIENT_OBSERVER_CALLS.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn audit_then_wait_observer(
+        context: ToolObserverContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            observers::audit::apply(context).await?;
             LATE_EFFECT_ENTERED.notify_one();
             LATE_EFFECT_RELEASE.notified().await;
-            Ok(replacement)
+            Ok(())
         })
     }
 
@@ -677,6 +778,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observers_receive_the_final_effect_result_and_continue_after_failure()
+    -> anyhow::Result<()> {
+        OBSERVER_CALLS.store(0, Ordering::SeqCst);
+        *OBSERVED_RESULT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let initial = ToolResult::text("initial", None);
+        let result = run_effects(
+            ToolEffectContext {
+                call: &call,
+                result: &initial,
+                cancelled: false,
+                duration_ms: 1,
+            },
+            &[NamedToolEffect {
+                name: "replace",
+                run: replacement_effect,
+            }],
+        )
+        .await;
+        run_observers(
+            ToolObserverContext {
+                call: &call,
+                result: &result,
+                cancelled: false,
+                duration_ms: 1,
+            },
+            &[
+                NamedToolObserver {
+                    name: "fail",
+                    run: failing_observer,
+                },
+                NamedToolObserver {
+                    name: "count",
+                    run: counting_observer,
+                },
+            ],
+        )
+        .await;
+
+        assert_eq!(OBSERVER_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            OBSERVED_RESULT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_deref(),
+            Some("replacement")
+        );
+        assert_eq!(dispatch_error_text(&result).as_deref(), Some("replacement"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn terminal_audit_counts_the_final_wire_content_once() -> anyhow::Result<()> {
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
@@ -697,13 +853,26 @@ mod tests {
                     name: "session-naming",
                     run: effects::session_naming::apply,
                 },
-                NamedToolEffect {
-                    name: "audit",
-                    run: effects::audit::apply,
-                },
             ],
         )
         .await;
+        run_observers(
+            ToolObserverContext {
+                call: &call,
+                result: &final_result,
+                cancelled: false,
+                duration_ms: 1,
+            },
+            &[NamedToolObserver {
+                name: "audit",
+                run: observers::audit::apply,
+            }],
+        )
+        .await;
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
         let wire = wire_result(final_result.clone());
         assert_eq!(wire.content.len(), 2);
         assert_eq!(wire.structured_content, None);
@@ -732,6 +901,7 @@ mod tests {
     #[tokio::test]
     async fn guard_rejection_skips_effects() -> anyhow::Result<()> {
         EFFECT_CALLS.store(0, Ordering::SeqCst);
+        GUARD_OBSERVER_CALLS.store(0, Ordering::SeqCst);
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = dispatch_tool_call_with(
@@ -741,11 +911,44 @@ mod tests {
                 name: "count",
                 run: counting_effect,
             }],
+            &[NamedToolObserver {
+                name: "count",
+                run: guard_counting_observer,
+            }],
         )
         .await
         .unwrap_or_else(|error| panic!("guard rejection should stay in-band: {error:?}"));
         assert_eq!(result.is_error, Some(true));
         assert_eq!(EFFECT_CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(GUARD_OBSERVER_CALLS.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finish_dispatch_waits_for_observer_submission() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("tool call identity missing"))?
+            .session
+            .clone();
+        let dispatch = tokio::spawn(dispatch_tool_call_with(
+            call,
+            &[],
+            &[],
+            &[NamedToolObserver {
+                name: "blocking",
+                run: blocking_observer,
+            }],
+        ));
+
+        FINISH_OBSERVER_ENTERED.notified().await;
+        assert_eq!(session.active_dispatch_count().await, 1);
+        FINISH_OBSERVER_RELEASE.notify_one();
+        dispatch.await??;
+        assert_eq!(session.active_dispatch_count().await, 0);
         Ok(())
     }
 
@@ -764,9 +967,10 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
+            &[],
+            &[NamedToolObserver {
                 name: "audit",
-                run: effects::audit::apply,
+                run: observers::audit::apply,
             }],
         )
         .await;
@@ -804,9 +1008,10 @@ mod tests {
             dispatch_tool_call_with(
                 dispatched_call,
                 &[],
-                &[NamedToolEffect {
+                &[],
+                &[NamedToolObserver {
                     name: "audit",
-                    run: audit_then_wait_effect,
+                    run: audit_then_wait_observer,
                 }],
             )
             .await
@@ -865,18 +1070,24 @@ mod tests {
     }
 
     #[test]
-    fn production_effects_end_with_terminal_audit() {
-        let names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
+    fn production_pipeline_keeps_audit_in_the_observer_lane() {
+        let effect_names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
         assert_eq!(
-            names,
+            effect_names,
             [
                 "ownership-claims",
                 "tabs-list-view",
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
-                "audit",
             ]
+        );
+        assert_eq!(
+            OBSERVERS
+                .iter()
+                .map(|observer| observer.name)
+                .collect::<Vec<_>>(),
+            ["audit"]
         );
     }
 
@@ -905,13 +1116,18 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
+            &[],
+            &[NamedToolObserver {
                 name: "audit",
-                run: effects::audit::apply,
+                run: observers::audit::apply,
             }],
         )
         .await
         .unwrap_or_else(|error| panic!("operator cancellation should stay in-band: {error:?}"));
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             result
@@ -959,6 +1175,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_cancellation_skips_effects_and_operator_result() -> anyhow::Result<()> {
+        CLIENT_OBSERVER_CALLS.store(0, Ordering::SeqCst);
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
@@ -971,10 +1188,17 @@ mod tests {
         let result = dispatch_tool_call_with(
             call.clone(),
             &[],
-            &[NamedToolEffect {
-                name: "audit",
-                run: effects::audit::apply,
-            }],
+            &[],
+            &[
+                NamedToolObserver {
+                    name: "audit",
+                    run: observers::audit::apply,
+                },
+                NamedToolObserver {
+                    name: "count",
+                    run: client_counting_observer,
+                },
+            ],
         )
         .await;
         let Err(error) = result else {
@@ -991,6 +1215,7 @@ mod tests {
         );
         assert_eq!(session.stop_dispatches().await, 0);
         assert!(call.dispatch_cancel.is_cancelled());
+        assert_eq!(CLIENT_OBSERVER_CALLS.load(Ordering::SeqCst), 0);
         Ok(())
     }
 }

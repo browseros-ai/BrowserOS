@@ -7,6 +7,7 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
+        session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
     },
     error::AppResult,
     ids::DispatchId,
@@ -26,6 +27,10 @@ use url::Url;
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
 
 const ARGS_JSON_MAX: usize = 4096;
+const RESULT_META_MAX: usize = 4096;
+const RESULT_STRUCTURED_KEY_MAX: usize = 128;
+const RESULT_STRUCTURED_KEYS_MAX: usize = 16;
+const RESULT_JSON_STRING_MAX: usize = 192;
 const SUSTAINED_ERROR_TAIL: usize = 3;
 const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
 
@@ -46,7 +51,8 @@ pub struct RecordToolDispatchInput {
     pub target_id: Option<String>,
     pub url: Option<String>,
     pub title: Option<String>,
-    pub raw_args: serde_json::Value,
+    pub args_json: String,
+    pub result_meta: String,
     pub duration_ms: i64,
     /// When the dispatch started, so a long-running script tool sorts before the
     /// child primitives it recorded while executing. `None` falls back to the
@@ -62,17 +68,6 @@ pub struct RecordToolDispatchInput {
     pub tool_output_token_estimate: i64,
     /// Formula identity; version 0 is reserved for legacy or otherwise unmeasured rows.
     pub token_estimator_version: i64,
-    pub result: DispatchResultSummary,
-}
-
-/// Audit-write input. Persistence keeps only the error bit, content-block count, and structured
-/// top-level keys, never content text or structured values.
-#[derive(Debug, Clone)]
-pub struct DispatchResultSummary {
-    pub is_error: bool,
-    pub cancelled: bool,
-    pub structured_content: serde_json::Value,
-    pub content: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,6 +143,12 @@ pub struct TaskSummary {
     pub last_screenshot_dispatch_id: Option<i64>,
     pub cursor_id: i64,
     pub has_screenshots: bool,
+    /// Session totals of the per-dispatch semantic token estimates, trustworthy only when
+    /// `tokens_measured`. `tokens_measured` is true iff the session has dispatches and every one
+    /// carries token-estimator v1; legacy/unmeasured sessions leave it false and the sums at 0.
+    pub tool_input_token_estimate: i64,
+    pub tool_output_token_estimate: i64,
+    pub tokens_measured: bool,
 }
 
 impl From<tasks::Model> for TaskSummary {
@@ -171,6 +172,9 @@ impl From<tasks::Model> for TaskSummary {
             last_screenshot_dispatch_id: model.last_screenshot_dispatch_id,
             cursor_id: model.cursor_id,
             has_screenshots: model.has_screenshots,
+            tool_input_token_estimate: model.tool_input_token_estimate,
+            tool_output_token_estimate: model.tool_output_token_estimate,
+            tokens_measured: model.tokens_measured,
         }
     }
 }
@@ -246,10 +250,16 @@ impl AuditLog {
         Self { db }
     }
 
-    /// Records a tool dispatch and refreshes its task summary atomically.
+    /// Convenience path for callers that need an immediately refreshed task projection.
     pub async fn record_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
-        let txn = self.db.connection().begin().await?;
         let session_id = input.session_id.clone();
+        let row_id = self.append_tool_dispatch(input).await?;
+        self.refresh_task(&session_id).await?;
+        Ok(row_id)
+    }
+
+    /// Appends one persistence-ready dispatch without recomputing its session projection.
+    pub async fn append_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
         let result = ToolDispatches::insert(tool_dispatches::ActiveModel {
             id: NotSet,
             created_at: Set(input.created_at.unwrap_or_else(now_epoch_ms)),
@@ -263,8 +273,8 @@ impl AuditLog {
             target_id: Set(input.target_id),
             url: Set(input.url),
             title: Set(input.title),
-            args_json: Set(Some(truncate(&safe_stringify(&input.raw_args)))),
-            result_meta: Set(Some(summarize_result(&input.result))),
+            args_json: Set(Some(input.args_json)),
+            result_meta: Set(Some(input.result_meta)),
             duration_ms: Set(Some(input.duration_ms)),
             tool_input_token_estimate: Set(input.tool_input_token_estimate.max(0)),
             tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
@@ -273,11 +283,16 @@ impl AuditLog {
             parent_dispatch_id: Set(input.parent_dispatch_id.map(DispatchId::into_inner)),
             has_screenshot: Set(false),
         })
-        .exec(&txn)
+        .exec(self.db.connection())
         .await?;
-        recompute_task(&txn, &session_id).await?;
-        txn.commit().await?;
         Ok(result.last_insert_id)
+    }
+
+    pub async fn refresh_task(&self, session_id: &str) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
     }
 
     /// Reconciles the recorded outcome when Stop wins after the audit effect ran.
@@ -294,24 +309,16 @@ impl AuditLog {
             txn.commit().await?;
             return Ok(false);
         };
-        let result = DispatchResultSummary {
-            is_error: true,
-            cancelled: true,
-            structured_content: json!({
-                "cancellationReason": OPERATOR_CANCELLATION_REASON,
-                "cancellationKind": "cockpit.operator-cancelled",
-            }),
-            content: json!([{
-                "type": "text",
-                "text": OPERATOR_CANCELLATION_REASON,
-            }]),
-        };
+        let structured_content = json!({
+            "cancellationReason": OPERATOR_CANCELLATION_REASON,
+            "cancellationKind": "cockpit.operator-cancelled",
+        });
         let output_token_estimate =
             estimate_tool_output_tokens(&[ContentBlock::text(OPERATOR_CANCELLATION_REASON)]);
         ToolDispatches::update_many()
             .col_expr(
                 tool_dispatches::Column::ResultMeta,
-                Expr::value(Some(summarize_result(&result))),
+                Expr::value(Some(result_meta(true, true, &structured_content, 1))),
             )
             .col_expr(
                 tool_dispatches::Column::ToolOutputTokenEstimate,
@@ -329,15 +336,15 @@ impl AuditLog {
     pub async fn mark_screenshot(&self, dispatch_id: i64) -> AppResult<()> {
         let txn = self.db.connection().begin().await?;
         if let Some(dispatch) = ToolDispatches::find_by_id(dispatch_id).one(&txn).await? {
-            ToolDispatches::update_many()
-                .col_expr(tool_dispatches::Column::HasScreenshot, Expr::value(true))
-                .filter(tool_dispatches::Column::Id.eq(dispatch_id))
-                .exec(&txn)
-                .await?;
+            mark_screenshot(&txn, dispatch_id).await?;
             recompute_task(&txn, &dispatch.session_id).await?;
         }
         txn.commit().await?;
         Ok(())
+    }
+
+    pub async fn mark_screenshot_without_projection(&self, dispatch_id: i64) -> AppResult<()> {
+        mark_screenshot(self.db.connection(), dispatch_id).await
     }
 
     /// Records a session start and refreshes its task summary atomically.
@@ -558,6 +565,15 @@ impl AuditLog {
     }
 }
 
+async fn mark_screenshot<C: ConnectionTrait>(conn: &C, dispatch_id: i64) -> AppResult<()> {
+    ToolDispatches::update_many()
+        .col_expr(tool_dispatches::Column::HasScreenshot, Expr::value(true))
+        .filter(tool_dispatches::Column::Id.eq(dispatch_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppResult<()> {
     let dispatches = query_dispatches_for_session(conn, session_id).await?;
     let start = query_start(conn, session_id).await?;
@@ -608,6 +624,19 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         .map(|row| row.id)
         .collect();
     let last_screenshot_dispatch_id = screenshot_ids.last().copied();
+    // Materialize the live-updating token totals so the audit surfaces read one field instead of
+    // re-summing dispatches. `tokens_measured` matches the efficiency projection's eligibility, so a
+    // legacy/unmeasured session reports absent rather than a misleading zero downstream.
+    let tokens_measured = !dispatches.is_empty()
+        && dispatches
+            .iter()
+            .all(|row| row.token_estimator_version == ELIGIBLE_TOKEN_ESTIMATOR_VERSION);
+    let tool_input_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_input_token_estimate.max(0))
+    });
+    let tool_output_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_output_token_estimate.max(0))
+    });
     Tasks::insert(tasks::ActiveModel {
         session_id: Set(session_id.to_owned()),
         agent_id: Set(agent_id),
@@ -625,6 +654,9 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         last_screenshot_dispatch_id: Set(last_screenshot_dispatch_id),
         cursor_id: Set(cursor_id),
         has_screenshots: Set(!screenshot_ids.is_empty()),
+        tool_input_token_estimate: Set(tool_input_token_estimate),
+        tool_output_token_estimate: Set(tool_output_token_estimate),
+        tokens_measured: Set(tokens_measured),
         updated_at: Set(now_epoch_ms()),
     })
     .on_conflict(
@@ -645,6 +677,9 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
                 tasks::Column::LastScreenshotDispatchId,
                 tasks::Column::CursorId,
                 tasks::Column::HasScreenshots,
+                tasks::Column::ToolInputTokenEstimate,
+                tasks::Column::ToolOutputTokenEstimate,
+                tasks::Column::TokensMeasured,
                 tasks::Column::UpdatedAt,
             ])
             .to_owned(),
@@ -761,45 +796,80 @@ fn safe_stringify(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"<unserialisable>\"".to_string())
 }
 
-fn truncate(value: &str) -> String {
-    if value.len() <= ARGS_JSON_MAX {
-        value.to_string()
-    } else {
-        format!("{}~", &value[..ARGS_JSON_MAX - 1])
-    }
+pub fn bounded_args_json(value: &serde_json::Value) -> String {
+    truncate_utf8(&safe_stringify(value), ARGS_JSON_MAX)
 }
 
-fn summarize_result(result: &DispatchResultSummary) -> String {
-    let structured_keys: Vec<String> = result
-        .structured_content
+pub fn result_meta(
+    is_error: bool,
+    cancelled: bool,
+    structured_content: &serde_json::Value,
+    content_block_count: usize,
+) -> String {
+    let structured_keys: Vec<String> = structured_content
         .as_object()
-        .map(|obj| obj.keys().cloned().collect())
+        .map(|obj| {
+            obj.keys()
+                .take(RESULT_STRUCTURED_KEYS_MAX)
+                .map(|key| bounded_json_string(key))
+                .collect()
+        })
         .unwrap_or_default();
-    let content_summary = result
-        .content
-        .as_array()
-        .map(|items| format!("{} block(s)", items.len()))
-        .unwrap_or_else(|| "unknown".to_string());
     let mut summary = json!({
-        "isError": result.is_error,
-        "cancelled": result.cancelled,
-        "contentSummary": content_summary,
+        "isError": is_error,
+        "cancelled": cancelled,
+        "contentSummary": format!("{content_block_count} block(s)"),
         "structuredKeys": structured_keys,
     });
-    if let Some(cancellation_kind) = result
-        .structured_content
+    if let Some(cancellation_kind) = structured_content
         .get("cancellationKind")
         .and_then(serde_json::Value::as_str)
     {
-        summary["cancellationKind"] = json!(cancellation_kind);
+        summary["cancellationKind"] = json!(bounded_json_string(cancellation_kind));
     }
-    summary.to_string()
+    let serialized = summary.to_string();
+    debug_assert!(serialized.len() <= RESULT_META_MAX);
+    serialized
+}
+
+fn bounded_json_string(value: &str) -> String {
+    let value = truncate_utf8(value, RESULT_STRUCTURED_KEY_MAX);
+    if serde_json::to_string(&value).map_or(usize::MAX, |encoded| encoded.len())
+        <= RESULT_JSON_STRING_MAX
+    {
+        return value;
+    }
+    let mut end = value.len().saturating_sub(1);
+    loop {
+        while !value.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        let candidate = format!("{}~", &value[..end]);
+        if serde_json::to_string(&candidate).map_or(usize::MAX, |encoded| encoded.len())
+            <= RESULT_JSON_STRING_MAX
+        {
+            return candidate;
+        }
+        end = end.saturating_sub(1);
+    }
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.saturating_sub(1);
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}~", &value[..end])
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditLog, DispatchResultSummary, ListTasksQuery, RecordToolDispatchInput, TaskStatus,
+        AuditLog, ListTasksQuery, RecordToolDispatchInput, TaskStatus, bounded_args_json,
+        result_meta,
     };
     use crate::db::{DATABASE_FILENAME, Database};
     use browseros_mcp::token_estimate::estimate_tool_output_tokens;
@@ -824,7 +894,8 @@ mod tests {
             target_id: Some("target".to_string()),
             url: Some(url.to_string()),
             title: None,
-            raw_args: json!({ "url": url }),
+            args_json: bounded_args_json(&json!({ "url": url })),
+            result_meta: result_meta(is_error, false, &json!({ "page": 1 }), 1),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
             created_at: None,
@@ -832,13 +903,28 @@ mod tests {
             tool_input_token_estimate: 11,
             tool_output_token_estimate: 22,
             token_estimator_version: 1,
-            result: DispatchResultSummary {
-                is_error,
-                cancelled: false,
-                structured_content: json!({ "page": 1 }),
-                content: json!([{ "type": "text", "text": "ok" }]),
-            },
         }
+    }
+
+    #[test]
+    fn result_metadata_bounds_json_escaped_strings() -> anyhow::Result<()> {
+        let mut structured = serde_json::Map::new();
+        for index in 0..16 {
+            structured.insert(
+                format!("{}-{index:02}", "\0".repeat(124)),
+                serde_json::Value::Null,
+            );
+        }
+        structured.insert(
+            "cancellationKind".to_string(),
+            serde_json::Value::String("\0".repeat(1024)),
+        );
+
+        let meta = result_meta(false, false, &serde_json::Value::Object(structured), 1);
+
+        assert!(meta.len() <= 4096);
+        serde_json::from_str::<serde_json::Value>(&meta)?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -881,6 +967,45 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("task missing"))?;
         assert_eq!(task.dispatch_count, 2);
+        assert!(task.tokens_measured);
+        assert_eq!(task.tool_input_token_estimate, 68);
+        assert_eq!(task.tool_output_token_estimate, 112);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_summary_reports_unmeasured_for_any_legacy_dispatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // One v1 dispatch alone measures cleanly.
+        audit
+            .record_tool_dispatch(dispatch("solo-v1", "https://one.example.com", false))
+            .await?;
+        let measured = audit
+            .get_task_summary("solo-v1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert!(measured.tokens_measured);
+        assert_eq!(measured.tool_input_token_estimate, 11);
+        assert_eq!(measured.tool_output_token_estimate, 22);
+
+        // A single unmeasured (v0) dispatch taints the whole session, and a negative per-dispatch
+        // estimate never drags the materialized total below zero.
+        audit
+            .record_tool_dispatch(dispatch("mixed", "https://one.example.com", false))
+            .await?;
+        let mut legacy = dispatch("mixed", "https://two.example.com", false);
+        legacy.token_estimator_version = 0;
+        legacy.tool_input_token_estimate = -5;
+        legacy.tool_output_token_estimate = 7;
+        audit.record_tool_dispatch(legacy).await?;
+        let mixed = audit
+            .get_task_summary("mixed")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("mixed task missing"))?;
+        assert!(!mixed.tokens_measured);
+        assert_eq!(mixed.tool_input_token_estimate, 11);
+        assert_eq!(mixed.tool_output_token_estimate, 29);
         Ok(())
     }
 

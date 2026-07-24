@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot frame A</title>
+    <style>
+      #frame-a-cursor {
+        cursor: pointer;
+      }
+    </style>
+    <script>
+      window.addEventListener('message', (event) => {
+        if (
+          event.data?.fixture === 'snapshot-frame-tree' &&
+          event.data.ready === 'grandchild'
+        ) {
+          parent.postMessage(event.data, '*')
+        }
+      })
+    </script>
+  </head>
+  <body>
+    <button id="frame-a-action" type="button">Frame A action ready</button>
+    <div
+      id="frame-a-cursor"
+      role="group"
+      aria-label="Frame A cursor ready"
+    >
+      Frame A cursor ready
+    </div>
+    <iframe
+      id="frame-grandchild"
+      title="Snapshot frame grandchild"
+      src="/snapshot-frame-grandchild.html"
+      width="400"
+      height="200"
+    ></iframe>
+    <script>
+      document
+        .getElementById('frame-a-action')
+        .addEventListener('click', () => {
+          document.getElementById('frame-a-action').textContent =
+            'Frame A action clicked'
+        })
+      parent.postMessage(
+        { fixture: 'snapshot-frame-tree', ready: 'frame-a' },
+        '*',
+      )
+    </script>
+  </body>
+</html>
