@@ -40,6 +40,9 @@ Core loop inside a script: snapshot -> act -> verify.
 Shared with other agents:
 - Open your own tab with browser.pages.newPage(url). Pages you do not own are
   rejected; browser.pages.list() shows what exists.
+- This browser is built for several agents at once: each agent, including a
+  subagent, gets its own isolated tabs and tab group, so parallel agents never
+  collide or disturb the user's own tabs.
 - If the user points you at a tab you do not own, open its URL in your own tab
   and work on that copy; leave the original untouched.
 - Rename your session early with name_session using a 2-3 word task label;
@@ -48,8 +51,10 @@ Shared with other agents:
   audit, replay); every browser action your script runs is recorded there.
 
 Large results are saved to a file and the path returned, read that file
-instead of re-fetching. Parallelize independent subtasks across their own tabs,
-at most 5 at a time unless the user asks for more.
+instead of re-fetching. Parallelize at two levels: inside one run, batch
+independent primitives with Promise.all; across a large workload, split it over
+subagents when your harness supports them, since each gets isolated tabs here.
+Keep to about 5 concurrent tabs per agent unless the user asks for more.
 
 If a call fails with "browser session not connected", the agent browser is not
 running or paired, tell the user to start BrowserClaw and check the cockpit;
