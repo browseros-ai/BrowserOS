@@ -31,6 +31,17 @@ ch2 = "/Users/shadowfax/ch2-src"
 
 Without a checkout selector, `bpatch` discovers the checkout from the current directory as before.
 
+List the machine-level paths from anywhere:
+
+```console
+$ bpatch ls
+config     /Users/shadowfax/.config/bpatch/config.toml
+store      /Users/shadowfax/code/browseros-project/packages/browseros/chromium_patches
+checkouts
+  ch1              /Users/shadowfax/ch1-src
+  ch2              /Users/shadowfax/ch2-src
+```
+
 Requirements: Git 2.40 or newer; base-bump conflict sessions use `git merge-tree --write-tree --merge-base`.
 
 Install from this directory:
@@ -101,10 +112,13 @@ Global flags:
 | `bpatch alias add <NAME> <PATH>` | global flags | `0`, `1` | Add or update a checkout alias in `~/.config/bpatch/config.toml`. |
 | `bpatch alias list` | global flags | `0`, `1` | List checkout aliases. |
 | `bpatch alias remove <NAME>` | global flags | `0`, `1` | Remove a checkout alias. |
+| `bpatch ls` | `--store`, `--json` | `0`, `1` | List the configured patch store and registered checkout aliases without discovering a checkout. |
 | `bpatch abort` | global flags | `0`, `1` | Remove a pending conflict session. |
 | `bpatch continue` | `--materialize`, global flags | `0`, `2`, `1` | Materialize conflict markers or finish a conflict session after resolution. |
 
 `extract` also has a hidden `--accept-suggestions` flag used by integration tests and scripted TTY bypasses; normal non-interactive routing should use `--feature <FEATURE>` or accept the `needs-feature` JSON result.
+
+`ls` is machine-level and does not accept `-C/--checkout`. It reads the configured store and aliases from `~/.config/bpatch/config.toml`; `--store <STORE>` only overrides the displayed store path for that invocation.
 
 `status`, `diff`, `apply`, `abort`, and `continue` also accept an optional positional checkout selector, for example `bpatch apply ch1`. Use `-C/--checkout` for verbs with their own positional arguments, such as `extract`.
 
@@ -247,6 +261,7 @@ reader.
 | feature inventory | `bpatch feature list` |
 | feature creation/top-up | `bpatch feature add <name> <path> [--desc ...]` or `bpatch feature add <name> --from-dirty` |
 | checkout aliases | `bpatch alias add <name> <path>`, then `bpatch apply <name>` or `bpatch -C <name> ...` |
+| machine path listing | `bpatch ls` |
 | conflict abort | `bpatch abort` |
 | conflict continue | `bpatch continue` or `bpatch continue --materialize` |
 | base repin/rebase-store flow | `bpatch extract --repin` |
