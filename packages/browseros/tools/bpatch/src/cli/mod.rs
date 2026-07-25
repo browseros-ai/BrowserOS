@@ -167,6 +167,9 @@ pub enum Command {
         after_long_help = r#"EXAMPLE:
   bpatch ls
   bpatch --store /abs/path/to/chromium_patches ls --json
+
+NOTE:
+  bpatch ls does not accept -C/--checkout because it lists machine config, not a checkout target.
 "#
     )]
     Ls,

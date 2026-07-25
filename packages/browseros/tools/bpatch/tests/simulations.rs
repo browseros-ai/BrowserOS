@@ -78,6 +78,25 @@ fn top_level_help_teaches_chromium_workflow() -> Result<()> {
 }
 
 #[test]
+fn ls_help_explains_machine_level_scope() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_bpatch"))
+        .args(["ls", "--help"])
+        .output()
+        .context("running bpatch ls --help")?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("List the configured chromium_patches store"));
+    assert!(stdout.contains("bpatch ls"));
+    assert!(stdout.contains("bpatch --store /abs/path/to/chromium_patches ls --json"));
+    assert!(stdout.contains("does not accept -C/--checkout"));
+    assert!(stdout.contains("lists machine config, not a checkout target"));
+    Ok(())
+}
+
+#[test]
 fn sim1_extract_hack_commit_renders_routing_net_fold_and_next_step() -> Result<()> {
     let checkout = FixtureRepo::new()?;
     let base = write_extract_base(&checkout)?;
