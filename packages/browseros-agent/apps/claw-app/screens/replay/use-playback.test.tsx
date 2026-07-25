@@ -111,13 +111,14 @@ describe('usePlayback', () => {
     expect(latest.time).toBe(6)
   })
 
-  it('defaults to 2x without consulting a player', async () => {
+  it('autoplays at 4x by default without consulting a player', async () => {
     await render(100)
 
-    expect(latest.speed).toBe(2)
+    expect(latest.speed).toBe(4)
+    expect(latest.isPlaying).toBe(true)
     await advanceTo(1_000)
     await advanceTo(2_000)
-    expect(latest.time).toBe(2)
+    expect(latest.time).toBe(4)
   })
 
   it('excludes paused wall time when playback resumes', async () => {
@@ -151,7 +152,7 @@ describe('usePlayback', () => {
     expect(latest.isPlaying).toBe(true)
   })
 
-  it('clamps a seek to the activity window and pauses', async () => {
+  it('clamps a seek to the activity window', async () => {
     await render(10)
 
     let applied = 0
@@ -160,13 +161,76 @@ describe('usePlayback', () => {
     })
     expect(applied).toBe(10)
     expect(latest.time).toBe(10)
-    expect(latest.isPlaying).toBe(false)
 
     await act(async () => {
       applied = latest.seek(-5)
     })
     expect(applied).toBe(0)
     expect(latest.time).toBe(0)
+  })
+
+  it('keeps playing through a scrub', async () => {
+    await render(100)
+    await act(async () => latest.setSpeed(1))
+    await advanceTo(0)
+    await advanceTo(2_000)
+    expect(latest.isPlaying).toBe(true)
+
+    await act(async () => {
+      latest.seek(50)
+    })
+    expect(latest.isPlaying).toBe(true)
+    expect(latest.time).toBe(50)
+
+    // The clock re-anchors at the seek target and keeps running.
+    await advanceTo(3_000)
+    await advanceTo(4_000)
+    expect(latest.time).toBe(51)
+  })
+
+  it('keeps playing through a speed change', async () => {
+    await render(100)
+    await act(async () => latest.setSpeed(1))
+    await advanceTo(0)
+    await advanceTo(2_000)
+    expect(latest.isPlaying).toBe(true)
+
+    await act(async () => latest.setSpeed(2))
+    expect(latest.isPlaying).toBe(true)
+
+    await advanceTo(3_000)
+    await advanceTo(4_000)
+    expect(latest.time).toBe(4)
+    expect(latest.isPlaying).toBe(true)
+  })
+
+  it('keeps a deliberate pause through a scrub', async () => {
+    await render(100)
+    await act(async () => latest.pause())
+
+    await act(async () => {
+      latest.seek(5)
+    })
+
+    expect(latest.time).toBe(5)
+    expect(latest.isPlaying).toBe(false)
+    expect(frames.size).toBe(0)
+  })
+
+  it('completes naturally when a playing scrub lands on the end', async () => {
+    await render(10)
+    await act(async () => latest.setSpeed(1))
+    await advanceTo(0)
+
+    await act(async () => {
+      latest.seek(10)
+    })
+    expect(latest.isPlaying).toBe(true)
+
+    await advanceTo(1_000)
+    await advanceTo(2_000)
+    expect(latest.time).toBe(10)
+    expect(latest.isPlaying).toBe(false)
   })
 
   it('resumes when a live recording grows past where activity ended', async () => {
@@ -214,7 +278,7 @@ describe('usePlayback', () => {
     await render(10)
     await advanceTo(0)
     await advanceTo(1_000)
-    expect(latest.time).toBe(2)
+    expect(latest.time).toBe(4)
   })
 
   it('keeps exactly one animation loop across control changes', async () => {

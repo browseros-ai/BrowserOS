@@ -443,6 +443,7 @@ describe('Replay auto-follow', () => {
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
       'true',
     )
+    expect(attr('[data-playback-speed]', 'data-playback-speed')).toBe('4')
     // Activity spans the first checkpoint (1s) to the last rrweb event (14s).
     expect(attr('[data-playback-time]', 'data-playback-total')).toBe('13')
     expect(currentCaption()).toBeUndefined()
@@ -568,7 +569,7 @@ describe('Replay auto-follow', () => {
     }).toEqual(forward)
   })
 
-  it('pauses and seeks to an action start when its timeline row is clicked', async () => {
+  it('keeps playing while seeking to a clicked timeline row', async () => {
     replayResult.replay = replayData(
       [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
       [1, 2],
@@ -580,7 +581,7 @@ describe('Replay auto-follow', () => {
     // 12s completion minus a 2s tool, rebased on the 1s activity origin.
     expect(attr('[data-playback-time]', 'data-playback-time')).toBe('9')
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
-      'false',
+      'true',
     )
     expect(viewport('tab')).toBe('2')
     expect(currentCaption()).toBe('Action on Tab 2')
@@ -594,6 +595,26 @@ describe('Replay manual control', () => {
       [1, 2],
       [toolFrame(1, 3), toolFrame(2, 12)],
     )
+
+  it('keeps playing across scrubs and speed changes', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+
+    await clickAct('[data-playback-seek="9"]')
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('9')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+
+    await clickAct('[data-playback-speed-option="2"]')
+    expect(attr('[data-playback-speed]', 'data-playback-speed')).toBe('2')
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'true',
+    )
+  })
 
   it('pins a clicked tab at the unchanged global time', async () => {
     replayResult.replay = twoTabs()

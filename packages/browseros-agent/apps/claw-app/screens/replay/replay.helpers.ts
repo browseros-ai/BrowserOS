@@ -67,4 +67,4 @@ export function formatTime(seconds: number): string {
 }
 
 export const PLAYBACK_SPEEDS: readonly number[] = [1, 2, 4]
-export const DEFAULT_PLAYBACK_SPEED = 2
+export const DEFAULT_PLAYBACK_SPEED = 4

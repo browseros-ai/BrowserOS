@@ -12,7 +12,10 @@ export interface Playback {
   /** Pauses playback without moving the playhead. */
   pause: () => void
   togglePlay: () => void
-  /** Jumps the playhead to `seconds` and pauses. Returns the applied value. */
+  /**
+   * Jumps the playhead to `seconds`, preserving the play state — only the
+   * pause button stops playback. Returns the applied value.
+   */
   seek: (seconds: number) => number
 }
 
@@ -116,13 +119,15 @@ export function usePlayback(totalSeconds: number): Playback {
     else play()
   }, [isPlaying, pause, play])
 
+  // Seeks never touch isPlaying: a playing scrub re-anchors on the next frame
+  // and keeps running, while a deliberately paused operator can frame-step
+  // without playback restarting under them.
   const seek = useCallback(
     (seconds: number) => {
       const clamped = Math.max(0, Math.min(totalSeconds, seconds))
       anchorRef.current = null
       completedRef.current = false
       applyTime(clamped)
-      setIsPlaying(false)
       return clamped
     },
     [applyTime, totalSeconds],

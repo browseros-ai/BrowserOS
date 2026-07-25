@@ -119,7 +119,7 @@ afterEach(async () => {
 })
 
 describe('PlaybackTransport', () => {
-  it('starts at 2x and keeps every speed selectable', async () => {
+  it('starts at 4x and keeps every speed selectable', async () => {
     await act(async () => root.render(<TransportHarness />))
 
     const speedButton = (label: string) =>
@@ -128,8 +128,8 @@ describe('PlaybackTransport', () => {
       )
 
     expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
-    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('true')
-    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('false')
+    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('false')
+    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('true')
 
     await act(async () => {
       speedButton('1×')?.dispatchEvent(
@@ -137,15 +137,15 @@ describe('PlaybackTransport', () => {
       )
     })
     expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('true')
-    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('false')
+    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('false')
 
     await act(async () => {
-      speedButton('4×')?.dispatchEvent(
+      speedButton('2×')?.dispatchEvent(
         new window.Event('click', { bubbles: true }),
       )
     })
     expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
-    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('true')
+    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('supports explicit pause, resume, and restart without changing speed', async () => {
@@ -161,11 +161,12 @@ describe('PlaybackTransport', () => {
     const toggle = () =>
       container.querySelector('button[aria-label]')?.getAttribute('aria-label')
 
-    const fourTimes = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === '4×',
+    const oneTimes = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === '1×',
     )
+    // A speed change through the real picker never pauses playback.
     await act(async () => {
-      fourTimes?.dispatchEvent(new window.Event('click', { bubbles: true }))
+      oneTimes?.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
     expect(toggle()).toBe('Pause')
 
@@ -181,7 +182,7 @@ describe('PlaybackTransport', () => {
     await click('[data-command-play]')
     expect(toggle()).toBe('Pause')
     expect(container.textContent).toContain('0:00 / 0:10')
-    expect(fourTimes?.getAttribute('aria-pressed')).toBe('true')
+    expect(oneTimes?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('bookmarks non-action tools at their activity start', async () => {
@@ -200,5 +201,9 @@ describe('PlaybackTransport', () => {
       marks[0]?.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
     expect(container.textContent).toContain('0:04 / 0:10')
+    // The jump seeks without pausing the running playback.
+    expect(
+      container.querySelector('button[aria-label]')?.getAttribute('aria-label'),
+    ).toBe('Pause')
   })
 })
