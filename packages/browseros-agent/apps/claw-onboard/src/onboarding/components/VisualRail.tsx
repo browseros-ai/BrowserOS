@@ -19,9 +19,14 @@ export function VisualRail() {
         }}
       />
       <div className="relative flex items-center gap-2.5">
-        <div className="flex size-[38px] items-center justify-center rounded-[11px] bg-accent font-extrabold text-card text-lg">
-          B
-        </div>
+        {/* Must stay a literal public path: importing the asset or inlining it
+            breaks scripts/verify-chromium-build.ts (allowlist, no data: URLs). */}
+        <img
+          alt=""
+          aria-hidden
+          className="size-[38px] rounded-[11px]"
+          src="/icon/128.png"
+        />
         <div className="font-extrabold text-[17px] tracking-tight">
           BrowserClaw
         </div>
