@@ -76,7 +76,8 @@ export function setupLlmProvidersBackupToBrowserOS(): () => void {
 }
 
 const backupToShimmy = backupToBrowserOS
-export const setupLlmProvidersBackupToShimmy = setupLlmProvidersBackupToBrowserOS
+export const setupLlmProvidersBackupToShimmy =
+  setupLlmProvidersBackupToBrowserOS
 
 /** Uploads provider metadata for signed-in users. */
 export async function syncLlmProviders(): Promise<void> {
