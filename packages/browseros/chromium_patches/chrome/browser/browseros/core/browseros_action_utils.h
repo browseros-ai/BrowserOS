@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_action_utils.h b/chrome/browser/browseros/core/browseros_action_utils.h
 new file mode 100644
-index 0000000000000..0adfaa4a8ac83
+index 0000000000000..cf8770fd34479
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_action_utils.h
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,60 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -17,34 +17,28 @@ index 0000000000000..0adfaa4a8ac83
 +#include "base/containers/fixed_flat_set.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 +#include "chrome/browser/ui/ui_features.h"
-+#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
 +#include "chrome/common/chrome_features.h"
 +#include "ui/actions/actions.h"
 +
 +namespace browseros {
 +
-+// Native action IDs for BrowserOS panels that need special treatment.
-+// These actions will:
-+// - Always be pinned (unless disabled via pref)
-+// - Show text labels (when enabled via pref)
-+// - Have high flex priority (always visible)
 +constexpr auto kBrowserOSNativeActionIds =
 +    base::MakeFixedFlatSet<actions::ActionId>({
 +        kActionSidePanelShowThirdPartyLlm,
-+        kActionSidePanelShowClashOfGpts,
-+        kActionBrowserOSAgent,
 +    });
 +
-+// Check if an action ID is a BrowserOS action (native or extension).
 +inline bool IsBrowserOSAction(actions::ActionId id) {
-+  // Check native actions
++  if (id == kActionBrowserOSAgent) {
++    return browseros::IsActiveBrowserOSExtension(browseros::kAgentExtensionId);
++  }
++
 +  if (kBrowserOSNativeActionIds.contains(id)) {
 +    return true;
 +  }
 +
-+  // Only labelled extensions are considered for BrowserOS actions
-+  for (const auto& ext_id : browseros::GetBrowserOSExtensionIds()) {
++  for (const auto& ext_id : browseros::GetActiveBrowserOSExtensionIds()) {
 +    if (!browseros::IsBrowserOSLabelledExtension(ext_id)) {
 +      continue;
 +    }
@@ -58,14 +52,10 @@ index 0000000000000..0adfaa4a8ac83
 +  return false;
 +}
 +
-+// Get the feature flag for a native BrowserOS action.
-+inline const base::Feature* GetFeatureForBrowserOSAction(
-+    actions::ActionId id) {
++inline const base::Feature* GetFeatureForBrowserOSAction(actions::ActionId id) {
 +  switch (id) {
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return &features::kThirdPartyLlmPanel;
-+    case kActionSidePanelShowClashOfGpts:
-+      return &features::kClashOfGpts;
 +    default:
 +      return nullptr;
 +  }

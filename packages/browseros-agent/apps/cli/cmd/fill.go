@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	"browseros-cli/output"
@@ -11,30 +10,24 @@ import (
 
 func init() {
 	fillCmd := &cobra.Command{
-		Use:         "fill <element> <text>",
+		Use:         "fill <ref> <value>",
 		Annotations: map[string]string{"group": "Input:"},
-		Short:       "Type text into an input element",
+		Short:       "Fill an input by snapshot ref",
 		Args:        cobra.MinimumNArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
-			var element int
-			if _, err := fmt.Sscanf(args[0], "%d", &element); err != nil {
-				output.Errorf(3, "invalid element ID: %s", args[0])
+			ref, err := elementRef(args[0])
+			if err != nil {
+				output.Error(err.Error(), 3)
 			}
-			text := strings.Join(args[1:], " ")
-			noClear, _ := cmd.Flags().GetBool("no-clear")
+			value := strings.Join(args[1:], " ")
 
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
+			c := newClient()
 
-			result, err := c.CallTool("fill", map[string]any{
-				"page":    pageID,
-				"element": element,
-				"text":    text,
-				"clear":   !noClear,
-			})
+			result, err := c.CallTool("act", fillToolArgsFromCommand(cmd, pageID, ref, value))
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -45,31 +38,29 @@ func init() {
 			}
 		},
 	}
-	fillCmd.Flags().Bool("no-clear", false, "Don't clear existing text before typing")
+	fillCmd.Flags().Bool("no-clear", false, "Don't clear existing value before filling")
 
 	clearCmd := &cobra.Command{
-		Use:         "clear <element>",
+		Use:         "clear <ref>",
 		Annotations: map[string]string{"group": "Input:"},
-		Short:       "Clear text content of an input element",
+		Short:       "Clear an input by snapshot ref",
 		Args:        cobra.ExactArgs(1),
-		Run:   elementAction("clear"),
+		Run:         elementAction("fill", map[string]any{"value": "", "clear": true}),
 	}
 
-	keyCmd := &cobra.Command{
-		Use:         "key <key>",
+	pressCmd := &cobra.Command{
+		Use:         "press <key>",
+		Aliases:     []string{"key"},
 		Annotations: map[string]string{"group": "Input:"},
 		Short:       "Press a key or key combination (e.g., Enter, Control+A)",
 		Args:        cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("press_key", map[string]any{
-				"page": pageID,
-				"key":  args[0],
-			})
+			c := newClient()
+			result, err := c.CallTool("act", pressToolArgs(pageID, args[0]))
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -81,5 +72,60 @@ func init() {
 		},
 	}
 
-	rootCmd.AddCommand(fillCmd, clearCmd, keyCmd)
+	typeCmd := &cobra.Command{
+		Use:         "type <text>",
+		Annotations: map[string]string{"group": "Input:"},
+		Short:       "Type text into the focused element",
+		Args:        cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			pageID, err := resolvePageID(nil)
+			if err != nil {
+				output.Error(err.Error(), 2)
+			}
+			c := newClient()
+			result, err := c.CallTool("act", typeToolArgs(pageID, strings.Join(args, " ")))
+			if err != nil {
+				output.Error(err.Error(), 1)
+			}
+			if jsonOut {
+				output.JSON(result)
+			} else {
+				output.Confirm(result.TextContent())
+			}
+		},
+	}
+
+	rootCmd.AddCommand(fillCmd, clearCmd, pressCmd, typeCmd)
+}
+
+// fillToolArgsFromCommand converts parsed fill flags into the compact act payload.
+func fillToolArgsFromCommand(cmd *cobra.Command, pageID int, ref, value string) map[string]any {
+	noClear, _ := cmd.Flags().GetBool("no-clear")
+	return fillToolArgs(pageID, ref, value, !noClear)
+}
+
+func fillToolArgs(pageID int, ref, value string, clear bool) map[string]any {
+	return map[string]any{
+		"page":  pageID,
+		"kind":  "fill",
+		"ref":   ref,
+		"value": value,
+		"clear": clear,
+	}
+}
+
+func pressToolArgs(pageID int, key string) map[string]any {
+	return map[string]any{
+		"page": pageID,
+		"kind": "press",
+		"key":  key,
+	}
+}
+
+func typeToolArgs(pageID int, text string) map[string]any {
+	return map[string]any{
+		"page": pageID,
+		"kind": "type",
+		"text": text,
+	}
 }

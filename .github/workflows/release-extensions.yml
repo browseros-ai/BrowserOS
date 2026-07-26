@@ -1,0 +1,283 @@
+name: "Release: Extensions (CRX)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version stamped on every selected extension (e.g., 0.0.118)"
+        required: true
+        type: string
+      extension:
+        description: "Extension to release"
+        required: true
+        type: choice
+        options:
+          - all
+          - agent
+          - controller
+          - bugreporter
+          - browserclaw
+        default: "all"
+      branch:
+        description: "Branch override (checkout ref for in-repo builds, clone branch for external repos)"
+        required: false
+        type: string
+        default: ""
+      github_release:
+        description: "Create or update the GitHub release"
+        required: false
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      version:
+        description: "Version stamped on every selected extension (e.g., 0.0.118)"
+        required: true
+        type: string
+      extension:
+        description: "Extension to release: all, agent, controller, bugreporter, or browserclaw"
+        required: false
+        type: string
+        default: "all"
+      branch:
+        description: "Branch override (checkout ref for in-repo builds, clone branch for external repos)"
+        required: false
+        type: string
+        default: ""
+      github_release:
+        description: "Create or update the GitHub release"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GH_TOKEN:
+        required: false
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+      BROWSEROS_AGENT_V2_KEY:
+        required: false
+      BROWSEROS_CONTROLLER_KEY:
+        required: false
+      BUGREPORTER_KEY:
+        required: false
+      BROWSERCLAW_KEY:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      VITE_PUBLIC_SENTRY_DSN:
+        required: false
+      SENTRY_AUTH_TOKEN:
+        required: false
+      SENTRY_ORG:
+        required: false
+      SENTRY_PROJECT:
+        required: false
+      VITE_PUBLIC_POSTHOG_KEY:
+        required: false
+      VITE_PUBLIC_POSTHOG_HOST:
+        required: false
+      VITE_CLAW_POSTHOG_KEY:
+        required: true
+      VITE_CLAW_POSTHOG_HOST:
+        required: false
+
+concurrency:
+  group: release-extensions
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Full history and tags: per-extension release notes diff against the
+          # previous ext-<name>/v* tag and need the whole commit range.
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Verify Chrome is available
+        run: google-chrome --version
+
+      - name: Run extension release
+        working-directory: packages/browseros
+        env:
+          VERSION: ${{ inputs.version }}
+          EXTENSION: ${{ inputs.extension }}
+          BRANCH: ${{ inputs.branch }}
+
+          # Cloning private external extension repos
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+          # Cloudflare R2 (CRX upload)
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+          # Extension signing keys
+          BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
+          BROWSEROS_CONTROLLER_KEY: ${{ secrets.BROWSEROS_CONTROLLER_KEY }}
+          BUGREPORTER_KEY: ${{ secrets.BUGREPORTER_KEY }}
+          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
+
+          # Build-time env consumed by the extension bundles
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          VITE_PUBLIC_POSTHOG_KEY: ${{ secrets.VITE_PUBLIC_POSTHOG_KEY }}
+          VITE_PUBLIC_POSTHOG_HOST: ${{ secrets.VITE_PUBLIC_POSTHOG_HOST }}
+          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
+          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
+          VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
+          NODE_ENV: production
+        # Args are quoted at execution time (never baked into a command
+        # string) so a crafted dispatch input cannot break into this shell.
+        run: |
+          set -euo pipefail
+          args=(--version "$VERSION")
+          if [ "$EXTENSION" != "all" ]; then
+            args+=(--name "$EXTENSION")
+          fi
+          if [ -n "$BRANCH" ]; then
+            args+=(--branch "$BRANCH")
+          fi
+          {
+            echo "### Release command"
+            echo '```bash'
+            echo "browseros ext release ${args[*]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run browseros ext release "${args[@]}"
+
+      - name: Create GitHub releases
+        if: ${{ inputs.github_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          EXTENSION: ${{ inputs.extension }}
+          BRANCH: ${{ inputs.branch }}
+        # One release per selected extension, each in its own ext-<name>/v* tag
+        # namespace (mirrors the agent-server/v* convention in release-server.yml).
+        # Inputs arrive via env and are only ever used quoted, so a crafted
+        # dispatch value cannot break out of this shell; the extension name is
+        # additionally validated against the known set before it feeds a tag.
+        run: |
+          set -euo pipefail
+
+          TARGET_SHA="$(git rev-parse HEAD)"
+
+          if [ "$EXTENSION" = "all" ]; then
+            names=(agent controller bugreporter browserclaw)
+          else
+            names=("$EXTENSION")
+          fi
+
+          for NAME in "${names[@]}"; do
+            case "$NAME" in
+              agent)
+                TITLE="BrowserOS Agent Extension - v$VERSION"
+                KIND="in-repo"
+                SCOPE_PATH="packages/browseros-agent/apps/app"
+                ;;
+              browserclaw)
+                TITLE="BrowserClaw Extension - v$VERSION"
+                KIND="in-repo"
+                SCOPE_PATH="packages/browseros-agent/apps/claw-app"
+                ;;
+              controller)
+                TITLE="BrowserOS Controller Extension - v$VERSION"
+                KIND="external"
+                REPO="browseros-ai/BrowserOS-agent"
+                EXT_BRANCH="${BRANCH:-main}"
+                ;;
+              bugreporter)
+                TITLE="BrowserOS Bug Reporter Extension - v$VERSION"
+                KIND="external"
+                REPO="browseros-ai/BrowserOS-feedback-extension"
+                EXT_BRANCH="${BRANCH:-main}"
+                ;;
+              *)
+                echo "::error::Unknown extension '$NAME'"
+                exit 1
+                ;;
+            esac
+
+            RELEASE_TAG="ext-${NAME}/v${VERSION}"
+            NOTES_FILE="/tmp/notes-${NAME}.md"
+
+            if [ "$KIND" = "in-repo" ]; then
+              # Newest existing ext-<name>/v* tag by version order, excluding the
+              # tag being released so idempotent re-runs still diff from the prior one.
+              PREVIOUS_TAG="$(git tag --list "ext-${NAME}/v*" | { grep -vFx "$RELEASE_TAG" || true; } | sort -V | tail -n1)"
+              CHANGELOG_FILE="/tmp/changelog-${NAME}.md"
+
+              if [ -z "$PREVIOUS_TAG" ]; then
+                echo "Initial ${TITLE} release." > "$CHANGELOG_FILE"
+              else
+                git log "${PREVIOUS_TAG}..${TARGET_SHA}" --pretty=format:"- %s (%h)" -- "$SCOPE_PATH" > "$CHANGELOG_FILE"
+                if [ ! -s "$CHANGELOG_FILE" ]; then
+                  echo "No changes in ${SCOPE_PATH} since ${PREVIOUS_TAG}." > "$CHANGELOG_FILE"
+                fi
+              fi
+
+              node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+                --input "$CHANGELOG_FILE" \
+                --output "$NOTES_FILE" \
+                --max-entries 15 \
+                --previous-tag "$PREVIOUS_TAG" \
+                --release-tag "$RELEASE_TAG"
+            else
+              # Built from another repo, so this monorepo's git log says nothing
+              # about it — record the source instead of inventing a changelog.
+              echo "Built from ${REPO} @ ${EXT_BRANCH}." > "$NOTES_FILE"
+            fi
+
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release edit "$RELEASE_TAG" \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            else
+              gh release create "$RELEASE_TAG" \
+                --target "$TARGET_SHA" \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
+
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$RELEASE_TAG" --draft=false
+            fi
+          done
+
+      - name: Upload CRX artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-release-${{ inputs.extension }}-${{ inputs.version }}
+          path: packages/browseros/build/extensions/dist/*.crx
+          if-no-files-found: warn
+          retention-days: 30

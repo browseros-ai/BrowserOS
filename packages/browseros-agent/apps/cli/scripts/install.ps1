@@ -93,8 +93,10 @@ try {
     }
 
     Move-Item -Force $Exe.FullName (Join-Path $Dir "$Binary.exe")
+    Copy-Item -Force (Join-Path $Dir "$Binary.exe") (Join-Path $Dir "bos.exe")
 
     Write-Host "Installed $Binary.exe to $Dir"
+    Write-Host "Installed bos.exe alias to $Dir"
 } finally {
     if (Test-Path $TmpDir) { Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue }
 }
@@ -112,4 +114,4 @@ if ($Dir -notin $PathEntries) {
 }
 
 Write-Host ""
-Write-Host "Run 'browseros-cli --help' to get started."
+Write-Host "Run 'browseros-cli --help' or 'bos --help' to get started."

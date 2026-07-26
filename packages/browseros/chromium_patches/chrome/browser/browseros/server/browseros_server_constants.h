@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_constants.h b/chrome/browser/browseros/server/browseros_server_constants.h
 new file mode 100644
-index 0000000000000..d2c8229f8c805
+index 0000000000000..8c9469cc988b5
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_constants.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,48 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -15,11 +15,7 @@ index 0000000000000..d2c8229f8c805
 +
 +namespace browseros_server {
 +
-+// Appcast URLs for checking server updates
-+inline constexpr char kDefaultAppcastUrl[] =
-+    "https://cdn.browseros.com/appcast-server.xml";
-+inline constexpr char kAlphaAppcastUrl[] =
-+    "https://cdn.browseros.com/appcast-server.alpha.xml";
++// Appcast URLs are product-specific and live on ManagedServerDescriptor.
 +
 +// Interval between update checks
 +inline constexpr base::TimeDelta kUpdateCheckInterval = base::Minutes(15);

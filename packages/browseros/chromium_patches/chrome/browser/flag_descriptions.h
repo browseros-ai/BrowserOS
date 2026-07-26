@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index d73e9a053eb63..5174931bde25d 100644
+index eb93b7a1529f9..0bc2602ef8dd4 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -284,6 +284,18 @@ inline constexpr char kBookmarksTreeViewName[] =
+@@ -291,6 +291,18 @@ inline constexpr char kBookmarksTreeViewName[] =
  inline constexpr char kBookmarksTreeViewDescription[] =
      "Show the bookmarks side panel in a tree view while in compact mode.";
  
@@ -18,6 +18,6 @@ index d73e9a053eb63..5174931bde25d 100644
 +    "Enables BrowserOS keyboard shortcuts (Cmd+Shift+K, Cmd+Shift+L, "
 +    "Option+A). Disable if these conflict with your keyboard layout.";
 +
- inline constexpr char kBrowsingHistoryActorIntegrationM1Name[] =
-     "Browsing History Actor Integration M1";
- inline constexpr char kBrowsingHistoryActorIntegrationM1Description[] =
+ inline constexpr char kBrowsingHistoryActorIntegrationM2Name[] =
+     "Browsing History Actor Integration M2";
+ inline constexpr char kBrowsingHistoryActorIntegrationM2Description[] =

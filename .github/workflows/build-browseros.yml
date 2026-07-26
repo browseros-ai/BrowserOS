@@ -1,0 +1,387 @@
+name: "Reusable: Chromium Browser Build"
+
+# Reusable WarpBuild job for one Chromium browser build. The Chromium checkout
+# cache is product-independent on purpose: it is captured immediately after
+# gclient sync, before BrowserOS/BrowserClaw patches or build outputs touch it.
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "Target platform: linux, windows, or macos"
+        required: true
+        type: string
+      arch:
+        description: "Target architecture"
+        required: true
+        type: string
+      product:
+        description: "Product to build: browseros or browserclaw"
+        required: true
+        type: string
+      runner:
+        description: "WarpBuild runner label"
+        required: true
+        type: string
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        required: true
+        type: number
+      profile:
+        description: "bos_build profile name"
+        required: false
+        type: string
+        default: release-ci
+      sign:
+        description: "Run signing steps selected by the profile/preset"
+        required: false
+        type: boolean
+        default: false
+      upload:
+        description: "Run upload steps selected by the profile/preset"
+        required: false
+        type: boolean
+        default: false
+      bundle-local-extensions:
+        description: "Prepare Bun and extension env for profiles that set bundle_local_extensions"
+        required: false
+        type: boolean
+        default: false
+      ref:
+        description: "Optional checkout ref override; empty uses the caller ref"
+        required: false
+        type: string
+        default: ""
+      artifact-name:
+        description: "Optional upload artifact name override"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ inputs.product }} ${{ inputs.platform }}-${{ inputs.arch }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Windows runners pipe stdout as cp1252, which crashes the emoji-heavy
+      # build CLI with UnicodeEncodeError; force UTF-8 for python and all
+      # its subprocesses (gclient, hooks). No-op on Linux/macOS.
+      PYTHONUTF8: "1"
+    steps:
+      - name: Validate inputs
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          PRODUCT: ${{ inputs.product }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            linux|windows|macos) ;;
+            *)
+              echo "::error::platform must be one of: linux, windows, macos"
+              exit 1
+              ;;
+          esac
+          case "$PRODUCT" in
+            browseros|browserclaw) ;;
+            *)
+              echo "::error::product must be one of: browseros, browserclaw"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # v8.x.y releases exist but astral-sh publishes no floating `v8`
+      # major tag - `@v8` is unresolvable and kills the job in Set up job.
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup Bun
+        if: inputs['bundle-local-extensions']
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Resolve chromium pin and paths
+        id: pin
+        run: |
+          set -euo pipefail
+          . packages/browseros/CHROMIUM_VERSION
+          version="$MAJOR.$MINOR.$BUILD.$PATCH"
+
+          # Keep the checkout outside the workspace so actions/checkout
+          # never touches it. pwd -W yields a native path on Windows.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            parent="$(cd "$GITHUB_WORKSPACE/.." && pwd -W)"
+          else
+            parent="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          fi
+
+          {
+            echo "version=$version"
+            echo "cache_key=chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-$version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "CHROMIUM_ROOT=$parent/chromium"
+            echo "CHROMIUM_SRC=$parent/chromium/src"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore chromium checkout (WarpCache)
+        if: runner.os != 'Windows'
+        id: warpcache
+        uses: WarpBuilds/cache/restore@v1
+        with:
+          path: ${{ env.CHROMIUM_ROOT }}
+          key: ${{ steps.pin.outputs.cache_key }}
+          restore-keys: |
+            chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-
+
+      - name: Restore chromium checkout (R2)
+        if: runner.os == 'Windows'
+        id: r2cache
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros source cache restore \
+            --key "${{ steps.pin.outputs.cache_key }}" \
+            --root "$CHROMIUM_ROOT"
+
+      - name: Ensure chromium checkout at pinned tag
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros source ensure \
+            --root "$CHROMIUM_ROOT" --step checkout
+
+      - name: Reset chromium tree (clean module)
+        working-directory: packages/browseros
+        run: |
+          set -euo pipefail
+          uv run browseros build --modules clean \
+            --chromium-src "$CHROMIUM_SRC" \
+            --build-type release \
+            --arch "${{ inputs.arch }}" \
+            --product "${{ inputs.product }}"
+
+      - name: Sync chromium dependencies (gclient)
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros source ensure \
+            --root "$CHROMIUM_ROOT" --step sync
+
+      # Save immediately after sync: the tree is pristine (no BrowserOS or
+      # BrowserClaw patches, no out/ dir), which keeps the cache deterministic
+      # and as small as possible.
+      - name: Save chromium checkout (WarpCache)
+        if: runner.os != 'Windows' && steps.warpcache.outputs.cache-hit != 'true'
+        uses: WarpBuilds/cache/save@v1
+        with:
+          path: ${{ env.CHROMIUM_ROOT }}
+          key: ${{ steps.pin.outputs.cache_key }}
+
+      - name: Save chromium checkout (R2)
+        if: runner.os == 'Windows' && steps.r2cache.outputs.cache-hit != 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros source cache save \
+            --key "${{ steps.pin.outputs.cache_key }}" \
+            --root "$CHROMIUM_ROOT"
+
+      - name: Install Linux build deps
+        if: inputs.platform == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # libfuse2: appimagetool is itself an AppImage and needs FUSE
+          sudo apt-get install -y libfuse2
+          "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
+
+      - name: Import macOS signing certificate
+        if: inputs.sign && inputs.platform == 'macos'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${MACOS_CERTIFICATE_P12:-}" ] || missing+=(MACOS_CERTIFICATE_P12)
+          [ -n "${MACOS_CERTIFICATE_PWD:-}" ] || missing+=(MACOS_CERTIFICATE_PWD)
+          [ -n "${MACOS_KEYCHAIN_PASSWORD:-}" ] || missing+=(MACOS_KEYCHAIN_PASSWORD)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::macOS signing requested, but missing required secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          cert_path="$RUNNER_TEMP/browseros-signing-cert.p12"
+          keychain_path="$RUNNER_TEMP/browseros-ci-signing.keychain-db"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$cert_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$cert_path" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+      - name: Install SSL.com CodeSignTool
+        if: inputs.sign && inputs.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Canonical source: the app.esigner.com file endpoint rejects the
+          # runner's Invoke-WebRequest (run 28835010397, OperationStopped).
+          $uri = 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows'
+          Invoke-WebRequest -Uri $uri -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+          $tool = Get-ChildItem -Path $extractRoot -Filter CodeSignTool.bat -Recurse | Select-Object -First 1
+          if (-not $tool) {
+            throw "CodeSignTool.bat was not found after extracting $zipPath"
+          }
+          "CODE_SIGN_TOOL_PATH=$($tool.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Export bundled extension local-build env
+        if: inputs['bundle-local-extensions']
+        env:
+          BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
+          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          VITE_PUBLIC_POSTHOG_KEY: ${{ secrets.VITE_PUBLIC_POSTHOG_KEY }}
+          VITE_PUBLIC_POSTHOG_HOST: ${{ secrets.VITE_PUBLIC_POSTHOG_HOST }}
+          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
+          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
+          VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
+          GRAPHQL_SCHEMA_PATH: apps/app/schema/graphql.schema.json
+          NODE_ENV: production
+        run: |
+          set -euo pipefail
+          write_env() {
+            local name="$1"
+            local value="${!name:-}"
+            local delimiter
+            delimiter="${name}_$(openssl rand -hex 8)"
+            {
+              echo "$name<<$delimiter"
+              printf '%s\n' "$value"
+              echo "$delimiter"
+            } >> "$GITHUB_ENV"
+          }
+
+          write_env BROWSEROS_AGENT_V2_KEY
+          write_env BROWSERCLAW_KEY
+          write_env POSTHOG_API_KEY
+          write_env VITE_PUBLIC_SENTRY_DSN
+          write_env SENTRY_AUTH_TOKEN
+          write_env SENTRY_ORG
+          write_env SENTRY_PROJECT
+          write_env VITE_PUBLIC_POSTHOG_KEY
+          write_env VITE_PUBLIC_POSTHOG_HOST
+          write_env VITE_CLAW_POSTHOG_KEY
+          write_env VITE_CLAW_POSTHOG_HOST
+          write_env VITE_PUBLIC_BROWSEROS_API
+          write_env GRAPHQL_SCHEMA_PATH
+          write_env NODE_ENV
+
+      - name: Build ${{ inputs.product }}
+        working-directory: packages/browseros
+        env:
+          # download_resources pulls product server bundles from R2.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+          # macOS signing and notarization.
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+
+          # Windows signing via SSL.com CodeSignTool.
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+
+          # Sparkle/WinSparkle artifact signatures.
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          sign_flag="--no-sign"
+          upload_flag="--no-upload"
+          if [ "${{ inputs.sign }}" = "true" ]; then
+            sign_flag="--sign"
+          fi
+          if [ "${{ inputs.upload }}" = "true" ]; then
+            upload_flag="--upload"
+          fi
+
+          uv run browseros build \
+            --profile "${{ inputs.profile }}" \
+            --product "${{ inputs.product }}" \
+            --arch "${{ inputs.arch }}" \
+            "$sign_flag" \
+            "$upload_flag" \
+            --chromium-src "$CHROMIUM_SRC"
+
+      - name: Report disk usage
+        if: always()
+        run: df -h || true
+
+      - name: Resolve artifact filename prefix
+        id: artifact_prefix
+        if: always()
+        env:
+          PRODUCT: ${{ inputs.product }}
+        run: |
+          set -euo pipefail
+          case "$PRODUCT" in
+            browseros)
+              echo "value=BrowserOS" >> "$GITHUB_OUTPUT"
+              ;;
+            browserclaw)
+              echo "value=BrowserClaw" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::product must be one of: browseros, browserclaw"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name || format('{0}-{1}-{2}-{3}', inputs.product, inputs.profile, inputs.platform, inputs.arch) }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: |
+            packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*.dmg
+            packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*.AppImage
+            packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*.deb
+            packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*_installer.exe
+            packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*_installer.zip

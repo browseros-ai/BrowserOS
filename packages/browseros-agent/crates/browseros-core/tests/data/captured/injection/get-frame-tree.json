@@ -1,0 +1,21 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "5AAC10CE9CA9998DB26C4B1043354B57",
+      "loaderId": "E804706766412F2474B1BC091698D5D9",
+      "url": "http://127.0.0.1:17243/injection.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    }
+  }
+}

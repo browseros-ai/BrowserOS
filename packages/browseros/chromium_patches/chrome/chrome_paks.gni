@@ -1,0 +1,20 @@
+diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
+index ffc4930414158..0cca4bb52b60e 100644
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -209,6 +209,7 @@ template("chrome_extra_paks") {
+         "$root_gen_dir/chrome/app_service_internals_resources.pak",
+         "$root_gen_dir/chrome/autofill_ml_internals_resources.pak",
+         "$root_gen_dir/chrome/bookmarks_resources.pak",
++        "$root_gen_dir/chrome/browseros_onboarding_resources.pak",
+         "$root_gen_dir/chrome/browser/actor/resources/actor_browser_resources.pak",
+         "$root_gen_dir/chrome/browser/actor/resources/actor_common_resources.pak",
+         "$root_gen_dir/chrome/certificate_manager_resources.pak",
+@@ -262,6 +263,7 @@ template("chrome_extra_paks") {
+       ]
+       deps += [
+         "//chrome/browser/actor/resources:browser_resources",
++        "//chrome/browser/browseros/onboarding:resources",
+         "//chrome/browser/resources:dev_ui_paks",
+         "//chrome/browser/resources/actor_overlay:resources",
+         "//chrome/browser/resources/autofill_ml_internals:resources",

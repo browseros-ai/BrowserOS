@@ -1,8 +1,8 @@
 diff --git a/extensions/browser/process_manager.h b/extensions/browser/process_manager.h
-index e467d7d6245c3..ba83e0a868ac1 100644
+index 4b3622c6bf83e..e6a892569bec5 100644
 --- a/extensions/browser/process_manager.h
 +++ b/extensions/browser/process_manager.h
-@@ -439,6 +439,11 @@ class ProcessManager : public KeyedService,
+@@ -427,6 +427,11 @@ class ProcessManager : public KeyedService,
    // A map of the active service worker keepalives.
    ServiceWorkerKeepaliveDataMap service_worker_keepalives_;
  

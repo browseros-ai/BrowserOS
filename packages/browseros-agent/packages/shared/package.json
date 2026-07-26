@@ -6,7 +6,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^3.24.2"
+    "jsonc-parser": "^3.3.1",
+    "zod": "^3.25.76"
   },
   "exports": {
     "./constants/exit-codes": {
@@ -33,6 +34,18 @@
       "types": "./src/constants/paths.ts",
       "import": "./src/constants/paths.ts"
     },
+    "./env/registry": {
+      "types": "./src/env/registry.ts",
+      "default": "./src/env/registry.ts"
+    },
+    "./env/load": {
+      "types": "./src/env/load.ts",
+      "default": "./src/env/load.ts"
+    },
+    "./env/generate": {
+      "types": "./src/env/generate.ts",
+      "default": "./src/env/generate.ts"
+    },
     "./types/logger": {
       "types": "./src/types/logger.ts",
       "import": "./src/types/logger.ts"
@@ -53,6 +66,14 @@
       "types": "./src/schemas/browser-context.ts",
       "import": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
+    },
+    "./mcp/claude-code-transport-tag": {
+      "types": "./src/mcp/claude-code-transport-tag.ts",
+      "default": "./src/mcp/claude-code-transport-tag.ts"
+    },
+    "./schemas/sidecar-config": {
+      "types": "./src/schemas/sidecar-config.ts",
+      "default": "./src/schemas/sidecar-config.ts"
     },
     "./sentry/sanitize": {
       "types": "./src/sentry/sanitize.ts",

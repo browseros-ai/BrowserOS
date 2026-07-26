@@ -1,15 +1,16 @@
 diff --git a/chrome/utility/importer/browseros/chrome_password_importer.h b/chrome/utility/importer/browseros/chrome_password_importer.h
 new file mode 100644
-index 0000000000000..e0cb4ec631e39
+index 0000000000000..7111af4e124b5
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_password_importer.h
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,25 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome password importer interface
 +
 +#ifndef CHROME_UTILITY_IMPORTER_BROWSEROS_CHROME_PASSWORD_IMPORTER_H_
 +#define CHROME_UTILITY_IMPORTER_BROWSEROS_CHROME_PASSWORD_IMPORTER_H_
 +
++#include <string>
 +#include <vector>
 +
 +#include "base/files/file_path.h"
@@ -22,7 +23,8 @@ index 0000000000000..e0cb4ec631e39
 +// Returns a vector of ImportedPasswordForm structs.
 +// On failure, returns an empty vector.
 +std::vector<user_data_importer::ImportedPasswordForm> ImportChromePasswords(
-+    const base::FilePath& profile_path);
++    const base::FilePath& profile_path,
++    const std::string& encryption_key);
 +
 +}  // namespace browseros_importer
 +

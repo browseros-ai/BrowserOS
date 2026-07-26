@@ -21,23 +21,41 @@ import { logger } from '../../logger'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
+import {
+  createMockBrowserOSLanguageModel,
+  shouldUseMockBrowserOSLLM,
+} from './mock-language-model'
 import type { ResolvedLLMConfig } from './types'
 
 type ProviderFactory = (config: ResolvedLLMConfig) => LanguageModel
 
+// This is the SECOND provider pipeline in the repo (the first being
+// `agent/provider-factory.ts`, used by chat). This one drives
+// `/test-provider` and `/refine-prompt`. Any baseUrl-related fix must
+// land in BOTH pipelines or the test button silently ignores what
+// the chat path honors. See PR #1905 for the sibling change.
 function createAnthropicModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
-  return createAnthropic({ apiKey: config.apiKey })(config.model)
+  return createAnthropic({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })(config.model)
 }
 
 function createOpenAIModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
-  return createOpenAI({ apiKey: config.apiKey })(config.model)
+  return createOpenAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })(config.model)
 }
 
 function createGoogleModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
-  return createGoogleGenerativeAI({ apiKey: config.apiKey })(config.model)
+  return createGoogleGenerativeAI({
+    apiKey: config.apiKey,
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
+  })(config.model)
 }
 
 function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
@@ -46,16 +64,23 @@ function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
 }
 
 function createAzureModel(config: ResolvedLLMConfig): LanguageModel {
-  if (!config.apiKey || !config.resourceName) {
-    throw new Error('Azure provider requires apiKey and resourceName')
+  // baseUrl and resourceName are mutually exclusive per the
+  // @ai-sdk/azure contract; the SDK ignores resourceName when
+  // baseURL is set. Match provider-factory.ts's shape.
+  if (!config.apiKey || (!config.resourceName && !config.baseUrl)) {
+    throw new Error(
+      'Azure provider requires apiKey and either resourceName or baseUrl',
+    )
   }
   return createAzure({
-    resourceName: config.resourceName,
     apiKey: config.apiKey,
+    ...(config.resourceName && { resourceName: config.resourceName }),
+    ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
 }
 
@@ -179,8 +204,7 @@ function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
 }
 
 function createChatGPTProModel(config: ResolvedLLMConfig): LanguageModel {
-  if (!config.apiKey)
-    throw new Error('ChatGPT Plus/Pro requires OAuth authentication')
+  if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
   return createOpenAI({
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
@@ -206,6 +230,9 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {
+  if (shouldUseMockBrowserOSLLM(config)) {
+    return createMockBrowserOSLanguageModel()
+  }
   const factory = PROVIDER_FACTORIES[config.provider]
   if (!factory) throw new Error(`Unknown provider: ${config.provider}`)
   return factory(config)

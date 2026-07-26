@@ -1,8 +1,8 @@
 diff --git a/chrome/app/app-Info.plist b/chrome/app/app-Info.plist
-index 9190c5ef6c092..cf0106b8ba53e 100644
+index 6fada0a2b1a1f..e11afaf69ca40 100644
 --- a/chrome/app/app-Info.plist
 +++ b/chrome/app/app-Info.plist
-@@ -409,5 +409,17 @@
+@@ -725,5 +725,17 @@
  	<array>
  		<string>_googlecast._tcp</string>
  	</array>
@@ -17,6 +17,6 @@ index 9190c5ef6c092..cf0106b8ba53e 100644
 +  <key>SUAutomaticallyUpdate</key>
 +  <true/>
 +	<key>CrProductDirName</key>
-+	<string>BrowserOS</string>
++	<string>${BROWSEROS_PRODUCT_DIR_NAME}</string>
  </dict>
  </plist>

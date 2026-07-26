@@ -1,11 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
   detectLineEnding,
   executeWithMetrics,
   normalizeToLF,
+  resolveWorkspacePath,
   restoreLineEndings,
   stripBom,
   toModelOutput,
@@ -77,15 +77,13 @@ export function createEditTool(cwd: string) {
     description:
       'Make a targeted edit to a file by replacing an exact string match. The old_string must match exactly one location in the file. If exact match fails, a whitespace-tolerant match is attempted.',
     inputSchema: z.object({
-      path: z
-        .string()
-        .describe('File path (relative to working directory or absolute)'),
+      path: z.string().describe('File path relative to the selected workspace'),
       old_string: z.string().describe('Exact text to find in the file'),
       new_string: z.string().describe('Replacement text'),
     }),
     execute: (params) =>
       executeWithMetrics(TOOL_NAME, async () => {
-        const resolved = resolve(cwd, params.path)
+        const resolved = await resolveWorkspacePath(cwd, params.path)
         const raw = await readFile(resolved, 'utf-8')
 
         const { content: noBom, hasBom } = stripBom(raw)

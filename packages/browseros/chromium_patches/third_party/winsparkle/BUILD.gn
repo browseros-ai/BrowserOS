@@ -1,0 +1,49 @@
+diff --git a/third_party/winsparkle/BUILD.gn b/third_party/winsparkle/BUILD.gn
+new file mode 100644
+index 0000000000000..3aa632868b181
+--- /dev/null
++++ b/third_party/winsparkle/BUILD.gn
+@@ -0,0 +1,43 @@
++# Copyright 2024 BrowserOS Authors. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++assert(is_win)
++
++# WinSparkle release zip layout: Release/ is x86, x64/Release/ is x64,
++# ARM64/Release/ is arm64.
++if (target_cpu == "x64") {
++  _winsparkle_bin_dir = "x64/Release"
++} else if (target_cpu == "arm64") {
++  _winsparkle_bin_dir = "ARM64/Release"
++} else {
++  _winsparkle_bin_dir = "Release"
++}
++
++# winsparkle.h injects /DEFAULTLIB:WinSparkle.lib via #pragma comment(lib)
++# into every object that includes it, so lib_dirs must reach every binary
++# that links such objects (tests included) — hence all_dependent_configs
++# on the group below.
++#
++# The DLL is delay-loaded on purpose: child processes never map it, and the
++# browser process loads it explicitly by absolute path from the version dir
++# (see chrome/browser/win/winsparkle_glue.cc). A missing DLL disables the
++# updater instead of failing process startup.
++config("winsparkle_link") {
++  lib_dirs = [ _winsparkle_bin_dir ]
++  libs = [ "WinSparkle.lib" ]
++  ldflags = [ "/DELAYLOAD:WinSparkle.dll" ]
++}
++
++# Stage WinSparkle.dll next to the build outputs. The installer picks it up
++# from there into the version dir via chrome/installer/mini_installer/
++# chrome.release.
++copy("winsparkle_dll") {
++  sources = [ "$_winsparkle_bin_dir/WinSparkle.dll" ]
++  outputs = [ "$root_out_dir/WinSparkle.dll" ]
++}
++
++group("winsparkle") {
++  all_dependent_configs = [ ":winsparkle_link" ]
++  data_deps = [ ":winsparkle_dll" ]
++}

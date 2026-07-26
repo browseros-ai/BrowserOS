@@ -1,9 +1,9 @@
 diff --git a/extensions/browser/BUILD.gn b/extensions/browser/BUILD.gn
-index fb3bd346b47e2..34bcc4e6dd27d 100644
+index 69303ae80f7bb..027f2bb510f12 100644
 --- a/extensions/browser/BUILD.gn
 +++ b/extensions/browser/BUILD.gn
-@@ -546,6 +546,7 @@ source_set("browser_sources") {
-   deps = [
+@@ -591,6 +591,7 @@ source_set("browser_sources") {
+     ":cws_item_service_proto",
      "//base",
      "//base:i18n",
 +    "//chrome/browser/browseros/core",

@@ -9,7 +9,31 @@ import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { logger } from '../../logger'
 import type { OAuthCallbackServer } from './callback-server'
 import { getOAuthProvider, type OAuthProviderConfig } from './providers'
-import type { OAuthTokenStore, StoredOAuthTokens } from './token-store'
+
+export interface StoredOAuthTokens {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  email?: string
+  accountId?: string
+}
+
+export interface OAuthStatus {
+  authenticated: boolean
+  email?: string
+  provider: string
+}
+
+export interface OAuthTokenStore {
+  upsertTokens(
+    browserosId: string,
+    provider: string,
+    tokens: StoredOAuthTokens,
+  ): void
+  getTokens(browserosId: string, provider: string): StoredOAuthTokens | null
+  deleteTokens(browserosId: string, provider: string): void
+  getStatus(browserosId: string, provider: string): OAuthStatus
+}
 
 interface PendingOAuthFlow {
   provider: string
@@ -62,7 +86,7 @@ export class OAuthTokenManager {
     private readonly callbackServer: OAuthCallbackServer,
   ) {}
 
-  // --- PKCE flow (ChatGPT Plus/Pro) ---
+  // --- PKCE flow (ChatGPT) ---
 
   async generateAuthorizationUrl(
     providerId: string,
@@ -455,7 +479,7 @@ export class OAuthTokenManager {
   }
 
   private stopCallbackIfIdle(): void {
-    const hasPkceFlows = [...this.pendingFlows.values()].some(() => true)
+    const hasPkceFlows = this.pendingFlows.size > 0
     if (!hasPkceFlows) {
       this.callbackServer.stop()
     }

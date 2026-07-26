@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.h b/chrome/browser/mac/sparkle_glue.h
 new file mode 100644
-index 0000000000000..868ffa7c1bfd0
+index 0000000000000..ad8ef816c7cd4
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,90 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -52,6 +52,12 @@ index 0000000000000..868ffa7c1bfd0
 +
 +// Main interface for Sparkle integration.
 +// Thread-safety: All methods must be called on the main thread.
++//
++// Version comparison is entirely plist-driven: Sparkle compares the
++// appcast's sparkle:version against the outer bundle's CFBundleVersion,
++// which the release pipeline stamps with "10000.<BrowserOS version>"
++// before signing (Context.get_sparkle_version in the BrowserOS repo).
++// Windows mirrors the same string via winsparkle_glue.cc.
 +@interface SparkleGlue : NSObject
 +
 ++ (nullable instancetype)sharedSparkleGlue;

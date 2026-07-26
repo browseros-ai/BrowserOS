@@ -166,12 +166,16 @@ export interface ActivateWindowParams {
   windowId: WindowID
 }
 
-export interface ShowWindowParams {
+export interface SetWindowVisibilityParams {
   windowId: WindowID
+  visible: boolean
+  activate?: boolean
 }
 
-export interface HideWindowParams {
-  windowId: WindowID
+export interface SetWindowVisibilityResult {
+  window: WindowInfo
+  replaced: boolean
+  previousWindowId: WindowID
 }
 
 export interface GetTabsParams {
@@ -206,7 +210,6 @@ export interface CreateTabParams {
   index?: number
   background?: boolean
   pinned?: boolean
-  hidden?: boolean
   browserContextId?: BrowserContextID
 }
 
@@ -271,15 +274,6 @@ export interface ShowTabParams {
 }
 
 export interface ShowTabResult {
-  tab: TabInfo
-}
-
-export interface HideTabParams {
-  targetId?: TargetID
-  tabId?: TabID
-}
-
-export interface HideTabResult {
   tab: TabInfo
 }
 

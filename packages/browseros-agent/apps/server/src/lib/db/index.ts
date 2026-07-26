@@ -3,31 +3,39 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { Database } from 'bun:sqlite'
+import {
+  type BrowserOsDatabase,
+  type DbHandle,
+  type OpenDbOptions,
+  openBrowserOsDatabase,
+} from './client'
 
-import { initSchema } from './schema'
+let handle: DbHandle | null = null
 
-let db: Database | null = null
-
-export function initializeDb(dbPath: string): Database {
-  if (!db) {
-    db = new Database(dbPath)
-    db.exec('PRAGMA journal_mode = WAL')
-    initSchema(db)
+/** Initializes the process-wide BrowserOS database handle used by server services. */
+export function initializeDb(options: OpenDbOptions): DbHandle {
+  if (!handle) {
+    handle = openBrowserOsDatabase(options)
   }
-  return db
+  return handle
 }
 
-export function getDb(): Database {
-  if (!db) {
+export function getDbHandle(): DbHandle {
+  if (!handle) {
     throw new Error('Database not initialized. Call initializeDb() first.')
   }
-  return db
+  return handle
+}
+
+export function getDb(): BrowserOsDatabase {
+  return getDbHandle().db
 }
 
 export function closeDb(): void {
-  if (db) {
-    db.close()
-    db = null
+  if (handle) {
+    handle.sqlite.close()
+    handle = null
   }
 }
+
+export type { BrowserOsDatabase, DbHandle, OpenDbOptions }

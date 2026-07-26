@@ -4,53 +4,61 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import type { Browser } from '../../../browser/browser'
-import type { ToolRegistry } from '../../../tools/tool-registry'
-import {
-  type KlavisProxyHandle,
-  registerKlavisTools,
-} from '../klavis/strata-proxy'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserMcpServer } from '@browseros/browser-mcp/mcp-server'
+import { logger } from '../../../lib/logger'
+import { metrics } from '../../../lib/metrics'
+import { shouldLogToolRegistration } from '../../../tools/registration-log-sampling'
+import type { ConnectorToolScope, KlavisService } from '../klavis'
+import type { ServerActivity } from '../server-activity'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
-import { registerTools } from './register-mcp'
 
 export interface McpServiceDeps {
   version: string
-  registry: ToolRegistry
-  browser: Browser
-  executionDir: string
-  resourcesDir: string
-  klavisProxy?: KlavisProxyHandle | null
+  browserSession: BrowserSession
+  klavis?: KlavisService
+  connectorScope?: ConnectorToolScope
+  defaultWindowId?: number
+  defaultTabGroupId?: string
+  includeStructuredContent?: boolean
+  activity?: ServerActivity
 }
 
-export function createMcpServer(deps: McpServiceDeps): McpServer {
-  const server = new McpServer(
-    {
-      name: 'browseros_mcp',
-      title: 'BrowserOS MCP server',
-      version: deps.version,
-    },
-    { capabilities: { logging: {} }, instructions: MCP_INSTRUCTIONS },
-  )
-
-  server.server.setRequestHandler(SetLevelRequestSchema, () => {
-    return {}
+/** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
+export function createMcpServer(deps: McpServiceDeps) {
+  const selectedServerNames = deps.connectorScope?.selectedServerNames ?? []
+  logger.debug('Creating BrowserOS MCP server', {
+    version: deps.version,
+    selectedServerNames,
+    selectedServerCount: selectedServerNames.length,
+    defaultWindowId: deps.defaultWindowId,
+    defaultTabGroupId: deps.defaultTabGroupId,
   })
 
-  // Register browser tools
-  registerTools(server, deps.registry, {
-    browser: deps.browser,
-    directories: {
-      workingDir: deps.executionDir,
-      resourcesDir: deps.resourcesDir,
+  const server = createBrowserMcpServer({
+    name: 'browseros_mcp',
+    title: 'BrowserOS MCP server',
+    version: deps.version,
+    browserSession: deps.browserSession,
+    defaultWindowId: deps.defaultWindowId,
+    defaultTabGroupId: deps.defaultTabGroupId,
+    instructions: MCP_INSTRUCTIONS,
+    registration: {
+      includeStructuredContent: deps.includeStructuredContent ?? false,
+      logger,
+      onToolExecutionStart: () => deps.activity?.beginMcpToolExecution(),
+      onToolExecutionEnd: () => deps.activity?.endMcpToolExecution(),
+      onToolExecuted: (event) => metrics.log('tool_executed', event),
+      shouldLogToolRegistration,
+      source: 'mcp',
     },
   })
 
-  // Register Klavis proxy tools (if connected)
-  if (deps.klavisProxy) {
-    registerKlavisTools(server, deps.klavisProxy)
-  }
+  deps.klavis?.registerMcpTools(server, deps.connectorScope)
+  logger.debug('BrowserOS MCP server created', {
+    selectedServerNames,
+    selectedServerCount: selectedServerNames.length,
+  })
 
   return server
 }

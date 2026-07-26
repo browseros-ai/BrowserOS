@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
-index 539677d6bb9ac..bc32fcec8788c 100644
+index 2523e8b9aa62c..1aa3248eee572 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 @@ -4,6 +4,7 @@
@@ -10,7 +10,7 @@ index 539677d6bb9ac..bc32fcec8788c 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -212,4 +213,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+@@ -211,4 +212,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
        ExtensionSidePanelCoordinator::GetPanelType());
  }
  
@@ -46,7 +46,7 @@ index 539677d6bb9ac..bc32fcec8788c 100644
 +    // Check if it's this extension's contextual panel that's showing.
 +    tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
 +    SidePanelRegistry* contextual_registry =
-+        tab->GetTabFeatures()->side_panel_registry();
++        SidePanelRegistry::From(tab);
 +    bool is_active = IsKeyActiveInRegistry(contextual_registry, extension_key);
 +    LOG(INFO) << "browseros: contextual panel is_active=" << is_active;
 +    return is_active;
@@ -56,7 +56,7 @@ index 539677d6bb9ac..bc32fcec8788c 100644
 +  // (it will show when the tab becomes active).
 +  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
 +  SidePanelRegistry* contextual_registry =
-+      tab->GetTabFeatures()->side_panel_registry();
++      SidePanelRegistry::From(tab);
 +  bool is_active = IsKeyActiveInRegistry(contextual_registry, extension_key);
 +  LOG(INFO) << "browseros: inactive tab contextual panel is_active=" << is_active;
 +  return is_active;
@@ -77,7 +77,7 @@ index 539677d6bb9ac..bc32fcec8788c 100644
 +      browser_window.GetActiveTabInterface()->GetContents();
 +  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(&web_contents);
 +  SidePanelRegistry* contextual_registry =
-+      tab->GetTabFeatures()->side_panel_registry();
++      SidePanelRegistry::From(tab);
 +
 +  SidePanelUI* side_panel_ui = browser_window.GetFeatures().side_panel_ui();
 +  bool is_active_tab = (&web_contents == active_web_contents);

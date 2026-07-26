@@ -2,26 +2,11 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * In-process cache for Klavis Strata `createStrata` responses.
- *
- * Conversation creation in `/chat` was blocking on a Worker-proxied
- * `klavisClient.createStrata` round-trip every time the user had any
- * managed Klavis app connected. This cache stores the (immutable) JSON
- * metadata returned by `createStrata` so that subsequent chats with the
- * same `(browserosId, enabled-server-set)` skip the round-trip entirely.
- *
- * It does NOT cache live MCP client connections — only URL/id metadata.
- * Per-session MCP clients continue to be opened and closed by
- * `AiSdkAgent.create` / `dispose` exactly as before, which makes the
- * cache safe across concurrent chats by construction.
  */
 
-import type {
-  KlavisClient,
-  StrataCreateResponse,
-} from '../../../lib/clients/klavis/klavis-client'
 import { logger } from '../../../lib/logger'
+import type { KlavisClient } from './client'
+import type { StrataCreateResponse } from './types'
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000
 
@@ -38,13 +23,12 @@ function normalizeServers(servers: readonly string[]): string {
 }
 
 function keyOf(browserosId: string, normalized: string): string {
-  // xxhash64 → 16 hex chars, fixed width. Birthday-bound collision risk
-  // for our scale (<10k entries) is ~5e-15; we additionally verify
-  // serverKey on read so collisions cannot affect correctness.
+  // The serverKey check below makes compact hash-key collisions harmless.
   const hash = Bun.hash(normalized).toString(16).padStart(16, '0')
   return `${browserosId}|${hash}`
 }
 
+/** Caches immutable Strata metadata, never live MCP client sessions. */
 export class KlavisStrataCache {
   private entries = new Map<string, Promise<CacheEntry>>()
 
@@ -69,8 +53,6 @@ export class KlavisStrataCache {
         logger.debug('Klavis strata cache hit', { key })
         return this.toResponse(resolved)
       }
-      // Stale/collision/rejected — evict, but only if we're the rightful
-      // evictor (a racing caller may have already replaced this slot).
       if (this.entries.get(key) === existing) {
         this.entries.delete(key)
       }
@@ -86,9 +68,6 @@ export class KlavisStrataCache {
     try {
       return this.toResponse(await inflight)
     } catch (err) {
-      // Identity-check: only drop OUR entry. A racing invalidate() may have
-      // already removed it, or a racing miss may have inserted a new one
-      // that we must not clobber.
       if (this.entries.get(key) === inflight) {
         this.entries.delete(key)
       }
@@ -141,5 +120,3 @@ export class KlavisStrataCache {
     }
   }
 }
-
-export const klavisStrataCache = new KlavisStrataCache()

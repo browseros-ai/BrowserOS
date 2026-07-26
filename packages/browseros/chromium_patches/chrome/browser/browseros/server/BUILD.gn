@@ -1,26 +1,43 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..85e9eaaba051c
+index 0000000000000000000000000000000000000000..5fadaa41de9c2259e4d0cd35a08b758f694ba703
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,183 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
 +
 +import("//build/config/chrome_build.gni")
++import("//chrome/browser/browseros/buildflags.gni")
 +
-+# Validate that required resources exist at build time
-+# GN will fail at generation time if resources/bin/browseros_server is missing
-+_browseros_binary_name = "browseros_server"
++_browseros_server_resources = "//chrome/browser/browseros/server/resources"
++_browserclaw_server_resources =
++    "//chrome/browser/browseros/claw_server/resources"
++
++_browseros_server_binary_name = "browseros_server"
++_browserclaw_server_binary_name = "browseros-claw-server"
++
 +if (is_win) {
-+  _browseros_binary_name += ".exe"
++  _browseros_server_binary_name += ".exe"
++  _browserclaw_server_binary_name += ".exe"
 +}
 +
-+action("validate_browseros_resources") {
++action("validate_browseros_server_resources") {
 +  script = "validate_resources.py"
-+  inputs = [ "resources/bin/${_browseros_binary_name}" ]
-+  outputs = [ "$target_gen_dir/browseros_resources_validated" ]
++  args = [ "bin/${_browseros_server_binary_name}" ]
++  inputs =
++      [ "${_browseros_server_resources}/bin/${_browseros_server_binary_name}" ]
++  outputs = [ "$target_gen_dir/browseros_server_resources_validated" ]
++}
++
++action("validate_browserclaw_server_resources") {
++  script = "validate_resources.py"
++  args = [ "bin/${_browserclaw_server_binary_name}" ]
++  inputs = [
++    "${_browserclaw_server_resources}/bin/${_browserclaw_server_binary_name}",
++  ]
++  outputs = [ "$target_gen_dir/browserclaw_server_resources_validated" ]
 +}
 +
 +source_set("server") {
@@ -46,15 +63,23 @@ index 0000000000000..85e9eaaba051c
 +    "process_controller.h",
 +    "process_controller_impl.cc",
 +    "process_controller_impl.h",
++    "server_process_launcher.h",
 +    "server_state_store.h",
 +    "server_state_store_impl.cc",
 +    "server_state_store_impl.h",
 +    "server_updater.h",
 +  ]
 +
++  if (is_win) {
++    sources += [ "server_process_launcher_win.cc" ]
++  } else {
++    sources += [ "server_process_launcher.cc" ]
++  }
++
 +  deps = [
 +    "//base",
 +    "//chrome/browser:browser_process",
++    "//chrome/browser/browseros/core:product",
 +    "//chrome/browser/browseros/metrics",
 +    "//chrome/common",
 +    "//components/prefs",
@@ -90,8 +115,11 @@ index 0000000000000..85e9eaaba051c
 +  testonly = true
 +  sources = [
 +    "browseros_appcast_parser_unittest.cc",
++    "browseros_server_config_unittest.cc",
 +    "browseros_server_manager_unittest.cc",
++    "browseros_server_proxy_unittest.cc",
 +    "browseros_server_utils_unittest.cc",
++    "server_process_launcher_unittest.cc",
 +  ]
 +
 +  deps = [
@@ -99,8 +127,11 @@ index 0000000000000..85e9eaaba051c
 +    ":test_support",
 +    "//base",
 +    "//base/test:test_support",
++    "//chrome/browser/browseros:buildflags",
++    "//chrome/browser/browseros/core",
 +    "//components/prefs:test_support",
 +    "//net",
++    "//net:test_support",
 +    "//testing/gmock",
 +    "//testing/gtest",
 +  ]
@@ -110,28 +141,49 @@ index 0000000000000..85e9eaaba051c
 +  import("//build/config/apple/symbols.gni")
 +  import("//build/config/mac/mac_sdk.gni")
 +
-+  # Bundle data for macOS - recursively packages resources/ to Resources/BrowserOSServer/default/
-+  bundle_data("browseros_resources_bundle") {
-+    sources = [ "resources" ]
-+    outputs = [ "{{bundle_resources_dir}}/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
-+    # deps = [ ":validate_browseros_resources" ]
++  bundle_data("browseros_server_resources_bundle") {
++    sources = [ _browseros_server_resources ]
++    outputs = [
++      "{{bundle_resources_dir}}/BrowserOSServer/default/{{source_file_part}}",
++    ]
++  }
++
++  bundle_data("browserclaw_server_resources_bundle") {
++    sources = [ _browserclaw_server_resources ]
++    outputs = [
++      "{{bundle_resources_dir}}/BrowserClawServer/default/{{source_file_part}}",
++    ]
 +  }
 +} else {
-+  # Copy for Windows/Linux - recursively packages resources/ to <exe_dir>/BrowserOSServer/default/
-+  copy("browseros_resources_copy") {
-+    sources = [ "resources" ]
++  copy("browseros_server_resources_copy") {
++    sources = [ _browseros_server_resources ]
 +    outputs = [ "$root_out_dir/BrowserOSServer/default/{{source_file_part}}" ]
-+    # TODO: Re-enable validation when resources/bin/browseros_server is available
-+    # deps = [ ":validate_browseros_resources" ]
++  }
++
++  copy("browserclaw_server_resources_copy") {
++    sources = [ _browserclaw_server_resources ]
++    outputs = [ "$root_out_dir/BrowserClawServer/default/{{source_file_part}}" ]
 +  }
 +}
 +
-+# Group for all BrowserOS server resources
 +group("browseros_server_resources") {
++  deps = []
++
 +  if (is_mac) {
-+    deps = [ ":browseros_resources_bundle" ]
++    if (browseros_product_browseros || browseros_package_all_server_resources) {
++      deps += [ ":browseros_server_resources_bundle" ]
++    }
++    if (browseros_product_browserclaw ||
++        browseros_package_all_server_resources) {
++      deps += [ ":browserclaw_server_resources_bundle" ]
++    }
 +  } else {
-+    deps = [ ":browseros_resources_copy" ]
++    if (browseros_product_browseros || browseros_package_all_server_resources) {
++      deps += [ ":browseros_server_resources_copy" ]
++    }
++    if (browseros_product_browserclaw ||
++        browseros_package_all_server_resources) {
++      deps += [ ":browserclaw_server_resources_copy" ]
++    }
 +  }
 +}

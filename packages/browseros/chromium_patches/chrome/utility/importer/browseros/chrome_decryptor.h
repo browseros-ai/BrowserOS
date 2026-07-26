@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor.h b/chrome/utility/importer/browseros/chrome_decryptor.h
 new file mode 100644
-index 0000000000000..3805c007ec30c
+index 0000000000000..668d27973e57c
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,56 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome data decryption interface
 +
@@ -38,13 +38,24 @@ index 0000000000000..3805c007ec30c
 +std::string ExtractChromeKey(const base::FilePath& profile_path,
 +                             KeyExtractionResult* result);
 +
++// Outcome of decrypting a single Chrome-encrypted value.
++enum class DecryptResult {
++  kSuccess,              // |plaintext| holds the decrypted value.
++  kEmpty,                // Ciphertext was empty; nothing to decrypt.
++  kAppBoundUnsupported,  // Windows "v20" App-Bound Encryption (Chrome 127+).
++                         // The key is held by Chrome's SYSTEM-level elevation
++                         // service and is intentionally not decryptable by
++                         // another application. Callers should skip the value.
++  kError,                // Decryption failed (bad key, corrupt data, etc.).
++};
++
 +// Decrypt a Chrome-encrypted value (password_value or encrypted_value).
-+// |ciphertext| is the raw blob from the database (includes v10 prefix).
-+// |key| is the encryption key from ExtractChromeKey().
-+// Returns true on success and sets |plaintext|.
-+bool DecryptChromeValue(const std::string& ciphertext,
-+                        const std::string& key,
-+                        std::string* plaintext);
++// |ciphertext| is the raw blob from the database (may carry a "v10"/"v20"
++// version prefix, or be a legacy unprefixed blob). |key| is the key from
++// ExtractChromeKey(). On kSuccess, |plaintext| holds the decrypted value.
++DecryptResult DecryptChromeValue(const std::string& ciphertext,
++                                 const std::string& key,
++                                 std::string* plaintext);
 +
 +}  // namespace browseros_importer
 +

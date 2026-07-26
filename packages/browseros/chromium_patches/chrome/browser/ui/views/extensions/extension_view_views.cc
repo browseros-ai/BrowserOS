@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/extensions/extension_view_views.cc b/chrome/browser/ui/views/extensions/extension_view_views.cc
-index f24639d796626..8fcf248beb22f 100644
+index f24639d796626..cc56b0d062a32 100644
 --- a/chrome/browser/ui/views/extensions/extension_view_views.cc
 +++ b/chrome/browser/ui/views/extensions/extension_view_views.cc
 @@ -9,6 +9,7 @@
@@ -19,7 +19,7 @@ index f24639d796626..8fcf248beb22f 100644
 +  // PopulateSidePanel() fires before the RWHV exists, so re-request here.
 +  if (host_->extension_host_type() ==
 +          extensions::mojom::ViewType::kExtensionSidePanel &&
-+      browseros::IsBrowserOSExtension(host_->extension_id())) {
++      browseros::IsActiveBrowserOSExtension(host_->extension_id())) {
 +    RequestFocus();
 +  }
  }

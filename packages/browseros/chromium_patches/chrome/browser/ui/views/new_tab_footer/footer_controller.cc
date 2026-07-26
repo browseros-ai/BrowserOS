@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/new_tab_footer/footer_controller.cc b/chrome/browser/ui/views/new_tab_footer/footer_controller.cc
-index fa4ddd420efdf..e52050341f8d6 100644
+index 6bd39ba34909e..0828b132a01e0 100644
 --- a/chrome/browser/ui/views/new_tab_footer/footer_controller.cc
 +++ b/chrome/browser/ui/views/new_tab_footer/footer_controller.cc
-@@ -201,14 +201,7 @@ bool NewTabFooterController::ContentsViewFooterCotroller::
+@@ -202,14 +202,7 @@ bool NewTabFooterController::ContentsViewFooterCotroller::
  
  bool NewTabFooterController::ContentsViewFooterCotroller::
      ShouldShowExtensionFooter(const GURL& url) {

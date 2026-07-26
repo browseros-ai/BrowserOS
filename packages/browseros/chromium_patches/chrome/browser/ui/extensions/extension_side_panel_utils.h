@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/ui/extensions/extension_side_panel_utils.h b/chrome/browser/ui/extensions/extension_side_panel_utils.h
-index 83f930392f97d..000800fe353c1 100644
+index 9e6cc5062846c..af36f14f4e6b2 100644
 --- a/chrome/browser/ui/extensions/extension_side_panel_utils.h
 +++ b/chrome/browser/ui/extensions/extension_side_panel_utils.h
-@@ -63,6 +63,25 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
-                                        const ExtensionId& extension_id,
-                                        std::optional<int> window_id);
+@@ -62,6 +62,25 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+                                        content::WebContents* web_contents,
+                                        const ExtensionId& extension_id);
  
 +// Returns true if the extension's contextual side panel is currently open
 +// (active) for the specified `web_contents`. This checks only the contextual

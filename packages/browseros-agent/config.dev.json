@@ -1,9 +1,12 @@
 {
   "ports": {
+    "server": 9105,
     "cdp": 9005,
-    "http_mcp": 9105,
-    "agent": 9205,
-    "extension": 9305
+    "proxy": 9105
+  },
+  "directories": {
+    "resources": "./resources",
+    "execution": "./out"
   },
   "flags": {
     "allow_remote_in_mcp": false

@@ -4,7 +4,7 @@ import type { SearchMatch } from './debugger'
 import type { UserAgentMetadata } from './emulation'
 import type { StreamHandle } from './io'
 import type { FrameId } from './page'
-import type { StackTrace } from './runtime'
+import type { ScriptId, StackTrace, UniqueDebuggerId } from './runtime'
 import type { CertificateId, MixedContentType, SecurityState } from './security'
 
 // ══ Types ══
@@ -214,21 +214,14 @@ export type CorsError =
   | 'PreflightInvalidAllowCredentials'
   | 'PreflightMissingAllowExternal'
   | 'PreflightInvalidAllowExternal'
-  | 'PreflightMissingAllowPrivateNetwork'
-  | 'PreflightInvalidAllowPrivateNetwork'
   | 'InvalidAllowMethodsPreflightResponse'
   | 'InvalidAllowHeadersPreflightResponse'
   | 'MethodDisallowedByPreflightResponse'
   | 'HeaderDisallowedByPreflightResponse'
   | 'RedirectContainsCredentials'
-  | 'InsecurePrivateNetwork'
-  | 'InvalidPrivateNetworkAccess'
-  | 'UnexpectedPrivateNetworkAccess'
+  | 'InsecureLocalNetwork'
+  | 'InvalidLocalNetworkAccess'
   | 'NoCorsRedirectModeNotFollow'
-  | 'PreflightMissingPrivateNetworkAccessId'
-  | 'PreflightMissingPrivateNetworkAccessName'
-  | 'PrivateNetworkAccessPermissionUnavailable'
-  | 'PrivateNetworkAccessPermissionDenied'
   | 'LocalNetworkAccessPermissionDenied'
 
 export interface CorsErrorStatus {
@@ -362,7 +355,6 @@ export interface Cookie {
   session: boolean
   sameSite?: CookieSameSite
   priority: CookiePriority
-  sameParty: boolean
   sourceScheme: CookieSourceScheme
   sourcePort: number
   partitionKey?: CookiePartitionKey
@@ -387,8 +379,6 @@ export type SetCookieBlockedReason =
   | 'SchemefulSameSiteStrict'
   | 'SchemefulSameSiteLax'
   | 'SchemefulSameSiteUnspecifiedTreatedAsLax'
-  | 'SamePartyFromCrossPartyContext'
-  | 'SamePartyConflictsWithOtherAttributes'
   | 'NameValuePairExceedsMaxSize'
   | 'DisallowedCharacter'
   | 'NoCookieContent'
@@ -408,7 +398,6 @@ export type CookieBlockedReason =
   | 'SchemefulSameSiteStrict'
   | 'SchemefulSameSiteLax'
   | 'SchemefulSameSiteUnspecifiedTreatedAsLax'
-  | 'SamePartyFromCrossPartyContext'
   | 'NameValuePairExceedsMaxSize'
   | 'PortMismatch'
   | 'SchemeMismatch'
@@ -456,7 +445,6 @@ export interface CookieParam {
   sameSite?: CookieSameSite
   expires?: TimeSinceEpoch
   priority?: CookiePriority
-  sameParty?: boolean
   sourceScheme?: CookieSourceScheme
   sourcePort?: number
   partitionKey?: CookiePartitionKey
@@ -572,7 +560,7 @@ export interface DirectUDPMessage {
   remotePort?: number
 }
 
-export type PrivateNetworkRequestPolicy =
+export type LocalNetworkAccessRequestPolicy =
   | 'Allow'
   | 'BlockFromInsecureToMorePrivate'
   | 'WarnFromInsecureToMorePrivate'
@@ -588,7 +576,23 @@ export interface ConnectTiming {
 export interface ClientSecurityState {
   initiatorIsSecureContext: boolean
   initiatorIPAddressSpace: IPAddressSpace
-  privateNetworkRequestPolicy: PrivateNetworkRequestPolicy
+  localNetworkAccessRequestPolicy: LocalNetworkAccessRequestPolicy
+}
+
+export interface AdScriptIdentifier {
+  scriptId: ScriptId
+  debuggerId: UniqueDebuggerId
+  name: string
+}
+
+export interface AdAncestry {
+  ancestryChain: AdScriptIdentifier[]
+  rootScriptFilterlistRule?: string
+}
+
+export interface AdProvenance {
+  filterlistRule?: string
+  adScriptAncestry?: AdAncestry
 }
 
 export type CrossOriginOpenerPolicyValue =
@@ -657,6 +661,17 @@ export interface ReportingApiEndpoint {
 export interface DeviceBoundSessionKey {
   site: string
   id: string
+}
+
+export interface DeviceBoundSessionWithUsage {
+  sessionKey: DeviceBoundSessionKey
+  usage:
+    | 'NotInScope'
+    | 'InScopeRefreshNotYetNeeded'
+    | 'InScopeRefreshNotAllowed'
+    | 'ProactiveRefreshNotPossible'
+    | 'ProactiveRefreshAttempted'
+    | 'Deferred'
 }
 
 export interface DeviceBoundSessionCookieCraving {
@@ -762,9 +777,17 @@ export type DeviceBoundSessionFetchResult =
   | 'FailedToUnwrapKey'
   | 'SessionDeletedDuringRefresh'
 
+export interface DeviceBoundSessionFailedRequest {
+  requestUrl: string
+  netError?: string
+  responseError?: number
+  responseErrorBody?: string
+}
+
 export interface CreationEventDetails {
   fetchResult: DeviceBoundSessionFetchResult
   newSession?: DeviceBoundSession
+  failedRequest?: DeviceBoundSessionFailedRequest
 }
 
 export interface RefreshEventDetails {
@@ -779,6 +802,7 @@ export interface RefreshEventDetails {
   fetchResult?: DeviceBoundSessionFetchResult
   newSession?: DeviceBoundSession
   wasFullyProactiveRefresh: boolean
+  failedRequest?: DeviceBoundSessionFailedRequest
 }
 
 export interface TerminationEventDetails {
@@ -988,7 +1012,6 @@ export interface SetCookieParams {
   sameSite?: CookieSameSite
   expires?: TimeSinceEpoch
   priority?: CookiePriority
-  sameParty?: boolean
   sourceScheme?: CookieSourceScheme
   sourcePort?: number
   partitionKey?: CookiePartitionKey
@@ -1313,6 +1336,7 @@ export interface RequestWillBeSentExtraInfoEvent {
   associatedCookies: AssociatedCookie[]
   headers: Headers
   connectTiming: ConnectTiming
+  deviceBoundSessionUsages?: DeviceBoundSessionWithUsage[]
   clientSecurityState?: ClientSecurityState
   siteHasCookieInOtherPartition?: boolean
   appliedNetworkConditionsId?: string

@@ -1,8 +1,8 @@
 diff --git a/chrome/common/extensions/api/side_panel.idl b/chrome/common/extensions/api/side_panel.idl
-index 7d41beb7dad84..f61f0bf21ad88 100644
+index afc66fce49630..9a73a7447e175 100644
 --- a/chrome/common/extensions/api/side_panel.idl
 +++ b/chrome/common/extensions/api/side_panel.idl
-@@ -124,10 +124,33 @@ namespace sidePanel {
+@@ -127,10 +127,33 @@ namespace sidePanel {
      DOMString path;
    };
  
@@ -36,8 +36,8 @@ index 7d41beb7dad84..f61f0bf21ad88 100644
  
    interface Functions {
      // Configures the side panel.
-@@ -176,6 +199,23 @@ namespace sidePanel {
-     [nodoc] static void close(
+@@ -185,6 +208,23 @@ namespace sidePanel {
+     static void close(
          CloseOptions options,
          VoidCallback callback);
 +

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.h b/chrome/browser/browseros/extensions/browseros_extension_maintainer.h
 new file mode 100644
-index 0000000000000..eb68969a4163f
+index 0000000000000..c70cbd4076100
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,69 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -31,9 +31,6 @@ index 0000000000000..eb68969a4163f
 +
 +namespace browseros {
 +
-+// Handles periodic maintenance of BrowserOS extensions.
-+// Tasks: uninstall deprecated, reinstall missing, re-enable disabled,
-+// force update check, log health metrics.
 +class BrowserOSExtensionMaintainer {
 + public:
 +  explicit BrowserOSExtensionMaintainer(Profile* profile);
@@ -43,32 +40,20 @@ index 0000000000000..eb68969a4163f
 +  BrowserOSExtensionMaintainer& operator=(const BrowserOSExtensionMaintainer&) =
 +      delete;
 +
-+  // Starts maintenance with an initial delay.
 +  void Start(const GURL& config_url,
 +             std::set<std::string> extension_ids,
 +             base::DictValue initial_config);
 +
-+  // Updates the set of tracked extension IDs.
 +  void UpdateExtensionIds(std::set<std::string> ids);
 +
 + private:
-+  // Fetches remote config and runs maintenance.
 +  void RunMaintenanceCycle();
-+
-+  // Called when config fetch completes.
 +  void OnConfigFetched(std::unique_ptr<network::SimpleURLLoader> loader,
 +                       std::optional<std::string> response_body);
-+
-+  // Parses config JSON and returns extensions dict.
 +  base::DictValue ParseConfigJson(const std::string& json_content);
-+
-+  // Executes all maintenance tasks.
 +  void ExecuteMaintenanceTasks();
-+
-+  // Schedules next maintenance cycle.
 +  void ScheduleNextMaintenance();
-+
-+  // Individual maintenance tasks
++  void UninstallInactiveProductExtensions();
 +  void UninstallDeprecatedExtensions();
 +  void ReinstallMissingExtensions();
 +  void ReenableDisabledExtensions();

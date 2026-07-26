@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000..5804d54696e8f
+index 0000000000000..568aba57b6197
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,440 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -72,7 +72,12 @@ index 0000000000000..5804d54696e8f
 +                                         std::set<std::string> extension_ids,
 +                                         base::DictValue initial_config) {
 +  config_url_ = config_url;
-+  extension_ids_ = std::move(extension_ids);
++  extension_ids_.clear();
++  for (const std::string& id : extension_ids) {
++    if (IsActiveBrowserOSExtension(id)) {
++      extension_ids_.insert(id);
++    }
++  }
 +  last_config_ = std::move(initial_config);
 +
 +  LOG(INFO) << "browseros: Maintainer started, " << extension_ids_.size()
@@ -88,7 +93,12 @@ index 0000000000000..5804d54696e8f
 +
 +void BrowserOSExtensionMaintainer::UpdateExtensionIds(
 +    std::set<std::string> ids) {
-+  extension_ids_ = std::move(ids);
++  extension_ids_.clear();
++  for (const std::string& id : ids) {
++    if (IsActiveBrowserOSExtension(id)) {
++      extension_ids_.insert(id);
++    }
++  }
 +}
 +
 +void BrowserOSExtensionMaintainer::RunMaintenanceCycle() {
@@ -132,7 +142,9 @@ index 0000000000000..5804d54696e8f
 +      last_config_ = std::move(config);
 +
 +      for (const auto [id, _] : last_config_) {
-+        extension_ids_.insert(id);
++        if (IsActiveBrowserOSExtension(id)) {
++          extension_ids_.insert(id);
++        }
 +      }
 +
 +      LOG(INFO) << "browseros: Updated config with " << last_config_.size()
@@ -158,8 +170,7 @@ index 0000000000000..5804d54696e8f
 +    return base::DictValue();
 +  }
 +
-+  const base::DictValue* extensions =
-+      parsed->GetDict().FindDict("extensions");
++  const base::DictValue* extensions = parsed->GetDict().FindDict("extensions");
 +
 +  if (!extensions) {
 +    LOG(ERROR) << "browseros: No 'extensions' key in config";
@@ -172,6 +183,7 @@ index 0000000000000..5804d54696e8f
 +void BrowserOSExtensionMaintainer::ExecuteMaintenanceTasks() {
 +  LOG(INFO) << "browseros: Executing maintenance tasks";
 +
++  UninstallInactiveProductExtensions();
 +  UninstallDeprecatedExtensions();
 +  ReinstallMissingExtensions();
 +  ReenableDisabledExtensions();
@@ -185,6 +197,41 @@ index 0000000000000..5804d54696e8f
 +      base::BindOnce(&BrowserOSExtensionMaintainer::RunMaintenanceCycle,
 +                     weak_ptr_factory_.GetWeakPtr()),
 +      kMaintenanceInterval);
++}
++
++void BrowserOSExtensionMaintainer::UninstallInactiveProductExtensions() {
++  if (!profile_) {
++    return;
++  }
++
++  extensions::ExtensionRegistry* registry =
++      extensions::ExtensionRegistry::Get(profile_);
++  extensions::ExtensionRegistrar* registrar =
++      extensions::ExtensionRegistrar::Get(profile_);
++
++  if (!registry || !registrar) {
++    return;
++  }
++
++  for (const std::string& id : GetAllBrowserOSExtensionIds()) {
++    if (IsActiveBrowserOSExtension(id)) {
++      continue;
++    }
++
++    const extensions::Extension* ext = registry->GetInstalledExtension(id);
++    if (!ext) {
++      continue;
++    }
++
++    LOG(INFO) << "browseros: Uninstalling inactive product extension " << id;
++
++    std::u16string error;
++    if (!registrar->UninstallExtension(
++            id, extensions::UNINSTALL_REASON_ORPHANED_EXTERNAL_EXTENSION,
++            &error)) {
++      LOG(WARNING) << "browseros: Failed to uninstall " << id << ": " << error;
++    }
++  }
 +}
 +
 +void BrowserOSExtensionMaintainer::UninstallDeprecatedExtensions() {
@@ -206,7 +253,7 @@ index 0000000000000..5804d54696e8f
 +    server_ids.insert(id);
 +  }
 +
-+  for (const std::string& id : GetBrowserOSExtensionIds()) {
++  for (const std::string& id : GetActiveBrowserOSExtensionIds()) {
 +    if (server_ids.contains(id)) {
 +      continue;
 +    }
@@ -275,8 +322,7 @@ index 0000000000000..5804d54696e8f
 +      extensions::ExtensionUpdater::CheckParams params;
 +      params.ids = {id};
 +      params.install_immediately = true;
-+      params.fetch_priority =
-+          extensions::DownloadFetchPriority::kForeground;
++      params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
 +      // Use InstallPendingNow - the extension is in PendingExtensionManager,
 +      // CheckNow with specific IDs only checks installed extensions.
 +      updater->InstallPendingNow(std::move(params));
@@ -321,15 +367,15 @@ index 0000000000000..5804d54696e8f
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Force update check for "
-+            << extension_ids_.size() << " extensions";
++  LOG(INFO) << "browseros: Force update check for " << extension_ids_.size()
++            << " extensions";
 +
 +  for (const std::string& id : extension_ids_) {
 +    const extensions::Extension* ext =
 +        registry ? registry->GetInstalledExtension(id) : nullptr;
 +    if (ext) {
-+      LOG(INFO) << "browseros: ext=" << id
-+                << " v" << ext->version().GetString();
++      LOG(INFO) << "browseros: ext=" << id << " v"
++                << ext->version().GetString();
 +    } else {
 +      LOG(INFO) << "browseros: ext=" << id << " not installed";
 +    }
@@ -337,7 +383,7 @@ index 0000000000000..5804d54696e8f
 +
 +  extensions::ExtensionUpdater::CheckParams params;
 +  params.ids = std::list<extensions::ExtensionId>(extension_ids_.begin(),
-+                                                   extension_ids_.end());
++                                                  extension_ids_.end());
 +  params.install_immediately = true;
 +  params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
 +  updater->CheckNow(std::move(params));
@@ -351,8 +397,7 @@ index 0000000000000..5804d54696e8f
 +
 +  extensions::ExtensionRegistry* registry =
 +      extensions::ExtensionRegistry::Get(profile_);
-+  extensions::ExtensionPrefs* prefs =
-+      extensions::ExtensionPrefs::Get(profile_);
++  extensions::ExtensionPrefs* prefs = extensions::ExtensionPrefs::Get(profile_);
 +
 +  if (!registry || !prefs) {
 +    return;

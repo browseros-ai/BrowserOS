@@ -1,0 +1,54 @@
+{
+  "name": "@browseros/browser-mcp",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@browseros/browser-core": "workspace:*",
+    "@browseros/cdp-protocol": "workspace:*",
+    "@browseros/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./mcp-server": {
+      "types": "./src/mcp-server.ts",
+      "default": "./src/mcp-server.ts"
+    },
+    "./mcp-prompt": {
+      "types": "./src/mcp-prompt.ts",
+      "default": "./src/mcp-prompt.ts"
+    },
+    "./output-file": {
+      "types": "./src/tools/output-file.ts",
+      "default": "./src/tools/output-file.ts"
+    },
+    "./register": {
+      "types": "./src/register.ts",
+      "default": "./src/register.ts"
+    },
+    "./registry": {
+      "types": "./src/tools/registry.ts",
+      "default": "./src/tools/registry.ts"
+    },
+    "./response": {
+      "types": "./src/response.ts",
+      "default": "./src/response.ts"
+    },
+    "./tool-output-dir": {
+      "types": "./src/tool-output-dir.ts",
+      "default": "./src/tool-output-dir.ts"
+    },
+    "./tools/*": {
+      "types": "./src/tools/*.ts",
+      "default": "./src/tools/*.ts"
+    }
+  }
+}

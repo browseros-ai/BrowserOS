@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/chrome_layout_provider.cc b/chrome/browser/ui/views/chrome_layout_provider.cc
-index 77be8f6e709d3..5f0dd9b1960d7 100644
+index eaeaeb9df31ec..d23c4bdc8c258 100644
 --- a/chrome/browser/ui/views/chrome_layout_provider.cc
 +++ b/chrome/browser/ui/views/chrome_layout_provider.cc
 @@ -167,9 +167,10 @@ int ChromeLayoutProvider::GetDistanceMetric(int metric) const {

@@ -1168,8 +1168,9 @@ describe('compaction E2E — pruning and output reduction', () => {
       { role: 'user', content: 'x'.repeat(3000) },
     ]
     const estimated = estimateTokensForThreshold(messages, config)
-    // 3000 chars / 3 = 1000 tokens, * 1.3 = 1300, + 12000 = 13300
-    expect(estimated).toBe(Math.ceil(1000 * 1.3) + 12_000)
+    expect(estimated).toBe(
+      Math.ceil(1000 * config.safetyMultiplier) + config.fixedOverhead,
+    )
   })
 })
 

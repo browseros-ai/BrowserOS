@@ -1,0 +1,41 @@
+diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
+index eb5c136381779..f47dd4a811905 100644
+--- a/components/os_crypt/common/BUILD.gn
++++ b/components/os_crypt/common/BUILD.gn
+@@ -2,12 +2,20 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/buildflag_header.gni")
++import("//chrome/browser/browseros/buildflags.gni")
++
+ source_set("switches") {
+   sources = [
+     "os_crypt_switches.h",
+   ]
+ }
+ 
++buildflag_header("browseros_product_buildflags") {
++  header = "browseros_product_buildflags.h"
++  flags = [ "BROWSEROS_PRODUCT_BROWSERCLAW=$browseros_product_browserclaw" ]
++}
++
+ if (is_apple) {
+   source_set("keychain_password_mac") {
+     sources = [
+@@ -15,6 +23,7 @@ if (is_apple) {
+       "keychain_password_mac.mm",
+     ]
+     deps = [
++      ":browseros_product_buildflags",
+       "//base",
+       "//build:branding_buildflags",
+       "//crypto",
+@@ -28,6 +37,7 @@ source_set("unit_tests") {
+     sources = [ "keychain_password_mac_unittest.mm" ]
+     deps = [
+       ":keychain_password_mac",
++      ":browseros_product_buildflags",
+       "//base",
+       "//crypto:mock_apple_keychain",
+       "//testing/gmock",

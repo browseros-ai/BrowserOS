@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h
 new file mode 100644
-index 0000000000000..ef7c13f156ea7
+index 0000000000000..1b30c5d723c09
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,236 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -153,7 +153,6 @@ index 0000000000000..ef7c13f156ea7
 +    IDC_SCREENSHOT,
 +    IDC_REFRESH,
 +    IDC_OPEN_IN_NEW_TAB,
-+    IDC_CLASH_OF_GPTS,
 +  };
 +
 +  std::unique_ptr<views::View> CreateThirdPartyLlmWebView(

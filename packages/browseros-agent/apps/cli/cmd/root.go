@@ -2,15 +2,14 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"browseros-cli/analytics"
+	"browseros-cli/cmd/raw"
 	"browseros-cli/config"
 	"browseros-cli/mcp"
 	"browseros-cli/output"
@@ -21,13 +20,14 @@ import (
 )
 
 var (
-	serverURL string
-	pageFlag  int
-	pageSet   bool
-	jsonOut   bool
-	debug     bool
-	timeout   time.Duration
-	version   = "dev"
+	serverURL  string
+	pageFlag   int
+	pageSet    bool
+	jsonOut    bool
+	debug      bool
+	showLLMTxt bool
+	timeout    time.Duration
+	version    = "dev"
 )
 
 const automaticUpdateDrainTimeout = 150 * time.Millisecond
@@ -51,11 +51,24 @@ func helpAliases(aliases []string) string {
 	return helpAliasColor.Sprintf("(aliases: %s)", strings.Join(aliases, ", "))
 }
 
+func agentStartHelp(cmd *cobra.Command) string {
+	if cmd != rootCmd {
+		return ""
+	}
+	return "\n" + helpHeader("Start here for agents:") + "\n" +
+		"  page=$(browseros-cli open --json https://example.com | jq -r .page)\n" +
+		"  browseros-cli -p \"$page\" snapshot\n" +
+		"  browseros-cli -p \"$page\" read --links\n" +
+		"  browseros-cli -p \"$page\" find text \"Search\" click\n"
+}
+
 var groupOrder = []string{
 	"Navigate:",
 	"Observe:",
 	"Input:",
+	"Raw:",
 	"Resources:",
+	"Integrations:",
 	"Setup:",
 }
 
@@ -99,6 +112,7 @@ const usageTemplate = `{{helpHeader "Usage:"}}{{if .Runnable}}
 
 {{helpHeader "Examples:"}}
 {{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+{{agentStartHelp .}}
 {{groupedHelp .}}{{end}}{{if .HasAvailableLocalFlags}}
 
 {{helpHeader "Flags:"}}
@@ -116,6 +130,16 @@ var rootCmd = &cobra.Command{
 	Long:          "browseros-cli — command-line interface for controlling BrowserOS via MCP",
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	Run:           runRoot,
+}
+
+// runRoot prints the agent guide to stdout for `--llm-txt`, otherwise grouped help.
+func runRoot(cmd *cobra.Command, _ []string) {
+	if showLLMTxt {
+		fmt.Fprint(cmd.OutOrStdout(), llmTxtGuide)
+		return
+	}
+	_ = cmd.Help()
 }
 
 func Execute() {
@@ -159,16 +183,29 @@ func init() {
 	cobra.AddTemplateFunc("helpAliases", helpAliases)
 	cobra.AddTemplateFunc("helpHint", helpHint)
 	cobra.AddTemplateFunc("groupedHelp", groupedHelp)
+	cobra.AddTemplateFunc("agentStartHelp", agentStartHelp)
 
 	rootCmd.SetUsageTemplate(usageTemplate)
 
 	rootCmd.PersistentFlags().StringVarP(&serverURL, "server", "s", defaultServerURL(), "BrowserOS server URL")
-	rootCmd.PersistentFlags().IntVarP(&pageFlag, "page", "p", 0, "Target page ID (default: active page)")
+	rootCmd.PersistentFlags().IntVarP(&pageFlag, "page", "p", 0, "Target page ID from open or tabs")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", envBool("BOS_JSON"), "JSON output")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", envBool("BOS_DEBUG"), "Debug output")
 	rootCmd.PersistentFlags().DurationVarP(&timeout, "timeout", "t", 120*time.Second, "Request timeout")
+	rootCmd.Flags().BoolVar(&showLLMTxt, "llm-txt", false, "Print the agent usage guide and exit")
 
 	rootCmd.Version = version
+	raw.Register(rootCmd, raw.Deps{
+		NewClient: func() raw.Client {
+			return newClient()
+		},
+		ResolvePageID: func() (int, error) {
+			return resolvePageID(nil)
+		},
+		JSONOutput: func() bool {
+			return jsonOut
+		},
+	})
 }
 
 func newClient() *mcp.Client {
@@ -182,18 +219,34 @@ func newClient() *mcp.Client {
 	return c
 }
 
-func resolvePageID(c *mcp.Client) (int, error) {
-	if rootCmd.PersistentFlags().Changed("page") {
-		return pageFlag, nil
-	}
+// resolvePageID enforces the CLI's explicit page contract for page-scoped commands.
+func resolvePageID(_ *mcp.Client) (int, error) {
+	return explicitPageID(rootCmd.PersistentFlags().Changed("page"), pageFlag)
+}
 
-	if env := os.Getenv("BROWSEROS_PAGE"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			return v, nil
+// explicitPageID returns only caller-provided page ids, never ambient browser state.
+func explicitPageID(changed bool, page int) (int, error) {
+	if changed {
+		if err := validatePageID(page); err != nil {
+			return 0, err
 		}
+		return page, nil
 	}
+	return 0, fmt.Errorf("page id is required: pass -p/--page <id> from `browseros-cli open --json | jq -r .page` or `browseros-cli tabs --json`")
+}
 
-	return c.ResolvePageID(nil)
+func validatePageID(page int) error {
+	if page <= 0 {
+		return fmt.Errorf("invalid page id: %d; page id must be greater than 0", page)
+	}
+	return nil
+}
+
+func validateChangedIntMinimum(name string, value int, changed bool, minimum int) error {
+	if changed && value < minimum {
+		return fmt.Errorf("%s must be %d or greater", name, minimum)
+	}
+	return nil
 }
 
 func envBool(key string) bool {
@@ -215,7 +268,7 @@ func newAutomaticUpdateManager(args []string) *update.Manager {
 }
 
 func shouldSkipAutomaticUpdates(args []string) bool {
-	if hasHelpFlag(args) || requestedBoolFlag(args, "--version", false) {
+	if hasHelpFlag(args) || requestedBoolFlag(args, "--version", false) || requestedBoolFlag(args, "--llm-txt", false) {
 		return true
 	}
 
@@ -288,18 +341,15 @@ func drainAutomaticUpdateCheckWithTimeout(done <-chan struct{}, timeout time.Dur
 	}
 }
 
+// defaultServerURL returns the implicit target from user-controlled settings only.
+//
+// BrowserOS writes a discovery file at runtime, but normal commands intentionally
+// ignore it so a saved URL is not silently overridden by another running server.
 func defaultServerURL() string {
-	// 1. Explicit env var always wins
 	if env := normalizeServerURL(os.Getenv("BROWSEROS_URL")); env != "" {
 		return env
 	}
 
-	// 2. Live discovery file from running BrowserOS (most current)
-	if url := loadBrowserosServerURL(); url != "" {
-		return url
-	}
-
-	// 3. Saved config (may be stale if port changed)
 	cfg, err := config.Load()
 	if err == nil {
 		if url := normalizeServerURL(cfg.ServerURL); url != "" {
@@ -308,33 +358,6 @@ func defaultServerURL() string {
 	}
 
 	return ""
-}
-
-type serverDiscoveryConfig struct {
-	ServerPort       int    `json:"server_port"`
-	URL              string `json:"url"`
-	ServerVersion    string `json:"server_version"`
-	BrowserOSVersion string `json:"browseros_version,omitempty"`
-	ChromiumVersion  string `json:"chromium_version,omitempty"`
-}
-
-func loadBrowserosServerURL() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".browseros", "server.json"))
-	if err != nil {
-		return ""
-	}
-
-	var sc serverDiscoveryConfig
-	if err := json.Unmarshal(data, &sc); err != nil {
-		return ""
-	}
-
-	return normalizeServerURL(sc.URL)
 }
 
 func normalizeServerURL(raw string) string {
@@ -368,8 +391,10 @@ func validateServerURL(raw string) (string, error) {
 
 	return "", fmt.Errorf(
 		"BrowserOS server URL is not configured.\n\n" +
-			"  If BrowserOS is running:  browseros-cli init --auto\n" +
-			"  If BrowserOS is closed:   browseros-cli launch\n" +
-			"  If not installed:         browseros-cli install",
+			"  Open BrowserOS Settings > BrowserOS MCP and copy the Server URL.\n" +
+			"  Save it with:       browseros-cli init <Server URL>\n" +
+			"  Example:            browseros-cli init http://127.0.0.1:9000/mcp\n" +
+			"  If BrowserOS is closed:  browseros-cli launch\n" +
+			"  If not installed:        download from https://browseros.com",
 	)
 }

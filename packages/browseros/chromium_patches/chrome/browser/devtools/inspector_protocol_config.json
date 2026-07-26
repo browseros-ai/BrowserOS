@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index df7ff4a10c045..a631474f81c5d 100644
+index 31b73283d26ea..0c44982bde0a7 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
 @@ -14,9 +14,20 @@
@@ -7,7 +7,7 @@ index df7ff4a10c045..a631474f81c5d 100644
              {
                  "domain": "Browser",
 -                "include": [ "getWindowForTarget", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride" ],
-+                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "showWindow", "hideWindow", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "hideTab", "getTabGroups", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
++                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "setWindowVisibility", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "getTabGroups", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
                  "include_events": []
              },
 +            {

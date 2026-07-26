@@ -1,12 +1,12 @@
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 7f69d0c4c8412..8920912761522 100644
+index 0329a8db9d800..5c9abae720765 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -289,6 +289,7 @@ enum APIPermissionID {
-   kExperimentalActor = 262,
+@@ -290,6 +290,7 @@ enum APIPermissionID {
    kEnterpriseLogin = 263,
    kProxyOverrideRulesPrivate = 264,
-+  kBrowserOS = 265,
+   kGlicPrivate = 265,
++  kBrowserOS = 266,
  
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in

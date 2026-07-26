@@ -1,0 +1,629 @@
+# Required secrets: CLAW_POSTHOG_KEY, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
+# publish_ota is true.
+name: "Release: BrowserClaw Server (Rust)"
+
+on:
+  push:
+    tags:
+      - "claw-server/v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version; defaults to apps/claw-server-rust/Cargo.toml at ref"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Git ref to release; defaults to the repository default branch"
+        required: false
+        type: string
+        default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version; defaults to apps/claw-server-rust/Cargo.toml at ref"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Git ref to release; defaults to the repository default branch"
+        required: false
+        type: string
+        default: ""
+      publish_ota:
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      CLAW_POSTHOG_KEY:
+        required: true
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+      SPARKLE_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-claw-server-rust
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name != 'push' || github.event.deleted != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      previous_tag: ${{ steps.release.outputs.previous_tag }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Resolve release
+        id: release
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          packages/browseros-agent/scripts/release/prepare-claw-server-rust-release.sh \
+            --event-name "$EVENT_NAME" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --ref-name "$REF_NAME" \
+            --requested-version "$REQUESTED_VERSION" \
+            --release-ref HEAD
+
+      - name: Generate release notes
+        env:
+          PREVIOUS_TAG: ${{ steps.release.outputs.previous_tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          CHANGELOG_FILE="/tmp/release-changelog.md"
+          NOTES_FILE="/tmp/release-notes.md"
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "Initial BrowserClaw Server Rust release." > "$CHANGELOG_FILE"
+          else
+            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$CHANGELOG_FILE"
+            if [ ! -s "$CHANGELOG_FILE" ]; then
+              echo "No commits since $PREVIOUS_TAG." > "$CHANGELOG_FILE"
+            fi
+          fi
+
+          node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+            --input "$CHANGELOG_FILE" \
+            --output "$NOTES_FILE" \
+            --max-entries 15 \
+            --previous-tag "$PREVIOUS_TAG" \
+            --release-tag "$RELEASE_TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          TITLE="BrowserClaw Server (Rust) - v$VERSION"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$TITLE" \
+              --notes-file /tmp/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$TITLE" \
+              --notes-file /tmp/release-notes.md
+          fi
+
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
+  cargo-test:
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Run Rust workspace tests
+        working-directory: packages/browseros-agent
+        run: cargo test --workspace --locked
+
+  harness-integrations-test:
+    needs: release
+    if: needs.release.outputs.version != ''
+    name: Harness integrations / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+          - runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Test native harness filesystem reconciliation
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: cargo test --locked -p harness-integrations
+
+  build:
+    needs:
+      - release
+      - cargo-test
+      - harness-integrations-test
+    if: needs.release.outputs.version != ''
+    name: Build / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+            binary_ext: ""
+          - target: darwin-x64
+            rust_target: x86_64-apple-darwin
+            runner: macos-14
+            binary_ext: ""
+          - target: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            binary_ext: ""
+          - target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            binary_ext: ""
+          - target: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            binary_ext: ".exe"
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      BROWSEROS_TARGET: ${{ matrix.target }}
+      RUST_TARGET: ${{ matrix.rust_target }}
+      BINARY_EXT: ${{ matrix.binary_ext }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "PYTHON_BIN=python" >> "$GITHUB_ENV"
+          else
+            echo "PYTHON_BIN=python3" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          rustc --version
+          cargo --version
+
+      - name: Stamp release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON_BIN" <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          manifest = Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml")
+          lockfile = Path("packages/browseros-agent/Cargo.lock")
+
+          manifest_text = manifest.read_text()
+          manifest_text, count = re.subn(
+              r'(?m)^version = "[^"]+"$',
+              f'version = "{version}"',
+              manifest_text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Expected exactly one claw-server-rust Cargo.toml version")
+          manifest.write_text(manifest_text)
+
+          lock_text = lockfile.read_text()
+          pattern = re.compile(
+              r'(\[\[package\]\]\nname = "claw-server-rust"\nversion = ")[^"]+(")'
+          )
+          lock_text, count = pattern.subn(
+              lambda match: f"{match.group(1)}{version}{match.group(2)}",
+              lock_text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Expected exactly one claw-server-rust Cargo.lock entry")
+          lockfile.write_text(lock_text)
+          PY
+
+      - name: Build Rust binary
+        shell: bash
+        working-directory: packages/browseros-agent
+        env:
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLAW_POSTHOG_KEY" ]; then
+            echo "::error::CLAW_POSTHOG_KEY is required"
+            exit 1
+          fi
+          cargo build --release --locked --target "$RUST_TARGET" \
+            -p claw-server-rust \
+            --bin browseros-claw-server-rs
+          "$PYTHON_BIN" <<'PY'
+          import os
+          from pathlib import Path
+
+          binary_name = f"browseros-claw-server-rs{os.environ['BINARY_EXT']}"
+          binary_path = Path("target") / os.environ["RUST_TARGET"] / "release" / binary_name
+          project_key = os.environ["CLAW_POSTHOG_KEY"].encode()
+          if project_key not in binary_path.read_bytes():
+              raise SystemExit("Compiled Rust server does not contain CLAW_POSTHOG_KEY")
+          PY
+
+      - name: Verify stamped binary version
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          BINARY_PATH="target/$RUST_TARGET/release/browseros-claw-server-rs$BINARY_EXT"
+          ACTUAL_VERSION="$("$BINARY_PATH" --version)"
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected $VERSION from $BINARY_PATH, got: $ACTUAL_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Package artifact zip
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON_BIN" <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          import stat
+          import zipfile
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          repo = Path(os.environ["GITHUB_WORKSPACE"])
+          agent = repo / "packages/browseros-agent"
+          version = os.environ["VERSION"]
+          target = os.environ["BROWSEROS_TARGET"]
+          rust_target = os.environ["RUST_TARGET"]
+          binary_ext = os.environ["BINARY_EXT"]
+          binary_name = f"browseros-claw-server-rs{binary_ext}"
+          runtime_binary_name = f"browseros-claw-server{binary_ext}"
+          binary_path = agent / "target" / rust_target / "release" / binary_name
+          if not binary_path.is_file():
+              raise SystemExit(f"Missing compiled binary: {binary_path}")
+          source_resources = agent / "apps/claw-server-rust/resources"
+          if not source_resources.is_dir():
+              raise SystemExit(f"Missing server resources: {source_resources}")
+
+          dist_root = agent / "dist/prod/claw-server-rust"
+          stage_root = dist_root / target
+          if stage_root.exists():
+              shutil.rmtree(stage_root)
+          staged_binary = stage_root / "resources/bin" / runtime_binary_name
+          staged_binary.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(binary_path, staged_binary)
+          if binary_ext != ".exe":
+              staged_binary.chmod(0o755)
+          shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)
+
+          files = sorted(
+              path
+              for path in stage_root.rglob("*")
+              if path.is_file() and path.name != "artifact-metadata.json"
+          )
+          metadata = {
+              "version": version,
+              "target": target,
+              "generatedAt": datetime.now(timezone.utc)
+              .isoformat(timespec="milliseconds")
+              .replace("+00:00", "Z"),
+              "files": [
+                  {
+                      "path": path.relative_to(stage_root).as_posix(),
+                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                      "size": path.stat().st_size,
+                  }
+                  for path in files
+              ],
+          }
+          metadata_path = stage_root / "artifact-metadata.json"
+          metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+
+          zip_path = dist_root / f"browseros-claw-server-rust-resources-{target}.zip"
+          zip_path.unlink(missing_ok=True)
+          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+              for path in [metadata_path, *files]:
+                  relative = path.relative_to(stage_root).as_posix()
+                  info = zipfile.ZipInfo(relative)
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  info.external_attr = (stat.S_IMODE(path.stat().st_mode) & 0o777) << 16
+                  with path.open("rb") as source:
+                      archive.writestr(info, source.read())
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a") as handle:
+              print(f"zip_path={zip_path}", file=handle)
+          print(zip_path)
+          PY
+
+      - name: Validate artifact zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros python <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+
+          from bos_build.steps.storage.download import extract_artifact_zip
+
+          zip_path = Path(os.environ["ZIP_PATH"])
+          target = os.environ["BROWSEROS_TARGET"]
+          binary_ext = os.environ["BINARY_EXT"]
+          expected = sorted([
+              f"resources/bin/browseros-claw-server{binary_ext}",
+              "resources/skills/browserclaw/SKILL.md",
+          ])
+          with tempfile.TemporaryDirectory() as tmp:
+              destination = Path(tmp) / target
+              extracted = extract_artifact_zip(zip_path, destination)
+              extracted_rel = sorted(
+                  path.relative_to(destination).as_posix() for path in extracted
+              )
+              if extracted_rel != expected:
+                  raise SystemExit(
+                      f"Expected extracted files {expected}, got {extracted_rel}"
+                  )
+          PY
+        env:
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+
+      - name: Upload target zip artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: claw-server-rust-${{ matrix.target }}
+          path: ${{ steps.package.outputs.zip_path }}
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - release
+      - build
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: claw-server-rust-*
+          path: dist/claw-server-rust
+          merge-multiple: true
+
+      - name: Preflight required secrets
+        run: |
+          set -euo pipefail
+          required=(
+            R2_ACCOUNT_ID
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Install AWS CLI
+        run: |
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Upload Rust server resource zips to R2
+        env:
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          for target in "${targets[@]}"; do
+            file="dist/claw-server-rust/browseros-claw-server-rust-resources-${target}.zip"
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing Rust server resource zip: $file"
+              exit 1
+            fi
+
+            for channel in "$VERSION" latest; do
+              key="claw-server-rust/prod-resources/${channel}/$(basename "$file")"
+              aws s3api put-object \
+                --endpoint-url "$R2_ENDPOINT" \
+                --region auto \
+                --bucket "$R2_BUCKET" \
+                --key "$key" \
+                --body "$file" \
+                --content-type application/zip >/dev/null
+              echo "Uploaded $key"
+            done
+          done
+
+      - name: Attach zips to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist/claw-server-rust -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
+          if [ "${#assets[@]}" -ne 5 ]; then
+            echo "::error::Expected 5 Rust server resource zips, found ${#assets[@]}"
+            printf 'Found asset: %s\n' "${assets[@]}"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+      - name: Verify CDN objects
+        run: |
+          set -euo pipefail
+          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          for channel in "$VERSION" latest; do
+            for target in "${targets[@]}"; do
+              url="https://cdn.browseros.com/claw-server-rust/prod-resources/${channel}/browseros-claw-server-rust-resources-${target}.zip"
+              curl --fail --silent --show-error --head --retry 5 --retry-delay 10 "$url" >/dev/null
+              echo "Verified $url"
+            done
+          done
+
+      - name: Summarize published resource keys
+        run: |
+          set -euo pipefail
+          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          {
+            echo "### BrowserClaw Server Rust resource publish"
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- GitHub release: \`$RELEASE_TAG\`"
+            echo "- Upload behavior: wrote versioned keys and repointed latest keys"
+            echo
+            echo "Latest CDN URLs:"
+            for target in "${targets[@]}"; do
+              echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-${target}.zip"
+            done
+            echo
+            echo "Versioned CDN URLs:"
+            for target in "${targets[@]}"; do
+              echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/${VERSION}/browseros-claw-server-rust-resources-${target}.zip"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-ota:
+    needs:
+      - release
+      - publish
+    if: ${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Preflight OTA signing key
+        run: |
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is required when publish_ota is true"
+            exit 1
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Publish alpha BrowserClaw server OTA artifacts
+        working-directory: packages/browseros
+        run: uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw

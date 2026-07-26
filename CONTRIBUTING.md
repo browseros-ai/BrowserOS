@@ -115,30 +115,20 @@ Once you have Chromium checked out, navigate to our build system:
 ```bash
 cd packages/browseros
 
-# Debug build (for development)
-# macOS
-python build/build.py --config build/config/debug.macos.yaml --chromium-src /path/to/chromium/src --build
+# Debug build (for development) — same command on macOS/Linux/Windows
+uv run browseros build --preset debug --chromium-src /path/to/chromium/src
 
-# Linux
-python build/build.py --config build/config/debug.linux.yaml --chromium-src /path/to/chromium/src --build
+# Release build (for production; add --no-sign/--no-upload as needed)
+uv run browseros build --preset release --chromium-src /path/to/chromium/src
 
-# Windows
-python build/build.py --config build/config/debug.windows.yaml --chromium-src /path/to/chromium/src --build
-
-# Release build (for production)
-# macOS
-python build/build.py --config build/config/release.macos.yaml --chromium-src /path/to/chromium/src --build
-
-# Linux
-python build/build.py --config build/config/release.linux.yaml --chromium-src /path/to/chromium/src --build
-
-# Windows
-python build/build.py --config build/config/release.windows.yaml --chromium-src /path/to/chromium/src --build
+# See every pipeline step and preset switch
+uv run browseros build --list
+uv run browseros build --help
 ```
 
 The build typically takes 1-3 hours on modern hardware (M4 Max, Ryzen 9, etc.).
 
-**For detailed instructions, see [Browser Build Guide](docs/BUILD.md).**
+**For the build system architecture and more invocations, see [packages/browseros/bos_build/README.md](packages/browseros/bos_build/README.md).**
 
 ## Making Your First Contribution
 

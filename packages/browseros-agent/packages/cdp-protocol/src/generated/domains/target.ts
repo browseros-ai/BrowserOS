@@ -101,6 +101,7 @@ export interface CreateTargetParams {
   background?: boolean
   forTab?: boolean
   hidden?: boolean
+  focus?: boolean
 }
 
 export interface CreateTargetResult {

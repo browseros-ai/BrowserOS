@@ -1,9 +1,8 @@
 {
   "ports": {
+    "server": 9100,
     "cdp": 9000,
-    "http_mcp": 9100,
-    "agent": 9200,
-    "extension": 9300
+    "proxy": 9100
   },
   "directories": {
     "resources": "./resources",

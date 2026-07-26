@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel.h b/chrome/browser/ui/views/side_panel/side_panel.h
-index 340d36f59e278..32dac5e143fbd 100644
+index 4946a573e264e..da735d4bf11f6 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel.h
 +++ b/chrome/browser/ui/views/side_panel/side_panel.h
-@@ -170,6 +170,9 @@ class SidePanel : public views::AccessiblePaneView,
+@@ -164,6 +164,9 @@ class SidePanel : public views::AccessiblePaneView,
  
    bool animations_disabled_ = false;
  

@@ -1,5 +1,5 @@
 diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/common/extensions/api/_permission_features.json
-index ff1abebbe57a4..2650969595bbd 100644
+index 7122901e91ee7..2869f3b07ebf5 100644
 --- a/chrome/common/extensions/api/_permission_features.json
 +++ b/chrome/common/extensions/api/_permission_features.json
 @@ -93,6 +93,10 @@

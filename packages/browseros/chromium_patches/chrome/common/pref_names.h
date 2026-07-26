@@ -1,8 +1,8 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 898e1c48db1e1..3f88b936ccd63 100644
+index 831ef13b599e6..b291b3328955d 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -1594,6 +1594,9 @@ inline constexpr char kImportDialogSavedPasswords[] =
+@@ -1135,6 +1135,9 @@ inline constexpr char kImportDialogSavedPasswords[] =
      "import_dialog_saved_passwords";
  inline constexpr char kImportDialogSearchEngine[] =
      "import_dialog_search_engine";
@@ -12,8 +12,8 @@ index 898e1c48db1e1..3f88b936ccd63 100644
  
  // Profile avatar and name
  inline constexpr char kProfileAvatarIndex[] = "profile.avatar_index";
-@@ -4336,6 +4339,18 @@ inline constexpr char kAndroidTipNotificationShownBottomOmnibox[] =
- // LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/notifications/tips/TipsUtils.java:TipsShownPrefs)
+@@ -3673,6 +3676,18 @@ inline constexpr char kAuxiliarySearchLastDonatedHistoryEntryVisitTime[] =
+ inline constexpr char kAppRatingPromptShown[] = "app_rating_prompt_shown";
  #endif  // BUILDFLAG(IS_ANDROID)
  
 +// BrowserOS: metrics prefs

@@ -1,0 +1,105 @@
+name: Sync internal-docs submodule
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [internal-docs-updated]
+
+concurrency:
+  group: sync-internal-docs
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Bump internal-docs submodule pointer on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Rewrite SSH submodule URL to HTTPS-with-token
+        env:
+          TOKEN: ${{ secrets.INTERNAL_DOCS_SYNC_TOKEN }}
+        run: |
+          git config --global "url.https://x-access-token:${TOKEN}@github.com/.insteadOf" "git@github.com:"
+
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.INTERNAL_DOCS_SYNC_TOKEN }}
+          submodules: true
+          ref: main
+          fetch-depth: 50
+
+      - name: Open auto-merge PR if internal-docs has new commits
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_DOCS_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Skip if submodule not yet configured (handoff window before someone adds it)
+          if ! git config --file .gitmodules --get-regexp '^submodule\..internal-docs\.path$' >/dev/null 2>&1; then
+            echo "internal-docs submodule not yet configured in .gitmodules. Skipping."
+            exit 0
+          fi
+
+          EXISTING_PR_URL=$(gh pr list \
+            --base main \
+            --state open \
+            --json headRefName,url \
+            --jq '[.[] | select(.headRefName | startswith("bot/sync-internal-docs-")) | .url][0] // ""')
+
+          if [ -n "$EXISTING_PR_URL" ]; then
+            echo "An internal-docs sync PR is already open: $EXISTING_PR_URL"
+            exit 0
+          fi
+
+          git submodule update --remote --merge .internal-docs
+
+          if git diff --quiet .internal-docs; then
+            echo "No internal-docs changes to sync."
+            exit 0
+          fi
+
+          BRANCH="bot/sync-internal-docs-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name  "browseros-bot"
+          git config user.email "bot@browseros.ai"
+          git checkout -b "$BRANCH"
+          git add .internal-docs
+          git commit -m "chore: sync internal-docs submodule"
+
+          CLEANUP_BRANCH=0
+          cleanup_branch() {
+            if [ "$CLEANUP_BRANCH" = "1" ]; then
+              git push origin --delete "$BRANCH" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_branch ERR
+
+          git push -u origin "$BRANCH"
+          CLEANUP_BRANCH=1
+
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: sync internal-docs submodule" \
+            --body "Automated bump of the \`.internal-docs\` submodule pointer. Auto-merging.")
+          CLEANUP_BRANCH=0
+          trap - ERR
+
+          if ! gh pr merge "$PR_URL" --squash --delete-branch; then
+            PR_STATE=$(gh pr view "$PR_URL" --json mergeStateStatus,statusCheckRollup)
+            MERGE_STATE=$(jq -r '.mergeStateStatus' <<<"$PR_STATE")
+            FAILED_CHECKS=$(jq '[.statusCheckRollup[] | select(
+              (.__typename == "CheckRun" and ((.conclusion // "") | test("^(FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED)$"))) or
+              (.__typename == "StatusContext" and ((.state // "") | test("^(FAILURE|ERROR)$")))
+            )] | length' <<<"$PR_STATE")
+
+            if [ "$MERGE_STATE" = "DIRTY" ] || [ "$FAILED_CHECKS" -gt 0 ]; then
+              echo "Immediate merge failed and PR is not auto-mergeable (mergeStateStatus=$MERGE_STATE, failedChecks=$FAILED_CHECKS). Leaving PR open."
+              exit 1
+            fi
+
+            echo "Immediate merge failed with mergeStateStatus=$MERGE_STATE and no failed checks; enabling auto-merge."
+            gh pr merge "$PR_URL" --auto --squash --delete-branch
+          fi

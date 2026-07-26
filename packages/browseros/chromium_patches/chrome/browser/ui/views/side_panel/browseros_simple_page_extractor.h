@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h b/chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h
 new file mode 100644
-index 0000000000000..b9cbddf65327e
+index 0000000000000..1fed9958dcfcb
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h
 @@ -0,0 +1,71 @@
@@ -20,7 +20,7 @@ index 0000000000000..b9cbddf65327e
 +namespace side_panel {
 +
 +// Extracts structured text content from accessibility tree snapshots for
-+// BrowserOS LLM features (LLM Chat, Clash of GPTs).
++// BrowserOS LLM features (LLM Chat).
 +//
 +// Uses depth-first search (DFS) with semantic boundary detection to extract
 +// clean, structured text without duplication. Formats output as markdown-like

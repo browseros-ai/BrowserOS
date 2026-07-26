@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.cc b/chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.cc
-index 94483bbb070cb..24509910918c0 100644
+index 28d359d6a77bf..455ac9f707ef9 100644
 --- a/chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.cc
 +++ b/chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.cc
 @@ -78,7 +78,7 @@ NewTabFooterUI::~NewTabFooterUI() = default;

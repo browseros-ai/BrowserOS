@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_service.cc b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-index b4e8c1ce7316c..c6ba8b2fc1ca6 100644
+index 5474809d1dcd7..7e8967854ac29 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 @@ -8,9 +8,11 @@
@@ -14,7 +14,7 @@ index b4e8c1ce7316c..c6ba8b2fc1ca6 100644
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -471,6 +473,139 @@ void SidePanelService::OnExtensionUninstalled(
+@@ -473,6 +475,139 @@ void SidePanelService::OnExtensionUninstalled(
    RemoveExtensionOptions(extension->id());
  }
  

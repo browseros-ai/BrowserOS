@@ -6,7 +6,6 @@
  * BrowserOS Server - Entry Point
  */
 
-// Runtime check for Bun
 if (typeof Bun === 'undefined') {
   console.error('Error: This application requires Bun runtime.')
   console.error(

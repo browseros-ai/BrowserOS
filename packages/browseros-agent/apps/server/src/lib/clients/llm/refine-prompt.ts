@@ -44,14 +44,30 @@ export async function refinePrompt(
     const resolvedConfig = await resolveLLMConfig(llmConfig, browserosId)
     const model = createLLMProvider(resolvedConfig)
 
-    // streamText works for all providers including Codex (which requires streaming)
+    // streamText works for all providers including Codex (which requires streaming).
+    // Capture streaming errors: the SDK's default onError just logs to
+    // console and does not propagate, so provider failures (bad URL,
+    // auth, timeout) end up as internal error chunks that `textStream`
+    // filters out. Without capturing, the loop exits with zero chunks
+    // and we misreport the failure as "Provider returned an empty
+    // response". Re-throw after the loop so the catch below surfaces
+    // the real error message.
+    let capturedError: unknown = null
     const stream = streamText({
       model,
       system: buildSystemPrompt(request.name),
       messages: [{ role: 'user', content: request.prompt }],
       abortSignal: AbortSignal.timeout(TIMEOUTS.REFINE_PROMPT),
+      onError: ({ error }) => {
+        capturedError = error
+      },
     })
-    const refined = (await stream.text)?.trim()
+    const chunks: string[] = []
+    for await (const chunk of stream.textStream) {
+      chunks.push(chunk)
+    }
+    if (capturedError) throw capturedError
+    const refined = chunks.join('').trim()
 
     if (!refined) {
       return { success: false, message: 'Provider returned an empty response' }

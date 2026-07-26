@@ -1,6 +1,6 @@
 # browseros-cli
 
-Command-line interface for controlling BrowserOS -- launch and automate the browser from the terminal.
+Command-line interface for controlling BrowserOS -- launch and automate the browser from the terminal or AI agents. The package installs both `browseros-cli` and `bos`.
 
 ## Installation
 
@@ -25,14 +25,13 @@ curl -fsSL https://cdn.browseros.com/cli/install.sh | bash
 ## Quick Start
 
 ```bash
-# Download BrowserOS
-browseros-cli install
+# Download BrowserOS from https://browseros.com
 
 # Start BrowserOS
 browseros-cli launch
 
-# Auto-configure MCP settings for your AI tools
-browseros-cli init --auto
+# Configure MCP settings with the Server URL from BrowserOS settings
+browseros-cli init http://127.0.0.1:9000/mcp
 
 # Verify everything is working
 browseros-cli health
@@ -40,37 +39,19 @@ browseros-cli health
 
 ## Usage
 
-### Navigation
+### Agent loop
 
 ```bash
-browseros-cli navigate "https://example.com"
+page=$(browseros-cli open --json https://example.com | jq -r .page)
+browseros-cli -p "$page" snapshot
+browseros-cli -p "$page" read --links
+browseros-cli -p "$page" find text "Search" click
+browseros-cli -p "$page" press Enter
+browseros-cli -p "$page" screenshot -o shot.png
+browseros-cli -p "$page" close
 ```
 
-### Observation
-
-```bash
-browseros-cli snapshot           # Get the accessibility tree of the current page
-browseros-cli console-logs       # View browser console output
-```
-
-### Screenshots
-
-```bash
-browseros-cli screenshot         # Capture the current page
-```
-
-### Input
-
-```bash
-browseros-cli click 42           # Click an element by its node ID
-browseros-cli fill 85 "query"    # Type text into an input field
-```
-
-### Agent Mode
-
-```bash
-browseros-cli agent "Search for flights to Tokyo"
-```
+`batch` can run shared-session browser steps for navigation, eval, snapshot/read/grep/find, and direct element actions like click/fill/press/type.
 
 ## Documentation
 

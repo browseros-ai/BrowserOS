@@ -1,0 +1,11 @@
+ApiError:
+  type: object
+  additionalProperties: false
+  required: [code, message]
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    requestId:
+      type: string

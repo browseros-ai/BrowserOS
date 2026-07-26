@@ -41,7 +41,10 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	p := proc.DefaultLocalPorts()
+	p, err := resolveTargetPorts(root, "")
+	if err != nil {
+		return err
+	}
 
 	proc.LogMsg(proc.TagInfo, "Killing processes on test ports...")
 	proc.KillPorts(p)
@@ -103,7 +106,19 @@ func runTest(cmd *cobra.Command, args []string) error {
 	env := proc.BuildEnv(p, "test")
 	serverDir := filepath.Join(root, "apps/server")
 
-	// Start server
+	tempDir, err = os.MkdirTemp("", "browseros-test-")
+	if err != nil {
+		cleanup()
+		return fmt.Errorf("creating temp dir: %w", err)
+	}
+	proc.LogMsgf(proc.TagBrowser, "Created temp profile: %s", tempDir)
+
+	sidecarPath := filepath.Join(tempDir, "server-config.json")
+	if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "resources"), tempDir, p); err != nil {
+		cleanup()
+		return fmt.Errorf("writing server config: %w", err)
+	}
+
 	proc.LogMsg(proc.TagServer, "Starting server...")
 	procs = append(procs, proc.StartManaged(ctx, &wg, proc.ProcConfig{
 		Tag:     proc.TagServer,
@@ -112,8 +127,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 		Restart: false,
 		Cmd: []string{
 			"bun", filepath.Join(serverDir, "src/index.ts"),
-			"--cdp-port", fmt.Sprintf("%d", p.CDP),
-			"--server-port", fmt.Sprintf("%d", p.Server),
+			"--config", sidecarPath,
 		},
 	}))
 
@@ -123,14 +137,6 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server failed to start on port %d", p.Server)
 	}
 	proc.LogMsg(proc.TagServer, "Server ready")
-
-	// Start browser with temp profile
-	tempDir, err = os.MkdirTemp("", "browseros-test-")
-	if err != nil {
-		cleanup()
-		return fmt.Errorf("creating temp dir: %w", err)
-	}
-	proc.LogMsgf(proc.TagBrowser, "Created temp profile: %s", tempDir)
 
 	proc.LogMsg(proc.TagBrowser, "Starting BrowserOS...")
 	procs = append(procs, proc.StartManaged(ctx, &wg, proc.ProcConfig{
@@ -143,6 +149,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 			UserDataDir:       tempDir,
 			Headless:          testHeadless,
 			LoadDevExtensions: false,
+			Product:           browser.ProductBrowserOS,
 		}),
 	}))
 

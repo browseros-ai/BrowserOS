@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1777750582590,
+      "tag": "0000_zippy_psylocke",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1777752799806,
+      "tag": "0001_lazy_orphan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777902205667,
+      "tag": "0002_chemical_whirlwind",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781916712443,
+      "tag": "0003_scrub_hermes_credentials",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/chrome_devtools_session.cc b/chrome/browser/devtools/chrome_devtools_session.cc
-index 40fa47a76f7ea..23a224d5b886a 100644
+index 0756036495f99..65f21fb911f66 100644
 --- a/chrome/browser/devtools/chrome_devtools_session.cc
 +++ b/chrome/browser/devtools/chrome_devtools_session.cc
 @@ -17,10 +17,12 @@
@@ -15,7 +15,7 @@ index 40fa47a76f7ea..23a224d5b886a 100644
  #include "chrome/browser/devtools/protocol/page_handler.h"
  #include "chrome/browser/devtools/protocol/pwa_handler.h"
  #include "chrome/browser/devtools/protocol/security_handler.h"
-@@ -111,6 +113,16 @@ ChromeDevToolsSession::ChromeDevToolsSession(
+@@ -120,6 +122,16 @@ ChromeDevToolsSession::ChromeDevToolsSession(
      browser_handler_ =
          std::make_unique<BrowserHandler>(&dispatcher_, agent_host->GetId());
    }

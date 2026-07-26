@@ -1,8 +1,8 @@
 diff --git a/base/threading/thread_restrictions.h b/base/threading/thread_restrictions.h
-index 59d6e6e4d899f..9f2737ff17c6f 100644
+index a1bb1a4602902..3f606d1b23986 100644
 --- a/base/threading/thread_restrictions.h
 +++ b/base/threading/thread_restrictions.h
-@@ -200,6 +200,9 @@ namespace scheduler {
+@@ -205,6 +205,9 @@ namespace scheduler {
  class NonMainThreadImpl;
  }
  }  // namespace blink
@@ -12,7 +12,7 @@ index 59d6e6e4d899f..9f2737ff17c6f 100644
  namespace cc {
  class CategorizedWorkerPoolJob;
  class CategorizedWorkerPool;
-@@ -595,6 +598,7 @@ class BASE_EXPORT ScopedAllowBlocking {
+@@ -614,6 +617,7 @@ class BASE_EXPORT ScopedAllowBlocking {
    friend class base::subtle::PlatformSharedMemoryRegion;
    friend class base::win::ScopedAllowBlockingForUserAccountControl;
    friend class blink::DiskDataAllocator;
@@ -20,7 +20,7 @@ index 59d6e6e4d899f..9f2737ff17c6f 100644
    friend class chromecast::CrashUtil;
    friend class content::BrowserProcessIOThread;
    friend class content::DWriteFontProxyImpl;
-@@ -743,6 +747,7 @@ class BASE_EXPORT ScopedAllowBaseSyncPrimitives {
+@@ -763,6 +767,7 @@ class BASE_EXPORT ScopedAllowBaseSyncPrimitives {
    friend class base::SimpleThread;
    friend class base::internal::GetAppOutputScopedAllowBaseSyncPrimitives;
    friend class blink::SourceStream;

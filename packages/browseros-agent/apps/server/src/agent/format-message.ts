@@ -1,6 +1,6 @@
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 
-export function formatBrowserContext(browserContext?: BrowserContext): string {
+function formatBrowserContext(browserContext?: BrowserContext): string {
   if (!browserContext?.activeTab && !browserContext?.selectedTabs?.length) {
     return ''
   }
@@ -41,7 +41,7 @@ export function formatBrowserContext(browserContext?: BrowserContext): string {
 /** Strip XML-like tags that match our prompt delimiters to prevent injection. */
 function sanitizeForPrompt(s: string): string {
   return s.replace(
-    /<\/?(?:selected_text|USER_QUERY|page_context|AGENT_PROMPT|soul|memory_and_identity|security|workspace)[^>]*>/gi,
+    /<\/?(?:selected_text|USER_QUERY|page_context|AGENT_PROMPT|soul|security|workspace)[^>]*>/gi,
     '',
   )
 }

@@ -1,5 +1,5 @@
 diff --git a/third_party/libxml/BUILD.gn b/third_party/libxml/BUILD.gn
-index 5780cb8336be3..0a3339ac7cd7f 100644
+index 890afc0e83a92..a7b55708e3f42 100644
 --- a/third_party/libxml/BUILD.gn
 +++ b/third_party/libxml/BUILD.gn
 @@ -81,6 +81,7 @@ static_library("xml_reader") {

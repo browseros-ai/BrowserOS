@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_ui_prefs.cc b/chrome/browser/ui/browser_ui_prefs.cc
-index e94568b1c7542..25e7e791009a0 100644
+index 25d238a208dcf..4700b8fdfcea0 100644
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
 @@ -68,7 +68,7 @@ void RegisterBrowserPrefs(PrefRegistrySimple* registry) {
@@ -11,7 +11,7 @@ index e94568b1c7542..25e7e791009a0 100644
  
  #if defined(USE_AURA)
    registry->RegisterBooleanPref(prefs::kOverscrollHistoryNavigationEnabled,
-@@ -112,7 +112,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -115,7 +115,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
  
    registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
                                  pref_registration_flags);
@@ -20,8 +20,8 @@ index e94568b1c7542..25e7e791009a0 100644
                                  pref_registration_flags);
    registry->RegisterBooleanPref(prefs::kSplitViewDragAndDropEnabled, true,
                                  pref_registration_flags);
-@@ -121,7 +121,8 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
-                                 pref_registration_flags);
+@@ -126,7 +126,8 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterInt64Pref(prefs::kBookmarkBarNavigationCount, 0);
    registry->RegisterBooleanPref(prefs::kPinContextualTaskButton, true,
                                  pref_registration_flags);
 -  registry->RegisterBooleanPref(prefs::kPinSplitTabButton, false,
@@ -29,4 +29,4 @@ index e94568b1c7542..25e7e791009a0 100644
 +  registry->RegisterBooleanPref(prefs::kPinSplitTabButton, true,
                                  pref_registration_flags);
  
-   registry->RegisterInt64Pref(prefs::kDefaultBrowserLastDeclined, 0);
+   registry->RegisterInt64Pref(prefs::kDefaultBrowserInfobarLastDeclined, 0);

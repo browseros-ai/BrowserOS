@@ -1,0 +1,9 @@
+# Unsigned nightly CI build on ephemeral runners: the workflow provisions
+# chromium (checkout/clean/sync) itself, so clean and git_setup are off;
+# artifacts stay local (upload off) and signing is not wired on WarpBuild.
+# Arch comes from the workflow matrix (--arch flag).
+preset: release
+clean: false
+provision: none
+sign: false
+upload: false

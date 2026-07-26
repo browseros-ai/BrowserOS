@@ -80,6 +80,9 @@ func PageList(result *mcp.ToolResult) {
 			continue
 		}
 		pageID := intVal(page["pageId"])
+		if pageID == 0 {
+			pageID = intVal(page["page"])
+		}
 		tabID := intVal(page["tabId"])
 		title := strVal(page["title"])
 		url := strVal(page["url"])
@@ -90,7 +93,11 @@ func PageList(result *mcp.ToolResult) {
 			marker = " " + boldColor.Sprint("[ACTIVE]")
 		}
 
-		fmt.Printf("  %d. %s (tab %d)%s\n", pageID, title, tabID, marker)
+		if tabID == 0 {
+			fmt.Printf("  %d. %s%s\n", pageID, title, marker)
+		} else {
+			fmt.Printf("  %d. %s (tab %d)%s\n", pageID, title, tabID, marker)
+		}
 		fmt.Printf("     %s\n", dimColor.Sprint(url))
 	}
 }
@@ -103,19 +110,41 @@ func ActivePage(result *mcp.ToolResult) {
 	}
 
 	sc := result.StructuredContent
-	pageID := intVal(sc["pageId"])
-	tabID := intVal(sc["tabId"])
-	title := strVal(sc["title"])
-	url := strVal(sc["url"])
+	page := sc
+	if nested, ok := sc["page"].(map[string]any); ok {
+		page = nested
+	}
 
-	fmt.Printf("Active page: %d (tab %d)\n", pageID, tabID)
+	pageID := intVal(page["pageId"])
+	if pageID == 0 {
+		pageID = intVal(page["page"])
+	}
+	tabID := intVal(page["tabId"])
+	title := strVal(page["title"])
+	url := strVal(page["url"])
+
+	if tabID == 0 {
+		fmt.Printf("Active page: %d\n", pageID)
+	} else {
+		fmt.Printf("Active page: %d (tab %d)\n", pageID, tabID)
+	}
 	fmt.Println(title)
 	fmt.Println(dimColor.Sprint(url))
 }
 
 func intVal(v any) int {
-	if f, ok := v.(float64); ok {
-		return int(f)
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
 	}
 	return 0
 }

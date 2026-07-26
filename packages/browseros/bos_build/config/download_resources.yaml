@@ -1,0 +1,116 @@
+# Download resources configuration for BrowserOS build
+# This file defines resources to download from R2 before the build process
+#
+# Behavior:
+# - Files are downloaded from R2 bucket at the specified r2_key path
+# - Existing files are cleared and re-downloaded (ensures latest)
+# - Build fails immediately if any download fails
+# - For universal builds on macOS, both arm64 and x64 are downloaded automatically
+# - `download_type: artifact_zip` downloads an archive, validates
+#   `artifact-metadata.json`, and extracts the declared files into `destination`
+#
+# Conditional Operations:
+# - Use 'os' field to specify target operating systems
+#   - Supported values: windows, macos, linux (case-sensitive)
+# - Use 'arch' field to specify target architectures
+#   - Supported values: x64, arm64
+# - Use 'build_type' field to specify when an operation should run
+#   - Supported values: debug, release
+# - Use 'executable' field to mark files that need executable permissions
+#   - Set to true for binaries (permissions are not preserved during download)
+# - Use 'download_type' field to switch from plain file download to archive extraction
+#   - Supported values: file, artifact_zip
+# R2 Path Structure:
+#   artifacts/server/latest/browseros-server-resources-{target}.zip
+#   claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-{target}.zip
+#   claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip
+#
+# Example:
+#   - name: "My Artifact - macOS ARM64"
+#     r2_key: "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip"
+#     destination: "resources/binaries/browseros_server/darwin-arm64"
+#     download_type: "artifact_zip"
+#     os: ["macos"]
+#     arch: ["arm64"]
+
+download_operations:
+  # BrowserOS Server resource bundles - Platform & Architecture specific
+  - name: "BrowserOS Server Resources - macOS ARM64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip"
+    destination: "resources/binaries/browseros_server/darwin-arm64"
+    download_type: "artifact_zip"
+    os: ["macos"]
+    arch: ["arm64"]
+
+  - name: "BrowserOS Server Resources - macOS x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-darwin-x64.zip"
+    destination: "resources/binaries/browseros_server/darwin-x64"
+    download_type: "artifact_zip"
+    os: ["macos"]
+    arch: ["x64"]
+
+  - name: "BrowserOS Server Resources - Linux ARM64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-linux-arm64.zip"
+    destination: "resources/binaries/browseros_server/linux-arm64"
+    download_type: "artifact_zip"
+    os: ["linux"]
+    arch: ["arm64"]
+
+  - name: "BrowserOS Server Resources - Linux x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-linux-x64.zip"
+    destination: "resources/binaries/browseros_server/linux-x64"
+    download_type: "artifact_zip"
+    os: ["linux"]
+    arch: ["x64"]
+
+  - name: "BrowserOS Server Resources - Windows x64"
+    r2_key: "artifacts/server/latest/browseros-server-resources-windows-x64.zip"
+    destination: "resources/binaries/browseros_server/windows-x64"
+    download_type: "artifact_zip"
+    os: ["windows"]
+    arch: ["x64"]
+
+  # BrowserOS Claw Server resource bundles - Platform & Architecture specific.
+  # BrowserClaw now ships claw-server-rust; copy_resources.yaml normalizes
+  # the legacy -rs binary filename from existing CDN resources if present.
+  - name: "BrowserOS Claw Rust Server Resources - macOS ARM64"
+    r2_key: "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip"
+    destination: "resources/binaries/browseros_claw_server_rust/darwin-arm64"
+    download_type: "artifact_zip"
+    os: ["macos"]
+    arch: ["arm64"]
+
+  - name: "BrowserOS Claw Rust Server Resources - macOS x64"
+    r2_key: "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-x64.zip"
+    destination: "resources/binaries/browseros_claw_server_rust/darwin-x64"
+    download_type: "artifact_zip"
+    os: ["macos"]
+    arch: ["x64"]
+
+  - name: "BrowserOS Claw Rust Server Resources - Linux ARM64"
+    r2_key: "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-arm64.zip"
+    destination: "resources/binaries/browseros_claw_server_rust/linux-arm64"
+    download_type: "artifact_zip"
+    os: ["linux"]
+    arch: ["arm64"]
+
+  - name: "BrowserOS Claw Rust Server Resources - Linux x64"
+    r2_key: "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip"
+    destination: "resources/binaries/browseros_claw_server_rust/linux-x64"
+    download_type: "artifact_zip"
+    os: ["linux"]
+    arch: ["x64"]
+
+  - name: "BrowserOS Claw Rust Server Resources - Windows x64"
+    r2_key: "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-windows-x64.zip"
+    destination: "resources/binaries/browseros_claw_server_rust/windows-x64"
+    download_type: "artifact_zip"
+    os: ["windows"]
+    arch: ["x64"]
+
+  # BrowserOS Claw onboarding static resources - platform-independent, feeds
+  # the onboarding grit pak built for every product (no os/arch/product gate)
+  - name: "BrowserOS Claw Onboarding Resources"
+    r2_key: "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip"
+    destination: "resources/binaries/browseros_claw_onboard"
+    download_type: "artifact_zip"

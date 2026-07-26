@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_constants.h b/chrome/browser/browseros/core/browseros_constants.h
 new file mode 100644
-index 0000000000000..e554c96adc5ad
+index 0000000000000..e7b9a3a608cde
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_constants.h
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,242 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -17,79 +17,142 @@ index 0000000000000..e554c96adc5ad
 +#include <vector>
 +
 +#include "base/command_line.h"
++#include "chrome/browser/browseros/core/browseros_product.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
 +
 +namespace browseros {
 +
-+// Check if URL overrides are disabled via command line flag
 +inline bool IsURLOverridesDisabled() {
-+  return base::CommandLine::ForCurrentProcess()->HasSwitch(kDisableUrlOverrides);
++  return base::CommandLine::ForCurrentProcess()->HasSwitch(
++      kDisableUrlOverrides);
 +}
 +
-+// Agent V2 Extension ID
-+inline constexpr char kAgentV2ExtensionId[] =
-+    "bflpfmnmnokmjhmgnolecpppdbdophmk";
-+
-+// BrowserOS extension config URLs
 +inline constexpr char kBrowserOSConfigUrl[] =
 +    "https://cdn.browseros.com/extensions/extensions.json";
 +inline constexpr char kBrowserOSAlphaConfigUrl[] =
 +    "https://cdn.browseros.com/extensions/extensions.alpha.json";
 +
-+// Bug Reporter Extension ID
++inline constexpr char kAgentExtensionId[] = "bflpfmnmnokmjhmgnolecpppdbdophmk";
++
 +inline constexpr char kBugReporterExtensionId[] =
 +    "adlpneommgkgeanpaekgoaolcpncohkf";
 +
-+// Controller Extension ID
-+inline constexpr char kControllerExtensionId[] =
-+    "nlnihljpboknmfagkikhkdblbedophja";
++inline constexpr char kBrowserClawExtensionId[] =
++    "pjimfkbpehlcllblajnpfamdfjhhlgkc";
 +
-+// uBlock Origin Extension ID (Chrome Web Store)
-+// inline constexpr char kUBlockOriginExtensionId[] =
-+//     "cjpalhdlnbpafiamejdnhcphjbkeiagm";
-+
-+// BrowserOS CDN update manifest URL
-+// Used for extensions installed from local .crx files that don't have
-+// an update_url in their manifest
 +inline constexpr char kBrowserOSUpdateUrl[] =
 +    "https://cdn.browseros.com/extensions/update-manifest.xml";
 +inline constexpr char kBrowserOSAlphaUpdateUrl[] =
 +    "https://cdn.browseros.com/extensions/update-manifest.alpha.xml";
 +
-+// chrome://browseros host constant
 +inline constexpr char kBrowserOSHost[] = "browseros";
 +
-+// URL route mapping for chrome://browseros/* virtual URLs
 +struct BrowserOSURLRoute {
-+  const char* virtual_path;    // Path in chrome://browseros/*, e.g., "/ai"
-+  const char* extension_id;    // Extension that handles this route
-+  const char* extension_page;  // Page within extension, e.g., "options.html"
-+  const char* extension_hash;  // Hash/fragment without #, e.g., "ai" (empty if none)
++  const char* virtual_path;
++  const char* extension_id;
++  const char* extension_page;
++  const char* extension_hash;
 +};
 +
++enum class BrowserOSExtensionProduct {
++  kBrowserOS,
++  kBrowserClaw,
++  kAll,
++};
++
++struct BrowserOSExtensionInfo {
++  const char* id;
++  bool is_pinned;
++  bool is_labelled;
++  BrowserOSExtensionProduct product;
++};
++
++inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
++    {kAgentExtensionId, false, false, BrowserOSExtensionProduct::kBrowserOS},
++    {kBugReporterExtensionId, true, false, BrowserOSExtensionProduct::kAll},
++    {kBrowserClawExtensionId, false, false,
++     BrowserOSExtensionProduct::kBrowserClaw},
++};
++
++inline constexpr size_t kBrowserOSExtensionsCount =
++    sizeof(kBrowserOSExtensions) / sizeof(kBrowserOSExtensions[0]);
++
++inline bool IsBrowserOSExtensionProductActive(
++    BrowserOSExtensionProduct product) {
++  switch (product) {
++    case BrowserOSExtensionProduct::kBrowserOS:
++      return IsBrowserOSProduct();
++    case BrowserOSExtensionProduct::kBrowserClaw:
++      return IsBrowserClawProduct();
++    case BrowserOSExtensionProduct::kAll:
++      return true;
++  }
++  return false;
++}
++
++inline const BrowserOSExtensionInfo* FindBrowserOSExtensionInfo(
++    const std::string& extension_id) {
++  for (const auto& info : kBrowserOSExtensions) {
++    if (extension_id == info.id) {
++      return &info;
++    }
++  }
++  return nullptr;
++}
++
++// Known means catalog membership, independent of the current product.
++inline bool IsKnownBrowserOSExtension(const std::string& extension_id) {
++  return FindBrowserOSExtensionInfo(extension_id) != nullptr;
++}
++
++// Active means the catalog entry belongs to the current BrowserOS product.
++inline bool IsActiveBrowserOSExtension(const std::string& extension_id) {
++  const BrowserOSExtensionInfo* info = FindBrowserOSExtensionInfo(extension_id);
++  return info && IsBrowserOSExtensionProductActive(info->product);
++}
++
++// Returns catalog IDs that should participate in current-product behavior.
++inline std::vector<std::string> GetActiveBrowserOSExtensionIds() {
++  std::vector<std::string> ids;
++  ids.reserve(kBrowserOSExtensionsCount);
++  for (const auto& info : kBrowserOSExtensions) {
++    if (IsBrowserOSExtensionProductActive(info.product)) {
++      ids.push_back(info.id);
++    }
++  }
++  return ids;
++}
++
++// Returns every managed catalog ID for cleanup and migration paths.
++inline std::vector<std::string> GetAllBrowserOSExtensionIds() {
++  std::vector<std::string> ids;
++  ids.reserve(kBrowserOSExtensionsCount);
++  for (const auto& info : kBrowserOSExtensions) {
++    ids.push_back(info.id);
++  }
++  return ids;
++}
++
 +inline constexpr BrowserOSURLRoute kBrowserOSURLRoutes[] = {
-+    {"/settings", kAgentV2ExtensionId, "app.html", "/settings"},
-+    {"/mcp", kAgentV2ExtensionId, "app.html", "/mcp"},
-+    {"/onboarding", kAgentV2ExtensionId, "app.html", "/onboarding"},
++    {"/settings", kAgentExtensionId, "app.html", "/settings"},
++    {"/mcp", kAgentExtensionId, "app.html", "/mcp"},
++    {"/onboarding", kAgentExtensionId, "app.html", "/onboarding"},
++    {"/claw", kBrowserClawExtensionId, "newtab.html", ""},
 +};
 +
 +inline constexpr size_t kBrowserOSURLRoutesCount =
 +    sizeof(kBrowserOSURLRoutes) / sizeof(kBrowserOSURLRoutes[0]);
 +
-+// Find a route for a given virtual path (e.g., "/ai")
-+// Returns nullptr if no matching route found
 +inline const BrowserOSURLRoute* FindBrowserOSRoute(std::string_view path) {
 +  for (const auto& route : kBrowserOSURLRoutes) {
-+    if (path == route.virtual_path) {
++    if (path == route.virtual_path &&
++        IsActiveBrowserOSExtension(route.extension_id)) {
 +      return &route;
 +    }
 +  }
 +  return nullptr;
 +}
 +
-+// Get the extension URL for a chrome://browseros/* path
-+// Returns empty string if no matching route or if URL overrides are disabled
-+// Example: "/ai" -> "chrome-extension://bflp.../options.html#ai"
 +inline std::string GetBrowserOSExtensionURL(std::string_view virtual_path) {
 +  if (IsURLOverridesDisabled()) {
 +    return std::string();
@@ -107,14 +170,6 @@ index 0000000000000..e554c96adc5ad
 +  return url;
 +}
 +
-+// Check if an extension URL matches a BrowserOS route
-+// If matched, returns the virtual URL (chrome://browseros/...)
-+// Returns empty string if not a BrowserOS extension URL
-+// Parameters:
-+//   extension_id: from url.host()
-+//   extension_path: from url.path(), e.g., "/options.html"
-+//   extension_ref: from url.ref(), e.g., "ai" or "/ai" (normalized internally)
-+// Fallback: If no exact hash match, falls back to route with empty hash for same page
 +inline std::string GetBrowserOSVirtualURL(std::string_view extension_id,
 +                                          std::string_view extension_path,
 +                                          std::string_view extension_ref) {
@@ -131,13 +186,18 @@ index 0000000000000..e554c96adc5ad
 +  const BrowserOSURLRoute* fallback_route = nullptr;
 +
 +  for (const auto& route : kBrowserOSURLRoutes) {
++    if (!IsActiveBrowserOSExtension(route.extension_id)) {
++      continue;
++    }
++
 +    if (extension_id != route.extension_id) {
 +      continue;
 +    }
 +
 +    // Compare path (handle leading slash)
 +    std::string route_path = std::string("/") + route.extension_page;
-+    if (extension_path != route_path && extension_path != route.extension_page) {
++    if (extension_path != route_path &&
++        extension_path != route.extension_page) {
 +      continue;
 +    }
 +
@@ -158,68 +218,23 @@ index 0000000000000..e554c96adc5ad
 +
 +  // No exact match - use fallback if available
 +  if (fallback_route) {
-+    return std::string("chrome://") + kBrowserOSHost + fallback_route->virtual_path;
++    return std::string("chrome://") + kBrowserOSHost +
++           fallback_route->virtual_path;
 +  }
 +
 +  return std::string();
 +}
 +
-+struct BrowserOSExtensionInfo {
-+  const char* id;
-+  bool is_pinned;
-+  bool is_labelled;
-+};
-+
-+inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAgentV2ExtensionId, false, false},
-+    {kBugReporterExtensionId, true, false},
-+    {kControllerExtensionId, false, false},
-+    // ublock origin gets installed from chrome web store
-+    // {kUBlockOriginExtensionId, false, false},
-+};
-+
-+inline constexpr size_t kBrowserOSExtensionsCount =
-+    sizeof(kBrowserOSExtensions) / sizeof(kBrowserOSExtensions[0]);
-+
-+inline const BrowserOSExtensionInfo* FindBrowserOSExtensionInfo(
-+    const std::string& extension_id) {
-+  for (const auto& info : kBrowserOSExtensions) {
-+    if (extension_id == info.id)
-+      return &info;
-+  }
-+  return nullptr;
-+}
-+
-+// Check if an extension is a BrowserOS extension
-+inline bool IsBrowserOSExtension(const std::string& extension_id) {
-+  return FindBrowserOSExtensionInfo(extension_id) != nullptr;
-+}
-+
 +inline bool IsBrowserOSPinnedExtension(const std::string& extension_id) {
-+  const BrowserOSExtensionInfo* info =
-+      FindBrowserOSExtensionInfo(extension_id);
-+  return info && info->is_pinned;
++  const BrowserOSExtensionInfo* info = FindBrowserOSExtensionInfo(extension_id);
++  return info && IsBrowserOSExtensionProductActive(info->product) &&
++         info->is_pinned;
 +}
 +
 +inline bool IsBrowserOSLabelledExtension(const std::string& extension_id) {
-+  const BrowserOSExtensionInfo* info =
-+      FindBrowserOSExtensionInfo(extension_id);
-+  return info && info->is_labelled;
-+}
-+
-+// Returns true if this extension uses the contextual (tab-specific) side panel
-+// toggle behavior. Currently only Agent V2 uses this.
-+inline bool UsesContextualSidePanelToggle(const std::string& extension_id) {
-+  return extension_id == kAgentV2ExtensionId;
-+}
-+
-+// Get all BrowserOS extension IDs
-+inline std::vector<std::string> GetBrowserOSExtensionIds() {
-+  std::vector<std::string> ids;
-+  ids.reserve(kBrowserOSExtensionsCount);
-+  for (const auto& info : kBrowserOSExtensions)
-+    ids.push_back(info.id);
-+  return ids;
++  const BrowserOSExtensionInfo* info = FindBrowserOSExtensionInfo(extension_id);
++  return info && IsBrowserOSExtensionProductActive(info->product) &&
++         info->is_labelled;
 +}
 +
 +// Sentry crash reporting

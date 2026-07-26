@@ -148,6 +148,11 @@ export type InspectMode =
   | 'captureAreaScreenshot'
   | 'none'
 
+export interface InspectedElementAnchorConfig {
+  nodeId?: NodeId
+  backendNodeId?: BackendNodeId
+}
+
 // ══ Commands ══
 
 export interface GetHighlightObjectForTestParams {
@@ -251,6 +256,10 @@ export interface SetShowContainerQueryOverlaysParams {
   containerQueryHighlightConfigs: ContainerQueryHighlightConfig[]
 }
 
+export interface SetShowInspectedElementAnchorParams {
+  inspectedElementAnchorConfig: InspectedElementAnchorConfig
+}
+
 export interface SetShowPaintRectsParams {
   result: boolean
 }
@@ -299,4 +308,12 @@ export interface NodeHighlightRequestedEvent {
 
 export interface ScreenshotRequestedEvent {
   viewport: Viewport
+}
+
+export interface InspectPanelShowRequestedEvent {
+  backendNodeId: BackendNodeId
+}
+
+export interface InspectedElementWindowRestoredEvent {
+  backendNodeId: BackendNodeId
 }

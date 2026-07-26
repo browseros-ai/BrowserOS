@@ -1,35 +1,47 @@
+import type { Browser } from '@browseros/browser-core/browser'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
-import type { Browser } from '../../browser/browser'
-import { KlavisClient } from '../../lib/clients/klavis/klavis-client'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
-import type { ToolRegistry } from '../../tools/tool-registry'
 import { ChatService } from '../services/chat-service'
+import type { KlavisService } from '../services/klavis'
+import type { ServerActivity } from '../services/server-activity'
 import { ChatRequestSchema } from '../types'
 import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
   browser: Browser
-  registry: ToolRegistry
+  browserSession: BrowserSession
   browserosId?: string
+  klavis?: KlavisService
   aiSdkDevtoolsEnabled?: boolean
+  /** Port the BrowserOS server bound to. Threaded to ACP providers so
+   *  the spawned agent can dial back into the local /mcp route. */
+  serverPort: number
+  /** BrowserOS resources directory. Threaded to ACP providers so the
+   *  bundled-Bun launcher under <resourcesDir>/bin/third_party/bun
+   *  can be located for built-in adapters (claude / codex). */
+  resourcesDir?: string | null
+  activity?: ServerActivity
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
   const { browserosId } = deps
 
   const sessionStore = new SessionStore()
-  const klavisClient = new KlavisClient()
   const service = new ChatService({
     sessionStore,
-    klavisClient,
+    klavis: deps.klavis,
     browser: deps.browser,
-    registry: deps.registry,
+    browserSession: deps.browserSession,
     browserosId,
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
+    serverPort: deps.serverPort,
+    resourcesDir: deps.resourcesDir,
+    activity: deps.activity,
   })
 
   return new Hono()

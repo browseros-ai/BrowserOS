@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cursor fixture</title>
+    <style>
+      #cursor-div {
+        cursor: pointer;
+        padding: 12px;
+        border: 1px solid #333;
+        width: 200px;
+      }
+      #editable {
+        border: 1px dashed #666;
+        min-height: 24px;
+        width: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Deliberately zero ARIA: every interactive here is discoverable only via
+         cursor styles, contenteditable, or tabindex. Exercises cursor-hit ref
+         minting for elements the AX tree alone would skip. -->
+    <h1>Cursor fixture</h1>
+    <div id="cursor-div">Clickable area</div>
+    <div id="editable" contenteditable="true">editable text</div>
+    <span id="focus-span" tabindex="0">Focusable span</span>
+    <div id="cursor-result">untouched</div>
+    <script>
+      document.getElementById('cursor-div').addEventListener('click', () => {
+        document.getElementById('cursor-result').textContent = 'div-clicked'
+      })
+    </script>
+  </body>
+</html>

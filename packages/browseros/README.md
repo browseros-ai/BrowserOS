@@ -44,9 +44,9 @@ packages/browseros/
 │   │   ├── ota/             # Over-the-air update support
 │   │   └── resources/       # Resource management
 │   ├── config/              # Build configuration
-│   └── features.yaml        # Feature flag definitions
 │
 ├── chromium_patches/        # BrowserOS patches applied to Chromium source
+│   ├── .features.yaml       # Canonical patch feature registry
 │   ├── chrome/browser/      # Browser UI and feature patches
 │   ├── components/          # Component patches (e.g., os_crypt)
 │   └── ...                  # Organized to mirror Chromium source tree
@@ -57,7 +57,7 @@ packages/browseros/
 │   └── entitlements/        # macOS entitlements (app, helper, GPU, etc.)
 │
 ├── tools/
-│   └── bdev                 # Developer tool
+│   └── patch                # BrowserOS patch CLI
 │
 ├── CHROMIUM_VERSION          # Pinned Chromium version (MAJOR.MINOR.BUILD.PATCH)
 ├── BASE_COMMIT              # Base Chromium commit hash
@@ -124,7 +124,9 @@ macOS builds require code signing for Keychain access, Gatekeeper, and notarizat
 
 ## Feature Flags
 
-Feature flags are defined in `features.yaml` and control which BrowserOS-specific features are compiled into the build. The feature module (`build/modules/feature/`) manages flag resolution at build time.
+Patch features are defined in `chromium_patches/.features.yaml`; bos_build and
+`tools/bpatch` both read that registry when grouping and validating Chromium
+patches.
 
 ## Related Resources
 

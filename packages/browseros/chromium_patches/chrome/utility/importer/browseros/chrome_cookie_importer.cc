@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_cookie_importer.cc b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
 new file mode 100644
-index 0000000000000..570f83ac1274c
+index 0000000000000..21b17a08e1a8e
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_cookie_importer.cc
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,295 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome cookie importer implementation
 +
@@ -14,6 +14,7 @@ index 0000000000000..570f83ac1274c
 +#include "base/files/file_util.h"
 +#include "base/logging.h"
 +#include "chrome/utility/importer/browseros/chrome_decryptor.h"
++#include "chrome/utility/importer/browseros/chrome_importer_utils.h"
 +#include "sql/database.h"
 +#include "sql/statement.h"
 +
@@ -36,34 +37,6 @@ index 0000000000000..570f83ac1274c
 +inline constexpr sql::Database::Tag kDatabaseTag{"ChromeImporter"};
 +
 +constexpr char kCookiesFilename[] = "Cookies";
-+
-+// Copy database to temp location to avoid locking issues with Chrome
-+base::FilePath CopyDatabaseToTemp(const base::FilePath& db_path) {
-+  base::FilePath temp_path;
-+  if (!base::CreateTemporaryFile(&temp_path)) {
-+    LOG(WARNING) << "browseros: Failed to create temp file";
-+    return base::FilePath();
-+  }
-+
-+  if (!base::CopyFile(db_path, temp_path)) {
-+    LOG(WARNING) << "browseros: Failed to copy database to temp";
-+    base::DeleteFile(temp_path);
-+    return base::FilePath();
-+  }
-+
-+  return temp_path;
-+}
-+
-+// Convert Chrome's microseconds since Windows epoch to base::Time
-+// Chrome stores times as microseconds since Jan 1, 1601 (Windows epoch)
-+base::Time ChromeTimeToBaseTime(int64_t chrome_time) {
-+  if (chrome_time == 0) {
-+    return base::Time();
-+  }
-+  // base::Time::FromDeltaSinceWindowsEpoch handles the conversion
-+  return base::Time::FromDeltaSinceWindowsEpoch(
-+      base::Microseconds(chrome_time));
-+}
 +
 +// Map Chrome's samesite integer to net::CookieSameSite
 +net::CookieSameSite IntToSameSite(int value) {
@@ -179,16 +152,12 @@ index 0000000000000..570f83ac1274c
 +}  // namespace
 +
 +std::vector<ImportedCookieEntry> ImportChromeCookies(
-+    const base::FilePath& profile_path) {
++    const base::FilePath& profile_path,
++    const std::string& encryption_key) {
 +  std::vector<ImportedCookieEntry> cookies;
-+
-+  // Extract encryption key (same key used for passwords and cookies)
-+  KeyExtractionResult key_result;
-+  std::string encryption_key = ExtractChromeKey(profile_path, &key_result);
-+
 +  if (encryption_key.empty()) {
-+    LOG(WARNING) << "browseros: Failed to extract encryption key, "
-+                 << "result: " << static_cast<int>(key_result);
++    LOG(WARNING) << "browseros: Chrome encryption key unavailable; "
++                 << "skipping cookie import";
 +    return cookies;
 +  }
 +
@@ -209,7 +178,7 @@ index 0000000000000..570f83ac1274c
 +  sql::Database db(kDatabaseTag);
 +  if (!db.Open(temp_db_path)) {
 +    LOG(WARNING) << "browseros: Failed to open Cookies database";
-+    base::DeleteFile(temp_db_path);
++    DeleteDatabaseTemp(temp_db_path);
 +    return cookies;
 +  }
 +
@@ -228,6 +197,10 @@ index 0000000000000..570f83ac1274c
 +  constexpr size_t kSha256HashLength = 32;
 +  const bool has_domain_hash_prefix = (db_version >= 24);
 +
++  // Counters for cookies we cannot import (reported after the loop).
++  int skipped_app_bound = 0;
++  int failed_decrypt = 0;
++
 +  // Query cookies table - use scope block to ensure statement is destroyed
 +  // before db.Close() to avoid DCHECK failure
 +  {
@@ -242,7 +215,7 @@ index 0000000000000..570f83ac1274c
 +    sql::Statement statement(db.GetUniqueStatement(kQuery));
 +    if (!statement.is_valid()) {
 +      LOG(WARNING) << "browseros: Failed to prepare query";
-+      base::DeleteFile(temp_db_path);
++      DeleteDatabaseTemp(temp_db_path);
 +      return cookies;
 +    }
 +
@@ -259,19 +232,27 @@ index 0000000000000..570f83ac1274c
 +      // Prefer encrypted_value if present, otherwise use plaintext
 +      if (!encrypted_value.empty()) {
 +        std::string decrypted_value;
-+        if (DecryptChromeValue(encrypted_value, encryption_key,
-+                               &decrypted_value)) {
-+          // Chrome 130+ (db version ≥ 24) prepends SHA256 hash of domain
-+          // to the cookie value before encryption. Strip it after decryption.
-+          if (has_domain_hash_prefix &&
-+              decrypted_value.size() > kSha256HashLength) {
-+            entry.value = decrypted_value.substr(kSha256HashLength);
-+          } else {
-+            entry.value = decrypted_value;
-+          }
++        DecryptResult decrypt_result = DecryptChromeValue(
++            encrypted_value, encryption_key, &decrypted_value);
++        if (decrypt_result == DecryptResult::kAppBoundUnsupported) {
++          // Chrome 127+ App-Bound (v20) cookie. Its key is held by Chrome's
++          // SYSTEM elevation service, so we skip it instead of importing an
++          // undecryptable value.
++          ++skipped_app_bound;
++          continue;
++        }
++        if (decrypt_result != DecryptResult::kSuccess) {
++          // Genuine decryption failure: skip rather than store a junk value.
++          ++failed_decrypt;
++          continue;
++        }
++        // Chrome 130+ (db version ≥ 24) prepends the SHA256 hash of the domain
++        // to the cookie value before encryption. Strip it after decryption.
++        if (has_domain_hash_prefix &&
++            decrypted_value.size() >= kSha256HashLength) {
++          entry.value = decrypted_value.substr(kSha256HashLength);
 +        } else {
-+          // Fall back to plaintext if decryption fails
-+          entry.value = plaintext_value;
++          entry.value = decrypted_value;
 +        }
 +      } else {
 +        entry.value = plaintext_value;
@@ -304,7 +285,15 @@ index 0000000000000..570f83ac1274c
 +  }  // statement destroyed here
 +
 +  db.Close();
-+  base::DeleteFile(temp_db_path);
++  DeleteDatabaseTemp(temp_db_path);
++
++  if (skipped_app_bound > 0 || failed_decrypt > 0) {
++    LOG(WARNING) << "browseros: Cookie import skipped " << skipped_app_bound
++                 << " App-Bound (v20) cookies and " << failed_decrypt
++                 << " undecryptable cookies; imported " << cookies.size()
++                 << ". App-Bound cookies (Chrome 127+) require Chrome's "
++                    "SYSTEM elevation service and cannot be imported.";
++  }
 +
 +  return cookies;
 +}

@@ -1,5 +1,5 @@
 diff --git a/chrome/test/data/webui/settings/import_data_dialog_test.ts b/chrome/test/data/webui/settings/import_data_dialog_test.ts
-index cf54982f5a4b6..1cf13ad985867 100644
+index c0b4425626c5b..cab58a2a1db66 100644
 --- a/chrome/test/data/webui/settings/import_data_dialog_test.ts
 +++ b/chrome/test/data/webui/settings/import_data_dialog_test.ts
 @@ -47,6 +47,8 @@ suite('ImportDataDialog', function() {

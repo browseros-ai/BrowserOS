@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/browser_features.cc b/chrome/browser/browser_features.cc
-index 875b4d0c538c5..00d5084d2e168 100644
+index 0f63c883ad8d9..0183142d8bb03 100644
 --- a/chrome/browser/browser_features.cc
 +++ b/chrome/browser/browser_features.cc
-@@ -41,6 +41,13 @@ BASE_FEATURE(kBookmarkTriggerForPreconnect, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -37,6 +37,13 @@ BASE_FEATURE(kBookmarkTriggerForPreconnect, base::FEATURE_ENABLED_BY_DEFAULT);
  // crbug.com/413259638 for more details of Bookmark triggered prefetching.
  BASE_FEATURE(kBookmarkTriggerForPrefetch, base::FEATURE_DISABLED_BY_DEFAULT);
  

@@ -1,0 +1,71 @@
+[workspace]
+members = ["crates/*", "apps/claw-server-rust"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/browseros-ai/BrowserOS"
+
+[workspace.dependencies]
+harness-integrations = { path = "crates/harness-integrations" }
+browseros-cdp = { path = "crates/browseros-cdp" }
+browseros-core = { path = "crates/browseros-core" }
+browseros-mcp = { path = "crates/browseros-mcp" }
+claw-api = { path = "crates/claw-api" }
+
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_repr = "0.1"
+serde-saphyr = { version = "0.0.29", default-features = false, features = ["deserialize"] }
+sha2 = "0.10"
+jsonc-parser = { version = "0.33", features = ["cst"] }
+toml_edit = "0.22"
+rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+schemars = "1.0"
+axum = "0.8"
+http = "1"
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+socket2 = "0.6"
+url = "2"
+base64 = "0.22"
+imagesize = "0.15"
+tokio-util = { version = "0.7", features = ["rt"] }
+regex = "1"
+rand = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde_path_to_error = "0.1"
+rquickjs = { version = "0.12.1", default-features = false, features = ["std", "futures", "parallel"] }
+clap = { version = "4.5", features = ["derive"] }
+sea-orm = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio", "macros"] }
+sea-orm-migration = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio"] }
+ulid = "1.2"
+time = { version = "0.3", features = ["formatting"] }
+tempfile = "3.14"
+toml = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

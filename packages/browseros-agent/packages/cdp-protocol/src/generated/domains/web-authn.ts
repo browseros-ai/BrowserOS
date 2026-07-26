@@ -6,7 +6,7 @@ export type AuthenticatorId = string
 
 export type AuthenticatorProtocol = 'u2f' | 'ctap2'
 
-export type Ctap2Version = 'ctap2_0' | 'ctap2_1'
+export type Ctap2Version = 'ctap2_0' | 'ctap2_1' | 'ctap2_2'
 
 export type AuthenticatorTransport =
   | 'usb'
@@ -25,6 +25,8 @@ export interface VirtualAuthenticatorOptions {
   hasCredBlob?: boolean
   hasMinPinLength?: boolean
   hasPrf?: boolean
+  hasHmacSecret?: boolean
+  hasHmacSecretMc?: boolean
   automaticPresenceSimulation?: boolean
   isUserVerified?: boolean
   defaultBackupEligibility?: boolean

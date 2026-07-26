@@ -1,0 +1,62 @@
+import type { CdpBackend } from './backends/types'
+import type { PageInfo } from './core/pages'
+import { BrowserSession } from './core/session'
+import { logger } from './logger'
+
+export type { PageInfo } from './core/pages'
+
+/** Server facade over BrowserSession for callers that are not MCP tools. */
+export class Browser {
+  private core: BrowserSession
+
+  constructor(cdp: CdpBackend) {
+    this.core = new BrowserSession(cdp)
+  }
+
+  isCdpConnected(): boolean {
+    return this.core.isConnected()
+  }
+
+  /** Browser-core session shared by MCP and the in-process agent. */
+  get session(): BrowserSession {
+    return this.core
+  }
+
+  async listPages(): Promise<PageInfo[]> {
+    return this.core.pages.list()
+  }
+
+  async newPage(
+    url: string,
+    opts?: { background?: boolean; windowId?: number },
+  ): Promise<number> {
+    const windowId = await this.resolveVisibleWindowId(opts?.windowId)
+    return this.core.pages.newPage(url, {
+      background: opts?.background,
+      windowId,
+    })
+  }
+
+  async closePage(page: number): Promise<void> {
+    await this.core.pages.close(page)
+  }
+
+  async resolveTabIds(tabIds: number[]): Promise<Map<number, number>> {
+    return this.core.pages.resolveTabIds(tabIds)
+  }
+
+  private async resolveVisibleWindowId(
+    requestedWindowId?: number,
+  ): Promise<number | undefined> {
+    if (requestedWindowId !== undefined) return requestedWindowId
+
+    const windows = await this.core.windows.list()
+    const visibleWindow =
+      windows.find((window) => window.isVisible && window.isActive) ??
+      windows.find((window) => window.isVisible)
+    if (visibleWindow) return visibleWindow.windowId
+
+    logger.warn('No visible browser window found; creating one for new page')
+    return (await this.core.windows.create()).windowId
+  }
+}

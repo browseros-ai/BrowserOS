@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.cc b/chrome/browser/devtools/protocol/browser_handler_android.cc
-index 82199c6e2e93b..628cc138aa267 100644
+index 82199c6e2e93b..7978474dda89b 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.cc
 @@ -11,6 +11,7 @@
@@ -70,7 +70,7 @@ index 82199c6e2e93b..628cc138aa267 100644
  Response BrowserHandlerAndroid::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -92,3 +146,184 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
+@@ -92,3 +146,178 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
      const std::string& in_url) {
    return Response::MethodNotFound(kNotImplemented);
  }
@@ -106,11 +106,13 @@ index 82199c6e2e93b..628cc138aa267 100644
 +  return Response::MethodNotFound(kNotImplemented);
 +}
 +
-+Response BrowserHandlerAndroid::ShowWindow(int window_id) {
-+  return Response::MethodNotFound(kNotImplemented);
-+}
-+
-+Response BrowserHandlerAndroid::HideWindow(int window_id) {
++Response BrowserHandlerAndroid::SetWindowVisibility(
++    int window_id,
++    bool visible,
++    std::optional<bool> activate,
++    std::unique_ptr<protocol::Browser::WindowInfo>* out_window,
++    bool* out_replaced,
++    int* out_previous_window_id) {
 +  return Response::MethodNotFound(kNotImplemented);
 +}
 +
@@ -142,7 +144,6 @@ index 82199c6e2e93b..628cc138aa267 100644
 +    std::optional<int> index,
 +    std::optional<bool> background,
 +    std::optional<bool> pinned,
-+    std::optional<bool> hidden,
 +    std::optional<std::string> browser_context_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  return Response::MethodNotFound(kNotImplemented);
@@ -196,13 +197,6 @@ index 82199c6e2e93b..628cc138aa267 100644
 +    std::optional<int> window_id,
 +    std::optional<int> index,
 +    std::optional<bool> activate,
-+    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
-+  return Response::MethodNotFound(kNotImplemented);
-+}
-+
-+Response BrowserHandlerAndroid::HideTab(
-+    std::optional<std::string> target_id,
-+    std::optional<int> tab_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  return Response::MethodNotFound(kNotImplemented);
 +}

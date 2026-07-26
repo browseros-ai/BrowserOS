@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 7280ef29b85c1..5a3690a409d58 100644
+index 97b17f850c30d..3676d4608aca8 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -12,6 +12,7 @@ import("//build/config/features.gni")
@@ -10,23 +10,24 @@ index 7280ef29b85c1..5a3690a409d58 100644
  import("//chrome/browser/downgrade/buildflags.gni")
  import("//chrome/common/features.gni")
  import("//chrome/common/request_header_integrity/buildflags.gni")
-@@ -98,6 +99,7 @@ if (is_win) {
+@@ -95,6 +96,8 @@ if (is_win) {
  buildflag_header("buildflags") {
    header = "buildflags.h"
    flags = [
 +    "ENABLE_SPARKLE=$enable_sparkle",
++    "ENABLE_WINSPARKLE=$enable_winsparkle",
      "ENABLE_UPDATER=$enable_updater",
      "ENABLE_UPDATE_NOTIFICATIONS=$enable_update_notifications",
      "USE_MINIKIN_HYPHENATION=$use_minikin_hyphenation",
-@@ -1901,6 +1903,7 @@ static_library("browser") {
-     "//chrome/browser/bluetooth",
-     "//chrome/browser/bluetooth:impl",
+@@ -1443,6 +1446,7 @@ static_library("browser") {
+     "//chrome/browser/bookmarks",
+     "//chrome/browser/bookmarks:impl",
      "//chrome/browser/breadcrumbs",
 +    "//chrome/browser/browseros",
+     "//chrome/browser/browsing_data",
      "//chrome/browser/browsing_data:constants",
-     "//chrome/browser/chooser_controller",
-     "//chrome/browser/commerce",
-@@ -6751,6 +6754,16 @@ static_library("browser") {
+     "//chrome/browser/browsing_topics",
+@@ -6204,6 +6208,27 @@ static_library("browser") {
      ]
    }
  
@@ -38,6 +39,17 @@ index 7280ef29b85c1..5a3690a409d58 100644
 +
 +    # Headers config for compilation (linking handled by chrome_framework)
 +    public_configs = [ "//third_party/sparkle:sparkle_link_framework" ]
++  }
++
++  if (is_win && enable_winsparkle) {
++    sources += [
++      "win/winsparkle_glue.cc",
++      "win/winsparkle_glue.h",
++    ]
++
++    # Link flags (import lib + /DELAYLOAD) propagate to every binary linking
++    # this target via all_dependent_configs on the group.
++    deps += [ "//third_party/winsparkle" ]
 +  }
 +
    if (is_android || is_mac || is_win || is_chromeos) {

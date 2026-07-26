@@ -1,0 +1,146 @@
+openapi: 3.0.3
+info:
+  title: BrowserClaw API
+  version: 1.0.0
+  description: Implementation-neutral REST contract shared by BrowserClaw clients and servers.
+servers:
+  - url: http://127.0.0.1:9200
+paths:
+  /system/health:
+    $ref: ./paths/system.yaml#/health
+  /system/shutdown:
+    $ref: ./paths/system.yaml#/shutdown
+  /api/v1/system:
+    $ref: ./paths/system.yaml#/info
+  /api/v1/cockpit/stats:
+    $ref: ./paths/cockpit.yaml#/stats
+  /api/v1/settings/telemetry:
+    $ref: ./paths/settings.yaml#/telemetry
+  /api/v1/sessions:
+    $ref: ./paths/sessions.yaml#/collection
+  /api/v1/sessions/{sessionId}:
+    $ref: ./paths/sessions.yaml#/detail
+  /api/v1/sessions/{sessionId}/cancel:
+    $ref: ./paths/sessions.yaml#/cancel
+  /api/v1/sessions/{sessionId}/recording:
+    $ref: ./paths/recordings.yaml#/metadata
+  /api/v1/sessions/{sessionId}/recording/events:
+    $ref: ./paths/recordings.yaml#/events
+  /api/v1/recordings/events:
+    $ref: ./paths/recordings.yaml#/ingest
+  /api/v1/sessions/{sessionId}/preview:
+    $ref: ./paths/sessions.yaml#/preview
+  /api/v1/sessions/{sessionId}/screenshots:
+    $ref: ./paths/sessions.yaml#/screenshots
+  /api/v1/sessions/{sessionId}/screenshots/{screenshotId}:
+    $ref: ./paths/sessions.yaml#/screenshot
+  /api/v1/connections:
+    $ref: ./paths/connections.yaml#/collection
+  /api/v1/connections/{harness}:
+    $ref: ./paths/connections.yaml#/harness
+  /api/v1/audit/storage:
+    $ref: ./paths/audit.yaml#/storage
+  /api/v1/audit/retention:
+    $ref: ./paths/audit.yaml#/retention
+  /api/v1/audit/cleanup:
+    $ref: ./paths/audit.yaml#/cleanup
+components:
+  parameters:
+    SessionId:
+      $ref: ./parameters.yaml#/SessionId
+    ScreenshotId:
+      $ref: ./parameters.yaml#/ScreenshotId
+    Harness:
+      $ref: ./parameters.yaml#/Harness
+    RecordingTabId:
+      $ref: ./parameters.yaml#/RecordingTabId
+    RecordingDocumentId:
+      $ref: ./parameters.yaml#/RecordingDocumentId
+    RecordingBatchId:
+      $ref: ./parameters.yaml#/RecordingBatchId
+    RecordingGap:
+      $ref: ./parameters.yaml#/RecordingGap
+  responses:
+    BadRequest:
+      $ref: ./responses.yaml#/BadRequest
+    NotFound:
+      $ref: ./responses.yaml#/NotFound
+    Conflict:
+      $ref: ./responses.yaml#/Conflict
+    Gone:
+      $ref: ./responses.yaml#/Gone
+    PayloadTooLarge:
+      $ref: ./responses.yaml#/PayloadTooLarge
+    InternalError:
+      $ref: ./responses.yaml#/InternalError
+  schemas:
+    ApiError:
+      $ref: ./schemas/common.yaml#/ApiError
+    HealthResponse:
+      $ref: ./schemas/system.yaml#/HealthResponse
+    ShutdownResponse:
+      $ref: ./schemas/system.yaml#/ShutdownResponse
+    SystemInfo:
+      $ref: ./schemas/system.yaml#/SystemInfo
+    SystemCapabilities:
+      $ref: ./schemas/system.yaml#/SystemCapabilities
+    CockpitStats:
+      $ref: ./schemas/cockpit.yaml#/CockpitStats
+    CockpitStatsWindow:
+      $ref: ./schemas/cockpit.yaml#/CockpitStatsWindow
+    TelemetryState:
+      $ref: ./schemas/settings.yaml#/TelemetryState
+    UpdateTelemetryRequest:
+      $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
+    SessionStatus:
+      $ref: ./schemas/sessions.yaml#/SessionStatus
+    LiveSessionActivityState:
+      $ref: ./schemas/sessions.yaml#/LiveSessionActivityState
+    LiveSessionState:
+      $ref: ./schemas/sessions.yaml#/LiveSessionState
+    SessionBrowserTab:
+      $ref: ./schemas/sessions.yaml#/SessionBrowserTab
+    SessionTokenUsage:
+      $ref: ./schemas/sessions.yaml#/SessionTokenUsage
+    SessionSummary:
+      $ref: ./schemas/sessions.yaml#/SessionSummary
+    SessionList:
+      $ref: ./schemas/sessions.yaml#/SessionList
+    SessionDetail:
+      $ref: ./schemas/sessions.yaml#/SessionDetail
+    SessionScreenshot:
+      $ref: ./schemas/sessions.yaml#/SessionScreenshot
+    SessionScreenshotList:
+      $ref: ./schemas/sessions.yaml#/SessionScreenshotList
+    Dispatch:
+      $ref: ./schemas/dispatches.yaml#/Dispatch
+    CancelSessionResponse:
+      $ref: ./schemas/sessions.yaml#/CancelSessionResponse
+    RecordingMetadata:
+      $ref: ./schemas/recordings.yaml#/RecordingMetadata
+    RecordingTabMetadata:
+      $ref: ./schemas/recordings.yaml#/RecordingTabMetadata
+    RecordingSegmentMetadata:
+      $ref: ./schemas/recordings.yaml#/RecordingSegmentMetadata
+    AppendRecordingEventsResponse:
+      $ref: ./schemas/recordings.yaml#/AppendRecordingEventsResponse
+    ToolEvent:
+      $ref: ./schemas/sessions.yaml#/ToolEvent
+    Harness:
+      $ref: ./schemas/connections.yaml#/Harness
+    Connection:
+      $ref: ./schemas/connections.yaml#/Connection
+    ConnectionList:
+      $ref: ./schemas/connections.yaml#/ConnectionList
+    AuditRetentionMode:
+      $ref: ./schemas/audit.yaml#/AuditRetentionMode
+    AuditRetention:
+      $ref: ./schemas/audit.yaml#/AuditRetention
+    AuditStorageUsage:
+      $ref: ./schemas/audit.yaml#/AuditStorageUsage
+    AuditStorageState:
+      $ref: ./schemas/audit.yaml#/AuditStorageState
+    SetAuditRetentionRequest:
+      $ref: ./schemas/audit.yaml#/SetAuditRetentionRequest
+    AuditCleanupResult:
+      $ref: ./schemas/audit.yaml#/AuditCleanupResult

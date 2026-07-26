@@ -1,5 +1,5 @@
 diff --git a/chrome/app/chrome_crash_reporter_client_win.cc b/chrome/app/chrome_crash_reporter_client_win.cc
-index ac91059612483..7286dfcca9365 100644
+index 1d85aa0d8410f..975c964d2aec9 100644
 --- a/chrome/app/chrome_crash_reporter_client_win.cc
 +++ b/chrome/app/chrome_crash_reporter_client_win.cc
 @@ -31,6 +31,12 @@

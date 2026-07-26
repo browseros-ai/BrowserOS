@@ -1,25 +1,25 @@
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 12845dd2464bb..ab7dbdd7d9452 100644
+index 4c7ad0aaa2347..af839ab033fb3 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -24,6 +24,8 @@
+@@ -23,6 +23,8 @@
+ #include "chrome/browser/accessibility/page_colors_controller.h"
  #include "chrome/browser/accessibility/prefers_default_scrollbar_styles_prefs.h"
- #include "chrome/browser/actor/ui/actor_ui_state_manager_prefs.h"
  #include "chrome/browser/browser_process_impl.h"
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
  #include "chrome/browser/chrome_content_browser_client.h"
  #include "chrome/browser/component_updater/component_updater_prefs.h"
  #include "chrome/browser/download/download_prefs.h"
-@@ -106,6 +108,7 @@
+@@ -108,6 +110,7 @@
  #include "components/breadcrumbs/core/breadcrumbs_status.h"
  #include "components/browsing_data/core/pref_names.h"
  #include "components/certificate_transparency/pref_names.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_prefs.h"
  #include "components/collaboration/public/pref_names.h"
- #include "components/commerce/core/pref_names.h"
+ #include "components/commerce/core/prefs.h"
  #include "components/content_settings/core/browser/host_content_settings_map.h"
-@@ -1738,6 +1741,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+@@ -1364,6 +1367,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
    breadcrumbs::RegisterPrefs(registry);
    browser_shutdown::RegisterPrefs(registry);
    BrowserProcessImpl::RegisterPrefs(registry);
@@ -28,7 +28,7 @@ index 12845dd2464bb..ab7dbdd7d9452 100644
    ChromeContentBrowserClient::RegisterLocalStatePrefs(registry);
    chrome_labs_prefs::RegisterLocalStatePrefs(registry);
    chrome_urls::RegisterPrefs(registry);
-@@ -2038,6 +2043,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+@@ -1678,6 +1683,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
    AnnouncementNotificationService::RegisterProfilePrefs(registry);
    autofill::prefs::RegisterProfilePrefs(registry);
    browsing_data::prefs::RegisterBrowserUserPrefs(registry);
@@ -36,7 +36,7 @@ index 12845dd2464bb..ab7dbdd7d9452 100644
    capture_policy::RegisterProfilePrefs(registry);
    certificate_transparency::prefs::RegisterPrefs(registry);
    ChromeContentBrowserClient::RegisterProfilePrefs(registry);
-@@ -2109,6 +2115,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+@@ -1752,6 +1758,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
    regional_capabilities::prefs::RegisterProfilePrefs(registry);
    RegisterBrowserUserPrefs(registry);
    RegisterGeminiSettingsPrefs(registry);
@@ -44,7 +44,7 @@ index 12845dd2464bb..ab7dbdd7d9452 100644
    RegisterPrefersDefaultScrollbarStylesPrefs(registry);
    RegisterSafetyHubProfilePrefs(registry);
  #if BUILDFLAG(IS_CHROMEOS)
-@@ -2508,6 +2515,10 @@ void RegisterGeminiSettingsPrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -2200,6 +2207,10 @@ void RegisterGeminiSettingsPrefs(user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterIntegerPref(prefs::kGeminiSettings, 0);
  }
  

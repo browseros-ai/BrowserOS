@@ -1,1 +1,0 @@
-{"query_id": "HN-1", "dataset": "webvoyager", "query": "go to HN best and click the comments section of 2nd post", "graders": ["webvoyager_grader"], "start_url": "https://www.amazon.com/", "metadata": {"original_task_id": "Amazon--0", "website": "Amazon", "category": "Amazon", "additional": {"ground_truth": "Sensodyne toothpaste ordered on Amazon", "answer_type": "golden"}}}

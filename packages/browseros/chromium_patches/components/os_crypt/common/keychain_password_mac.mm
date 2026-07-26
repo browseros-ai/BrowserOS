@@ -1,16 +1,28 @@
 diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
-index caa0e420956a3..d60a67a8bacb7 100644
+index f240dc22ee391..805f7e3f37a5b 100644
 --- a/components/os_crypt/common/keychain_password_mac.mm
 +++ b/components/os_crypt/common/keychain_password_mac.mm
-@@ -35,8 +35,9 @@
+@@ -18,6 +18,7 @@
+ #include "base/strings/string_view_util.h"
+ #include "base/types/expected.h"
+ #include "build/branding_buildflags.h"
++#include "components/os_crypt/common/browseros_product_buildflags.h"
+ #include "crypto/apple/keychain_v2.h"
+ #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+ 
+@@ -38,8 +39,13 @@
  const char kDefaultServiceName[] = "Chrome Safe Storage";
  const char kDefaultAccountName[] = "Chrome";
  #else
 -const char kDefaultServiceName[] = "Chromium Safe Storage";
 -const char kDefaultAccountName[] = "Chromium";
-+// BrowserOS: custom keychain service name
++#if BUILDFLAG(BROWSEROS_PRODUCT_BROWSERCLAW)
++const char kDefaultServiceName[] = "BrowserClaw Safe Storage";
++const char kDefaultAccountName[] = "BrowserClaw";
++#else
 +const char kDefaultServiceName[] = "BrowserOS Safe Storage";
 +const char kDefaultAccountName[] = "BrowserOS";
++#endif
  #endif
  
  // These values are persisted to logs. Entries should not be renumbered and

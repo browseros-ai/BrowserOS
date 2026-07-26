@@ -19,7 +19,7 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 │                                                                      │
 │   /mcp ─────── MCP tool endpoints (53+ tools)                       │
 │   /chat ────── Agent streaming (AI SDK)                              │
-│   /health ─── Health check                                           │
+│   /system/health ─ Health check                                      │
 │                                                                      │
 │   ┌─────────────────────────────────────────────────────────────┐   │
 │   │  Agent Loop                                                  │   │
@@ -49,7 +49,7 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 
 ## MCP Tools
 
-53+ tools organized by category:
+Tools organized by category:
 
 | Category | Tools |
 |----------|-------|
@@ -64,7 +64,6 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 | **History** | `history_search`, `history_recent`, `history_delete`, `history_delete_range` |
 | **Tab Groups** | `group_list`, `group_create`, `group_update`, `group_ungroup`, `group_close` |
 | **Filesystem** | `ls`, `read`, `write`, `edit`, `find`, `grep`, `bash` |
-| **Memory** | `read_core`, `update_core`, `read_soul`, `update_soul`, `search_memory`, `write_memory` |
 | **DOM** | `dom`, `dom_search` |
 | **Console** | `get_console_messages` |
 | **Other** | `browseros_info`, `handle_dialog`, `wait_for`, `download`, `export_pdf`, `output_file`, `nudges` |
@@ -82,15 +81,6 @@ The agent loop uses the [Vercel AI SDK](https://sdk.vercel.ai) to orchestrate mu
 ### Provider Factory
 
 The provider factory (`src/agent/provider-factory.ts`) creates AI SDK providers from runtime configuration, supporting hot-swapping between providers without restart.
-
-## Skills System
-
-Skills are custom instruction sets that shape agent behavior:
-
-- **Catalog** (`src/skills/catalog.ts`) — registry of available skills
-- **Defaults** (`src/skills/defaults/`) — built-in skill definitions
-- **Loader** (`src/skills/loader.ts`) — loads skills from local and remote sources
-- **Remote sync** (`src/skills/remote-sync.ts`) — syncs skills from the BrowserOS cloud
 
 ## Directory Structure
 
@@ -112,15 +102,12 @@ apps/server/
 │   │   ├── navigation.ts
 │   │   ├── input.ts
 │   │   ├── snapshot.ts
-│   │   ├── memory/
 │   │   ├── filesystem/
 │   │   └── ...
-│   ├── skills/                # Skills system
 │   ├── lib/                   # Shared utilities
 │   └── rpc.ts                 # JSON-RPC type definitions
 ├── tests/
 │   ├── tools/                 # Tool-level tests
-│   ├── sdk/                   # SDK integration tests
 │   └── server.integration.test.ts
 └── package.json
 ```
@@ -135,21 +122,20 @@ apps/server/
 ### Setup
 
 ```bash
-# Copy environment files
-cp .env.example .env.development
+# From this app directory, create the shared root development env file
+(cd ../.. && cp .env.development.example .env.development)
 
-# Start the server (with hot reload)
-bun run start
+# Start the server directly (dev:watch generates this config automatically)
+bun --env-file=../../.env.development src/index.ts --config ../../config.dev.json
 ```
 
-See the [agent monorepo README](../../README.md) for full environment variable reference and `process-compose` setup.
+See the [agent monorepo README](../../README.md) for full environment variable reference and `dev:watch` setup.
 
 ### Testing
 
 ```bash
 bun run test:tools          # Tool-level tests
 bun run test:integration    # Full integration tests (requires running BrowserOS)
-bun run test:sdk            # SDK integration tests
 ```
 
 ### Building
@@ -165,10 +151,19 @@ bun scripts/build/server.ts --target=darwin-arm64,linux-x64
 bun scripts/build/server.ts --target=all --no-upload
 ```
 
-## Ports
+## Release Flow
 
-| Port | Env Variable | Purpose |
-|------|-------------|---------|
-| 9100 | `BROWSEROS_SERVER_PORT` | HTTP server (MCP, chat, health) |
-| 9000 | `BROWSEROS_CDP_PORT` | Chromium CDP (server connects as client) |
-| 9300 | `BROWSEROS_EXTENSION_PORT` | Legacy BrowserOS launch arg kept for compatibility |
+Server releases are GitHub Releases for annotated component tags. They do not build or upload server binaries; GitHub provides the source zip and tarball for the tag.
+
+Bump `packages/browseros-agent/apps/server/package.json` and the matching `bun.lock` entry in a PR, merge it, then tag the merged commit:
+
+```bash
+git tag -a agent-server/v0.0.123 -m "BrowserOS Server - v0.0.123"
+git push origin agent-server/v0.0.123
+```
+
+The workflow validates the tag against the hardcoded package path. A tag push fails if the tagged commit's package version does not match the tag version. Manual dispatch can set the package version on the default branch, update the matching lockfile entry, create the annotated tag, and publish the GitHub Release.
+
+## Sidecar Config
+
+`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, and Chromium-managed launches generate this file before starting the binary.

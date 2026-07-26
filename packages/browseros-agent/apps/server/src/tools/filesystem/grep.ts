@@ -1,5 +1,5 @@
-import { readFile, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { constants } from 'node:fs'
+import { open, stat } from 'node:fs/promises'
 import { tool } from 'ai'
 import { z } from 'zod'
 import {
@@ -8,6 +8,7 @@ import {
   GREP_MAX_LINE_LENGTH,
   isBinaryPath,
   MAX_GREP_FILE_SIZE,
+  resolveWorkspacePath,
   toModelOutput,
   truncateLine,
   walkFiles,
@@ -20,6 +21,34 @@ interface GrepMatch {
   lineNum: number
   line: string
   isMatch: boolean
+}
+
+const GREP_FILE_OPEN_FLAGS =
+  constants.O_RDONLY |
+  (typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0)
+
+/** Reads grep input from a descriptor so final-component symlinks are rejected. */
+async function readGrepFileContent(
+  filePath: string,
+  maxBytes?: number,
+): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>>
+  try {
+    handle = await open(filePath, GREP_FILE_OPEN_FLAGS)
+  } catch {
+    return null
+  }
+
+  try {
+    const fileStat = await handle.stat()
+    if (!fileStat.isFile()) return null
+    if (maxBytes !== undefined && fileStat.size > maxBytes) return null
+    return await handle.readFile({ encoding: 'utf-8' })
+  } catch {
+    return null
+  } finally {
+    await handle.close()
+  }
 }
 
 function searchFileLines(
@@ -98,7 +127,9 @@ export function createGrepTool(cwd: string) {
       path: z
         .string()
         .optional()
-        .describe('Directory or file to search (default: working directory)'),
+        .describe(
+          'Directory or file to search relative to the selected workspace',
+        ),
       glob: z
         .string()
         .optional()
@@ -120,7 +151,7 @@ export function createGrepTool(cwd: string) {
     execute: (params) =>
       // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: grep tool has many output mode and filtering branches
       executeWithMetrics(TOOL_NAME, async () => {
-        const searchPath = resolve(cwd, params.path || '.')
+        const searchPath = await resolveWorkspacePath(cwd, params.path || '.')
         const limit = params.limit || DEFAULT_GREP_LIMIT
         const context = params.context || 0
 
@@ -160,7 +191,16 @@ export function createGrepTool(cwd: string) {
         let totalMatchCount = 0
 
         if (pathStat.isFile()) {
-          const content = await readFile(searchPath, 'utf-8')
+          const content = await readGrepFileContent(
+            searchPath,
+            MAX_GREP_FILE_SIZE,
+          )
+          if (content === null) {
+            return {
+              text: `Unable to read file: ${params.path || searchPath}`,
+              isError: true,
+            }
+          }
           const lines = content.split('\n')
           const relPath = params.path || searchPath
           const fileMatches = searchFileLines(
@@ -173,24 +213,16 @@ export function createGrepTool(cwd: string) {
           allMatches.push(...fileMatches)
           totalMatchCount = fileMatches.filter((m) => m.isMatch).length
         } else {
-          for await (const relPath of walkFiles(searchPath, searchPath)) {
+          for await (const file of walkFiles(searchPath, searchPath)) {
+            const relPath = file.path
             if (isBinaryPath(relPath)) continue
             if (globMatcher && !globMatcher.match(relPath)) continue
 
-            const fullPath = join(searchPath, relPath)
-            try {
-              const fileStat = await stat(fullPath)
-              if (fileStat.size > MAX_GREP_FILE_SIZE) continue
-            } catch {
-              continue
-            }
-
-            let content: string
-            try {
-              content = await readFile(fullPath, 'utf-8')
-            } catch {
-              continue
-            }
+            const content = await readGrepFileContent(
+              file.realPath,
+              MAX_GREP_FILE_SIZE,
+            )
+            if (content === null) continue
 
             const lines = content.split('\n')
             const remaining = limit - totalMatchCount

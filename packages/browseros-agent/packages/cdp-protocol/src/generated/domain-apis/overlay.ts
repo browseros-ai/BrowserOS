@@ -12,7 +12,9 @@ import type {
   HighlightQuadParams,
   HighlightRectParams,
   HighlightSourceOrderParams,
+  InspectedElementWindowRestoredEvent,
   InspectNodeRequestedEvent,
+  InspectPanelShowRequestedEvent,
   NodeHighlightRequestedEvent,
   ScreenshotRequestedEvent,
   SetInspectModeParams,
@@ -25,6 +27,7 @@ import type {
   SetShowGridOverlaysParams,
   SetShowHingeParams,
   SetShowHitTestBordersParams,
+  SetShowInspectedElementAnchorParams,
   SetShowIsolatedElementsParams,
   SetShowLayoutShiftRegionsParams,
   SetShowPaintRectsParams,
@@ -70,6 +73,9 @@ export interface OverlayApi {
   setShowContainerQueryOverlays(
     params: SetShowContainerQueryOverlaysParams,
   ): Promise<void>
+  setShowInspectedElementAnchor(
+    params: SetShowInspectedElementAnchorParams,
+  ): Promise<void>
   setShowPaintRects(params: SetShowPaintRectsParams): Promise<void>
   setShowLayoutShiftRegions(
     params: SetShowLayoutShiftRegionsParams,
@@ -101,6 +107,14 @@ export interface OverlayApi {
   on(
     event: 'screenshotRequested',
     handler: (params: ScreenshotRequestedEvent) => void,
+  ): () => void
+  on(
+    event: 'inspectPanelShowRequested',
+    handler: (params: InspectPanelShowRequestedEvent) => void,
+  ): () => void
+  on(
+    event: 'inspectedElementWindowRestored',
+    handler: (params: InspectedElementWindowRestoredEvent) => void,
   ): () => void
   on(event: 'inspectModeCanceled', handler: () => void): () => void
 }

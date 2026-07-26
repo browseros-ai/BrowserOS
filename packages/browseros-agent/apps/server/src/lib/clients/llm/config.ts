@@ -11,7 +11,13 @@ import { INLINED_ENV } from '../../../env'
 import { logger } from '../../logger'
 import { fetchBrowserOSConfig, getLLMConfigFromProvider } from '../gateway'
 import { getOAuthTokenManager } from '../oauth'
+import {
+  resolveMockBrowserOSConfig,
+  shouldUseMockBrowserOSLLM,
+} from './mock-language-model'
 import type { ResolvedLLMConfig } from './types'
+
+const CHATGPT_PROVIDER_DISPLAY_NAME = 'ChatGPT'
 
 export async function resolveLLMConfig(
   config: LLMConfig,
@@ -21,8 +27,8 @@ export async function resolveLLMConfig(
   if (config.provider === LLM_PROVIDERS.CHATGPT_PRO) {
     return resolveOAuthConfig(config, browserosId, {
       providerId: 'chatgpt-pro',
-      displayName: 'ChatGPT Plus/Pro',
-      defaultModel: 'gpt-5.3-codex',
+      displayName: CHATGPT_PROVIDER_DISPLAY_NAME,
+      defaultModel: 'gpt-5.5',
       useRefresh: true,
       extraFields: (tokens) => ({
         upstreamProvider: 'openai',
@@ -49,6 +55,9 @@ export async function resolveLLMConfig(
 
   // BrowserOS gateway: fetch config from remote service
   if (config.provider === LLM_PROVIDERS.BROWSEROS) {
+    if (shouldUseMockBrowserOSLLM(config)) {
+      return resolveMockBrowserOSConfig(config, browserosId)
+    }
     return resolveBrowserOSConfig(config, browserosId)
   }
 

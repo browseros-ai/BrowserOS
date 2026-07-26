@@ -1,3 +1,8 @@
 [submodule "packages/browseros-agent/vendor/sup-agent"]
 	path = packages/browseros-agent/vendor/sup-agent
 	url = https://github.com/Karthikprasadm/Sup-agent.git
+
+[submodule ".internal-docs"]
+	path = .internal-docs
+	url = git@github.com:browseros-ai/internal-docs.git
+	branch = main

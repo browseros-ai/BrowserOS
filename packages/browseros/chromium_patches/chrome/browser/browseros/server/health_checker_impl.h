@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/health_checker_impl.h b/chrome/browser/browseros/server/health_checker_impl.h
 new file mode 100644
-index 0000000000000..7b1d0c8678540
+index 0000000000000..b00ba7e862d32
 --- /dev/null
 +++ b/chrome/browser/browseros/server/health_checker_impl.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,47 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -38,14 +38,12 @@ index 0000000000000..7b1d0c8678540
 +
 +  // HealthChecker implementation:
 +  void CheckHealth(int port,
++                   const std::string& path,
 +                   base::OnceCallback<void(bool success)> callback) override;
-+  void RequestShutdown(int port,
-+                       base::OnceCallback<void(bool success)> callback) override;
 +
 + private:
-+  void OnRequestComplete(
-+      base::OnceCallback<void(bool success)> callback,
-+      scoped_refptr<net::HttpResponseHeaders> headers);
++  void OnRequestComplete(base::OnceCallback<void(bool success)> callback,
++                         scoped_refptr<net::HttpResponseHeaders> headers);
 +
 +  std::unique_ptr<network::SimpleURLLoader> url_loader_;
 +};

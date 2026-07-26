@@ -1,0 +1,42 @@
+# Windows Debug Build Configuration
+# Matching macOS feature set
+is_debug = true
+is_component_build = true
+symbol_level = 0
+chrome_pgo_phase = 0
+is_official_build = false
+use_siso = false
+is_clang = true
+exclude_unwind_tables = false
+treat_warnings_as_errors = false
+use_sysroot = false
+v8_symbol_level = 0
+
+# Windows-specific compiler/linker settings
+target_cpu = "x64"
+use_custom_libcxx = false
+use_lld = true
+dcheck_always_on = true
+
+# Match macOS features exactly
+enable_reporting = false
+enable_service_discovery = false
+enable_widevine = true
+google_api_key = ""
+google_default_client_id = ""
+google_default_client_secret = ""
+use_official_google_api_keys = false
+use_unofficial_version_number = false
+enable_updater = false
+blink_symbol_level = 0
+enable_mse_mpeg2ts_stream_parser = true
+enable_swiftshader = true
+ffmpeg_branding = "Chrome"
+proprietary_codecs = true
+enable_platform_hevc = true
+disable_fieldtrial_testing_config = true
+
+enable_winsparkle = true
+
+# Disable Windows-specific features that macOS doesn't use
+enable_nacl = false

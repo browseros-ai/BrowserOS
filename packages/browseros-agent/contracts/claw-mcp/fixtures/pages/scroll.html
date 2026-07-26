@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scroll fixture</title>
+    <style>
+      body {
+        min-height: 5000px;
+      }
+      #status-bar {
+        position: fixed;
+        top: 0;
+        right: 0;
+        background: #eee;
+        padding: 4px 8px;
+      }
+      #tooltip {
+        display: none;
+      }
+      /* cursor:pointer makes these non-ARIA nodes mint snapshot refs
+         (cursor-hit ref minting), so hover/drag can target them by ref. */
+      #hover-target {
+        cursor: pointer;
+        width: 120px;
+      }
+      #hover-target:hover + #tooltip {
+        display: block;
+      }
+      #drag-list li {
+        cursor: pointer;
+        padding: 6px;
+        border: 1px solid #999;
+        width: 160px;
+        user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Scroll fixture</h1>
+    <div id="status-bar">scroll:<span id="scroll-pos">0</span></div>
+    <div id="hover-target" aria-label="Hover me">Hover me</div>
+    <div id="tooltip">tooltip revealed</div>
+    <ul id="drag-list">
+      <li aria-label="item-a">item-a</li>
+      <li aria-label="item-b">item-b</li>
+      <li aria-label="item-c">item-c</li>
+    </ul>
+    <div id="drag-order">item-a,item-b,item-c</div>
+    <p>Tall filler content continues far below the fold.</p>
+    <script>
+      addEventListener('scroll', () => {
+        document.getElementById('scroll-pos').textContent = String(Math.round(scrollY))
+      })
+      // Pointer-based reorder (mousedown on one item, mouseup on another) so a
+      // synthetic mouse-event drag works without HTML5 drag-and-drop events.
+      const list = document.getElementById('drag-list')
+      let dragged = null
+      list.addEventListener('mousedown', (event) => {
+        dragged = event.target.closest('li')
+      })
+      addEventListener('mouseup', (event) => {
+        const target = event.target.closest('#drag-list li')
+        if (dragged && target && target !== dragged) {
+          list.insertBefore(dragged, target)
+          const order = [...list.children].map((item) => item.textContent).join(',')
+          document.getElementById('drag-order').textContent = order
+        }
+        dragged = null
+      })
+    </script>
+  </body>
+</html>

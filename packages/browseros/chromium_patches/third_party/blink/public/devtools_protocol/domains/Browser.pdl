@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 6015a94554c21..a25c14c912689 100644
+index 6015a94554c21..43dd32ff0983d 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 @@ -8,6 +8,16 @@
@@ -19,7 +19,7 @@ index 6015a94554c21..a25c14c912689 100644
  
    # The state of the browser window.
    experimental type WindowState extends string
-@@ -31,6 +41,228 @@ domain Browser
+@@ -31,6 +41,224 @@ domain Browser
        # The window state. Default to normal.
        optional WindowState windowState
  
@@ -90,13 +90,15 @@ index 6015a94554c21..a25c14c912689 100644
 +    parameters
 +      WindowID windowId
 +
-+  experimental command showWindow
++  experimental command setWindowVisibility
 +    parameters
 +      WindowID windowId
-+
-+  experimental command hideWindow
-+    parameters
-+      WindowID windowId
++      boolean visible
++      optional boolean activate
++    returns
++      WindowInfo window
++      boolean replaced
++      WindowID previousWindowId
 +
 +  # --- Tab Management ---
 +  # Commands that operate on a single tab accept both targetId and tabId.
@@ -105,6 +107,8 @@ index 6015a94554c21..a25c14c912689 100644
 +  experimental command getTabs
 +    parameters
 +      optional WindowID windowId
++      # Only affects all-window enumeration. When windowId is provided, tabs
++      # from that specific window are returned even if the window is hidden.
 +      optional boolean includeHidden
 +    returns
 +      array of TabInfo tabs
@@ -129,7 +133,6 @@ index 6015a94554c21..a25c14c912689 100644
 +      optional integer index
 +      optional boolean background
 +      optional boolean pinned
-+      optional boolean hidden
 +      optional BrowserContextID browserContextId
 +    returns
 +      TabInfo tab
@@ -181,13 +184,6 @@ index 6015a94554c21..a25c14c912689 100644
 +      optional WindowID windowId
 +      optional integer index
 +      optional boolean activate
-+    returns
-+      TabInfo tab
-+
-+  experimental command hideTab
-+    parameters
-+      optional Target.TargetID targetId
-+      optional TabID tabId
 +    returns
 +      TabInfo tab
 +
@@ -248,7 +244,7 @@ index 6015a94554c21..a25c14c912689 100644
    experimental type PermissionType extends string
      enum
        ar
-@@ -294,6 +526,28 @@ domain Browser
+@@ -294,6 +522,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  

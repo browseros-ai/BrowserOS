@@ -1,0 +1,36 @@
+health:
+  get:
+    operationId: getHealth
+    responses:
+      '200':
+        description: The server is ready.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthResponse
+      '500':
+        $ref: ../responses.yaml#/InternalError
+info:
+  get:
+    operationId: getSystemInfo
+    responses:
+      '200':
+        description: Product and implementation information.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/SystemInfo
+      '500':
+        $ref: ../responses.yaml#/InternalError
+shutdown:
+  post:
+    operationId: shutdown
+    responses:
+      '200':
+        description: Shutdown was accepted.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/ShutdownResponse
+      '500':
+        $ref: ../responses.yaml#/InternalError

@@ -1,5 +1,6 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
+import type { AdProvenance } from './network'
 import type { FrameId } from './page'
 import type {
   ExecutionContextId,
@@ -28,6 +29,7 @@ export type PseudoType =
   | 'checkmark'
   | 'before'
   | 'after'
+  | 'expand-icon'
   | 'picker-icon'
   | 'interest-hint'
   | 'marker'
@@ -112,6 +114,7 @@ export interface Node {
   isScrollable?: boolean
   affectedByStartingStyles?: boolean
   adoptedStyleSheets?: StyleSheetId[]
+  adProvenance?: AdProvenance
 }
 
 export interface DetachedElementInfo {
@@ -578,6 +581,11 @@ export interface PseudoElementAddedEvent {
 export interface ScrollableFlagUpdatedEvent {
   nodeId: NodeId
   isScrollable: boolean
+}
+
+export interface AdRelatedStateUpdatedEvent {
+  nodeId: NodeId
+  adProvenance?: AdProvenance
 }
 
 export interface AffectedByStartingStylesFlagUpdatedEvent {

@@ -12,11 +12,9 @@ import { URL } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-import {
-  cleanupBrowserOS,
-  ensureBrowserOS,
-  type TestEnvironmentConfig,
-} from './__helpers__/index'
+import { MOCK_BROWSEROS_RESPONSE_TEXT } from '../src/lib/clients/llm/mock-language-model'
+import { cleanupBrowserOS, ensureBrowserOS } from './__helpers__/index'
+import type { TestEnvironmentConfig } from './__helpers__/setup'
 
 setDefaultTimeout(30000)
 
@@ -60,7 +58,7 @@ describe('HTTP Server Integration Tests', () => {
 
   describe('Health endpoint', () => {
     it('responds with 200 OK', async () => {
-      const response = await fetch(`${getBaseUrl()}/health`)
+      const response = await fetch(`${getBaseUrl()}/system/health`)
       assert.strictEqual(response.status, 200)
 
       const json = await response.json()
@@ -153,9 +151,21 @@ describe('HTTP Server Integration Tests', () => {
     })
   })
 
+  describe('Removed endpoints', () => {
+    it('does not expose the removed /monitoring endpoint', async () => {
+      const response = await fetch(`${getBaseUrl()}/monitoring/runs`)
+
+      assert.strictEqual(
+        response.status,
+        404,
+        'Removed /monitoring should return 404',
+      )
+    })
+  })
+
   describe('Chat endpoint', () => {
     it(
-      'streams a chat response with BrowserOS provider',
+      'streams a mocked chat response for BrowserOS provider requests in test mode',
       async () => {
         const conversationId = crypto.randomUUID()
 
@@ -205,6 +215,10 @@ describe('HTTP Server Integration Tests', () => {
         assert.ok(
           fullResponse.includes('data:'),
           'Should contain SSE data events',
+        )
+        assert.ok(
+          fullResponse.includes(MOCK_BROWSEROS_RESPONSE_TEXT),
+          'Should include the mocked BrowserOS chat response',
         )
 
         const deleteResponse = await fetch(

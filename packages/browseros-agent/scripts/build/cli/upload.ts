@@ -4,11 +4,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  createR2Client,
+  joinObjectKey,
+  uploadFileToObject,
+} from '@browseros/build-server-tools'
+import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { log } from '../log'
-import { createR2Client, joinObjectKey, uploadFileToObject } from '../server/r2'
 import { type CliUploadConfig, loadCliUploadConfig } from './config'
 
-const CDN_BASE_URL = 'https://cdn.browseros.com'
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8'
 const CLI_ARCHIVE_PATTERN =
   /^browseros-cli_(?<version>[^_]+)_(?<os>darwin|linux|windows)_(?<arch>amd64|arm64)\.(?<ext>tar\.gz|zip)$/
@@ -45,7 +49,7 @@ export interface CliReleaseManifest {
   assets: Record<string, CliReleaseAsset>
 }
 
-interface CliArchiveMetadata {
+export interface CliArchiveMetadata {
   filename: string
   version: string
   os: string
@@ -67,7 +71,7 @@ export async function runCliRelease(options: CliReleaseOptions): Promise<void> {
   await uploadCliRelease(resolveRootDir(), options)
 }
 
-export async function uploadCliInstallers(rootDir: string): Promise<void> {
+async function uploadCliInstallers(rootDir: string): Promise<void> {
   const { r2 } = loadCliUploadConfig(rootDir)
   const client = createR2Client(r2)
 
@@ -86,7 +90,7 @@ export async function uploadCliInstallers(rootDir: string): Promise<void> {
         contentType: installer.contentType,
       })
       log.success(`Uploaded ${objectKey}`)
-      log.info(`${CDN_BASE_URL}/${objectKey}`)
+      log.info(`${EXTERNAL_URLS.CDN}/${objectKey}`)
     }
 
     log.done('CLI installer upload completed')
@@ -139,7 +143,7 @@ export function buildCliReleaseManifest(options: {
   const checksumByFilename = parseCliChecksums(options.checksumsContent)
   const assets: Record<string, CliReleaseAsset> = {}
   const filenames = [...options.filenames].sort()
-  const cdnBaseURL = options.cdnBaseURL ?? CDN_BASE_URL
+  const cdnBaseURL = options.cdnBaseURL ?? EXTERNAL_URLS.CDN
   const uploadPrefix = options.uploadPrefix ?? 'cli'
 
   for (const filename of filenames) {
@@ -170,7 +174,7 @@ export function buildCliReleaseManifest(options: {
   return {
     version: options.version,
     published_at: options.published_at ?? new Date().toISOString(),
-    tag: `browseros-cli-v${options.version}`,
+    tag: `cli/v${options.version}`,
     assets,
   }
 }
@@ -216,7 +220,7 @@ async function uploadCliManifest(
     contentType: JSON_CONTENT_TYPE,
   })
   log.success(`Uploaded ${latestKey}`)
-  log.info(`${CDN_BASE_URL}/${latestKey}`)
+  log.info(`${EXTERNAL_URLS.CDN}/${latestKey}`)
 }
 
 async function uploadCliRelease(
@@ -257,7 +261,7 @@ async function uploadCliRelease(
       await uploadFileToObject(client, r2, versionedKey, filePath)
       await uploadFileToObject(client, r2, latestKey, filePath)
       log.success(`Uploaded ${filename}`)
-      log.info(`${CDN_BASE_URL}/${versionedKey}`)
+      log.info(`${EXTERNAL_URLS.CDN}/${versionedKey}`)
     }
 
     await uploadCliManifest(
@@ -276,7 +280,7 @@ async function uploadCliRelease(
       contentType: 'text/plain; charset=utf-8',
     })
     log.success(`Uploaded ${versionKey}`)
-    log.info(`${CDN_BASE_URL}/${versionKey}`)
+    log.info(`${EXTERNAL_URLS.CDN}/${versionKey}`)
 
     log.done('CLI binary upload completed')
   } finally {

@@ -4,14 +4,32 @@
 
 export type StorageArea = 'session' | 'local' | 'sync' | 'managed'
 
+export interface ExtensionInfo {
+  id: string
+  name: string
+  version: string
+  path: string
+  enabled: boolean
+}
+
 // ══ Commands ══
+
+export interface TriggerActionParams {
+  id: string
+  targetId: string
+}
 
 export interface LoadUnpackedParams {
   path: string
+  enableInIncognito?: boolean
 }
 
 export interface LoadUnpackedResult {
   id: string
+}
+
+export interface GetExtensionsResult {
+  extensions: ExtensionInfo[]
 }
 
 export interface UninstallParams {

@@ -27,6 +27,13 @@ describe('isAllowedOrigin', () => {
     ).toBe(true)
   })
 
+  it('accepts the pinned published extension origin when env is unset', () => {
+    delete process.env.BROWSEROS_TRUSTED_ORIGINS
+    expect(
+      isAllowedOrigin('chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk'),
+    ).toBe(true)
+  })
+
   it('rejects unknown origins when env is empty', () => {
     process.env.BROWSEROS_TRUSTED_ORIGINS = ''
     expect(isAllowedOrigin('https://example.com')).toBe(false)
@@ -58,6 +65,22 @@ describe('isAllowedOrigin', () => {
     expect(isAllowedOrigin('http://localhost:5173')).toBe(true)
     expect(isAllowedOrigin('http://localhost:5174')).toBe(false)
     expect(isAllowedOrigin('http://localhost')).toBe(false)
+  })
+
+  it('normalizes configured URLs to browser origin strings', () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS =
+      'http://localhost:5173/app,chrome-extension://abcdef/options'
+    expect(isAllowedOrigin('http://localhost:5173')).toBe(true)
+    expect(isAllowedOrigin('http://localhost:5173/app')).toBe(false)
+    expect(isAllowedOrigin('chrome-extension://abcdef')).toBe(true)
+  })
+
+  it('ignores malformed configured origins', () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS =
+      'not a url,http://localhost :5173,chrome-extension://abc'
+    expect(isAllowedOrigin('not a url')).toBe(false)
+    expect(isAllowedOrigin('http://localhost :5173')).toBe(false)
+    expect(isAllowedOrigin('chrome-extension://abc')).toBe(true)
   })
 
   it('rejects the literal string "null" unless explicitly allowlisted', () => {

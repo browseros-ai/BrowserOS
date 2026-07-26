@@ -1,11 +1,12 @@
+import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { logger } from '../lib/logger'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
   agent: AiSdkAgent
-  hiddenPageId?: number
-  /** Browser context scoped to the scheduled hidden page. */
+  scheduledPageId?: number
+  /** Browser context scoped to the scheduled background page. */
   browserContext?: BrowserContext
   /** MCP server names used when the session was created, for change detection. */
   mcpServerKey?: string
@@ -13,6 +14,18 @@ export interface AgentSession {
   workingDir?: string
   /** LLM config used when the session was created, for provider/model changes. */
   llmConfigKey?: string
+  /**
+   * Read-only chat mode when the session was created, for change detection.
+   *
+   * Required, unlike the other change-detection fields: it is never
+   * legitimately absent, and an unstamped session would compare
+   * `undefined !== false` and fake a mode change, rebuilding and announcing a
+   * switch that never happened. Keeping it required makes the compiler enforce
+   * the stamp at every construction site.
+   */
+  chatMode: boolean
+  /** Browser-generated output paths returned during this conversation. */
+  outputFileAccess?: BrowserOutputFileAccess
 }
 
 export class SessionStore {

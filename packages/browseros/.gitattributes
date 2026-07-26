@@ -2,3 +2,10 @@
 resources/binaries/browseros_server/* filter=lfs diff=lfs merge=lfs -text
 resources/binaries/codex/ filter=lfs diff=lfs merge=lfs -text
 resources/binaries/browseros_server/ filter=lfs diff=lfs merge=lfs -text
+
+# Chromium-destined sources must keep LF byte-for-byte: Windows runners'
+# git autocrlf otherwise converts them at checkout and chromium's strict
+# parsers reject the \r (e.g. json_schema_compiler on browser_os.idl).
+chromium_files/** -text
+chromium_patches/** -text
+series_patches/** -text

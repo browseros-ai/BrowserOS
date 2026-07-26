@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/metrics/browseros_metrics.cc b/chrome/browser/browseros/metrics/browseros_metrics.cc
 new file mode 100644
-index 0000000000000..cf1a9a0c1790b
+index 0000000000000..a8e149094bdb5
 --- /dev/null
 +++ b/chrome/browser/browseros/metrics/browseros_metrics.cc
 @@ -0,0 +1,100 @@

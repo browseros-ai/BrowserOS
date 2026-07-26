@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel.cc b/chrome/browser/ui/views/side_panel/side_panel.cc
-index 56a63f28ca526..773d4ff107c9a 100644
+index b341cbd160ba3..8a637ab8bd2f6 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel.cc
-@@ -879,8 +879,10 @@ double SidePanel::GetAnimationValueFor(
+@@ -967,8 +967,10 @@ double SidePanel::GetAnimationValueFor(BrowserAnimationSequence which) const {
  }
  
  bool SidePanel::ShouldShowAnimation() const {

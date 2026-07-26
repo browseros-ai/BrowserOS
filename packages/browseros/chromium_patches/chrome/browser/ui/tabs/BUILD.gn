@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
-index 4f05add8e848f..fab6898d798e2 100644
+index 4a638c0371d70..1a3726e0f3a71 100644
 --- a/chrome/browser/ui/tabs/BUILD.gn
 +++ b/chrome/browser/ui/tabs/BUILD.gn
-@@ -520,6 +520,7 @@ if (!is_android) {
-       "//chrome/app/vector_icons",
+@@ -487,6 +487,7 @@ if (!is_android) {
+       "//chrome/browser/accessibility_annotator/content_annotator",
        "//chrome/browser/actor",
        "//chrome/browser/actor/ui",
 +      "//chrome/browser/browseros/core:prefs",
+       "//chrome/browser/bookmarks",
+       "//chrome/browser/collaboration/messaging",
        "//chrome/browser/commerce",
-       "//chrome/browser/content_settings:content_settings_factory",
-       "//chrome/browser/contextual_cueing",

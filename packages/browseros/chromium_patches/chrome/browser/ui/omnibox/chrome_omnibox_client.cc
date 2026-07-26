@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-index 37cb48b9b7c9f..90d2d430f41a5 100644
+index bbc00215573b4..ad4a41458ef96 100644
 --- a/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ b/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-@@ -123,6 +123,7 @@
+@@ -122,6 +122,7 @@
  #include "url/gurl.h"
  
  #if BUILDFLAG(ENABLE_EXTENSIONS)
 +#include "chrome/browser/browseros/core/browseros_constants.h"
  #include "chrome/browser/ui/extensions/settings_api_bubble_helpers.h"
- #endif
  
-@@ -323,15 +324,50 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+@@ -393,15 +394,50 @@ gfx::Image ChromeOmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
  }
  
  std::u16string ChromeOmniboxClient::GetFormattedFullURL() const {
@@ -60,4 +60,4 @@ index 37cb48b9b7c9f..90d2d430f41a5 100644
 +#endif
  }
  
- metrics::OmniboxEventProto::PageClassification
+ bool ChromeOmniboxClient::IsContextualTasksPage() const {

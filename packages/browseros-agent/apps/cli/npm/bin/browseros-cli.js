@@ -9,7 +9,7 @@ const EXT = process.platform === 'win32' ? '.exe' : ''
 const BIN_PATH = path.join(BINARY_DIR, `browseros-cli${EXT}`)
 
 if (!fs.existsSync(BIN_PATH)) {
-  console.error('browseros-cli: binary not found, downloading...')
+  console.error('browseros-cli/bos: binary not found, downloading...')
   try {
     execFileSync(
       process.execPath,
@@ -18,7 +18,7 @@ if (!fs.existsSync(BIN_PATH)) {
     )
   } catch {
     console.error(
-      'browseros-cli: failed to download binary. Try reinstalling:\n  npm install -g browseros-cli',
+      'browseros-cli/bos: failed to download binary. Try reinstalling:\n  npm install -g browseros-cli',
     )
     process.exit(1)
   }

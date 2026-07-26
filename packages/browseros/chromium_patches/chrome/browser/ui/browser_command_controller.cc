@@ -1,31 +1,56 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index deb531f8832e3..91cf6b70413ff 100644
+index 738696abf04fa..ec170ce291d37 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
-@@ -70,6 +70,8 @@
+@@ -7,7 +7,9 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <optional>
+ #include <string>
++#include <tuple>
+ 
+ #include "base/check_deref.h"
+ #include "base/command_line.h"
+@@ -24,10 +26,13 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/actor/ui/actor_overlay_web_view.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
+ #include "chrome/browser/browsing_data/browsing_data_important_sites_util.h"
+ #include "chrome/browser/defaults.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/devtools/features.h"
++#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/feedback/public/feedback_source.h"
+ #include "chrome/browser/feedback/show_feedback_page.h"
+ #include "chrome/browser/glic/fre/glic_fre_controller.h"
+@@ -37,6 +42,7 @@
+ #include "chrome/browser/glic/public/glic_enabling.h"
+ #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+ #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
++#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
+ #include "chrome/browser/lifetime/application_lifetime.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -86,6 +92,7 @@
+ #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
  #include "chrome/browser/ui/ui_features.h"
- #include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
- #include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h"
-+#include "chrome/browser/ui/views/side_panel/clash_of_gpts/clash_of_gpts_coordinator.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
  #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
-@@ -104,7 +106,13 @@
- #include "content/public/browser/web_contents_observer.h"
- #include "content/public/common/profiling.h"
- #include "content/public/common/url_constants.h"
-+#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
-+#include "chrome/browser/browseros/core/browseros_constants.h"
-+#include "chrome/browser/extensions/extension_tab_util.h"
-+#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
+@@ -101,6 +108,7 @@
+ #include "chrome/common/webui_url_constants.h"
+ #include "components/bookmarks/common/bookmark_pref_names.h"
+ #include "components/dom_distiller/core/dom_distiller_features.h"
 +#include "components/infobars/content/content_infobar_manager.h"
- #include "extensions/browser/extension_registrar.h"
-+#include "extensions/browser/extension_registry.h"
- #include "extensions/common/extension_urls.h"
- #include "printing/buildflags/buildflags.h"
- #include "ui/actions/actions.h"
-@@ -988,6 +996,71 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+ #include "components/input/native_web_keyboard_event.h"
+ #include "components/lens/buildflags.h"
+ #include "components/password_manager/core/browser/manage_passwords_referrer.h"
+@@ -1089,6 +1097,65 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
        browser_->GetFeatures().side_panel_ui()->Show(
            SidePanelEntryId::kBookmarks, SidePanelOpenTrigger::kAppMenu);
        break;
@@ -45,18 +70,11 @@ index deb531f8832e3..91cf6b70413ff 100644
 +        }
 +      }
 +      break;
-+    case IDC_OPEN_CLASH_OF_GPTS:
-+      if (base::FeatureList::IsEnabled(features::kClashOfGpts)) {
-+        ClashOfGptsCoordinator* coordinator =
-+            browser_->browser_window_features()->clash_of_gpts_coordinator();
-+        // If not showing properly, close and recreate
-+        if (!coordinator->IsShowing()) {
-+          coordinator->Close();
-+        }
-+        coordinator->Show();
-+      }
-+      break;
 +    case IDC_TOGGLE_BROWSEROS_AGENT: {
++      if (!browseros::IsActiveBrowserOSExtension(
++              browseros::kAgentExtensionId)) {
++        break;
++      }
 +      content::WebContents* active_contents =
 +          browser_->tab_strip_model()->GetActiveWebContents();
 +      if (!active_contents) {
@@ -67,7 +85,7 @@ index deb531f8832e3..91cf6b70413ff 100644
 +      const extensions::Extension* extension =
 +          extensions::ExtensionRegistry::Get(profile)
 +              ->enabled_extensions()
-+              .GetByID(browseros::kAgentV2ExtensionId);
++              .GetByID(browseros::kAgentExtensionId);
 +      if (!extension) {
 +        infobars::ContentInfoBarManager* infobar_manager =
 +            infobars::ContentInfoBarManager::FromWebContents(active_contents);
@@ -77,7 +95,8 @@ index deb531f8832e3..91cf6b70413ff 100644
 +              infobars::InfoBarDelegate::
 +                  BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE,
 +              nullptr,
-+              u"BrowserOS Agent is installing/updating. Please try again shortly.",
++              u"BrowserOS Agent is installing/updating. Please try again "
++              u"shortly.",
 +              /*auto_expire=*/true,
 +              /*should_animate=*/true,
 +              /*closeable=*/true);
@@ -97,17 +116,19 @@ index deb531f8832e3..91cf6b70413ff 100644
      case IDC_SHOW_APP_MENU:
        base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
        ShowAppMenu(browser_);
-@@ -1648,6 +1721,13 @@ void BrowserCommandController::InitCommandState() {
+@@ -1802,6 +1869,15 @@ void BrowserCommandController::InitCommandState() {
    }
  
    command_updater_.UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);
-+  command_updater_.UpdateCommandEnabled(IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL,
-+                                        base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
-+  command_updater_.UpdateCommandEnabled(IDC_CYCLE_THIRD_PARTY_LLM_PROVIDER,
-+                                        base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
-+  command_updater_.UpdateCommandEnabled(IDC_OPEN_CLASH_OF_GPTS,
-+                                        base::FeatureList::IsEnabled(features::kClashOfGpts));
-+  command_updater_.UpdateCommandEnabled(IDC_TOGGLE_BROWSEROS_AGENT, true);
++  command_updater_.UpdateCommandEnabled(
++      IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL,
++      base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
++  command_updater_.UpdateCommandEnabled(
++      IDC_CYCLE_THIRD_PARTY_LLM_PROVIDER,
++      base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
++  command_updater_.UpdateCommandEnabled(
++      IDC_TOGGLE_BROWSEROS_AGENT,
++      browseros::IsActiveBrowserOSExtension(browseros::kAgentExtensionId));
  
    if (browser_->is_type_normal()) {
      // Reading list commands.

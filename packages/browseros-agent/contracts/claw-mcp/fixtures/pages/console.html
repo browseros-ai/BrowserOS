@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Console fixture</title>
+  </head>
+  <body>
+    <h1>Console fixture</h1>
+    <button id="throw-error" type="button">Throw error</button>
+    <script>
+      console.log('fixture log one')
+      console.warn('fixture warn one')
+      console.error('fixture error one')
+      document.getElementById('throw-error').addEventListener('click', () => {
+        throw new Error('fixture thrown error')
+      })
+    </script>
+  </body>
+</html>

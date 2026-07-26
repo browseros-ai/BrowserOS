@@ -1,0 +1,64 @@
+version: 2
+
+updates:
+  - package-ecosystem: "bun"
+    directory: "/packages/browseros-agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 3
+    # Major bumps are opt-in only via security advisories. Routine
+    # version PRs are limited to minor + patch so the queue stays
+    # actionable. A security update that requires a major bump still
+    # gets opened by Dependabot — `ignore` rules do not apply to
+    # security updates.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+      # @ricky0123/vad-web is pre-1.0 and treats every patch as a
+      # breaking API change (0.0.17 → 0.0.30 rewrote MicVAD.new's
+      # stream option into a getStream/pauseStream/resumeStream
+      # callback trio). Pin it here so it's opt-in only; a real
+      # upgrade needs a hand migration of `modules/voice/vad.silero.ts`.
+      - dependency-name: "@ricky0123/vad-web"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"

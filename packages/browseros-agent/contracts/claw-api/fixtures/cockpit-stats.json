@@ -1,0 +1,27 @@
+{
+  "hasMeasuredStats": true,
+  "allTime": {
+    "browserClawTokenEstimate": 250000,
+    "screenshotFirstTokenEstimate": 240000,
+    "rawTokenSavingsEstimate": -10000,
+    "humanTimeSavedMs": 7200000,
+    "sessionCount": 12,
+    "toolCallCount": 200
+  },
+  "last30Days": {
+    "browserClawTokenEstimate": 150000,
+    "screenshotFirstTokenEstimate": 180000,
+    "rawTokenSavingsEstimate": 30000,
+    "humanTimeSavedMs": 3600000,
+    "sessionCount": 5,
+    "toolCallCount": 100
+  },
+  "last7Days": {
+    "browserClawTokenEstimate": 0,
+    "screenshotFirstTokenEstimate": 0,
+    "rawTokenSavingsEstimate": 0,
+    "humanTimeSavedMs": 0,
+    "sessionCount": 0,
+    "toolCallCount": 0
+  }
+}

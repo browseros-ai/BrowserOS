@@ -32,7 +32,7 @@ The Agent is a monorepo with 3 components:
 
 | Component | Path | What it does |
 |-----------|------|--------------|
-| **Agent UI** | `apps/agent` | Chrome extension — chat interface, settings, side panel |
+| **Agent UI** | `apps/app` | Chrome extension — chat interface, settings, side panel |
 | **Server** | `apps/server` | Bun server — agent loop, MCP tools, API endpoints |
 | **Controller** | `apps/controller-ext` | Chrome extension — bridges `chrome.*` APIs to the server |
 
@@ -52,7 +52,7 @@ bun install
 
 # Copy environment files
 cp apps/server/.env.example apps/server/.env.development
-cp apps/agent/.env.example apps/agent/.env.development
+cp apps/app/.env.example apps/app/.env.development
 ```
 
 ### Running Locally
@@ -68,7 +68,7 @@ bun run start:agent
 Then load the extension in BrowserOS:
 1. Go to `chrome://extensions/`
 2. Enable **Developer mode**
-3. Click **Load unpacked** and select the `apps/agent/dist/` folder
+3. Click **Load unpacked** and select the `apps/app/dist/` folder
 
 ### Commands
 

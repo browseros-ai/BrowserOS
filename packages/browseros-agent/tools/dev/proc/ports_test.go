@@ -96,12 +96,6 @@ func TestResolveWatchPortsRandomUsesUniquePortsInRange(t *testing.T) {
 
 func TestResolveWatchPortsDefaultFallsBackWhenPreferredUnavailable(t *testing.T) {
 	defaults := findUniqueFreePorts(t, 3)
-	originalDefaults := defaultLocalPorts
-	defaultLocalPorts = defaults
-	defer func() {
-		defaultLocalPorts = originalDefaults
-	}()
-
 	cdpListener := listenOnPort(t, defaults.CDP)
 	defer cdpListener.Close()
 	serverListener := listenOnPort(t, defaults.Server)
@@ -109,7 +103,7 @@ func TestResolveWatchPortsDefaultFallsBackWhenPreferredUnavailable(t *testing.T)
 	extensionListener := listenOnPort(t, defaults.Extension)
 	defer extensionListener.Close()
 
-	ports, reservations, err := ResolveWatchPorts(false)
+	ports, reservations, err := ResolveWatchPortsWithDefaults(defaults, false)
 	if err != nil {
 		t.Fatalf("ResolveWatchPorts returned error: %v", err)
 	}

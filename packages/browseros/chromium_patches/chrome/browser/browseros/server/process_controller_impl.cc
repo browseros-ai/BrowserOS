@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.cc b/chrome/browser/browseros/server/process_controller_impl.cc
 new file mode 100644
-index 0000000000000..a398856f672fd
+index 0000000000000000000000000000000000000000..5e5fcdc251bfc3e352287150f9e43fc7c618b093
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.cc
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,167 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,14 +12,12 @@ index 0000000000000..a398856f672fd
 +
 +#include <optional>
 +
-+#include "chrome/browser/browseros/server/browseros_server_utils.h"
-+
 +#include "base/files/file_util.h"
 +#include "base/json/json_writer.h"
 +#include "base/logging.h"
-+#include "base/process/launch.h"
-+#include "base/strings/string_number_conversions.h"
 +#include "build/build_config.h"
++#include "chrome/browser/browseros/server/browseros_server_utils.h"
++#include "chrome/browser/browseros/server/server_process_launcher.h"
 +
 +#if BUILDFLAG(IS_POSIX)
 +#include <signal.h>
@@ -29,56 +27,28 @@ index 0000000000000..a398856f672fd
 +
 +namespace {
 +
-+constexpr base::FilePath::CharType kConfigFileName[] =
-+    FILE_PATH_LITERAL("server_config.json");
-+
-+// Writes the server configuration to a JSON file.
-+// Returns the path to the config file on success, empty path on failure.
-+// Note: resources_dir is passed separately because it may differ from
-+// config.paths.resources when fallback is used.
 +base::FilePath WriteConfigJson(const ServerLaunchConfig& config,
 +                               const base::FilePath& actual_resources_dir) {
-+  base::FilePath config_path = config.paths.execution.Append(kConfigFileName);
++  base::FilePath config_path =
++      config.paths.execution.Append(config.config_file_name);
 +
-+  base::DictValue root;
-+
-+  // ports
-+  base::DictValue ports_dict;
-+  ports_dict.Set("cdp", config.ports.cdp);
-+  ports_dict.Set("server", config.ports.server);
-+  ports_dict.Set("extension", config.ports.extension);
-+  root.Set("ports", std::move(ports_dict));
-+
-+  // directories
-+  base::DictValue directories;
-+  directories.Set("resources", actual_resources_dir.AsUTF8Unsafe());
-+  directories.Set("execution", config.paths.execution.AsUTF8Unsafe());
-+  root.Set("directories", std::move(directories));
-+
-+  // flags
-+  base::DictValue flags;
-+  flags.Set("allow_remote_in_mcp", config.allow_remote_in_mcp);
-+  root.Set("flags", std::move(flags));
-+
-+  // instance
-+  base::DictValue instance;
-+  instance.Set("install_id", config.identity.install_id);
-+  instance.Set("browseros_version", config.identity.browseros_version);
-+  instance.Set("chromium_version", config.identity.chromium_version);
-+  root.Set("instance", std::move(instance));
++  base::DictValue root = BuildServerConfigJson(config, actual_resources_dir);
 +
 +  std::optional<std::string> json_output = base::WriteJson(root);
 +  if (!json_output.has_value()) {
-+    LOG(ERROR) << "browseros: Failed to serialize config to JSON";
++    LOG(ERROR) << "browseros: Failed to serialize " << config.log_name
++               << " config to JSON";
 +    return base::FilePath();
 +  }
 +
 +  if (!base::WriteFile(config_path, json_output.value())) {
-+    LOG(ERROR) << "browseros: Failed to write config file: " << config_path;
++    LOG(ERROR) << "browseros: Failed to write " << config.log_name
++               << " config file: " << config_path;
 +    return base::FilePath();
 +  }
 +
-+  LOG(INFO) << "browseros: Wrote config to " << config_path;
++  LOG(INFO) << "browseros: Wrote " << config.log_name << " config to "
++            << config_path;
 +  return config_path;
 +}
 +
@@ -120,29 +90,16 @@ index 0000000000000..a398856f672fd
 +    return result;
 +  }
 +
-+  // Write configuration to JSON file
 +  base::FilePath config_path = WriteConfigJson(config, actual_resources_dir);
 +  if (config_path.empty()) {
 +    LOG(ERROR) << "browseros: Failed to write config file, aborting launch";
 +    return result;
 +  }
 +
-+  // Build command line with --config flag and explicit port args
 +  base::CommandLine cmd(actual_exe_path);
 +  cmd.AppendSwitchPath("config", config_path);
-+  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(config.ports.cdp));
-+  cmd.AppendSwitchASCII("server-port", base::NumberToString(config.ports.server));
-+  cmd.AppendSwitchASCII("extension-port",
-+                        base::NumberToString(config.ports.extension));
 +
-+  // Set up launch options
-+  base::LaunchOptions options;
-+#if BUILDFLAG(IS_WIN)
-+  options.start_hidden = true;
-+#endif
-+
-+  // Launch the process (blocking I/O)
-+  result.process = base::LaunchProcess(cmd, options);
++  result.process = LaunchServerProcess(cmd);
 +  return result;
 +}
 +

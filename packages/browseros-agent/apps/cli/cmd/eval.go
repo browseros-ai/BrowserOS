@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 
 	"browseros-cli/output"
@@ -16,14 +17,14 @@ func init() {
 		Args:        cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			expression := strings.Join(args, " ")
-			c := newClient()
-			pageID, err := resolvePageID(c)
+			pageID, err := resolvePageID(nil)
 			if err != nil {
 				output.Error(err.Error(), 2)
 			}
-			result, err := c.CallTool("evaluate_script", map[string]any{
-				"page":       pageID,
-				"expression": expression,
+			c := newClient()
+			result, err := c.CallTool("evaluate", map[string]any{
+				"page": pageID,
+				"code": evalCode(expression),
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -37,4 +38,22 @@ func init() {
 	}
 
 	rootCmd.AddCommand(cmd)
+}
+
+// evalCode preserves the old expression-style CLI while still accepting statement snippets.
+func evalCode(source string) string {
+	return fmt.Sprintf(`const source = %s
+const isSyntaxError = (err) => err instanceof SyntaxError || err?.name === 'SyntaxError'
+try {
+  return await (0, eval)(`+"`(async () => (${source}))()`"+`)
+} catch (expressionError) {
+  if (!isSyntaxError(expressionError)) throw expressionError
+  try {
+    const value = (0, eval)(source)
+    return value && typeof value.then === 'function' ? await value : value
+  } catch (statementError) {
+    if (!isSyntaxError(statementError)) throw statementError
+    return await (0, eval)(`+"`(async () => { ${source} })()`"+`)
+  }
+}`, jsLiteral(source))
 }

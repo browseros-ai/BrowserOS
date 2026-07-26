@@ -1,0 +1,26 @@
+diff --git a/third_party/winsparkle/README.browseros b/third_party/winsparkle/README.browseros
+new file mode 100644
+index 0000000000000..eeacd5a4f89c1
+--- /dev/null
++++ b/third_party/winsparkle/README.browseros
+@@ -0,0 +1,20 @@
++Name: WinSparkle
++URL: https://winsparkle.org/
++Source: https://github.com/vslavik/winsparkle/releases/download/v0.9.3/WinSparkle-0.9.3.zip
++Version: 0.9.3
++License: MIT (COPYING), expat parser under COPYING.expat
++Security Critical: yes (verifies Ed25519-signed updates)
++
++App update framework for Windows, the Windows counterpart of the Sparkle
++framework used by the macOS build (//third_party/sparkle).
++
++This directory holds a subset of the official prebuilt release zip with the
++top-level WinSparkle-<version>/ folder stripped: include/, per-arch
++{Release,x64/Release,ARM64/Release}/WinSparkle.{dll,lib}, and license/docs.
++Omitted: *.pdb, bin/ (winsparkle-tool.exe — release signing is done by
++packages/browseros/build/common/sparkle.py in the BrowserOS repo).
++
++The BrowserOS release pipeline does not rely on these vendored binaries: the
++winsparkle_setup build module downloads and extracts the same zip on the fly
++(mirroring sparkle_setup on macOS). To bump the version, update
++WINSPARKLE_VERSION in the BrowserOS repo's build config and re-vendor here.

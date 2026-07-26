@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/api/debugger/debugger_api.cc b/chrome/browser/extensions/api/debugger/debugger_api.cc
-index d211f9b7dcb34..b4531a158210d 100644
+index 43449cdb81723..90af18743b2af 100644
 --- a/chrome/browser/extensions/api/debugger/debugger_api.cc
 +++ b/chrome/browser/extensions/api/debugger/debugger_api.cc
-@@ -485,7 +485,7 @@ bool ExtensionDevToolsClientHost::Attach() {
+@@ -476,7 +476,7 @@ bool ExtensionDevToolsClientHost::Attach() {
    const bool suppress_infobar =
        base::CommandLine::ForCurrentProcess()->HasSwitch(
            ::switches::kSilentDebuggerExtensionAPI) ||

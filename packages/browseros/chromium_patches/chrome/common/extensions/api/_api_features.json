@@ -1,36 +1,12 @@
 diff --git a/chrome/common/extensions/api/_api_features.json b/chrome/common/extensions/api/_api_features.json
-index 846a910323217..e78e1125f61cd 100644
+index 61747d2e11813..8ed80de268684 100644
 --- a/chrome/common/extensions/api/_api_features.json
 +++ b/chrome/common/extensions/api/_api_features.json
-@@ -179,6 +179,34 @@
+@@ -186,6 +186,10 @@
      ],
      "contexts": ["privileged_extension"]
    }],
 +  "browserOS": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.getAccessibilityTree": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.getInteractiveSnapshot": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.getPageStructure": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.click": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.inputText": {
-+    "dependencies": ["permission:browserOS"],
-+    "contexts": ["privileged_extension"]
-+  },
-+  "browserOS.clear": {
 +    "dependencies": ["permission:browserOS"],
 +    "contexts": ["privileged_extension"]
 +  },

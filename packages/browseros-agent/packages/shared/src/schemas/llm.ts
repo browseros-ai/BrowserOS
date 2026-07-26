@@ -28,6 +28,9 @@ export const LLM_PROVIDERS = {
   GITHUB_COPILOT: 'github-copilot',
   QWEN_CODE: 'qwen-code',
   MINIMAX: 'minimax',
+  CLAUDE_CODE: 'claude-code',
+  CODEX: 'codex',
+  ACP_CUSTOM: 'acp-custom',
 } as const
 
 /**
@@ -50,6 +53,9 @@ export const LLMProviderSchema: z.ZodEnum<
     'github-copilot',
     'qwen-code',
     'minimax',
+    'claude-code',
+    'codex',
+    'acp-custom',
   ]
 > = z.enum([
   LLM_PROVIDERS.ANTHROPIC,
@@ -67,6 +73,9 @@ export const LLMProviderSchema: z.ZodEnum<
   LLM_PROVIDERS.GITHUB_COPILOT,
   LLM_PROVIDERS.QWEN_CODE,
   LLM_PROVIDERS.MINIMAX,
+  LLM_PROVIDERS.CLAUDE_CODE,
+  LLM_PROVIDERS.CODEX,
+  LLM_PROVIDERS.ACP_CUSTOM,
 ])
 
 export type LLMProvider = z.infer<typeof LLMProviderSchema>
@@ -77,6 +86,7 @@ export type LLMProvider = z.infer<typeof LLMProviderSchema>
  */
 export const LLMConfigSchema: z.ZodObject<{
   provider: typeof LLMProviderSchema
+  providerId: z.ZodOptional<z.ZodString>
   model: z.ZodOptional<z.ZodString>
   apiKey: z.ZodOptional<z.ZodString>
   baseUrl: z.ZodOptional<z.ZodString>
@@ -85,10 +95,20 @@ export const LLMConfigSchema: z.ZodObject<{
   accessKeyId: z.ZodOptional<z.ZodString>
   secretAccessKey: z.ZodOptional<z.ZodString>
   sessionToken: z.ZodOptional<z.ZodString>
-  reasoningEffort: z.ZodOptional<z.ZodEnum<['none', 'low', 'medium', 'high']>>
+  reasoningEffort: z.ZodOptional<
+    z.ZodEnum<['none', 'low', 'medium', 'high', 'xhigh', 'max']>
+  >
   reasoningSummary: z.ZodOptional<z.ZodEnum<['auto', 'concise', 'detailed']>>
+  acpAgentId: z.ZodOptional<z.ZodString>
+  acpCommand: z.ZodOptional<z.ZodString>
+  acpFixedWorkspacePath: z.ZodOptional<z.ZodString>
 }> = z.object({
   provider: LLMProviderSchema,
+  // The unique LlmProviderConfig.id this request points at. Used by the
+  // ACP factory to scope the default workspace path so two providers of
+  // the same type (e.g. Claude Opus High vs Claude Sonnet Medium) get
+  // their own isolated working directory instead of sharing one.
+  providerId: z.string().optional(),
   model: z.string().optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
@@ -99,9 +119,21 @@ export const LLMConfigSchema: z.ZodObject<{
   accessKeyId: z.string().optional(),
   secretAccessKey: z.string().optional(),
   sessionToken: z.string().optional(),
-  // ChatGPT Pro (Codex)
-  reasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  // ChatGPT Pro (Codex) shares the lower half; ACP-backed providers
+  // (claude advertises xhigh + max) extend it further. The wider enum
+  // accepts every value any ACP agent emits so the chat path can pass
+  // probe-discovered values through verbatim.
+  reasoningEffort: z
+    .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+    .optional(),
   reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
+  // ACP-backed providers (claude-code, codex, acp-custom). agent id
+  // resolves through acpx's registry; command is only used when
+  // provider is 'acp-custom'; workspace is the fixed-path cwd the
+  // user picks at provider-create time.
+  acpAgentId: z.string().optional(),
+  acpCommand: z.string().optional(),
+  acpFixedWorkspacePath: z.string().optional(),
 })
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>

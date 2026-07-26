@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 08859f9d1fa91..a20e65c98b9a9 100644
+index 2659d698da985..6ee889ce6bb92 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -23,7 +23,7 @@ index 08859f9d1fa91..a20e65c98b9a9 100644
 +#include "chrome/browser/extensions/extension_service.h"
 +#include "extensions/browser/extension_system.h"
 +#include "extensions/common/extension.h"
-+#include "chrome/browser/extensions/webstore_installer.h"
++#include "extensions/browser/webstore_installer.h"
 +#include "extensions/browser/extension_registry.h"
 +#include "chrome/browser/extensions/extension_install_prompt.h"
 +#include "chrome/browser/extensions/webstore_install_with_prompt.h"
@@ -103,7 +103,7 @@ index 08859f9d1fa91..a20e65c98b9a9 100644
 +      /*partition_key=*/std::nullopt,
 +      cookie.source_scheme,
 +      cookie.source_port,
-+      net::CookieSourceType::kUnknown,
++      net::CookieSourceType::kOther,
 +      net::CanonicalCookieFromStorageCallSite::kCookieManager);
 +
 +  if (!canonical_cookie) {

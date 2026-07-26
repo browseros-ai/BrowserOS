@@ -1,0 +1,25 @@
+{
+  "name": "@browseros/claw-api-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract-typed BrowserClaw HTTP client.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@browseros/claw-api": "workspace:*",
+    "openapi-fetch": "0.17.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./openapi": {
+      "types": "./src/generated/openapi.ts",
+      "default": "./src/generated/openapi.ts"
+    }
+  }
+}

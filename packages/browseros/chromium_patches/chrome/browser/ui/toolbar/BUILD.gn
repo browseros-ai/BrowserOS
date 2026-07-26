@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/toolbar/BUILD.gn b/chrome/browser/ui/toolbar/BUILD.gn
+index e2d9d2396f6ba..c50ca0f3fb326 100644
+--- a/chrome/browser/ui/toolbar/BUILD.gn
++++ b/chrome/browser/ui/toolbar/BUILD.gn
+@@ -235,6 +235,7 @@ source_set("impl") {
+     ]
+ 
+     deps += [
++      "//chrome/browser/browseros/core:prefs",
+       "//chrome/browser/extensions",
+       "//chrome/browser/ui/extensions",
+     ]

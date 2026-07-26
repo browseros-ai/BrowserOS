@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_installer.cc b/chrome/browser/browseros/extensions/browseros_extension_installer.cc
 new file mode 100644
-index 0000000000000..ad2da65f1d4f4
+index 0000000000000..ed44e6788a59e
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_installer.cc
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,309 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -61,7 +61,7 @@ index 0000000000000..ad2da65f1d4f4
 +
 +BrowserOSExtensionInstaller::BrowserOSExtensionInstaller(Profile* profile)
 +    : profile_(profile) {
-+  for (const std::string& id : GetBrowserOSExtensionIds()) {
++  for (const std::string& id : GetActiveBrowserOSExtensionIds()) {
 +    extension_ids_.insert(id);
 +  }
 +}
@@ -94,12 +94,11 @@ index 0000000000000..ad2da65f1d4f4
 +  base::FilePath manifest_path =
 +      bundled_path.Append(FILE_PATH_LITERAL("bundled_extensions.json"));
 +
-+  if (!base::PathExists(manifest_path)) {
-+    LOG(INFO) << "browseros: No bundled manifest at " << manifest_path.value();
-+    return false;
-+  }
-+
 +  LOG(INFO) << "browseros: Loading from bundled at " << bundled_path.value();
++
++  // Manifest existence is checked on the blocking task below (missing file
++  // yields empty prefs and OnBundledLoadComplete falls back to remote), so
++  // startup never touches the disk on the UI thread here.
 +
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
@@ -117,7 +116,7 @@ index 0000000000000..ad2da65f1d4f4
 +    const base::FilePath& bundled_path) {
 +  std::string json_content;
 +  if (!base::ReadFileToString(manifest_path, &json_content)) {
-+    LOG(ERROR) << "browseros: Failed to read bundled manifest";
++    LOG(INFO) << "browseros: No bundled manifest at " << manifest_path.value();
 +    return base::DictValue();
 +  }
 +
@@ -135,9 +134,8 @@ index 0000000000000..ad2da65f1d4f4
 +      continue;
 +    }
 +
-+    // Only install registered BrowserOS extensions
-+    if (!IsBrowserOSExtension(extension_id)) {
-+      LOG(WARNING) << "browseros: Skipping unregistered extension "
++    if (!IsActiveBrowserOSExtension(extension_id)) {
++      LOG(WARNING) << "browseros: Skipping inactive or unregistered extension "
 +                   << extension_id;
 +      continue;
 +    }
@@ -249,9 +247,8 @@ index 0000000000000..ad2da65f1d4f4
 +      continue;
 +    }
 +
-+    // Only install registered BrowserOS extensions
-+    if (!IsBrowserOSExtension(extension_id)) {
-+      LOG(WARNING) << "browseros: Skipping unregistered extension "
++    if (!IsActiveBrowserOSExtension(extension_id)) {
++      LOG(WARNING) << "browseros: Skipping inactive or unregistered extension "
 +                   << extension_id;
 +      continue;
 +    }
@@ -299,8 +296,7 @@ index 0000000000000..ad2da65f1d4f4
 +    return base::DictValue();
 +  }
 +
-+  const base::DictValue* extensions =
-+      parsed->GetDict().FindDict("extensions");
++  const base::DictValue* extensions = parsed->GetDict().FindDict("extensions");
 +
 +  if (!extensions) {
 +    LOG(ERROR) << "browseros: No 'extensions' key in config";

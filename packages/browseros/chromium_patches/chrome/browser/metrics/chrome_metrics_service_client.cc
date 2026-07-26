@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/metrics/chrome_metrics_service_client.cc b/chrome/browser/metrics/chrome_metrics_service_client.cc
-index cc273dc75b378..601c0223c8965 100644
+index c1c24f499ae2a..7132b8186a7d8 100644
 --- a/chrome/browser/metrics/chrome_metrics_service_client.cc
 +++ b/chrome/browser/metrics/chrome_metrics_service_client.cc
-@@ -76,6 +76,7 @@
- #include "components/component_updater/component_updater_service.h"
- #include "components/crash/core/common/crash_keys.h"
- #include "components/history/core/browser/history_service.h"
+@@ -35,6 +35,7 @@
+ #include "base/threading/platform_thread.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
- #include "components/metrics/call_stacks/call_stack_profile_metrics_provider.h"
- #include "components/metrics/component_metrics_provider.h"
- #include "components/metrics/content/content_stability_metrics_provider.h"
-@@ -1074,6 +1075,7 @@ void ChromeMetricsServiceClient::RegisterUKMProviders() {
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/glic/glic_metrics_provider.h"
+ #include "chrome/browser/google/google_brand.h"
+@@ -1116,6 +1117,7 @@ void ChromeMetricsServiceClient::RegisterUKMProviders() {
  }
  
  void ChromeMetricsServiceClient::NotifyApplicationNotIdle() {

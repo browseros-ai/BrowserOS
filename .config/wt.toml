@@ -1,7 +1,0 @@
-[post-create]
-install = "cd packages/browseros-agent && bun install"
-env = "for f in {{ repo_root }}/packages/browseros-agent/apps/*/.env.*; do [ -f \"$f\" ] && cp \"$f\" \"${f#{{ repo_root }}/}\"; done 2>/dev/null || true"
-llm = "cp -r {{ repo_root }}/.llm . 2>/dev/null || true"
-
-[pre-remove]
-llm-sync = "rsync -au .llm/ {{ repo_root }}/.llm/ 2>/dev/null || true"

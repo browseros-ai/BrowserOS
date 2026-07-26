@@ -1,12 +1,15 @@
 diff --git a/chrome/browser/browseros/BUILD.gn b/chrome/browser/browseros/BUILD.gn
 new file mode 100644
-index 0000000000000..a7e89ea2d1c47
+index 0000000000000..9b2f877bec910
 --- /dev/null
 +++ b/chrome/browser/browseros/BUILD.gn
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,37 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
++
++import("//build/buildflag_header.gni")
++import("//chrome/browser/browseros/buildflags.gni")
 +
 +# Master BUILD file for BrowserOS components.
 +# This groups together all BrowserOS-related code that lives under
@@ -15,8 +18,21 @@ index 0000000000000..a7e89ea2d1c47
 +group("browseros") {
 +  deps = [
 +    "//chrome/browser/browseros/core",
++    "//chrome/browser/browseros/core:product",
 +    "//chrome/browser/browseros/metrics",
++    "//chrome/browser/browseros/onboarding",
 +    "//chrome/browser/browseros/server",
++  ]
++}
++
++# Selects the product identity (BrowserOS vs BrowserClaw) at build time.
++# See buildflags.gni for the `browseros_product` GN arg.
++buildflag_header("buildflags") {
++  header = "buildflags.h"
++  flags = [
++    "BROWSEROS_PRODUCT_BROWSEROS=$browseros_product_browseros",
++    "BROWSEROS_PRODUCT_BROWSERCLAW=$browseros_product_browserclaw",
++    "BROWSEROS_ALLOW_RUNTIME_PRODUCT_OVERRIDE=$browseros_allow_runtime_product_override",
 +  ]
 +}
 +

@@ -1,0 +1,20 @@
+{
+  "ports": {
+    "server": 9200,
+    "cdp": 49337,
+    "proxy": 9200
+  },
+  "directories": {
+    "resources": "./resources",
+    "execution": "./out"
+  },
+  "flags": {
+    "allow_remote_in_mcp": false
+  },
+  "instance": {
+    "client_id": "",
+    "install_id": "",
+    "browseros_version": "",
+    "chromium_version": ""
+  }
+}

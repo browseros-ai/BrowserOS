@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_mac.mm b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
 new file mode 100644
-index 0000000000000..caabfa17010ab
+index 0000000000000..762582371aee4
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,194 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome decryption - macOS implementation
 +// Uses Keychain for key retrieval, PBKDF2 for key derivation, AES-128-CBC for decryption
@@ -16,7 +16,7 @@ index 0000000000000..caabfa17010ab
 +#include "base/logging.h"
 +#include "base/strings/string_util.h"
 +#include "build/build_config.h"
-+#include "crypto/apple/keychain.h"
++#include "crypto/apple/keychain_v2.h"
 +#include "third_party/boringssl/src/include/openssl/evp.h"
 +
 +#if BUILDFLAG(IS_MAC)
@@ -33,6 +33,8 @@ index 0000000000000..caabfa17010ab
 +constexpr size_t kIvLength = 16;
 +constexpr char kEncryptionVersionPrefix[] = "v10";
 +constexpr size_t kEncryptionVersionPrefixLength = 3;
++// Windows-only App-Bound marker; guarded against defensively (see below).
++constexpr char kAppBoundVersionPrefix[] = "v20";
 +
 +// IV is 16 space characters
 +constexpr uint8_t kIv[kIvLength] = {
@@ -46,11 +48,11 @@ index 0000000000000..caabfa17010ab
 +
 +// Retrieve Chrome's password from macOS Keychain using the modern API
 +bool GetChromePasswordFromKeychain(std::string* password) {
-+  std::unique_ptr<crypto::apple::Keychain> keychain =
-+      crypto::apple::Keychain::DefaultKeychain();
++  crypto::apple::KeychainV2& keychain =
++      crypto::apple::KeychainV2::GetInstance();
 +
-+  auto result = keychain->FindGenericPassword(kChromeKeychainService,
-+                                               kChromeKeychainAccount);
++  auto result = keychain.FindGenericPassword(kChromeKeychainService,
++                                             kChromeKeychainAccount);
 +
 +  if (!result.has_value()) {
 +    OSStatus error = result.error();
@@ -160,36 +162,37 @@ index 0000000000000..caabfa17010ab
 +                     derived_key.size());
 +}
 +
-+bool DecryptChromeValue(const std::string& ciphertext,
-+                        const std::string& key,
-+                        std::string* plaintext) {
++DecryptResult DecryptChromeValue(const std::string& ciphertext,
++                                 const std::string& key,
++                                 std::string* plaintext) {
 +  if (ciphertext.empty()) {
-+    return false;
++    return DecryptResult::kEmpty;
 +  }
 +
-+  // Check for v10 prefix (Chrome's encryption marker)
-+  if (ciphertext.length() < kEncryptionVersionPrefixLength ||
-+      !base::StartsWith(ciphertext, kEncryptionVersionPrefix)) {
-+    // Not encrypted with v10, might be plaintext or old format
-+    *plaintext = ciphertext;
-+    return true;
++  // App-Bound Encryption is Windows-only, but guard defensively so a v20 blob
++  // is skipped rather than mistaken for plaintext.
++  if (base::StartsWith(ciphertext, kAppBoundVersionPrefix)) {
++    return DecryptResult::kAppBoundUnsupported;
 +  }
 +
-+  // Extract the actual encrypted data (skip "v10" prefix)
-+  auto ciphertext_span = base::as_byte_span(ciphertext);
-+  auto encrypted_span = ciphertext_span.subspan(kEncryptionVersionPrefixLength);
-+  const uint8_t* encrypted_data = encrypted_span.data();
-+  size_t encrypted_length = encrypted_span.size();
-+
-+  if (encrypted_length == 0) {
-+    LOG(WARNING) << "browseros: Empty ciphertext after prefix";
-+    return false;
++  // v10 values: AES-128-CBC under the Keychain-derived key.
++  if (base::StartsWith(ciphertext, kEncryptionVersionPrefix)) {
++    auto encrypted_span =
++        base::as_byte_span(ciphertext).subspan(kEncryptionVersionPrefixLength);
++    if (encrypted_span.empty()) {
++      LOG(WARNING) << "browseros: Empty ciphertext after v10 prefix";
++      return DecryptResult::kError;
++    }
++    std::vector<uint8_t> key_bytes(key.begin(), key.end());
++    return DecryptAesCbc(key_bytes, encrypted_span.data(),
++                         encrypted_span.size(), plaintext)
++               ? DecryptResult::kSuccess
++               : DecryptResult::kError;
 +  }
 +
-+  // Convert key string to vector
-+  std::vector<uint8_t> key_bytes(key.begin(), key.end());
-+
-+  return DecryptAesCbc(key_bytes, encrypted_data, encrypted_length, plaintext);
++  // Unprefixed values are genuinely unencrypted on macOS.
++  *plaintext = ciphertext;
++  return DecryptResult::kSuccess;
 +}
 +
 +}  // namespace browseros_importer

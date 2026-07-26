@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h
-index 7cda29020d9c8..0227cea111fb3 100644
+index 4b17a33e211a8..7225867cb31d0 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h
 +++ b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h
-@@ -59,6 +59,9 @@ class PinnedToolbarActionsContainer
+@@ -58,6 +58,9 @@ class PinnedToolbarActionsContainer
    // ToolbarIconContainerView:
    void UpdateAllIcons() override;
  
@@ -10,9 +10,9 @@ index 7cda29020d9c8..0227cea111fb3 100644
 +  void UpdateAllLabels();
 +
    // views::View:
-   void OnThemeChanged() override;
    void AddedToWidget() override;
-@@ -76,6 +79,7 @@ class PinnedToolbarActionsContainer
+   bool GetDropFormats(int* formats,
+@@ -74,6 +77,7 @@ class PinnedToolbarActionsContainer
    void OnActionAddedLocally(actions::ActionId id) override;
    void OnActionRemovedLocally(actions::ActionId id) override;
    void OnActionsChanged() override;

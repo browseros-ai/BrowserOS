@@ -8,7 +8,7 @@ import type {
   UserModelMessage,
 } from 'ai'
 
-type ToolResultOutput = ToolResultPart['output']
+export type ToolResultOutput = ToolResultPart['output']
 type ToolResultContentPart = Extract<
   ToolResultOutput,
   { type: 'content' }
@@ -37,9 +37,7 @@ function formatFilePlaceholder(mediaType?: string, filename?: string): string {
   return filename ? `[File: ${filename}]` : '[File]'
 }
 
-export function isBinaryToolResultContentPart(
-  part: ToolResultContentPart,
-): boolean {
+function isBinaryToolResultContentPart(part: ToolResultContentPart): boolean {
   return (
     part.type === 'media' ||
     part.type === 'image-data' ||

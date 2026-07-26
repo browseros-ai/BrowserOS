@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
-index 171a1037969db..e5f17e5be1047 100644
+index 06e3a9b5e0ee9..a49cac1c4052d 100644
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
 @@ -15,6 +15,7 @@

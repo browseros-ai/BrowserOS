@@ -4,11 +4,9 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import type { KlavisClient } from '../../../../src/api/services/klavis/client'
 import { KlavisStrataCache } from '../../../../src/api/services/klavis/strata-cache'
-import type {
-  KlavisClient,
-  StrataCreateResponse,
-} from '../../../../src/lib/clients/klavis/klavis-client'
+import type { StrataCreateResponse } from '../../../../src/api/services/klavis/types'
 
 class StubKlavisClient {
   callCount = 0
@@ -98,7 +96,7 @@ describe('KlavisStrataCache', () => {
   })
 
   it('TTL expiry triggers a fresh fetch', async () => {
-    const cache = new KlavisStrataCache(10) // 10 ms TTL
+    const cache = new KlavisStrataCache(10)
     const client = new StubKlavisClient()
     await cache.getOrFetch(asClient(client), 'u', ['Gmail'])
     await new Promise((r) => setTimeout(r, 25))
@@ -114,7 +112,7 @@ describe('KlavisStrataCache', () => {
     cache.invalidate('userA')
     await cache.getOrFetch(asClient(client), 'userA', ['Gmail'])
     await cache.getOrFetch(asClient(client), 'userB', ['Gmail'])
-    expect(client.callCount).toBe(3) // userA: cold + cold, userB: cold + hit
+    expect(client.callCount).toBe(3)
   })
 
   it('invalidate while a fetch is in flight does not store the result', async () => {
@@ -125,7 +123,6 @@ describe('KlavisStrataCache', () => {
     cache.invalidate('u')
     const result = await inflight
     expect(result.strataId).toBe('strata_u')
-    // Next call should not see the post-invalidate write — must re-fetch.
     await cache.getOrFetch(asClient(client), 'u', ['Gmail'])
     expect(client.callCount).toBe(2)
   })

@@ -1,0 +1,52 @@
+name: Build System Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/browseros/bos_build/**"
+      - "packages/browseros/tools/vendor_uploads/**"
+      - "packages/browseros/chromium_files/products/**"
+      - "packages/browseros/pyproject.toml"
+      - "packages/browseros/uv.lock"
+      - "tools/release_secrets/**"
+      - ".github/workflows/bos-build-tests.yml"
+
+jobs:
+  tests:
+    name: bos_build / unittest + ruff
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/browseros
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Run bos_build tests
+        run: uv run python -m unittest discover -s bos_build -t . -p "*_test.py" -v
+
+      - name: Run release secrets tests
+        working-directory: ${{ github.workspace }}
+        run: python3 -m unittest discover -s tools/release_secrets -t . -p "*_test.py" -v
+
+      - name: Ruff
+        run: uv run ruff check bos_build
+
+      - name: CLI smoke
+        run: |
+          uv run browseros build --list > /dev/null
+          # Runner has no chromium checkout — this smoke IS the
+          # no-checkout regression test for --show-plan.
+          uv run browseros build --preset release --show-plan
+          uv run browseros product doctor
+
+      - name: Run vendor_uploads tests
+        working-directory: packages/browseros/tools/vendor_uploads
+        run: uv run python -m unittest discover -s vendor_uploads -t . -p "*_test.py"

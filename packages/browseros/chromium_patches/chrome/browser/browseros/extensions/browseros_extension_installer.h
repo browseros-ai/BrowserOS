@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_installer.h b/chrome/browser/browseros/extensions/browseros_extension_installer.h
 new file mode 100644
-index 0000000000000..9a3c2000ed05a
+index 0000000000000..944dc8fa738b6
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_installer.h
 @@ -0,0 +1,100 @@

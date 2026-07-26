@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/importer/in_process_importer_bridge.cc b/chrome/browser/importer/in_process_importer_bridge.cc
-index fbb20f1ae0668..2ae55dd11704a 100644
+index 20e454416b8a9..ea76dce5206fa 100644
 --- a/chrome/browser/importer/in_process_importer_bridge.cc
 +++ b/chrome/browser/importer/in_process_importer_bridge.cc
-@@ -21,11 +21,16 @@
+@@ -20,11 +20,16 @@
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_parser.h"
  #include "components/search_engines/template_url_prepopulate_data.h"
@@ -19,7 +19,7 @@ index fbb20f1ae0668..2ae55dd11704a 100644
  history::URLRows ConvertImporterURLRowsToHistoryURLRows(
      const std::vector<user_data_importer::ImporterURLRow>& rows) {
    history::URLRows converted;
-@@ -53,6 +58,8 @@ history::VisitSource ConvertImporterVisitSourceToHistoryVisitSource(
+@@ -52,6 +57,8 @@ history::VisitSource ConvertImporterVisitSourceToHistoryVisitSource(
        return history::SOURCE_IE_IMPORTED;
      case user_data_importer::VISIT_SOURCE_SAFARI_IMPORTED:
        return history::SOURCE_SAFARI_IMPORTED;
@@ -28,7 +28,7 @@ index fbb20f1ae0668..2ae55dd11704a 100644
    }
    NOTREACHED();
  }
-@@ -151,6 +158,11 @@ void InProcessImporterBridge::SetPasswordForm(
+@@ -150,6 +157,11 @@ void InProcessImporterBridge::SetPasswordForm(
    writer_->AddPasswordForm(ConvertImportedPasswordForm(form));
  }
  
@@ -40,7 +40,7 @@ index fbb20f1ae0668..2ae55dd11704a 100644
  void InProcessImporterBridge::SetAutofillFormData(
      const std::vector<ImporterAutofillFormDataEntry>& entries) {
    std::vector<autofill::AutocompleteEntry> autocomplete_entries;
-@@ -168,6 +180,15 @@ void InProcessImporterBridge::SetAutofillFormData(
+@@ -167,6 +179,15 @@ void InProcessImporterBridge::SetAutofillFormData(
    writer_->AddAutocompleteFormDataEntries(autocomplete_entries);
  }
  

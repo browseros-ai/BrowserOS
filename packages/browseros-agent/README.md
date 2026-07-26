@@ -7,12 +7,9 @@ The agent platform powering **BrowserOS**-based builds ([Shimmy-Browser](https:/
 ```
 apps/
   server/          # Bun server - MCP endpoints + agent loop
-  agent/           # Agent UI (Chrome extension)
+  app/             # BrowserOS app UI (Chrome extension)
   cli/             # Go CLI for controlling BrowserOS from the terminal
-  eval/            # Evaluation framework for benchmarking agents
-
 packages/
-  agent-sdk/       # Node.js SDK (@browseros-ai/agent-sdk)
   cdp-protocol/    # Type-safe Chrome DevTools Protocol bindings
   shared/          # Shared constants (ports, timeouts, limits)
 ```
@@ -20,17 +17,15 @@ packages/
 | Package | Description |
 |---------|-------------|
 | `apps/server` | Bun server exposing MCP tools and running the agent loop |
-| `apps/agent` | Agent UI — Chrome extension for the chat interface |
+| `apps/app` | BrowserOS app UI — Chrome extension for the chat interface |
 | `apps/cli` | Go CLI — control BrowserOS from the terminal or AI coding agents |
-| `apps/eval` | Benchmark framework — WebVoyager, Mind2Web evaluation |
-| `packages/agent-sdk` | Node.js SDK for browser automation with natural language |
 | `packages/cdp-protocol` | Auto-generated CDP type bindings used by the server |
 | `packages/shared` | Shared constants used across packages |
 
 ## Architecture
 
 - `apps/server`: Bun server which contains the agent loop and tools.
-- `apps/agent`: Agent UI (Chrome extension).
+- `apps/app`: BrowserOS app UI (Chrome extension).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -45,7 +40,7 @@ packages/
 │                                                                          │
 │   /mcp ─────── MCP tool endpoints                                        │
 │   /chat ────── Agent streaming                                           │
-│   /health ─── Health check                                               │
+│   /system/health ─ Health check                                          │
 │                                                                          │
 │   Tools:                                                                 │
 │   └── CDP-backed browser tools (tabs, navigation, input, screenshots,   │
@@ -65,98 +60,74 @@ packages/
 
 ### Ports
 
-| Port | Env Variable | Purpose |
-|------|--------------|---------|
-| 9100 | `BROWSEROS_SERVER_PORT` | HTTP server - MCP endpoints, agent chat, health |
-| 9000 | `BROWSEROS_CDP_PORT` | Chromium CDP server (BrowserOS Server connects as client) |
-| 9300 | `BROWSEROS_EXTENSION_PORT` | Legacy BrowserOS launch arg kept for compatibility; not used by the server |
+| Port | Sidecar Field | Purpose |
+|------|---------------|---------|
+| 9100 | `ports.server` | HTTP server - MCP endpoints, agent chat, health |
+| 9000 | `ports.cdp` | Chromium CDP server (BrowserOS Server connects as client) |
+| 9100 | `ports.proxy` | Browser proxy port emitted by Chromium for managed sidecars |
 
 ## Development
 
 ### Setup
 
-Requires [process-compose](https://github.com/F1bonacc1/process-compose):
-
 ```bash
-brew install process-compose
-```
+# Copy the root development environment file
+cp .env.development.example .env.development
 
-```bash
-# Copy environment files for each package
-cp apps/server/.env.example apps/server/.env.development
-cp apps/agent/.env.example apps/agent/.env.development
-cp apps/server/.env.production.example apps/server/.env.production
+# Install deps and generate agent code
+bun run dev:setup
 
 # Start the full dev environment
-process-compose up
+bun run dev:watch
 ```
 
-The `process-compose up` command runs the following in order:
-1. `bun install` — installs dependencies
-2. `bun --cwd apps/agent codegen` — generates agent code
-3. `bun --cwd apps/server start` and `bun --cwd apps/agent dev` — starts server and agent in parallel
+`dev:watch` starts the server and app UI immediately.
+Existing checkouts with old per-app env files should run `bun run env:migrate` to merge those values into the root files.
+For release builds, copy `.env.production.example` to `.env.production` and fill the production-only secrets before running build or upload scripts.
 
 ### Environment Variables
 
-Runtime uses `.env.development`, while production artifact builds use `.env.production`:
+The monorepo has two root env files:
 
-- `apps/server/.env.development` - Server runtime configuration for local dev
-- `apps/server/.env.production` - Server production artifact build configuration
-- `apps/agent/.env.development` - Agent UI configuration
+- `.env.development` - local development, tests, app/server runs, and codegen inputs.
+- `.env.production` - release builds and upload scripts.
 
-**Server Variables** (`apps/server/.env.development`)
+Both are gitignored. Their tracked templates, `.env.development.example` and `.env.production.example`, are generated from `@browseros/shared/env/registry`; run `bun run env:examples` after changing the registry. CI drift-checks the generated examples.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BROWSEROS_SERVER_PORT` | 9100 | HTTP server port (MCP, chat, health) |
-| `BROWSEROS_CDP_PORT` | 9000 | Chromium CDP port (server connects as client) |
-| `BROWSEROS_EXTENSION_PORT` | 9300 | Legacy BrowserOS launch arg kept for compatibility |
-| `BROWSEROS_CONFIG_URL` | - | Remote config endpoint for rate limits |
-| `BROWSEROS_INSTALL_ID` | - | Unique installation identifier (analytics) |
-| `BROWSEROS_CLIENT_ID` | - | Client identifier (analytics) |
-| `POSTHOG_API_KEY` | - | Server-side PostHog API key |
-| `SENTRY_DSN` | - | Server-side Sentry DSN |
-| `BROWSEROS_TEST_HEADLESS` | false | Headless mode for server tests |
+Fresh clone setup is: copy `.env.development.example` to `.env.development`, fill any secrets needed for the workflow, then run `bun run dev:*`. Existing checkouts can run `bun run env:migrate` to merge old per-app values into the root files.
 
-**Server Production Build Variables** (`apps/server/.env.production`)
+**Server Sidecar Config** (`--config <path>`)
 
-Copy from `apps/server/.env.production.example` before running `build:server`.
-`build:server` requires all values below except `R2_DOWNLOAD_PREFIX` and `R2_UPLOAD_PREFIX`.
+The server and Claw server read startup ports, resource directories, execution directories, and instance metadata from a sidecar JSON file. `tools/dev`, dogfood, and Chromium-managed sidecar launches generate this file and pass it with `--config`.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BROWSEROS_CONFIG_URL` | - | Remote config endpoint baked into prod binary |
-| `CODEGEN_SERVICE_URL` | - | Graph/codegen backend URL baked into prod binary |
-| `POSTHOG_API_KEY` | - | PostHog key baked into prod binary |
-| `SENTRY_DSN` | - | Sentry DSN baked into prod binary |
-| `R2_ACCOUNT_ID` | - | Cloudflare account id for production artifact downloads/uploads |
-| `R2_ACCESS_KEY_ID` | - | Cloudflare R2 access key id |
-| `R2_SECRET_ACCESS_KEY` | - | Cloudflare R2 secret access key |
-| `R2_BUCKET` | - | Cloudflare R2 bucket name |
-| `R2_DOWNLOAD_PREFIX` | - | Optional prefix prepended to third-party resource object keys |
-| `R2_UPLOAD_PREFIX` | `server/prod-resources` | Optional prefix for uploaded artifact zips |
+| Field | Description |
+|-------|-------------|
+| `ports.server` | HTTP server port (MCP, chat, health) |
+| `ports.cdp` | Chromium CDP port (server connects as client) |
+| `ports.proxy` | Browser proxy port emitted by Chromium |
+| `directories.resources` | Packaged resources root |
+| `directories.execution` | Runtime execution/log/config directory |
+| `instance.*` | Optional browser/client metadata |
 
-**Agent Variables** (`apps/agent/.env.development`)
+**Root Env Sections**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BROWSEROS_SERVER_PORT` | 9100 | Passed to BrowserOS via CLI args |
-| `BROWSEROS_CDP_PORT` | 9000 | Passed to BrowserOS via CLI args |
-| `BROWSEROS_EXTENSION_PORT` | 9300 | Legacy BrowserOS CLI arg still passed for compatibility |
-| `VITE_BROWSEROS_SERVER_PORT` | 9100 | Agent UI connects to server (must match `BROWSEROS_SERVER_PORT`) |
-| `BROWSEROS_BINARY` | - | Path to BrowserOS binary |
-| `USE_BROWSEROS_BINARY` | true | Use BrowserOS instead of default Chrome |
-| `VITE_PUBLIC_POSTHOG_KEY` | - | Agent UI PostHog key |
-| `VITE_PUBLIC_SENTRY_DSN` | - | Agent UI Sentry DSN |
+| Section | File | Purpose |
+|---------|------|---------|
+| `dev-tools` | `.env.development` | Optional codegen and local tooling inputs such as `CDP_PROTOCOL_JSON` and `BROWSEROS_BINARY`. |
+| `app` | `.env.development` | Browser extension and local BrowserOS launch settings, including dev ports, public Vite values, source-map upload settings, and optional GraphQL schema path. |
+| `claw` | `.env.development` | Optional Claw app/server overrides such as Claw API URL, user-data dir, CDP port, and `BROWSERCLAW_DIR`. |
+| `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, and local server test settings. |
+| `upload` | `.env.production` | Cloudflare R2 credentials and bucket for production artifact uploads. |
 
-> **Note:** Port variables are duplicated in both files and must be kept in sync when running server and agent together.
+Production build and upload scripts read root `.env.production` plus exported process env through the shared loader in `@browseros/shared/env/*`; exported process env takes precedence. Missing required values fail with an error naming the key, section, and root file.
 
 ### Commands
 
 ```bash
 # Start
-bun run start:server          # Start the server
-bun run start:agent           # Start agent extension (dev mode)
+bun run dev:watch             # Start server and app with generated sidecar config
+bun run start:server          # Start the server from the repo root
+cd apps/server && bun --env-file=../../.env.development src/index.ts --config ../../config.dev.json
 
 # Build
 bun run build                 # Build server and agent
@@ -164,15 +135,22 @@ bun run build:server          # Build production server resource artifacts and u
 bun run build:agent           # Build agent extension
 
 # Test
-bun run test                  # Run standard tests
-bun run test:cdp              # Run CDP-based tests
-bun run test:integration      # Run integration tests
+bun run test                  # Run all tests
+bun run test:all              # Run all tests
+bun run test:main             # Run key server tools and integration tests
+
+# App-specific test groups (from packages/browseros-agent)
+cd apps/server && bun run test:tools
+cd apps/server && bun run test:cdp
+cd apps/server && bun run test:integration
 
 # Quality
 bun run lint                  # Check with Biome
 bun run lint:fix              # Auto-fix
 bun run typecheck             # TypeScript check
 ```
+
+`bun run typecheck` runs the native TypeScript 7 compiler (`tsc` from `typescript@7`, the Go-native build). Unlike an editor's bundled classic TypeScript, the native compiler does not implicitly include every `@types/*` package it finds — each tsconfig must list its ambient type packages in `compilerOptions.types` (the root tsconfig defaults to `["node", "bun"]`). A new package that omits this may look green in the editor but fail `bun run typecheck` in CI with "Cannot find name 'Bun' / 'process'"; add the needed names to its `types` array. For editor parity with CI, install your editor's native TypeScript 7 support.
 
 `build:server` now emits artifacts under `dist/prod/server/<target>/` and zip files under `dist/prod/server/`.
 

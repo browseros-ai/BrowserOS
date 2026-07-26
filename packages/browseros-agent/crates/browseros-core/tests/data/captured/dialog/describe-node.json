@@ -1,0 +1,67 @@
+{
+  "node": {
+    "nodeId": 1,
+    "backendNodeId": 2,
+    "nodeType": 9,
+    "nodeName": "#document",
+    "localName": "",
+    "nodeValue": "",
+    "childNodeCount": 2,
+    "children": [
+      {
+        "nodeId": 2,
+        "parentId": 0,
+        "backendNodeId": 17,
+        "nodeType": 10,
+        "nodeName": "html",
+        "localName": "",
+        "nodeValue": "",
+        "publicId": "",
+        "systemId": ""
+      },
+      {
+        "nodeId": 3,
+        "parentId": 0,
+        "backendNodeId": 3,
+        "nodeType": 1,
+        "nodeName": "HTML",
+        "localName": "html",
+        "nodeValue": "",
+        "childNodeCount": 2,
+        "children": [
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 4,
+            "nodeType": 1,
+            "nodeName": "HEAD",
+            "localName": "head",
+            "nodeValue": "",
+            "childNodeCount": 2,
+            "attributes": []
+          },
+          {
+            "nodeId": 0,
+            "parentId": 0,
+            "backendNodeId": 7,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": 5,
+            "attributes": []
+          }
+        ],
+        "attributes": [
+          "lang",
+          "en"
+        ],
+        "frameId": "18BD5ED6DD6E5C341D4D84080175E83F"
+      }
+    ],
+    "documentURL": "http://127.0.0.1:17243/dialog.html",
+    "baseURL": "http://127.0.0.1:17243/dialog.html",
+    "xmlVersion": "",
+    "compatibilityMode": "NoQuirksMode"
+  }
+}

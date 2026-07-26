@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createLsTool } from '../../../src/tools/filesystem/ls'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
 
@@ -100,9 +100,41 @@ describe('filesystem_ls', () => {
     expect(result.text).toContain('MB')
   })
 
-  it('handles absolute path', async () => {
+  it('rejects absolute paths', async () => {
     await writeFile(join(tmpDir, 'abs.txt'), 'data')
     const result = await exec({ path: tmpDir })
-    expect(result.text).toContain('abs.txt')
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('relative to the selected workspace')
+  })
+
+  it('rejects traversal outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-ls-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      const result = await exec({ path: `../${basename(outsideDir)}` })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects symlinked directories outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-ls-symlink-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await symlink(outsideDir, join(tmpDir, 'outside-link'))
+      const result = await exec({ path: 'outside-link' })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

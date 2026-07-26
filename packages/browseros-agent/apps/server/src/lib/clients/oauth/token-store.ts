@@ -2,98 +2,85 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * SQLite storage for OAuth tokens.
  */
 
-import type { Database } from 'bun:sqlite'
+import { and, eq } from 'drizzle-orm'
+import type { BrowserOsDatabase } from '../../db'
+import { type OAuthTokenRow, oauthTokens } from '../../db/schema'
+import type {
+  OAuthStatus,
+  OAuthTokenStore as OAuthTokenStoreContract,
+  StoredOAuthTokens,
+} from './token-manager'
 
-export interface StoredOAuthTokens {
-  accessToken: string
-  refreshToken: string
-  expiresAt: number
-  email?: string
-  accountId?: string
-}
-
-export interface OAuthStatus {
-  authenticated: boolean
-  email?: string
-  provider: string
-}
-
-export class OAuthTokenStore {
-  constructor(private readonly db: Database) {}
+/** Persists OAuth tokens in the BrowserOS Drizzle database for server-managed LLM providers. */
+export class OAuthTokenStore implements OAuthTokenStoreContract {
+  constructor(private readonly db: BrowserOsDatabase) {}
 
   upsertTokens(
     browserosId: string,
     provider: string,
     tokens: StoredOAuthTokens,
   ): void {
-    const stmt = this.db.prepare(`
-      INSERT INTO oauth_tokens (browseros_id, provider, access_token, refresh_token, expires_at, email, account_id, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT (browseros_id, provider) DO UPDATE SET
-        access_token = excluded.access_token,
-        refresh_token = excluded.refresh_token,
-        expires_at = excluded.expires_at,
-        email = excluded.email,
-        account_id = excluded.account_id,
-        updated_at = datetime('now')
-    `)
-    stmt.run(
+    const row: OAuthTokenRow = {
       browserosId,
       provider,
-      tokens.accessToken,
-      tokens.refreshToken,
-      tokens.expiresAt,
-      tokens.email ?? null,
-      tokens.accountId ?? null,
-    )
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      email: tokens.email ?? null,
+      accountId: tokens.accountId ?? null,
+      updatedAt: Date.now(),
+    }
+    this.db
+      .insert(oauthTokens)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [oauthTokens.browserosId, oauthTokens.provider],
+        set: row,
+      })
+      .run()
   }
 
   getTokens(browserosId: string, provider: string): StoredOAuthTokens | null {
-    const row = this.db
-      .prepare(
-        'SELECT access_token, refresh_token, expires_at, email, account_id FROM oauth_tokens WHERE browseros_id = ? AND provider = ?',
-      )
-      .get(browserosId, provider) as {
-      access_token: string
-      refresh_token: string
-      expires_at: number
-      email: string | null
-      account_id: string | null
-    } | null
-
+    const row = this.findRow(browserosId, provider)
     if (!row) return null
     return {
-      accessToken: row.access_token,
-      refreshToken: row.refresh_token,
-      expiresAt: row.expires_at,
+      accessToken: row.accessToken,
+      refreshToken: row.refreshToken,
+      expiresAt: row.expiresAt,
       email: row.email ?? undefined,
-      accountId: row.account_id ?? undefined,
+      accountId: row.accountId ?? undefined,
     }
   }
 
   deleteTokens(browserosId: string, provider: string): void {
-    this.db
-      .prepare(
-        'DELETE FROM oauth_tokens WHERE browseros_id = ? AND provider = ?',
-      )
-      .run(browserosId, provider)
+    this.db.delete(oauthTokens).where(tokenKey(browserosId, provider)).run()
   }
 
   getStatus(browserosId: string, provider: string): OAuthStatus {
-    const row = this.db
-      .prepare(
-        'SELECT email FROM oauth_tokens WHERE browseros_id = ? AND provider = ?',
-      )
-      .get(browserosId, provider) as { email: string | null } | null
-
+    const row = this.findRow(browserosId, provider)
     return {
       authenticated: row !== null,
       email: row?.email ?? undefined,
       provider,
     }
   }
+
+  private findRow(browserosId: string, provider: string): OAuthTokenRow | null {
+    return (
+      this.db
+        .select()
+        .from(oauthTokens)
+        .where(tokenKey(browserosId, provider))
+        .get() ?? null
+    )
+  }
+}
+
+function tokenKey(browserosId: string, provider: string) {
+  return and(
+    eq(oauthTokens.browserosId, browserosId),
+    eq(oauthTokens.provider, provider),
+  )
 }

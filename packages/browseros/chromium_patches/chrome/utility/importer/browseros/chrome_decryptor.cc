@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor.cc b/chrome/utility/importer/browseros/chrome_decryptor.cc
 new file mode 100644
-index 0000000000000..cf7ccdf4336f7
+index 0000000000000..36088220e95b9
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor.cc
 @@ -0,0 +1,31 @@
@@ -25,11 +25,11 @@ index 0000000000000..cf7ccdf4336f7
 +  return std::string();
 +}
 +
-+bool DecryptChromeValue(const std::string& ciphertext,
-+                        const std::string& key,
-+                        std::string* plaintext) {
++DecryptResult DecryptChromeValue(const std::string& ciphertext,
++                                 const std::string& key,
++                                 std::string* plaintext) {
 +  LOG(INFO) << "browseros: Linux decryption not yet implemented";
-+  return false;
++  return DecryptResult::kError;
 +}
 +
 +#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)

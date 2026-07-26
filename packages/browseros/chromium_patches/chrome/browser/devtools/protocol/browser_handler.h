@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.h b/chrome/browser/devtools/protocol/browser_handler.h
-index e1424aa52cbf6..ffd1c86c5aed9 100644
+index e1424aa52cbf6..aa49d245cc034 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.h
 +++ b/chrome/browser/devtools/protocol/browser_handler.h
 @@ -5,9 +5,17 @@
@@ -35,7 +35,7 @@ index e1424aa52cbf6..ffd1c86c5aed9 100644
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -41,9 +57,118 @@ class BrowserHandler : public protocol::Browser::Backend {
+@@ -41,6 +57,108 @@ class BrowserHandler : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -54,8 +54,13 @@ index e1424aa52cbf6..ffd1c86c5aed9 100644
 +      std::unique_ptr<protocol::Browser::WindowInfo>* out_window) override;
 +  protocol::Response CloseWindow(int window_id) override;
 +  protocol::Response ActivateWindow(int window_id) override;
-+  protocol::Response ShowWindow(int window_id) override;
-+  protocol::Response HideWindow(int window_id) override;
++  protocol::Response SetWindowVisibility(
++      int window_id,
++      bool visible,
++      std::optional<bool> activate,
++      std::unique_ptr<protocol::Browser::WindowInfo>* out_window,
++      bool* out_replaced,
++      int* out_previous_window_id) override;
 +
 +  // Tab management
 +  protocol::Response GetTabs(
@@ -76,7 +81,6 @@ index e1424aa52cbf6..ffd1c86c5aed9 100644
 +      std::optional<int> index,
 +      std::optional<bool> background,
 +      std::optional<bool> pinned,
-+      std::optional<bool> hidden,
 +      std::optional<std::string> browser_context_id,
 +      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
 +  protocol::Response CloseTab(std::optional<std::string> target_id,
@@ -108,10 +112,6 @@ index e1424aa52cbf6..ffd1c86c5aed9 100644
 +      std::optional<int> index,
 +      std::optional<bool> activate,
 +      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
-+  protocol::Response HideTab(
-+      std::optional<std::string> target_id,
-+      std::optional<int> tab_id,
-+      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
 +
 +  // Tab group management
 +  protocol::Response GetTabGroups(
@@ -142,15 +142,5 @@ index e1424aa52cbf6..ffd1c86c5aed9 100644
 +      std::unique_ptr<protocol::Browser::TabGroupInfo>* out_group) override;
 +
   private:
-+  Browser* GetOrCreateHiddenWindow(Profile* profile);
-+  void MakeWindowHidden(Browser* browser);
-+  void MakeWindowVisible(BrowserWindowInterface* bwi);
-+  bool IsHiddenWindow(int window_id) const;
-+
    base::flat_set<std::string> contexts_with_overridden_permissions_;
    std::string target_id_;
-+  base::flat_set<int> hidden_window_ids_;
-+  base::flat_map<raw_ptr<Profile>, raw_ptr<Browser>> hidden_window_per_profile_;
- };
- 
- #endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_BROWSER_HANDLER_H_

@@ -1,16 +1,21 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_win.cc b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
 new file mode 100644
-index 0000000000000..d4653cb2abf43
+index 0000000000000..97d92c4309ffe
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_win.cc
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,279 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome decryption - Windows implementation
 +// Uses DPAPI for key retrieval, AES-256-GCM for decryption
 +
 +#include "chrome/utility/importer/browseros/chrome_decryptor.h"
 +
-+#include "base/win/wincrypt_shim.h"
++#include <windows.h>
++
++#include <wincrypt.h>
++
++#include <string>
++#include <utility>
 +
 +#include "base/base64.h"
 +#include "base/files/file_util.h"
@@ -30,6 +35,10 @@ index 0000000000000..d4653cb2abf43
 +// Chrome's encryption constants for Windows
 +constexpr char kEncryptionVersionPrefix[] = "v10";
 +constexpr size_t kEncryptionVersionPrefixLength = 3;
++// Chrome 127+ App-Bound Encryption marker. Its key lives in Local State under
++// os_crypt.app_bound_encrypted_key and is sealed by Chrome's SYSTEM elevation
++// service, so values with this prefix cannot be decrypted here.
++constexpr char kAppBoundVersionPrefix[] = "v20";
 +constexpr char kDpapiPrefix[] = "DPAPI";
 +constexpr size_t kDpapiPrefixLength = 5;
 +constexpr size_t kNonceLength = 12;  // AES-GCM nonce
@@ -82,17 +91,44 @@ index 0000000000000..d4653cb2abf43
 +  return true;
 +}
 +
-+// Decrypt using Windows DPAPI
++// Decrypt a raw DPAPI blob (no version prefix) with the current user's
++// credentials. Returns false if CryptUnprotectData fails.
++bool DecryptRawDpapiBlob(const uint8_t* data,
++                         size_t length,
++                         std::string* decrypted_data) {
++  DATA_BLOB input_blob;
++  input_blob.pbData = const_cast<BYTE*>(data);
++  input_blob.cbData = static_cast<DWORD>(length);
++
++  DATA_BLOB output_blob = {0};
++  if (!CryptUnprotectData(&input_blob, nullptr, nullptr, nullptr, nullptr,
++                          CRYPTPROTECT_UI_FORBIDDEN, &output_blob)) {
++    return false;
++  }
++
++  bool ok = false;
++  if (output_blob.pbData && output_blob.cbData > 0) {
++    decrypted_data->assign(reinterpret_cast<char*>(output_blob.pbData),
++                           output_blob.cbData);
++    ok = true;
++  }
++  if (output_blob.pbData) {
++    LocalFree(output_blob.pbData);
++  }
++  return ok;
++}
++
++// Decrypt the "DPAPI"-prefixed os_crypt key blob read from Local State.
 +bool DecryptWithDpapi(const std::string& encrypted_data,
 +                      std::string* decrypted_data) {
 +  if (encrypted_data.length() <= kDpapiPrefixLength) {
-+    LOG(WARNING) << "browseros: Encrypted data too short";
++    LOG(WARNING) << "browseros: Encrypted key too short";
 +    return false;
 +  }
 +
 +  // Check for "DPAPI" prefix
 +  if (!base::StartsWith(encrypted_data, kDpapiPrefix)) {
-+    LOG(WARNING) << "browseros: Missing DPAPI prefix";
++    LOG(WARNING) << "browseros: Missing DPAPI prefix on key";
 +    return false;
 +  }
 +
@@ -101,28 +137,12 @@ index 0000000000000..d4653cb2abf43
 +                        kDpapiPrefixLength;
 +  size_t data_length = encrypted_data.length() - kDpapiPrefixLength;
 +
-+  DATA_BLOB input_blob;
-+  input_blob.pbData = const_cast<BYTE*>(data);
-+  input_blob.cbData = static_cast<DWORD>(data_length);
-+
-+  DATA_BLOB output_blob = {0};
-+
-+  if (!CryptUnprotectData(&input_blob, nullptr, nullptr, nullptr, nullptr,
-+                          CRYPTPROTECT_UI_FORBIDDEN, &output_blob)) {
-+    DWORD error = GetLastError();
-+    LOG(WARNING) << "browseros: CryptUnprotectData failed with error: "
-+                 << error;
++  if (!DecryptRawDpapiBlob(data, data_length, decrypted_data)) {
++    LOG(WARNING) << "browseros: CryptUnprotectData failed for key with error: "
++                 << GetLastError();
 +    return false;
 +  }
-+
-+  if (output_blob.pbData && output_blob.cbData > 0) {
-+    decrypted_data->assign(reinterpret_cast<char*>(output_blob.pbData),
-+                           output_blob.cbData);
-+    LocalFree(output_blob.pbData);
-+    return true;
-+  }
-+
-+  return false;
++  return true;
 +}
 +
 +// Decrypt AES-256-GCM encrypted data
@@ -216,34 +236,48 @@ index 0000000000000..d4653cb2abf43
 +  return decrypted_key;
 +}
 +
-+bool DecryptChromeValue(const std::string& ciphertext,
-+                        const std::string& key,
-+                        std::string* plaintext) {
++DecryptResult DecryptChromeValue(const std::string& ciphertext,
++                                 const std::string& key,
++                                 std::string* plaintext) {
 +  if (ciphertext.empty()) {
-+    return false;
++    return DecryptResult::kEmpty;
 +  }
 +
-+  // Check for v10 prefix (Chrome's encryption marker)
-+  if (ciphertext.length() < kEncryptionVersionPrefixLength ||
-+      !base::StartsWith(ciphertext, kEncryptionVersionPrefix)) {
-+    // Not encrypted with v10, might be plaintext or old format
-+    LOG(INFO) << "browseros: Value doesn't have v10 prefix, may be unencrypted";
-+    *plaintext = ciphertext;
-+    return true;
++  // Chrome 127+ App-Bound Encryption. The key is sealed by Chrome's SYSTEM
++  // elevation service and cannot be recovered by another application, so the
++  // caller must skip this value rather than treat the blob as plaintext.
++  if (base::StartsWith(ciphertext, kAppBoundVersionPrefix)) {
++    return DecryptResult::kAppBoundUnsupported;
 +  }
 +
-+  // Extract the actual encrypted data (skip "v10" prefix)
-+  const uint8_t* encrypted_data =
-+      reinterpret_cast<const uint8_t*>(ciphertext.data()) +
-+      kEncryptionVersionPrefixLength;
-+  size_t encrypted_length = ciphertext.length() - kEncryptionVersionPrefixLength;
-+
-+  if (encrypted_length == 0) {
-+    LOG(WARNING) << "browseros: Empty ciphertext after prefix";
-+    return false;
++  // Modern (v10) values: AES-256-GCM under the DPAPI-wrapped os_crypt key.
++  if (base::StartsWith(ciphertext, kEncryptionVersionPrefix)) {
++    const uint8_t* encrypted_data =
++        reinterpret_cast<const uint8_t*>(ciphertext.data()) +
++        kEncryptionVersionPrefixLength;
++    size_t encrypted_length =
++        ciphertext.length() - kEncryptionVersionPrefixLength;
++    if (encrypted_length == 0) {
++      LOG(WARNING) << "browseros: Empty ciphertext after v10 prefix";
++      return DecryptResult::kError;
++    }
++    return DecryptAesGcm(key, encrypted_data, encrypted_length, plaintext)
++               ? DecryptResult::kSuccess
++               : DecryptResult::kError;
 +  }
 +
-+  return DecryptAesGcm(key, encrypted_data, encrypted_length, plaintext);
++  // Legacy unprefixed blob: either raw DPAPI (pre-v10 Chrome) or a genuinely
++  // unencrypted value. Try DPAPI first, then fall back to plaintext. Mirrors
++  // os_crypt_win.cc's handling of values without a version prefix.
++  std::string dpapi_plaintext;
++  if (DecryptRawDpapiBlob(reinterpret_cast<const uint8_t*>(ciphertext.data()),
++                          ciphertext.length(), &dpapi_plaintext)) {
++    *plaintext = std::move(dpapi_plaintext);
++    return DecryptResult::kSuccess;
++  }
++
++  *plaintext = ciphertext;
++  return DecryptResult::kSuccess;
 +}
 +
 +}  // namespace browseros_importer

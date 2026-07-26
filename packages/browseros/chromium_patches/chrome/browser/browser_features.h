@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/browser_features.h b/chrome/browser/browser_features.h
-index a9cbacc50c7b5..cf13309f8f308 100644
+index a6202094c1d66..7e1b1edfdee13 100644
 --- a/chrome/browser/browser_features.h
 +++ b/chrome/browser/browser_features.h
 @@ -35,6 +35,8 @@ BASE_DECLARE_FEATURE(kAllowUnmutedAutoplayForTWA);

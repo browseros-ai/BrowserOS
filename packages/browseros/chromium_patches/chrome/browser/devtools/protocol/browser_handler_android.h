@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.h b/chrome/browser/devtools/protocol/browser_handler_android.h
-index a80686d439110..52b7344ac56a9 100644
+index a80686d439110..b35c043695542 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.h
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.h
 @@ -22,6 +22,14 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
@@ -36,8 +36,13 @@ index a80686d439110..52b7344ac56a9 100644
 +      std::unique_ptr<protocol::Browser::WindowInfo>* out_window) override;
 +  protocol::Response CloseWindow(int window_id) override;
 +  protocol::Response ActivateWindow(int window_id) override;
-+  protocol::Response ShowWindow(int window_id) override;
-+  protocol::Response HideWindow(int window_id) override;
++  protocol::Response SetWindowVisibility(
++      int window_id,
++      bool visible,
++      std::optional<bool> activate,
++      std::unique_ptr<protocol::Browser::WindowInfo>* out_window,
++      bool* out_replaced,
++      int* out_previous_window_id) override;
 +
 +  // Tab management
 +  protocol::Response GetTabs(
@@ -58,7 +63,6 @@ index a80686d439110..52b7344ac56a9 100644
 +      std::optional<int> index,
 +      std::optional<bool> background,
 +      std::optional<bool> pinned,
-+      std::optional<bool> hidden,
 +      std::optional<std::string> browser_context_id,
 +      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
 +  protocol::Response CloseTab(std::optional<std::string> target_id,
@@ -89,10 +93,6 @@ index a80686d439110..52b7344ac56a9 100644
 +      std::optional<int> window_id,
 +      std::optional<int> index,
 +      std::optional<bool> activate,
-+      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
-+  protocol::Response HideTab(
-+      std::optional<std::string> target_id,
-+      std::optional<int> tab_id,
 +      std::unique_ptr<protocol::Browser::TabInfo>* out_tab) override;
 +
 +  // Tab group management

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/toolbar_actions_model.cc b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
-index 89c4445bf4185..39f22a4571f8e 100644
+index d4f8091fffc0e..b0f72561e3a2f 100644
 --- a/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 @@ -18,6 +18,7 @@
@@ -10,7 +10,7 @@ index 89c4445bf4185..39f22a4571f8e 100644
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
-@@ -383,6 +384,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
+@@ -389,6 +390,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
  }
  
  bool ToolbarActionsModel::IsActionForcePinned(const ActionId& action_id) const {
@@ -22,12 +22,12 @@ index 89c4445bf4185..39f22a4571f8e 100644
    auto* management =
        extensions::ExtensionManagementFactory::GetForBrowserContext(profile_);
    return management->GetForcePinnedList().contains(action_id);
-@@ -628,6 +634,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
+@@ -634,6 +640,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
                           return !std::ranges::contains(pinned, id);
                         });
  
-+  // Add BrowserOS extensions to the force-pinned list (only those marked as pinned)
-+  for (const std::string& ext_id : browseros::GetBrowserOSExtensionIds()) {
++  for (const std::string& ext_id :
++       browseros::GetActiveBrowserOSExtensionIds()) {
 +    if (browseros::IsBrowserOSPinnedExtension(ext_id) &&
 +        !std::ranges::contains(pinned, ext_id)) {
 +      pinned.push_back(ext_id);

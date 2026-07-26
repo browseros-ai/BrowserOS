@@ -29,7 +29,6 @@ import {
 
 export {
   type CompactionState,
-  type ComputedConfig,
   computeConfig,
   estimateTokens,
   estimateTokensForThreshold,

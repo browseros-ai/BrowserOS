@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 90eec90d4ef45..da7beb4a4547e 100644
+index f823433796c5c..1bc6610d0626e 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -613,6 +613,7 @@
+@@ -623,6 +623,7 @@
  #endif
  
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -10,7 +10,7 @@ index 90eec90d4ef45..da7beb4a4547e 100644
  #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
  #include "chrome/browser/extensions/chrome_extension_cookies.h"
  #include "extensions/browser/api/web_request/web_request_api.h"
-@@ -1449,7 +1450,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
+@@ -1541,7 +1542,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
  void ChromeContentBrowserClient::RegisterProfilePrefs(
      user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterBooleanPref(prefs::kDisable3DAPIs, false);
@@ -19,12 +19,28 @@ index 90eec90d4ef45..da7beb4a4547e 100644
    // Register user prefs for mapping SitePerProcess and IsolateOrigins in
    // user policy in addition to the same named ones in Local State (which are
    // used for mapping the command-line flags).
-@@ -4931,6 +4932,43 @@ bool ChromeContentBrowserClient::
+@@ -4479,10 +4480,10 @@ bool ChromeContentBrowserClient::CanCreateWindow(
+         web_contents->GetResponsibleWebContents();
+     bool is_from_embedded_page = web_contents != responsible_web_contents;
+     if (contextual_tasks_ui_service &&
+-        contextual_tasks_ui_service->HandleNavigation(
+-            std::move(url_params), responsible_web_contents,
+-            is_from_embedded_page,
+-            /*is_to_new_tab=*/true)) {
++        contextual_tasks_ui_service->HandleNavigation(std::move(url_params),
++                                                      responsible_web_contents,
++                                                      is_from_embedded_page,
++                                                      /*is_to_new_tab=*/true)) {
+       return false;
+     }
+   }
+@@ -5052,6 +5053,44 @@ bool ChromeContentBrowserClient::
               prefs.root_scrollbar_theme_color;
  }
  
 +// Handles chrome://browseros/* URLs by rewriting to extension URLs.
-+// Forward handler: chrome://browseros/ai -> chrome-extension://[id]/options.html
++// Forward handler: chrome://browseros/ai ->
++// chrome-extension://[id]/options.html
 +static bool HandleBrowserOSURL(GURL* url,
 +                               content::BrowserContext* browser_context) {
 +  if (!url->SchemeIs(content::kChromeUIScheme) ||
@@ -32,8 +48,7 @@ index 90eec90d4ef45..da7beb4a4547e 100644
 +    return false;
 +  }
 +
-+  std::string extension_url =
-+      browseros::GetBrowserOSExtensionURL(url->path());
++  std::string extension_url = browseros::GetBrowserOSExtensionURL(url->path());
 +  if (extension_url.empty()) {
 +    return false;
 +  }
@@ -42,16 +57,17 @@ index 90eec90d4ef45..da7beb4a4547e 100644
 +  return true;
 +}
 +
-+// Reverse handler: chrome-extension://[id]/options.html#ai -> chrome://browseros/ai
-+// This ensures the virtual URL is shown in the address bar.
++// Reverse handler: chrome-extension://[id]/options.html#ai ->
++// chrome://browseros/ai This ensures the virtual URL is shown in the address
++// bar.
 +static bool ReverseBrowserOSURL(GURL* url,
 +                                content::BrowserContext* browser_context) {
 +  if (!url->SchemeIs(extensions::kExtensionScheme)) {
 +    return false;
 +  }
 +
-+  std::string virtual_url = browseros::GetBrowserOSVirtualURL(
-+      url->host(), url->path(), url->ref());
++  std::string virtual_url =
++      browseros::GetBrowserOSVirtualURL(url->host(), url->path(), url->ref());
 +  if (virtual_url.empty()) {
 +    return false;
 +  }
@@ -63,7 +79,7 @@ index 90eec90d4ef45..da7beb4a4547e 100644
  void ChromeContentBrowserClient::BrowserURLHandlerCreated(
      BrowserURLHandler* handler) {
    // The group policy NTP URL handler must be registered before the other NTP
-@@ -4945,6 +4978,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+@@ -5068,6 +5107,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
    handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,
                            BrowserURLHandler::null_handler());
  
@@ -77,7 +93,7 @@ index 90eec90d4ef45..da7beb4a4547e 100644
  #if BUILDFLAG(IS_ANDROID)
    // Handler to rewrite chrome://newtab on Android.
    handler->AddHandlerPair(&chrome::android::HandleAndroidNativePageURL,
-@@ -7775,6 +7820,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
+@@ -7901,6 +7947,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
  ChromeContentBrowserClient::ShouldOverrideLocalNetworkAccessRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {
@@ -85,7 +101,7 @@ index 90eec90d4ef45..da7beb4a4547e 100644
 +  // Allow BrowserOS extensions to access private networks (e.g., localhost).
 +  // This enables extension service workers to connect to local servers.
 +  if (origin.scheme() == extensions::kExtensionScheme &&
-+      browseros::IsBrowserOSExtension(origin.host())) {
++      browseros::IsActiveBrowserOSExtension(origin.host())) {
 +    return LocalNetworkAccessRequestPolicyOverride::kForceAllow;
 +  }
 +#endif

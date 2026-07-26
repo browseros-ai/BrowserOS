@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/updater/extension_updater.h b/chrome/browser/extensions/updater/extension_updater.h
-index 13058decda421..896c45d1c26dd 100644
+index d88bf029fadaa..338f449194c69 100644
 --- a/chrome/browser/extensions/updater/extension_updater.h
 +++ b/chrome/browser/extensions/updater/extension_updater.h
-@@ -167,6 +167,13 @@ class ExtensionUpdater : public KeyedService,
+@@ -166,6 +166,13 @@ class ExtensionUpdater : public KeyedService,
    // regularly scheduled check or a pending check from CheckSoon().
    void CheckNow(CheckParams params);
  

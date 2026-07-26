@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..a7edcdd9d98ee
+index 0000000000000..529d7fc706730
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,170 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -29,21 +29,22 @@ index 0000000000000..a7edcdd9d98ee
 +
 +namespace browseros {
 +class BrowserOSServerManager;
++struct ManagedServerDescriptor;
 +}
 +
 +namespace browseros_server {
 +
-+// Manages automatic updates for the BrowserOS server binary.
++// Manages automatic updates for the selected BrowserOS sidecar server.
 +//
 +// Update flow:
-+// 1. Fetch appcast XML from CDN
-+// 2. Parse and find matching platform enclosure
-+// 3. Download ZIP if newer version available
-+// 4. Verify Ed25519 signature
-+// 5. Extract to versions/{version}/
-+// 6. Test binary with --version
-+// 7. Update current_version file
-+// 8. Signal manager to use new binary on next restart
++// 1. Fetch the descriptor-selected appcast XML from CDN.
++// 2. Parse and find the matching platform enclosure.
++// 3. Download ZIP if a newer version is available.
++// 4. Verify Ed25519 signature.
++// 5. Extract to the product's versions/{version}/ directory.
++// 6. Test the binary with --version.
++// 7. Update the product's current_version file.
++// 8. Signal the manager to restart using the new binary.
 +class BrowserOSServerUpdater : public browseros::ServerUpdater {
 + public:
 +  explicit BrowserOSServerUpdater(browseros::BrowserOSServerManager* manager);
@@ -142,6 +143,10 @@ index 0000000000000..a7edcdd9d98ee
 +  void ResetState();
 +
 +  raw_ptr<browseros::BrowserOSServerManager> manager_;
++
++  // Selected sidecar's OTA contract (appcast feeds, state dir, binary name,
++  // readiness path). Points at a process-lifetime static descriptor.
++  raw_ptr<const browseros::ManagedServerDescriptor> descriptor_;
 +
 +  base::RepeatingTimer update_check_timer_;
 +

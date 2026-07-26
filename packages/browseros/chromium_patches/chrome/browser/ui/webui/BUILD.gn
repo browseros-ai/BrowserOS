@@ -1,13 +1,12 @@
 diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
-index f74846025f398..5452b6a0c7cf2 100644
+index 0cccaa551b871..8b0e1ded36f1b 100644
 --- a/chrome/browser/ui/webui/BUILD.gn
 +++ b/chrome/browser/ui/webui/BUILD.gn
-@@ -89,6 +89,8 @@ source_set("configs") {
- 
- source_set("webui") {
-   sources = [
-+    "clash_of_gpts/clash_of_gpts_ui.cc",
-+    "clash_of_gpts/clash_of_gpts_ui.h",
-     "constrained_web_dialog_ui.cc",
-     "constrained_web_dialog_ui.h",
-     "current_channel_logo.cc",
+@@ -46,6 +46,7 @@ source_set("configs") {
+   deps = [
+     ":webui",
+     "//chrome/browser/actor/ui:actor_overlay",
++    "//chrome/browser/browseros/onboarding",
+     "//chrome/browser/contextual_tasks:ui",
+     "//chrome/browser/glic",
+     "//chrome/browser/optimization_guide",

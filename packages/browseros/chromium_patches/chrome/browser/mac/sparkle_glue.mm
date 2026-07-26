@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..25c4843095e4f
+index 0000000000000..7a5da195279c1
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,668 @@
+@@ -0,0 +1,673 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -20,6 +20,7 @@ index 0000000000000..25c4843095e4f
 +#include "base/system/sys_info.h"
 +#include "base/version.h"
 +#include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/core/browseros_product.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/upgrade_detector/build_state.h"
 +
@@ -32,12 +33,16 @@ index 0000000000000..25c4843095e4f
 +namespace {
 +
 +NSString* GetArchitectureSpecificFeedURL() {
-+  const char* kBaseURL = "https://cdn.browseros.com/";
++  // Feed keys are owned by release/feeds/spec.py (_BROWSER_FEED_SLUGS) in
++  // the BrowserOS repo; keep the two in lockstep.
++  const char* base_url = browseros::IsBrowserClawProduct()
++                             ? "https://cdn.browseros.com/appcast-claw"
++                             : "https://cdn.browseros.com/appcast";
 +
 +  if (base::SysInfo::OperatingSystemArchitecture() == "x86_64") {
-+    return [NSString stringWithFormat:@"%sappcast-x86_64.xml", kBaseURL];
++    return [NSString stringWithFormat:@"%s-x86_64.xml", base_url];
 +  }
-+  return [NSString stringWithFormat:@"%sappcast.xml", kBaseURL];
++  return [NSString stringWithFormat:@"%s.xml", base_url];
 +}
 +
 +bool IsOnReadOnlyFilesystem(NSString* path) {

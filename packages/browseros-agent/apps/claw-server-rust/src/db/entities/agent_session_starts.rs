@@ -1,0 +1,20 @@
+use sea_orm::entity::prelude::*;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "agent_session_starts")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i64,
+    pub created_at: i64,
+    pub session_id: String,
+    pub agent_id: String,
+    pub slug: String,
+    pub agent_label: String,
+    pub client_name: String,
+    pub client_version: String,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+impl ActiveModelBehavior for ActiveModel {}

@@ -2,7 +2,7 @@
  * @license
  * Copyright 2025 BrowserOS
  */
-interface ScreenshotData {
+export interface ScreenshotData {
   html: string
 }
 

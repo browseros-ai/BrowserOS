@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_extensions_importer.cc b/chrome/utility/importer/browseros/chrome_extensions_importer.cc
 new file mode 100644
-index 0000000000000..521ceadec9fc9
+index 0000000000000..bd13aa92a2373
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_extensions_importer.cc
 @@ -0,0 +1,98 @@

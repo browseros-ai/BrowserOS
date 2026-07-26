@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { FilesystemToolResult } from '../../../src/tools/filesystem/utils'
 import { createWriteTool } from '../../../src/tools/filesystem/write'
 
@@ -76,12 +76,47 @@ describe('filesystem_write', () => {
     expect(written).toBe(content)
   })
 
-  it('handles absolute paths', async () => {
+  it('rejects absolute paths', async () => {
     const absPath = join(tmpDir, 'absolute.txt')
     const result = await exec({ path: absPath, content: 'abs content' })
-    expect(result.isError).toBeUndefined()
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('relative to the selected workspace')
+  })
 
-    const content = await readFile(absPath, 'utf-8')
-    expect(content).toBe('abs content')
+  it('rejects traversal outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-write-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      const result = await exec({
+        path: `../${basename(outsideDir)}/escape.txt`,
+        content: 'escape',
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects writes below symlinked parents outside the workspace', async () => {
+    const outsideDir = join(
+      tmpdir(),
+      `fs-write-symlink-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    )
+    await mkdir(outsideDir, { recursive: true })
+    try {
+      await symlink(outsideDir, join(tmpDir, 'outside-link'))
+      const result = await exec({
+        path: 'outside-link/new.txt',
+        content: 'escape',
+      })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('outside the selected workspace')
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

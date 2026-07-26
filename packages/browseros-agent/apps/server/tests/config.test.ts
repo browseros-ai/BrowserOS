@@ -1,14 +1,8 @@
-/**
- * @license
- * Copyright 2025 BrowserOS
- */
-
 import { afterEach, beforeEach, describe, it } from 'bun:test'
 import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
 import { loadServerConfig } from '../src/config'
 
 describe('loadServerConfig', () => {
@@ -19,7 +13,6 @@ describe('loadServerConfig', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browseros-config-test-'))
     originalEnv = { ...process.env }
 
-    // Clear relevant env vars
     delete process.env.BROWSEROS_CDP_PORT
     delete process.env.BROWSEROS_SERVER_PORT
     delete process.env.BROWSEROS_EXTENSION_PORT
@@ -35,451 +28,290 @@ describe('loadServerConfig', () => {
     process.env = originalEnv
   })
 
-  describe('CLI parsing', () => {
-    it('parses all CLI args', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--cdp-port=9222',
-        '--server-port=9223',
-        '--extension-port=9224',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.cdpPort, 9222)
-      assert.strictEqual(result.value.serverPort, 9223)
-      // agentPort is deprecated - always equals serverPort
-      assert.strictEqual(result.value.agentPort, 9223)
-      assert.strictEqual(result.value.extensionPort, 9224)
-      assert.strictEqual(result.value.mcpAllowRemote, false)
+  it('maps a sidecar JSON config into ServerConfig', () => {
+    const configPath = writeSidecarConfig({
+      ports: {
+        server: 9223,
+        cdp: 9222,
+        proxy: 9444,
+      },
+      directories: {
+        resources: 'resources',
+        execution: 'execution',
+      },
+      flags: {
+        allow_remote_in_mcp: true,
+      },
+      instance: {
+        client_id: 'user-123',
+        install_id: 'install-456',
+        browseros_version: '1.0.0',
+        chromium_version: '140.0.0.0',
+      },
     })
 
-    it('parses --allow-remote-in-mcp flag', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=9223',
-        '--allow-remote-in-mcp',
-      ])
+    const result = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      configPath,
+    ])
 
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.mcpAllowRemote, true)
-    })
-
-    it('cdp-port is optional (nullable)', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=9223',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.cdpPort, null)
-      assert.strictEqual(result.value.extensionPort, null)
-    })
-
-    it('warns when --extension-port is provided', () => {
-      const warnings: string[] = []
-      const originalWarn = console.warn
-      console.warn = (message?: unknown) => {
-        warnings.push(String(message))
-      }
-
-      try {
-        const result = loadServerConfig([
-          'bun',
-          'src/index.ts',
-          '--server-port=9223',
-          '--extension-port=9224',
-        ])
-
-        assert.strictEqual(result.ok, true)
-        assert.deepStrictEqual(warnings, [
-          'Warning: --extension-port is deprecated and has no effect.',
-        ])
-      } finally {
-        console.warn = originalWarn
-      }
-    })
+    assert.strictEqual(result.ok, true)
+    if (!result.ok) return
+    assert.strictEqual(result.value.cdpPort, 9222)
+    assert.strictEqual(result.value.serverPort, 9223)
+    assert.strictEqual(result.value.agentPort, 9223)
+    assert.strictEqual(result.value.extensionPort, null)
+    assert.strictEqual(
+      result.value.resourcesDir,
+      path.join(tempDir, 'resources'),
+    )
+    assert.strictEqual(
+      result.value.executionDir,
+      path.join(tempDir, 'execution'),
+    )
+    assert.strictEqual(result.value.mcpAllowRemote, true)
+    assert.strictEqual(result.value.instanceClientId, 'user-123')
+    assert.strictEqual(result.value.instanceInstallId, 'install-456')
+    assert.strictEqual(result.value.instanceBrowserosVersion, '1.0.0')
+    assert.strictEqual(result.value.instanceChromiumVersion, '140.0.0.0')
   })
 
-  describe('environment variables', () => {
-    it('reads from env when CLI not provided', () => {
-      process.env.BROWSEROS_CDP_PORT = '9222'
-      process.env.BROWSEROS_SERVER_PORT = '9223'
-      process.env.BROWSEROS_EXTENSION_PORT = '9224'
+  it('accepts standalone binary argv without a script path', () => {
+    const configPath = writeSidecarConfig()
 
-      const result = loadServerConfig(['bun', 'src/index.ts'])
+    const result = loadServerConfig([
+      '/usr/bin/browseros_server',
+      '--config',
+      configPath,
+    ])
 
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.cdpPort, 9222)
-      assert.strictEqual(result.value.serverPort, 9223)
-      // agentPort is deprecated - always equals serverPort
-      assert.strictEqual(result.value.agentPort, 9223)
-      assert.strictEqual(result.value.extensionPort, 9224)
-    })
-
-    it('CLI takes precedence over env', () => {
-      process.env.BROWSEROS_SERVER_PORT = '9999'
-      process.env.BROWSEROS_EXTENSION_PORT = '9999'
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=1111',
-        '--extension-port=3333',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.serverPort, 1111)
-      // agentPort is deprecated - always equals serverPort
-      assert.strictEqual(result.value.agentPort, 1111)
-      assert.strictEqual(result.value.extensionPort, 3333)
-    })
+    assert.strictEqual(result.ok, true)
+    if (!result.ok) return
+    assert.strictEqual(result.value.serverPort, 9100)
+    assert.strictEqual(result.value.cdpPort, 9000)
   })
 
-  describe('config file loading', () => {
-    it('loads config from --config path', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: {
-            cdp: 9222,
-            http_mcp: 3000,
-            extension: 3002,
-          },
-          flags: {
-            allow_remote_in_mcp: true,
-          },
-        }),
-      )
+  it('requires --config instead of falling back to defaults or env', () => {
+    process.env.BROWSEROS_CDP_PORT = '9222'
+    process.env.BROWSEROS_SERVER_PORT = '9223'
+    process.env.BROWSEROS_RESOURCES_DIR = tempDir
+    process.env.BROWSEROS_EXECUTION_DIR = tempDir
 
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
+    const result = loadServerConfig(['bun', 'src/index.ts'])
 
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.cdpPort, 9222)
-      assert.strictEqual(result.value.serverPort, 3000)
-      // agentPort is deprecated - always equals serverPort
-      assert.strictEqual(result.value.agentPort, 3000)
-      assert.strictEqual(result.value.extensionPort, 3002)
-      assert.strictEqual(result.value.mcpAllowRemote, true)
-    })
-
-    it('CLI takes precedence over config file', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: {
-            http_mcp: 3000,
-            extension: 3002,
-          },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-        '--server-port=9999',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.serverPort, 9999)
-      // agentPort is deprecated - always equals serverPort
-      assert.strictEqual(result.value.agentPort, 9999)
-    })
-
-    it('config file takes precedence over env', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: {
-            http_mcp: 3000,
-            extension: 3002,
-          },
-        }),
-      )
-
-      process.env.BROWSEROS_SERVER_PORT = '9999'
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.serverPort, 3000)
-    })
-
-    it('resolves relative paths in config file', () => {
-      const subdir = path.join(tempDir, 'subdir')
-      fs.mkdirSync(subdir)
-      const configPath = path.join(subdir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: { http_mcp: 3000, extension: 3002 },
-          directories: {
-            resources: '../data',
-            execution: './logs',
-          },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.resourcesDir, path.join(tempDir, 'data'))
-      assert.strictEqual(result.value.executionDir, path.join(subdir, 'logs'))
-    })
-
-    it('loads instance metadata from config', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: { http_mcp: 3000, extension: 3002 },
-          instance: {
-            client_id: 'user-123',
-            install_id: 'install-456',
-            browseros_version: '1.0.0',
-            chromium_version: '120.0.0',
-          },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.instanceClientId, 'user-123')
-      assert.strictEqual(result.value.instanceInstallId, 'install-456')
-      assert.strictEqual(result.value.instanceBrowserosVersion, '1.0.0')
-      assert.strictEqual(result.value.instanceChromiumVersion, '120.0.0')
-    })
+    assert.strictEqual(result.ok, false)
+    if (result.ok) return
+    assert.strictEqual(result.error, '--config is required')
   })
 
-  describe('error handling (Result type)', () => {
-    it('returns error for missing required ports', () => {
-      const result = loadServerConfig(['bun', 'src/index.ts'])
+  it('rejects an empty --config value', () => {
+    const result = loadServerConfig(['bun', 'src/index.ts', '--config='])
 
-      assert.strictEqual(result.ok, false)
-      if (result.ok) return
-      assert.ok(result.error.includes('serverPort'))
-    })
-
-    it('returns error for missing config file', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--config=/nonexistent/config.json',
-      ])
-
-      assert.strictEqual(result.ok, false)
-      if (result.ok) return
-      assert.ok(result.error.includes('Config file not found'))
-    })
-
-    it('returns error for invalid JSON in config file', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(configPath, 'this is not valid json {{{')
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      assert.strictEqual(result.ok, false)
-      if (result.ok) return
-      assert.ok(result.error.includes('Config file error'))
-    })
-
-    it('ignores invalid port types in config (Zod catches later)', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: {
-            http_mcp: 'not-a-number',
-            extension: 3002,
-          },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      // Should fail Zod validation since http_mcp is invalid
-      assert.strictEqual(result.ok, false)
-      if (result.ok) return
-      assert.ok(result.error.includes('serverPort'))
-    })
-
-    it('ignores invalid instance types (no strict validation)', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: { http_mcp: 3000, extension: 3002 },
-          instance: {
-            client_id: 123, // should be string
-            browseros_version: true, // should be string
-          },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      // Should succeed - invalid types are silently ignored
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.instanceClientId, undefined)
-      assert.strictEqual(result.value.instanceBrowserosVersion, undefined)
-    })
+    assert.strictEqual(result.ok, false)
+    if (result.ok) return
+    assert.strictEqual(result.error, '--config requires a path')
   })
 
-  describe('defaults', () => {
-    it('uses cwd for resourcesDir and executionDir by default', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
+  it('rejects old runtime config CLI flags', () => {
+    for (const flag of [
+      '--server-port=9223',
+      '--cdp-port=9222',
+      '--http-mcp-port=9223',
+      '--agent-port=9223',
+      '--extension-port=9224',
+      '--resources-dir=resources',
+      '--execution-dir=execution',
+      '--allow-remote-in-mcp',
+    ]) {
+      const result = loadServerConfig(['bun', 'src/index.ts', flag])
 
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.resourcesDir, process.cwd())
-      assert.strictEqual(result.value.executionDir, process.cwd())
-    })
-
-    it('defaults mcpAllowRemote to false', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.mcpAllowRemote, false)
-    })
-
-    it('defaults cdpPort to null', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.cdpPort, null)
-    })
-
-    it('agentPort always equals serverPort (deprecated)', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.agentPort, result.value.serverPort)
-    })
-
-    it('defaults extensionPort to null', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.extensionPort, null)
-    })
-
-    it('defaults aiSdkDevtoolsEnabled to false', () => {
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, false)
-    })
+      assert.strictEqual(result.ok, false, flag)
+      if (result.ok) continue
+      assert.ok(result.error.includes('unknown option'), result.error)
+      assert.ok(result.error.includes(flag.split('=')[0]), result.error)
+    }
   })
 
-  describe('AI SDK DevTools', () => {
-    it('enables devtools via BROWSEROS_AI_SDK_DEVTOOLS env var', () => {
-      process.env.BROWSEROS_AI_SDK_DEVTOOLS = 'true'
+  it('ignores old server runtime env vars when --config is present', () => {
+    process.env.BROWSEROS_CDP_PORT = '1111'
+    process.env.BROWSEROS_SERVER_PORT = '2222'
+    process.env.BROWSEROS_EXTENSION_PORT = '3333'
+    process.env.BROWSEROS_RESOURCES_DIR = '/wrong/resources'
+    process.env.BROWSEROS_EXECUTION_DIR = '/wrong/execution'
+    process.env.BROWSEROS_INSTALL_ID = 'wrong-install'
+    process.env.BROWSEROS_CLIENT_ID = 'wrong-client'
 
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        '--server-port=3000',
-      ])
+    const configPath = writeSidecarConfig()
+    const result = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      configPath,
+    ])
 
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, true)
-    })
-
-    it('enables devtools via config file flags.ai_sdk_devtools', () => {
-      const configPath = path.join(tempDir, 'config.json')
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ports: { http_mcp: 3000, extension: 3002 },
-          flags: { ai_sdk_devtools: true },
-        }),
-      )
-
-      const result = loadServerConfig([
-        'bun',
-        'src/index.ts',
-        `--config=${configPath}`,
-      ])
-
-      assert.strictEqual(result.ok, true)
-      if (!result.ok) return
-      assert.strictEqual(result.value.aiSdkDevtoolsEnabled, true)
-    })
+    assert.strictEqual(result.ok, true)
+    if (!result.ok) return
+    assert.strictEqual(result.value.cdpPort, 9000)
+    assert.strictEqual(result.value.serverPort, 9100)
+    assert.strictEqual(result.value.extensionPort, null)
+    assert.strictEqual(
+      result.value.resourcesDir,
+      path.join(tempDir, 'resources'),
+    )
+    assert.strictEqual(
+      result.value.executionDir,
+      path.join(tempDir, 'execution'),
+    )
+    assert.strictEqual(result.value.instanceClientId, 'client-123')
+    assert.strictEqual(result.value.instanceInstallId, 'install-456')
   })
+
+  it('fails when required sidecar fields are missing', () => {
+    const configPath = writeRawSidecarConfig({
+      ports: {
+        cdp: 9000,
+        http_mcp: 9100,
+        extension: 9300,
+      },
+      directories: {
+        resources: 'resources',
+      },
+    })
+
+    const result = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      configPath,
+    ])
+
+    assert.strictEqual(result.ok, false)
+    if (result.ok) return
+    assert.ok(result.error.includes('ports.server'), result.error)
+    assert.ok(result.error.includes('directories.execution'), result.error)
+    assert.ok(!result.error.includes('http_mcp'), result.error)
+  })
+
+  it('returns sidecar parser errors for invalid known JSON fields', () => {
+    const configPath = writeSidecarConfig({
+      ports: {
+        server: 0,
+        cdp: 9000,
+      },
+      directories: {
+        resources: 'resources',
+        execution: 'execution',
+      },
+    })
+
+    const result = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      configPath,
+    ])
+
+    assert.strictEqual(result.ok, false)
+    if (result.ok) return
+    assert.ok(result.error.includes('ports.server'), result.error)
+    assert.ok(result.error.includes('integer port between 1 and 65535'))
+  })
+
+  it('keeps the AI SDK devtools toggle outside the sidecar contract', () => {
+    process.env.BROWSEROS_AI_SDK_DEVTOOLS = 'true'
+    const configPath = writeSidecarConfig()
+
+    const result = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      configPath,
+    ])
+
+    assert.strictEqual(result.ok, true)
+    if (!result.ok) return
+    assert.strictEqual(result.value.aiSdkDevtoolsEnabled, true)
+  })
+
+  it('returns clear errors for missing and malformed config files', () => {
+    const missing = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      '/missing/config.json',
+    ])
+    assert.deepStrictEqual(missing, {
+      ok: false,
+      error: 'Sidecar config file not found: /missing/config.json',
+    })
+
+    const malformedPath = path.join(tempDir, 'malformed.json')
+    fs.writeFileSync(malformedPath, '{')
+    const malformed = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      malformedPath,
+    ])
+    assert.strictEqual(malformed.ok, false)
+    if (malformed.ok) return
+    assert.ok(malformed.error.includes('Sidecar config file error'))
+  })
+
+  function writeSidecarConfig(overrides: Record<string, unknown> = {}): string {
+    const config = deepMerge(
+      {
+        ports: {
+          server: 9100,
+          cdp: 9000,
+          proxy: 9100,
+        },
+        directories: {
+          resources: 'resources',
+          execution: 'execution',
+        },
+        flags: {
+          allow_remote_in_mcp: false,
+        },
+        instance: {
+          client_id: 'client-123',
+          install_id: 'install-456',
+          browseros_version: '1.2.3',
+          chromium_version: '140.0.0.0',
+        },
+      },
+      overrides,
+    )
+    const configPath = path.join(tempDir, 'config.json')
+    fs.writeFileSync(configPath, JSON.stringify(config))
+    return configPath
+  }
+
+  function writeRawSidecarConfig(config: Record<string, unknown>): string {
+    const configPath = path.join(tempDir, 'config.json')
+    fs.writeFileSync(configPath, JSON.stringify(config))
+    return configPath
+  }
 })
+
+function deepMerge(
+  base: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...base }
+  for (const [key, value] of Object.entries(overrides)) {
+    const current = result[key]
+    if (isPlainObject(current) && isPlainObject(value)) {
+      result[key] = deepMerge(current, value)
+    } else {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}

@@ -11,6 +11,7 @@ import type { BrowserApi } from './domain-apis/browser'
 import type { CacheStorageApi } from './domain-apis/cache-storage'
 import type { CastApi } from './domain-apis/cast'
 import type { ConsoleApi } from './domain-apis/console'
+import type { CrashReportContextApi } from './domain-apis/crash-report-context'
 import type { CSSApi } from './domain-apis/css'
 import type { DebuggerApi } from './domain-apis/debugger'
 import type { DeviceAccessApi } from './domain-apis/device-access'
@@ -48,6 +49,7 @@ import type { RuntimeApi } from './domain-apis/runtime'
 import type { SchemaApi } from './domain-apis/schema'
 import type { SecurityApi } from './domain-apis/security'
 import type { ServiceWorkerApi } from './domain-apis/service-worker'
+import type { SmartCardEmulationApi } from './domain-apis/smart-card-emulation'
 import type { StorageApi } from './domain-apis/storage'
 import type { SystemInfoApi } from './domain-apis/system-info'
 import type { TargetApi } from './domain-apis/target'
@@ -55,6 +57,7 @@ import type { TetheringApi } from './domain-apis/tethering'
 import type { TracingApi } from './domain-apis/tracing'
 import type { WebAudioApi } from './domain-apis/web-audio'
 import type { WebAuthnApi } from './domain-apis/web-authn'
+import type { WebMCPApi } from './domain-apis/web-mcp'
 
 export interface ProtocolApi {
   readonly Accessibility: AccessibilityApi
@@ -68,6 +71,7 @@ export interface ProtocolApi {
   readonly CSS: CSSApi
   readonly CacheStorage: CacheStorageApi
   readonly Cast: CastApi
+  readonly CrashReportContext: CrashReportContextApi
   readonly DOM: DOMApi
   readonly DOMDebugger: DOMDebuggerApi
   readonly DOMSnapshot: DOMSnapshotApi
@@ -99,6 +103,7 @@ export interface ProtocolApi {
   readonly Preload: PreloadApi
   readonly Security: SecurityApi
   readonly ServiceWorker: ServiceWorkerApi
+  readonly SmartCardEmulation: SmartCardEmulationApi
   readonly Storage: StorageApi
   readonly SystemInfo: SystemInfoApi
   readonly Target: TargetApi
@@ -106,6 +111,7 @@ export interface ProtocolApi {
   readonly Tracing: TracingApi
   readonly WebAudio: WebAudioApi
   readonly WebAuthn: WebAuthnApi
+  readonly WebMCP: WebMCPApi
   readonly Console: ConsoleApi
   readonly Debugger: DebuggerApi
   readonly HeapProfiler: HeapProfilerApi

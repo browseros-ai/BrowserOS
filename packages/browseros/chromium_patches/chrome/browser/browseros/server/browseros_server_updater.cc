@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..9050130727fc8
+index 0000000000000..f154a9f21a6cb
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1078 @@
+@@ -0,0 +1,1096 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21,6 +21,7 @@ index 0000000000000..9050130727fc8
 +#include "base/logging.h"
 +#include "base/path_service.h"
 +#include "base/process/launch.h"
++#include "base/strings/strcat.h"
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_util.h"
 +#include "base/task/thread_pool.h"
@@ -28,6 +29,7 @@ index 0000000000000..9050130727fc8
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
++#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
@@ -268,7 +270,8 @@ index 0000000000000..9050130727fc8
 +
 +BrowserOSServerUpdater::BrowserOSServerUpdater(
 +    browseros::BrowserOSServerManager* manager)
-+    : manager_(manager) {}
++    : manager_(manager),
++      descriptor_(&browseros::GetManagedServerDescriptor()) {}
 +
 +BrowserOSServerUpdater::~BrowserOSServerUpdater() {
 +  Stop();
@@ -413,17 +416,18 @@ index 0000000000000..9050130727fc8
 +  state_ = State::kFetchingAppcast;
 +  update_in_progress_ = true;
 +
-+  // Get appcast URL (allow override via command line, otherwise use
-+  // alpha/stable)
++  // Get appcast URL (allow override via command line, otherwise use the
++  // selected product's alpha/stable feed). The override switch is
++  // product-agnostic because only the selected sidecar's updater runs.
 +  std::string appcast_url;
 +  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
 +  if (cmd->HasSwitch(browseros::kServerAppcastUrl)) {
 +    appcast_url = cmd->GetSwitchValueASCII(browseros::kServerAppcastUrl);
 +    LOG(INFO) << "browseros: Using custom appcast URL: " << appcast_url;
 +  } else if (base::FeatureList::IsEnabled(features::kBrowserOsAlphaFeatures)) {
-+    appcast_url = kAlphaAppcastUrl;
++    appcast_url = std::string(descriptor_->updater.alpha_appcast_url);
 +  } else {
-+    appcast_url = kDefaultAppcastUrl;
++    appcast_url = std::string(descriptor_->updater.appcast_url);
 +  }
 +
 +  GURL url(appcast_url);
@@ -703,8 +707,15 @@ index 0000000000000..9050130727fc8
 +}
 +
 +void BrowserOSServerUpdater::CheckServerStatus() {
-+  GURL status_url("http://127.0.0.1:" +
-+                  base::NumberToString(manager_->GetServerPort()) + "/status");
++  // Products without a readiness contract restart right after verification.
++  if (descriptor_->updater.readiness_path.empty()) {
++    OnServerStatusChecked(/*can_update=*/true);
++    return;
++  }
++
++  GURL status_url(base::StrCat({"http://127.0.0.1:",
++                                base::NumberToString(manager_->GetServerPort()),
++                                descriptor_->updater.readiness_path}));
 +
 +  LOG(INFO) << "browseros: Checking server status at " << status_url;
 +
@@ -910,7 +921,14 @@ index 0000000000000..9050130727fc8
 +  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
 +    return base::FilePath();
 +  }
-+  return user_data_dir.Append(FILE_PATH_LITERAL(".browseros"));
++  base::FilePath execution_dir =
++      user_data_dir.Append(FILE_PATH_LITERAL(".browseros"));
++  // Non-empty state dir isolates a product's OTA state (e.g. Claw under
++  // .browseros/BrowserClawServer/); empty keeps the legacy BrowserOS layout.
++  if (!descriptor_->updater.state_dir.empty()) {
++    execution_dir = execution_dir.Append(descriptor_->updater.state_dir);
++  }
++  return execution_dir;
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetVersionsDir() const {
@@ -940,7 +958,7 @@ index 0000000000000..9050130727fc8
 +  base::FilePath binary = GetVersionDir(version)
 +                              .Append(FILE_PATH_LITERAL("resources"))
 +                              .Append(FILE_PATH_LITERAL("bin"))
-+                              .Append(FILE_PATH_LITERAL("browseros_server"));
++                              .Append(descriptor_->binary_name);
 +#if BUILDFLAG(IS_WIN)
 +  binary = binary.AddExtension(FILE_PATH_LITERAL(".exe"));
 +#endif

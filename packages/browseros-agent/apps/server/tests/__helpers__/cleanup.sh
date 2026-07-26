@@ -20,6 +20,14 @@ for port in $CDP_PORT $SERVER_PORT $EXTENSION_PORT; do
   fi
 done
 
+# Kill orphaned test browser processes (matches only BrowserOS launched with
+# a test user-data-dir — never the user's dev BrowserOS)
+orphan_pids=$(pgrep -f 'browseros-test-' 2>/dev/null || true)
+if [ -n "$orphan_pids" ]; then
+  echo "  Killing orphaned test browser processes: $(echo "$orphan_pids" | tr '\n' ' ')"
+  echo "$orphan_pids" | xargs kill -9 2>/dev/null || true
+fi
+
 # Clean up orphaned temp directories (created by browser.ts)
 # Uses $TMPDIR which matches Node's os.tmpdir()
 TEMP_DIR="${TMPDIR:-/tmp}"

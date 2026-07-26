@@ -1,8 +1,8 @@
 diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
-index 7568beca10c6c..4e4573c3ad32d 100644
+index 3732a63380831..59a3948f998f9 100644
 --- a/content/browser/devtools/protocol/target_handler.cc
 +++ b/content/browser/devtools/protocol/target_handler.cc
-@@ -119,6 +119,19 @@ std::unique_ptr<Target::TargetInfo> BuildTargetInfo(
+@@ -120,6 +120,19 @@ std::unique_ptr<Target::TargetInfo> BuildTargetInfo(
    if (!subtype.empty()) {
      target_info->SetSubtype(subtype);
    }
@@ -22,7 +22,7 @@ index 7568beca10c6c..4e4573c3ad32d 100644
    return target_info;
  }
  
-@@ -1416,11 +1429,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
+@@ -1437,11 +1450,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
  }
  
  void TargetHandler::DevToolsAgentHostAttached(DevToolsAgentHost* host) {

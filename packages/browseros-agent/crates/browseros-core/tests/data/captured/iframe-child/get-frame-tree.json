@@ -1,0 +1,45 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "7F5FEF4F95BECD8A16E9B27476D0F1A0",
+      "loaderId": "FB447890E41F485956C036A13B2A83FF",
+      "url": "http://127.0.0.1:17243/iframe-child.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    },
+    "childFrames": [
+      {
+        "frame": {
+          "id": "2F91246C8450078CFED18D83844B33CF",
+          "parentId": "7F5FEF4F95BECD8A16E9B27476D0F1A0",
+          "loaderId": "CF0D46C80E17E551F7987A3B293C1338",
+          "name": "grandchild",
+          "url": "http://127.0.0.1:17243/iframe-grandchild.html",
+          "domainAndRegistry": "",
+          "securityOrigin": "http://127.0.0.1:17243",
+          "securityOriginDetails": {
+            "isLocalhost": true
+          },
+          "mimeType": "text/html",
+          "adFrameStatus": {
+            "adFrameType": "none",
+            "explanations": []
+          },
+          "secureContextType": "SecureLocalhost",
+          "crossOriginIsolatedContextType": "NotIsolated",
+          "gatedAPIFeatures": []
+        }
+      }
+    ]
+  }
+}

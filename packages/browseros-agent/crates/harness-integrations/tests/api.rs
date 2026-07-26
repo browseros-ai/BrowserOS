@@ -1,0 +1,435 @@
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use harness_integrations::{
+    AgentId, AgentScope, DisconnectInput, Error, LinkInput, ListLinksFilter, McpManager, McpServer,
+    McpServerSpec, UnlinkInput, detect_installed_agents, is_agent_supported, is_installed,
+    list_supported_agents, resolve_agent_surface, resolve_harness_definition,
+};
+use serde_json::Value;
+use tempfile::tempdir;
+
+fn stdio_server(name: &str) -> McpServer {
+    McpServer {
+        name: name.to_string(),
+        spec: McpServerSpec::Stdio {
+            command: format!("{name}-mcp"),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    }
+}
+
+fn link_input(server: McpServer, agent: AgentId, config_path: &Path) -> LinkInput {
+    let mut input = LinkInput::new(server, agent);
+    input.config_path = Some(config_path.to_path_buf());
+    input
+}
+
+#[test]
+fn link_writes_config_and_byte_compatible_manifest() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let config = root.path().join("cursor.json");
+    let summary = manager.link(link_input(
+        McpServer {
+            name: "  gh  ".to_string(),
+            spec: McpServerSpec::Stdio {
+                command: "gh-mcp".to_string(),
+                args: vec!["serve".to_string()],
+                env: BTreeMap::new(),
+            },
+        },
+        AgentId::Cursor,
+        &config,
+    ))?;
+    assert_eq!(summary.server_name, "gh");
+    assert!(summary.created);
+
+    let config_json: Value = serde_json::from_str(&fs::read_to_string(&config)?)?;
+    assert_eq!(config_json["mcpServers"]["gh"]["command"], "gh-mcp");
+    let manifest_raw = fs::read_to_string(root.path().join("workspace/manifest.json"))?;
+    assert!(manifest_raw.ends_with('\n'));
+    assert!(manifest_raw.contains("\"addedAt\""));
+    assert!(manifest_raw.contains("\"configPath\""));
+    assert!(manifest_raw.contains("\"createdAt\""));
+    assert!(!manifest_raw.contains("added_at"));
+    Ok(())
+}
+
+#[test]
+fn relink_is_idempotent_and_spec_is_last_write_wins() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let cursor = root.path().join("cursor.json");
+    let zed = root.path().join("zed.json");
+    manager.link(link_input(stdio_server("gh"), AgentId::Cursor, &cursor))?;
+    let first_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        root.path().join("workspace/manifest.json"),
+    )?)?;
+    let summary = manager.link(link_input(stdio_server("gh"), AgentId::Cursor, &cursor))?;
+    assert!(!summary.created);
+    let second_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        root.path().join("workspace/manifest.json"),
+    )?)?;
+    assert_eq!(
+        first_manifest["servers"]["gh"]["addedAt"],
+        second_manifest["servers"]["gh"]["addedAt"]
+    );
+    assert_eq!(
+        first_manifest["servers"]["gh"]["links"]["cursor"]["createdAt"],
+        second_manifest["servers"]["gh"]["links"]["cursor"]["createdAt"]
+    );
+
+    manager.link(link_input(
+        McpServer {
+            name: "gh".to_string(),
+            spec: McpServerSpec::Http {
+                url: "https://example.com/mcp".to_string(),
+                headers: BTreeMap::new(),
+            },
+        },
+        AgentId::Zed,
+        &zed,
+    ))?;
+    let listed = manager.list()?;
+    assert!(matches!(listed[0].spec, McpServerSpec::Http { .. }));
+    assert_eq!(listed[0].links.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn foreign_entries_require_explicit_overwrite() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let config = root.path().join("cursor.json");
+    fs::write(&config, r#"{"mcpServers":{"gh":{"command":"foreign"}}}"#)?;
+    let error = manager
+        .link(link_input(stdio_server("gh"), AgentId::Cursor, &config))
+        .err()
+        .ok_or("expected a foreign-entry error")?;
+    assert!(matches!(
+        error,
+        Error::ForeignEntry {
+            agent: AgentId::Cursor,
+            ..
+        }
+    ));
+    let mut overwrite = link_input(stdio_server("gh"), AgentId::Cursor, &config);
+    overwrite.allow_overwrite = true;
+    let summary = manager.link(overwrite)?;
+    assert!(summary.overwrote_foreign);
+    Ok(())
+}
+
+#[test]
+fn unlink_uses_recorded_path_and_unknown_links_are_no_ops() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = tempdir()?;
+    let workspace = root.path().join("workspace");
+    let manager = McpManager::new(&workspace);
+    let unknown = manager.unlink(UnlinkInput::new("ghost", AgentId::Cursor))?;
+    assert!(!unknown.removed);
+    assert!(!workspace.join("manifest.json").exists());
+
+    let config = root.path().join("custom/cursor.json");
+    fs::create_dir_all(config.parent().ok_or("missing test parent")?)?;
+    manager.link(link_input(stdio_server("gh"), AgentId::Cursor, &config))?;
+    let summary = manager.unlink(UnlinkInput::new("gh", AgentId::Cursor))?;
+    assert!(summary.removed);
+    let value: Value = serde_json::from_str(&fs::read_to_string(config)?)?;
+    assert!(value["mcpServers"]["gh"].is_null());
+    Ok(())
+}
+
+#[test]
+fn disconnect_never_touches_other_agent_files() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let cursor = root.path().join("cursor.json");
+    let vscode = root.path().join("vscode.json");
+    let zed = root.path().join("zed.json");
+    for (agent, path) in [
+        (AgentId::Cursor, &cursor),
+        (AgentId::VsCode, &vscode),
+        (AgentId::Zed, &zed),
+    ] {
+        manager.link(link_input(stdio_server("gh"), agent, path))?;
+    }
+    let vscode_before = fs::read(&vscode)?;
+    let zed_before = fs::read(&zed)?;
+    let summary = manager.disconnect(DisconnectInput::new("gh", AgentId::Cursor))?;
+    assert!(summary.unlinked);
+    assert!(!summary.removed_manifest);
+    assert_eq!(fs::read(vscode)?, vscode_before);
+    assert_eq!(fs::read(zed)?, zed_before);
+    assert_eq!(manager.list_links(ListLinksFilter::default())?.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn disconnect_can_keep_an_empty_manifest_entry() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let config = root.path().join("cursor.json");
+    manager.link(link_input(stdio_server("solo"), AgentId::Cursor, &config))?;
+    let mut input = DisconnectInput::new("solo", AgentId::Cursor);
+    input.remove_if_last = false;
+    let summary = manager.disconnect(input)?;
+    assert!(!summary.removed_manifest);
+    assert!(manager.list()?[0].links.is_empty());
+    Ok(())
+}
+
+#[test]
+fn list_links_filters_by_server_and_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let cursor = root.path().join("cursor.json");
+    let zed = root.path().join("zed.json");
+    manager.link(link_input(stdio_server("one"), AgentId::Cursor, &cursor))?;
+    manager.link(link_input(stdio_server("two"), AgentId::Zed, &zed))?;
+    let links = manager.list_links(ListLinksFilter {
+        server_names: None,
+        agents: Some(vec![AgentId::Zed]),
+    })?;
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].server_name, "two");
+    Ok(())
+}
+
+#[test]
+fn rescan_reads_each_manifest_recorded_config_path() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let first = root.path().join("custom/first.json");
+    let second = root.path().join("custom/second.json");
+    fs::create_dir_all(first.parent().ok_or("missing custom config parent")?)?;
+    manager.link(link_input(stdio_server("one"), AgentId::Cursor, &first))?;
+    manager.link(link_input(stdio_server("two"), AgentId::Cursor, &second))?;
+
+    let report = manager.rescan()?;
+    assert_eq!(report.verified.len(), 2);
+    assert_eq!(
+        report
+            .verified
+            .iter()
+            .map(|link| link.config_path.as_path())
+            .collect::<Vec<_>>(),
+        [first.as_path(), second.as_path()]
+    );
+    assert!(report.drifted.is_empty());
+    assert!(report.missing.is_empty());
+    Ok(())
+}
+
+#[test]
+fn install_gate_and_project_scope_return_typed_errors() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let missing = root.path().join("missing/cursor.json");
+    let error = manager
+        .link(link_input(stdio_server("gh"), AgentId::Cursor, &missing))
+        .err()
+        .ok_or("expected install error")?;
+    assert!(matches!(
+        error,
+        Error::AgentNotInstalled {
+            agent: AgentId::Cursor,
+            ..
+        }
+    ));
+
+    let config = root.path().join("cursor.json");
+    let mut project = link_input(stdio_server("gh"), AgentId::Cursor, &config);
+    project.scope = AgentScope::Project;
+    assert!(matches!(
+        manager.link(project),
+        Err(Error::UnresolvedConfigPath { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn malformed_manifest_is_never_silently_reset() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let workspace = root.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    fs::write(workspace.join("manifest.json"), "{ broken")?;
+    let manager = McpManager::new(workspace);
+    assert!(matches!(manager.list(), Err(Error::Manifest { .. })));
+    Ok(())
+}
+
+#[test]
+fn recent_catalog_path_fixes_match_typescript() -> Result<(), Box<dyn std::error::Error>> {
+    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?;
+    assert_eq!(
+        opencode.harness.install_check_paths.darwin,
+        &[
+            "$XDG_CONFIG_HOME/opencode",
+            "$HOME/.config/opencode",
+            "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.harness.install_check_paths.linux,
+        &[
+            "$XDG_CONFIG_HOME/opencode",
+            "$HOME/.config/opencode",
+            "$HOME/.opencode",
+            "$HOME/.local/share/opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.harness.install_check_paths.windows,
+        &[
+            "$USERPROFILE\\.config\\opencode",
+            "$USERPROFILE\\.opencode",
+            "$USERPROFILE\\.local\\share\\opencode",
+        ]
+    );
+    assert_eq!(
+        opencode.mcp.system_paths.darwin,
+        &[
+            "$XDG_CONFIG_HOME/opencode/opencode.json",
+            "$HOME/.config/opencode/opencode.json",
+            "$XDG_CONFIG_HOME/opencode/opencode.jsonc",
+            "$HOME/.config/opencode/opencode.jsonc",
+            "$HOME/.opencode/opencode.jsonc",
+        ]
+    );
+
+    let antigravity = resolve_agent_surface(AgentId::Antigravity, AgentScope::System)?;
+    assert_eq!(
+        antigravity.harness.install_check_paths.darwin,
+        &["$HOME/.gemini/antigravity"]
+    );
+    assert_eq!(
+        antigravity.mcp.system_paths.darwin,
+        &["$HOME/.gemini/config/mcp_config.json"]
+    );
+    assert_eq!(
+        antigravity.mcp.system_paths.linux,
+        &["$HOME/.gemini/config/mcp_config.json"]
+    );
+    assert_eq!(
+        antigravity.mcp.system_paths.windows,
+        &["$USERPROFILE\\.gemini\\config\\mcp_config.json"]
+    );
+    Ok(())
+}
+
+#[test]
+fn opencode_install_fingerprint_drives_probe_and_default_link_gate()
+-> Result<(), Box<dyn std::error::Error>> {
+    const CHILD_HOME: &str = "AGENT_MCP_MANAGER_OPENCODE_TEST_HOME";
+    if let Some(home) = env::var_os(CHILD_HOME) {
+        return exercise_opencode_install_fingerprint(&PathBuf::from(home));
+    }
+
+    let root = tempdir()?;
+    let output = Command::new(env::current_exe()?)
+        .args([
+            "--exact",
+            "opencode_install_fingerprint_drives_probe_and_default_link_gate",
+            "--nocapture",
+        ])
+        .env(CHILD_HOME, root.path())
+        .env("HOME", root.path())
+        .env("USERPROFILE", root.path())
+        .env("XDG_CONFIG_HOME", root.path().join(".config"))
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "isolated OpenCode regression failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn exercise_opencode_install_fingerprint(home: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(home.join(".local/share/opencode"))?;
+    assert_eq!(
+        is_installed(&[AgentId::OpenCode])?.get(&AgentId::OpenCode),
+        Some(&true)
+    );
+
+    let manager = McpManager::new(home.join("manager-workspace"));
+    manager.link(LinkInput::new(stdio_server("browseros"), AgentId::OpenCode))?;
+    let config_path = home.join(".config/opencode/opencode.json");
+    let config: Value = serde_json::from_str(&fs::read_to_string(&config_path)?)?;
+    assert_eq!(config["mcp"]["browseros"]["command"][0], "browseros-mcp");
+
+    let override_path = home.join("custom/missing/opencode.json");
+    let mut explicit = LinkInput::new(stdio_server("strict"), AgentId::OpenCode);
+    explicit.config_path = Some(override_path.clone());
+    assert!(matches!(
+        manager.link(explicit),
+        Err(Error::AgentNotInstalled { config_path, .. }) if config_path == override_path
+    ));
+    Ok(())
+}
+
+#[test]
+fn public_agent_helpers_expose_exactly_the_seven_harness_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        list_supported_agents(),
+        vec![
+            AgentId::ClaudeCode,
+            AgentId::Codex,
+            AgentId::Cursor,
+            AgentId::OpenCode,
+            AgentId::Antigravity,
+            AgentId::VsCode,
+            AgentId::Zed,
+        ]
+    );
+    assert!(is_agent_supported("claude-code"));
+    assert!(!is_agent_supported("toString"));
+    assert_eq!(serde_json::to_string(&AgentId::OpenCode)?, "\"opencode\"");
+    assert_eq!(serde_json::to_string(&AgentId::VsCode)?, "\"vscode\"");
+    assert_eq!(
+        resolve_agent_surface(AgentId::Codex, AgentScope::System)?.supported_transports,
+        &[
+            harness_integrations::McpTransport::Stdio,
+            harness_integrations::McpTransport::Http,
+        ]
+    );
+    let claude = resolve_agent_surface(AgentId::ClaudeCode, AgentScope::System)?.mcp;
+    assert_eq!(
+        claude.system_paths.darwin,
+        &["$CLAUDE_CONFIG_DIR/.claude.json", "$HOME/.claude.json"]
+    );
+    assert_eq!(
+        claude.http.and_then(|shape| shape.sse_tag_value),
+        Some("sse")
+    );
+    let codex = resolve_agent_surface(AgentId::Codex, AgentScope::System)?.mcp;
+    assert_eq!(
+        codex.http.and_then(|shape| shape.header_field),
+        Some("http_headers")
+    );
+    let opencode = resolve_agent_surface(AgentId::OpenCode, AgentScope::System)?.mcp;
+    assert!(opencode.stdio.command_as_array);
+    assert_eq!(opencode.stdio.env_field, Some("environment"));
+    let codex = resolve_harness_definition(AgentId::Codex);
+    let zed = resolve_harness_definition(AgentId::Zed);
+    assert_ne!(codex.mcp.system_paths.darwin, zed.mcp.system_paths.darwin);
+    assert_eq!(
+        codex.skill.map(|surface| surface.global_roots.darwin),
+        zed.skill.map(|surface| surface.global_roots.darwin)
+    );
+    assert_eq!(detect_installed_agents()?.len(), 7);
+    assert!(is_installed(&[])?.is_empty());
+    Ok(())
+}

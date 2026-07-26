@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.h b/chrome/browser/browseros/extensions/browseros_extension_loader.h
 new file mode 100644
-index 0000000000000..ea2c856556f5f
+index 0000000000000..9673304e2eecb
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,89 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -67,10 +67,13 @@ index 0000000000000..ea2c856556f5f
 +  // preventing orphan detection from uninstalling existing extensions.
 +  base::DictValue ReconstructPrefsFromInstalledExtensions();
 +
-+  // Installs remote extensions immediately via PendingExtensionManager + updater.
++  // Installs remote extensions immediately via PendingExtensionManager +
++  // updater.
 +  void InstallRemoteExtensionsNow(base::DictValue config);
 +
-+  // Installs bundled CRX extensions immediately via CrxInstaller.
++  // Installs bundled CRX extensions immediately via CrxInstaller. Covers
++  // fresh installs and upgrades where the bundled version is newer than the
++  // installed one (e.g. right after an app update shipped a newer CRX).
 +  void InstallBundledExtensionsNow();
 +
 +  raw_ptr<Profile> profile_;

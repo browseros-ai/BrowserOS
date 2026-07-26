@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!**/apps/eval/src/dashboard/index.html", "!!**/vendor"]
+    "includes": [
+      "**",
+      "!.scripts",
+      "!**/*.svg",
+      "!packages/claw-api/src/generated",
+      "!contracts/claw-mcp/fixtures/pages",
+      "!crates/browseros-core/tests/data/captured"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -17,7 +24,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "correctness": {
         "noUnusedImports": "error",
         "noUnusedVariables": "error"
@@ -48,5 +55,17 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/scripts/dev/inspect-ui.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    }
+  ]
 }

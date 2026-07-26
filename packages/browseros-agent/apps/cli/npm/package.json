@@ -3,7 +3,8 @@
   "version": "0.2.0",
   "description": "Command-line interface for controlling BrowserOS — launch and automate the browser from the terminal",
   "bin": {
-    "browseros-cli": "bin/browseros-cli.js"
+    "browseros-cli": "bin/browseros-cli.js",
+    "bos": "bin/browseros-cli.js"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js"

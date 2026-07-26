@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index 5d5af07b158c0..f32c7889de5be 100644
+index 43fd1559eee76..403c61b70361e 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
-@@ -357,6 +357,12 @@ source_set("extensions") {
+@@ -343,6 +343,12 @@ source_set("extensions") {
      "external_install_manager.h",
      "external_install_manager_factory.cc",
      "external_install_manager_factory.h",
@@ -15,7 +15,7 @@ index 5d5af07b158c0..f32c7889de5be 100644
      "external_policy_loader.cc",
      "external_policy_loader.h",
      "external_pref_loader.cc",
-@@ -690,6 +696,18 @@ source_set("extensions") {
+@@ -687,6 +693,14 @@ source_set("extensions") {
        "api/automation_internal/chrome_automation_internal_api_delegate.h",
        "api/bookmark_manager_private/bookmark_manager_private_api.cc",
        "api/bookmark_manager_private/bookmark_manager_private_api.h",
@@ -27,18 +27,15 @@ index 5d5af07b158c0..f32c7889de5be 100644
 +      "api/browser_os/browser_os_api_utils.h",
 +      "api/browser_os/browser_os_change_detector.cc",
 +      "api/browser_os/browser_os_change_detector.h",
-+      "api/browser_os/browser_os_content_processor.cc",
-+      "api/browser_os/browser_os_content_processor.h",
-+      "api/browser_os/browser_os_snapshot_processor.cc",
-+      "api/browser_os/browser_os_snapshot_processor.h",
        "api/chrome_device_permissions_prompt.h",
        "api/enterprise_reporting_private/conversion_utils.cc",
        "api/enterprise_reporting_private/conversion_utils.h",
-@@ -997,6 +1015,8 @@ source_set("extensions") {
+@@ -987,6 +1001,9 @@ source_set("extensions") {
        "//components/language/core/common",
        "//components/language/core/language_model",
        "//components/live_caption:constants",
 +      "//chrome/browser/browseros/core",
++      "//chrome/browser/browseros/core:prefs",
 +      "//chrome/browser/browseros/metrics",
        "//components/media_device_salt",
        "//components/navigation_interception",

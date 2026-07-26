@@ -1,9 +1,9 @@
 diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
 new file mode 100644
-index 0000000000000..da7102fd5b5e3
+index 0000000000000..baeb98959b39a
 --- /dev/null
 +++ b/chrome/common/extensions/api/browser_os.idl
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,138 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -43,118 +43,6 @@ index 0000000000000..da7102fd5b5e3
 +    DOMString name;
 +  };
 +
-+  dictionary AccessibilityTree {
-+    // The ID of the root node
-+    long rootId;
-+
-+    // Map of node IDs to complete accessibility node data
-+    // Each node contains: id, role, states, actions, all attribute maps,
-+    // childIds, and other ui::AXNodeData fields
-+    object nodes;
-+
-+    // Tree-level metadata (optional)
-+    // Contains: title, url, doctype, mimetype, loaded, loadingProgress,
-+    // focusId, and selection information
-+    object? treeData;
-+  };
-+
-+  // Page content extraction types
-+  enum ContentItemType {
-+    heading,
-+    text,
-+    link,
-+    image,
-+    video
-+  };
-+
-+  // A content item extracted from the page in document order
-+  dictionary ContentItem {
-+    ContentItemType type;
-+    // Text content (for heading, text, link - the accessible name)
-+    DOMString? text;
-+    // URL (for link, image, video - the href or src)
-+    DOMString? url;
-+    // Heading level (for heading only, 1-6)
-+    long? level;
-+    // Alternative text (for image, video - alt attribute or title)
-+    DOMString? alt;
-+  };
-+
-+  // Page content in document order
-+  dictionary PageContent {
-+    // Content items in the order they appear in the document
-+    ContentItem[] items;
-+    // Timestamp when extraction was performed
-+    double timestamp;
-+    // Time taken to process (milliseconds)
-+    long processingTimeMs;
-+  };
-+
-+  // Interactive element types
-+  enum InteractiveNodeType {
-+    clickable,
-+    typeable,
-+    selectable,
-+    other
-+  };
-+
-+  // Rectangle bounds
-+  dictionary Rect {
-+    double x;
-+    double y;
-+    double width;
-+    double height;
-+  };
-+
-+  // Interactive node in the snapshot
-+  dictionary InteractiveNode {
-+    long nodeId;
-+    InteractiveNodeType type;
-+    DOMString? name;
-+    // Bounding rectangle of the node
-+    Rect? rect;
-+    // Flexible attributes dictionary for extensibility
-+    // Can include: tag, axValue, htmlTag, role, context, path, and any future attributes
-+    object? attributes;
-+  };
-+
-+  // Snapshot of interactive elements
-+  dictionary InteractiveSnapshot {
-+    long snapshotId;
-+    double timestamp;
-+    InteractiveNode[] elements;
-+    // Hierarchical text representation with context
-+    DOMString? hierarchicalStructure;
-+    // Performance metrics
-+    long processingTimeMs;
-+  };
-+
-+  // Options for getInteractiveSnapshot
-+  dictionary InteractiveSnapshotOptions {
-+    boolean? viewportOnly;
-+  };
-+
-+  // Page load status information
-+  dictionary PageLoadStatus {
-+    boolean isResourcesLoading;
-+    boolean isDOMContentLoaded;
-+    boolean isPageComplete;
-+  };
-+
-+  // Standard response for all interaction methods
-+  dictionary InteractionResponse {
-+    boolean success;
-+  };
-+
-+  callback GetAccessibilityTreeCallback = void(AccessibilityTree tree);
-+  callback GetInteractiveSnapshotCallback = void(InteractiveSnapshot snapshot);
-+  callback InteractionCallback = void(InteractionResponse response);
-+  callback GetPageLoadStatusCallback = void(PageLoadStatus status);
-+  callback ScrollCallback = void();
-+  callback ScrollToNodeCallback = void(boolean scrolled);
-+  callback CaptureScreenshotCallback = void(DOMString dataUrl);
-+  callback GetSnapshotCallback = void(PageContent content);
-+
 +  // Settings-related types
 +  dictionary PrefObject {
 +    DOMString key;
@@ -165,168 +53,25 @@ index 0000000000000..da7102fd5b5e3
 +  // Callback for settings functions
 +  callback GetPrefCallback = void(PrefObject pref);
 +  callback SetPrefCallback = void(boolean success);
-+  callback GetAllPrefsCallback = void(PrefObject[] prefs);
-+  
++
 +  // Callback for metrics logging
 +  callback VoidCallback = void();
-+  
++
 +  // Callback for getting version number
 +  callback GetVersionNumberCallback = void(DOMString version);
-+  
-+  // Callback for executeJavaScript
-+  callback ExecuteJavaScriptCallback = void(any result);
 +
 +  // Callback for choosePath.
 +  // |result|: Selected path info, or null if user cancelled.
 +  callback ChoosePathCallback = void(optional SelectedPath result);
 +
++  // Callback for showToast.
++  // |shown|: True if the toast was displayed, false if it was suppressed.
++  callback ShowToastCallback = void(boolean shown);
++
++  // Callback for showInfoBar.
++  callback ShowInfoBarCallback = void(boolean shown);
++
 +  interface Functions {
-+    // Gets the full accessibility tree for a tab
-+    // |tabId|: The tab to get the accessibility tree for. Defaults to active tab.
-+    // |callback|: Called with the accessibility tree data.
-+    static void getAccessibilityTree(
-+        optional long tabId,
-+        GetAccessibilityTreeCallback callback);
-+
-+    // Gets a snapshot of interactive elements on the page
-+    // |tabId|: The tab to get the snapshot for. Defaults to active tab.
-+    // |options|: Options for the snapshot.
-+    // |callback|: Called with the interactive snapshot data.
-+    static void getInteractiveSnapshot(
-+        optional long tabId,
-+        optional InteractiveSnapshotOptions options,
-+        GetInteractiveSnapshotCallback callback);
-+
-+
-+    // Clicks on an element by its nodeId from the interactive snapshot
-+    // |tabId|: The tab containing the element. Defaults to active tab.
-+    // |nodeId|: The nodeId from the interactive snapshot.
-+    // |callback|: Called when the click is complete.
-+    static void click(
-+        optional long tabId,
-+        long nodeId,
-+        InteractionCallback callback);
-+
-+    // Inputs text into an element by its nodeId
-+    // |tabId|: The tab containing the element. Defaults to active tab.
-+    // |nodeId|: The nodeId from the interactive snapshot.
-+    // |text|: The text to input.
-+    // |callback|: Called when the input is complete.
-+    static void inputText(
-+        optional long tabId,
-+        long nodeId,
-+        DOMString text,
-+        InteractionCallback callback);
-+
-+    // Clears the content of an input element by its nodeId
-+    // |tabId|: The tab containing the element. Defaults to active tab.
-+    // |nodeId|: The nodeId from the interactive snapshot.
-+    // |callback|: Called when the clear is complete.
-+    static void clear(
-+        optional long tabId,
-+        long nodeId,
-+        InteractionCallback callback);
-+
-+    // Gets the page load status for a tab
-+    // |tabId|: The tab to check. Defaults to active tab.
-+    // |callback|: Called with the page load status.
-+    static void getPageLoadStatus(
-+        optional long tabId,
-+        GetPageLoadStatusCallback callback);
-+
-+    // Scrolls the page up by approximately one viewport height
-+    // |tabId|: The tab to scroll. Defaults to active tab.
-+    // |callback|: Called when the scroll is complete.
-+    static void scrollUp(
-+        optional long tabId,
-+        ScrollCallback callback);
-+
-+    // Scrolls the page down by approximately one viewport height
-+    // |tabId|: The tab to scroll. Defaults to active tab.
-+    // |callback|: Called when the scroll is complete.
-+    static void scrollDown(
-+        optional long tabId,
-+        ScrollCallback callback);
-+
-+    // Scrolls the page to bring the specified node into view
-+    // |tabId|: The tab to scroll. Defaults to active tab.
-+    // |nodeId|: The node ID from getInteractiveSnapshot to scroll to.
-+    // |callback|: Called with whether scrolling was needed (false if already in view).
-+    static void scrollToNode(
-+        optional long tabId,
-+        long nodeId,
-+        ScrollToNodeCallback callback);
-+
-+    // Sends special key events to the active element in a tab
-+    // |tabId|: The tab to send keys to. Defaults to active tab.
-+    // |key|: The special key to send. Supported keys:
-+    //   - "Enter": Submit forms, activate buttons, insert line break
-+    //   - "Delete": Delete character after cursor
-+    //   - "Backspace": Delete character before cursor
-+    //   - "Tab": Move focus to next element
-+    //   - "Escape": Cancel operations, close dialogs
-+    //   - "ArrowUp": Move cursor/selection up
-+    //   - "ArrowDown": Move cursor/selection down
-+    //   - "ArrowLeft": Move cursor/selection left
-+    //   - "ArrowRight": Move cursor/selection right
-+    //   - "Home": Move to beginning of line/document
-+    //   - "End": Move to end of line/document
-+    //   - "PageUp": Scroll up one page
-+    //   - "PageDown": Scroll down one page
-+    // |callback|: Called when the key has been sent.
-+    static void sendKeys(
-+        optional long tabId,
-+        DOMString key,
-+        InteractionCallback callback);
-+    
-+    // Clicks at specific coordinates on the page
-+    // |tabId|: The tab to click in. Defaults to active tab.
-+    // |x|: X coordinate in CSS pixels from viewport origin.
-+    // |y|: Y coordinate in CSS pixels from viewport origin.
-+    // |callback|: Called when the click is complete.
-+    static void clickCoordinates(
-+        optional long tabId,
-+        double x,
-+        double y,
-+        InteractionCallback callback);
-+    
-+    // Types text after clicking at coordinates to focus element
-+    // |tabId|: The tab to type in. Defaults to active tab.
-+    // |x|: X coordinate to click for focus.
-+    // |y|: Y coordinate to click for focus.
-+    // |text|: Text to type after focusing.
-+    // |callback|: Called when the operation is complete.
-+    static void typeAtCoordinates(
-+        optional long tabId,
-+        double x,
-+        double y,
-+        DOMString text,
-+        InteractionCallback callback);
-+        
-+    // Captures a screenshot of the tab as a thumbnail
-+    // |tabId|: The tab to capture. Defaults to active tab.
-+    // |thumbnailSize|: Optional max dimension for the thumbnail. If not provided, uses viewport size.
-+    //                  The actual size will be the minimum of this value and the viewport dimensions.
-+    //                  Ignored if width and height are specified.
-+    // |showHighlights|: If true, shows bounding boxes around clickable, typeable, and selectable elements that are in viewport.
-+    // |width|: Optional exact width for screenshot. When used with height, overrides thumbnailSize.
-+    // |height|: Optional exact height for screenshot. When used with width, overrides thumbnailSize.
-+    // |callback|: Called with the screenshot as a data URL.
-+    static void captureScreenshot(
-+        optional long tabId,
-+        optional long thumbnailSize,
-+        optional boolean showHighlights,
-+        optional long width,
-+        optional long height,
-+        CaptureScreenshotCallback callback);
-+
-+    // Gets a simple text snapshot of the page
-+    // |tabId|: The tab to extract content from. Defaults to active tab.
-+    // |callback|: Called with the page snapshot.
-+    static void getSnapshot(
-+        optional long tabId,
-+        GetSnapshotCallback callback);
-+
 +    // Settings API functions - compatible with chrome.settingsPrivate
 +    // Gets a specific preference value
 +    // |name|: The preference name (e.g., "nxtscape.default_provider").
@@ -346,11 +91,6 @@ index 0000000000000..da7102fd5b5e3
 +        optional DOMString pageId,
 +        SetPrefCallback callback);
 +
-+    // Gets all preferences (filtered to nxtscape.* prefs)
-+    // |callback|: Called with array of preference objects.
-+    static void getAllPrefs(
-+        GetAllPrefsCallback callback);
-+    
 +    // Logs a metric event with optional properties
 +    // |eventName|: The name of the event to log (e.g., "extension.action").
 +    // |properties|: Optional JSON object with additional properties.
@@ -359,7 +99,7 @@ index 0000000000000..da7102fd5b5e3
 +        DOMString eventName,
 +        optional object properties,
 +        optional VoidCallback callback);
-+    
++
 +    // Gets the browser version number
 +    // |callback|: Called with the version string.
 +    static void getVersionNumber(
@@ -369,15 +109,6 @@ index 0000000000000..da7102fd5b5e3
 +    // |callback|: Called with the version string.
 +    static void getBrowserosVersionNumber(
 +        GetVersionNumberCallback callback);
-+    
-+    // Executes JavaScript code in the specified tab
-+    // |tabId|: The tab to execute JavaScript in. Defaults to active tab.
-+    // |code|: The JavaScript code to execute.
-+    // |callback|: Called with the result of the execution.
-+    static void executeJavaScript(
-+        optional long tabId,
-+        DOMString code,
-+        ExecuteJavaScriptCallback callback);
 +
 +    // Opens a native OS file/folder picker dialog.
 +    // Returns the selected path or null if the user cancels.
@@ -390,6 +121,24 @@ index 0000000000000..da7102fd5b5e3
 +    static void choosePath(
 +        optional ChoosePathOptions options,
 +        ChoosePathCallback callback);
++
++    // Shows a transient toast notification in the active browser window. The
++    // message is supplied dynamically, so no resource string is required.
++    // |message|: The text to display in the toast.
++    // |durationMs|: How long the toast stays visible, in milliseconds. Clamped
++    //     to [1000, 30000]. Defaults to the standard toast timeout if omitted.
++    // |callback|: Called with true if the toast was shown, false if it was
++    //     suppressed (e.g. by the user's toast alert-level setting).
++    static void showToast(
++        DOMString message,
++        optional long durationMs,
++        ShowToastCallback callback);
++
++    // Shows a simple alert infobar in the active browser tab.
++    // |message|: Text to display.
++    // |callback|: Called with whether the infobar was shown.
++    static void showInfoBar(
++        DOMString message,
++        ShowInfoBarCallback callback);
 +  };
 +};
-+

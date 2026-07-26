@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_prefs.cc b/chrome/browser/browseros/server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..8c3a459477837
+index 0000000000000..d1829772e773f
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_prefs.cc
 @@ -0,0 +1,49 @@
@@ -20,11 +20,11 @@ index 0000000000000..8c3a459477837
 +// Stable MCP proxy port
 +const char kProxyPort[] = "browseros.server.proxy_port";
 +
++// Stable HTTPS MCP proxy port
++const char kProxyHttpsPort[] = "browseros.server.proxy_https_port";
++
 +// Sidecar backend server port
 +const char kServerPort[] = "browseros.server.server_port";
-+
-+// Extension WebSocket server port
-+const char kExtensionServerPort[] = "browseros.server.extension_port";
 +
 +// Allow remote connections to MCP server (security setting)
 +const char kAllowRemoteInMCP[] = "browseros.server.allow_remote_in_mcp";
@@ -42,8 +42,8 @@ index 0000000000000..8c3a459477837
 +void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
 +  registry->RegisterIntegerPref(kCDPServerPort, kDefaultCDPPort);
 +  registry->RegisterIntegerPref(kProxyPort, kDefaultProxyPort);
++  registry->RegisterIntegerPref(kProxyHttpsPort, kDefaultProxyHttpsPort);
 +  registry->RegisterIntegerPref(kServerPort, kDefaultServerPort);
-+  registry->RegisterIntegerPref(kExtensionServerPort, kDefaultExtensionPort);
 +  registry->RegisterBooleanPref(kAllowRemoteInMCP, false);
 +  registry->RegisterBooleanPref(kRestartServerRequested, false);
 +  registry->RegisterStringPref(kServerVersion, std::string());

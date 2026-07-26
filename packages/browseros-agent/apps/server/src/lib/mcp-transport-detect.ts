@@ -100,7 +100,3 @@ export async function detectMcpTransport(
   })
   return transport
 }
-
-export function clearTransportCache(): void {
-  transportCache.clear()
-}

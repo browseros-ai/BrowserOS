@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_cookie_importer.h b/chrome/utility/importer/browseros/chrome_cookie_importer.h
 new file mode 100644
-index 0000000000000..edfd9f068250b
+index 0000000000000..b706ed9dfa177
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_cookie_importer.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,53 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome cookie importer interface
 +
@@ -51,7 +51,8 @@ index 0000000000000..edfd9f068250b
 +// profile_path should point to the Chrome profile directory containing
 +// the "Cookies" database file.
 +std::vector<ImportedCookieEntry> ImportChromeCookies(
-+    const base::FilePath& profile_path);
++    const base::FilePath& profile_path,
++    const std::string& encryption_key);
 +
 +}  // namespace browseros_importer
 +

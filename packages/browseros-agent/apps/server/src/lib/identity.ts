@@ -3,22 +3,27 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { Database } from 'bun:sqlite'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 export interface IdentityConfig {
   installId?: string
-  db: Database
+  statePath?: string
 }
 
-class IdentityService {
-  private browserOSId: string | null = null // Unique identifier for the BrowserOS instance
+interface IdentityStateFile {
+  browserosId: string
+}
 
+export class IdentityService {
+  private browserOSId: string | null = null
+
+  /** Chooses the stable BrowserOS id without coupling it to the product SQLite schema. */
   initialize(config: IdentityConfig): void {
-    const { installId, db } = config
-
-    // Priority: DB > config > generate new
     this.browserOSId =
-      this.loadFromDb(db) || installId || this.generateAndSave(db)
+      normalizeInstallId(config.installId) ??
+      this.loadFromState(config.statePath) ??
+      this.generateAndSave(config.statePath)
   }
 
   getBrowserOSId(): string {
@@ -34,20 +39,43 @@ class IdentityService {
     return this.browserOSId !== null
   }
 
-  private loadFromDb(db: Database): string | null {
-    const stmt = db.prepare('SELECT browseros_id FROM identity WHERE id = 1')
-    const row = stmt.get() as { browseros_id: string } | null
-    return row?.browseros_id ?? null
+  private loadFromState(statePath: string | undefined): string | null {
+    if (!statePath) return null
+    try {
+      const parsed = JSON.parse(
+        readFileSync(statePath, 'utf8'),
+      ) as Partial<IdentityStateFile>
+      return typeof parsed.browserosId === 'string' &&
+        parsed.browserosId.length > 0
+        ? parsed.browserosId
+        : null
+    } catch (err) {
+      if (isNotFoundError(err)) return null
+      throw err
+    }
   }
 
-  private generateAndSave(db: Database): string {
+  private generateAndSave(statePath: string | undefined): string {
     const browserosId = crypto.randomUUID()
-    const stmt = db.prepare(
-      'INSERT OR REPLACE INTO identity (id, browseros_id) VALUES (1, ?)',
-    )
-    stmt.run(browserosId)
+    if (statePath) {
+      mkdirSync(dirname(statePath), { recursive: true })
+      writeFileSync(statePath, `${JSON.stringify({ browserosId })}\n`, 'utf8')
+    }
     return browserosId
   }
+}
+
+function normalizeInstallId(installId: string | undefined): string | null {
+  return installId && installId.length > 0 ? installId : null
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    err.code === 'ENOENT'
+  )
 }
 
 export const identity = new IdentityService()

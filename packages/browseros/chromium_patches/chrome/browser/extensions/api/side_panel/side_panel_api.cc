@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_api.cc b/chrome/browser/extensions/api/side_panel/side_panel_api.cc
-index f89e8095cc91f..90e334e435f2a 100644
+index 99e9cc39ad41e..90545097937ce 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_api.cc
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_api.cc
-@@ -71,11 +71,11 @@ ExtensionFunction::ResponseAction SidePanelOpenFunction::RunFunction() {
+@@ -73,11 +73,11 @@ ExtensionFunction::ResponseAction SidePanelOpenFunction::RunFunction() {
    EXTENSION_FUNCTION_VALIDATE(extension());
  
    // `sidePanel.open()` requires a user gesture.
@@ -19,7 +19,7 @@ index f89e8095cc91f..90e334e435f2a 100644
  
    std::optional<api::side_panel::Open::Params> params =
        api::side_panel::Open::Params::Create(args());
-@@ -152,4 +152,54 @@ ExtensionFunction::ResponseAction SidePanelCloseFunction::RunFunction() {
+@@ -168,4 +168,54 @@ ExtensionFunction::ResponseAction SidePanelCloseFunction::RunFunction() {
    return RespondNow(NoArguments());
  }
  

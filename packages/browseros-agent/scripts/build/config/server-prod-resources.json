@@ -1,7 +1,7 @@
 {
   "resources": [
     {
-      "name": "Bun Runtime - macOS ARM64",
+      "name": "Bun - macOS ARM64",
       "source": {
         "type": "r2",
         "key": "third_party/bun/bun-darwin-arm64"
@@ -12,7 +12,7 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - macOS x64",
+      "name": "Bun - macOS x64",
       "source": {
         "type": "r2",
         "key": "third_party/bun/bun-darwin-x64"
@@ -23,7 +23,7 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - Linux ARM64",
+      "name": "Bun - Linux ARM64",
       "source": {
         "type": "r2",
         "key": "third_party/bun/bun-linux-arm64"
@@ -34,10 +34,10 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - Linux x64",
+      "name": "Bun - Linux x64 baseline",
       "source": {
         "type": "r2",
-        "key": "third_party/bun/bun-linux-x64"
+        "key": "third_party/bun/bun-linux-x64-baseline"
       },
       "destination": "resources/bin/third_party/bun",
       "os": ["linux"],
@@ -45,68 +45,24 @@
       "executable": true
     },
     {
-      "name": "Bun Runtime - Windows x64",
+      "name": "Bun - Windows x64 baseline",
       "source": {
         "type": "r2",
-        "key": "third_party/bun/bun-windows-x64.exe"
+        "key": "third_party/bun/bun-windows-x64-baseline.exe"
       },
       "destination": "resources/bin/third_party/bun.exe",
       "os": ["windows"],
-      "arch": ["x64"]
-    },
-    {
-      "name": "ripgrep - macOS ARM64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-darwin-arm64"
-      },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["macos"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - macOS x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-darwin-x64"
-      },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["macos"],
       "arch": ["x64"],
       "executable": true
     },
     {
-      "name": "ripgrep - Linux ARM64",
+      "name": "Drizzle migrations",
       "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-linux-arm64"
+        "type": "local",
+        "path": "apps/server/src/lib/db/migrations"
       },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["linux"],
-      "arch": ["arm64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - Linux x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-linux-x64"
-      },
-      "destination": "resources/bin/third_party/rg",
-      "os": ["linux"],
-      "arch": ["x64"],
-      "executable": true
-    },
-    {
-      "name": "ripgrep - Windows x64",
-      "source": {
-        "type": "r2",
-        "key": "third_party/ripgrep/rg-windows-x64.exe"
-      },
-      "destination": "resources/bin/third_party/rg.exe",
-      "os": ["windows"],
-      "arch": ["x64"]
+      "destination": "resources/db/migrations",
+      "recursive": true
     }
   ]
 }

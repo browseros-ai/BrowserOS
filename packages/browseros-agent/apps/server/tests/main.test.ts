@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  */
 
-import { afterEach, describe, expect, it, mock } from 'bun:test'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 const config = {
   cdpPort: 9222,
@@ -14,103 +14,155 @@ const config = {
   executionDir: '/tmp/browseros-execution',
   mcpAllowRemote: false,
   aiSdkDevtoolsEnabled: false,
+  instanceClientId: 'client-test',
 }
 
 describe('Application.start', () => {
   afterEach(() => {
     mock.restore()
+    mock.clearAllMocks()
   })
 
   it('starts with the CDP backend only', async () => {
-    const createHttpServer = mock(async () => ({}))
-    const cdpConnect = mock(async () => {})
-    const browserCtor = mock(() => {})
-    const loggerInfo = mock(() => {})
-    const loggerWarn = mock(() => {})
-    const loggerDebug = mock(() => {})
-    const loggerError = mock(() => {})
-    mock.module('../src/api/server', () => ({
+    const {
+      Application,
+      browserModule,
+      cdpConnect,
       createHttpServer,
-    }))
-    mock.module('../src/browser/backends/cdp', () => ({
-      CdpBackend: class {
-        async connect(): Promise<void> {
-          await cdpConnect()
-        }
-      },
-    }))
-    mock.module('../src/browser/browser', () => ({
-      Browser: class {
-        constructor(cdp: unknown) {
-          browserCtor(cdp)
-        }
-      },
-    }))
-    mock.module('../src/lib/browseros-dir', () => ({
-      cleanOldSessions: mock(async () => {}),
-      ensureBrowserosDir: mock(async () => {}),
-      removeServerConfigSync: mock(() => {}),
-      writeServerConfig: mock(async () => {}),
-    }))
-    mock.module('../src/lib/db', () => ({
-      initializeDb: mock(() => ({})),
-    }))
-    mock.module('../src/lib/identity', () => ({
-      identity: {
-        initialize: mock(() => {}),
-        getBrowserOSId: mock(() => 'browseros-id'),
-      },
-    }))
-    mock.module('../src/lib/logger', () => ({
-      logger: {
-        setLogFile: mock(() => {}),
-        info: loggerInfo,
-        warn: loggerWarn,
-        debug: loggerDebug,
-        error: loggerError,
-      },
-    }))
-    mock.module('../src/lib/metrics', () => ({
-      metrics: {
-        initialize: mock(() => {}),
-        isEnabled: mock(() => true),
-        log: mock(() => {}),
-      },
-    }))
-    mock.module('../src/lib/sentry', () => ({
-      Sentry: {
-        setContext: mock(() => {}),
-        setUser: mock(() => {}),
-        captureException: mock(() => {}),
-      },
-    }))
-    mock.module('../src/lib/soul', () => ({
-      seedSoulTemplate: mock(async () => {}),
-    }))
-    mock.module('../src/skills/migrate', () => ({
-      migrateBuiltinSkills: mock(async () => {}),
-    }))
-    mock.module('../src/skills/remote-sync', () => ({
-      startSkillSync: mock(() => {}),
-      stopSkillSync: mock(() => {}),
-      syncBuiltinSkills: mock(async () => {}),
-    }))
-    mock.module('../src/tools/registry', () => ({
-      registry: {
-        names: () => ['test_tool'],
-      },
-    }))
-
-    const { Application } = await import('../src/main')
+      loggerError,
+      loggerInfo,
+      loggerWarn,
+    } = await setupApplicationTest()
     const app = new Application(config)
 
     await app.start()
 
     expect(cdpConnect).toHaveBeenCalledTimes(1)
-    expect(browserCtor).toHaveBeenCalledTimes(1)
     expect(createHttpServer).toHaveBeenCalledTimes(1)
+    expect(createHttpServer.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        browser: expect.any(browserModule.Browser),
+      }),
+    )
     expect(createHttpServer.mock.calls[0]?.[0]).not.toHaveProperty('controller')
+    expect(loggerInfo).toHaveBeenCalled()
     expect(loggerWarn).not.toHaveBeenCalled()
     expect(loggerError).not.toHaveBeenCalled()
   })
+
+  it('stores the database below the BrowserOS directory instead of the execution directory', async () => {
+    const originalBrowserosDir = process.env.BROWSEROS_DIR
+    process.env.BROWSEROS_DIR = '/tmp/browseros-dogfood'
+
+    try {
+      const { Application, initializeDb } = await setupApplicationTest()
+      const app = new Application(config)
+
+      await app.start()
+
+      expect(initializeDb).toHaveBeenCalledWith({
+        dbPath: '/tmp/browseros-dogfood/db/browseros.sqlite',
+        resourcesDir: config.resourcesDir,
+      })
+    } finally {
+      if (originalBrowserosDir === undefined) {
+        delete process.env.BROWSEROS_DIR
+      } else {
+        process.env.BROWSEROS_DIR = originalBrowserosDir
+      }
+    }
+  })
+
+  it('warns at boot when metrics is enabled but no instance identity is configured', async () => {
+    const { Application, loggerWarn } = await setupApplicationTest()
+    const { instanceClientId: _unused, ...configWithoutIdentity } = config
+    const app = new Application(configWithoutIdentity)
+
+    await app.start()
+
+    const warnedAboutIdentity = loggerWarn.mock.calls.some(
+      (args) =>
+        typeof args[0] === 'string' && args[0].includes('no instance identity'),
+    )
+    expect(warnedAboutIdentity).toBe(true)
+  })
 })
+
+async function setupApplicationTest() {
+  const apiServer = await import('../src/api/server')
+  const browserModule = await import('@browseros/browser-core/browser')
+  const cdpModule = await import('@browseros/browser-core/backends/cdp')
+  const runtimeModule = await import('../src/lib/agents/runtime')
+  const browserosDir = await import('../src/lib/browseros-dir')
+  const dbModule = await import('../src/lib/db')
+  const identityModule = await import('../src/lib/identity')
+  const loggerModule = await import('../src/lib/logger')
+  const metricsModule = await import('../src/lib/metrics')
+  const sentryModule = await import('../src/lib/sentry')
+
+  const createHttpServer = spyOn(apiServer, 'createHttpServer')
+  createHttpServer.mockImplementation(async () => ({}) as never)
+
+  const cdpConnect = mock(async () => {})
+  spyOn(cdpModule.CdpBackend.prototype, 'connect').mockImplementation(
+    cdpConnect,
+  )
+
+  spyOn(browserosDir, 'cleanOldSessions').mockImplementation(async () => {})
+  spyOn(browserosDir, 'ensureBrowserosDir').mockImplementation(async () => {})
+  spyOn(browserosDir, 'writeServerConfig').mockImplementation(async () => {})
+  spyOn(browserosDir, 'removeServerConfigSync').mockImplementation(() => {})
+
+  const initializeDb = spyOn(dbModule, 'initializeDb').mockImplementation(
+    () =>
+      ({
+        path: '/tmp/browseros-state/db/browseros.sqlite',
+        migrationsDir: '/tmp/browseros-resources/db/migrations',
+        sqlite: { close: () => {} },
+        db: {},
+      }) as never,
+  )
+  spyOn(identityModule.identity, 'initialize').mockImplementation(() => {})
+  spyOn(identityModule.identity, 'getBrowserOSId').mockImplementation(
+    () => 'browseros-id',
+  )
+
+  const loggerInfo = spyOn(loggerModule.logger, 'info').mockImplementation(
+    () => {},
+  )
+  const loggerWarn = spyOn(loggerModule.logger, 'warn').mockImplementation(
+    () => {},
+  )
+  spyOn(loggerModule.logger, 'debug').mockImplementation(() => {})
+  const loggerError = spyOn(loggerModule.logger, 'error').mockImplementation(
+    () => {},
+  )
+  spyOn(loggerModule.logger, 'setLogFile').mockImplementation(() => {})
+
+  spyOn(metricsModule.metrics, 'initialize').mockImplementation(() => {})
+  spyOn(metricsModule.metrics, 'isEnabled').mockImplementation(() => true)
+  spyOn(metricsModule.metrics, 'log').mockImplementation(() => {})
+
+  spyOn(sentryModule.Sentry, 'setContext').mockImplementation(() => {})
+  spyOn(sentryModule.Sentry, 'setUser').mockImplementation(() => {})
+  spyOn(sentryModule.Sentry, 'captureException').mockImplementation(() => {})
+
+  spyOn(runtimeModule, 'configureClaudeRuntime').mockImplementation(
+    () => ({}) as never,
+  )
+  spyOn(runtimeModule, 'configureCodexRuntime').mockImplementation(
+    () => ({}) as never,
+  )
+
+  const { Application } = await import('../src/main')
+  return {
+    Application,
+    browserModule,
+    cdpConnect,
+    createHttpServer,
+    loggerError,
+    loggerInfo,
+    loggerWarn,
+    initializeDb,
+  }
+}

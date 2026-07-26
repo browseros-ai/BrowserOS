@@ -21,7 +21,7 @@ func init() {
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
-			result, err := c.CallTool("list_tab_groups", nil)
+			result, err := c.CallTool("tab_groups", map[string]any{"action": "list"})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -49,13 +49,16 @@ func init() {
 				pageIDs = append(pageIDs, id)
 			}
 
-			toolArgs := map[string]any{"pageIds": pageIDs}
+			toolArgs := map[string]any{
+				"action": "create",
+				"pages":  pageIDs,
+			}
 			if title != "" {
 				toolArgs["title"] = title
 			}
 
 			c := newClient()
-			result, err := c.CallTool("group_tabs", toolArgs)
+			result, err := c.CallTool("tab_groups", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -77,7 +80,10 @@ func init() {
 			color, _ := cmd.Flags().GetString("color")
 			collapsed, _ := cmd.Flags().GetBool("collapsed")
 
-			toolArgs := map[string]any{"groupId": args[0]}
+			toolArgs := map[string]any{
+				"action":  "update",
+				"groupId": args[0],
+			}
 			if title != "" {
 				toolArgs["title"] = title
 			}
@@ -89,7 +95,7 @@ func init() {
 			}
 
 			c := newClient()
-			result, err := c.CallTool("update_tab_group", toolArgs)
+			result, err := c.CallTool("tab_groups", toolArgs)
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -119,7 +125,10 @@ func init() {
 			}
 
 			c := newClient()
-			result, err := c.CallTool("ungroup_tabs", map[string]any{"pageIds": pageIDs})
+			result, err := c.CallTool("tab_groups", map[string]any{
+				"action": "ungroup",
+				"pages":  pageIDs,
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}
@@ -137,7 +146,10 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			c := newClient()
-			result, err := c.CallTool("close_tab_group", map[string]any{"groupId": args[0]})
+			result, err := c.CallTool("tab_groups", map[string]any{
+				"action":  "close",
+				"groupId": args[0],
+			})
 			if err != nil {
 				output.Error(err.Error(), 1)
 			}

@@ -1,8 +1,8 @@
 diff --git a/chrome/utility/importer/bookmarks_file_importer_unittest.cc b/chrome/utility/importer/bookmarks_file_importer_unittest.cc
-index 01439138862f1..dac2ce83c6e1d 100644
+index 253407be1260d..d18b0fc681338 100644
 --- a/chrome/utility/importer/bookmarks_file_importer_unittest.cc
 +++ b/chrome/utility/importer/bookmarks_file_importer_unittest.cc
-@@ -16,6 +16,7 @@
+@@ -15,6 +15,7 @@
  #include "base/time/time.h"
  #include "chrome/common/importer/importer_autofill_form_data_entry.h"
  #include "chrome/common/importer/importer_bridge.h"
@@ -10,7 +10,7 @@ index 01439138862f1..dac2ce83c6e1d 100644
  #include "components/user_data_importer/common/imported_bookmark_entry.h"
  #include "components/user_data_importer/common/importer_data_types.h"
  #include "testing/gmock/include/gmock/gmock.h"
-@@ -83,6 +84,14 @@ class MockImporterBridge : public ImporterBridge {
+@@ -82,6 +83,14 @@ class MockImporterBridge : public ImporterBridge {
                SetAutofillFormData,
                (const std::vector<ImporterAutofillFormDataEntry>&),
                (override));

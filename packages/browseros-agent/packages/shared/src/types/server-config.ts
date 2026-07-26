@@ -9,6 +9,7 @@
 
 export interface ServerDiscoveryConfig {
   server_port: number
+  cdp_port?: number
   url: string
   server_version: string
   browseros_version?: string

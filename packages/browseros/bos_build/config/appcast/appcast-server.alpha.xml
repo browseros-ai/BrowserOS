@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>BrowserOS Server (Alpha)</title>
+    <link>https://cdn.browseros.com/appcast-server.alpha.xml</link>
+    <description>BrowserOS Server binary updates</description>
+    <language>en</language>
+
+    <item>
+      <sparkle:version>0.0.86</sparkle:version>
+      <pubDate>Thu, 16 Apr 2026 18:58:59 +0000</pubDate>
+
+      <!-- macOS arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.86_darwin_arm64.zip"
+        sparkle:os="macos"
+        sparkle:arch="arm64"
+        sparkle:edSignature="kkM3dFanJr9TQgRPV7NOs7GwYpVfLHH+Db6oUWLHTWQFODBy8wx46fD6sioQdsB4k+9Ra9QCBm0WRSvKDkljDQ=="
+        length="101284695"
+        type="application/zip"/>
+    </item>
+
+  </channel>
+</rss>

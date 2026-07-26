@@ -1,0 +1,3 @@
+preset: release
+download: false
+bundle_local_extensions: true

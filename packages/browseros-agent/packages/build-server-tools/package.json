@@ -1,0 +1,27 @@
+{
+  "name": "@browseros/build-server-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared production artifact tooling for BrowserOS server binaries and static asset bundles",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1089.0",
+    "@browseros/shared": "workspace:*",
+    "commander": "^14.0.3",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.5",
+    "@types/node": "^24.13.3"
+  }
+}

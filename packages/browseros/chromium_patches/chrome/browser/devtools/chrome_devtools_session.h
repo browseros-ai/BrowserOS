@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/chrome_devtools_session.h b/chrome/browser/devtools/chrome_devtools_session.h
-index 3055c80381c43..77e4a79324414 100644
+index bac525f420dee..52d94ea97d9ee 100644
 --- a/chrome/browser/devtools/chrome_devtools_session.h
 +++ b/chrome/browser/devtools/chrome_devtools_session.h
 @@ -21,10 +21,12 @@ class DevToolsAgentHostClientChannel;
@@ -15,7 +15,7 @@ index 3055c80381c43..77e4a79324414 100644
  class PWAHandler;
  class SecurityHandler;
  class StorageHandler;
-@@ -65,10 +67,12 @@ class ChromeDevToolsSession : public protocol::FrontendChannel {
+@@ -66,10 +68,12 @@ class ChromeDevToolsSession : public protocol::FrontendChannel {
  
    protocol::UberDispatcher dispatcher_;
    std::unique_ptr<AutofillHandler> autofill_handler_;

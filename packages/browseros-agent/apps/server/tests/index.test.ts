@@ -14,7 +14,7 @@ import { executablePath } from 'puppeteer'
 // This test uses old CLI args (--headless, --isolated, --executable-path)
 // which were removed in Phase 1. Need to update for new architecture:
 // - Start browser with CDP on specific port
-// - Start MCP server with --cdp-port and --mcp-port
+// - Start MCP server with sidecar --config
 // - Test via HTTP/SSE transport instead of STDIO
 describe.skip('e2e', () => {
   async function withClient(cb: (client: Client) => Promise<void>) {

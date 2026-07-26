@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/health_checker_impl.cc b/chrome/browser/browseros/server/health_checker_impl.cc
 new file mode 100644
-index 0000000000000..73ef5eaf9e8e3
+index 0000000000000..cba17265c71d9
 --- /dev/null
 +++ b/chrome/browser/browseros/server/health_checker_impl.cc
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,93 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -35,18 +35,17 @@ index 0000000000000..73ef5eaf9e8e3
 +
 +void HealthCheckerImpl::CheckHealth(
 +    int port,
++    const std::string& path,
 +    base::OnceCallback<void(bool success)> callback) {
-+  // Build health check URL
-+  GURL health_url("http://127.0.0.1:" + base::NumberToString(port) + "/health");
++  GURL health_url("http://127.0.0.1:" + base::NumberToString(port) + path);
 +
-+  // Create network traffic annotation
 +  net::NetworkTrafficAnnotationTag traffic_annotation =
 +      net::DefineNetworkTrafficAnnotation("browseros_health_check", R"(
 +        semantics {
 +          sender: "BrowserOS Server Manager"
 +          description:
 +            "Checks if the BrowserOS MCP server is healthy by querying its "
-+            "/health endpoint."
++            "configured health endpoint."
 +          trigger: "Periodic health check every 30 seconds while server is running."
 +          data: "No user data sent, just an HTTP GET request."
 +          destination: LOCAL
@@ -58,7 +57,6 @@ index 0000000000000..73ef5eaf9e8e3
 +            "Internal health check for BrowserOS server functionality."
 +        })");
 +
-+  // Create resource request
 +  auto resource_request = std::make_unique<network::ResourceRequest>();
 +  resource_request->url = health_url;
 +  resource_request->method = "GET";
@@ -68,58 +66,8 @@ index 0000000000000..73ef5eaf9e8e3
 +      std::move(resource_request), traffic_annotation);
 +  url_loader->SetTimeoutDuration(kHealthCheckTimeout);
 +
-+  // Get URL loader factory from system network context
-+  auto* url_loader_factory =
-+      g_browser_process->system_network_context_manager()
-+          ->GetURLLoaderFactory();
-+
-+  url_loader_ = std::move(url_loader);
-+  url_loader_->DownloadHeadersOnly(
-+      url_loader_factory,
-+      base::BindOnce(&HealthCheckerImpl::OnRequestComplete,
-+                     base::Unretained(this), std::move(callback)));
-+}
-+
-+void HealthCheckerImpl::RequestShutdown(
-+    int port,
-+    base::OnceCallback<void(bool success)> callback) {
-+  // Build shutdown URL
-+  GURL shutdown_url("http://127.0.0.1:" + base::NumberToString(port) +
-+                    "/shutdown");
-+
-+  // Create network traffic annotation
-+  net::NetworkTrafficAnnotationTag traffic_annotation =
-+      net::DefineNetworkTrafficAnnotation("browseros_shutdown_request", R"(
-+        semantics {
-+          sender: "BrowserOS Server Manager"
-+          description:
-+            "Requests graceful shutdown of the BrowserOS server via POST to "
-+            "/shutdown endpoint."
-+          trigger: "Browser shutdown or server restart."
-+          data: "No user data sent, just an HTTP POST request."
-+          destination: LOCAL
-+        }
-+        policy {
-+          cookies_allowed: NO
-+          setting: "This feature cannot be disabled by settings."
-+          policy_exception_justification:
-+            "Internal shutdown request for BrowserOS server functionality."
-+        })");
-+
-+  // Create resource request
-+  auto resource_request = std::make_unique<network::ResourceRequest>();
-+  resource_request->url = shutdown_url;
-+  resource_request->method = "POST";
-+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-+
-+  auto url_loader = network::SimpleURLLoader::Create(
-+      std::move(resource_request), traffic_annotation);
-+  url_loader->SetTimeoutDuration(base::Seconds(1));
-+
-+  // Get URL loader factory from system network context
-+  auto* url_loader_factory =
-+      g_browser_process->system_network_context_manager()
-+          ->GetURLLoaderFactory();
++  auto* url_loader_factory = g_browser_process->system_network_context_manager()
++                                 ->GetURLLoaderFactory();
 +
 +  url_loader_ = std::move(url_loader);
 +  url_loader_->DownloadHeadersOnly(

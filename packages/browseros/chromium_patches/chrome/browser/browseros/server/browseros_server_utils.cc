@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_utils.cc b/chrome/browser/browseros/server/browseros_server_utils.cc
 new file mode 100644
-index 0000000000000..8b3137bf24e8a
+index 0000000000000..dbd7e166bb02c
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_utils.cc
 @@ -0,0 +1,518 @@
@@ -24,6 +24,7 @@ index 0000000000000..8b3137bf24e8a
 +#include "base/threading/platform_thread.h"
 +#include "build/build_config.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
++#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/common/chrome_paths.h"
 +#include "components/version_info/version_info.h"
 +#include "net/base/ip_address.h"
@@ -226,7 +227,7 @@ index 0000000000000..8b3137bf24e8a
 +  }
 +#endif
 +
-+  return exe_dir.Append(FILE_PATH_LITERAL("BrowserOSServer"))
++  return exe_dir.Append(GetManagedServerDescriptor().bundle_dir)
 +      .Append(FILE_PATH_LITERAL("default"))
 +      .Append(FILE_PATH_LITERAL("resources"));
 +}
@@ -235,7 +236,7 @@ index 0000000000000..8b3137bf24e8a
 +  base::FilePath browseros_exe =
 +      GetBundledResourcesPath()
 +          .Append(FILE_PATH_LITERAL("bin"))
-+          .Append(FILE_PATH_LITERAL("browseros_server"));
++          .Append(GetManagedServerDescriptor().binary_name);
 +
 +#if BUILDFLAG(IS_WIN)
 +  browseros_exe = browseros_exe.AddExtension(FILE_PATH_LITERAL(".exe"));
@@ -511,9 +512,8 @@ index 0000000000000..8b3137bf24e8a
 +  }
 +
 +  // Wait for process to exit
-+  DWORD wait_result =
-+      WaitForSingleObject(handle.Get(),
-+                          static_cast<DWORD>(graceful_timeout.InMilliseconds()));
++  DWORD wait_result = WaitForSingleObject(
++      handle.Get(), static_cast<DWORD>(graceful_timeout.InMilliseconds()));
 +  return wait_result == WAIT_OBJECT_0;
 +
 +#else
