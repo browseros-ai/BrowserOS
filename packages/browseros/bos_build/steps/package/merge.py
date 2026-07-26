@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Merge two architecture builds into one universal .app via the vendored universalizer."""
 
-import sys
 import shutil
+import sys
 from pathlib import Path
-from ...lib.utils import run_command, log_info, log_error, log_success
+
+from ...lib.utils import log_error, log_info, log_success, run_command
 
 
 def merge_architectures(
@@ -79,6 +80,6 @@ def merge_architectures(
             log_error("Universal binary creation failed - output not found")
             return False
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to create universal binary: {e}")
         return False
