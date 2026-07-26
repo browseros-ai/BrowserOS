@@ -7,7 +7,7 @@ import {
 import type { Provider } from './chatComponentTypes'
 
 const options: Provider[] = [
-  { kind: 'llm', id: 'browseros', name: 'BrowserOS', type: 'browseros' },
+  { kind: 'llm', id: 'browseros', name: 'Sup agent', type: 'browseros' },
   {
     kind: 'llm',
     id: 'anthropic-sonnet',
@@ -39,7 +39,7 @@ describe('groupProviderOptions', () => {
     expect(groupProviderOptions(options)).toEqual([
       {
         key: 'llm',
-        label: 'BrowserOS agent + your LLM',
+        label: 'Sup agent + your LLM',
         options: [options[0], options[1]],
       },
       {
