@@ -1,4 +1,7 @@
 {
   "terminal.integrated.tabs.title": "${sequence} ${process}",
-  "terminal.integrated.tabs.description": "${cwd}"
+  "terminal.integrated.tabs.description": "${cwd}",
+  "files.associations": {
+    "**/packages/browseros/chromium_patches/**/*": "diff"
+  }
 }
