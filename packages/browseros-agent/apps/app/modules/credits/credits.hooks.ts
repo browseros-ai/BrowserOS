@@ -1,7 +1,7 @@
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
-import { getBrowserosId } from './browseros-id'
+import { getBrowserosId } from '@/lib/credits/browseros-id'
 
 interface CreditsInfo {
   credits: number

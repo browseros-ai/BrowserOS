@@ -2,6 +2,16 @@ import {
   openWindowSidePanelIdsStorage,
   sidePanelPerWindowStorage,
 } from './sidePanelOpenStateStorage'
+import { markRestorePending } from './activeSessionStorage'
+
+export const SHIMMY_AGENT_SIDEPANEL_BUSY_KEY = 'shimmyAgentSidepanelBusy' as const
+export const SHIMMY_SIDEPANEL_LAST_TAB_KEY = 'shimmySidepanelLastTabId' as const
+
+export function recordSidePanelOpenOnTab(tabId: number): void {
+  chrome.storage.session
+    .set({ [SHIMMY_SIDEPANEL_LAST_TAB_KEY]: tabId })
+    .catch(() => null)
+}
 
 const SIDEPANEL_PATH = 'sidepanel.html'
 const openWindowSidePanelIds = new Set<number>()
@@ -180,19 +190,84 @@ export function registerSidePanelOpenStateListeners(): void {
 
 /** Opens from non-toolbar flows that may not carry Chrome's user gesture. */
 export async function openSidePanel(
-  target: SidePanelTarget,
+  target: SidePanelTarget | number,
 ): Promise<SidePanelToggleResult> {
   await ensureSidePanelRuntimeStateLoaded()
-  return await openTabSidePanel(target)
+  let normalizedTarget: SidePanelTarget
+  if (typeof target === 'number') {
+    const tab = await chrome.tabs.get(target).catch(() => null)
+    normalizedTarget = {
+      tabId: target,
+      windowId: tab?.windowId ?? -1,
+    }
+  } else {
+    normalizedTarget = target
+  }
+  const result = await openTabSidePanel(normalizedTarget)
+  if (result.opened) {
+    recordSidePanelOpenOnTab(normalizedTarget.tabId)
+  }
+  return result
 }
 
 /** Toggles the configured side panel scope from a toolbar/user gesture. */
 export async function toggleSidePanel(
-  target: SidePanelTarget,
+  target: SidePanelTarget | number,
 ): Promise<SidePanelToggleResult> {
   await ensureSidePanelRuntimeStateLoaded()
-  if (sidePanelPerWindow) {
-    return await toggleWindowSidePanel(target)
+  let normalizedTarget: SidePanelTarget
+  if (typeof target === 'number') {
+    const tab = await chrome.tabs.get(target).catch(() => null)
+    normalizedTarget = {
+      tabId: target,
+      windowId: tab?.windowId ?? -1,
+    }
+  } else {
+    normalizedTarget = target
   }
-  return await toggleTabSidePanel(target)
+  let result: SidePanelToggleResult
+  if (sidePanelPerWindow) {
+    result = await toggleWindowSidePanel(normalizedTarget)
+  } else {
+    result = await toggleTabSidePanel(normalizedTarget)
+  }
+  if (result.opened) {
+    recordSidePanelOpenOnTab(normalizedTarget.tabId)
+  } else {
+    chrome.storage.session.remove(SHIMMY_SIDEPANEL_LAST_TAB_KEY).catch(() => null)
+  }
+  return result
+}
+
+/**
+ * When the active tab changes (e.g. the agent focuses another tab via CDP),
+ * re-attach the extension side panel to the new tab if it was open on the
+ * previous tab, or if the sidepanel chat is mid-request (`agentBusy`).
+ */
+export async function migrateSidePanelIfOpenBetweenTabs(
+  newTabId: number,
+  previousTabId: number | undefined,
+  agentBusy: boolean,
+): Promise<void> {
+  if (previousTabId === undefined || previousTabId === newTabId) return
+
+  // In window mode, the side panel stays open on the window anyway, so we only migrate in tab mode.
+  if (sidePanelPerWindow) return
+
+  try {
+    const wasOpen = agentBusy
+      ? true
+      : await chrome.sidePanel.browserosIsOpen({ tabId: previousTabId })
+    if (!wasOpen) return
+    const already = await chrome.sidePanel.browserosIsOpen({ tabId: newTabId })
+    if (already) return
+    markRestorePending()
+    // Find the windowId of the new tab
+    const tab = await chrome.tabs.get(newTabId)
+    if (tab.windowId !== undefined) {
+      await openSidePanel({ tabId: newTabId, windowId: tab.windowId })
+    }
+  } catch {
+    // Fail-safe
+  }
 }

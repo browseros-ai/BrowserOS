@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import {
   useInvalidateCredits,
   useMarkCreditsExhausted,
-} from '@/lib/credits/useCredits'
+} from '@/modules/credits/credits.hooks'
 import type { ProviderType } from '@/lib/llm-providers/types'
 
 const SURVEY_DIRECTIONS = [
