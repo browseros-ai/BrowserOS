@@ -8,11 +8,11 @@ from types import SimpleNamespace
 from typing import cast
 from unittest import mock
 
-from . import windows
-from ..compile import standard
 from ...core.context import ArtifactRegistry, Context
 from ...core.products import get_product_descriptor
 from ...core.step import ValidationError
+from ..compile import standard
+from . import windows
 
 
 class BuildMiniInstallerTest(unittest.TestCase):
@@ -51,7 +51,7 @@ class BuildMiniInstallerTest(unittest.TestCase):
                     SimpleNamespace(
                         chromium_src=Path(tmp),
                         out_dir="out/Default",
-                        get_app_path=lambda: product_path,
+                        get_app_path=lambda product_path=product_path: product_path,
                     ),
                 )
 
@@ -83,20 +83,20 @@ class WindowsExecutableFinalizationTest(unittest.TestCase):
                         chromium_src=root,
                         out_dir="out/Default",
                         artifact_registry=registry,
-                        get_chromium_app_path=lambda: chrome_path,
-                        get_app_path=lambda: product_path,
+                        get_chromium_app_path=lambda chrome_path=chrome_path: chrome_path,
+                        get_app_path=lambda product_path=product_path: product_path,
                     ),
                 )
                 order = []
                 installer_path = root / "dist" / "installer.exe"
                 zip_path = root / "dist" / "installer.zip"
 
-                def create_installer(_ctx):
+                def create_installer(_ctx, product_path=product_path, order=order, installer_path=installer_path):
                     self.assertEqual(product_path.read_bytes(), b"stale product")
                     order.append("installer")
                     return installer_path
 
-                def create_zip(_ctx):
+                def create_zip(_ctx, product_path=product_path, order=order, zip_path=zip_path):
                     self.assertEqual(product_path.read_bytes(), b"stale product")
                     order.append("zip")
                     return zip_path
@@ -142,9 +142,11 @@ class WindowsPackageModuleValidateTest(unittest.TestCase):
         self._touch_output("mini_installer.exe")
         winsparkle_path = self.build_output_dir / "WinSparkle.dll"
 
-        with mock.patch.object(windows, "IS_WINDOWS", return_value=True):
-            with self.assertRaises(ValidationError) as raised:
-                windows.WindowsPackageModule().validate(self.ctx)
+        with (
+            mock.patch.object(windows, "IS_WINDOWS", return_value=True),
+            self.assertRaises(ValidationError) as raised,
+        ):
+            windows.WindowsPackageModule().validate(self.ctx)
 
         message = str(raised.exception)
         self.assertIn("WinSparkle.dll", message)
@@ -162,20 +164,24 @@ class WindowsPackageModuleValidateTest(unittest.TestCase):
         self._touch_output("WinSparkle.dll")
         mini_installer_path = self.build_output_dir / "mini_installer.exe"
 
-        with mock.patch.object(windows, "IS_WINDOWS", return_value=True):
-            with self.assertRaises(ValidationError) as raised:
-                windows.WindowsPackageModule().validate(self.ctx)
+        with (
+            mock.patch.object(windows, "IS_WINDOWS", return_value=True),
+            self.assertRaises(ValidationError) as raised,
+        ):
+            windows.WindowsPackageModule().validate(self.ctx)
 
         self.assertEqual(
             str(raised.exception), f"mini_installer.exe not found: {mini_installer_path}"
         )
 
     def test_validate_raises_when_not_windows(self):
-        with mock.patch.object(windows, "IS_WINDOWS", return_value=False):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(windows, "IS_WINDOWS", return_value=False),
+            self.assertRaisesRegex(
                 ValidationError, "Windows packaging requires Windows"
-            ):
-                windows.WindowsPackageModule().validate(self.ctx)
+            ),
+        ):
+            windows.WindowsPackageModule().validate(self.ctx)
 
 
 if __name__ == "__main__":
