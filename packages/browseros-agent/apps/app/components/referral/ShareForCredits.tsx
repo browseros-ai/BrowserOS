@@ -4,7 +4,7 @@ import type { FC } from 'react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useCredits, useInvalidateCredits } from '@/lib/credits/useCredits'
+import { useCredits, useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import {
   getShareOnTwitterUrl,
   submitReferral,
