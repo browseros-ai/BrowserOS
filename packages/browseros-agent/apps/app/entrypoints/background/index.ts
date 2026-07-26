@@ -242,7 +242,6 @@ const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
 const cleanupLegacyToolApprovalStorage = async () => {
   await storage.removeItems([...LEGACY_TOOL_APPROVAL_STORAGE_KEYS])
 }
-}
 
 export default defineBackground(() => {
   registerSidePanelOpenStateListeners()
