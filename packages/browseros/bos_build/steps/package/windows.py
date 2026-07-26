@@ -4,16 +4,18 @@
 import shutil
 import zipfile
 from pathlib import Path
-from ...core.step import Step, ValidationError, step
+from typing import ClassVar
+
 from ...core.context import Context
+from ...core.step import Step, ValidationError, step
 from ...lib.utils import (
-    run_command,
-    log_info,
+    IS_WINDOWS,
+    join_paths,
     log_error,
+    log_info,
     log_success,
     log_warning,
-    join_paths,
-    IS_WINDOWS,
+    run_command,
 )
 from ..compile.standard import autoninja_command
 
@@ -28,8 +30,8 @@ class MiniInstallerModule(Step):
     step that package_windows requires.
     """
 
-    produces = []
-    requires = []
+    produces: ClassVar[list[str]] = []
+    requires: ClassVar[list[str]] = []
     description = "Build unsigned mini_installer.exe (CI builds without signing)"
 
     def validate(self, context: Context) -> None:
@@ -49,8 +51,8 @@ class MiniInstallerModule(Step):
 
 @step("package_windows", phase="package", platforms=("windows",))
 class WindowsPackageModule(Step):
-    produces = ["installer", "installer_zip"]
-    requires = []
+    produces: ClassVar[list[str]] = ["installer", "installer_zip"]
+    requires: ClassVar[list[str]] = []
     description = "Create Windows installer and portable ZIP"
 
     def validate(self, context: Context) -> None:
@@ -113,7 +115,7 @@ class WindowsPackageModule(Step):
             shutil.copy2(mini_installer_path, installer_path)
             log_success(f"Installer created: {installer_name}")
             return installer_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"Failed to create installer: {e}")
 
     def _create_portable_zip(self, ctx: Context) -> Path:
@@ -136,7 +138,7 @@ class WindowsPackageModule(Step):
 
             log_success(f"Installer ZIP created: {zip_name}")
             return zip_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"Failed to create installer ZIP: {e}")
 
 
@@ -188,7 +190,7 @@ def build_mini_installer(ctx: Context) -> bool:
         )
         return False
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to build setup/mini_installer: {e}")
         return False
 
@@ -215,7 +217,7 @@ def create_installer(ctx: Context) -> bool:
         shutil.copy2(mini_installer_path, installer_path)
         log_success(f"Installer created: {installer_name}")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to create installer: {e}")
         return False
 
@@ -248,7 +250,7 @@ def create_portable_zip(ctx: Context) -> bool:
 
         log_success(f"Installer ZIP created: {zip_name}")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to create installer ZIP: {e}")
         return False
 
@@ -265,7 +267,7 @@ def get_target_cpu(build_output_dir: Path) -> str:
         for cpu in ("x64", "x86", "arm64"):
             if f'target_cpu="{cpu}"' in args_gn_content:
                 return cpu
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     return "x64"  # Default
