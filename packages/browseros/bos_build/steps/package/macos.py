@@ -3,16 +3,17 @@
 
 import shutil
 from pathlib import Path
-from typing import Optional, List
-from ...core.step import Step, ValidationError, step
+from typing import ClassVar
+
 from ...core.context import Context
-from ...lib.utils import run_command, log_info, log_error, log_success, IS_MACOS
+from ...core.step import Step, ValidationError, step
+from ...lib.utils import IS_MACOS, log_error, log_info, log_success, run_command
 
 
 @step("package_macos", phase="package", platforms=("macos",))
 class MacOSPackageModule(Step):
-    produces = ["dmg"]
-    requires = []
+    produces: ClassVar[list[str]] = ["dmg"]
+    requires: ClassVar[list[str]] = []
     description = "Create DMG package for macOS"
 
     def validate(self, ctx: Context) -> None:
@@ -73,7 +74,7 @@ def create_dmg(
     app_path: Path,
     dmg_path: Path,
     volume_name: str = "BrowserOS",
-    pkg_dmg_path: Optional[Path] = None,
+    pkg_dmg_path: Path | None = None,
 ) -> bool:
     """Create a DMG package from an app bundle"""
     log_info(f"\n📀 Creating DMG package: {dmg_path.name}")
@@ -130,7 +131,7 @@ def create_dmg(
         run_command(cmd)
         log_success(f"DMG created: {dmg_path}")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to create DMG: {e}")
         return False
 
@@ -161,7 +162,7 @@ def sign_dmg(dmg_path: Path, certificate_name: str) -> bool:
 
         log_success("DMG signed successfully")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Failed to sign DMG: {e}")
         return False
 
@@ -258,7 +259,7 @@ def notarize_dmg(dmg_path: Path, keychain_profile: str = "notarytool-profile") -
         log_success("Final security assessment passed")
         return True
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Unexpected error during DMG notarization: {e}")
         return False
 
@@ -268,7 +269,7 @@ def create_signed_notarized_dmg(
     dmg_path: Path,
     certificate_name: str,
     volume_name: str = "BrowserOS",
-    pkg_dmg_path: Optional[Path] = None,
+    pkg_dmg_path: Path | None = None,
     keychain_profile: str = "notarytool-profile",
 ) -> bool:
     """Create, sign, and notarize a DMG in one go"""
@@ -294,7 +295,7 @@ def create_signed_notarized_dmg(
     return True
 
 
-def package_universal(contexts: List[Context]) -> bool:
+def package_universal(contexts: list[Context]) -> bool:
     """Create DMG package for universal binary"""
     log_info("=" * 70)
     log_info("📦 Creating universal DMG package...")
