@@ -5,22 +5,22 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import ClassVar
 
-from ...products.server_binaries import all_server_bundles, server_bundles_for_product
-from ...core.step import Step, ValidationError, step
 from ...core.context import Context
+from ...core.step import Step, ValidationError, step
 from ...lib.utils import (
-    log_info,
+    IS_LINUX,
+    get_platform_arch,
+    join_paths,
     log_error,
-    log_warning,
+    log_info,
     log_success,
+    log_warning,
     run_command,
     safe_rmtree,
-    join_paths,
-    get_platform_arch,
-    IS_LINUX,
 )
+from ...products.server_binaries import all_server_bundles, server_bundles_for_product
 
 # Target-arch packaging metadata. These describe the artifact we're
 # producing, not the build machine. `appimage_arch` is passed to
@@ -81,7 +81,7 @@ def product_icons_dir(ctx: Context) -> Path:
     return Path(ctx.root_dir) / "resources" / ctx.product.id / "icons"
 
 
-def appimage_icon_source(ctx: Context) -> Optional[Path]:
+def appimage_icon_source(ctx: Context) -> Path | None:
     """Return the best AppImage root icon for the active product."""
     icons_base = product_icons_dir(ctx)
     for filename in ("product_logo_256.png", "product_logo.png"):
@@ -93,8 +93,8 @@ def appimage_icon_source(ctx: Context) -> Optional[Path]:
 
 @step("package_linux", phase="package", platforms=("linux",))
 class LinuxPackageModule(Step):
-    produces = ["appimage", "deb"]
-    requires = []
+    produces: ClassVar[list[str]] = ["appimage", "deb"]
+    requires: ClassVar[list[str]] = []
     description = "Create AppImage and .deb packages for Linux"
 
     def validate(self, ctx: Context) -> None:
@@ -138,10 +138,10 @@ class LinuxPackageModule(Step):
         elif deb_path:
             log_warning("   Only .deb created (AppImage failed)")
 
-    def _package_appimage(self, ctx: Context, package_dir: Path) -> Optional[Path]:
+    def _package_appimage(self, ctx: Context, package_dir: Path) -> Path | None:
         return package_appimage(ctx, package_dir)
 
-    def _package_deb(self, ctx: Context, package_dir: Path) -> Optional[Path]:
+    def _package_deb(self, ctx: Context, package_dir: Path) -> Path | None:
         return package_deb(ctx, package_dir)
 
 
@@ -359,7 +359,7 @@ export CHROME_WRAPPER="${{THIS}}"
     return True
 
 
-def download_appimagetool(ctx: Context) -> Optional[Path]:
+def download_appimagetool(ctx: Context) -> Path | None:
     """Download the appimagetool binary that runs on the build machine.
 
     Note: this is keyed on the HOST arch, not ctx.architecture. When
@@ -687,7 +687,7 @@ def create_deb(ctx: Context, debdir: Path, output_path: Path) -> bool:
 # =============================================================================
 
 
-def package_appimage(ctx: Context, package_dir: Path) -> Optional[Path]:
+def package_appimage(ctx: Context, package_dir: Path) -> Path | None:
     """Create AppImage package.
 
     Returns:
@@ -719,7 +719,7 @@ def package_appimage(ctx: Context, package_dir: Path) -> Optional[Path]:
     return None
 
 
-def package_deb(ctx: Context, package_dir: Path) -> Optional[Path]:
+def package_deb(ctx: Context, package_dir: Path) -> Path | None:
     """Create .deb package.
 
     Returns:
@@ -751,7 +751,7 @@ def package_deb(ctx: Context, package_dir: Path) -> Optional[Path]:
     return None
 
 
-def package_universal(contexts: List[Context]) -> bool:
+def package_universal(contexts: list[Context]) -> bool:
     """Linux doesn't support universal binaries"""
     log_warning("Universal binaries are not supported on Linux")
     return False
