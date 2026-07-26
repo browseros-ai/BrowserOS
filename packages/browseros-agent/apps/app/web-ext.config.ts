@@ -59,6 +59,8 @@ const chromiumArgs = [
   '--disable-browseros-extensions',
   '--browseros-dock-icon=dev',
   `--browseros-product=${browserOSProduct('browseros')}`,
+  '--disable-gpu',
+  '--no-sandbox',
 ]
 
 if (env.BROWSEROS_CDP_PORT) {
