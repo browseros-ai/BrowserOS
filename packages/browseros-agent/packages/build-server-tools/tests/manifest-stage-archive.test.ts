@@ -115,7 +115,9 @@ describe('resource manifest and artifact staging', () => {
     const stagedPath = join(artifact.resourcesDir, 'bin/browseros-claw-server')
     expect(stagedBinaryName(product, target)).toBe('browseros-claw-server')
     expect(await readFile(stagedPath, 'utf8')).toBe('server')
-    expect((await stat(stagedPath)).mode & 0o111).not.toBe(0)
+    if (process.platform !== 'win32') {
+      expect((await stat(stagedPath)).mode & 0o111).not.toBe(0)
+    }
   })
 
   it('adds .exe to staged Windows binaries', async () => {
@@ -205,7 +207,9 @@ describe('resource manifest and artifact staging', () => {
       'artifacts/vendor/third_party/bun/bun-darwin-arm64',
     ])
     expect(await readFile(bunPath, 'utf8')).toBe('#!/bin/sh\n')
-    expect((await stat(bunPath)).mode & 0o111).not.toBe(0)
+    if (process.platform !== 'win32') {
+      expect((await stat(bunPath)).mode & 0o111).not.toBe(0)
+    }
   })
 
   it('archives with the descriptor archive base name and uploads latest plus version keys', async () => {
