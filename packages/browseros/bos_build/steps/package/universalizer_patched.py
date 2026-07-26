@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# coding: utf-8
 
 # Copyright Nxtscape Authors
 # Patch of src/chrome/installer/mac/universalizer.py to handle merging of two archs
@@ -70,7 +69,7 @@ def _file_type_for_stat(st):
     if stat.S_ISDIR(st.st_mode):
         return "directory"
 
-    raise Exception("unknown file type for mode 0o%o" % st.st_mode)
+    raise ValueError(f"unknown file type for mode 0o{st.st_mode:o}")
 
 
 def _sole_list_element(values, exception_message):
@@ -86,7 +85,7 @@ def _sole_list_element(values, exception_message):
     """
     s = set(values)
     if len(s) != 1:
-        raise Exception(exception_message)
+        raise ValueError(exception_message)
 
     return values[0]
 
@@ -118,7 +117,6 @@ class CantMergeException(Exception):
     be merged successfully.
     """
 
-    pass
 
 
 def _merge_info_plists(input_paths, output_path):
@@ -248,7 +246,7 @@ def _universalize(input_paths, output_path, root):
 
     input_types = [_file_type_for_stat(x) for x in input_stats]
     type = _sole_list_element(
-        input_types, "varying types %r for input paths %r" % (input_types, input_paths)
+        input_types, f"varying types {input_types!r} for input paths {input_paths!r}"
     )
 
     if type == "file":
@@ -275,7 +273,7 @@ def _universalize(input_paths, output_path, root):
                                 shutil.copyfile(input_paths[0], output_path)
                             else:
                                 raise CantMergeException(
-                                    "non-Mach-O files differ: %r" % input_paths
+                                    f"non-Mach-O files differ: {input_paths!r}"
                                 )
                     else:
                         # Check if files are already universal with same architectures
@@ -345,16 +343,14 @@ def _universalize(input_paths, output_path, root):
         targets = [os.readlink(x) for x in input_paths]
         target = _sole_list_element(
             targets,
-            "varying symbolic link targets %r for input paths %r"
-            % (targets, input_paths),
+            f"varying symbolic link targets {targets!r} for input paths {input_paths!r}",
         )
         os.symlink(target, output_path)
 
     input_permissions = [stat.S_IMODE(x.st_mode) for x in input_stats]
     permission = _sole_list_element(
         input_permissions,
-        "varying permissions %r for input paths %r"
-        % (["0o%o" % x for x in input_permissions], input_paths),
+        "varying permissions {!r} for input paths {!r}".format([f"0o{x:o}" for x in input_permissions], input_paths),
     )
 
     os.lchmod(output_path, permission)
@@ -415,7 +411,7 @@ def main(args):
     parser.add_argument("output", help="The merged directory tree to produce.")
     parsed = parser.parse_args(args)
     if len(parsed.inputs) < 2:
-        raise Exception("too few inputs")
+        raise ValueError("too few inputs")
 
     universalize(parsed.inputs, parsed.output)
 
