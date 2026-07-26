@@ -5,7 +5,7 @@
   "version": "0.0.100",
   "type": "module",
   "scripts": {
-    "dev": "test -d generated/graphql || bun run codegen; bun --env-file=../../.env.development wxt",
+    "dev": "bun -e \"import fs from 'fs'; if (!fs.existsSync('generated/graphql')) require('child_process').execSync('bun run codegen', { stdio: 'inherit' })\" && bun --env-file=../../.env.development wxt",
     "build": "bun run codegen && wxt build",
     "build:dev": "bun --env-file=../../.env.development wxt build --mode development",
     "zip": "wxt zip",
