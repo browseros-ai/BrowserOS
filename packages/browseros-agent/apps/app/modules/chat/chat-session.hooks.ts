@@ -11,13 +11,12 @@ import {
   readActiveSession,
   saveActiveSession,
 } from '@/lib/browseros/activeSessionStorage'
-import { Capabilities, Feature } from '@/lib/browseros/capabilities'
-import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
 import {
   getWindowConversation,
   setWindowConversation,
 } from '@/lib/browseros/perWindowConversationStorage'
 import { sidePanelPerWindowStorage } from '@/lib/browseros/sidePanelOpenStateStorage'
+import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import {
   CONVERSATION_RESET_EVENT,
