@@ -2,7 +2,7 @@ import { storage } from '@wxt-dev/storage'
 
 export const sidePanelPerWindowStorage = storage.defineItem<boolean>(
   'local:browseros.side_panel.per_window',
-  { fallback: false },
+  { fallback: true },
 )
 
 export const openWindowSidePanelIdsStorage = storage.defineItem<number[]>(

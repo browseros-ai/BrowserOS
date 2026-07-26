@@ -13,8 +13,8 @@ export const tabs = defineTool({
       .describe('URL for action="new" (defaults to about:blank).'),
     background: z
       .boolean()
-      .default(true)
-      .describe('Open without stealing focus for action="new".'),
+      .default(false)
+      .describe('Open and select/focus the new tab for action="new".'),
     page: z.number().int().optional().describe('Page id for action="close".'),
   }),
   annotations: {
