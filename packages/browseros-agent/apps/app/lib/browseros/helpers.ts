@@ -1,3 +1,4 @@
+import { env } from '../env'
 import { getBrowserOSAdapter } from './adapter'
 import { BROWSEROS_PREFS } from './prefs'
 
@@ -29,6 +30,17 @@ async function getMcpPort(): Promise<number> {
     // BrowserOS API not available
   }
 
+  if (!env.PROD) {
+    try {
+      const devUrl = new URL(
+        env.VITE_PUBLIC_BROWSEROS_API ?? 'http://127.0.0.1:9111',
+      )
+      const port = Number(devUrl.port)
+      if (port) return port
+    } catch {}
+    return 9111
+  }
+
   throw new McpPortError()
 }
 
@@ -55,6 +67,17 @@ export async function getProxyPort(): Promise<number> {
     }
   } catch {
     // BrowserOS API not available
+  }
+
+  if (!env.PROD) {
+    try {
+      const devUrl = new URL(
+        env.VITE_PUBLIC_BROWSEROS_API ?? 'http://127.0.0.1:9111',
+      )
+      const port = Number(devUrl.port)
+      if (port) return port
+    } catch {}
+    return 9111
   }
 
   throw new ProxyPortError()
