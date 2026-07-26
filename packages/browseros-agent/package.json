@@ -9,7 +9,6 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "bun run build:agent-sdk",
     "dev": "bun scripts/dev/stack.ts",
     "start": "bun scripts/dev/stack.ts",
     "dev:stack": "bun scripts/dev/stack.ts",
@@ -52,7 +51,6 @@
     "build:claw-onboard:resources:test": "FORCE_COLOR=1 bun scripts/build/claw-onboard.ts --no-upload",
     "build:agent:dev": "FORCE_COLOR=1 bun run --filter @browseros/app --elide-lines=0 build:dev",
     "build:agent": "bun run codegen:agent && bun run --filter @browseros/app build",
-    "build:agent-sdk": "bun run --filter @browseros-ai/agent-sdk build",
     "codegen:agent": "bun run --filter @browseros/app codegen",
     "upload:onboarding-video": "FORCE_COLOR=1 bun scripts/build/upload-onboarding-video.ts",
     "test": "bun run test:all",
