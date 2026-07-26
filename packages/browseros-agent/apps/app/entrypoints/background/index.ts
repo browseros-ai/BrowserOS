@@ -3,6 +3,7 @@ import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
+import {
   migrateSidePanelIfOpenBetweenTabs,
   openSidePanel,
   SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
