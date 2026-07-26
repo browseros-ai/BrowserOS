@@ -1,8 +1,8 @@
 {
   "ports": {
-    "server": 9105,
-    "cdp": 9005,
-    "proxy": 9105
+    "server": 9111,
+    "cdp": 9333,
+    "proxy": 9111
   },
   "directories": {
     "resources": "./resources",
