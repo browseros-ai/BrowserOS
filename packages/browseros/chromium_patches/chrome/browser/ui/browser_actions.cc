@@ -86,7 +86,7 @@ index 8a43e7c2fcde5..2f9e4a7a80b4b 100644
 +                  const extensions::Extension* extension =
 +                      extensions::ExtensionRegistry::Get(profile)
 +                          ->enabled_extensions()
-+                          .GetByID(browseros::kAgentV2ExtensionId);
++                          .GetByID(browseros::kAgentExtensionId);
 +                  if (!extension) {
 +                    LOG(WARNING) << "browseros: Agent extension not found";
 +                    infobars::ContentInfoBarManager* infobar_manager =
