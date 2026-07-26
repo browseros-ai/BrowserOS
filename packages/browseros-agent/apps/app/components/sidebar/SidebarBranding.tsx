@@ -73,20 +73,30 @@ export const SidebarBranding: FC<SidebarBrandingProps> = ({
     <img
       src={PRODUCT_LOGO_URL}
       alt={PRODUCT_LOGO_ALT}
-      className="h-10 w-auto max-w-40 object-contain object-left"
+      className={cn(
+        'h-10 shrink-0 object-contain',
+        expanded ? 'w-auto max-w-40 object-left' : 'w-10 object-center',
+      )}
       draggable={false}
     />
   )
 
   return (
-    <div className="flex h-14 items-center justify-between border-b px-2">
+    <div
+      className={cn(
+        'flex h-14 items-center border-b px-2',
+        expanded ? 'justify-between' : 'justify-center',
+      )}
+    >
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             className={cn(
-              'flex cursor-pointer items-center gap-2 rounded-lg p-1.5 text-left transition-colors hover:bg-sidebar-accent focus-visible:outline-none',
-              expanded ? 'pr-3' : '',
+              'flex cursor-pointer items-center transition-colors hover:bg-sidebar-accent focus-visible:outline-none',
+              expanded
+                ? 'w-full gap-2 rounded-lg p-1.5 pr-3 text-left'
+                : 'size-10 justify-center rounded-lg',
             )}
           >
             {headerIcon}
