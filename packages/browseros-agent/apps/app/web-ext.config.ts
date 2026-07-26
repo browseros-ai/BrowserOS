@@ -85,5 +85,5 @@ export default defineWebExtConfig({
   chromiumArgs,
   chromiumProfile: chromiumProfile(),
   keepProfileChanges: true,
-  startUrls: ['chrome://newtab'],
+  startUrls: ['chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html'],
 })
