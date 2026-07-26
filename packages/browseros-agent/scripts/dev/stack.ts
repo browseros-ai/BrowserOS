@@ -8,7 +8,7 @@ import pc from 'picocolors'
 // WXT + browser, then MCP server; ports from apps/agent/.env.development
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..')
-const AGENT_ENV = join(ROOT, 'apps/agent/.env.development')
+const AGENT_ENV = join(ROOT, 'apps/app/.env.development')
 
 const TAG = {
   agent: pc.magenta,
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   log('agent', 'Starting agent (WXT + browser)…')
 
   const agentProc = spawn({
-    cmd: ['bun', 'run', '--filter', '@browseros/agent', 'dev'],
+    cmd: ['bun', 'run', '--filter', '@browseros/app', 'dev'],
     cwd: ROOT,
     stdout: 'inherit',
     stderr: 'inherit',
