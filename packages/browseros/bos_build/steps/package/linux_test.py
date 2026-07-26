@@ -77,7 +77,10 @@ class CopyBrowserFilesTest(unittest.TestCase):
         self,
     ) -> None:
         for product_id in ("browseros", "browserclaw"):
-            with self.subTest(product_id=product_id), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(product_id=product_id),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 root = Path(tmp)
                 out_dir = root / "out" / "Release"
                 target_dir = root / "package"
@@ -106,9 +109,7 @@ class CopyBrowserFilesTest(unittest.TestCase):
                 self.assertEqual((target_dir / product_id).read_text(), "browser")
                 self.assertEqual(
                     (
-                        target_dir
-                        / "browseros_extensions"
-                        / f"{product_id}.crx"
+                        target_dir / "browseros_extensions" / f"{product_id}.crx"
                     ).read_text(),
                     product_id,
                 )
@@ -233,7 +234,10 @@ class CopyBrowserFilesTest(unittest.TestCase):
 class LinuxProductMetadataTest(unittest.TestCase):
     def test_helpers_use_product_package_names(self) -> None:
         for product_id in ("browseros", "browserclaw"):
-            with self.subTest(product_id=product_id), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(product_id=product_id),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 root = Path(tmp)
                 product = get_product_descriptor(product_id)
                 ctx = cast(
