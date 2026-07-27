@@ -101,7 +101,9 @@ const BOOTSTRAP_JS: &str = r#"
   }
 
   function call(method, args) {
-    return __browserosCall(method, JSON.stringify(args ?? []));
+    // The third flag marks primitives that ran inside a hot-loaded helper, so
+    // distillation can skip a successful reuse's replayed actions.
+    return __browserosCall(method, JSON.stringify(args ?? []), (globalThis.__helperDepth || 0) > 0);
   }
 
   function scoped(prefix, pageId) {
@@ -396,12 +398,14 @@ fn load_preloaded_helpers(ctx: &Ctx<'_>, helpers: &[HelperSource]) {
     // references `helpers.<name>` gets a clean `undefined` instead of a
     // `ReferenceError: helpers is not defined`.
     let _ = ctx
-        .eval::<(), _>("globalThis.helpers = globalThis.helpers || {};")
+        .eval::<(), _>("globalThis.helpers = globalThis.helpers || {}; globalThis.__helperDepth = globalThis.__helperDepth || 0;")
         .catch(ctx);
     for helper in helpers {
         let name = serde_json::to_string(&helper.name).unwrap_or_else(|_| "\"helper\"".to_string());
+        // Wrap so calls made inside the helper run at helperDepth > 0, tagging
+        // their primitives as replayed; the depth is restored even if it throws.
         let snippet = format!(
-            "try {{ helpers[{name}] = (\n{source}\n); }} catch (e) {{ console.log('helper load failed: ' + {name} + ': ' + e); }}",
+            "try {{ const __fn = (\n{source}\n); helpers[{name}] = async (...args) => {{ globalThis.__helperDepth++; try {{ return await __fn(...args); }} finally {{ globalThis.__helperDepth--; }} }}; }} catch (e) {{ console.log('helper load failed: ' + {name} + ': ' + e); }}",
             source = helper.source,
         );
         let _ = ctx.eval::<(), _>(snippet).catch(ctx);
@@ -535,10 +539,10 @@ fn install_globals<'js>(
     };
     let call_bridge = {
         let bridge = bridge.clone();
-        move |ctx: Ctx<'js>, method: String, args_json: String| {
+        move |ctx: Ctx<'js>, method: String, args_json: String, from_helper: bool| {
             let bridge = bridge.clone();
             async move {
-                match bridge.call(&method, &args_json).await {
+                match bridge.call(&method, &args_json, from_helper).await {
                     Ok(BrowserCallValue::Json(value)) => json_to_js(&ctx, value),
                     Ok(BrowserCallValue::Undefined) => Ok(JsValue::new_undefined(ctx.clone())),
                     Err(message) => Err(Exception::throw_message(&ctx, &message)),
@@ -562,7 +566,12 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
-    async fn call(&self, method: &str, args_json: &str) -> Result<BrowserCallValue, String> {
+    async fn call(
+        &self,
+        method: &str,
+        args_json: &str,
+        from_helper: bool,
+    ) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
         // Kept for the audit record and the self-healing distiller; dispatch
@@ -584,6 +593,7 @@ impl BrowserBridge {
                 method,
                 page,
                 args: &recorded_args,
+                from_helper,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
             })
@@ -1451,6 +1461,7 @@ mod tests {
         reject: Option<String>,
         annotated: usize,
         saved: Vec<(String, String, String)>,
+        from_helper: Vec<(String, bool)>,
     }
 
     struct MockHook(Arc<Mutex<HookLog>>);
@@ -1470,11 +1481,14 @@ mod tests {
         }
 
         fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
-            self.0
+            let mut log = self
+                .0
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .recorded
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            log.recorded
                 .push((record.method.to_owned(), record.page, record.is_error));
+            log.from_helper
+                .push((record.method.to_owned(), record.from_helper));
             Box::pin(async move {})
         }
 
@@ -1542,6 +1556,36 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.inner_call_hook = Some(Arc::new(MockHook(log)));
         ctx
+    }
+
+    #[tokio::test]
+    async fn run_tags_primitives_called_inside_a_helper() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let mut ctx = ctx_with_hook(log.clone());
+        ctx.preloaded_helpers = vec![HelperSource {
+            name: "act".to_string(),
+            source: "async (browser) => browser.pages.getInfo(1)".to_string(),
+        }];
+        // One direct primitive, then one via the helper.
+        let result = run_tool_with_ctx(
+            "await browser.pages.getInfo(1); await helpers.act(browser); return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The direct call is not from a helper; the one inside act() is.
+        assert_eq!(
+            log.from_helper,
+            vec![
+                ("pages.getInfo".to_string(), false),
+                ("pages.getInfo".to_string(), true),
+            ]
+        );
+        Ok(())
     }
 
     #[tokio::test]

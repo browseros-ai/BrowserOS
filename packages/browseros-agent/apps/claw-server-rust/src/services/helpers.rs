@@ -171,6 +171,30 @@ pub fn has_any_helpers(browserclaw_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Cap on auto-distilled candidate helpers kept per host, so reuse-driven
+/// candidates do not accumulate unbounded.
+pub const MAX_CANDIDATES_PER_HOST: usize = 10;
+
+/// Evicts the oldest candidate helpers for a host beyond `keep`. Only files
+/// whose header marks them `candidate:true` are eligible; promoted or hand-saved
+/// helpers are never removed.
+pub fn prune_candidates(browserclaw_dir: &Path, host: &str, keep: usize) {
+    let mut candidates: Vec<HelperMeta> = list_helper_meta(browserclaw_dir, host)
+        .into_iter()
+        .filter(|meta| meta.candidate)
+        .collect();
+    if candidates.len() <= keep {
+        return;
+    }
+    // Newest first by last-verified; evict the tail.
+    candidates.sort_by_key(|meta| std::cmp::Reverse(meta.last_verified));
+    for meta in candidates.into_iter().skip(keep) {
+        if let Some(path) = helper_path(browserclaw_dir, host, &meta.name) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 /// Lists helpers for a host with their parsed provenance, sorted by name. A file
 /// missing a header still lists, with default provenance.
 #[must_use]
@@ -307,6 +331,39 @@ mod tests {
         };
         let huge = "a".repeat(MAX_HELPER_BYTES + 1);
         assert!(save_helper(dir.path(), &meta, &huge).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn prune_candidates_caps_candidates_and_keeps_promoted_helpers() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let root = dir.path();
+        let helper = |name: &str, verified: i64, candidate: bool| HelperMeta {
+            name: name.to_string(),
+            host: "h".to_string(),
+            last_verified: verified,
+            agent: String::new(),
+            candidate,
+            deps: String::new(),
+        };
+        // A promoted (candidate:false) helper must survive pruning.
+        save_helper(root, &helper("keep-me", 500, false), "async () => 1")?;
+        for i in 1..=3 {
+            save_helper(
+                root,
+                &helper(&format!("candidate-{i}"), i, true),
+                "async () => 1",
+            )?;
+        }
+        prune_candidates(root, "h", 1); // keep only the newest candidate
+        let names: Vec<String> = list_helper_meta(root, "h")
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect();
+        assert!(names.contains(&"keep-me".to_string()));
+        assert!(names.contains(&"candidate-3".to_string())); // newest
+        assert!(!names.contains(&"candidate-1".to_string()));
+        assert!(!names.contains(&"candidate-2".to_string()));
         Ok(())
     }
 

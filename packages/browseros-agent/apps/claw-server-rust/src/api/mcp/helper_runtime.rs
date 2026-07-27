@@ -155,12 +155,15 @@ fn format_helper_ref(helper: &Value) -> String {
         .and_then(Value::as_i64)
         .map(|days| format!(" {days}d"))
         .unwrap_or_default();
-    let candidate = helper
+    let candidate = if helper
         .get("candidate")
         .and_then(Value::as_bool)
         .unwrap_or(false)
-        .then_some(", candidate")
-        .unwrap_or_default();
+    {
+        ", candidate"
+    } else {
+        ""
+    };
     format!("{name}{age}{candidate}")
 }
 

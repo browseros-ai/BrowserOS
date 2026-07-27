@@ -66,6 +66,7 @@ impl InnerCallHook for ScriptInnerCallHook {
         let page = record.page;
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
+        let from_helper = record.from_helper;
         let raw_args = record.args.clone();
         Box::pin(async move {
             let Some(identity) = self.identity() else {
@@ -111,7 +112,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
                 args_json: bounded_args_json(&raw_args),
-                result_meta: result_meta(is_error, false, &Value::Null, 0),
+                result_meta: child_result_meta(is_error, from_helper),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
                 // the parent script dispatch, which is stamped with its start.
@@ -237,6 +238,22 @@ impl InnerCallHook for ScriptInnerCallHook {
             helpers::read_helper_source(&self.call.state.config.browserclaw_dir, host, name)
         })
     }
+}
+
+/// Result metadata for a child primitive: the standard summary, plus a
+/// `fromHelper` marker when the primitive ran inside a hot-loaded helper, so the
+/// distiller can skip a successful reuse's replayed actions.
+fn child_result_meta(is_error: bool, from_helper: bool) -> String {
+    let base = result_meta(is_error, false, &Value::Null, 0);
+    if !from_helper {
+        return base;
+    }
+    let mut value: Value =
+        serde_json::from_str(&base).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("fromHelper".to_string(), Value::Bool(true));
+    }
+    value.to_string()
 }
 
 #[cfg(test)]
@@ -461,6 +478,7 @@ mod tests {
             method: "input.click",
             page: Some(1),
             args: &json!([1, "e5"]),
+            from_helper: false,
             is_error: false,
             duration_ms: 3,
         })
@@ -485,6 +503,7 @@ mod tests {
             method: "input.click",
             page: Some(4),
             args: &json!([4, "e5"]),
+            from_helper: false,
             is_error: false,
             duration_ms: 12,
         })

@@ -62,11 +62,12 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
             candidate: true,
             deps,
         };
-        if let Err(error) =
-            helpers::save_helper(&context.call.state.config.browserclaw_dir, &meta, &source)
-        {
+        let dir = &context.call.state.config.browserclaw_dir;
+        if let Err(error) = helpers::save_helper(dir, &meta, &source) {
             warn!(error = %error, "distilled candidate helper save failed");
         }
+        // Bound accumulation: keep only the most recent candidates per host.
+        helpers::prune_candidates(dir, &meta.host, helpers::MAX_CANDIDATES_PER_HOST);
         Ok(())
     })
 }
@@ -84,9 +85,11 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
     // rather than embedded (no credentials or personal data in a shared helper).
     let mut inputs = 0usize;
     for row in children {
-        // Only replay actions that actually succeeded: a caught-and-recovered
-        // failure must not enter a "successful" helper.
-        if row_failed(row) {
+        // Only distill the agent's own successful actions: skip failures (a
+        // caught-and-recovered step) and primitives replayed from inside a
+        // hot-loaded helper (a reuse), so a working reuse does not re-distill and
+        // a failed reuse distills only the manual repair.
+        if row_failed(row) || row_from_helper(row) {
             continue;
         }
         let args: Vec<Value> = row
@@ -117,10 +120,20 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
 /// Whether a child's recorded result marked it an error, read from its
 /// `result_meta` summary.
 fn row_failed(row: &ToolDispatchRow) -> bool {
+    result_meta_flag(row, "isError")
+}
+
+/// Whether a child primitive ran inside a hot-loaded helper (a replay), tagged
+/// by the script hook in `result_meta`.
+fn row_from_helper(row: &ToolDispatchRow) -> bool {
+    result_meta_flag(row, "fromHelper")
+}
+
+fn result_meta_flag(row: &ToolDispatchRow, key: &str) -> bool {
     row.result_meta
         .as_deref()
         .and_then(|meta| serde_json::from_str::<Value>(meta).ok())
-        .and_then(|meta| meta.get("isError").and_then(Value::as_bool))
+        .and_then(|meta| meta.get(key).and_then(Value::as_bool))
         .unwrap_or(false)
 }
 
@@ -260,6 +273,49 @@ mod tests {
         assert!(source.contains("inputs.field0"));
         assert!(source.contains("inputs.field1"));
         Ok(())
+    }
+
+    #[test]
+    fn excludes_helper_replays_and_distills_only_the_manual_repair() -> anyhow::Result<()> {
+        let tagged = |tool: &str, args: Value, is_error: bool| {
+            let mut row = child(tool, args);
+            row.result_meta = Some(json!({ "isError": is_error, "fromHelper": true }).to_string());
+            row
+        };
+        let children = [
+            // A stale helper replays two fills, then its click fails:
+            tagged("input.fill", json!([3, "e3", "old"]), false),
+            tagged("input.fill", json!([3, "e5", "old"]), false),
+            tagged("input.click", json!([3, "e6"]), true),
+            // The agent repairs manually (not from a helper):
+            child("input.fill", json!([3, "e3", "repaired"])),
+            child("input.click", json!([3, "e7"])),
+        ];
+        let (source, _) = distill_source(&children)
+            .ok_or_else(|| anyhow::anyhow!("expected a distilled macro"))?;
+        // Only the manual repair distills; the helper's replayed actions are gone.
+        assert!(
+            !source.contains("e5"),
+            "helper-replayed action leaked: {source}"
+        );
+        assert!(source.contains("e7"), "repair action missing: {source}");
+        assert_eq!(source.matches("await browser").count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fully_replayed_reuse_does_not_distill() {
+        let helper = |tool: &str, args: Value| {
+            let mut row = child(tool, args);
+            row.result_meta = Some(json!({ "isError": false, "fromHelper": true }).to_string());
+            row
+        };
+        // Every action came from a helper: nothing new to learn.
+        let children = [
+            helper("input.fill", json!([3, "e3", "x"])),
+            helper("input.click", json!([3, "e6"])),
+        ];
+        assert!(distill_source(&children).is_none());
     }
 
     #[test]
