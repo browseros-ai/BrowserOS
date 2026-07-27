@@ -45,8 +45,10 @@ export function stampConversationOwner(
  * Stamps the given owner onto every conversation that predates owner tracking
  * (no owner yet), leaving already-owned ones untouched. Run once on upgrade so
  * a user's pre-existing local history stays scoped to them instead of vanishing
- * behind the owner filter (#559). Returns `changed: false` when nothing needed
- * stamping so callers can skip the write.
+ * behind the owner filter (#559). The inferred owner is marked `localOnly` so
+ * the record is never uploaded: on a shared profile the first signer sees the
+ * adopted history locally but it can't reach their cloud. Returns
+ * `changed: false` when nothing needed stamping so callers can skip the write.
  */
 export function backfillConversationOwners(
   conversations: Conversation[],
@@ -56,7 +58,18 @@ export function backfillConversationOwners(
   const next = conversations.map((conversation) => {
     if (conversation.owner != null) return conversation
     changed = true
-    return { ...conversation, owner: ownerId }
+    return { ...conversation, owner: ownerId, localOnly: true }
   })
   return changed ? { changed, conversations: next } : { changed, conversations }
+}
+
+/**
+ * The conversations that may be pushed to the cloud: everything except records
+ * whose owner was only inferred by the upgrade backfill (`localOnly`). Keeps one
+ * account's adopted pre-upgrade history out of another account's cloud (#559).
+ */
+export function selectUploadableConversations(
+  conversations: Conversation[],
+): Conversation[] {
+  return conversations.filter((conversation) => !conversation.localOnly)
 }

@@ -9,6 +9,7 @@ import {
   backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
+  selectUploadableConversations,
   stampConversationOwner,
 } from './conversation-scope'
 import { createConversationUploadScheduler } from './conversation-upload-scheduler'
@@ -90,7 +91,12 @@ export function useConversations() {
 
   useEffect(() => {
     // An empty snapshot cancels work queued before logout or local deletion.
-    scheduleConversationUpload(userId ? conversations : [], userId ?? null)
+    // Backfill-adopted (localOnly) records are never uploaded so a shared
+    // profile can't push one account's pre-upgrade history into another's cloud.
+    scheduleConversationUpload(
+      userId ? selectUploadableConversations(conversations) : [],
+      userId ?? null,
+    )
   }, [userId, conversations])
 
   useEffect(() => {

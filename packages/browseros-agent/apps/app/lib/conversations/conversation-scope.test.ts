@@ -3,6 +3,7 @@ import {
   backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
+  selectUploadableConversations,
   stampConversationOwner,
 } from './conversation-scope'
 import type { Conversation } from './conversationStorage'
@@ -44,16 +45,21 @@ describe('filterConversationsByOwner', () => {
 })
 
 describe('backfillConversationOwners', () => {
-  it('stamps the owner onto pre-owner conversations', () => {
+  it('stamps the owner onto pre-owner conversations and marks them local-only', () => {
     const result = backfillConversationOwners([conv('a'), conv('b')], 'A')
     expect(result.changed).toBe(true)
     expect(result.conversations.map((c) => c.owner)).toEqual(['A', 'A'])
+    expect(result.conversations.map((c) => c.localOnly)).toEqual([true, true])
   })
 
-  it('leaves already-owned conversations untouched', () => {
+  it('leaves already-owned conversations untouched and not local-only', () => {
     const result = backfillConversationOwners([conv('a', 'A'), conv('b')], 'A')
     expect(result.changed).toBe(true)
     expect(result.conversations.map((c) => c.owner)).toEqual(['A', 'A'])
+    expect(result.conversations.map((c) => c.localOnly)).toEqual([
+      undefined,
+      true,
+    ])
   })
 
   it('never reassigns a conversation owned by another account', () => {
@@ -92,5 +98,25 @@ describe('stampConversationOwner', () => {
   it('stamps undefined for a truly anonymous save', () => {
     const [stamped] = stampConversationOwner([conv('a')], 'a', undefined)
     expect(stamped.owner).toBeUndefined()
+  })
+})
+
+describe('selectUploadableConversations', () => {
+  const backfilled = (id: string, owner: string): Conversation => ({
+    ...conv(id, owner),
+    localOnly: true,
+  })
+
+  it('excludes backfill-adopted (local-only) records from upload', () => {
+    const input = [conv('a', 'A'), backfilled('b', 'A'), conv('c', 'A')]
+    expect(selectUploadableConversations(input).map((c) => c.id)).toEqual([
+      'a',
+      'c',
+    ])
+  })
+
+  it('keeps everything when no record is local-only', () => {
+    const input = [conv('a', 'A'), conv('b', 'A')]
+    expect(selectUploadableConversations(input)).toEqual(input)
   })
 })
