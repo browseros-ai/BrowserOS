@@ -117,28 +117,25 @@ const MergedChatHistory: FC<{ userId: string }> = ({ userId }) => {
     [localHistory, remoteConversations],
   )
 
-  const remoteIds = useMemo(
-    () => new Set(remoteConversations.map((c) => c.id)),
-    [remoteConversations],
-  )
-
   const groupedConversations = useMemo(
     () => groupConversations(merged),
     [merged],
   )
 
   const handleDelete = async (id: string) => {
-    // Delete the cloud copy first (regardless of whether it is on the currently
-    // fetched page) so a transient failure keeps the durable local copy for a
-    // retry and the two never diverge. A conversation with no cloud row deletes
-    // as a no-op; keep local only when the cloud row is known to still exist.
+    // Delete the cloud copy first so the two sides never diverge, then keep the
+    // durable local copy for a retry on any remote failure (including a cloud
+    // mirror on an unfetched history page, whose id we cannot see here). A
+    // conversation with no cloud row is a no-op delete: the mutation returns an
+    // empty payload rather than throwing, so local-only conversations still
+    // delete cleanly.
     try {
       await deleteConversationMutation.mutateAsync({ rowId: id })
     } catch (error) {
       sentry.captureException(error, {
         extra: { message: 'Failed to delete remote conversation' },
       })
-      if (remoteIds.has(id)) return
+      return
     }
     await removeConversation(id)
   }
