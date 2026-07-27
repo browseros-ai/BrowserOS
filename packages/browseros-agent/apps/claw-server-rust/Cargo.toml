@@ -33,6 +33,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
+pulldown-cmark.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tempfile.workspace = true

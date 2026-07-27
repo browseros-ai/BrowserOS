@@ -12,7 +12,7 @@ use crate::{
 use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::warn;
 
 /// Observer that distills a successful script run into a candidate helper keyed
@@ -48,23 +48,29 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
             },
         };
         let steps = source.matches("await browser").count();
-        let inputs = source.matches("inputs.field").count();
-        let deps = if inputs > 0 {
-            format!(
-                "distilled from {steps} recorded step(s); expects {inputs} input value(s) in `inputs`"
-            )
+        let input_count = source.matches("inputs.field").count();
+        // An opened-page macro has the `(browser, inputs)` signature; a search-by-URL
+        // one additionally reads a field into the navigation via encodeURIComponent.
+        let opens_page = source.starts_with("async (browser, inputs");
+        let is_search = opens_page && source.contains("encodeURIComponent(inputs.field");
+        let inputs = build_inputs(&source, input_count);
+        let description = describe(&host, steps, opens_page, is_search);
+        // A search-by-URL flow gets one canonical descriptive name per host; other
+        // flows keep a content hash so identical flows dedupe on re-run.
+        let name = if is_search {
+            format!("search-{host}")
         } else {
-            format!("distilled from {steps} recorded step(s)")
+            format!("candidate-{}", short_hash(&source))
         };
         let meta = HelperMeta {
-            // Same flow hashes to the same name, so re-running overwrites rather
-            // than accumulating a new candidate each time.
-            name: format!("candidate-{}", short_hash(&source)),
+            name,
             host,
             last_verified: now_epoch_ms(),
             agent: identity.agent.slug().to_string(),
             candidate: true,
-            deps,
+            opens_page,
+            inputs,
+            description,
         };
         let dir = &context.call.state.config.browserclaw_dir;
         if let Err(error) = helpers::save_helper(dir, &meta, &source) {
@@ -310,6 +316,34 @@ async fn page_host(session: &BrowserSession, page_id: u64) -> Option<String> {
     helpers::host_bucket(&info.url)
 }
 
+/// Builds the `field<n> -> description` input map from the generated source: a
+/// field read into a URL via `encodeURIComponent` is a search query; the rest are
+/// generic input values. Drives the documented call form.
+fn build_inputs(source: &str, count: usize) -> BTreeMap<String, String> {
+    (0..count)
+        .map(|index| {
+            let field = format!("field{index}");
+            let desc = if source.contains(&format!("encodeURIComponent(inputs.{field})")) {
+                "search query"
+            } else {
+                "input value"
+            };
+            (field, desc.to_string())
+        })
+        .collect()
+}
+
+/// A one-line human summary of the distilled flow for the helper's frontmatter.
+fn describe(host: &str, steps: usize, opens_page: bool, is_search: bool) -> String {
+    if is_search {
+        format!("Opens {host} search for a query and returns the results page")
+    } else if opens_page {
+        format!("Opens a {host} page and returns it")
+    } else {
+        format!("Replays {steps} step(s) on {host}")
+    }
+}
+
 /// A short, deterministic id for a helper source so identical flows dedupe.
 fn short_hash(source: &str) -> String {
     use std::hash::{Hash, Hasher};
@@ -470,6 +504,24 @@ mod tests {
             helper("input.click", json!([3, "e6"])),
         ];
         assert!(distill_source(&children).is_none());
+    }
+
+    #[test]
+    fn build_inputs_labels_search_query_field_and_describes_flow() {
+        let search = "const page = await browser.pages.newPage(\"https://www.amazon.in/s?k=\" + encodeURIComponent(inputs.field0));";
+        let inputs = build_inputs(search, 1);
+        assert_eq!(inputs.get("field0").map(String::as_str), Some("search query"));
+        assert_eq!(
+            describe("amazon.in", 2, true, true),
+            "Opens amazon.in search for a query and returns the results page"
+        );
+        // A form fill (not a URL query) is a generic input value.
+        let fill = "await browser.input(page).fill(\"e5\", inputs.field0);";
+        assert_eq!(
+            build_inputs(fill, 1).get("field0").map(String::as_str),
+            Some("input value")
+        );
+        assert_eq!(describe("example.com", 3, false, false), "Replays 3 step(s) on example.com");
     }
 
     #[test]

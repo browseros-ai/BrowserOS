@@ -210,13 +210,16 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(identity) = self.identity() else {
                 return Err("no agent identity for this script".to_string());
             };
+            let (opens_page, inputs) = helpers::analyze_source(source);
             let meta = helpers::HelperMeta {
                 name: name.to_string(),
                 host: host.to_string(),
                 last_verified: now_epoch_ms(),
                 agent: identity.agent.slug().to_string(),
                 candidate: false,
-                deps: String::new(),
+                opens_page,
+                inputs,
+                description: format!("Saved helper for {host}"),
             };
             helpers::save_helper(&self.call.state.config.browserclaw_dir, &meta, source)
                 .map_err(|error| format!("could not save helper: {error}"))
@@ -235,7 +238,10 @@ impl InnerCallHook for ScriptInnerCallHook {
 
     fn read_helper<'a>(&'a self, host: &'a str, name: &'a str) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
-            helpers::read_helper_source(&self.call.state.config.browserclaw_dir, host, name)
+            // The agent-facing read returns the full self-documenting doc
+            // (description, call form, source), not the bare source: hot-load uses
+            // the extracted source; a reader wants the context.
+            helpers::read_helper(&self.call.state.config.browserclaw_dir, host, name)
         })
     }
 }

@@ -1,25 +1,29 @@
-//! Persistence seam for code-mode helpers: reusable `.js` a script saves for a
-//! host and a later script loads by name. Layout is
-//! `<browserclaw_dir>/helpers/<host>/<name>.js`. This module owns only the
-//! traversal-safe storage; the saveHelper primitive and the hot-load into the
-//! script runtime that build on it land with the self-healing work.
+//! Persistence seam for code-mode helpers: a reusable flow a script saves for a
+//! host and a later script loads by name. Each helper is a self-documenting
+//! Markdown file at `<browserclaw_dir>/helpers/<host>/<name>.md`: YAML
+//! frontmatter (provenance, freshness, call shape, inputs), a human-and-agent
+//! readable body, and a fenced `js` block holding the function source. The host
+//! extracts that source for the runtime, so the engine still hot-loads a plain
+//! function expression; all Markdown handling stays here.
 
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
 };
 
 const HELPERS_DIR: &str = "helpers";
-const HELPER_EXTENSION: &str = "js";
-const HEADER_PREFIX: &str = "// browserclaw-helper: ";
+const HELPER_EXTENSION: &str = "md";
 
-/// Upper bound on a helper's source so a script cannot fill the disk.
+/// Upper bound on a helper's source so a script cannot fill the disk. Bounds the
+/// JS source itself, not the rendered file, so the limit is stable as the
+/// surrounding Markdown grows.
 pub const MAX_HELPER_BYTES: usize = 64 * 1024;
 
-/// Provenance and freshness a helper file carries in a leading comment line, so
-/// a later reader can judge staleness and origin. A `//` line is inert to
-/// `eval`, so the file still evals as a bare function expression.
+/// Provenance, freshness, and call shape a helper file carries in its
+/// frontmatter, so a later reader (human or agent) can judge staleness and
+/// origin and call it correctly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelperMeta {
     pub name: String,
@@ -30,8 +34,17 @@ pub struct HelperMeta {
     pub agent: String,
     #[serde(default)]
     pub candidate: bool,
+    /// Whether the macro opens its own page (`(browser, inputs)`, returns a page)
+    /// versus acting on a page passed to it (`(browser, page, inputs)`).
+    #[serde(rename = "opensPage", default)]
+    pub opens_page: bool,
+    /// Input field name to a short human description, e.g. `field0 -> "search
+    /// query"`. Empty when the helper takes no inputs.
     #[serde(default)]
-    pub deps: String,
+    pub inputs: BTreeMap<String, String>,
+    /// One-line human summary of what the helper does.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// A single safe path segment: non-empty, not a traversal token, limited to an
@@ -59,7 +72,7 @@ fn helper_path(browserclaw_dir: &Path, host: &str, name: &str) -> Option<PathBuf
     helpers_dir(browserclaw_dir, host).map(|dir| dir.join(format!("{name}.{HELPER_EXTENSION}")))
 }
 
-/// Lists helper base names (without the `.js` extension) available for a host,
+/// Lists helper base names (without the `.md` extension) available for a host,
 /// sorted. Missing directory or unsafe host yields an empty list.
 #[must_use]
 pub fn list_helpers(browserclaw_dir: &Path, host: &str) -> Vec<String> {
@@ -84,22 +97,23 @@ pub fn list_helpers(browserclaw_dir: &Path, host: &str) -> Vec<String> {
     names
 }
 
-/// Reads a helper's source, or `None` for an unsafe host/name or a missing file.
+/// Reads a helper's raw Markdown file, or `None` for an unsafe host/name or a
+/// missing file. This is the full self-documenting doc a reader sees.
 #[must_use]
 pub fn read_helper(browserclaw_dir: &Path, host: &str, name: &str) -> Option<String> {
     let path = helper_path(browserclaw_dir, host, name)?;
     fs::read_to_string(path).ok()
 }
 
-/// Writes a helper's source, creating the host directory. Errors on an unsafe
-/// host or name.
-pub fn write_helper(browserclaw_dir: &Path, host: &str, name: &str, code: &str) -> io::Result<()> {
+/// Writes a helper file verbatim, creating the host directory. Errors on an
+/// unsafe host or name.
+pub fn write_helper(browserclaw_dir: &Path, host: &str, name: &str, content: &str) -> io::Result<()> {
     let path = helper_path(browserclaw_dir, host, name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsafe helper host or name"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, code)
+    fs::write(path, content)
 }
 
 /// Derives the helper host bucket from a page URL: the hostname minus a leading
@@ -118,28 +132,177 @@ pub fn host_bucket(url: &str) -> Option<String> {
     is_safe_segment(bucket).then(|| bucket.to_string())
 }
 
-/// Renders a helper file: the provenance header line, then the source.
+/// The exact call form for a helper, derived from its shape and inputs, so the
+/// discovery note, the file body, and `readHelper` never drift. Bracket access
+/// works for any name; the argument object names each input.
+#[must_use]
+pub fn call_example(meta: &HelperMeta) -> String {
+    let name = &meta.name;
+    let inputs_obj = (!meta.inputs.is_empty()).then(|| {
+        let fields: Vec<String> = meta
+            .inputs
+            .iter()
+            .map(|(field, desc)| format!("{field}: {}", input_placeholder(desc)))
+            .collect();
+        format!("{{ {} }}", fields.join(", "))
+    });
+    match (meta.opens_page, inputs_obj) {
+        (true, Some(obj)) => format!("helpers[\"{name}\"](browser, {obj})"),
+        (true, None) => format!("helpers[\"{name}\"](browser)"),
+        (false, Some(obj)) => format!("helpers[\"{name}\"](browser, page, {obj})"),
+        (false, None) => format!("helpers[\"{name}\"](browser, page)"),
+    }
+}
+
+/// A copy-paste placeholder value for an input, tagged with its description so a
+/// reader knows what to fill in.
+fn input_placeholder(desc: &str) -> String {
+    if desc.is_empty() {
+        "\"...\"".to_string()
+    } else {
+        format!("\"<{desc}>\"")
+    }
+}
+
+/// Infers a hand-saved helper's call shape from its source: whether it opens its
+/// own page (no `page` parameter) and which `inputs.field<n>` it reads. A
+/// best-effort heuristic for the `saveHelper` path; the distiller sets these
+/// directly from what it recorded.
+#[must_use]
+pub fn analyze_source(source: &str) -> (bool, BTreeMap<String, String>) {
+    let params = param_list(source);
+    let opens_page = !params.iter().any(|param| param == "page");
+    let mut inputs = BTreeMap::new();
+    let needle = "inputs.field";
+    let mut from = 0;
+    while let Some(pos) = source[from..].find(needle) {
+        let start = from + pos + needle.len();
+        let digits: String = source[start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if !digits.is_empty() {
+            inputs.insert(format!("field{digits}"), "input value".to_string());
+        }
+        from = start;
+    }
+    (opens_page, inputs)
+}
+
+/// The parameter identifiers of the first parenthesized list in a source (the
+/// arrow function's params), stripped of default values.
+fn param_list(source: &str) -> Vec<String> {
+    let Some(open) = source.find('(') else {
+        return Vec::new();
+    };
+    let rest = &source[open + 1..];
+    let Some(close) = rest.find(')') else {
+        return Vec::new();
+    };
+    rest[..close]
+        .split(',')
+        .map(|part| part.split('=').next().unwrap_or("").trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// Quotes a string as a JSON scalar, which is a valid YAML double-quoted scalar,
+/// so colons, quotes, and newlines survive without a YAML serializer.
+fn yaml_str(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn render_frontmatter(meta: &HelperMeta) -> String {
+    let mut out = String::from("---\n");
+    out.push_str(&format!("name: {}\n", yaml_str(&meta.name)));
+    out.push_str(&format!("host: {}\n", yaml_str(&meta.host)));
+    out.push_str(&format!("lastVerified: {}\n", meta.last_verified));
+    out.push_str(&format!("agent: {}\n", yaml_str(&meta.agent)));
+    out.push_str(&format!("candidate: {}\n", meta.candidate));
+    out.push_str(&format!("opensPage: {}\n", meta.opens_page));
+    out.push_str(&format!("description: {}\n", yaml_str(&meta.description)));
+    if meta.inputs.is_empty() {
+        out.push_str("inputs: {}\n");
+    } else {
+        out.push_str("inputs:\n");
+        for (field, desc) in &meta.inputs {
+            out.push_str(&format!("  {}: {}\n", yaml_str(field), yaml_str(desc)));
+        }
+    }
+    out.push_str("---\n");
+    out
+}
+
+fn render_body(meta: &HelperMeta, source: &str) -> String {
+    let mut out = String::new();
+    if !meta.description.is_empty() {
+        out.push_str(&meta.description);
+        out.push_str("\n\n");
+    }
+    out.push_str("Call it:\n\n");
+    out.push_str(&format!("`{}`\n\n", call_example(meta)));
+    out.push_str("```js\n");
+    out.push_str(source.trim_end());
+    out.push_str("\n```\n");
+    out
+}
+
+/// Renders a helper file: YAML frontmatter, a readable body, and the source in a
+/// fenced `js` block.
 #[must_use]
 pub fn format_helper(meta: &HelperMeta, source: &str) -> String {
-    let header = serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string());
-    format!("{HEADER_PREFIX}{header}\n{source}")
+    format!("{}\n{}", render_frontmatter(meta), render_body(meta, source))
 }
 
-/// Splits a helper file into its parsed header (if any) and its source body,
-/// with the header line removed so the body evals as a bare function expression.
+/// Whether a fence info string names JavaScript (first token `js`/`javascript`).
+fn is_js_lang(lang: &str) -> bool {
+    matches!(lang.split_whitespace().next(), Some("js" | "javascript"))
+}
+
+/// Splits a helper file into its parsed frontmatter (if any) and the source from
+/// its first `js` fenced block, using a CommonMark parser so the extraction is
+/// robust. A file with no frontmatter yields `None`; one with no `js` fence
+/// yields an empty source, so a malformed helper simply does not hot-load.
 #[must_use]
 pub fn parse_helper(content: &str) -> (Option<HelperMeta>, String) {
-    if let Some(rest) = content.strip_prefix(HEADER_PREFIX) {
-        let (line, body) = rest.split_once('\n').unwrap_or((rest, ""));
-        return (
-            serde_json::from_str::<HelperMeta>(line.trim()).ok(),
-            body.to_string(),
-        );
+    use pulldown_cmark::{CodeBlockKind, Event, MetadataBlockKind, Options, Parser, Tag, TagEnd};
+
+    let parser = Parser::new_ext(content, Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+    let mut frontmatter = String::new();
+    let mut source = String::new();
+    let mut in_meta = false;
+    let mut in_js = false;
+    let mut js_captured = false;
+    for event in parser {
+        match event {
+            Event::Start(Tag::MetadataBlock(MetadataBlockKind::YamlStyle)) => in_meta = true,
+            Event::End(TagEnd::MetadataBlock(_)) => in_meta = false,
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang)))
+                if !js_captured && is_js_lang(&lang) =>
+            {
+                in_js = true;
+            }
+            Event::End(TagEnd::CodeBlock) if in_js => {
+                in_js = false;
+                js_captured = true;
+            }
+            Event::Text(text) => {
+                if in_meta {
+                    frontmatter.push_str(&text);
+                } else if in_js {
+                    source.push_str(&text);
+                }
+            }
+            _ => {}
+        }
     }
-    (None, content.to_string())
+    let meta = (!frontmatter.trim().is_empty())
+        .then(|| serde_saphyr::from_str::<HelperMeta>(&frontmatter).ok())
+        .flatten();
+    (meta, source.trim().to_string())
 }
 
-/// Writes a helper with its provenance header. Rejects an oversized source.
+/// Writes a helper as a Markdown doc. Rejects an oversized source.
 pub fn save_helper(browserclaw_dir: &Path, meta: &HelperMeta, source: &str) -> io::Result<()> {
     if source.len() > MAX_HELPER_BYTES {
         return Err(io::Error::new(
@@ -155,8 +318,8 @@ pub fn save_helper(browserclaw_dir: &Path, meta: &HelperMeta, source: &str) -> i
     )
 }
 
-/// Reads a helper's source body with its provenance header stripped, ready to
-/// eval. `None` for an unsafe host/name or a missing file.
+/// Reads a helper's JS source from its `js` fenced block, ready to eval. `None`
+/// for an unsafe host/name or a missing file; empty when the file has no source.
 #[must_use]
 pub fn read_helper_source(browserclaw_dir: &Path, host: &str, name: &str) -> Option<String> {
     read_helper(browserclaw_dir, host, name).map(|content| parse_helper(&content).1)
@@ -176,8 +339,8 @@ pub fn has_any_helpers(browserclaw_dir: &Path) -> bool {
 pub const MAX_CANDIDATES_PER_HOST: usize = 10;
 
 /// Evicts the oldest candidate helpers for a host beyond `keep`. Only files
-/// whose header marks them `candidate:true` are eligible; promoted or hand-saved
-/// helpers are never removed.
+/// whose frontmatter marks them `candidate:true` are eligible; promoted or
+/// hand-saved helpers are never removed.
 pub fn prune_candidates(browserclaw_dir: &Path, host: &str, keep: usize) {
     let mut candidates: Vec<HelperMeta> = list_helper_meta(browserclaw_dir, host)
         .into_iter()
@@ -195,8 +358,8 @@ pub fn prune_candidates(browserclaw_dir: &Path, host: &str, keep: usize) {
     }
 }
 
-/// Lists helpers for a host with their parsed provenance, sorted by name. A file
-/// missing a header still lists, with default provenance.
+/// Lists helpers for a host with their parsed frontmatter, sorted by name. A file
+/// missing frontmatter still lists, with default provenance.
 #[must_use]
 pub fn list_helper_meta(browserclaw_dir: &Path, host: &str) -> Vec<HelperMeta> {
     list_helpers(browserclaw_dir, host)
@@ -210,7 +373,9 @@ pub fn list_helper_meta(browserclaw_dir: &Path, host: &str) -> Vec<HelperMeta> {
                 last_verified: 0,
                 agent: String::new(),
                 candidate: false,
-                deps: String::new(),
+                opens_page: false,
+                inputs: BTreeMap::new(),
+                description: String::new(),
             }))
         })
         .collect()
@@ -221,21 +386,29 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn search_meta() -> HelperMeta {
+        HelperMeta {
+            name: "search-amazon".to_string(),
+            host: "amazon.in".to_string(),
+            last_verified: 1_784_887_201_128,
+            agent: "codex".to_string(),
+            candidate: true,
+            opens_page: true,
+            inputs: BTreeMap::from([("field0".to_string(), "search query".to_string())]),
+            description: "Opens amazon.in search for a query".to_string(),
+        }
+    }
+
     #[test]
     fn write_then_read_round_trips_and_lists() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let root = dir.path();
-        write_helper(
-            root,
-            "linkedin.com",
-            "accept-invites",
-            "export const x = 1;",
-        )?;
-        write_helper(root, "linkedin.com", "messages", "export const y = 2;")?;
+        write_helper(root, "linkedin.com", "accept-invites", "one")?;
+        write_helper(root, "linkedin.com", "messages", "two")?;
 
         assert_eq!(
             read_helper(root, "linkedin.com", "accept-invites").as_deref(),
-            Some("export const x = 1;")
+            Some("one")
         );
         assert_eq!(
             list_helpers(root, "linkedin.com"),
@@ -290,45 +463,74 @@ mod tests {
     }
 
     #[test]
-    fn save_read_and_list_carry_provenance_and_strip_header() -> anyhow::Result<()> {
+    fn call_example_matches_shape_and_inputs() {
+        // Open-page macro with an input: bracket access, inputs object, no page.
+        assert_eq!(
+            call_example(&search_meta()),
+            "helpers[\"search-amazon\"](browser, { field0: \"<search query>\" })"
+        );
+        let mut passed = search_meta();
+        passed.name = "reply".to_string();
+        passed.opens_page = false;
+        passed.inputs = BTreeMap::new();
+        assert_eq!(call_example(&passed), "helpers[\"reply\"](browser, page)");
+        passed.opens_page = true;
+        assert_eq!(call_example(&passed), "helpers[\"reply\"](browser)");
+    }
+
+    #[test]
+    fn analyze_source_infers_shape_and_inputs() {
+        let (opens_page, inputs) =
+            analyze_source("async (browser, inputs = {}) => { return inputs.field0 + inputs.field1; }");
+        assert!(opens_page);
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs.contains_key("field0"));
+        assert!(inputs.contains_key("field1"));
+
+        let (opens_page, inputs) =
+            analyze_source("async (browser, page, inputs = {}) => { await browser.input(page).fill('e', inputs.field0); }");
+        assert!(!opens_page);
+        assert_eq!(inputs.len(), 1);
+
+        let (opens_page, inputs) = analyze_source("async (browser, page) => { return 1; }");
+        assert!(!opens_page);
+        assert!(inputs.is_empty());
+    }
+
+    #[test]
+    fn save_read_and_list_round_trip_frontmatter_and_extract_source() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let root = dir.path();
-        let meta = HelperMeta {
-            name: "accept-invites".to_string(),
-            host: "linkedin.com".to_string(),
-            last_verified: 1_784_887_201_128,
-            agent: "codex".to_string(),
-            candidate: true,
-            deps: "linkedin.com invitation list".to_string(),
-        };
-        save_helper(root, &meta, "async (browser, page) => { return 1; }")?;
+        let source = "async (browser, inputs = {}) => { return inputs.field0; }";
+        save_helper(root, &search_meta(), source)?;
 
-        // The eval body is the source with the header comment stripped.
+        // The eval body is the source lifted out of the js fence.
         assert_eq!(
-            read_helper_source(root, "linkedin.com", "accept-invites").as_deref(),
-            Some("async (browser, page) => { return 1; }")
+            read_helper_source(root, "amazon.in", "search-amazon").as_deref(),
+            Some(source)
         );
-        // Provenance round-trips through the header.
-        let listed = list_helper_meta(root, "linkedin.com");
+        // The raw doc a reader sees carries the description and call form.
+        let doc = read_helper(root, "amazon.in", "search-amazon").unwrap_or_default();
+        assert!(doc.contains("Opens amazon.in search for a query"));
+        assert!(doc.contains("helpers[\"search-amazon\"](browser, { field0: \"<search query>\" })"));
+        // Frontmatter round-trips through the parser.
+        let listed = list_helper_meta(root, "amazon.in");
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].name, "accept-invites");
+        assert_eq!(listed[0].name, "search-amazon");
         assert_eq!(listed[0].last_verified, 1_784_887_201_128);
         assert!(listed[0].candidate);
+        assert!(listed[0].opens_page);
         assert_eq!(listed[0].agent, "codex");
+        assert_eq!(listed[0].inputs.get("field0").map(String::as_str), Some("search query"));
+        assert_eq!(listed[0].description, "Opens amazon.in search for a query");
         Ok(())
     }
 
     #[test]
     fn oversized_source_is_rejected() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let meta = HelperMeta {
-            name: "big".to_string(),
-            host: "example.com".to_string(),
-            last_verified: 0,
-            agent: String::new(),
-            candidate: false,
-            deps: String::new(),
-        };
+        let mut meta = search_meta();
+        meta.name = "big".to_string();
         let huge = "a".repeat(MAX_HELPER_BYTES + 1);
         assert!(save_helper(dir.path(), &meta, &huge).is_err());
         Ok(())
@@ -344,7 +546,9 @@ mod tests {
             last_verified: verified,
             agent: String::new(),
             candidate,
-            deps: String::new(),
+            opens_page: true,
+            inputs: BTreeMap::new(),
+            description: String::new(),
         };
         // A promoted (candidate:false) helper must survive pruning.
         save_helper(root, &helper("keep-me", 500, false), "async () => 1")?;
@@ -371,21 +575,26 @@ mod tests {
     fn has_any_helpers_gates_on_a_populated_helpers_root() -> anyhow::Result<()> {
         let dir = tempdir()?;
         assert!(!has_any_helpers(dir.path()));
-        write_helper(dir.path(), "example.com", "x", "async () => {}")?;
+        save_helper(dir.path(), &search_meta(), "async () => {}")?;
         assert!(has_any_helpers(dir.path()));
         Ok(())
     }
 
     #[test]
-    fn a_headerless_file_still_lists_with_defaults() -> anyhow::Result<()> {
+    fn a_file_without_frontmatter_lists_with_defaults_and_extracts_source() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let root = dir.path();
-        write_helper(root, "example.com", "legacy", "async () => {}")?;
+        write_helper(
+            root,
+            "example.com",
+            "legacy",
+            "no frontmatter here\n\n```js\nasync () => {}\n```\n",
+        )?;
         let listed = list_helper_meta(root, "example.com");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "legacy");
         assert_eq!(listed[0].last_verified, 0);
-        // A headerless file reads back verbatim.
+        // The js fence is still extracted even without frontmatter.
         assert_eq!(
             read_helper_source(root, "example.com", "legacy").as_deref(),
             Some("async () => {}")

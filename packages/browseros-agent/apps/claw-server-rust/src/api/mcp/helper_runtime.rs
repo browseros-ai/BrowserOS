@@ -18,8 +18,10 @@ use std::collections::BTreeSet;
 
 const MS_PER_DAY: i64 = 86_400_000;
 
-/// Discovery/staleness view of a helper: name, soft age signal, and whether it
-/// is a distilled candidate. `ageDays` is null when never stamped.
+/// Discovery/staleness view of a helper: name, soft age signal, whether it is a
+/// distilled candidate, a description, and the exact copy-paste call form so the
+/// agent can reuse it without guessing the signature. `ageDays` is null when
+/// never stamped.
 #[must_use]
 pub(crate) fn helper_info_json(meta: &HelperMeta, now: i64) -> Value {
     let age_days = (meta.last_verified > 0).then(|| (now - meta.last_verified).max(0) / MS_PER_DAY);
@@ -28,6 +30,10 @@ pub(crate) fn helper_info_json(meta: &HelperMeta, now: i64) -> Value {
         "ageDays": age_days,
         "candidate": meta.candidate,
         "agent": meta.agent,
+        "description": meta.description,
+        "opensPage": meta.opens_page,
+        "inputs": meta.inputs,
+        "call": helpers::call_example(meta),
     })
 }
 
@@ -124,23 +130,24 @@ pub fn discovery(
 
 const _: ToolEffect = discovery;
 
-/// A concise, agent-readable summary of the helpers available on the tabs' hosts.
+/// A concise, agent-readable summary of the helpers available on the tabs' hosts:
+/// per helper a freshness signal, a description, and the exact call form to copy.
 #[must_use]
 fn discovery_note(available: &[Value]) -> String {
     let mut lines = vec![
-        "Reusable helpers for your tabs (call helpers.<name>(browser, page), or read one with browser.readHelper(name, { host })):".to_string(),
+        "Reusable helpers for your tabs. Call the one you need with the form shown, or read its full doc with browser.readHelper(name, { host }):".to_string(),
     ];
     for entry in available {
         let host = entry
             .get("host")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let names: Vec<String> = entry
-            .get("helpers")
-            .and_then(Value::as_array)
-            .map(|items| items.iter().map(format_helper_ref).collect())
-            .unwrap_or_default();
-        lines.push(format!("- {host}: {}", names.join(", ")));
+        lines.push(format!("- {host}:"));
+        if let Some(items) = entry.get("helpers").and_then(Value::as_array) {
+            for helper in items {
+                lines.push(format_helper_ref(helper));
+            }
+        }
     }
     lines.join("\n")
 }
@@ -153,8 +160,7 @@ fn format_helper_ref(helper: &Value) -> String {
     let age = helper
         .get("ageDays")
         .and_then(Value::as_i64)
-        .map(|days| format!(" {days}d"))
-        .unwrap_or_default();
+        .map_or_else(|| "unstamped".to_string(), |days| format!("{days}d"));
     let candidate = if helper
         .get("candidate")
         .and_then(Value::as_bool)
@@ -164,7 +170,14 @@ fn format_helper_ref(helper: &Value) -> String {
     } else {
         ""
     };
-    format!("{name}{age}{candidate}")
+    let description = helper
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|desc| !desc.is_empty())
+        .map(|desc| format!(": {desc}"))
+        .unwrap_or_default();
+    let call = helper.get("call").and_then(Value::as_str).unwrap_or_default();
+    format!("  - {name} ({age}{candidate}){description}\n    {call}")
 }
 
 /// Builds the `[{ host, helpers: [...] }]` discovery list for a set of hosts,
@@ -200,7 +213,12 @@ mod tests {
             last_verified,
             agent: "codex".to_string(),
             candidate,
-            deps: String::new(),
+            opens_page: true,
+            inputs: std::collections::BTreeMap::from([(
+                "field0".to_string(),
+                "search query".to_string(),
+            )]),
+            description: format!("Opens {host} search for a query"),
         }
     }
 
@@ -215,17 +233,25 @@ mod tests {
     }
 
     #[test]
-    fn discovery_note_summarizes_available_helpers_as_text() {
-        let available = vec![json!({
-            "host": "example.com",
-            "helpers": [
-                { "name": "greet", "ageDays": 0, "candidate": false },
-                { "name": "candidate-abc", "ageDays": 7, "candidate": true }
-            ]
-        })];
+    fn discovery_note_renders_description_and_correct_call_form() {
+        let now = MS_PER_DAY;
+        let entry = helper_info_json(&meta("search-amazon", "amazon.in", MS_PER_DAY, true), now);
+        let available = vec![json!({ "host": "amazon.in", "helpers": [entry] })];
         let note = discovery_note(&available);
-        assert!(note.contains("helpers.<name>"));
-        assert!(note.contains("example.com: greet 0d, candidate-abc 7d, candidate"));
+        assert!(note.contains("browser.readHelper"));
+        assert!(note.contains("- amazon.in:"));
+        // Freshness, candidate flag, and the description ride the helper line.
+        assert!(
+            note.contains("- search-amazon (0d, candidate): Opens amazon.in search for a query"),
+            "note: {note}"
+        );
+        // The exact, copy-paste call form: bracket access, inputs object, no page.
+        assert!(
+            note.contains("helpers[\"search-amazon\"](browser, { field0: \"<search query>\" })"),
+            "note: {note}"
+        );
+        // The wrong dotted form is gone.
+        assert!(!note.contains("helpers.<name>"));
     }
 
     #[test]
