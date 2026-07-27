@@ -13,6 +13,7 @@ import {
   stampConversationOwner,
 } from './conversation-scope'
 import { createConversationUploadScheduler } from './conversation-upload-scheduler'
+import { runExclusive } from './conversation-write-queue'
 import {
   type Conversation,
   conversationStorage,
@@ -64,7 +65,8 @@ export function useConversations() {
   useEffect(() => {
     if (!effectiveOwnerId) return
     let cancelled = false
-    ;(async () => {
+    runExclusive(async () => {
+      if (cancelled) return
       if (await conversationsOwnerBackfilledStorage.getValue()) return
       const current = (await conversationStorage.getValue()) ?? []
       const result = backfillConversationOwners(current, effectiveOwnerId)
@@ -72,7 +74,7 @@ export function useConversations() {
       if (result.changed)
         await conversationStorage.setValue(result.conversations)
       await conversationsOwnerBackfilledStorage.setValue(true)
-    })().catch((error) => {
+    }).catch((error) => {
       sentry.captureException(error, {
         extra: { message: 'Failed to backfill conversation owners' },
       })
@@ -107,31 +109,33 @@ export function useConversations() {
     return unwatch
   }, [])
 
-  const removeConversation = async (id: string) => {
-    const current = (await conversationStorage.getValue()) ?? []
-    await conversationStorage.setValue(current.filter((c) => c.id !== id))
-    await removeConversationExecutionHistory(id)
-  }
+  const removeConversation = (id: string) =>
+    runExclusive(async () => {
+      const current = (await conversationStorage.getValue()) ?? []
+      await conversationStorage.setValue(current.filter((c) => c.id !== id))
+      await removeConversationExecutionHistory(id)
+    })
 
-  const saveConversation = async (id: string, messages: UIMessage[]) => {
-    const current = (await conversationStorage.getValue()) ?? []
-    const plan = planConversationSave(current, id, messages)
-    if (!plan) return
+  const saveConversation = (id: string, messages: UIMessage[]) =>
+    runExclusive(async () => {
+      const current = (await conversationStorage.getValue()) ?? []
+      const plan = planConversationSave(current, id, messages)
+      if (!plan) return
 
-    // Stamp the effective owner so a signed-out user continuing their own
-    // (last signed-in) history keeps it scoped to them rather than dropping it
-    // to an anonymous record that the owner filter would then hide (#559).
-    const owned = stampConversationOwner(
-      plan.conversations,
-      id,
-      effectiveOwnerId,
-    )
+      // Stamp the effective owner so a signed-out user continuing their own
+      // (last signed-in) history keeps it scoped to them rather than dropping it
+      // to an anonymous record that the owner filter would then hide (#559).
+      const owned = stampConversationOwner(
+        plan.conversations,
+        id,
+        effectiveOwnerId,
+      )
 
-    await conversationStorage.setValue(owned)
-    await Promise.all(
-      plan.removedConversationIds.map(removeConversationExecutionHistory),
-    )
-  }
+      await conversationStorage.setValue(owned)
+      await Promise.all(
+        plan.removedConversationIds.map(removeConversationExecutionHistory),
+      )
+    })
 
   const getConversation = (id: string) => {
     return conversations.find((c) => c.id === id)
