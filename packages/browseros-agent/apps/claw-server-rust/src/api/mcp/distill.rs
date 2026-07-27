@@ -37,11 +37,15 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
             .dispatches_with_parent(context.call.dispatch_id.as_str())
             .await
             .unwrap_or_default();
-        let Some((source, page_id)) = distill_source(&children) else {
+        let Some((source, target)) = distill_source(&children) else {
             return Ok(());
         };
-        let Some(host) = page_host(session, page_id).await else {
-            return Ok(());
+        let host = match target {
+            DistillTarget::Host(host) => host,
+            DistillTarget::Page(page_id) => match page_host(session, page_id).await {
+                Some(host) => host,
+                None => return Ok(()),
+            },
         };
         let steps = source.matches("await browser").count();
         let inputs = source.matches("inputs.field").count();
@@ -74,16 +78,30 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
 
 const _: ToolObserver = distill;
 
+/// How the distilled helper's host is resolved: directly from an opening
+/// navigation URL, or from the page id the flow drove.
+pub(crate) enum DistillTarget {
+    Host(String),
+    Page(u64),
+}
+
 /// Synthesizes a single-page action macro from the recorded child sequence, plus
-/// the page id it drove. `None` unless at least two recognized actions all target
-/// one page (multi-page replays are a follow-up).
+/// how to resolve its host. Handles two shapes: a flow that opens its own page
+/// (`newPage(url)`, common for search-by-URL) becomes
+/// `async (browser, inputs) => { const page = await browser.pages.newPage(...); ...; return page; }`;
+/// a flow that acts on an existing page keeps `async (browser, page, inputs) => { ... }`.
+/// `None` unless at least two recognized actions target one page (multi-page
+/// replays are a follow-up).
 #[must_use]
-pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u64)> {
+pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, DistillTarget)> {
     let mut lines = Vec::new();
     let mut pages = BTreeSet::new();
-    // Running index for value inputs, so typed values are read from `inputs`
-    // rather than embedded (no credentials or personal data in a shared helper).
+    // Running index for value inputs, so typed values (and URL query terms) are
+    // read from `inputs` rather than embedded (no personal data in a shared helper).
     let mut inputs = 0usize;
+    // The opening navigation, if the flow creates its own page: (url JS expression, host bucket).
+    let mut opened: Option<(String, Option<String>)> = None;
+    let mut new_pages = 0usize;
     for row in children {
         // Only distill the agent's own successful actions: skip failures (a
         // caught-and-recovered step) and primitives replayed from inside a
@@ -97,6 +115,17 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
             .as_deref()
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default();
+        if row.tool_name == "pages.newPage" {
+            new_pages += 1;
+            let Some(url) = args.first().and_then(Value::as_str) else {
+                continue;
+            };
+            opened = Some((
+                parameterize_url(url, &mut inputs),
+                helpers::host_bucket(url),
+            ));
+            continue;
+        }
         let Some(page) = args.first().and_then(Value::as_u64) else {
             continue;
         };
@@ -106,15 +135,89 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, u6
         pages.insert(page);
         lines.push(line);
     }
-    if lines.len() < 2 || pages.len() != 1 {
+    // At most one opened page; page-scoped actions all target a single page.
+    if new_pages > 1 || pages.len() > 1 {
         return None;
     }
-    let page = *pages.iter().next()?;
-    let source = format!(
-        "async (browser, page, inputs = {{}}) => {{\n{}\n}}",
-        lines.join("\n")
-    );
-    Some((source, page))
+    let action_count = lines.len() + usize::from(opened.is_some());
+    if action_count < 2 {
+        return None;
+    }
+    match opened {
+        Some((url_expr, host)) => {
+            let mut body = vec![format!(
+                "  const page = await browser.pages.newPage({url_expr});"
+            )];
+            body.extend(lines);
+            body.push("  return page;".to_string());
+            let source = format!(
+                "async (browser, inputs = {{}}) => {{\n{}\n}}",
+                body.join("\n")
+            );
+            let target = match host {
+                Some(host) => DistillTarget::Host(host),
+                None => DistillTarget::Page(*pages.iter().next()?),
+            };
+            Some((source, target))
+        }
+        None => {
+            let page = *pages.iter().next()?;
+            let source = format!(
+                "async (browser, page, inputs = {{}}) => {{\n{}\n}}",
+                lines.join("\n")
+            );
+            Some((source, DistillTarget::Page(page)))
+        }
+    }
+}
+
+/// Rewrites a URL's search-query values as `encodeURIComponent(inputs.field<n>)`
+/// so a search-by-URL navigation becomes a reusable, parameterized macro without
+/// baking in the specific query. Returns a JS string expression. URLs with no
+/// recognized search parameter are emitted as a literal.
+fn parameterize_url(url: &str, inputs: &mut usize) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return json_string(url);
+    };
+    let mut fragments: Vec<String> = Vec::new();
+    let mut literal = format!("{base}?");
+    let mut parameterized = false;
+    for (index, pair) in query.split('&').enumerate() {
+        if index > 0 {
+            literal.push('&');
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if is_search_key(key) && !value.is_empty() {
+            parameterized = true;
+            literal.push_str(key);
+            literal.push('=');
+            fragments.push(json_string(&literal));
+            literal.clear();
+            fragments.push(format!("encodeURIComponent(inputs.field{inputs})"));
+            *inputs += 1;
+        } else {
+            literal.push_str(pair);
+        }
+    }
+    if !parameterized {
+        return json_string(url);
+    }
+    if !literal.is_empty() {
+        fragments.push(json_string(&literal));
+    }
+    fragments.join(" + ")
+}
+
+/// Common search-query parameter names across sites (amazon `k`, google `q`, ...).
+fn is_search_key(key: &str) -> bool {
+    matches!(
+        key,
+        "q" | "k" | "query" | "search" | "s" | "term" | "keyword" | "keywords" | "field-keywords"
+    )
+}
+
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Whether a child's recorded result marked it an error, read from its
@@ -147,26 +250,28 @@ fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
         args.get(index)
             .map_or_else(|| "undefined".to_string(), Value::to_string)
     };
-    let mut input = || {
-        let field = format!("inputs.field{inputs}");
-        *inputs += 1;
-        field
-    };
     let line = match tool {
-        "nav.goto" => format!("  await browser.nav(page).goto({});", arg(1)),
+        "nav.goto" => format!(
+            "  await browser.nav(page).goto({});",
+            url_arg(args, 1, inputs)
+        ),
         "nav.back" => "  await browser.nav(page).back();".to_string(),
         "nav.forward" => "  await browser.nav(page).forward();".to_string(),
         "nav.reload" => "  await browser.nav(page).reload();".to_string(),
         "input.click" => format!("  await browser.input(page).click({});", arg(1)),
-        "input.fill" => format!("  await browser.input(page).fill({}, {});", arg(1), input()),
-        "input.type" => format!("  await browser.input(page).type({});", input()),
+        "input.fill" => format!(
+            "  await browser.input(page).fill({}, {});",
+            arg(1),
+            next_input(inputs)
+        ),
+        "input.type" => format!("  await browser.input(page).type({});", next_input(inputs)),
         "input.press" => format!("  await browser.input(page).press({});", arg(1)),
         "input.hover" => format!("  await browser.input(page).hover({});", arg(1)),
         "input.selectOption" => {
             format!(
                 "  await browser.input(page).selectOption({}, {});",
                 arg(1),
-                input()
+                next_input(inputs)
             )
         }
         "input.scroll" => format!(
@@ -179,6 +284,24 @@ fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
         _ => return None,
     };
     Some(line)
+}
+
+/// The next `inputs.field<n>` placeholder, advancing the counter.
+fn next_input(inputs: &mut usize) -> String {
+    let field = format!("inputs.field{inputs}");
+    *inputs += 1;
+    field
+}
+
+/// A URL argument, parameterized when it is a string with a search query, else
+/// emitted as its JSON literal.
+fn url_arg(args: &[Value], index: usize, inputs: &mut usize) -> String {
+    match args.get(index).and_then(Value::as_str) {
+        Some(url) => parameterize_url(url, inputs),
+        None => args
+            .get(index)
+            .map_or_else(|| "undefined".to_string(), Value::to_string),
+    }
 }
 
 async fn page_host(session: &BrowserSession, page_id: u64) -> Option<String> {
@@ -234,9 +357,9 @@ mod tests {
             child("input.fill", json!([3, "e5", "alice"])),
             child("input.click", json!([3, "e6"])),
         ];
-        let (source, page) = distill_source(&children)
+        let (source, target) = distill_source(&children)
             .ok_or_else(|| anyhow::anyhow!("expected a distilled macro"))?;
-        assert_eq!(page, 3);
+        assert!(matches!(target, DistillTarget::Page(3)));
         // The fill value is parameterized (inputs.field0), never embedded.
         assert_eq!(
             source,
@@ -245,6 +368,37 @@ mod tests {
              await browser.input(page).fill(\"e5\", inputs.field0);\n  \
              await browser.input(page).click(\"e6\");\n}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn distills_a_search_by_url_flow_into_a_parameterized_macro() -> anyhow::Result<()> {
+        // The natural real-agent pattern: search by URL, then read (not type + click).
+        let children = [
+            child(
+                "pages.newPage",
+                json!(["https://www.amazon.in/s?k=wireless+earbuds"]),
+            ),
+            child("wait", json!([10, { "text": "results", "timeout": 20000 }])),
+            child("read", json!([10, {}])), // pure read, skipped
+        ];
+        let (source, target) = distill_source(&children)
+            .ok_or_else(|| anyhow::anyhow!("expected a distilled macro"))?;
+        // Host comes straight from the navigation URL.
+        assert!(matches!(&target, DistillTarget::Host(host) if host == "amazon.in"));
+        // The query term is parameterized (never embedded); the macro opens its own page.
+        assert!(!source.contains("wireless"), "query leaked: {source}");
+        assert!(
+            source.contains("async (browser, inputs = {}) =>"),
+            "shape: {source}"
+        );
+        assert!(
+            source.contains(
+                "const page = await browser.pages.newPage(\"https://www.amazon.in/s?k=\" + encodeURIComponent(inputs.field0));"
+            ),
+            "got: {source}"
+        );
+        assert!(source.contains("return page;"));
         Ok(())
     }
 
