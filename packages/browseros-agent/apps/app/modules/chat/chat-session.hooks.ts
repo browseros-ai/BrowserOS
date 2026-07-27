@@ -613,7 +613,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     if (options?.origin !== 'sidepanel') return
 
-    const handleActivated = async (activeInfo: chrome.tabs.TabActiveInfo) => {
+    const handleActivated = async (activeInfo: {
+      tabId: number
+      windowId: number
+    }) => {
       if (activeInfo.windowId !== windowIdRef.current) return
       const tabId = activeInfo.tabId
       if (tabId === tabIdRef.current) return
