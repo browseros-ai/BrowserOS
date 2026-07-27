@@ -78,6 +78,12 @@ export function useAuditScreenData(): AuditScreenData {
       search: filters.search || undefined,
       limit: 100,
     },
+    // Audit is a historical review, not a live feed. Opt out of the shared
+    // factory's 3s poll here: on an infinite query it re-requests every loaded
+    // page on each tick, so a paginated audit view fires an unbounded, never-
+    // stopping stream of session requests. Freshness still comes from refetch
+    // on window focus, remount, and the cleanup mutation's invalidation.
+    refetchInterval: false,
   })
 
   const pages = query.data?.pages
