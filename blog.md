@@ -16,7 +16,7 @@ In practice, those three parts let you ask questions about pages, trigger action
 
 ## Why a fork?
 
-Shimmy-Browser is a development fork of BrowserOS. That means you get the full upstream architecture, but you can tailor identity, prompts, and product messaging to your needs. In this fork, the agent identity is customized (SUP) and product branding emphasizes Shimmy. This is especially useful for experimentation, internal deployments, or building on top of upstream without waiting for upstream changes.
+Shimmy-Browser is a development fork of BrowserOS. That means you get the full upstream architecture, but you can tailor identity, prompts, and product messaging to your needs. In this fork, the agent is rebranded as **Sup agent** (with customized logo, centered sidebar placement, and custom branding) instead of the default BrowserOS theme. This is especially useful for experimentation, internal deployments, or building on top of upstream without waiting for upstream changes.
 
 ## The core architecture
 
@@ -58,7 +58,7 @@ The repo is split into two major parts:
 
 - **packages/browseros**: Chromium patches, build scripts, packaging.
 - **packages/browseros-agent**: the agent platform, including:
-  - `apps/agent` (extension UI)
+  - `apps/app` (extension UI)
   - `apps/server` (Bun server + agent loop)
   - shared packages and tooling
 
@@ -71,8 +71,8 @@ If you are building UI or behavior changes, you will mostly live in the agent pa
 You can start the full stack with a single command once dependencies and env files are set up. The quick path is:
 
 1. Install dependencies in `packages/browseros-agent`.
-2. Copy `.env.example` to `.env.development` for both `apps/agent` and `apps/server`.
-3. Keep `BROWSEROS_CDP_PORT` and `BROWSEROS_SERVER_PORT` aligned in both files.
+2. Configure your local environment variables in `packages/browseros-agent/apps/app/.env.development` (making sure your browser path `BROWSEROS_BINARY` is correctly set).
+3. Keep `BROWSEROS_CDP_PORT` and `BROWSEROS_SERVER_PORT` aligned.
 4. Run the dev stack from the repo root:
 
 ```
@@ -91,6 +91,15 @@ Here is the practical value of this fork if you are experimenting with AI browsi
 - **Customizable**: identity and product messaging can be tailored without waiting on upstream.
 
 It is a strong foundation if you want to prototype agent behavior, test prompts in real UI, or develop new MCP tools.
+
+## Latest Platform Enhancements
+
+The Shimmy-Browser platform has recently received several critical updates to make development smoother and the user experience more seamless:
+
+- **Rebranded to Sup Agent**: The visual elements have been completely tailored to the "Sup agent" identity. This includes center-aligned logos in the sidebar, updated branding headers, text placeholders, and custom search selectors.
+- **Per-Window Session Persistence**: The extension now tracks conversation panels on a per-window basis. Switching tabs no longer resets the sidebar state, ensuring chat history is preserved throughout your sessions.
+- **Active Tab Focus**: When the agent performs actions or navigates to a new webpage, the browser automatically switches tab focus to show the active work page.
+- **Resilient Dev Connection Fallback**: Improved local connection reliability. The extension now falls back automatically to the local dev server port (`9111`) if the custom browser APIs (`chrome.browserOS`) are unavailable or slow to initialize.
 
 ## How to contribute
 
