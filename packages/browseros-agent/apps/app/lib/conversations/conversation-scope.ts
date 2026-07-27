@@ -25,6 +25,23 @@ export function filterConversationsByOwner(
 }
 
 /**
+ * Returns a copy of `conversations` with `ownerId` stamped on the conversation
+ * matching `id`, leaving the rest untouched. Callers pass the effective owner
+ * (current user, else last signed-in) so a signed-out user continuing their own
+ * history keeps it scoped to them instead of dropping it to an anonymous,
+ * unowned record that then leaks into anonymous history (#559).
+ */
+export function stampConversationOwner(
+  conversations: Conversation[],
+  id: string,
+  ownerId: string | undefined,
+): Conversation[] {
+  return conversations.map((conversation) =>
+    conversation.id === id ? { ...conversation, owner: ownerId } : conversation,
+  )
+}
+
+/**
  * Stamps the given owner onto every conversation that predates owner tracking
  * (no owner yet), leaving already-owned ones untouched. Run once on upgrade so
  * a user's pre-existing local history stays scoped to them instead of vanishing

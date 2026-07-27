@@ -9,6 +9,7 @@ import {
   backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
+  stampConversationOwner,
 } from './conversation-scope'
 import { createConversationUploadScheduler } from './conversation-upload-scheduler'
 import {
@@ -111,12 +112,13 @@ export function useConversations() {
     const plan = planConversationSave(current, id, messages)
     if (!plan) return
 
-    // Stamp the current owner on the saved conversation so it stays scoped to
-    // whoever authored it (undefined when signed out).
-    const owned = plan.conversations.map((conversation) =>
-      conversation.id === id
-        ? { ...conversation, owner: userId }
-        : conversation,
+    // Stamp the effective owner so a signed-out user continuing their own
+    // (last signed-in) history keeps it scoped to them rather than dropping it
+    // to an anonymous record that the owner filter would then hide (#559).
+    const owned = stampConversationOwner(
+      plan.conversations,
+      id,
+      effectiveOwnerId,
     )
 
     await conversationStorage.setValue(owned)

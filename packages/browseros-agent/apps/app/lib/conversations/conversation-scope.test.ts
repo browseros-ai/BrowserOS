@@ -3,6 +3,7 @@ import {
   backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
+  stampConversationOwner,
 } from './conversation-scope'
 import type { Conversation } from './conversationStorage'
 
@@ -69,5 +70,27 @@ describe('backfillConversationOwners', () => {
 
   it('reports no change for an empty list', () => {
     expect(backfillConversationOwners([], 'A').changed).toBe(false)
+  })
+})
+
+describe('stampConversationOwner', () => {
+  it('stamps the effective owner on the matching conversation only', () => {
+    const result = stampConversationOwner([conv('a'), conv('b')], 'a', 'A')
+    expect(result.map((c) => [c.id, c.owner])).toEqual([
+      ['a', 'A'],
+      ['b', undefined],
+    ])
+  })
+
+  it('keeps a signed-out continuation scoped to the last signed-in user', () => {
+    const [stamped] = stampConversationOwner([conv('a', 'A')], 'a', 'A')
+    expect(filterConversationsByOwner([stamped], 'A').map((c) => c.id)).toEqual(
+      ['a'],
+    )
+  })
+
+  it('stamps undefined for a truly anonymous save', () => {
+    const [stamped] = stampConversationOwner([conv('a')], 'a', undefined)
+    expect(stamped.owner).toBeUndefined()
   })
 })
