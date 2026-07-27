@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
 } from './conversation-scope'
@@ -38,5 +39,35 @@ describe('filterConversationsByOwner', () => {
     expect(filterConversationsByOwner(all, undefined).map((c) => c.id)).toEqual(
       ['anon'],
     )
+  })
+})
+
+describe('backfillConversationOwners', () => {
+  it('stamps the owner onto pre-owner conversations', () => {
+    const result = backfillConversationOwners([conv('a'), conv('b')], 'A')
+    expect(result.changed).toBe(true)
+    expect(result.conversations.map((c) => c.owner)).toEqual(['A', 'A'])
+  })
+
+  it('leaves already-owned conversations untouched', () => {
+    const result = backfillConversationOwners([conv('a', 'A'), conv('b')], 'A')
+    expect(result.changed).toBe(true)
+    expect(result.conversations.map((c) => c.owner)).toEqual(['A', 'A'])
+  })
+
+  it('never reassigns a conversation owned by another account', () => {
+    const result = backfillConversationOwners([conv('a', 'B')], 'A')
+    expect(result.conversations[0].owner).toBe('B')
+  })
+
+  it('reports no change when every conversation already has an owner', () => {
+    const input = [conv('a', 'A'), conv('b', 'B')]
+    const result = backfillConversationOwners(input, 'A')
+    expect(result.changed).toBe(false)
+    expect(result.conversations).toBe(input)
+  })
+
+  it('reports no change for an empty list', () => {
+    expect(backfillConversationOwners([], 'A').changed).toBe(false)
   })
 })

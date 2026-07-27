@@ -6,11 +6,16 @@ import { removeConversationExecutionHistory } from '../execution-history/storage
 import { sentry } from '../sentry/sentry'
 import { planConversationSave } from './conversation-save'
 import {
+  backfillConversationOwners,
   filterConversationsByOwner,
   resolveEffectiveOwnerId,
 } from './conversation-scope'
 import { createConversationUploadScheduler } from './conversation-upload-scheduler'
-import { type Conversation, conversationStorage } from './conversationStorage'
+import {
+  type Conversation,
+  conversationStorage,
+  conversationsOwnerBackfilledStorage,
+} from './conversationStorage'
 import { uploadConversationsToGraphql } from './uploadConversationsToGraphql'
 
 const scheduleConversationUpload = createConversationUploadScheduler(
@@ -48,6 +53,32 @@ export function useConversations() {
   }, [userId])
 
   const effectiveOwnerId = resolveEffectiveOwnerId(userId, lastSignedInUserId)
+
+  // One-time upgrade migration: conversations created before owner tracking
+  // have no owner and would otherwise be hidden by the owner filter. Stamp them
+  // for the first effective owner we see, once, so a user's pre-existing history
+  // stays with them (#559). Deferred until an owner exists, so a never-signed-in
+  // install keeps its history anonymous until first sign-in.
+  useEffect(() => {
+    if (!effectiveOwnerId) return
+    let cancelled = false
+    ;(async () => {
+      if (await conversationsOwnerBackfilledStorage.getValue()) return
+      const current = (await conversationStorage.getValue()) ?? []
+      const result = backfillConversationOwners(current, effectiveOwnerId)
+      if (cancelled) return
+      if (result.changed)
+        await conversationStorage.setValue(result.conversations)
+      await conversationsOwnerBackfilledStorage.setValue(true)
+    })().catch((error) => {
+      sentry.captureException(error, {
+        extra: { message: 'Failed to backfill conversation owners' },
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [effectiveOwnerId])
 
   // Only surface the effective identity's conversations so another account
   // signing into the same browser profile never sees them (#559).

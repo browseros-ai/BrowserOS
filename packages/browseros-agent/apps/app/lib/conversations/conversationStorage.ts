@@ -19,3 +19,14 @@ export const conversationStorage = storage.defineItem<Conversation[]>(
     fallback: [],
   },
 )
+
+/**
+ * Set once the pre-owner local history has been stamped with its owner on
+ * upgrade, so the one-time backfill never runs again (#559).
+ */
+export const conversationsOwnerBackfilledStorage = storage.defineItem<boolean>(
+  'local:conversationsOwnerBackfilled',
+  {
+    fallback: false,
+  },
+)

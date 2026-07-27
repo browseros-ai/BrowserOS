@@ -23,3 +23,23 @@ export function filterConversationsByOwner(
     (conversation) => (conversation.owner ?? undefined) === effectiveOwnerId,
   )
 }
+
+/**
+ * Stamps the given owner onto every conversation that predates owner tracking
+ * (no owner yet), leaving already-owned ones untouched. Run once on upgrade so
+ * a user's pre-existing local history stays scoped to them instead of vanishing
+ * behind the owner filter (#559). Returns `changed: false` when nothing needed
+ * stamping so callers can skip the write.
+ */
+export function backfillConversationOwners(
+  conversations: Conversation[],
+  ownerId: string,
+): { changed: boolean; conversations: Conversation[] } {
+  let changed = false
+  const next = conversations.map((conversation) => {
+    if (conversation.owner != null) return conversation
+    changed = true
+    return { ...conversation, owner: ownerId }
+  })
+  return changed ? { changed, conversations: next } : { changed, conversations }
+}
