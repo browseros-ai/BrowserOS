@@ -183,7 +183,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     error: agentUrlError,
   } = useAgentServerUrl()
 
-  const { saveConversation: saveLocalConversation } = useConversations()
+  const { saveConversation: saveLocalConversation, effectiveOwnerId } =
+    useConversations()
   const {
     isLoggedIn,
     saveConversation: saveRemoteConversation,
@@ -487,8 +488,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       // cloud actually holds.
       const localConversations = await conversationStorage.getValue()
       if (cancelled) return
+      // Scope by owner so a per-window pointer never restores another account's
+      // conversation on a shared profile (#559).
       const local = localConversations?.find(
-        (c) => c.id === conversationIdParam,
+        (c) =>
+          c.id === conversationIdParam &&
+          (c.owner ?? undefined) === effectiveOwnerId,
       )
 
       // Signed in but the cloud copy is still loading: show local now and let
@@ -528,6 +533,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     remoteConversationData,
     isRemoteConversationFetched,
     isLoggedIn,
+    effectiveOwnerId,
   ])
 
   // Per-window scope: resume this window's conversation when the panel

@@ -7,6 +7,7 @@ import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
 import { useConversations } from '@/lib/conversations/useConversations'
 import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
+import { sentry } from '@/lib/sentry/sentry'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import { useGraphqlInfiniteQuery } from '@/modules/graphql/graphql-infinite-query.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
@@ -127,12 +128,19 @@ const MergedChatHistory: FC<{ userId: string }> = ({ userId }) => {
   )
 
   const handleDelete = async (id: string) => {
-    // Delete both copies so the conversation cannot reappear from the other
-    // source on the next merge.
-    await removeConversation(id)
-    if (remoteIds.has(id)) {
-      deleteConversationMutation.mutate({ rowId: id })
+    // Delete the cloud copy first (regardless of whether it is on the currently
+    // fetched page) so a transient failure keeps the durable local copy for a
+    // retry and the two never diverge. A conversation with no cloud row deletes
+    // as a no-op; keep local only when the cloud row is known to still exist.
+    try {
+      await deleteConversationMutation.mutateAsync({ rowId: id })
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: { message: 'Failed to delete remote conversation' },
+      })
+      if (remoteIds.has(id)) return
     }
+    await removeConversation(id)
   }
 
   // Only block on a spinner when there is nothing local to show yet and the
