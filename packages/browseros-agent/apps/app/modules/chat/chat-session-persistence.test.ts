@@ -3,6 +3,7 @@ import type { ChatStatus, UIMessage } from 'ai'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  pickRicherMessages,
 } from './chat-session-persistence'
 
 describe('chat session persistence transitions', () => {
@@ -50,6 +51,41 @@ describe('chat session persistence transitions', () => {
     expect(
       getPersistableMessages([user, emptyAssistant, partialAssistant]),
     ).toEqual([user, partialAssistant])
+  })
+})
+
+describe('pickRicherMessages (resume reconcile)', () => {
+  const local = [userMessage('a'), assistantMessage('b')]
+  const remoteAhead = [
+    userMessage('a'),
+    assistantMessage('b'),
+    userMessage('c'),
+  ]
+
+  it('prefers the cloud copy when it has more messages', () => {
+    expect(pickRicherMessages(local, remoteAhead)).toBe(remoteAhead)
+  })
+
+  it('prefers the cloud copy when both are equal length (cloud is authoritative)', () => {
+    const remoteSame = [userMessage('a'), assistantMessage('b')]
+    expect(pickRicherMessages(local, remoteSame)).toBe(remoteSame)
+  })
+
+  it('keeps the local copy when it has more messages (never regress)', () => {
+    const remoteBehind = [userMessage('a')]
+    expect(pickRicherMessages(local, remoteBehind)).toBe(local)
+  })
+
+  it('falls back to local when the cloud has no copy', () => {
+    expect(pickRicherMessages(local, undefined)).toBe(local)
+  })
+
+  it('uses the cloud copy when there is no local copy', () => {
+    expect(pickRicherMessages(undefined, remoteAhead)).toBe(remoteAhead)
+  })
+
+  it('returns undefined when neither source has the conversation', () => {
+    expect(pickRicherMessages(undefined, undefined)).toBeUndefined()
   })
 })
 

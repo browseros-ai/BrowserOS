@@ -13,16 +13,30 @@ import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { ConversationList } from './components/ConversationList'
 import type { HistoryConversation } from './components/types'
-import { extractLastUserMessage, groupConversations } from './components/utils'
+import {
+  extractLastUserMessage,
+  groupConversations,
+  mergeHistoryConversations,
+} from './components/utils'
 import {
   DeleteConversationDocument,
   GetConversationsForHistoryDocument,
 } from './graphql/chatHistoryDocument'
 import { LocalChatHistory } from './local/LocalChatHistory'
 
-const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
+/**
+ * History for a signed-in user. Local conversations are the durable source of
+ * truth (issue #559) and are always shown; the cloud is merged in by id so
+ * older, cloud-only conversations still appear. Deleting removes both copies.
+ */
+const MergedChatHistory: FC<{ userId: string }> = ({ userId }) => {
   const { conversationId: activeConversationId } = useChatSessionContext()
   const queryClient = useQueryClient()
+
+  // Local (durable) history plus its delete + execution-history cascade. This
+  // also drives cloud sync of local conversations via useConversations.
+  const { conversations: localConversations, removeConversation } =
+    useConversations()
 
   const { data: profileData } = useGraphqlQuery(GetProfileIdByUserIdDocument, {
     userId,
@@ -31,7 +45,6 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
 
   const {
     data: graphqlData,
-    isLoading: isLoadingConversations,
     isFetching,
     hasNextPage,
     isFetchingNextPage,
@@ -64,11 +77,7 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
     },
   )
 
-  const handleDelete = (id: string) => {
-    deleteConversationMutation.mutate({ rowId: id })
-  }
-
-  const conversations = useMemo<HistoryConversation[]>(() => {
+  const remoteConversations = useMemo<HistoryConversation[]>(() => {
     if (!graphqlData?.pages) return []
 
     return graphqlData.pages.flatMap((page) =>
@@ -92,12 +101,45 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
     )
   }, [graphqlData])
 
-  const groupedConversations = useMemo(
-    () => groupConversations(conversations),
-    [conversations],
+  const localHistory = useMemo<HistoryConversation[]>(
+    () =>
+      localConversations.map((conv) => ({
+        id: conv.id,
+        lastMessagedAt: conv.lastMessagedAt,
+        lastUserMessage: extractLastUserMessage(conv.messages),
+      })),
+    [localConversations],
   )
 
-  if (!profileId || isLoadingConversations) {
+  const merged = useMemo<HistoryConversation[]>(
+    () => mergeHistoryConversations(localHistory, remoteConversations),
+    [localHistory, remoteConversations],
+  )
+
+  const remoteIds = useMemo(
+    () => new Set(remoteConversations.map((c) => c.id)),
+    [remoteConversations],
+  )
+
+  const groupedConversations = useMemo(
+    () => groupConversations(merged),
+    [merged],
+  )
+
+  const handleDelete = async (id: string) => {
+    // Delete both copies so the conversation cannot reappear from the other
+    // source on the next merge.
+    await removeConversation(id)
+    if (remoteIds.has(id)) {
+      deleteConversationMutation.mutate({ rowId: id })
+    }
+  }
+
+  // Only block on a spinner when there is nothing local to show yet and the
+  // cloud has not returned its first page. Once local exists it renders
+  // immediately and the cloud folds in, so history is never blank while
+  // signed in (issue #559).
+  if (merged.length === 0 && !graphqlData) {
     return (
       <div className="flex flex-1 items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -113,7 +155,7 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
       hasNextPage={hasNextPage}
       isFetchingNextPage={isFetchingNextPage}
       onLoadMore={fetchNextPage}
-      isRefreshing={isFetching && !isLoadingConversations}
+      isRefreshing={isFetching}
     />
   )
 }
@@ -121,12 +163,12 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
 export const ChatHistory: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const userId = sessionInfo.user?.id
-  // needed to initiate remote-sync
-  useConversations()
 
   if (userId) {
-    return <RemoteChatHistory userId={userId} />
+    return <MergedChatHistory userId={userId} />
   }
 
+  // Signed out: local-only view (which also runs the no-op sync). Local is
+  // retained across auth changes, so signing out no longer empties history.
   return <LocalChatHistory />
 }

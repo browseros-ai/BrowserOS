@@ -41,6 +41,7 @@ import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  pickRicherMessages,
 } from './chat-session-persistence'
 import {
   prepareSidepanelSendMessagesRequest,
@@ -469,42 +470,65 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (!conversationIdParam) return
     if (restoredConversationId === conversationIdParam) return
 
-    if (isLoggedIn) {
-      if (!isRemoteConversationFetched) return
+    let cancelled = false
 
-      if (remoteConversationData?.conversation) {
-        const restoredMessages =
-          remoteConversationData.conversation.conversationMessages.nodes
-            .filter((node): node is NonNullable<typeof node> => node !== null)
-            .map((node) => node.message as UIMessage)
+    const applyRestored = (messages: UIMessage[] | undefined) => {
+      if (!messages?.length) return
+      setConversationId(
+        conversationIdParam as ReturnType<typeof crypto.randomUUID>,
+      )
+      setMessages(messages)
+    }
 
-        setConversationId(
-          conversationIdParam as ReturnType<typeof crypto.randomUUID>,
-        )
-        setMessages(restoredMessages)
-        markMessagesAsSaved(conversationIdParam, restoredMessages)
+    const restore = async () => {
+      // Local-first: the durable local copy (issue #559) is shown immediately
+      // and works regardless of auth. When signed in we reconcile with the
+      // cloud once it resolves and seed the remote-save dedup from what the
+      // cloud actually holds.
+      const localConversations = await conversationStorage.getValue()
+      if (cancelled) return
+      const local = localConversations?.find(
+        (c) => c.id === conversationIdParam,
+      )
+
+      // Signed in but the cloud copy is still loading: show local now and let
+      // the effect re-run to reconcile rather than committing early.
+      if (isLoggedIn && !isRemoteConversationFetched) {
+        applyRestored(local?.messages)
+        return
       }
+
+      const remoteMessages =
+        isLoggedIn && remoteConversationData?.conversation
+          ? remoteConversationData.conversation.conversationMessages.nodes
+              .filter((node): node is NonNullable<typeof node> => node !== null)
+              .map((node) => node.message as UIMessage)
+          : undefined
+
+      applyRestored(pickRicherMessages(local?.messages, remoteMessages))
+
+      // Seed the remote-save dedup from the cloud's actual state only, so a
+      // follow-up turn appends the truly-missing messages, and a local-only
+      // conversation stays "new" so the next turn creates it in the cloud.
+      if (remoteMessages) {
+        markMessagesAsSaved(conversationIdParam, remoteMessages)
+      }
+
       setRestoredConversationId(conversationIdParam)
       setSearchParams({}, { replace: true })
-    } else {
-      const restoreLocal = async () => {
-        const conversations = await conversationStorage.getValue()
-        const conversation = conversations?.find(
-          (c) => c.id === conversationIdParam,
-        )
-
-        if (conversation) {
-          setConversationId(
-            conversation.id as ReturnType<typeof crypto.randomUUID>,
-          )
-          setMessages(conversation.messages)
-        }
-        setRestoredConversationId(conversationIdParam)
-        setSearchParams({}, { replace: true })
-      }
-      restoreLocal()
     }
-  }, [conversationIdParam, remoteConversationData, isLoggedIn])
+
+    restore()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    conversationIdParam,
+    remoteConversationData,
+    isRemoteConversationFetched,
+    isLoggedIn,
+  ])
 
   // Per-window scope: resume this window's conversation when the panel
   // (re)mounts (e.g. closed + reopened) instead of starting a blank chat.
@@ -579,10 +603,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
+    // Local is the durable source of truth and is written on every turn
+    // regardless of auth, so history survives sign-out (issue #559). When
+    // signed in we additionally mirror the turn to the cloud.
+    saveLocalConversation(conversationIdRef.current, messagesToSave)
     if (isLoggedIn) {
       saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    } else {
-      saveLocalConversation(conversationIdRef.current, messagesToSave)
     }
 
     invalidateCredits()

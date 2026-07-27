@@ -35,6 +35,22 @@ export const extractLastUserMessage = (messages: UIMessage[]): string => {
   return text || 'New conversation'
 }
 
+/**
+ * Merges local and remote history by id, newest first. The local copy wins for
+ * conversations we still hold locally (its lastMessagedAt is the message time);
+ * remote fills in older, cloud-only history. Local id == remote rowId makes the
+ * dedupe exact (issue #559).
+ */
+export const mergeHistoryConversations = (
+  local: HistoryConversation[],
+  remote: HistoryConversation[],
+): HistoryConversation[] => {
+  const byId = new Map<string, HistoryConversation>()
+  for (const conversation of remote) byId.set(conversation.id, conversation)
+  for (const conversation of local) byId.set(conversation.id, conversation)
+  return [...byId.values()].sort((a, b) => b.lastMessagedAt - a.lastMessagedAt)
+}
+
 export const groupConversations = (
   conversations: HistoryConversation[],
 ): GroupedConversations => {

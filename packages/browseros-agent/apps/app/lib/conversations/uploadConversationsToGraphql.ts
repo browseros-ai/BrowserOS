@@ -1,7 +1,7 @@
 import { execute } from '@/lib/graphql/execute'
 import { sessionStorage } from '../auth/sessionStorage'
 import { sentry } from '../sentry/sentry'
-import { type Conversation, conversationStorage } from './conversationStorage'
+import type { Conversation } from './conversationStorage'
 import {
   BulkCreateConversationMessagesDocument,
   ConversationExistsDocument,
@@ -23,8 +23,6 @@ export async function uploadConversationsToGraphql(
   const profileId = profileResult.profileByUserId?.rowId
   if (!profileId) return
 
-  const uploadedIds: string[] = []
-
   for (const conversation of conversations) {
     try {
       const existsResult = await execute(ConversationExistsDocument, {
@@ -40,7 +38,6 @@ export async function uploadConversationsToGraphql(
         uploadedCount = countResult.conversationMessages?.totalCount ?? 0
 
         if (uploadedCount >= conversation.messages.length) {
-          uploadedIds.push(conversation.id)
           continue
         }
       } else {
@@ -75,8 +72,6 @@ export async function uploadConversationsToGraphql(
           })
         }
       }
-
-      uploadedIds.push(conversation.id)
     } catch (error) {
       sentry.captureException(error, {
         extra: {
@@ -86,9 +81,8 @@ export async function uploadConversationsToGraphql(
       })
     }
   }
-
-  if (uploadedIds.length > 0) {
-    const remaining = conversations.filter((c) => !uploadedIds.includes(c.id))
-    conversationStorage.setValue(remaining)
-  }
+  // Local conversations are the durable source of truth and are intentionally
+  // NOT drained after upload (issue #559): the cloud is a mirror, not a move.
+  // Re-uploads are idempotent via the conversationExists + uploaded-count
+  // checks above, so retaining local costs at most a skip round-trip.
 }
