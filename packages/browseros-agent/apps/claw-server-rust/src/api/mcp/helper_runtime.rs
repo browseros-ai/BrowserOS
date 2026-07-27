@@ -12,6 +12,7 @@ use crate::{
 use browseros_core::BrowserSession;
 use browseros_mcp::{ToolResult, framework::HelperSource};
 use futures_util::future::BoxFuture;
+use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -102,8 +103,14 @@ pub fn discovery(
         if available.is_empty() {
             return Ok(None);
         }
-        // Append alongside the run's { ok, value, logs }; leave text content as is.
         let mut result = context.result.clone();
+        // Deliver discovery through a text block: structured content is not
+        // serialized over the MCP wire (the script tool has no output schema),
+        // so a helpersAvailable structured field alone never reaches the agent.
+        result
+            .content
+            .push(ContentBlock::text(discovery_note(&available)));
+        // Also keep the structured field for any client that does read it.
         result.structured_content = Some(match result.structured_content.take() {
             Some(Value::Object(mut map)) => {
                 map.insert("helpersAvailable".to_string(), Value::Array(available));
@@ -116,6 +123,46 @@ pub fn discovery(
 }
 
 const _: ToolEffect = discovery;
+
+/// A concise, agent-readable summary of the helpers available on the tabs' hosts.
+#[must_use]
+fn discovery_note(available: &[Value]) -> String {
+    let mut lines = vec![
+        "Reusable helpers for your tabs (call helpers.<name>(browser, page), or read one with browser.readHelper(name, { host })):".to_string(),
+    ];
+    for entry in available {
+        let host = entry
+            .get("host")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let names: Vec<String> = entry
+            .get("helpers")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(format_helper_ref).collect())
+            .unwrap_or_default();
+        lines.push(format!("- {host}: {}", names.join(", ")));
+    }
+    lines.join("\n")
+}
+
+fn format_helper_ref(helper: &Value) -> String {
+    let name = helper
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let age = helper
+        .get("ageDays")
+        .and_then(Value::as_i64)
+        .map(|days| format!(" {days}d"))
+        .unwrap_or_default();
+    let candidate = helper
+        .get("candidate")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then_some(", candidate")
+        .unwrap_or_default();
+    format!("{name}{age}{candidate}")
+}
 
 /// Builds the `[{ host, helpers: [...] }]` discovery list for a set of hosts,
 /// omitting hosts with no helpers.
@@ -162,6 +209,20 @@ mod tests {
         assert_eq!(fresh["candidate"], json!(true));
         let unstamped = helper_info_json(&meta("b", "h", 0, false), now);
         assert_eq!(unstamped["ageDays"], Value::Null);
+    }
+
+    #[test]
+    fn discovery_note_summarizes_available_helpers_as_text() {
+        let available = vec![json!({
+            "host": "example.com",
+            "helpers": [
+                { "name": "greet", "ageDays": 0, "candidate": false },
+                { "name": "candidate-abc", "ageDays": 7, "candidate": true }
+            ]
+        })];
+        let note = discovery_note(&available);
+        assert!(note.contains("helpers.<name>"));
+        assert!(note.contains("example.com: greet 0d, candidate-abc 7d, candidate"));
     }
 
     #[test]

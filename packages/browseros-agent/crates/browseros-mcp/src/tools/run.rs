@@ -392,9 +392,9 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
 /// after the SDK bootstrap. A broken helper is contained by its try/catch and
 /// reported through the captured console; it never fails the run.
 fn load_preloaded_helpers(ctx: &Ctx<'_>, helpers: &[HelperSource]) {
-    if helpers.is_empty() {
-        return;
-    }
+    // Always expose the namespace, even with nothing to load, so a script that
+    // references `helpers.<name>` gets a clean `undefined` instead of a
+    // `ReferenceError: helpers is not defined`.
     let _ = ctx
         .eval::<(), _>("globalThis.helpers = globalThis.helpers || {};")
         .catch(ctx);
@@ -1542,6 +1542,25 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.inner_call_hook = Some(Arc::new(MockHook(log)));
         ctx
+    }
+
+    #[tokio::test]
+    async fn run_exposes_an_empty_helpers_namespace_without_preloads() -> anyhow::Result<()> {
+        // No preloaded_helpers: referencing helpers.<name> must not throw.
+        let ctx = test_ctx();
+        let result = run_tool_with_ctx(
+            "return { kind: typeof helpers, missing: typeof helpers.nope };",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["kind"], json!("object"));
+        assert_eq!(structured["value"]["missing"], json!("undefined"));
+        Ok(())
     }
 
     #[tokio::test]
