@@ -25,7 +25,7 @@ import {
 } from '@/lib/conversations/active-conversation-buffer'
 import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
-import { uploadConversationsToGraphql } from '@/lib/conversations/uploadConversationsToGraphql'
+import { uploadConversations } from '@/lib/conversations/uploadConversationsToGraphql'
 import { useConversations } from '@/lib/conversations/useConversations'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
@@ -604,49 +604,34 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     invalidateCredits()
   }, [status])
 
-  // Buffer the in-flight conversation as it streams so navigating away mid-chat
-  // still lets the next mount sync it to the cloud (#559). Throttled (leading +
-  // trailing) so continuous streaming is captured about once a second without
-  // thrashing storage; the settled turn is also buffered at turn end above.
-  const bufferWriteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  )
-  const lastBufferWriteRef = useRef(0)
+  // Save the in-flight conversation whenever the page is hidden (navigating to
+  // Settings, closing the tab, switching away) so it isn't lost before the next
+  // mount syncs it to the cloud (#559). Reads the latest messages at hide time,
+  // which fires before unload where a React unmount cleanup would not. The
+  // settled turn is also buffered at turn end above.
   useEffect(() => {
     if (!isLoggedIn || !userId) return
-    if (getPersistableMessages(messages).length === 0) return
-    const id = conversationIdRef.current
-    const writeBuffer = () => {
-      lastBufferWriteRef.current = Date.now()
+    const onHide = () => {
+      if (document.visibilityState !== 'hidden') return
       const latest = getPersistableMessages(messagesRef.current)
       if (latest.length === 0) return
       void bufferActiveConversation({
-        id,
+        id: conversationIdRef.current,
         messages: latest,
         lastMessagedAt: Date.now(),
         userId,
       })
     }
-    const throttleMs = 1500
-    const sinceLast = Date.now() - lastBufferWriteRef.current
-    clearTimeout(bufferWriteTimerRef.current)
-    if (sinceLast >= throttleMs) {
-      writeBuffer()
-    } else {
-      bufferWriteTimerRef.current = setTimeout(
-        writeBuffer,
-        throttleMs - sinceLast,
-      )
-    }
-    return () => clearTimeout(bufferWriteTimerRef.current)
-  }, [messages, isLoggedIn, userId])
+    document.addEventListener('visibilitychange', onHide)
+    return () => document.removeEventListener('visibilitychange', onHide)
+  }, [isLoggedIn, userId])
 
   // On mount (and on sign-in), push any buffered in-flight conversations for the
   // current user to the cloud so an interrupted chat still lands in history. It
   // is never restored into the active conversation; recovery is via history.
   useEffect(() => {
     if (!isLoggedIn || !userId) return
-    void flushActiveConversationBuffer(userId, uploadConversationsToGraphql)
+    void flushActiveConversationBuffer(userId, uploadConversations)
   }, [isLoggedIn, userId])
 
   useEffect(() => {

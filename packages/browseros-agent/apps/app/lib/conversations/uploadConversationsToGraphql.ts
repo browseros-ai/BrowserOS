@@ -10,18 +10,25 @@ import {
   GetUploadedMessageCountDocument,
 } from './graphql/uploadConversationDocument'
 
-export async function uploadConversationsToGraphql(
+/**
+ * Uploads each conversation to the cloud idempotently (creating it and
+ * appending only the messages the cloud does not already have) and returns the
+ * ids that are now fully in the cloud. A missing session/profile yields an empty
+ * result and per-conversation errors are swallowed and omitted, so a caller can
+ * safely retry whatever is not returned. Does not touch local storage.
+ */
+export async function uploadConversations(
   conversations: Conversation[],
-) {
-  if (conversations.length === 0) return
+): Promise<string[]> {
+  if (conversations.length === 0) return []
 
   const sessionInfo = await sessionStorage.getValue()
   const userId = sessionInfo?.user?.id
-  if (!userId) return
+  if (!userId) return []
 
   const profileResult = await execute(GetProfileIdByUserIdDocument, { userId })
   const profileId = profileResult.profileByUserId?.rowId
-  if (!profileId) return
+  if (!profileId) return []
 
   const uploadedIds: string[] = []
 
@@ -86,6 +93,18 @@ export async function uploadConversationsToGraphql(
       })
     }
   }
+
+  return uploadedIds
+}
+
+/**
+ * Uploads local conversations and drains the ones that reached the cloud from
+ * `local:conversations`.
+ */
+export async function uploadConversationsToGraphql(
+  conversations: Conversation[],
+): Promise<void> {
+  const uploadedIds = await uploadConversations(conversations)
 
   if (uploadedIds.length > 0) {
     const remaining = conversations.filter((c) => !uploadedIds.includes(c.id))

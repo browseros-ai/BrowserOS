@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'bun:test'
 import {
   type ActiveConversationBufferEntry,
-  removeBufferEntries,
+  pruneFlushedEntries,
   selectBufferEntriesForUser,
   upsertBufferEntry,
 } from './active-conversation-buffer.helpers'
 
-const entry = (id: string, userId: string): ActiveConversationBufferEntry => ({
+const entry = (
+  id: string,
+  userId: string,
+  lastMessagedAt = 0,
+): ActiveConversationBufferEntry => ({
   id,
   userId,
   messages: [],
-  lastMessagedAt: 0,
+  lastMessagedAt,
 })
 
 describe('upsertBufferEntry', () => {
@@ -41,15 +45,25 @@ describe('selectBufferEntriesForUser', () => {
   })
 })
 
-describe('removeBufferEntries', () => {
-  it('drops the flushed ids and keeps the rest', () => {
-    const all = [entry('a', 'A'), entry('b', 'A'), entry('c', 'A')]
-    expect(removeBufferEntries(all, ['a', 'c']).map((e) => e.id)).toEqual(['b'])
+describe('pruneFlushedEntries', () => {
+  it('removes only the exact snapshots that were flushed', () => {
+    const all = [entry('a', 'A', 1), entry('b', 'A', 1), entry('c', 'A', 1)]
+    const flushed = [entry('a', 'A', 1), entry('c', 'A', 1)]
+    expect(pruneFlushedEntries(all, flushed).map((e) => e.id)).toEqual(['b'])
   })
 
-  it('returns the remaining entries when nothing matches', () => {
-    expect(
-      removeBufferEntries([entry('a', 'A')], ['x']).map((e) => e.id),
-    ).toEqual(['a'])
+  it('keeps a newer snapshot written for the same id during the upload', () => {
+    // 'a' was uploaded at t=1 but rewritten at t=2 while the upload ran.
+    const latest = [entry('a', 'A', 2), entry('b', 'A', 1)]
+    const flushed = [entry('a', 'A', 1)]
+    expect(pruneFlushedEntries(latest, flushed).map((e) => e.id)).toEqual([
+      'a',
+      'b',
+    ])
+  })
+
+  it('keeps entries whose upload was not confirmed', () => {
+    const latest = [entry('a', 'A', 1), entry('b', 'A', 1)]
+    expect(pruneFlushedEntries(latest, []).map((e) => e.id)).toEqual(['a', 'b'])
   })
 })

@@ -1,7 +1,7 @@
 import { storage } from '@wxt-dev/storage'
 import {
   type ActiveConversationBufferEntry,
-  removeBufferEntries,
+  pruneFlushedEntries,
   selectBufferEntriesForUser,
   upsertBufferEntry,
 } from './active-conversation-buffer.helpers'
@@ -31,31 +31,34 @@ export async function bufferActiveConversation(
 
 /**
  * Uploads the current user's buffered conversations to the cloud via the given
- * idempotent uploader, then removes the flushed entries. Only the current
- * user's entries are touched, so a previous account's un-synced conversation is
- * never pushed into this account's cloud.
+ * uploader (which returns the ids it confirmed reached the cloud), then removes
+ * only those exact snapshots. Entries whose upload failed, and any newer
+ * snapshot written for the same conversation during the upload, are kept for a
+ * later retry. Only the current user's entries are ever touched, so a previous
+ * account's un-synced conversation is never pushed into this account's cloud.
  */
 export async function flushActiveConversationBuffer(
   userId: string,
-  upload: (conversations: Conversation[]) => Promise<void>,
+  upload: (conversations: Conversation[]) => Promise<string[]>,
 ): Promise<void> {
   const current = (await activeConversationBufferStorage.getValue()) ?? []
   const mine = selectBufferEntriesForUser(current, userId)
   if (mine.length === 0) return
 
-  await upload(
-    mine.map(({ id, messages, lastMessagedAt }) => ({
-      id,
-      messages,
-      lastMessagedAt,
-    })),
+  const uploadedIds = new Set(
+    await upload(
+      mine.map(({ id, messages, lastMessagedAt }) => ({
+        id,
+        messages,
+        lastMessagedAt,
+      })),
+    ),
   )
+  const flushed = mine.filter((e) => uploadedIds.has(e.id))
+  if (flushed.length === 0) return
 
   const latest = (await activeConversationBufferStorage.getValue()) ?? []
   await activeConversationBufferStorage.setValue(
-    removeBufferEntries(
-      latest,
-      mine.map((e) => e.id),
-    ),
+    pruneFlushedEntries(latest, flushed),
   )
 }
