@@ -16,20 +16,29 @@ import { type OnboardingVideo, posterFor } from './cockpit-videos'
 interface VideoTileProps {
   video: OnboardingVideo
   onPlay: (video: OnboardingVideo) => void
+  /** `bento` sizes to the grid cell; `rail` is a fixed-width scroll item. */
+  variant?: 'bento' | 'rail'
 }
 
-export function VideoTile({ video, onPlay }: VideoTileProps) {
-  const featured = video.span === 'featured'
+export function VideoTile({
+  video,
+  onPlay,
+  variant = 'bento',
+}: VideoTileProps) {
+  const featured = variant === 'bento' && video.span === 'featured'
+  const rail = variant === 'rail'
   return (
     <button
       type="button"
       onClick={() => onPlay(video)}
       aria-label={`Play: ${video.title}`}
       className={cn(
-        'group relative aspect-video overflow-hidden rounded-2xl border border-border-2 bg-muted text-left outline-none md:aspect-auto md:h-full',
+        'group relative aspect-video overflow-hidden rounded-2xl border border-border-2 bg-muted text-left outline-none',
         'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        variant === 'bento' && 'md:aspect-auto md:h-full',
         featured && 'md:col-span-2 md:row-span-2',
-        video.span === 'wide' && 'md:col-span-2',
+        variant === 'bento' && video.span === 'wide' && 'md:col-span-2',
+        rail && 'w-60 shrink-0 snap-start',
       )}
     >
       <img
@@ -43,22 +52,28 @@ export function VideoTile({ video, onPlay }: VideoTileProps) {
       <span
         className={cn(
           'absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-background/90 text-accent shadow-sm ring-1 ring-accent/20 backdrop-blur transition duration-200 group-hover:scale-110 group-hover:ring-accent/40',
-          featured ? 'size-16' : 'size-11',
+          featured ? 'size-16' : rail ? 'size-9' : 'size-11',
         )}
       >
         <Play
           className={cn(
             'translate-x-[1px] fill-accent',
-            featured ? 'size-7' : 'size-5',
+            featured ? 'size-7' : rail ? 'size-4' : 'size-5',
           )}
         />
       </span>
 
-      <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1 p-4">
+      <div
+        className={cn(
+          'absolute inset-x-0 bottom-0 flex flex-col gap-1',
+          rail ? 'p-3' : 'p-4',
+        )}
+      >
         <span
           className={cn(
-            'line-clamp-2 font-semibold text-white leading-tight',
+            'font-semibold text-white leading-tight',
             featured ? 'text-lg' : 'text-sm',
+            rail ? 'line-clamp-1' : 'line-clamp-2',
           )}
         >
           {video.title}
