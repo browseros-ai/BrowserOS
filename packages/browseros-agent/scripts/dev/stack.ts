@@ -93,7 +93,21 @@ async function main(): Promise<void> {
     '--disable-features=EdgeStartupBoost',
     '--no-first-run',
     '--no-default-browser-check',
+    '--use-mock-keychain',
+    '--show-component-extension-options',
+    '--disable-browseros-server',
+    '--disable-browseros-server-updater',
+    '--disable-browseros-extensions',
+    '--browseros-dock-icon=dev',
+    '--browseros-product=browseros',
+    `--browseros-mcp-port=${serverPort}`,
+    `--browseros-server-port=${serverPort}`,
+    `--browseros-proxy-port=${serverPort}`,
   ]
+
+  if (stackEnv.BROWSEROS_EXTENSION_PORT) {
+    browserArgs.push(`--browseros-extension-port=${stackEnv.BROWSEROS_EXTENSION_PORT}`)
+  }
 
   log('info', `Starting browser: ${browserBinary} (standalone app mode)`)
   const browserProc = spawn({
