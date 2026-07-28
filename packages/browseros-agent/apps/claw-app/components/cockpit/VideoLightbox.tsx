@@ -9,7 +9,7 @@
  */
 
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { embedUrlFor, type OnboardingVideo } from './cockpit-videos'
+import { type OnboardingVideo, posterFor, videoUrlFor } from './cockpit-videos'
 
 interface VideoLightboxProps {
   video: OnboardingVideo | null
@@ -29,13 +29,15 @@ export function VideoLightbox({ video, onClose }: VideoLightboxProps) {
           <>
             <DialogTitle className="sr-only">{video.title}</DialogTitle>
             <div className="aspect-video w-full bg-black">
-              <iframe
+              {/* biome-ignore lint/a11y/useMediaCaption: onboarding demos ship without a captions track yet */}
+              <video
                 key={video.id}
-                src={embedUrlFor(video)}
-                title={video.title}
-                allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                allowFullScreen
-                className="h-full w-full border-0"
+                src={videoUrlFor(video)}
+                poster={posterFor(video)}
+                controls
+                autoPlay
+                playsInline
+                className="h-full w-full"
               />
             </div>
             <div className="flex flex-col gap-1 p-5">

@@ -36,14 +36,6 @@ export default defineConfig({
     ],
     // Recording is universal; the local server owns tab attribution.
     host_permissions: ['http://127.0.0.1/*', '<all_urls>'],
-    // Keep the MV3 default script/object restrictions and additionally allow
-    // the onboarding how-to bento to frame YouTube's privacy embed. img-src and
-    // connect-src stay unlisted (unrestricted) so poster URLs and the local API
-    // keep loading.
-    content_security_policy: {
-      extension_pages:
-        "script-src 'self'; object-src 'self'; frame-src 'self' https://www.youtube-nocookie.com;",
-    },
     action: {
       default_icon: {
         16: 'icon/16.png',

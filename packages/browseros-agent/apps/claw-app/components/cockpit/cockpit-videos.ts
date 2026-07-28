@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Content manifest for the first-run how-to video bento. Editing the
- * line-up here never touches layout: the bento maps `span` to grid
- * cells and derives the poster and embed URL from `youtubeId`.
+ * line-up here never touches layout: the bento maps `span` to grid cells,
+ * derives the poster from the YouTube thumbnail, and plays a self-hosted
+ * video in the lightbox (a YouTube iframe cannot play from the extension's
+ * chrome-extension origin).
  *
- * Placeholder line-up: two BrowserOS videos repeated to fill the grid.
- * Real how-to clips replace these later by swapping `youtubeId` / copy.
- * A per-video `poster` URL can override the derived YouTube thumbnail
- * once branded posters exist.
+ * Placeholder line-up: two BrowserOS videos fill the grid. Every tile plays
+ * the same holdover clip for now; real per-video `videoUrl`s and branded
+ * `poster`s drop in later without touching layout.
  */
 
 export type VideoSpan = 'featured' | 'wide' | 'default'
@@ -24,7 +25,16 @@ export interface OnboardingVideo {
   span: VideoSpan
   /** Optional poster URL; falls back to the YouTube thumbnail. */
   poster?: string
+  /** Optional self-hosted video URL; falls back to the shared holdover clip. */
+  videoUrl?: string
 }
+
+/**
+ * Temporary self-hosted clip every tile plays until per-video `videoUrl`s
+ * exist. This is the previous single first-run demo.
+ */
+const PLACEHOLDER_VIDEO_URL =
+  'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4'
 
 const CAN_AI_AUTOMATE = {
   youtubeId: 'rIZ8OBHL7Zo',
@@ -53,10 +63,6 @@ export function posterFor(video: OnboardingVideo): string {
   )
 }
 
-/**
- * Privacy-friendly nocookie embed, autoplaying because the user
- * explicitly clicked the tile to open the player.
- */
-export function embedUrlFor(video: OnboardingVideo): string {
-  return `https://www.youtube-nocookie.com/embed/${video.youtubeId}?autoplay=1&rel=0`
+export function videoUrlFor(video: OnboardingVideo): string {
+  return video.videoUrl ?? PLACEHOLDER_VIDEO_URL
 }
