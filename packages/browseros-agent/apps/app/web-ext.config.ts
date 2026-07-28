@@ -63,7 +63,6 @@ const chromiumArgs = [
   '--disable-features=EdgeStartupBoost',
   '--no-first-run',
   '--no-default-browser-check',
-  `--user-data-dir=${chromiumProfile()}`,
 ]
 
 if (env.BROWSEROS_CDP_PORT) {
