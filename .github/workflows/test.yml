@@ -99,7 +99,9 @@ jobs:
 
       - name: Setup Rust
         if: matrix.needs_rust == true
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned so the clippy lint set is deterministic and matches local dev;
+        # a floating `stable` silently changes which lints fire across runs.
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy,rustfmt
 
