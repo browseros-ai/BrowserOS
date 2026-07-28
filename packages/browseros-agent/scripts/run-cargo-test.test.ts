@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   buildCargoJunitXml,
   parseCargoTestCounts,
+  reconcileCargoCounts,
 } from './run-cargo-test.helpers'
 
 describe('parseCargoTestCounts', () => {
@@ -33,6 +34,37 @@ describe('parseCargoTestCounts', () => {
       ignored: 0,
       total: 0,
     })
+  })
+})
+
+describe('reconcileCargoCounts', () => {
+  const counts = (p: number, f: number, i: number) => ({
+    passed: p,
+    failed: f,
+    ignored: i,
+    total: p + f + i,
+  })
+
+  it('leaves counts untouched when cargo exited zero', () => {
+    expect(reconcileCargoCounts(counts(84, 0, 0), 0)).toEqual(counts(84, 0, 0))
+  })
+
+  it('forces a failure when cargo fails before any test result (compile error)', () => {
+    const result = reconcileCargoCounts(counts(0, 0, 0), 101)
+    expect(result.failed).toBe(1)
+    expect(result.total).toBe(1)
+  })
+
+  it('forces a failure when a later crate fails after earlier tests passed', () => {
+    const result = reconcileCargoCounts(counts(84, 0, 0), 101)
+    expect(result.failed).toBe(1)
+    expect(result.total).toBe(84)
+  })
+
+  it('keeps the real failure count when tests actually failed', () => {
+    expect(reconcileCargoCounts(counts(97, 3, 0), 101)).toEqual(
+      counts(97, 3, 0),
+    )
   })
 })
 

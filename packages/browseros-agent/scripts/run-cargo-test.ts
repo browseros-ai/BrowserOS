@@ -16,6 +16,7 @@ import { basename, dirname, resolve } from 'node:path'
 import {
   buildCargoJunitXml,
   parseCargoTestCounts,
+  reconcileCargoCounts,
 } from './run-cargo-test.helpers'
 
 const args = process.argv.slice(2)
@@ -42,12 +43,10 @@ const exitCode: number = await new Promise((res) => {
 
 if (junitPath) {
   const suite = basename(junitPath).replace(/\.xml$/, '') || 'cargo'
+  const counts = reconcileCargoCounts(parseCargoTestCounts(combined), exitCode)
   const outputPath = resolve(junitPath)
   mkdirSync(dirname(outputPath), { recursive: true })
-  writeFileSync(
-    outputPath,
-    buildCargoJunitXml(suite, parseCargoTestCounts(combined)),
-  )
+  writeFileSync(outputPath, buildCargoJunitXml(suite, counts))
 }
 
 process.exit(exitCode)
