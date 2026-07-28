@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "build:chromium": "tsc --noEmit && vite build --mode chromium && bun scripts/verify-chromium-build.ts",
     "preview": "vite preview",
-    "test": "bun test",
+    "test": "bun run ../../scripts/run-bun-test.ts ./apps/claw-onboard",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe"

@@ -22,8 +22,20 @@ if (!process.env.BROWSEROS_BINARY) {
 
 buildRustServer()
 
+// Emit JUnit so the PR test summary reports real counts instead of 0/0. The
+// workflow passes an absolute BROWSEROS_JUNIT_PATH, so cwd does not matter.
+const junitPath = process.env.BROWSEROS_JUNIT_PATH?.trim()
+const junitArgs = junitPath
+  ? ['--reporter=junit', `--reporter-outfile=${junitPath}`]
+  : []
+
 const result = Bun.spawnSync({
-  cmd: ['bun', 'test', resolve(import.meta.dir, 'rust-conformance.test.ts')],
+  cmd: [
+    'bun',
+    'test',
+    resolve(import.meta.dir, 'rust-conformance.test.ts'),
+    ...junitArgs,
+  ],
   env: {
     ...process.env,
     ...(smoke ? { CLAW_MCP_SMOKE: '1' } : {}),

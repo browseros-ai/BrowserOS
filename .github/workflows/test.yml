@@ -75,7 +75,7 @@ jobs:
             junit_path: test-results/build.xml
             needs_browser: false
           - suite: claw-server-rust
-            command: cargo test --workspace --locked
+            command: bun run ./scripts/run-cargo-test.ts test --workspace --locked
             junit_path: test-results/claw-server-rust.xml
             needs_browser: false
             needs_rust: true
@@ -311,12 +311,22 @@ jobs:
               header = f"## :x: Tests failed — {total_failed}/{total_tests} failed"
 
           lines = [marker, header, ""]
+          gate_suites = []
           if suites:
               lines.append("| Suite | Passed | Failed | Skipped |")
               lines.append("|-------|--------|--------|---------|")
               for s in suites:
-                  icon = ":white_check_mark:" if s["failed"] == 0 and s["total"] > 0 else ":warning:" if s["total"] == 0 else ":x:"
-                  lines.append(f"| {icon} `{s['name']}` | {s['passed']}/{s['total']} | {s['failed']} | {s['skipped']} |")
+                  if s["failed"] > 0:
+                      icon, passed_cell = ":x:", f"{s['passed']}/{s['total']}"
+                  elif s["total"] == 0:
+                      # Ran clean but emitted no JUnit counts (a lint/format gate).
+                      icon, passed_cell = ":white_check_mark:", "passed"
+                      gate_suites.append(s["name"])
+                  else:
+                      icon, passed_cell = ":white_check_mark:", f"{s['passed']}/{s['total']}"
+                  lines.append(f"| {icon} `{s['name']}` | {passed_cell} | {s['failed']} | {s['skipped']} |")
+              if gate_suites:
+                  lines += ["", "> `passed` = ran successfully but emits no JUnit counts (a lint/format gate)."]
 
           if failed_cases:
               lines += ["", "<details open>", "<summary><b>Failed tests</b></summary>", ""]
