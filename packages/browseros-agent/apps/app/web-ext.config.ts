@@ -52,6 +52,8 @@ function browserOSProduct(defaultProduct: 'browseros' | 'browserclaw') {
   return product
 }
 
+const extensionPath = resolve(configDir, 'dist/chrome-mv3-dev').replace(/\\/g, '/')
+
 const chromiumArgs = [
   '--use-mock-keychain',
   '--show-component-extension-options',
@@ -59,6 +61,7 @@ const chromiumArgs = [
   '--disable-browseros-extensions',
   '--browseros-dock-icon=dev',
   `--browseros-product=${browserOSProduct('browseros')}`,
+  `--load-extension=${extensionPath}`,
   '--app=chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html',
   '--disable-features=EdgeStartupBoost',
   '--no-first-run',
