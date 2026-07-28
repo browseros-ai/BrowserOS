@@ -16,15 +16,22 @@ import {
  * ids that are now fully in the cloud. A missing session/profile yields an empty
  * result and per-conversation errors are swallowed and omitted, so a caller can
  * safely retry whatever is not returned. Does not touch local storage.
+ *
+ * Pass `expectedUserId` to bind the upload to a specific account: if the live
+ * session no longer belongs to that user (a session switch races the upload),
+ * nothing is uploaded, so one account's buffered conversation is never created
+ * under another account's profile.
  */
 export async function uploadConversations(
   conversations: Conversation[],
+  expectedUserId?: string,
 ): Promise<string[]> {
   if (conversations.length === 0) return []
 
   const sessionInfo = await sessionStorage.getValue()
   const userId = sessionInfo?.user?.id
   if (!userId) return []
+  if (expectedUserId && userId !== expectedUserId) return []
 
   const profileResult = await execute(GetProfileIdByUserIdDocument, { userId })
   const profileId = profileResult.profileByUserId?.rowId

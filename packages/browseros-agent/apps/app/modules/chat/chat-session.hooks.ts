@@ -638,7 +638,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // is never restored into the active conversation; recovery is via history.
   useEffect(() => {
     if (!isLoggedIn || !userId) return
-    void flushActiveConversationBuffer(userId, uploadConversations)
+    void flushActiveConversationBuffer(userId, (conversations) =>
+      uploadConversations(conversations, userId),
+    )
   }, [isLoggedIn, userId])
 
   useEffect(() => {
