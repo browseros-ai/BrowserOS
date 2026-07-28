@@ -30,10 +30,6 @@ const HOME_TASK_LIMIT = 12
 export function RecentActivity() {
   const query = useSessions({
     variables: { limit: HOME_TASK_LIMIT },
-    // Homepage feed opts in to a light poll so new sessions surface without a
-    // manual refresh. This consumer never paginates (single page), so a tick
-    // is one request, not the all-pages refetch that makes polling unsafe as a
-    // shared-factory default.
     refetchInterval: 3000,
   })
   const tasks = (query.data?.pages ?? [])

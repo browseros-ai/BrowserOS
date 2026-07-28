@@ -69,13 +69,11 @@ export const useSessions = createInfiniteQuery<
     }),
   initialPageParam: undefined,
   getNextPageParam: (last) => last.nextCursor,
-  // No `refetchInterval` default on purpose. This is an infinite query, so an
-  // interval refetches *every loaded page* on each tick; baking a poll into
-  // the shared factory turns any paginated consumer (e.g. the audit view) into
-  // an unbounded, never-stopping request stream. Polling is opt-in per
-  // consumer instead (see RecentActivity and the cockpit onboarding probe).
-  // Keep prior pages visible while a new filter set loads so the adjacent
-  // filter controls stay mounted and retain keyboard focus.
+  // No `refetchInterval` default: on an infinite query an interval refetches
+  // every loaded page each tick, so a shared-factory poll would make paginated
+  // views (e.g. audit) request forever. Polling is opt-in per consumer.
+  // Keep the prior pages visible while a new filter set loads so the
+  // adjacent filter controls remain mounted and retain keyboard focus.
   placeholderData: (previous) => previous,
 })
 
