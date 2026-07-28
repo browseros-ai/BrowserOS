@@ -250,9 +250,7 @@ describe('Cockpit (v2)', () => {
     })
     expect(firstRun).toContain('You watch. Your agent')
     expect(firstRun).toContain('Set up MCP endpoint')
-    expect(firstRun).toContain(
-      'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
-    )
+    expect(firstRun).toContain('Can AI Agents Finally Automate the Web?')
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
 

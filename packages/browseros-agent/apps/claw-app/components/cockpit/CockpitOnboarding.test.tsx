@@ -9,55 +9,63 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { CockpitOnboarding } from './CockpitOnboarding'
 
-function render(state: 'first-run' | 'waiting'): string {
+function render(
+  state: 'first-run' | 'waiting',
+  connectedHarnesses: readonly string[] = [],
+): string {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <CockpitOnboarding state={state} />
+      <CockpitOnboarding
+        state={state}
+        connectedHarnesses={connectedHarnesses}
+      />
     </MemoryRouter>,
   )
 }
 
 describe('CockpitOnboarding', () => {
-  it('first-run: hero, motion demo, single install CTA, prompt tile, and reminder strip render', () => {
+  it('first-run: hero, how-to video bento as posters, install CTA, and prompt tile render', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
-    expect(html).toContain('first-run-demo.mp4')
+    // The bento renders poster tiles with a play affordance; no iframe
+    // is present until the reader opens the lightbox.
+    expect(html).toContain('Can AI Agents Finally Automate the Web?')
+    expect(html).toContain('Play: ')
+    expect(html).not.toContain('youtube-nocookie.com/embed')
     expect(html).toContain('Set up MCP endpoint')
     expect(html).toContain('Paste this into Claude Code, Cursor, or Codex.')
     expect(html).toContain(
       'Use BrowserClaw. Book me the cheapest morning flight',
     )
-    expect(html).toContain('Install BrowserClaw as an MCP.')
-    expect(html).toContain('Prompt your agent.')
-    expect(html).toContain('Watch it here.')
   })
 
-  it('first-run: renders only ONE primary CTA button in the action row', () => {
-    // The Copy starter prompt button was retired; the primary action
-    // row now holds just the MCP install navigation link.
+  it('first-run: retires the single setup demo and the numbered step strip', () => {
     const html = render('first-run')
-    expect(html).not.toContain('Copy starter prompt')
+    expect(html).not.toContain('first-run-demo.mp4')
+    expect(html).not.toContain('Install BrowserClaw as an MCP.')
+    expect(html).not.toContain('Watch it here.')
   })
 
-  it('first-run: does NOT render the waiting banner before any signal', () => {
+  it('first-run: renders neither the waiting banner nor a connected-agents line', () => {
     const html = render('first-run')
     expect(html).not.toContain(
       'Waiting for your first run. Come back here as soon',
     )
+    expect(html).not.toContain('connected')
   })
 
-  it('waiting: banner renders, install CTA relabels to View, step 01 marks done, step 02 goes active', () => {
-    const html = render('waiting')
+  it('waiting: banner renders, install CTA relabels to View, and connected agents list', () => {
+    const html = render('waiting', ['Claude Code', 'Cursor'])
     expect(html).toContain('Waiting for your first run. Come back here as soon')
     expect(html).toContain('View MCP endpoint')
     expect(html).not.toContain('Set up MCP endpoint')
-    expect(html).toContain('MCP installed.')
-    expect(html).not.toContain('Install BrowserClaw as an MCP.')
+    expect(html).toContain('Claude Code, Cursor')
+    expect(html).toContain('connected')
   })
 
   it('waiting: retains the starter prompt tile so the reader can still copy', () => {
-    const html = render('waiting')
+    const html = render('waiting', ['Claude Code'])
     expect(html).toContain(
       'Use BrowserClaw. Book me the cheapest morning flight',
     )

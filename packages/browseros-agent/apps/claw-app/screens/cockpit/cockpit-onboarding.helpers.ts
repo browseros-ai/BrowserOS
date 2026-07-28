@@ -40,7 +40,7 @@ export const HERO_COPY = {
   h1Prefix: 'You watch. Your agent',
   h1Accent: 'works.',
   subhead:
-    'Set up BrowserClaw once. Tell your AI to use it. Everything lands here.',
+    'See how people put BrowserClaw to work, then paste a task into your agent and run it.',
 } as const
 
 export const PRIMARY_ACTION_COPY = {
@@ -64,17 +64,8 @@ export const STARTER_PROMPT_LABEL =
 export const STARTER_PROMPT =
   'Use BrowserClaw. Book me the cheapest morning flight from SFO to NYC next Friday.'
 
-export const STEP_COPY = {
-  install: {
-    activeTitle: 'Install BrowserClaw as an MCP.',
-    doneTitle: 'MCP installed.',
-  },
-  ask: {
-    title: 'Prompt your agent.',
-  },
-  watch: {
-    title: 'Watch it here.',
-  },
+export const CONNECTED_COPY = {
+  suffix: 'connected',
 } as const
 
 export const FOOTER_COPY = {

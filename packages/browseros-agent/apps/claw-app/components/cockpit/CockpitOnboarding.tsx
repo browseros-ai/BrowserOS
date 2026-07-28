@@ -4,47 +4,50 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * First-run guidance rendered by the Cockpit screen when the reader
- * has no session activity yet. Anchors on a short Remotion motion
- * demo that establishes the mental model (this cockpit watches;
- * your agent acts), then a single definitive CTA to set up the MCP
- * endpoint, then the copyable starter prompt tile, then a tight
- * three-step reminder strip, then a docs link.
+ * has no session activity yet. Leads with a how-to video bento (agents
+ * auto-connect at launch, so onboarding teaches how to put BrowserClaw
+ * to work rather than how to install it), then the MCP endpoint CTA,
+ * the copyable starter prompt, a connected-agents line, and a docs link.
  *
  * Two visual variants keyed off the `state` prop.
  *
- *   first-run  no connections + no activity. Primary CTA is the MCP
- *              install; step 01 pulses active.
- *   waiting    at least one MCP connection + no activity. Primary
- *              CTA becomes "View MCP endpoint"; step 01 renders
- *              done; step 02 pulses active; a waiting banner tells
+ *   first-run  no connections + no activity. Primary CTA sets up the
+ *              MCP endpoint.
+ *   waiting    at least one connection + no activity. Primary CTA
+ *              becomes "View MCP endpoint" and a waiting banner tells
  *              the reader we are listening.
  *
  * State transitions are handled by the parent (Cockpit) via query
  * refetches; the component is a stateless presenter.
  */
 
+import { Check } from 'lucide-react'
 import { useState } from 'react'
 import {
+  CONNECTED_COPY,
   FOOTER_COPY,
   HERO_COPY,
   type OnboardingState,
   PRIMARY_ACTION_COPY,
   STARTER_PROMPT,
   STARTER_PROMPT_LABEL,
-  STEP_COPY,
   WAITING_COPY,
 } from '@/screens/cockpit/cockpit-onboarding.helpers'
 import { FirstRunPrimaryActions } from './FirstRunPrimaryActions'
-import { FirstRunStrip } from './FirstRunStrip'
-import { FirstRunVideo } from './FirstRunVideo'
 import { FirstRunWaitingBanner } from './FirstRunWaitingBanner'
 import { StarterPromptTile } from './StarterPromptTile'
+import { VideoBento } from './VideoBento'
 
 interface CockpitOnboardingProps {
   state: Exclude<OnboardingState, 'ready'>
+  /** User-facing harnesses BrowserClaw is registered in (from the live list). */
+  connectedHarnesses?: readonly string[]
 }
 
-export function CockpitOnboarding({ state }: CockpitOnboardingProps) {
+export function CockpitOnboarding({
+  state,
+  connectedHarnesses = [],
+}: CockpitOnboardingProps) {
   const [promptCopied, setPromptCopied] = useState(false)
   const isWaiting = state === 'waiting'
   const showWaitingBanner = isWaiting || promptCopied
@@ -61,7 +64,7 @@ export function CockpitOnboarding({ state }: CockpitOnboardingProps) {
       aria-label={HERO_COPY.eyebrow.toLowerCase()}
     >
       <OnboardingHero />
-      <FirstRunVideo />
+      <VideoBento />
       <FirstRunPrimaryActions
         installHref={PRIMARY_ACTION_COPY.install.href}
         installLabel={
@@ -78,27 +81,7 @@ export function CockpitOnboarding({ state }: CockpitOnboardingProps) {
         </div>
         <StarterPromptTile prompt={STARTER_PROMPT} onCopied={flagCopied} />
       </div>
-      <FirstRunStrip
-        steps={[
-          {
-            number: '01',
-            title: isWaiting
-              ? STEP_COPY.install.doneTitle
-              : STEP_COPY.install.activeTitle,
-            status: isWaiting ? 'done' : 'active',
-          },
-          {
-            number: '02',
-            title: STEP_COPY.ask.title,
-            status: isWaiting ? 'active' : 'upcoming',
-          },
-          {
-            number: '03',
-            title: STEP_COPY.watch.title,
-            status: 'upcoming',
-          },
-        ]}
-      />
+      <ConnectedAgentsRow harnesses={connectedHarnesses} />
       <OnboardingFooter />
     </section>
   )
@@ -118,6 +101,18 @@ function OnboardingHero() {
       </h1>
       <p className="text-ink-3 text-sm">{HERO_COPY.subhead}</p>
     </header>
+  )
+}
+
+function ConnectedAgentsRow({ harnesses }: { harnesses: readonly string[] }) {
+  if (harnesses.length === 0) return null
+  return (
+    <div className="flex items-center gap-2 rounded-2xl border border-border-2 bg-card p-4">
+      <Check className="size-4 shrink-0 text-accent" />
+      <span className="font-mono text-[12.5px] text-ink-2 uppercase tracking-[0.06em]">
+        {harnesses.join(', ')} {CONNECTED_COPY.suffix}
+      </span>
+    </div>
   )
 }
 
