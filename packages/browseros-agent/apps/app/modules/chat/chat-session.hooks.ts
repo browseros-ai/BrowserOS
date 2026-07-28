@@ -19,8 +19,13 @@ import {
   MESSAGE_SENT_EVENT,
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import {
+  bufferActiveConversation,
+  flushActiveConversationBuffer,
+} from '@/lib/conversations/active-conversation-buffer'
 import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
+import { uploadConversationsToGraphql } from '@/lib/conversations/uploadConversationsToGraphql'
 import { useConversations } from '@/lib/conversations/useConversations'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
@@ -185,6 +190,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const { saveConversation: saveLocalConversation } = useConversations()
   const {
     isLoggedIn,
+    userId,
     saveConversation: saveRemoteConversation,
     resetConversation: resetRemoteConversation,
     markMessagesAsSaved,
@@ -580,6 +586,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (messagesToSave.length === 0) return
 
     if (isLoggedIn) {
+      // Buffer the settled turn durably before the fire-and-forget cloud write,
+      // so an interrupted navigation still lets the next mount sync it (#559).
+      if (userId) {
+        void bufferActiveConversation({
+          id: conversationIdRef.current,
+          messages: messagesToSave,
+          lastMessagedAt: Date.now(),
+          userId,
+        })
+      }
       saveRemoteConversation(conversationIdRef.current, messagesToSave)
     } else {
       saveLocalConversation(conversationIdRef.current, messagesToSave)
@@ -587,6 +603,37 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
     invalidateCredits()
   }, [status])
+
+  // Buffer the in-flight conversation as it streams so navigating away mid-chat
+  // still lets the next mount sync it to the cloud (#559). Debounced so tokens
+  // don't thrash storage; the settled turn is also buffered at turn end above.
+  const bufferWriteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  )
+  useEffect(() => {
+    if (!isLoggedIn || !userId) return
+    const messagesToBuffer = getPersistableMessages(messages)
+    if (messagesToBuffer.length === 0) return
+    const id = conversationIdRef.current
+    clearTimeout(bufferWriteTimerRef.current)
+    bufferWriteTimerRef.current = setTimeout(() => {
+      void bufferActiveConversation({
+        id,
+        messages: messagesToBuffer,
+        lastMessagedAt: Date.now(),
+        userId,
+      })
+    }, 1500)
+    return () => clearTimeout(bufferWriteTimerRef.current)
+  }, [messages, isLoggedIn, userId])
+
+  // On mount (and on sign-in), push any buffered in-flight conversations for the
+  // current user to the cloud so an interrupted chat still lands in history. It
+  // is never restored into the active conversation; recovery is via history.
+  useEffect(() => {
+    if (!isLoggedIn || !userId) return
+    void flushActiveConversationBuffer(userId, uploadConversationsToGraphql)
+  }, [isLoggedIn, userId])
 
   useEffect(() => {
     if (chatError) invalidateCredits()
