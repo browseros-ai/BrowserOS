@@ -63,20 +63,36 @@ async function main(): Promise<void> {
   const agentProc = spawn({
     cmd: ['bun', 'run', '--filter', '@browseros/app', 'dev'],
     cwd: ROOT,
-    stdout: 'inherit',
+    stdout: 'pipe',
     stderr: 'inherit',
     env: stackEnv,
   })
 
-  const manifestPath = join(ROOT, 'apps/app/dist/chrome-mv3-dev/manifest.json')
   log('info', 'Waiting for extension to compile…')
+  const reader = agentProc.stdout.getReader()
+  const decoder = new TextDecoder()
+  
   while (true) {
-    try {
-      const exists = await Bun.file(manifestPath).exists()
-      if (exists) break
-    } catch {}
-    await new Promise((r) => setTimeout(r, 200))
+    const { done, value } = await reader.read()
+    if (done) break
+    const chunk = decoder.decode(value, { stream: true })
+    process.stdout.write(chunk)
+    if (chunk.includes('Built extension') || chunk.includes('Load "dist')) {
+      break
+    }
   }
+
+  // Resume forwarding stdout asynchronously
+  ;(async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        process.stdout.write(decoder.decode(value, { stream: true }))
+      }
+    } catch {}
+  })()
+
   log('info', 'Extension compiled!')
 
   const browserBinary = stackEnv.BROWSEROS_BINARY || 'chrome'
