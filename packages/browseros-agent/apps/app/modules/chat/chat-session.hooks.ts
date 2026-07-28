@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import { isIncognitoContext } from '@/lib/browseros/incognito'
 import {
   getWindowConversation,
   setWindowConversation,
@@ -41,6 +42,7 @@ import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  shouldPersistHistory,
 } from './chat-session-persistence'
 import {
   prepareSidepanelSendMessagesRequest,
@@ -176,6 +178,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
 
+  // Incognito chats are never written to history or the cloud (#1189). Resolved
+  // once per session; the context is fixed for the life of the page.
+  const [isIncognito] = useState(isIncognitoContext)
+  const persistHistory = shouldPersistHistory(isIncognito)
+
   const {
     baseUrl: agentServerUrl,
     isLoading: isLoadingAgentUrl,
@@ -226,7 +233,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     startTask: startExecutionTask,
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
-  } = useExecutionHistoryTracker()
+  } = useExecutionHistoryTracker({ enabled: persistHistory })
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -579,10 +586,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
-    if (isLoggedIn) {
-      saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    } else {
-      saveLocalConversation(conversationIdRef.current, messagesToSave)
+    // Skip all history writes in incognito so the chat never becomes durable
+    // (neither local nor cloud) and can't surface in a normal window (#1189).
+    if (persistHistory) {
+      if (isLoggedIn) {
+        saveRemoteConversation(conversationIdRef.current, messagesToSave)
+      } else {
+        saveLocalConversation(conversationIdRef.current, messagesToSave)
+      }
     }
 
     invalidateCredits()
@@ -770,6 +781,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoading: isLoadingProviders || isLoadingAgentUrl,
     canSend,
     isSyncing: !isIntegrationsSynced,
+    isIncognito,
     isRestoringConversation,
     agentUrlError,
     chatError,
