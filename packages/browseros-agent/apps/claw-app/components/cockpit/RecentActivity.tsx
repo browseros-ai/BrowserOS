@@ -28,7 +28,11 @@ const HOME_TASK_LIMIT = 12
  * At mobile: everything single-column.
  */
 export function RecentActivity() {
-  const query = useSessions({ variables: { limit: HOME_TASK_LIMIT } })
+  const query = useSessions({
+    variables: { limit: HOME_TASK_LIMIT },
+    // Homepage feed: poll so new sessions surface without a manual refresh.
+    refetchInterval: 3000,
+  })
   const tasks = (query.data?.pages ?? [])
     .flatMap((p) => p.items)
     .slice(0, HOME_TASK_LIMIT)
