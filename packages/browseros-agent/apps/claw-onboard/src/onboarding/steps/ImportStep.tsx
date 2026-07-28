@@ -15,12 +15,13 @@ import { MacKeychainNotice } from '../components/MacKeychainNotice'
 import { StepWrap } from '../components/StepWrap'
 import {
   completedImportItemCount,
+  defaultImportItemsForSource,
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
   sanitizeImportSelection,
-  selectableItemsForSource,
   selectedSourceById,
+  splitImportSelection,
 } from '../onboarding-v2.helpers'
 import type { OnboardingFormValues } from '../onboarding-v2.schemas'
 import type { ImportPhase } from '../onboarding-v2.types'
@@ -34,18 +35,29 @@ interface ImportStepProps {
   onContinue: () => void
 }
 
+/**
+ * Names the logins rather than counting them, so the default action reads as a
+ * credential handover instead of a bulk browser import. Extras stay countable
+ * because they are opt-in and the user should see what they added.
+ */
 function importButtonLabelFor(
   hasSource: boolean,
   hasSupportedItems: boolean,
-  checkedItemCount: number,
+  checkedItems: readonly BrowserOSImportItem[],
   sourceName: string,
 ): string {
   if (!hasSource) return 'Pick a profile'
-  if (!hasSupportedItems) return 'Nothing to import from this profile'
-  if (checkedItemCount === 0) return 'Select what to import'
-  return `Import ${checkedItemCount} ${
-    checkedItemCount === 1 ? 'item' : 'items'
-  } from ${sourceName}`
+  if (!hasSupportedItems) return 'Nothing to copy from this profile'
+  if (checkedItems.length === 0) return 'Select what to copy'
+
+  const { loginItems, extraItems } = splitImportSelection(checkedItems)
+  if (loginItems.length === 0) {
+    return `Copy ${extraItems.length} ${
+      extraItems.length === 1 ? 'item' : 'items'
+    } from ${sourceName}`
+  }
+  if (extraItems.length === 0) return `Copy logins from ${sourceName}`
+  return `Copy logins + ${extraItems.length} more from ${sourceName}`
 }
 
 /** Renders the browser import step across quit, picker, progress, and success states. */
@@ -93,7 +105,7 @@ export function ImportStep({
   const importButtonLabel = importButtonLabelFor(
     Boolean(selectedSource),
     hasSupportedItems,
-    checkedItems.length,
+    checkedItems,
     sourceName,
   )
 
@@ -115,20 +127,19 @@ export function ImportStep({
   return (
     <StepWrap>
       <DisplayHeading>
-        Import your <Em>logins</Em>.
+        Your agents need your <Em>logins.</Em>
       </DisplayHeading>
       <StepCopy>
-        Copy your saved sessions here so your agent never has to log in again.
-        Stays local, on this Mac.
+        Gmail, GitHub, your bank &mdash; whatever Chrome is already signed into.
+        Copy these logins, which your Chrome already has. Everything is stored
+        locally on this machine.
       </StepCopy>
 
       {phase === 'picker' && (
         <>
           <div className="mb-2.5 flex items-center justify-between gap-3">
             <div className="font-bold text-[12.5px] text-ink-2">
-              {isDetecting
-                ? 'Looking for profiles'
-                : 'Pick a profile to import'}
+              {isDetecting ? 'Looking for profiles' : 'Pick a profile'}
             </div>
             <Button
               type="button"
@@ -161,7 +172,7 @@ export function ImportStep({
                       field.onChange(source.id)
                       form.setValue(
                         'selectedItems',
-                        selectableItemsForSource(source),
+                        defaultImportItemsForSource(source),
                         {
                           shouldDirty: true,
                           shouldValidate: true,

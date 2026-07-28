@@ -8,8 +8,8 @@ import type { FieldErrors, Resolver, ResolverResult } from 'react-hook-form'
 import type { BrowserOSImportItem } from './browseros-onboarding-api'
 import {
   DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
+  defaultImportItemsForSource,
   MOCK_BROWSEROS_IMPORT_SOURCES,
-  selectableItemsForSource,
 } from './onboarding-v2.helpers'
 
 export interface OnboardingFormValues {
@@ -28,7 +28,7 @@ interface OnboardingFormError {
 
 export const onboardingFormDefaults: OnboardingFormValues = {
   selectedSourceId: DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
-  selectedItems: selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+  selectedItems: defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
 }
 
 function sanitizeSelectedItems(value: unknown): BrowserOSImportItem[] {
