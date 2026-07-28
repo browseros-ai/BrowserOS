@@ -130,6 +130,16 @@ pub struct UrlMigrationOutcome {
     pub failed: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FirstRunConnectOutcome {
+    pub connected: usize,
+    pub failed: usize,
+    pub already_linked: usize,
+    /// True when this was an existing install (a harness was already linked) so
+    /// the sweep was skipped and only the first-run marker gets seeded.
+    pub seeded_existing: bool,
+}
+
 #[derive(Clone)]
 pub struct HarnessService {
     manager: McpManager,
@@ -364,6 +374,34 @@ impl HarnessService {
                 })
             })
             .collect())
+    }
+
+    /// First-launch sweep: registers BrowserClaw in every detected-but-unlinked
+    /// harness so a new user does not have to connect each one by hand. An
+    /// existing install (any harness already linked) is left untouched and only
+    /// seeded, so a returning user's disconnect choices are never overridden.
+    /// Best-effort: a single harness failing does not abort the sweep.
+    pub async fn first_run_connect(&self, mcp_url: &str) -> AppResult<FirstRunConnectOutcome> {
+        let connections = self.list_browseros_connections().await?;
+        let already_linked = connections.iter().filter(|state| state.installed).count();
+        let Some(targets) = first_run_connect_targets(&connections) else {
+            return Ok(FirstRunConnectOutcome {
+                already_linked,
+                seeded_existing: true,
+                ..FirstRunConnectOutcome::default()
+            });
+        };
+        let mut outcome = FirstRunConnectOutcome::default();
+        for harness in targets {
+            match self.connect_browseros(harness, mcp_url).await {
+                Ok(_) => outcome.connected += 1,
+                Err(error) => {
+                    outcome.failed += 1;
+                    tracing::warn!(harness = %harness, %error, "first-run auto-connect failed for harness");
+                }
+            }
+        }
+        Ok(outcome)
     }
 
     /// Rescans managed entries and repairs drifted or missing files from manifest specs.
@@ -840,5 +878,56 @@ impl fmt::Display for HarnessOperationError {
 impl From<std::io::Error> for AppError {
     fn from(source: std::io::Error) -> Self {
         Self::Io { path: None, source }
+    }
+}
+
+/// Decides first-launch auto-connect targets (Option B). Returns `None` when any
+/// harness is already linked, marking this an existing install to seed without
+/// sweeping; otherwise the full detected-but-unlinked set to connect.
+fn first_run_connect_targets(connections: &[ConnectionState]) -> Option<Vec<Harness>> {
+    if connections.iter().any(|state| state.installed) {
+        return None;
+    }
+    Some(connections.iter().map(|state| state.harness).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn(harness: Harness, installed: bool) -> ConnectionState {
+        ConnectionState {
+            harness,
+            installed,
+            agent_id: harness.agent_id(),
+            config_path: None,
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn sweeps_all_when_nothing_linked() {
+        let connections = vec![
+            conn(Harness::ClaudeCode, false),
+            conn(Harness::Cursor, false),
+        ];
+        assert_eq!(
+            first_run_connect_targets(&connections),
+            Some(vec![Harness::ClaudeCode, Harness::Cursor])
+        );
+    }
+
+    #[test]
+    fn seeds_existing_install_without_sweeping() {
+        let connections = vec![
+            conn(Harness::ClaudeCode, true),
+            conn(Harness::Cursor, false),
+        ];
+        assert_eq!(first_run_connect_targets(&connections), None);
+    }
+
+    #[test]
+    fn empty_machine_sweeps_nothing() {
+        assert_eq!(first_run_connect_targets(&[]), Some(Vec::new()));
     }
 }
