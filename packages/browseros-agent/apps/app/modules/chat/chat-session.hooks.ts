@@ -605,25 +605,39 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }, [status])
 
   // Buffer the in-flight conversation as it streams so navigating away mid-chat
-  // still lets the next mount sync it to the cloud (#559). Debounced so tokens
-  // don't thrash storage; the settled turn is also buffered at turn end above.
+  // still lets the next mount sync it to the cloud (#559). Throttled (leading +
+  // trailing) so continuous streaming is captured about once a second without
+  // thrashing storage; the settled turn is also buffered at turn end above.
   const bufferWriteTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
+  const lastBufferWriteRef = useRef(0)
   useEffect(() => {
     if (!isLoggedIn || !userId) return
-    const messagesToBuffer = getPersistableMessages(messages)
-    if (messagesToBuffer.length === 0) return
+    if (getPersistableMessages(messages).length === 0) return
     const id = conversationIdRef.current
-    clearTimeout(bufferWriteTimerRef.current)
-    bufferWriteTimerRef.current = setTimeout(() => {
+    const writeBuffer = () => {
+      lastBufferWriteRef.current = Date.now()
+      const latest = getPersistableMessages(messagesRef.current)
+      if (latest.length === 0) return
       void bufferActiveConversation({
         id,
-        messages: messagesToBuffer,
+        messages: latest,
         lastMessagedAt: Date.now(),
         userId,
       })
-    }, 1500)
+    }
+    const throttleMs = 1500
+    const sinceLast = Date.now() - lastBufferWriteRef.current
+    clearTimeout(bufferWriteTimerRef.current)
+    if (sinceLast >= throttleMs) {
+      writeBuffer()
+    } else {
+      bufferWriteTimerRef.current = setTimeout(
+        writeBuffer,
+        throttleMs - sinceLast,
+      )
+    }
     return () => clearTimeout(bufferWriteTimerRef.current)
   }, [messages, isLoggedIn, userId])
 
