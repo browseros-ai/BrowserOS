@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { createHash } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'bun'
@@ -55,7 +58,7 @@ async function main(): Promise<void> {
     'info',
     `CDP=${cdpPort}  HTTP server=${serverPort}  (set BROWSEROS_* in that file to change)`,
   )
-  log('agent', 'Starting agent (WXT + browser)…')
+  log('agent', 'Starting extension builder (WXT)…')
 
   const agentProc = spawn({
     cmd: ['bun', 'run', '--filter', '@browseros/app', 'dev'],
@@ -63,6 +66,40 @@ async function main(): Promise<void> {
     stdout: 'inherit',
     stderr: 'inherit',
     env: stackEnv,
+  })
+
+  const manifestPath = join(ROOT, 'apps/app/dist/chrome-mv3-dev/manifest.json')
+  log('info', 'Waiting for extension to compile…')
+  while (true) {
+    try {
+      const exists = await Bun.file(manifestPath).exists()
+      if (exists) break
+    } catch {}
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  log('info', 'Extension compiled!')
+
+  const browserBinary = stackEnv.BROWSEROS_BINARY || 'chrome'
+  const label = 'shimmy'
+  const key = createHash('sha256').update(ROOT).digest('hex').slice(0, 8)
+  const browserProfile = join(tmpdir(), `browseros-dev-${label}-${key}-custom`)
+  mkdirSync(browserProfile, { recursive: true })
+
+  const browserArgs = [
+    `--load-unpacked=${join(ROOT, 'apps/app/dist/chrome-mv3-dev')}`,
+    `--remote-debugging-port=${cdpPort}`,
+    `--user-data-dir=${browserProfile}`,
+    '--app=chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html',
+    '--disable-features=EdgeStartupBoost',
+    '--no-first-run',
+    '--no-default-browser-check',
+  ]
+
+  log('info', `Starting browser: ${browserBinary} (standalone app mode)`)
+  const browserProc = spawn({
+    cmd: [browserBinary, ...browserArgs],
+    stdout: 'inherit',
+    stderr: 'inherit',
   })
 
   log('server', 'Waiting for CDP…')
@@ -84,18 +121,21 @@ async function main(): Promise<void> {
 
   const cleanup = (): void => {
     agentProc.kill()
+    browserProc.kill()
     serverProc.kill()
   }
 
   process.on('SIGINT', cleanup)
   process.on('SIGTERM', cleanup)
 
-  const [agentCode, serverCode] = await Promise.all([
+  const [agentCode, browserCode, serverCode] = await Promise.all([
     agentProc.exited,
+    browserProc.exited,
     serverProc.exited,
   ])
-  if (agentCode !== 0 || serverCode !== 0) {
-    console.error(`\nExited: agent=${agentCode} server=${serverCode}`)
+  cleanup()
+  if (agentCode !== 0 || browserCode !== 0 || serverCode !== 0) {
+    console.error(`\nExited: agent=${agentCode} browser=${browserCode} server=${serverCode}`)
     process.exit(1)
   }
 }
