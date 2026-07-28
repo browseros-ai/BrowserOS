@@ -604,15 +604,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     invalidateCredits()
   }, [status])
 
-  // Save the in-flight conversation whenever the page is hidden (navigating to
-  // Settings, closing the tab, switching away) so it isn't lost before the next
-  // mount syncs it to the cloud (#559). Reads the latest messages at hide time,
-  // which fires before unload where a React unmount cleanup would not. The
-  // settled turn is also buffered at turn end above.
+  // Save the in-flight conversation before it can be lost: on page hide (full
+  // navigation, tab switch, close) and on unmount, because an in-app SPA route
+  // change to Settings unmounts the chat while the page stays visible, so
+  // visibilitychange never fires. Reads the latest messages either way; the next
+  // mount then syncs it to the cloud (#559). The settled turn is also buffered
+  // at turn end above. This effect's deps are the auth pair, not messages, so
+  // the unmount write runs once, not on every token.
   useEffect(() => {
     if (!isLoggedIn || !userId) return
-    const onHide = () => {
-      if (document.visibilityState !== 'hidden') return
+    const writeBuffer = () => {
       const latest = getPersistableMessages(messagesRef.current)
       if (latest.length === 0) return
       void bufferActiveConversation({
@@ -622,8 +623,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         userId,
       })
     }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') writeBuffer()
+    }
     document.addEventListener('visibilitychange', onHide)
-    return () => document.removeEventListener('visibilitychange', onHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      writeBuffer()
+    }
   }, [isLoggedIn, userId])
 
   // On mount (and on sign-in), push any buffered in-flight conversations for the
