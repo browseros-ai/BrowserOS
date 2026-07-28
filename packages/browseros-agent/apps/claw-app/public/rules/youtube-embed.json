@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "referer",
+          "operation": "set",
+          "value": "https://www.youtube.com/"
+        }
+      ]
+    },
+    "condition": {
+      "requestDomains": ["youtube-nocookie.com"],
+      "resourceTypes": [
+        "sub_frame",
+        "xmlhttprequest",
+        "script",
+        "media",
+        "image",
+        "font",
+        "stylesheet",
+        "ping",
+        "other"
+      ]
+    }
+  }
+]
