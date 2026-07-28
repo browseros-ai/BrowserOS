@@ -12,10 +12,9 @@ import {
   saveActiveSession,
 } from '@/lib/browseros/activeSessionStorage'
 import {
-  getWindowConversation,
-  setWindowConversation,
-} from '@/lib/browseros/perWindowConversationStorage'
-import { sidePanelPerWindowStorage } from '@/lib/browseros/sidePanelOpenStateStorage'
+  getTabConversation,
+  setTabConversation,
+} from '@/lib/browseros/perTabConversationStorage'
 import { SHIMMY_AGENT_SIDEPANEL_BUSY_KEY } from '@/lib/browseros/toggleSidePanel'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import {
@@ -575,28 +574,35 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [conversationIdParam, remoteConversationData, isLoggedIn])
 
-  // Per-window scope: resume this window's conversation when the panel
-  // (re)mounts (e.g. closed + reopened) instead of starting a blank chat.
-  // No-op in per-tab scope. Tab switches keep the same panel instance, so this
-  // only matters for a fresh mount.
+  // Tab-scoped conversation tracking:
+  // 1. Resolve current active tab on mount, load its conversation.
+  // 2. Listen for tab activation to swap the conversation dynamically.
+  // 3. Keep the tab-to-conversation mapping updated.
+  const tabIdRef = useRef<number | null>(null)
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; reads refs
   useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
     let cancelled = false
     ;(async () => {
-      if (!(await sidePanelPerWindowStorage.getValue())) return
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       })
+      const tabId = tab?.id
       const windowId = tab?.windowId
-      if (windowId == null || cancelled) return
+      if (tabId == null || windowId == null || cancelled) return
+      tabIdRef.current = tabId
       windowIdRef.current = windowId
-      const stored = await getWindowConversation(windowId)
+
+      const stored = await getTabConversation(tabId)
       if (cancelled) return
-      if (stored && stored !== conversationIdRef.current) {
-        setSearchParams({ conversationId: stored })
-      } else if (!stored) {
-        await setWindowConversation(windowId, conversationIdRef.current)
+      if (stored) {
+        if (stored !== conversationIdRef.current) {
+          setSearchParams({ conversationId: stored })
+        }
+      } else {
+        await setTabConversation(tabId, conversationIdRef.current)
       }
     })()
     return () => {
@@ -604,13 +610,42 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [])
 
-  // Remember the conversation this window is on so a remount can resume it.
   useEffect(() => {
-    const windowId = windowIdRef.current
-    if (windowId == null) return
+    if (options?.origin !== 'sidepanel') return
+
+    const handleActivated = async (activeInfo: {
+      tabId: number
+      windowId: number
+    }) => {
+      if (activeInfo.windowId !== windowIdRef.current) return
+      const tabId = activeInfo.tabId
+      if (tabId === tabIdRef.current) return
+      tabIdRef.current = tabId
+
+      const stored = await getTabConversation(tabId)
+      if (stored) {
+        setSearchParams({ conversationId: stored })
+      } else {
+        const newId = crypto.randomUUID()
+        await setTabConversation(tabId, newId)
+        setConversationId(newId)
+        setMessages([])
+        setSearchParams({}, { replace: true })
+      }
+    }
+
+    chrome.tabs.onActivated.addListener(handleActivated)
+    return () => {
+      chrome.tabs.onActivated.removeListener(handleActivated)
+    }
+  }, [setMessages, setSearchParams, options?.origin])
+
+  // Remember the conversation this tab is on so tab switches can resume it.
+  useEffect(() => {
+    const tabId = tabIdRef.current
+    if (tabId == null) return
     ;(async () => {
-      if (!(await sidePanelPerWindowStorage.getValue())) return
-      await setWindowConversation(windowId, conversationId)
+      await setTabConversation(tabId, conversationId)
     })()
   }, [conversationId])
 
