@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * First-run guidance rendered by the Cockpit screen when the reader
- * has no session activity yet. Leads with a how-to video bento (agents
- * auto-connect at launch, so onboarding teaches how to put BrowserClaw
- * to work rather than how to install it), then the MCP endpoint CTA,
+ * has no session activity yet. Leads with a single focused how-to video
+ * (agents auto-connect at launch, so onboarding teaches how to put
+ * BrowserClaw to work rather than how to install it), then the MCP CTA,
  * the copyable starter prompt, a connected-agents line, and a docs link.
  *
  * Two visual variants keyed off the `state` prop.
@@ -36,7 +36,7 @@ import {
 import { FirstRunPrimaryActions } from './FirstRunPrimaryActions'
 import { FirstRunWaitingBanner } from './FirstRunWaitingBanner'
 import { StarterPromptTile } from './StarterPromptTile'
-import { VideoBento } from './VideoBento'
+import { VideoFeature } from './VideoFeature'
 
 interface CockpitOnboardingProps {
   state: Exclude<OnboardingState, 'ready'>
@@ -64,7 +64,7 @@ export function CockpitOnboarding({
       aria-label={HERO_COPY.eyebrow.toLowerCase()}
     >
       <OnboardingHero />
-      <VideoBento />
+      <VideoFeature />
       <FirstRunPrimaryActions
         installHref={PRIMARY_ACTION_COPY.install.href}
         installLabel={

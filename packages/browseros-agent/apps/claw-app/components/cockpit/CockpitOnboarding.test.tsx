@@ -24,12 +24,12 @@ function render(
 }
 
 describe('CockpitOnboarding', () => {
-  it('first-run: hero, how-to video bento as posters, install CTA, and prompt tile render', () => {
+  it('first-run: hero, a single focused how-to video, install CTA, and prompt tile render', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
-    // The bento renders poster tiles with a play affordance; no iframe
-    // is present until the reader opens the lightbox.
+    // The feature video renders as a poster with a play affordance; no
+    // iframe or self-hosted source is present until the lightbox opens.
     expect(html).toContain('Can AI Agents Finally Automate the Web?')
     expect(html).toContain('Play: ')
     expect(html).not.toContain('youtube-nocookie.com/embed')

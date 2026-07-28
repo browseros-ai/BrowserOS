@@ -90,8 +90,7 @@ export function Cockpit() {
       ) : (
         <RunningGrid sessions={sessions} />
       )}
-      <RecentActivity />
-      <VideoRail />
+      <RecentActivity interlude={<VideoRail />} />
     </div>
   )
 }
