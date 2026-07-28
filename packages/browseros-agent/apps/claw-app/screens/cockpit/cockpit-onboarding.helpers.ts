@@ -45,19 +45,16 @@ export const HERO_COPY = {
 
 export const PANEL_COPY = {
   heading: 'Hand off your first task',
+  // Three status messages share one fixed-height slot so copying never
+  // reflows the panel. Keep each to at most two lines at panel width.
   tieBack: 'Then come back here to watch it run.',
+  waiting: 'Waiting for your first run. Come back the moment you press enter.',
+  copied: 'Copied. Paste it into your agent, then watch it here.',
 } as const
 
 export const MANAGE_COPY = {
   label: 'Manage agents',
   href: '/mcp',
-} as const
-
-export const WAITING_COPY = {
-  connectedNoActivity:
-    'Waiting for your first run. Come back here as soon as you press enter in your agent.',
-  promptCopied:
-    'Prompt copied. Paste it into Claude Code, Cursor, or Codex, then press enter.',
 } as const
 
 export const STARTER_PROMPT_LABEL =

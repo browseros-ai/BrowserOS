@@ -12,8 +12,9 @@
  *
  * Two variants keyed off `state`:
  *   first-run  no connections + no activity.
- *   waiting    at least one connection + no activity; the start panel shows a
- *              waiting banner instead of the tie-back line.
+ *   waiting    at least one connection + no activity.
+ * Both share one layout; only the panel's fixed-height status line changes
+ * text (tie-back, waiting, or copied-confirmation) so copying never reflows.
  *
  * State transitions are handled by the parent (Cockpit) via query refetches;
  * the component is a stateless presenter.
@@ -32,9 +33,7 @@ import {
   PANEL_COPY,
   STARTER_PROMPT,
   STARTER_PROMPT_LABEL,
-  WAITING_COPY,
 } from '@/screens/cockpit/cockpit-onboarding.helpers'
-import { FirstRunWaitingBanner } from './FirstRunWaitingBanner'
 import { StarterPromptTile } from './StarterPromptTile'
 import { VideoFeature } from './VideoFeature'
 
@@ -50,29 +49,31 @@ export function CockpitOnboarding({
 }: CockpitOnboardingProps) {
   const [promptCopied, setPromptCopied] = useState(false)
   const isWaiting = state === 'waiting'
-  const showWaitingBanner = isWaiting || promptCopied
-  const waitingMessage = promptCopied
-    ? WAITING_COPY.promptCopied
-    : WAITING_COPY.connectedNoActivity
+  const listening = isWaiting || promptCopied
+  const statusText = promptCopied
+    ? PANEL_COPY.copied
+    : isWaiting
+      ? PANEL_COPY.waiting
+      : PANEL_COPY.tieBack
   const flagCopied = () => {
     setPromptCopied(true)
     window.setTimeout(() => setPromptCopied(false), 8000)
   }
   return (
     <section
-      className="flex flex-col gap-8"
+      className="flex min-h-[calc(100dvh-6rem)] flex-col justify-center gap-8"
       aria-label={HERO_COPY.eyebrow.toLowerCase()}
     >
       <OnboardingHero />
-      <div className="grid gap-6 md:grid-cols-12 md:items-start">
+      <div className="grid gap-6 md:grid-cols-12 md:items-stretch">
         <div className="md:col-span-7">
           <VideoFeature />
         </div>
         <StartPanel
           className="md:col-span-5"
           harnesses={connectedHarnesses}
-          showWaitingBanner={showWaitingBanner}
-          waitingMessage={waitingMessage}
+          listening={listening}
+          statusText={statusText}
           onPromptCopied={flagCopied}
         />
       </div>
@@ -101,16 +102,17 @@ function OnboardingHero() {
 interface StartPanelProps {
   className?: string
   harnesses: readonly string[]
-  showWaitingBanner: boolean
-  waitingMessage: string
+  /** True once the reader is connected or has copied the prompt: shows the live dot. */
+  listening: boolean
+  statusText: string
   onPromptCopied: () => void
 }
 
 function StartPanel({
   className,
   harnesses,
-  showWaitingBanner,
-  waitingMessage,
+  listening,
+  statusText,
   onPromptCopied,
 }: StartPanelProps) {
   return (
@@ -134,11 +136,14 @@ function StartPanel({
           variant="block"
         />
       </div>
-      {showWaitingBanner ? (
-        <FirstRunWaitingBanner message={waitingMessage} />
-      ) : (
-        <p className="text-[12.5px] text-ink-3">{PANEL_COPY.tieBack}</p>
-      )}
+      {/* Fixed-height slot: text swaps in place so a copy never reflows the
+          panel (and, via items-stretch, the video beside it). */}
+      <p className="flex min-h-[2.5rem] items-center gap-2 text-[12.5px] text-ink-3">
+        {listening && (
+          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+        )}
+        <span>{statusText}</span>
+      </p>
     </div>
   )
 }

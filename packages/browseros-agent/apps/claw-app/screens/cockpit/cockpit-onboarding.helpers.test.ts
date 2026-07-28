@@ -10,8 +10,8 @@ import {
   getOnboardingState,
   HERO_COPY,
   MANAGE_COPY,
+  PANEL_COPY,
   STARTER_PROMPT,
-  WAITING_COPY,
 } from './cockpit-onboarding.helpers'
 
 describe('getOnboardingState', () => {
@@ -56,11 +56,11 @@ describe('cockpit onboarding copy', () => {
     )
   })
 
-  it('waiting-banner copy differentiates connected-no-activity from prompt-copied', () => {
-    expect(WAITING_COPY.connectedNoActivity).toContain(
-      'Waiting for your first run.',
-    )
-    expect(WAITING_COPY.promptCopied).toContain('Prompt copied.')
+  it('panel status copy pins the heading and the three fixed-slot messages', () => {
+    expect(PANEL_COPY.heading).toBe('Hand off your first task')
+    expect(PANEL_COPY.tieBack).toBe('Then come back here to watch it run.')
+    expect(PANEL_COPY.waiting).toContain('Waiting for your first run.')
+    expect(PANEL_COPY.copied).toContain('Copied.')
   })
 
   it('manage-agents link points at the MCP screen', () => {

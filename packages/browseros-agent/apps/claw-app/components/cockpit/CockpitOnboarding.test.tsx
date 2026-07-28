@@ -49,17 +49,16 @@ describe('CockpitOnboarding', () => {
     expect(html).not.toContain('Watch it here.')
   })
 
-  it('first-run: renders neither the waiting banner nor a connected-agents line', () => {
+  it('first-run: shows the tie-back status, not the waiting status or a connected line', () => {
     const html = render('first-run')
-    expect(html).not.toContain(
-      'Waiting for your first run. Come back here as soon',
-    )
+    expect(html).toContain('Then come back here to watch it run.')
+    expect(html).not.toContain('Waiting for your first run')
     expect(html).not.toContain('connected')
   })
 
-  it('waiting: the waiting banner renders and connected agents show as chips', () => {
+  it('waiting: the waiting status renders and connected agents show as chips', () => {
     const html = render('waiting', ['Claude Code', 'Cursor'])
-    expect(html).toContain('Waiting for your first run. Come back here as soon')
+    expect(html).toContain('Waiting for your first run')
     expect(html).toContain('Claude Code')
     expect(html).toContain('Cursor')
     expect(html).toContain('2 connected')
