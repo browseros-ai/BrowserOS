@@ -30,6 +30,7 @@ const HOME_TASK_LIMIT = 12
 export function RecentActivity() {
   const query = useSessions({
     variables: { limit: HOME_TASK_LIMIT },
+    // Homepage feed: poll so new sessions surface without a manual refresh.
     refetchInterval: 3000,
   })
   const tasks = (query.data?.pages ?? [])
