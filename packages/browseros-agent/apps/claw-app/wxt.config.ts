@@ -33,10 +33,6 @@ export default defineConfig({
       'webNavigation',
       'downloads',
       'notifications',
-      // Rewrites the Referer on the onboarding how-to embeds so YouTube's
-      // player accepts them (uses existing host access, not broad network
-      // control). Scoped to youtube-nocookie.com by the rule below.
-      'declarativeNetRequestWithHostAccess',
     ],
     // Recording is universal; the local server owns tab attribution.
     host_permissions: ['http://127.0.0.1/*', '<all_urls>'],
@@ -47,15 +43,6 @@ export default defineConfig({
     content_security_policy: {
       extension_pages:
         "script-src 'self'; object-src 'self'; frame-src 'self' https://www.youtube-nocookie.com;",
-    },
-    declarative_net_request: {
-      rule_resources: [
-        {
-          id: 'youtube-embed-referer',
-          enabled: true,
-          path: 'rules/youtube-embed.json',
-        },
-      ],
     },
     action: {
       default_icon: {
