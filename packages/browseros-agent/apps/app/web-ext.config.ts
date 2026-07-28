@@ -59,6 +59,11 @@ const chromiumArgs = [
   '--disable-browseros-extensions',
   '--browseros-dock-icon=dev',
   `--browseros-product=${browserOSProduct('browseros')}`,
+  '--app=chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html',
+  '--disable-features=EdgeStartupBoost',
+  '--no-first-run',
+  '--no-default-browser-check',
+  `--user-data-dir=${chromiumProfile()}`,
 ]
 
 if (env.BROWSEROS_CDP_PORT) {
@@ -85,5 +90,5 @@ export default defineWebExtConfig({
   chromiumArgs,
   chromiumProfile: chromiumProfile(),
   keepProfileChanges: true,
-  startUrls: ['chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html'],
+  startUrls: [],
 })
