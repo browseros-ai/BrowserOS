@@ -14,4 +14,5 @@ timeout = 30000
 # (Note: Tests already use mutex for browser access)
 # preload = []
 
+[install]
 linker = "hoisted"
