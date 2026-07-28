@@ -249,7 +249,7 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
     expect(firstRun).toContain('You watch. Your agent')
-    expect(firstRun).toContain('Set up MCP endpoint')
+    expect(firstRun).toContain('Hand off your first task')
     expect(firstRun).toContain('Can AI Agents Finally Automate the Web?')
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
@@ -260,7 +260,7 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
     expect(waiting).toContain('Waiting for your first run')
-    expect(waiting).toContain('View MCP endpoint')
+    expect(waiting).toContain('Manage agents')
     expect(waiting).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
   })

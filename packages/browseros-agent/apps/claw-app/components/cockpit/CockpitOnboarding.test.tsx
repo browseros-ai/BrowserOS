@@ -24,7 +24,7 @@ function render(
 }
 
 describe('CockpitOnboarding', () => {
-  it('first-run: hero, a single focused how-to video, install CTA, and prompt tile render', () => {
+  it('first-run: hero, a focused video, and the start panel render', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
@@ -33,7 +33,9 @@ describe('CockpitOnboarding', () => {
     expect(html).toContain('Can AI Agents Finally Automate the Web?')
     expect(html).toContain('Play: ')
     expect(html).not.toContain('youtube-nocookie.com/embed')
-    expect(html).toContain('Set up MCP endpoint')
+    expect(html).toContain('Hand off your first task')
+    expect(html).toContain('Copy task')
+    expect(html).toContain('Manage agents')
     expect(html).toContain('Paste this into Claude Code, Cursor, or Codex.')
     expect(html).toContain(
       'Use BrowserClaw. Book me the cheapest morning flight',
@@ -55,13 +57,12 @@ describe('CockpitOnboarding', () => {
     expect(html).not.toContain('connected')
   })
 
-  it('waiting: banner renders, install CTA relabels to View, and connected agents list', () => {
+  it('waiting: the waiting banner renders and connected agents show as chips', () => {
     const html = render('waiting', ['Claude Code', 'Cursor'])
     expect(html).toContain('Waiting for your first run. Come back here as soon')
-    expect(html).toContain('View MCP endpoint')
-    expect(html).not.toContain('Set up MCP endpoint')
-    expect(html).toContain('Claude Code, Cursor')
-    expect(html).toContain('connected')
+    expect(html).toContain('Claude Code')
+    expect(html).toContain('Cursor')
+    expect(html).toContain('2 connected')
   })
 
   it('waiting: retains the starter prompt tile so the reader can still copy', () => {

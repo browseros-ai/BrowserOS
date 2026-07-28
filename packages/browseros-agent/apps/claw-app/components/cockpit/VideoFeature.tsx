@@ -36,15 +36,15 @@ export function VideoFeature() {
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
 
-        <span className="absolute top-1/2 left-1/2 flex size-20 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-background/90 text-accent shadow ring-1 ring-accent/25 backdrop-blur transition duration-200 group-hover:scale-110 group-hover:ring-accent/40">
-          <Play className="size-8 translate-x-[2px] fill-accent" />
+        <span className="absolute top-1/2 left-1/2 flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-background/90 text-accent shadow ring-1 ring-accent/25 backdrop-blur transition duration-200 group-hover:scale-110 group-hover:ring-accent/40">
+          <Play className="size-6 translate-x-[2px] fill-accent" />
         </span>
 
-        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 p-6 md:p-8">
-          <span className="max-w-2xl font-semibold text-white text-xl leading-tight md:text-3xl">
+        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 p-5">
+          <span className="max-w-md font-semibold text-lg text-white leading-tight md:text-xl">
             {video.title}
           </span>
-          <span className="font-mono text-[11px] text-white/70 uppercase tracking-[0.12em]">
+          <span className="font-mono text-[10.5px] text-white/70 uppercase tracking-[0.12em]">
             {video.channel}
           </span>
         </div>

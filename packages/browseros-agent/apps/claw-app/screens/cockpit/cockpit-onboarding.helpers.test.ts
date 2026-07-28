@@ -9,7 +9,7 @@ import {
   FOOTER_COPY,
   getOnboardingState,
   HERO_COPY,
-  PRIMARY_ACTION_COPY,
+  MANAGE_COPY,
   STARTER_PROMPT,
   WAITING_COPY,
 } from './cockpit-onboarding.helpers'
@@ -41,12 +41,12 @@ describe('cockpit onboarding copy', () => {
   // Snapshot-style tests that pin the shipped copy so accidental
   // voice drift is caught. Update these on purpose; every string
   // change here is a copy-pass decision, not a mechanical fix.
-  it('hero copy carries the mental-model headline and how-to frame', () => {
-    expect(HERO_COPY.eyebrow).toBe('GET STARTED')
+  it('hero copy carries the mental-model headline and a welcoming frame', () => {
+    expect(HERO_COPY.eyebrow).toBe('WELCOME')
     expect(HERO_COPY.h1Prefix).toBe('You watch. Your agent')
     expect(HERO_COPY.h1Accent).toBe('works.')
     expect(HERO_COPY.subhead).toBe(
-      'See how people put BrowserClaw to work, then paste a task into your agent and run it.',
+      'Your agents are wired in. Watch a quick demo, then hand your first task to any of them.',
     )
   })
 
@@ -63,10 +63,9 @@ describe('cockpit onboarding copy', () => {
     expect(WAITING_COPY.promptCopied).toContain('Prompt copied.')
   })
 
-  it('primary action labels flip between active and done states', () => {
-    expect(PRIMARY_ACTION_COPY.install.activeLabel).toBe('Set up MCP endpoint')
-    expect(PRIMARY_ACTION_COPY.install.doneLabel).toBe('View MCP endpoint')
-    expect(PRIMARY_ACTION_COPY.install.href).toBe('/mcp')
+  it('manage-agents link points at the MCP screen', () => {
+    expect(MANAGE_COPY.label).toBe('Manage agents')
+    expect(MANAGE_COPY.href).toBe('/mcp')
   })
 
   it('docs footer link deep-links to the BrowserClaw section', () => {

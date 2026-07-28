@@ -36,19 +36,21 @@ export function getOnboardingState({
 }
 
 export const HERO_COPY = {
-  eyebrow: 'GET STARTED',
+  eyebrow: 'WELCOME',
   h1Prefix: 'You watch. Your agent',
   h1Accent: 'works.',
   subhead:
-    'See how people put BrowserClaw to work, then paste a task into your agent and run it.',
+    'Your agents are wired in. Watch a quick demo, then hand your first task to any of them.',
 } as const
 
-export const PRIMARY_ACTION_COPY = {
-  install: {
-    activeLabel: 'Set up MCP endpoint',
-    doneLabel: 'View MCP endpoint',
-    href: '/mcp',
-  },
+export const PANEL_COPY = {
+  heading: 'Hand off your first task',
+  tieBack: 'Then come back here to watch it run.',
+} as const
+
+export const MANAGE_COPY = {
+  label: 'Manage agents',
+  href: '/mcp',
 } as const
 
 export const WAITING_COPY = {
