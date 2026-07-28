@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   type ActiveConversationBufferEntry,
   pruneFlushedEntries,
+  runExclusiveBufferWrite,
   selectBufferEntriesForUser,
   upsertBufferEntry,
 } from './active-conversation-buffer.helpers'
@@ -65,5 +66,32 @@ describe('pruneFlushedEntries', () => {
   it('keeps entries whose upload was not confirmed', () => {
     const latest = [entry('a', 'A', 1), entry('b', 'A', 1)]
     expect(pruneFlushedEntries(latest, []).map((e) => e.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('runExclusiveBufferWrite', () => {
+  it('serializes overlapping mutations instead of interleaving them', async () => {
+    const order: string[] = []
+    const first = runExclusiveBufferWrite(async () => {
+      order.push('a-start')
+      await Promise.resolve()
+      await Promise.resolve()
+      order.push('a-end')
+    })
+    const second = runExclusiveBufferWrite(async () => {
+      order.push('b-start')
+      order.push('b-end')
+    })
+    await Promise.all([first, second])
+    expect(order).toEqual(['a-start', 'a-end', 'b-start', 'b-end'])
+  })
+
+  it('keeps draining the queue after a mutation rejects', async () => {
+    await expect(
+      runExclusiveBufferWrite(async () => {
+        throw new Error('boom')
+      }),
+    ).rejects.toThrow('boom')
+    await expect(runExclusiveBufferWrite(async () => 'ok')).resolves.toBe('ok')
   })
 })

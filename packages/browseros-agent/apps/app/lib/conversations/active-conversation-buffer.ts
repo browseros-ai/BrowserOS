@@ -2,6 +2,7 @@ import { storage } from '@wxt-dev/storage'
 import {
   type ActiveConversationBufferEntry,
   pruneFlushedEntries,
+  runExclusiveBufferWrite,
   selectBufferEntriesForUser,
   upsertBufferEntry,
 } from './active-conversation-buffer.helpers'
@@ -23,10 +24,12 @@ export const activeConversationBufferStorage = storage.defineItem<
 export async function bufferActiveConversation(
   entry: ActiveConversationBufferEntry,
 ): Promise<void> {
-  const current = (await activeConversationBufferStorage.getValue()) ?? []
-  await activeConversationBufferStorage.setValue(
-    upsertBufferEntry(current, entry),
-  )
+  await runExclusiveBufferWrite(async () => {
+    const current = (await activeConversationBufferStorage.getValue()) ?? []
+    await activeConversationBufferStorage.setValue(
+      upsertBufferEntry(current, entry),
+    )
+  })
 }
 
 /**
@@ -57,8 +60,13 @@ export async function flushActiveConversationBuffer(
   const flushed = mine.filter((e) => uploadedIds.has(e.id))
   if (flushed.length === 0) return
 
-  const latest = (await activeConversationBufferStorage.getValue()) ?? []
-  await activeConversationBufferStorage.setValue(
-    pruneFlushedEntries(latest, flushed),
-  )
+  // The upload above ran outside the lock so writes weren't blocked; take the
+  // lock only to re-read the latest buffer and remove the flushed snapshots, so
+  // a concurrent write is neither clobbered by nor clobbers this prune.
+  await runExclusiveBufferWrite(async () => {
+    const latest = (await activeConversationBufferStorage.getValue()) ?? []
+    await activeConversationBufferStorage.setValue(
+      pruneFlushedEntries(latest, flushed),
+    )
+  })
 }
