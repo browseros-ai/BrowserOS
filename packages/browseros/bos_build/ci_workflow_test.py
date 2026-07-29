@@ -6,8 +6,11 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
+
+from bos_build.steps.source import provision
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -94,6 +97,41 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         ):
             with self.subTest(phase=phase):
                 self.assertLess(bootstrap_index, indexes[phase])
+
+    def test_source_ensure_explicitly_repairs_disposable_depot_tools_cache(self):
+        steps = self.build_steps()
+
+        for phase in (
+            "Ensure chromium checkout at pinned tag",
+            "Sync chromium dependencies (gclient)",
+        ):
+            with self.subTest(phase=phase):
+                step = next(step for step in steps if step.get("name") == phase)
+                self.assertIn("--repair-cached-depot-tools", step["run"])
+
+    def test_checkout_cache_uses_v2_without_v1_fallback(self):
+        steps = self.build_steps()
+        pin_step = next(
+            step
+            for step in steps
+            if step.get("name") == "Resolve chromium pin and paths"
+        )
+        warp_restore = next(
+            step
+            for step in steps
+            if step.get("name") == "Restore chromium checkout (WarpCache)"
+        )
+
+        self.assertIn(
+            "chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-$version",
+            pin_step["run"],
+        )
+        self.assertIn(
+            "chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-",
+            warp_restore["with"]["restore-keys"],
+        )
+        self.assertNotIn("-v1-", pin_step["run"])
+        self.assertNotIn("-v1-", warp_restore["with"]["restore-keys"])
 
     def test_git_bootstrap_uses_isolated_global_config_and_exact_values(self):
         script = self.git_bootstrap_step()["run"]
@@ -280,6 +318,191 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     )
                     self.assertEqual(result.stdout.splitlines(), [value])
 
+    @unittest.skipUnless(os.name == "nt", "requires Git for Windows")
+    def test_cached_crlf_depot_tools_repairs_before_native_batch_self_update(self):
+        script = self.git_bootstrap_step()["run"]
+
+        with tempfile.TemporaryDirectory(
+            prefix="browseros depot tools cache ",
+        ) as tmp:
+            temp_root = Path(tmp)
+            legacy_config = temp_root / "legacy-global.gitconfig"
+            legacy_env = os.environ.copy()
+            legacy_env["GIT_CONFIG_GLOBAL"] = str(legacy_config)
+            subprocess.run(
+                ["git", "config", "--global", "core.autocrlf", "true"],
+                check=True,
+                env=legacy_env,
+            )
+
+            seed = temp_root / "seed"
+            seed.mkdir()
+            subprocess.run(
+                ["git", "init", "--initial-branch=main"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "BrowserOS test"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "ci@example.invalid"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            tracked = seed / "gclient.py"
+            tracked.write_bytes(b"first line\nsecond line\n")
+            subprocess.run(
+                ["git", "add", tracked.name],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "initial"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+
+            origin = temp_root / "origin.git"
+            subprocess.run(
+                ["git", "clone", "--bare", str(seed), str(origin)],
+                check=True,
+                env=legacy_env,
+            )
+            root = temp_root / "chromium"
+            root.mkdir()
+            depot_tools = root / "depot_tools"
+            subprocess.run(
+                ["git", "clone", str(origin), str(depot_tools)],
+                check=True,
+                env=legacy_env,
+            )
+            self.assertIn(b"\r\n", (depot_tools / tracked.name).read_bytes())
+
+            tracked.write_bytes(b"first line\nupstream second line\n")
+            subprocess.run(
+                ["git", "add", tracked.name],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "upstream update"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+            subprocess.run(
+                ["git", "push", str(origin), "main"],
+                check=True,
+                cwd=seed,
+                env=legacy_env,
+            )
+
+            runner_temp = temp_root / "runner temp"
+            runner_temp.mkdir()
+            github_env = temp_root / "github env"
+            missing_home = temp_root / "missing home"
+            bash_env = os.environ.copy()
+            bash_env.pop("GIT_CONFIG_GLOBAL", None)
+            bash_env.update(
+                {
+                    "GITHUB_ENV": str(github_env),
+                    "HOME": str(missing_home),
+                    "RUNNER_OS": "Windows",
+                    "RUNNER_TEMP": str(runner_temp),
+                }
+            )
+            subprocess.run(
+                [git_bash_path(), "-c", script],
+                check=True,
+                env=bash_env,
+            )
+            _, config_path = github_env.read_text(encoding="utf-8").strip().split(
+                "=",
+                maxsplit=1,
+            )
+            native_env = os.environ.copy()
+            native_env.update(
+                {
+                    "GIT_CONFIG_GLOBAL": config_path,
+                    "HOME": str(missing_home),
+                }
+            )
+
+            dirty = subprocess.run(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=no",
+                ],
+                capture_output=True,
+                check=True,
+                cwd=depot_tools,
+                env=native_env,
+                text=True,
+            )
+            self.assertIn(tracked.name, dirty.stdout)
+            subprocess.run(
+                ["git", "fetch", "origin"],
+                check=True,
+                cwd=depot_tools,
+                env=native_env,
+            )
+            blocked = subprocess.run(
+                ["git", "merge", "--ff-only", "origin/main"],
+                capture_output=True,
+                cwd=depot_tools,
+                env=native_env,
+                text=True,
+            )
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertIn(
+                "local changes",
+                (blocked.stdout + blocked.stderr).lower(),
+            )
+
+            with mock.patch.dict(os.environ, native_env, clear=True):
+                provision.ensure_depot_tools(
+                    root,
+                    repair_cached_depot_tools=True,
+                )
+
+            git_wrapper = depot_tools / "git-wrapper.bat"
+            git_wrapper.write_bytes(b"@echo off\r\ngit %*\r\n")
+            command = subprocess.list2cmdline(
+                [git_wrapper.name, "merge", "--ff-only", "origin/main"]
+            )
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", command],
+                check=True,
+                cwd=depot_tools,
+                env=native_env,
+            )
+            git_wrapper.unlink()
+
+            clean = subprocess.run(
+                ["git", "status", "--porcelain=v1"],
+                capture_output=True,
+                check=True,
+                cwd=depot_tools,
+                env=native_env,
+                text=True,
+            )
+            self.assertEqual(clean.stdout, "")
+            self.assertIn(
+                b"upstream second line\n",
+                (depot_tools / tracked.name).read_bytes(),
+            )
+
     def test_reusable_workflow_changes_trigger_build_system_tests(self):
         test_workflow = self.load_workflow("bos-build-tests.yml")
         # PyYAML's YAML 1.1 resolver treats the GitHub Actions `on` key as a
@@ -334,7 +557,7 @@ class ChromiumGitRunbookTest(unittest.TestCase):
 
         bootstrap_index = release_flow.index("`GIT_CONFIG_GLOBAL`")
         source_ensure_index = release_flow.index(
-            "`browseros source ensure --step checkout`"
+            "`browseros source ensure --step checkout --repair-cached-depot-tools`"
         )
         self.assertLess(bootstrap_index, source_ensure_index)
         self.assertIn(
@@ -359,6 +582,21 @@ class ChromiumGitRunbookTest(unittest.TestCase):
         self.assertIn("depot_tools `git.bat`", troubleshooting)
         self.assertIn("`GIT_CONFIG_GLOBAL`", troubleshooting)
         self.assertIn("do not modify the runner image", troubleshooting)
+
+    def test_dirty_depot_tools_cache_failure_has_fail_closed_recovery(self):
+        heading = "## Troubleshooting: cached depot_tools appears all-dirty"
+        self.assertIn(heading, self.runbook)
+        troubleshooting = self.runbook.split(heading, maxsplit=1)[1].split(
+            "\n## ",
+            maxsplit=1,
+        )[0]
+
+        self.assertIn("Your local changes", troubleshooting)
+        self.assertIn("Failed to update depot_tools", troubleshooting)
+        self.assertIn("line-ending-only", troubleshooting)
+        self.assertIn("substantive tracked changes", troubleshooting)
+        self.assertIn("`--repair-cached-depot-tools`", troubleshooting)
+        self.assertIn("`v2`", troubleshooting)
 
 
 if __name__ == "__main__":

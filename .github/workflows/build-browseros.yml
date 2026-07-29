@@ -153,7 +153,7 @@ jobs:
 
           {
             echo "version=$version"
-            echo "cache_key=chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-$version"
+            echo "cache_key=chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-$version"
           } >> "$GITHUB_OUTPUT"
           {
             echo "CHROMIUM_ROOT=$parent/chromium"
@@ -168,7 +168,7 @@ jobs:
           path: ${{ env.CHROMIUM_ROOT }}
           key: ${{ steps.pin.outputs.cache_key }}
           restore-keys: |
-            chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-
+            chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-
 
       - name: Restore chromium checkout (R2)
         if: runner.os == 'Windows'
@@ -188,7 +188,8 @@ jobs:
         run: |
           set -euo pipefail
           uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step checkout
+            --root "$CHROMIUM_ROOT" --step checkout \
+            --repair-cached-depot-tools
 
       - name: Reset chromium tree (clean module)
         working-directory: packages/browseros
@@ -204,7 +205,8 @@ jobs:
         run: |
           set -euo pipefail
           uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step sync
+            --root "$CHROMIUM_ROOT" --step sync \
+            --repair-cached-depot-tools
 
       # Save immediately after sync: the tree is pristine (no BrowserOS or
       # BrowserClaw patches, no out/ dir), which keeps the cache deterministic

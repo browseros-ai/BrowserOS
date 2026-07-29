@@ -135,14 +135,18 @@ The reusable workflow performs the per-platform recipe:
    skip the step.
 3. `astral-sh/setup-uv`, resolve the Chromium pin and paths, then restore the
    pinned chromium checkout from cache (see below).
-4. `browseros source ensure --step checkout` — ensures depot_tools and
-   `src` at the tag from `packages/browseros/CHROMIUM_VERSION`. No-op when
-   the cache is warm and the pin unchanged.
+4. `browseros source ensure --step checkout --repair-cached-depot-tools` —
+   validates depot_tools, normalizes only line-ending-only tracked changes in
+   the explicitly disposable checkout, and ensures `src` at the tag from
+   `packages/browseros/CHROMIUM_VERSION`. No-op when the cache is warm, clean,
+   and the pin is unchanged. Substantive tracked depot_tools changes fail
+   closed rather than being reset.
 5. `uv run browseros build --modules clean ...` — the standard clean module
    resets the tree (it also deletes hook-managed toolchains like
    `third_party/llvm-build`, which the next step restores).
-6. `browseros source ensure --step sync` — `gclient sync -D
-   --no-history --shallow`, exactly what the git_setup module runs.
+6. `browseros source ensure --step sync --repair-cached-depot-tools` —
+   revalidates depot_tools, then runs `gclient sync -D --no-history
+   --shallow`, exactly what the git_setup module runs.
 7. Save the cache (only when the restore missed, i.e. first run per pin).
 8. `uv run browseros build --profile release-ci --product <product>
    --arch <arch> --chromium-src .../src`, with signing and R2 upload flags
@@ -158,11 +162,17 @@ step signs when `sign=true`.
 
 ## Caching strategy
 
-Cache key: `chromium-src-<platform>-<arch>-v1-<CHROMIUM_VERSION>`. Contents:
+Cache key: `chromium-src-<platform>-<arch>-v2-<CHROMIUM_VERSION>`. Contents:
 the whole gclient root (depot_tools, `.gclient`, post-sync `src`) captured
 immediately after `gclient sync`, before patches and before any `out/` dir
 exists — pristine and deterministic. The pin changes rarely, so steady state
 is one cold sync per chromium bump per platform.
+
+Generation `v2` was introduced after the Windows Git bootstrap standardized
+`core.autocrlf=false`. It deliberately has no `v1` fallback: those immutable
+archives may contain a depot_tools worktree checked out under the previous
+line-ending policy. The first `v2` run per platform is therefore cold and
+publishes a cache under the current policy.
 
 - **Linux / macOS — WarpCache** (`WarpBuilds/cache@v1`): drop-in for
   `actions/cache` with no size cap (entries expire 7 days after last use).
@@ -223,7 +233,7 @@ gh workflow run release-linux.yml -f products=all -f upload_to_r2=true
 
 The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next run is cold again for that version. To force a fresh
-checkout, bump the `v1` in the cache key (workflow) — for Windows also delete
+checkout, bump the `v2` in the cache key (workflow) — for Windows also delete
 the old object under `ci-cache/chromium/` in R2.
 
 ## Troubleshooting: depot_tools cannot read global Git config
@@ -249,6 +259,36 @@ the temporary file. Fix the workflow contract; do not modify the runner image
 or create `C:/Users/runneradmin/.gitconfig` manually. WarpBuild runners are
 ephemeral, and account-level repair would disappear with the VM while
 reintroducing HOME-resolution ambiguity.
+
+## Troubleshooting: cached depot_tools appears all-dirty
+
+The Windows cache-policy migration failure occurs after R2 restore and the
+Chromium clean step. `gclient.bat` starts, prints `Updating depot_tools...`,
+then Git reports `Your local changes to the following files would be
+overwritten by checkout` for most depot_tools files, followed by `Aborting`
+and `Failed to update depot_tools`. This is distinct from the missing-global-
+config signature above and from Azure runner provisioning.
+
+An archive written under `core.autocrlf=true` can restore CRLF working-tree
+bytes whose index contains LF. Once the job selects `core.autocrlf=false`,
+Git correctly sees those tracked files as modified. Chromium's later clean
+module resets `src`, but depot_tools self-update happens before anything else
+resets the depot_tools worktree.
+
+The reusable workflow passes `--repair-cached-depot-tools` only on its
+disposable source-provisioning calls. The provisioner validates the repository
+and classifies its tracked diff. It resets and verifies the checkout only when
+every change is line-ending-only. If it finds substantive tracked changes, it
+fails with `substantive tracked changes` and preserves the files; this prevents
+cache corruption from being silently masked. The flag defaults off for local
+CLI use, so developer-owned depot_tools edits are never reset implicitly.
+Untracked files are preserved.
+
+Cache generation `v2` has no `v1` fallback, so normal recovery is a cold sync
+followed by a new archive under the current Git policy. If this signature
+appears on a `v2` hit, inspect the source-ensure log for either the normalization
+message or the fail-closed error. Do not delete files in a persistent checkout
+and do not broaden the repair to unconditional `git reset --hard`.
 
 ## Troubleshooting: jobs stuck in `queued`
 
