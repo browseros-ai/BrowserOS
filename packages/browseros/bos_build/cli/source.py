@@ -59,6 +59,14 @@ def ensure_cmd(
         "--version-file",
         help="CHROMIUM_VERSION pin file (default: package root)",
     ),
+    repair_cached_depot_tools: bool = typer.Option(
+        False,
+        "--repair-cached-depot-tools",
+        help=(
+            "Repair line-ending-only tracked changes in an existing depot_tools "
+            "checkout; intended for disposable CI caches"
+        ),
+    ),
 ):
     """Idempotently provision depot_tools + chromium src at the pinned tag."""
     if step not in ("checkout", "sync", "all"):
@@ -78,7 +86,13 @@ def ensure_cmd(
     log_info(f"Chromium root: {root.resolve()}")
 
     try:
-        ensure(root.resolve(), version, strategy=strategy, step_name=step)
+        ensure(
+            root.resolve(),
+            version,
+            strategy=strategy,
+            step_name=step,
+            repair_cached_depot_tools=repair_cached_depot_tools,
+        )
     except Exception as e:
         log_error(f"Provisioning failed: {e}")
         raise typer.Exit(1)
