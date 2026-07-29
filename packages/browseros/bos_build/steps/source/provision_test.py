@@ -106,6 +106,25 @@ class DepotToolsRecoveryTest(unittest.TestCase):
             self.assertEqual(tracked.read_bytes(), changed)
             self.assertTrue(self._tracked_status(depot_tools))
 
+    def test_authorized_repair_rejects_trailing_whitespace_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            changed = b"first line \nsecond line\n"
+            tracked.write_bytes(changed)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "substantive tracked changes",
+            ):
+                provision.ensure_depot_tools(
+                    root,
+                    repair_cached_depot_tools=True,
+                )
+
+            self.assertEqual(tracked.read_bytes(), changed)
+            self.assertTrue(self._tracked_status(depot_tools))
+
     def test_default_preserves_dirty_developer_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

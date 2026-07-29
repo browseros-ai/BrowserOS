@@ -289,6 +289,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             native_env.update(
                 {
                     "GIT_CONFIG_GLOBAL": config_path,
+                    "GITHUB_ENV": str(github_env),
+                    "GITHUB_PATH": str(temp_root / "github path"),
                     "HOME": str(missing_home),
                 }
             )

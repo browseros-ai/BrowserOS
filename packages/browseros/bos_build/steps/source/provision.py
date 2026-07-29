@@ -105,8 +105,8 @@ def _repair_cached_depot_tools(depot_tools: Path) -> None:
         return
 
     for diff_args in (
-        ["diff", "--quiet", "--ignore-space-at-eol", "--"],
-        ["diff", "--cached", "--quiet", "--ignore-space-at-eol", "--"],
+        ["diff", "--quiet", "--ignore-cr-at-eol", "--"],
+        ["diff", "--cached", "--quiet", "--ignore-cr-at-eol", "--"],
     ):
         diff = subprocess.run(["git", *diff_args], cwd=depot_tools)
         if diff.returncode == 1:
