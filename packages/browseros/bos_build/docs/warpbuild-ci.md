@@ -280,9 +280,11 @@ disposable source-provisioning calls. The provisioner validates the repository
 and classifies its tracked diff. It resets and verifies the checkout only when
 every change is line-ending-only. If it finds substantive tracked changes, it
 fails with `substantive tracked changes` and preserves the files; this prevents
-cache corruption from being silently masked. The flag defaults off for local
-CLI use, so developer-owned depot_tools edits are never reset implicitly.
-Untracked files are preserved.
+cache corruption from being silently masked. It likewise rejects non-default
+index flags such as assume-unchanged or skip-worktree, because those flags can
+hide real content from status and diff. The flag defaults off for local CLI
+use, so developer-owned depot_tools edits are never reset implicitly. Untracked
+files are preserved.
 
 Cache generation `v2` has no `v1` fallback, so normal recovery is a cold sync
 followed by a new archive under the current Git policy. If this signature

@@ -602,6 +602,8 @@ class ChromiumGitRunbookTest(unittest.TestCase):
         self.assertIn("Failed to update depot_tools", troubleshooting)
         self.assertIn("line-ending-only", troubleshooting)
         self.assertIn("substantive tracked changes", troubleshooting)
+        self.assertIn("non-default", troubleshooting)
+        self.assertIn("index flags", troubleshooting)
         self.assertIn("`--repair-cached-depot-tools`", troubleshooting)
         self.assertIn("`v2`", troubleshooting)
 

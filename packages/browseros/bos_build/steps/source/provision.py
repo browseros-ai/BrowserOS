@@ -90,6 +90,29 @@ def _repair_cached_depot_tools(depot_tools: Path) -> None:
             f"cached depot_tools is not a valid Git worktree: {depot_tools}"
         )
 
+    index_state = subprocess.run(
+        ["git", "ls-files", "-v", "-z"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    if index_state.returncode != 0:
+        raise RuntimeError(
+            "could not inspect cached depot_tools index flags: "
+            f"{index_state.stderr.strip()}"
+        )
+    unsafe_index_entries = [
+        entry
+        for entry in index_state.stdout.split("\0")
+        if entry and not entry.startswith("H ")
+    ]
+    if unsafe_index_entries:
+        markers = sorted({entry[0] for entry in unsafe_index_entries})
+        raise RuntimeError(
+            "cached depot_tools has non-default index flags "
+            f"({', '.join(markers)}); refusing line-ending repair"
+        )
+
     status = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=no"],
         cwd=depot_tools,
@@ -105,8 +128,25 @@ def _repair_cached_depot_tools(depot_tools: Path) -> None:
         return
 
     for diff_args in (
-        ["diff", "--quiet", "--ignore-cr-at-eol", "--"],
-        ["diff", "--cached", "--quiet", "--ignore-cr-at-eol", "--"],
+        [
+            "diff",
+            "--quiet",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
+            "--ignore-cr-at-eol",
+            "--",
+        ],
+        [
+            "diff",
+            "--cached",
+            "--quiet",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
+            "--ignore-cr-at-eol",
+            "--",
+        ],
     ):
         diff = subprocess.run(["git", *diff_args], cwd=depot_tools)
         if diff.returncode == 1:
