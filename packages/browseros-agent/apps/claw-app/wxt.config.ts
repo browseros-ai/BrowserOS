@@ -20,6 +20,8 @@ export default defineConfig({
     // followed by claw-specific extras.
     permissions: [
       'topSites',
+      'favicon',
+      'search',
       'storage',
       'unlimitedStorage',
       'scripting',

@@ -12,6 +12,7 @@ import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
 import { FilterBar } from '@/components/audit/FilterBar'
 import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
+import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
 import {
   Table,
   TableBody,
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
+import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { NUMERIC_COLUMN_IDS, TASK_COLUMNS } from './audit.columns'
 import { useAuditScreenData } from './audit.data'
 import {
@@ -64,6 +66,7 @@ export function Audit() {
   } = useAuditScreenData()
   const navigate = useNavigate()
   const location = useLocation()
+  const stats = useCockpitStats()
 
   const hasActiveFilters =
     filters.agentSlug !== null ||
@@ -123,6 +126,8 @@ export function Audit() {
         </h1>
         <ManageAuditFilesDialog />
       </header>
+
+      {stats.data?.hasMeasuredStats && <SavedStatsBand stats={stats.data} />}
 
       {!isError && (tasks.length > 0 || hasActiveFilters) && (
         <FilterBar

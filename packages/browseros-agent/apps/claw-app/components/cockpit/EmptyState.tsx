@@ -8,10 +8,9 @@ interface EmptyStateProps {
 }
 
 /**
- * Shared empty-state card used by RunningGrid and RecentActivity when
- * the registry has nothing to show. Same border / padding rhythm as
- * the running card so the page does not collapse to a flat header
- * when no agents are connected.
+ * Shared empty-state card used by RecentActivity when the registry has
+ * nothing to show. Same border / padding rhythm as the running card so
+ * the page does not collapse to a flat header when no agents are connected.
  */
 export function EmptyState({ title, hint, icon }: EmptyStateProps) {
   return (

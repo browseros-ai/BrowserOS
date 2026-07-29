@@ -3,6 +3,7 @@ import type { CockpitStats } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import * as _topSitesHooks from '@/components/newtab/top-sites.hooks'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cockpitStatsHooks from '@/modules/api/cockpit.hooks'
@@ -13,15 +14,14 @@ import type { LiveSessionCardRecord } from './cockpit.helpers'
 const cockpitDataResultKey = '__browserclawCockpitDataResult'
 const connectionsHookResultKey = '__browserclawConnectionsHookResult'
 const sessionsHookResultKey = '__browserclawSessionsHookResult'
-const statsHookOptionsKey = '__browserclawStatsHookOptions'
 const statsHookResultKey = '__browserclawStatsHookResult'
+const statsHookCallsKey = '__browserclawStatsHookCalls'
+const topSitesHookResultKey = '__browserclawTopSitesHookResult'
 
 function hookState() {
   return globalThis as Record<string, unknown>
 }
 
-// Spread real modules in mock.module replacements: Bun's registry is
-// process-scoped, so partial replacements can break unrelated imports.
 mock.module('./cockpit.data', () => ({
   ..._cockpitData,
   useCockpitData: () =>
@@ -38,9 +38,7 @@ mock.module('@/modules/api/audit.hooks', () => ({
       data: { pages: [{ items: [] }] },
       isPending: false,
     },
-  taskScreenshotUrl: (sessionId: string, id: number) =>
-    `/api/v1/sessions/${sessionId}/screenshots/${id}`,
-  useTaskScreenshotBaseUrl: () => null,
+  useSessionPreviewUrl: () => null,
 }))
 
 mock.module('@/modules/api/connections.hooks', () => ({
@@ -68,8 +66,9 @@ mock.module('@/modules/api/connections.hooks', () => ({
 
 mock.module('@/modules/api/cockpit.hooks', () => ({
   ..._cockpitStatsHooks,
-  useCockpitStats: (options?: { enabled?: boolean }) => {
-    hookState()[statsHookOptionsKey] = options
+  useCockpitStats: () => {
+    hookState()[statsHookCallsKey] =
+      ((hookState()[statsHookCallsKey] as number) ?? 0) + 1
     return (
       hookState()[statsHookResultKey] ?? {
         data: undefined,
@@ -78,6 +77,16 @@ mock.module('@/modules/api/cockpit.hooks', () => ({
       }
     )
   },
+}))
+
+mock.module('@/components/newtab/top-sites.hooks', () => ({
+  ..._topSitesHooks,
+  useTopSites: () =>
+    hookState()[topSitesHookResultKey] ?? {
+      data: [],
+      isPending: false,
+      isError: false,
+    },
 }))
 
 const { Cockpit } = await import('./Cockpit')
@@ -111,38 +120,21 @@ const measuredStats: CockpitStats = {
   allTime: {
     browserClawTokenEstimate: 12_400,
     screenshotFirstTokenEstimate: 120_000,
-    rawTokenSavingsEstimate: 107_600,
-    humanTimeSavedMs: 7_500_000,
+    rawTokenSavingsEstimate: 45_100,
+    humanTimeSavedMs: 2_160_000,
     sessionCount: 12,
     toolCallCount: 78,
   },
-  last30Days: {
-    browserClawTokenEstimate: 2_400,
-    screenshotFirstTokenEstimate: 20_000,
-    rawTokenSavingsEstimate: 17_600,
-    humanTimeSavedMs: 1_500_000,
-    sessionCount: 3,
-    toolCallCount: 18,
-  },
-  last7Days: zeroWindow,
-}
-
-const unmeasuredStats: CockpitStats = {
-  hasMeasuredStats: false,
-  allTime: zeroWindow,
   last30Days: zeroWindow,
   last7Days: zeroWindow,
 }
 
 type ConnectionsState = 'empty' | 'installed' | 'pending'
 type SessionsState = 'empty' | 'history'
-type StatsState = 'error' | 'loading' | 'measured' | 'unmeasured'
+type StatsState = 'loading' | 'measured'
 
 function setCockpitSessions(sessions: LiveSessionCardRecord[]) {
-  hookState()[cockpitDataResultKey] = {
-    sessions,
-    isPending: false,
-  }
+  hookState()[cockpitDataResultKey] = { sessions, isPending: false }
 }
 
 function setConnectionsState(state: ConnectionsState) {
@@ -178,16 +170,19 @@ function setStatsState(state: StatsState) {
   hookState()[statsHookResultKey] =
     state === 'measured'
       ? { data: measuredStats, isPending: false, isError: false }
-      : state === 'unmeasured'
-        ? { data: unmeasuredStats, isPending: false, isError: false }
-        : state === 'error'
-          ? { data: undefined, isPending: false, isError: true }
-          : { data: undefined, isPending: true, isError: false }
+      : { data: undefined, isPending: true, isError: false }
 }
 
-function statsQueryEnabled(): boolean | undefined {
-  return (hookState()[statsHookOptionsKey] as { enabled?: boolean } | undefined)
-    ?.enabled
+function setTopSites(items: Array<{ url: string; title: string }>) {
+  hookState()[topSitesHookResultKey] = {
+    data: items,
+    isPending: false,
+    isError: false,
+  }
+}
+
+function statsCallCount(): number {
+  return (hookState()[statsHookCallsKey] as number) ?? 0
 }
 
 function renderApp(
@@ -196,13 +191,15 @@ function renderApp(
     liveSessions?: LiveSessionCardRecord[]
     sessions?: SessionsState
     stats?: StatsState
+    topSites?: Array<{ url: string; title: string }>
   } = {},
 ): string {
   setCockpitSessions(options.liveSessions ?? [])
   setConnectionsState(options.connections ?? 'empty')
   setSessionsState(options.sessions ?? 'history')
   setStatsState(options.stats ?? 'loading')
-  hookState()[statsHookOptionsKey] = undefined
+  setTopSites(options.topSites ?? [])
+  hookState()[statsHookCallsKey] = 0
 
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -216,33 +213,39 @@ function renderApp(
   )
 }
 
-describe('Cockpit (v2)', () => {
-  it('renders measured idle stats between the hero and recent activity', () => {
-    const html = renderApp({ stats: 'measured' })
+describe('Cockpit new-tab monitor', () => {
+  it('renders the calm idle page: brand mark, omnibox, top sites, one glance line', () => {
+    const html = renderApp({
+      stats: 'measured',
+      topSites: [{ url: 'https://github.com/', title: 'GitHub' }],
+    })
 
-    const heroIndex = html.indexOf('working on')
-    const savedStatsIndex = html.indexOf('Since you started')
-    const recentActivityIndex = html.indexOf('Recent activity')
-    expect(heroIndex).toBeGreaterThan(-1)
-    expect(savedStatsIndex).toBeGreaterThan(heroIndex)
-    expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
-    expect(html).toContain('nothing running')
+    expect(html).toContain('alt="BrowserClaw"')
+    expect(html).toContain('Search the web or type a URL')
+    expect(html).toContain('data-top-site="https://github.com/"')
+    expect(html).toContain('Idle')
+    expect(html).toContain('tokens saved')
     expect(html).not.toContain('Running now')
-    expect(statsQueryEnabled()).toBe(true)
+    expect(statsCallCount()).toBeGreaterThan(0)
   })
 
-  it('always renders RunningGrid for a live session', () => {
+  it('promotes the running monitor to the hero for a live session', () => {
     const html = renderApp({
       liveSessions: [liveSession('session-live')],
       stats: 'measured',
     })
 
-    expect(html).toContain('Running now')
-    expect(html).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
+    const runningIndex = html.indexOf('Running now')
+    const searchIndex = html.indexOf('Search the web or type a URL')
+    expect(runningIndex).toBeGreaterThan(-1)
+    expect(html).toContain('data-session-card="session-live"')
+    // The running block leads the column; search demotes beneath it.
+    expect(searchIndex).toBeGreaterThan(runningIndex)
+    expect(html).not.toContain('alt="BrowserClaw"')
+    expect(statsCallCount()).toBeGreaterThan(0)
   })
 
-  it('keeps first-run and waiting onboarding shells free of saved stats', () => {
+  it('keeps onboarding shells free of the monitor and its stats query', () => {
     const firstRun = renderApp({
       connections: 'empty',
       sessions: 'empty',
@@ -250,11 +253,9 @@ describe('Cockpit (v2)', () => {
     })
     expect(firstRun).toContain('You watch. Your agent')
     expect(firstRun).toContain('Set up MCP endpoint')
-    expect(firstRun).toContain(
-      'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
-    )
-    expect(firstRun).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
+    expect(firstRun).not.toContain('Running now')
+    expect(firstRun).not.toContain('Search the web or type a URL')
+    expect(statsCallCount()).toBe(0)
 
     const waiting = renderApp({
       connections: 'installed',
@@ -262,39 +263,8 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
     expect(waiting).toContain('Waiting for your first run')
-    expect(waiting).toContain('View MCP endpoint')
-    expect(waiting).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
-  })
-
-  for (const stats of ['loading', 'error', 'unmeasured'] as const) {
-    it(`preserves Recent activity while idle stats are ${stats}`, () => {
-      const html = renderApp({ stats })
-
-      expect(html).toContain('Recent activity')
-      expect(html).not.toContain('Since you started')
-      expect(html).not.toContain('Running now')
-      expect(statsQueryEnabled()).toBe(true)
-    })
-  }
-
-  it('does not query stats before the onboarding probes resolve', () => {
-    const html = renderApp({
-      connections: 'pending',
-      sessions: 'empty',
-      stats: 'measured',
-    })
-
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('No recent activity')
-    expect(html).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
-  })
-
-  it('does NOT render an add-profile tile in the default v2 build', () => {
-    const html = renderApp()
-    expect(html).not.toContain('New profile')
-    expect(html).not.toContain('harness . logins . guardrails')
+    expect(waiting).not.toContain('Running now')
+    expect(statsCallCount()).toBe(0)
   })
 
   it('shows a connected zero-tab live session before configuration or activity', () => {
@@ -309,9 +279,6 @@ describe('Cockpit (v2)', () => {
     expect(html).toContain('data-session-card="session-connected"')
     expect(html).toContain('data-stop-session="session-connected"')
     expect(html).not.toContain('You watch. Your agent')
-    expect(html).not.toContain('Set up MCP endpoint')
-    expect(html).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
   })
 })
 
