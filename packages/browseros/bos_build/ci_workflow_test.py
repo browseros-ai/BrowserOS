@@ -114,6 +114,23 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             github_env = temp_root / "github env"
             config_path = runner_temp / "browseros-global.gitconfig"
 
+            env = os.environ.copy()
+            env.pop("GIT_CONFIG_GLOBAL", None)
+            env.update(
+                {
+                    "GITHUB_ENV": str(github_env),
+                    "HOME": str(missing_home),
+                    "RUNNER_TEMP": str(runner_temp),
+                }
+            )
+
+            subprocess.run(
+                ["bash", "-c", script],
+                check=True,
+                env=env,
+            )
+            self.assertTrue(config_path.is_file())
+
             for key in EXPECTED_GIT_CONFIG:
                 subprocess.run(
                     [
@@ -140,22 +157,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     check=True,
                 )
 
-            env = os.environ.copy()
-            env.pop("GIT_CONFIG_GLOBAL", None)
-            env.update(
-                {
-                    "GITHUB_ENV": str(github_env),
-                    "HOME": str(missing_home),
-                    "RUNNER_TEMP": str(runner_temp),
-                }
+            subprocess.run(
+                ["bash", "-c", script],
+                check=True,
+                env=env,
             )
-
-            for _ in range(2):
-                subprocess.run(
-                    ["bash", "-c", script],
-                    check=True,
-                    env=env,
-                )
 
             self.assertFalse(missing_home.exists())
             self.assertEqual(
@@ -179,6 +185,67 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     )
                     self.assertEqual(result.stdout.splitlines(), [value])
 
+    @unittest.skipUnless(os.name == "nt", "requires Git for Windows")
+    def test_native_git_wrapper_reads_config_propagated_by_git_bash(self):
+        script = self.git_bootstrap_step()["run"]
+
+        with tempfile.TemporaryDirectory(prefix="browseros native git ") as tmp:
+            temp_root = Path(tmp)
+            runner_temp = temp_root / "runner temp"
+            runner_temp.mkdir()
+            missing_home = temp_root / "missing home"
+            github_env = temp_root / "github env"
+
+            bash_env = os.environ.copy()
+            bash_env.pop("GIT_CONFIG_GLOBAL", None)
+            bash_env.update(
+                {
+                    "GITHUB_ENV": str(github_env),
+                    "HOME": str(missing_home),
+                    "RUNNER_TEMP": str(runner_temp),
+                }
+            )
+            subprocess.run(
+                ["bash", "-c", script],
+                check=True,
+                env=bash_env,
+            )
+
+            assignment = github_env.read_text(encoding="utf-8").strip()
+            name, config_path = assignment.split("=", maxsplit=1)
+            self.assertEqual(name, "GIT_CONFIG_GLOBAL")
+
+            git_wrapper = temp_root / "git-wrapper.bat"
+            git_wrapper.write_bytes(b"@echo off\r\ngit %*\r\n")
+            native_env = os.environ.copy()
+            native_env.update(
+                {
+                    "GIT_CONFIG_GLOBAL": config_path,
+                    "HOME": str(missing_home),
+                }
+            )
+
+            for key, value in EXPECTED_GIT_CONFIG.items():
+                with self.subTest(key=key):
+                    command = subprocess.list2cmdline(
+                        [
+                            "call",
+                            str(git_wrapper),
+                            "config",
+                            "--global",
+                            "--get-all",
+                            key,
+                        ]
+                    )
+                    result = subprocess.run(
+                        ["cmd.exe", "/d", "/c", command],
+                        capture_output=True,
+                        check=True,
+                        env=native_env,
+                        text=True,
+                    )
+                    self.assertEqual(result.stdout.splitlines(), [value])
+
     def test_reusable_workflow_changes_trigger_build_system_tests(self):
         test_workflow = self.load_workflow("bos-build-tests.yml")
         # PyYAML's YAML 1.1 resolver treats the GitHub Actions `on` key as a
@@ -189,6 +256,26 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertIn(
             ".github/workflows/build-browseros.yml",
             pull_request_paths,
+        )
+
+    def test_build_system_tests_cross_git_bash_to_native_git_on_windows(self):
+        test_workflow = self.load_workflow("bos-build-tests.yml")
+        windows_job = test_workflow["jobs"]["windows-git-bootstrap"]
+        verification_step = next(
+            step
+            for step in windows_job["steps"]
+            if step.get("name") == "Verify Windows Git bootstrap"
+        )
+
+        self.assertEqual(windows_job["runs-on"], "windows-latest")
+        self.assertEqual(verification_step["shell"], "bash")
+        self.assertEqual(
+            verification_step["working-directory"],
+            "packages/browseros",
+        )
+        self.assertEqual(
+            verification_step["run"],
+            "uv run python -m unittest bos_build.ci_workflow_test -v",
         )
 
 
