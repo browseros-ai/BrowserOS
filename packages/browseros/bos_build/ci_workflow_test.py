@@ -346,7 +346,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         resolved_env = os.environ.copy()
         resolved_env.update(env)
         return subprocess.run(
-            ["bash", "-c", script],
+            [git_bash_path(), "-c", script],
             cwd=cwd,
             env=resolved_env,
             capture_output=True,
