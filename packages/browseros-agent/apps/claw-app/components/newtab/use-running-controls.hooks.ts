@@ -3,19 +3,23 @@ import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
-import { AgentRunningCard } from './AgentRunningCard'
 
-interface RunningGridProps {
-  sessions: LiveSessionCardRecord[]
+export interface RunningControls {
+  onWatch: (session: LiveSessionCardRecord) => void
+  onStop: (sessionId: string) => void
+  pendingBrowserTabId?: number
+  cancelPendingSessionId?: string
 }
 
-/** Renders one card and one set of controls per connected live session. */
-export function RunningGrid({ sessions }: RunningGridProps) {
+/**
+ * One Watch / Stop implementation shared by the lead card and the rest rows.
+ * Stop invalidates the live-session and paginated-session caches by their
+ * `getKey` so both the running panel and the audit history refresh.
+ */
+export function useRunningControls(): RunningControls {
   const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
-
-  if (sessions.length === 0) return null
 
   const onWatch = (session: LiveSessionCardRecord) => {
     const browserTabId = session.selectedTab?.browserTabId
@@ -24,7 +28,6 @@ export function RunningGrid({ sessions }: RunningGridProps) {
       { browserTabId },
       {
         onError: (err) => {
-          // eslint-disable-next-line no-console
           console.warn('focus browser tab failed', {
             sessionId: session.sessionId,
             browserTabId,
@@ -34,6 +37,7 @@ export function RunningGrid({ sessions }: RunningGridProps) {
       },
     )
   }
+
   const onStop = (sessionId: string) => {
     cancel.mutate(
       { sessionId },
@@ -47,12 +51,12 @@ export function RunningGrid({ sessions }: RunningGridProps) {
           })
         },
         onError: (err) => {
-          // eslint-disable-next-line no-console
           console.warn('cancel session failed', { sessionId, err })
         },
       },
     )
   }
+
   const pendingBrowserTabId =
     focus.isPending && focus.variables
       ? focus.variables.browserTabId
@@ -62,32 +66,5 @@ export function RunningGrid({ sessions }: RunningGridProps) {
       ? cancel.variables.sessionId
       : undefined
 
-  return (
-    <section className="space-y-4">
-      <header className="flex items-baseline gap-3">
-        <h2 className="font-semibold text-ink text-lg">Running now</h2>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]">
-          <span
-            aria-hidden
-            className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(221_90%_55%/0.5)]"
-          />
-          {sessions.length} live
-        </span>
-      </header>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {sessions.map((session) => (
-          <AgentRunningCard
-            key={session.sessionId}
-            session={session}
-            onWatch={session.selectedTab ? () => onWatch(session) : undefined}
-            onStop={() => onStop(session.sessionId)}
-            isFocusPending={
-              pendingBrowserTabId === session.selectedTab?.browserTabId
-            }
-            isCancelPending={cancelPendingSessionId === session.sessionId}
-          />
-        ))}
-      </div>
-    </section>
-  )
+  return { onWatch, onStop, pendingBrowserTabId, cancelPendingSessionId }
 }

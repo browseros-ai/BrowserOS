@@ -1,6 +1,11 @@
 import { ExternalLink, RefreshCw, Square } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
-import { formatToolTrail, siteOf } from '@/screens/cockpit/cockpit.helpers'
+import {
+  formatElapsed,
+  formatToolTrail,
+  siteOf,
+} from '@/screens/cockpit/cockpit.helpers'
 import { MiniScreencast } from './MiniScreencast'
 import { TabCountChip } from './TabCountChip'
 
@@ -10,6 +15,10 @@ interface SessionRunningCardProps {
   onStop: () => void
   isFocusPending?: boolean
   isCancelPending?: boolean
+  /** `lead` gives the dock's prominent card a taller live preview. */
+  size?: 'default' | 'lead'
+  /** When set, shows live elapsed since the session started. */
+  now?: number
 }
 
 /**
@@ -27,6 +36,8 @@ export function AgentRunningCard({
   onStop,
   isFocusPending,
   isCancelPending,
+  size = 'default',
+  now,
 }: SessionRunningCardProps) {
   const selectedTab = session.selectedTab
   const active = session.state === 'active'
@@ -36,7 +47,10 @@ export function AgentRunningCard({
   return (
     <div
       data-session-card={session.sessionId}
-      className="group relative flex h-[300px] flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40"
+      className={cn(
+        'group relative flex flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40',
+        size === 'lead' ? 'h-[clamp(240px,34dvh,360px)]' : 'h-[300px]',
+      )}
     >
       <div className="relative flex-1 overflow-hidden">
         <MiniScreencast
@@ -65,6 +79,11 @@ export function AgentRunningCard({
             <span className="truncate text-white">{session.label}</span>
             <span className="shrink-0 text-white/45">{session.harness}</span>
           </span>
+          {now !== undefined && (
+            <span className="ml-auto shrink-0 text-white/55 normal-case tabular-nums">
+              {formatElapsed(now - session.startedAt)}
+            </span>
+          )}
           <span
             className={
               active

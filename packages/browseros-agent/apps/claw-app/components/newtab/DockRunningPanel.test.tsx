@@ -4,10 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cancelHooks from '@/modules/api/cancel.hooks'
 import * as _focusHooks from '@/modules/api/focus.hooks'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
+import type { StatsSlice } from '@/screens/cockpit/newtab.data'
 
 const cancelCalls: Array<{ sessionId: string }> = []
 const focusCalls: Array<{ browserTabId: number }> = []
@@ -42,7 +44,38 @@ mock.module('@/modules/api/focus.hooks', () => ({
   }),
 }))
 
-const { RunningGrid } = await import('./RunningGrid')
+const { DockRunningPanel } = await import('./DockRunningPanel')
+
+const measuredStats: StatsSlice = {
+  isPending: false,
+  data: {
+    hasMeasuredStats: true,
+    allTime: {
+      browserClawTokenEstimate: 12_400,
+      screenshotFirstTokenEstimate: 120_000,
+      rawTokenSavingsEstimate: 45_100,
+      humanTimeSavedMs: 2_160_000,
+      sessionCount: 12,
+      toolCallCount: 78,
+    },
+    last30Days: {
+      browserClawTokenEstimate: 0,
+      screenshotFirstTokenEstimate: 0,
+      rawTokenSavingsEstimate: 0,
+      humanTimeSavedMs: 0,
+      sessionCount: 0,
+      toolCallCount: 0,
+    },
+    last7Days: {
+      browserClawTokenEstimate: 0,
+      screenshotFirstTokenEstimate: 0,
+      rawTokenSavingsEstimate: 0,
+      humanTimeSavedMs: 0,
+      sessionCount: 0,
+      toolCallCount: 0,
+    },
+  },
+}
 
 const globalDescriptors = new Map(
   ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
@@ -143,35 +176,48 @@ async function render(sessions: LiveSessionCardRecord[]) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={queryClient}>
-        <RunningGrid sessions={sessions} />
+        <MemoryRouter>
+          <DockRunningPanel sessions={sessions} stats={measuredStats} />
+        </MemoryRouter>
       </QueryClientProvider>,
     ),
   )
 }
 
-describe('RunningGrid', () => {
-  it('hides the Running now section when no live sessions are connected', async () => {
+describe('DockRunningPanel', () => {
+  it('renders nothing without any live sessions', async () => {
     await render([])
     expect(container.textContent).not.toContain('Running now')
-    expect(container.textContent).not.toContain('0 live')
   })
 
-  it('renders and cancels two same-profile sessions by distinct session ids', async () => {
+  it('leads with the newest run and keeps the compact stat in the header', async () => {
     await render([
-      session({ sessionId: 'session-a' }),
-      session({ sessionId: 'session-b' }),
+      session({ sessionId: 'session-old', startedAt: 100 }),
+      session({ sessionId: 'session-new', startedAt: 200 }),
     ])
 
+    expect(container.textContent).toContain('Running now')
+    expect(container.textContent).toContain('2 running')
+    expect(container.textContent).toContain('45.1K saved')
     expect(
       [...container.querySelectorAll('[data-session-card]')].map((card) =>
         card.getAttribute('data-session-card'),
       ),
-    ).toEqual(['session-a', 'session-b'])
+    ).toEqual(['session-new', 'session-old'])
+  })
+
+  it('cancels a session and invalidates the live and history caches', async () => {
+    await render([
+      session({ sessionId: 'session-a', startedAt: 100 }),
+      session({ sessionId: 'session-b', startedAt: 200 }),
+    ])
+
     const stopB = container.querySelector('[data-stop-session="session-b"]')
     if (!stopB) throw new Error('session-b Stop button missing')
     await act(async () => {
       stopB.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
+
     expect(cancelCalls).toEqual([{ sessionId: 'session-b' }])
     expect(invalidatedQueryKeys).toEqual([
       _auditHooks.useLiveSessions.getKey(),
@@ -179,56 +225,11 @@ describe('RunningGrid', () => {
     ])
   })
 
-  it('counts connected sessions, including an idle zero-tab session', async () => {
-    await render([
-      session({ sessionId: 'session-active' }),
-      session({
-        sessionId: 'session-idle',
-        state: 'idle',
-        selectedTab: null,
-        browserTabs: [],
-        toolCount: 0,
-        recentTools: [],
-      }),
-    ])
-
-    expect(container.textContent).toContain('2 live')
-    const idleCard = container.querySelector(
-      '[data-session-card="session-idle"]',
-    )
-    expect(idleCard?.textContent).toContain('Idle')
-    expect(idleCard?.querySelector('[data-watch-browser-tab]')).toBeNull()
-    expect(idleCard?.querySelector('[data-preview-url]')).toBeNull()
-    expect(
-      idleCard?.querySelector('[data-stop-session="session-idle"]'),
-    ).not.toBeNull()
-  })
-
-  it('retains multi-tab count and merged tool trail', async () => {
-    const selectedTab = browserTab({
-      browserTabId: 41,
-      recentTools: [{ name: 'navigate', at: 100 }],
-    })
-    await render([
-      session({
-        selectedTab,
-        browserTabs: [selectedTab, browserTab({ browserTabId: 42 })],
-        toolCount: 3,
-        recentTools: [
-          { name: 'navigate', at: 100 },
-          { name: 'snapshot', at: 200 },
-          { name: 'act', at: 300 },
-        ],
-      }),
-    ])
-
-    expect(container.textContent).toContain('2 tabs')
-    expect(container.textContent).toContain('navigate -> snapshot -> act')
-  })
-
   it('watches the exact selected browser tab id', async () => {
     const selectedTab = browserTab({ browserTabId: 42 })
-    await render([session({ selectedTab, browserTabs: [selectedTab] })])
+    await render([
+      session({ selectedTab, browserTabs: [selectedTab], startedAt: 200 }),
+    ])
 
     const watch = container.querySelector('[data-watch-browser-tab="42"]')
     if (!watch) throw new Error('Watch button missing')

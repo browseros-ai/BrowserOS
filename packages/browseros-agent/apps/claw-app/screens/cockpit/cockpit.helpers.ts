@@ -50,6 +50,17 @@ export function formatRelative(ms: number, now: number): string {
   return `${days}d ago`
 }
 
+/** Compact live elapsed since a session started, e.g. `53s`, `1m 12s`, `2h 04m`. */
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes === 0) return `${seconds}s`
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
+}
+
 /** Returns the most recent N tool names joined for compact card trail rows. */
 export function formatToolTrail(
   recentTools: ToolEvent[],
