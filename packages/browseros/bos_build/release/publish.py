@@ -12,6 +12,7 @@ from .common import (
     PLATFORM_DISPLAY_NAMES,
     fetch_all_release_metadata,
     get_download_path_mapping,
+    validate_release_metadata,
 )
 
 
@@ -41,8 +42,19 @@ class PublishModule(Step):
     requires = []
     description = "Publish versioned artifacts to latest download URLs"
 
-    def __init__(self, platforms: Optional[List[str]] = None):
+    def __init__(
+        self,
+        platforms: Optional[List[str]] = None,
+        macos_arch: str = "universal",
+        source_sha: str = "",
+        workflow_run_id: str = "",
+        workflow_run_attempt: str = "",
+    ):
         self.platforms = platforms or PLATFORMS
+        self.macos_arch = macos_arch
+        self.source_sha = source_sha
+        self.workflow_run_id = workflow_run_id
+        self.workflow_run_attempt = workflow_run_attempt
 
     def validate(self, ctx: Context) -> None:
         if not BOTO3_AVAILABLE:
@@ -69,6 +81,29 @@ class PublishModule(Step):
         metadata = fetch_all_release_metadata(version, env, ctx.product.id)
         if not metadata:
             raise RuntimeError(f"No release metadata found for version {version}")
+        if any(
+            (
+                self.source_sha,
+                self.workflow_run_id,
+                self.workflow_run_attempt,
+            )
+        ):
+            validated: Dict[str, dict] = {}
+            for platform in self.platforms:
+                selection = "windows" if platform == "win" else platform
+                validated.update(
+                    validate_release_metadata(
+                        metadata,
+                        version=version,
+                        product_id=ctx.product.id,
+                        platforms=selection,
+                        macos_arch=self.macos_arch,
+                        source_sha=self.source_sha,
+                        workflow_run_id=self.workflow_run_id,
+                        workflow_run_attempt=self.workflow_run_attempt,
+                    )
+                )
+            metadata = validated
         missing_platforms = [
             platform for platform in self.platforms if platform not in metadata
         ]

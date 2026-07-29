@@ -178,11 +178,40 @@ def publish(
         "--platform",
         help="Platform to promote: macos, win, or linux (repeatable; default: all)",
     ),
+    macos_arch: str = typer.Option(
+        "universal",
+        "--macos-arch",
+        help="Expected macOS artifact set: arm64, x64, or universal",
+    ),
+    source_sha: str = typer.Option(
+        "",
+        "--source-sha",
+        help="Require release metadata from this source commit",
+    ),
+    workflow_run_id: str = typer.Option(
+        "",
+        "--workflow-run-id",
+        help="Require release metadata from this Actions run",
+    ),
+    workflow_run_attempt: str = typer.Option(
+        "",
+        "--workflow-run-attempt",
+        help="Require release metadata from this Actions run attempt",
+    ),
 ):
     """Publish versioned artifacts to download/ paths (make live)."""
     release_ctx = create_release_context(version, product=product)
     log_info(f"🚀 Publishing v{version} to download/ paths")
-    execute_module(release_ctx, PublishModule(platforms=platforms))
+    execute_module(
+        release_ctx,
+        PublishModule(
+            platforms=platforms,
+            macos_arch=macos_arch,
+            source_sha=source_sha,
+            workflow_run_id=workflow_run_id,
+            workflow_run_attempt=workflow_run_attempt,
+        ),
+    )
 
 
 @app.command("download")
@@ -289,7 +318,19 @@ def github_create(
 
     if publish_to_download:
         log_info(f"\n🚀 Publishing v{version} to download/ paths")
-        execute_module(ctx, PublishModule())
+        publish_platforms = None
+        if platforms and platforms != "all":
+            publish_platforms = ["win" if platforms == "windows" else platforms]
+        execute_module(
+            ctx,
+            PublishModule(
+                platforms=publish_platforms,
+                macos_arch=macos_arch,
+                source_sha=source_sha,
+                workflow_run_id=workflow_run_id,
+                workflow_run_attempt=workflow_run_attempt,
+            ),
+        )
 
 
 if __name__ == "__main__":

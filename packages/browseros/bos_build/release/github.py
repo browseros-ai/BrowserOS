@@ -354,6 +354,7 @@ class GithubModule(Step):
         metadata = fetch_all_release_metadata(version, ctx.env, ctx.product.id)
         if not metadata:
             raise RuntimeError(f"No release metadata found for version {version}")
+        expected_assets: Optional[set[str]] = None
         if self.platforms is not None:
             metadata = validate_release_metadata(
                 metadata,
@@ -365,6 +366,11 @@ class GithubModule(Step):
                 workflow_run_id=self.workflow_run_id,
                 workflow_run_attempt=self.workflow_run_attempt,
             )
+            expected_assets = {
+                artifact["filename"]
+                for release in metadata.values()
+                for artifact in release["artifacts"].values()
+            }
 
         log_info(f"\n{'='*60}")
         log_info(f"Creating GitHub Release: {tag}")
@@ -424,8 +430,18 @@ class GithubModule(Step):
                     raise RuntimeError(
                         f"Could not verify release target for {tag}: {exc}"
                     ) from exc
-                if self.platforms is not None and not self.skip_upload:
-                    for asset in existing.get("assets", []):
+                if expected_assets is not None and not self.skip_upload:
+                    existing_assets = set(existing.get("assets", []))
+                    unexpected_assets = existing_assets - expected_assets
+                    if self.platforms != "all" and unexpected_assets:
+                        raise RuntimeError(
+                            f"Draft release {tag} contains assets outside the "
+                            f"selected {self.platforms} contract: "
+                            f"{sorted(unexpected_assets)}. Refusing a partial "
+                            "refresh that would delete other platforms; rerun "
+                            "with --platforms all or use a new version."
+                        )
+                    for asset in sorted(existing_assets):
                         try:
                             delete_github_release_asset(tag, repo, asset)
                         except Exception as exc:
@@ -456,12 +472,7 @@ class GithubModule(Step):
             failed = [f for f, ok in results if not ok]
             if failed:
                 raise RuntimeError(f"Failed to upload: {', '.join(failed)}")
-            if self.platforms is not None:
-                expected_assets = {
-                    artifact["filename"]
-                    for release in metadata.values()
-                    for artifact in release["artifacts"].values()
-                }
+            if expected_assets is not None:
                 try:
                     final_release = inspect_github_release(tag, repo)
                 except Exception as exc:

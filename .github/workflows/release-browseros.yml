@@ -641,7 +641,7 @@ jobs:
             echo '```bash'
             echo "cd packages/browseros"
             if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]}"
+              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT"
             else
               echo "# Browser artifact promotion skipped: upload_to_r2=false."
             fi
@@ -949,12 +949,8 @@ jobs:
             if [ -n "$release_json" ]; then
               target_commitish="$(jq -r '.target_commitish // ""' <<< "$release_json")"
               if [ "$target_commitish" != "$GITHUB_SHA" ]; then
-                gh release edit "$tag" --target "$GITHUB_SHA"
-                verified_target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
-                if [ "$verified_target" != "$GITHUB_SHA" ]; then
-                  echo "::error::Draft release $tag target remained $verified_target instead of $GITHUB_SHA."
-                  exit 1
-                fi
+                echo "::error::Untagged draft release $tag targets $target_commitish, not workflow SHA $GITHUB_SHA. Refusing to retarget a draft that may already contain assets; use a new version or recreate the draft."
+                exit 1
               fi
             fi
           else

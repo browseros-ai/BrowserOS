@@ -434,9 +434,6 @@ if [ "$1" = "api" ] && [[ "$*" == *"/commits/"* ]]; then
   printf '%s\\n' "$FAKE_TAG_PROBE"
   exit "$FAKE_TAG_RC"
 fi
-if [ "$1" = "release" ] && [ "$2" = "view" ]; then
-  printf '%s\\n' "$FAKE_VERIFIED_TARGET"
-fi
 """,
             encoding="utf-8",
         )
@@ -495,7 +492,6 @@ fi
         release_rc: int,
         tag_probe: str = "",
         tag_rc: int = 1,
-        verified_target: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
         script = self.named_step(
             workflow_name,
@@ -519,7 +515,6 @@ fi
                 "FAKE_RELEASE_RC": str(release_rc),
                 "FAKE_TAG_PROBE": tag_probe,
                 "FAKE_TAG_RC": str(tag_rc),
-                "FAKE_VERIFIED_TARGET": verified_target,
                 "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
             }
         )
@@ -736,6 +731,15 @@ fi
                     encoding="utf-8"
                 )
                 self.assertIn("--platform win", summary)
+                self.assertIn(
+                    "release publish --version 0.49.0 "
+                    f"--product {product} --platform win "
+                    "--macos-arch universal "
+                    f"--source-sha {'a' * 40} "
+                    "--workflow-run-id 30418029456 "
+                    "--workflow-run-attempt 2",
+                    summary,
+                )
                 for token in (
                     "--platforms windows",
                     "--macos-arch universal",
@@ -881,10 +885,10 @@ fi
                     0,
                 ),
                 (
-                    "untagged-draft-retarget",
+                    "matching-untagged-draft",
                     self.api_probe(
                         200,
-                        '{"draft":true,"target_commitish":"old"}',
+                        f'{{"draft":true,"target_commitish":"{sha}"}}',
                     ),
                     0,
                     missing_tag,
@@ -900,7 +904,6 @@ fi
                         release_rc=release_rc,
                         tag_probe=tag,
                         tag_rc=tag_rc,
-                        verified_target=sha,
                     )
 
                     self.assertEqual(
@@ -930,12 +933,40 @@ fi
                         f"/releases/tags/{expected_tag_uri}",
                         gh_calls,
                     )
-                    if label == "untagged-draft-retarget":
-                        self.assertIn(
-                            f"release edit {expected_tag} "
-                            f"--target {sha}",
-                            gh_calls,
-                        )
+                    self.assertNotIn("release edit", gh_calls)
+
+    def test_finalize_never_retargets_an_untagged_draft(self):
+        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
+            expected_tag = (
+                "browserclaw/v0.49.0"
+                if product == "browserclaw"
+                else "v0.49.0"
+            )
+            missing_tag = self.api_probe(
+                422,
+                f'{{"message":"No commit found for SHA: {expected_tag}"}}',
+            )
+
+            result, root, _ = self.run_finalize_script(
+                workflow_name,
+                product,
+                release_probe=self.api_probe(
+                    200,
+                    '{"draft":true,"target_commitish":"old"}',
+                ),
+                release_rc=0,
+                tag_probe=missing_tag,
+                tag_rc=1,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Refusing to retarget a draft",
+                result.stdout + result.stderr,
+            )
+            self.assertFalse((root / "uv-calls").exists())
+            gh_calls = (root / "gh-calls").read_text(encoding="utf-8")
+            self.assertNotIn("release edit", gh_calls)
 
     def test_release_workflows_pin_source_and_draft_to_workflow_sha(self):
         reusable = (WORKFLOW_DIR / "build-browseros.yml").read_text(

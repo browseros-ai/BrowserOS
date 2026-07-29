@@ -378,7 +378,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             artifact["filename"]
             for artifact in metadata["win"]["artifacts"].values()
         }
-        initial_assets = ["BrowserOS_v0.49.0_universal.dmg", "stale.bin"]
+        initial_assets = [sorted(expected)[0]]
         with (
             self.patches(metadata),
             mock.patch.object(
@@ -421,6 +421,50 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             [call.args[2] for call in delete.call_args_list],
             initial_assets,
         )
+
+    def test_partial_refresh_never_deletes_other_platform_assets(self):
+        existing_assets = [
+            "BrowserClaw_v0.49.0_universal.dmg",
+            "BrowserClaw_v0.49.0_x64_installer.exe",
+        ]
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "Release browserclaw/v0.49.0 already exists"),
+            ),
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                return_value={"isDraft": True, "assets": existing_assets},
+            ),
+            mock.patch.object(
+                github_module,
+                "delete_github_release_asset",
+            ) as delete,
+            mock.patch.object(github_module, "edit_github_release") as edit,
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+            ) as upload,
+        ):
+            result = self.invoke_create(
+                "--platforms",
+                "windows",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Refusing a partial refresh", plain_output(result))
+        delete.assert_not_called()
+        edit.assert_not_called()
+        upload.assert_not_called()
 
     def test_skip_upload_preserves_existing_draft_assets(self):
         with (
@@ -549,7 +593,18 @@ class PublishCliIntegrityTest(unittest.TestCase):
                 return_value=False,
             ),
         ):
-            result = self.invoke_publish("--platform", "win")
+            result = self.invoke_publish(
+                "--platform",
+                "win",
+                "--macos-arch",
+                "universal",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+            )
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Failed to publish", plain_output(result))
@@ -564,9 +619,49 @@ class PublishCliIntegrityTest(unittest.TestCase):
                 return_value=True,
             ),
         ):
-            result = self.invoke_publish("--platform", "win")
+            result = self.invoke_publish(
+                "--platform",
+                "win",
+                "--macos-arch",
+                "universal",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+            )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
+
+    def test_promotion_provenance_mismatch_blocks_every_copy(self):
+        metadata = _github_metadata()
+        metadata["win"]["source_sha"] = "b" * 40
+        with (
+            self.patches(metadata),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module,
+                "copy_to_download_path",
+                return_value=True,
+            ) as copy,
+        ):
+            result = self.invoke_publish(
+                "--platform",
+                "win",
+                "--macos-arch",
+                "universal",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("source_sha mismatch", plain_output(result))
+        copy.assert_not_called()
 
     def test_mixed_request_fails_when_one_platform_has_no_promotable_assets(self):
         metadata = {
