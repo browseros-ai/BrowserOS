@@ -170,6 +170,11 @@ class WarpBuildRunbookTest(unittest.TestCase):
             / "warpbuild-ci.md"
         )
         cls.runbook = runbook_path.read_text(encoding="utf-8")
+        troubleshooting = cls.runbook.split(
+            "## Troubleshooting: jobs stuck in `queued`",
+            maxsplit=1,
+        )[1]
+        cls.troubleshooting = " ".join(troubleshooting.split())
 
     def test_windows_runner_table_uses_live_sku(self):
         self.assertIn(
@@ -206,12 +211,24 @@ class WarpBuildRunbookTest(unittest.TestCase):
         self.assertIn("East US returned HTTP 409 `SkuNotAvailable`", self.runbook)
 
     def test_troubleshooting_calls_out_stack_launch_errors(self):
-        self.assertIn("BYOC stack's launch errors", self.runbook)
-        self.assertIn("LaunchInstances", self.runbook)
-        self.assertIn("image/VM-size generation mismatch", self.runbook)
-        self.assertIn("regional capacity", self.runbook)
-        self.assertIn("regionally available Gen1-compatible size", self.runbook)
-        self.assertIn("`Standard_D32as_v4`", self.runbook)
+        self.assertIn("BYOC stack's launch errors", self.troubleshooting)
+        self.assertIn("LaunchInstances", self.troubleshooting)
+        self.assertRegex(
+            self.troubleshooting,
+            r"An Azure 400 [^.]* image/VM-size generation mismatch [^.]* "
+            r"choose a Gen1-compatible size",
+        )
+        self.assertRegex(
+            self.troubleshooting,
+            r"An Azure 409 `SkuNotAvailable` [^.]*\. "
+            r"Check quota and regional capacity [^.]* "
+            r"choose a regionally available Gen1-compatible size",
+        )
+        self.assertRegex(
+            self.troubleshooting,
+            r"`Standard_D32as_v4` is the verified-family fallback [^.]* "
+            r"confirm its capacity in East US before switching",
+        )
 
 
 if __name__ == "__main__":
