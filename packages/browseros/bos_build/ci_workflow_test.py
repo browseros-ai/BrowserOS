@@ -386,7 +386,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 check=True,
                 env=legacy_env,
             )
-            self.assertIn(b"\r\n", (depot_tools / tracked.name).read_bytes())
+            cached_bytes = (depot_tools / tracked.name).read_bytes()
+            self.assertIn(b"\r\n", cached_bytes)
 
             tracked.write_bytes(b"first line\nupstream second line\n")
             subprocess.run(
@@ -439,6 +440,10 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 }
             )
 
+            # R2 extraction restores working bytes independently of Git's
+            # index stat cache. Rewriting the legacy bytes models that cache
+            # boundary and forces native Git to inspect their line endings.
+            (depot_tools / tracked.name).write_bytes(cached_bytes)
             dirty = subprocess.run(
                 [
                     "git",
