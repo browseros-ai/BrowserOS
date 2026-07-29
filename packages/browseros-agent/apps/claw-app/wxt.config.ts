@@ -33,6 +33,8 @@ export default defineConfig({
       'webNavigation',
       'downloads',
       'notifications',
+      'favicon',
+      'search',
     ],
     // Recording is universal; the local server owns tab attribution.
     host_permissions: ['http://127.0.0.1/*', '<all_urls>'],

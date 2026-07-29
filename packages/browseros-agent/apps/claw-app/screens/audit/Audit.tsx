@@ -12,6 +12,8 @@ import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
 import { FilterBar } from '@/components/audit/FilterBar'
 import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
+import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -22,6 +24,7 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
+import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { NUMERIC_COLUMN_IDS, TASK_COLUMNS } from './audit.columns'
 import { useAuditScreenData } from './audit.data'
 import {
@@ -114,6 +117,7 @@ export function Audit() {
   const [hoveredTask, setHoveredTask] = useState<TaskSummary | null>(null)
   const rows = table.getRowModel().rows
   const visibleColumnCount = table.getVisibleFlatColumns().length
+  const stats = useCockpitStats()
 
   return (
     <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
@@ -123,6 +127,12 @@ export function Audit() {
         </h1>
         <ManageAuditFilesDialog />
       </header>
+
+      {stats.isPending ? (
+        <Skeleton className="h-40 w-full rounded-2xl" />
+      ) : stats.data?.hasMeasuredStats ? (
+        <SavedStatsBand stats={stats.data} />
+      ) : null}
 
       {!isError && (tasks.length > 0 || hasActiveFilters) && (
         <FilterBar

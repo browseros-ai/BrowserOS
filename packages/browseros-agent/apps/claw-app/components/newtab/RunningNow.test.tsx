@@ -42,7 +42,7 @@ mock.module('@/modules/api/focus.hooks', () => ({
   }),
 }))
 
-const { RunningGrid } = await import('./RunningGrid')
+const { RunningNow } = await import('./RunningNow')
 
 const globalDescriptors = new Map(
   ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
@@ -143,13 +143,13 @@ async function render(sessions: LiveSessionCardRecord[]) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={queryClient}>
-        <RunningGrid sessions={sessions} />
+        <RunningNow sessions={sessions} />
       </QueryClientProvider>,
     ),
   )
 }
 
-describe('RunningGrid', () => {
+describe('RunningNow', () => {
   it('hides the Running now section when no live sessions are connected', async () => {
     await render([])
     expect(container.textContent).not.toContain('Running now')

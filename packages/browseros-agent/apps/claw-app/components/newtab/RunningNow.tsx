@@ -1,16 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { AgentRunningCard } from '@/components/cockpit/AgentRunningCard'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
-import { AgentRunningCard } from './AgentRunningCard'
 
-interface RunningGridProps {
+interface RunningNowProps {
   sessions: LiveSessionCardRecord[]
 }
 
-/** Renders one card and one set of controls per connected live session. */
-export function RunningGrid({ sessions }: RunningGridProps) {
+/**
+ * First-class live view for the new-tab. A prominent lead card carries the
+ * newest session; any remaining sessions sit in a calm two-up grid below it.
+ * Renders nothing when nothing is connected.
+ */
+export function RunningNow({ sessions }: RunningNowProps) {
   const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
@@ -62,9 +66,22 @@ export function RunningGrid({ sessions }: RunningGridProps) {
       ? cancel.variables.sessionId
       : undefined
 
+  const renderCard = (session: LiveSessionCardRecord) => (
+    <AgentRunningCard
+      key={session.sessionId}
+      session={session}
+      onWatch={session.selectedTab ? () => onWatch(session) : undefined}
+      onStop={() => onStop(session.sessionId)}
+      isFocusPending={pendingBrowserTabId === session.selectedTab?.browserTabId}
+      isCancelPending={cancelPendingSessionId === session.sessionId}
+    />
+  )
+
+  const [lead, ...rest] = sessions
+
   return (
     <section className="space-y-4">
-      <header className="flex items-baseline gap-3">
+      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="font-semibold text-ink text-lg">Running now</h2>
         <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]">
           <span
@@ -73,21 +90,16 @@ export function RunningGrid({ sessions }: RunningGridProps) {
           />
           {sessions.length} live
         </span>
+        <span className="font-serif text-accent text-sm italic">
+          working now
+        </span>
       </header>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {sessions.map((session) => (
-          <AgentRunningCard
-            key={session.sessionId}
-            session={session}
-            onWatch={session.selectedTab ? () => onWatch(session) : undefined}
-            onStop={() => onStop(session.sessionId)}
-            isFocusPending={
-              pendingBrowserTabId === session.selectedTab?.browserTabId
-            }
-            isCancelPending={cancelPendingSessionId === session.sessionId}
-          />
-        ))}
-      </div>
+      {lead && renderCard(lead)}
+      {rest.length > 0 && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {rest.map(renderCard)}
+        </div>
+      )}
     </section>
   )
 }

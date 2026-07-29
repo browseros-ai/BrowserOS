@@ -1,9 +1,6 @@
-import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
-import { RecentActivity } from '@/components/cockpit/RecentActivity'
-import { RunningGrid } from '@/components/cockpit/RunningGrid'
-import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
+import { NewtabHome } from '@/components/newtab/NewtabHome'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
@@ -75,14 +72,10 @@ export function Cockpit() {
   }
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
-      <CockpitHero />
-      {shouldLoadStats && stats.data?.hasMeasuredStats ? (
-        <SavedStatsBand stats={stats.data} />
-      ) : (
-        <RunningGrid sessions={sessions} />
-      )}
-      <RecentActivity />
-    </div>
+    <NewtabHome
+      sessions={sessions}
+      stats={stats.data}
+      statsPending={stats.isPending}
+    />
   )
 }

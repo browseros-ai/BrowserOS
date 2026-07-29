@@ -217,32 +217,33 @@ function renderApp(
 }
 
 describe('Cockpit (v2)', () => {
-  it('renders measured idle stats between the hero and recent activity', () => {
+  it('renders the idle glance under the search over top sites', () => {
     const html = renderApp({ stats: 'measured' })
 
-    const heroIndex = html.indexOf('working on')
-    const savedStatsIndex = html.indexOf('Since you started')
-    const recentActivityIndex = html.indexOf('Recent activity')
-    expect(heroIndex).toBeGreaterThan(-1)
-    expect(savedStatsIndex).toBeGreaterThan(heroIndex)
-    expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
-    expect(html).toContain('nothing running')
+    const searchIndex = html.indexOf('Search the web or type a URL')
+    const statIndex = html.indexOf('90% fewer')
+    const recentIndex = html.indexOf('all activity')
+    expect(searchIndex).toBeGreaterThan(-1)
+    expect(statIndex).toBeGreaterThan(searchIndex)
+    expect(recentIndex).toBeGreaterThan(statIndex)
+    expect(html).toContain('Idle')
     expect(html).not.toContain('Running now')
     expect(statsQueryEnabled()).toBe(true)
   })
 
-  it('always renders RunningGrid for a live session', () => {
+  it('renders the running view for a live session', () => {
     const html = renderApp({
       liveSessions: [liveSession('session-live')],
       stats: 'measured',
     })
 
     expect(html).toContain('Running now')
-    expect(html).not.toContain('Since you started')
+    expect(html).toContain('Search the web or type a URL')
+    expect(html).not.toContain('90% fewer')
     expect(statsQueryEnabled()).toBe(false)
   })
 
-  it('keeps first-run and waiting onboarding shells free of saved stats', () => {
+  it('keeps first-run and waiting onboarding shells free of the new-tab', () => {
     const firstRun = renderApp({
       connections: 'empty',
       sessions: 'empty',
@@ -253,7 +254,7 @@ describe('Cockpit (v2)', () => {
     expect(firstRun).toContain(
       'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
     )
-    expect(firstRun).not.toContain('Since you started')
+    expect(firstRun).not.toContain('Search the web or type a URL')
     expect(statsQueryEnabled()).toBe(false)
 
     const waiting = renderApp({
@@ -263,16 +264,16 @@ describe('Cockpit (v2)', () => {
     })
     expect(waiting).toContain('Waiting for your first run')
     expect(waiting).toContain('View MCP endpoint')
-    expect(waiting).not.toContain('Since you started')
+    expect(waiting).not.toContain('Search the web or type a URL')
     expect(statsQueryEnabled()).toBe(false)
   })
 
   for (const stats of ['loading', 'error', 'unmeasured'] as const) {
-    it(`preserves Recent activity while idle stats are ${stats}`, () => {
+    it(`preserves the recent peek while idle stats are ${stats}`, () => {
       const html = renderApp({ stats })
 
-      expect(html).toContain('Recent activity')
-      expect(html).not.toContain('Since you started')
+      expect(html).toContain('all activity')
+      expect(html).toContain('Search the web or type a URL')
       expect(html).not.toContain('Running now')
       expect(statsQueryEnabled()).toBe(true)
     })
@@ -285,9 +286,9 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
 
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('No recent activity')
-    expect(html).not.toContain('Since you started')
+    expect(html).toContain('all activity')
+    expect(html).toContain('No activity yet')
+    expect(html).not.toContain('Running now')
     expect(statsQueryEnabled()).toBe(false)
   })
 
@@ -310,7 +311,6 @@ describe('Cockpit (v2)', () => {
     expect(html).toContain('data-stop-session="session-connected"')
     expect(html).not.toContain('You watch. Your agent')
     expect(html).not.toContain('Set up MCP endpoint')
-    expect(html).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
   })
 })
