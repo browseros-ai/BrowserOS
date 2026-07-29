@@ -57,9 +57,12 @@ class WatchdogFilterTest(unittest.TestCase):
         ]
     }
 
-    def load_watchdog_step(self, workflow_name: str) -> dict[str, object]:
+    def load_workflow(self, workflow_name: str) -> dict[str, object]:
         workflow_path = REPO_ROOT / ".github" / "workflows" / workflow_name
-        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        return yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+
+    def load_watchdog_step(self, workflow_name: str) -> dict[str, object]:
+        workflow = self.load_workflow(workflow_name)
         steps = workflow["jobs"]["queue-watchdog"]["steps"]
         return next(
             step
@@ -97,9 +100,14 @@ class WatchdogFilterTest(unittest.TestCase):
 
         for workflow_name, expected_label in self.WORKFLOWS.items():
             with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
                 step = self.load_watchdog_step(workflow_name)
                 env = step["env"]
                 self.assertEqual(env["RUNNER_LABEL"], expected_label)
+                self.assertEqual(
+                    env["RUNNER_LABEL"],
+                    workflow["jobs"]["build"]["with"]["runner"],
+                )
 
                 jobs = self.apply_filter(env["JOB_FILTER"], expected_label)
 
