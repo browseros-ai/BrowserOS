@@ -17,7 +17,9 @@ use crate::error::{AppError, AppResult, IoPath};
 use migration::Migrator;
 use sea_orm::{
     DatabaseConnection, DbErr, RuntimeErr, SqlxSqliteConnector,
-    sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    sqlx::sqlite::{
+        SqliteConnectOptions, SqliteError, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+    },
 };
 use sea_orm_migration::MigratorTrait;
 use std::{
@@ -48,7 +50,11 @@ impl From<DbErr> for AppError {
     }
 }
 
-/// Opens a SQLite database, applies its migrator, and recovers broken files once.
+const SQLITE_CORRUPT: i32 = 11;
+const SQLITE_NOTADB: i32 = 26;
+const SQLITE_PRIMARY_RESULT_CODE_MASK: i32 = 0xff;
+
+/// Opens and migrates SQLite, recovering corrupt or invalid database files once.
 async fn open_and_migrate<M: MigratorTrait>(path: &Path) -> AppResult<DatabaseConnection> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await.with_path(parent)?;
@@ -56,11 +62,48 @@ async fn open_and_migrate<M: MigratorTrait>(path: &Path) -> AppResult<DatabaseCo
 
     match connect_and_migrate::<M>(path).await {
         Ok(conn) => Ok(conn),
-        Err(_) => {
+        Err(error) if is_recoverable_sqlite_error(&error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "SQLite database is corrupt or invalid; backing up and recreating"
+            );
             back_up_database(path).await?;
             connect_and_migrate::<M>(path).await.map_err(AppError::from)
         }
+        Err(error) => Err(AppError::from(error)),
     }
+}
+
+fn is_recoverable_sqlite_error(error: &DbErr) -> bool {
+    let runtime_error = match error {
+        DbErr::Conn(error) | DbErr::Exec(error) | DbErr::Query(error) => error,
+        _ => return false,
+    };
+    let RuntimeErr::SqlxError(error) = runtime_error else {
+        return false;
+    };
+    let Some(database_error) = error.as_database_error() else {
+        return false;
+    };
+    if database_error.try_downcast_ref::<SqliteError>().is_none() {
+        return false;
+    }
+    let Some(code) = database_error
+        .code()
+        .and_then(|code| code.parse::<i32>().ok())
+    else {
+        return false;
+    };
+    is_recoverable_sqlite_result_code(code)
+}
+
+fn is_recoverable_sqlite_result_code(code: i32) -> bool {
+    // SQLite extended result codes retain the primary result code in the low byte.
+    matches!(
+        code & SQLITE_PRIMARY_RESULT_CODE_MASK,
+        SQLITE_CORRUPT | SQLITE_NOTADB
+    )
 }
 
 async fn connect_and_migrate<M: MigratorTrait>(path: &Path) -> Result<DatabaseConnection, DbErr> {
@@ -124,11 +167,14 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditLog, DATABASE_FILENAME, Database, append_suffix, audit_log::ListDispatchesQuery,
-        back_up_database, connect_and_migrate, migration::Migrator,
+        AuditLog, DATABASE_FILENAME, Database, SQLITE_CORRUPT, SQLITE_NOTADB, append_suffix,
+        audit_log::ListDispatchesQuery, back_up_database, connect_and_migrate,
+        is_recoverable_sqlite_error, is_recoverable_sqlite_result_code, migration::Migrator,
+        open_and_migrate,
     };
+    use crate::error::AppError;
     use sea_orm::{
-        ConnectionTrait, DbBackend, Statement,
+        ConnectionTrait, DbBackend, DbErr, Statement,
         sqlx::{
             self, Connection, Row,
             sqlite::{SqliteConnectOptions, SqliteConnection},
@@ -328,6 +374,68 @@ mod tests {
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
             Migrator::migrations().into_iter().take(6).collect()
         }
+    }
+
+    #[tokio::test]
+    async fn older_migrator_does_not_replace_a_newer_database() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+        let current = Database::open(&path).await?;
+        current.0.close().await?;
+
+        let error = match open_and_migrate::<MigratorThrough6>(&path).await {
+            Ok(conn) => {
+                conn.close().await?;
+                anyhow::bail!("older migrator replaced a database with newer migrations");
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(&error, AppError::Db(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("m0007_add_session_efficiency_stats"),
+            "unexpected migration error: {error}"
+        );
+        assert!(!append_suffix(&path, ".bak").exists());
+
+        let mut conn = SqliteConnection::connect_with(&sqlite_options(&path)).await?;
+        let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
+            .fetch_one(&mut conn)
+            .await?;
+        assert_eq!(migration_count, 11);
+        conn.close().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_result_code_classifier_is_corruption_specific() {
+        for code in [
+            SQLITE_CORRUPT,
+            SQLITE_NOTADB,
+            SQLITE_CORRUPT | (1 << 8),
+            SQLITE_CORRUPT | (2 << 8),
+            SQLITE_CORRUPT | (3 << 8),
+        ] {
+            assert!(
+                is_recoverable_sqlite_result_code(code),
+                "code {code} should be recoverable"
+            );
+        }
+        for (name, code) in [
+            ("SQLITE_BUSY", 5),
+            ("SQLITE_READONLY", 8),
+            ("SQLITE_IOERR", 10),
+            ("SQLITE_CANTOPEN", 14),
+        ] {
+            assert!(
+                !is_recoverable_sqlite_result_code(code),
+                "{name} ({code}) should fail closed"
+            );
+        }
+        assert!(!is_recoverable_sqlite_error(&DbErr::Custom(
+            "migration mismatch".to_string()
+        )));
     }
 
     #[tokio::test]
