@@ -88,6 +88,13 @@ def _empty_mac_appcast():
 """
 
 
+def _empty_item_mac_appcast():
+    return _empty_mac_appcast().replace(
+        "  </channel>",
+        "    <item>\n    </item>\n  </channel>",
+    )
+
+
 class PublisherTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -170,6 +177,72 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(
             self.client.calls, [("put", "appcast.xml", "application/xml")]
         )
+
+    def test_empty_live_shell_is_valid_first_population(self):
+        publisher = self._publisher(
+            {"appcast.xml": _empty_mac_appcast().encode()}
+        )
+
+        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast())
+
+        self.assertTrue(ok)
+        self.assertEqual(self.client.calls, [])
+        self.assertEqual(
+            (self.appcast_staging / "appcast.xml").read_text(),
+            _mac_appcast(),
+        )
+
+    def test_empty_live_item_is_backed_up_before_first_population(self):
+        publisher = self._publisher(
+            {"appcast.xml": _empty_item_mac_appcast().encode()}
+        )
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast(),
+            publish=True,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            self.client.calls,
+            [
+                ("copy", "appcast.xml", "feeds-history/appcast.xml.20260701T120000Z"),
+                ("put", "appcast.xml", "application/xml"),
+            ],
+        )
+
+    def test_wrong_channel_empty_live_shell_fails_closed(self):
+        live = _empty_item_mac_appcast().replace(
+            "https://cdn.browseros.com/appcast.xml",
+            "https://cdn.browseros.com/appcast-claw.xml",
+        )
+        publisher = self._publisher({"appcast.xml": live.encode()})
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast(),
+            publish=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_populated_versionless_live_appcast_fails_closed(self):
+        live = _mac_appcast().replace(
+            "<sparkle:version>10000.0.47.0.2</sparkle:version>",
+            "",
+        )
+        publisher = self._publisher({"appcast.xml": live.encode()})
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast("10000.0.48.0.0"),
+            publish=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
 
     def test_downgrade_refused_without_flag(self):
         publisher = self._publisher(

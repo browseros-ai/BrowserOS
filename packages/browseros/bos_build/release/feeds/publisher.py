@@ -33,6 +33,31 @@ BACKUP_PREFIX = "feeds-history"
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
+def _is_empty_appcast_shell(content: str) -> bool:
+    """Whether content is an unambiguously unpopulated RSS appcast.
+
+    BrowserClaw's Windows feeds were provisioned before their first release
+    with one whitespace-only ``<item>``.  Treat that shape, and the equivalent
+    shell with no items, as first publication.  Any item attributes, text, or
+    children make the live document meaningful and therefore unguardable.
+    """
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return False
+    if root.tag != "rss":
+        return False
+    channel = root.find("channel")
+    if channel is None:
+        return False
+    return all(
+        not item.attrib
+        and not list(item)
+        and not (item.text or "").strip()
+        for item in channel.findall("item")
+    )
+
+
 def _default_http_head(url: str) -> int:
     import requests
 
@@ -295,6 +320,14 @@ class FeedPublisher:
 
         live_version = extract_appcast_version(live)
         if live_version is None:
+            if _is_empty_appcast_shell(live):
+                if not self._check_channel_metadata(spec, live):
+                    return False
+                log_info(
+                    f"{spec.key}: live appcast is an empty shell "
+                    "(first population)"
+                )
+                return True
             return self._refuse_unguardable_live(spec, allow_downgrade)
 
         return self._refuse_downgrade(
