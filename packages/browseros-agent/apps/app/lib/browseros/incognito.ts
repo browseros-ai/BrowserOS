@@ -1,10 +1,19 @@
 /**
- * Whether the current extension page runs in an incognito context. Assistant
- * history is never persisted there (#1189). `chrome.extension.inIncognitoContext`
- * is synchronous and reads true for an extension page (side panel, newtab)
- * opened in an incognito window, so the gate can be applied without racing an
- * async lookup.
+ * Whether the assistant is running in an incognito window. Assistant history is
+ * never persisted when true (#1189).
+ *
+ * Resolved from the hosting window rather than `chrome.extension.inIncognitoContext`:
+ * in the default "spanning" incognito mode the side panel runs in the shared
+ * (non-incognito) context, so `inIncognitoContext` reads false even when the
+ * panel is shown in an incognito window. The window's own `incognito` flag is
+ * authoritative. `chrome.windows` needs no permission and `tabs` is already
+ * granted, so no manifest change is required.
  */
-export function isIncognitoContext(): boolean {
-  return chrome.extension?.inIncognitoContext ?? false
+export async function isIncognitoWindow(): Promise<boolean> {
+  try {
+    const window = await chrome.windows.getCurrent()
+    return window.incognito ?? false
+  } catch {
+    return false
+  }
 }

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
-import { isIncognitoContext } from '@/lib/browseros/incognito'
+import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   getWindowConversation,
   setWindowConversation,
@@ -179,8 +179,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const invalidateCredits = useInvalidateCredits()
 
   // Incognito chats are never written to history or the cloud (#1189). Resolved
-  // once per session; the context is fixed for the life of the page.
-  const [isIncognito] = useState(isIncognitoContext)
+  // from the hosting window on mount (chrome.extension.inIncognitoContext is
+  // false for a side panel in spanning mode). This settles long before any turn
+  // ends, so the turn-end save always sees the correct value.
+  const [isIncognito, setIsIncognito] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    isIncognitoWindow().then((incognito) => {
+      if (!cancelled) setIsIncognito(incognito)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const persistHistory = shouldPersistHistory(isIncognito)
 
   const {
