@@ -259,8 +259,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 with self.subTest(key=key):
                     command = subprocess.list2cmdline(
                         [
-                            "call",
-                            str(git_wrapper),
+                            git_wrapper.name,
                             "config",
                             "--global",
                             "--get-all",
@@ -270,6 +269,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     result = subprocess.run(
                         ["cmd.exe", "/d", "/c", command],
                         capture_output=True,
+                        cwd=temp_root,
                         env=native_env,
                         text=True,
                     )
