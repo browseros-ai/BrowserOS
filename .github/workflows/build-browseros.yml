@@ -98,7 +98,7 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Configure Git for depot_tools
         if: runner.os == 'Windows'
