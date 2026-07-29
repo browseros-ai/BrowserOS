@@ -105,7 +105,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          git_config="$RUNNER_TEMP/browseros-global.gitconfig"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            git_config_dir="$(cd "$RUNNER_TEMP" && pwd -W)"
+          else
+            git_config_dir="$(cd "$RUNNER_TEMP" && pwd)"
+          fi
+          git_config="$git_config_dir/browseros-global.gitconfig"
           export GIT_CONFIG_GLOBAL="$git_config"
           printf 'GIT_CONFIG_GLOBAL=%s\n' "$git_config" >> "$GITHUB_ENV"
 

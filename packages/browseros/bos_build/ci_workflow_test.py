@@ -100,7 +100,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertIn("set -euo pipefail", script)
         self.assertIn(
-            'git_config="$RUNNER_TEMP/browseros-global.gitconfig"',
+            'git_config_dir="$(cd "$RUNNER_TEMP" && pwd -W)"',
+            script,
+        )
+        self.assertIn(
+            'git_config="$git_config_dir/browseros-global.gitconfig"',
             script,
         )
         self.assertIn('export GIT_CONFIG_GLOBAL="$git_config"', script)
@@ -138,6 +142,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 {
                     "GITHUB_ENV": str(github_env),
                     "HOME": str(missing_home),
+                    "RUNNER_OS": "Windows" if os.name == "nt" else "Linux",
                     "RUNNER_TEMP": str(runner_temp),
                 }
             )
@@ -182,10 +187,16 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             )
 
             self.assertFalse(missing_home.exists())
-            self.assertEqual(
-                github_env.read_text(encoding="utf-8").splitlines(),
-                [f"GIT_CONFIG_GLOBAL={config_path}"] * 2,
-            )
+            assignments = github_env.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(assignments), 2)
+            for assignment in assignments:
+                name, emitted_path = assignment.split("=", maxsplit=1)
+                self.assertEqual(name, "GIT_CONFIG_GLOBAL")
+                self.assertNotIn("\\", emitted_path)
+                self.assertEqual(
+                    Path(emitted_path).resolve(),
+                    config_path.resolve(),
+                )
             for key, value in EXPECTED_GIT_CONFIG.items():
                 with self.subTest(key=key):
                     result = subprocess.run(
@@ -220,6 +231,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 {
                     "GITHUB_ENV": str(github_env),
                     "HOME": str(missing_home),
+                    "RUNNER_OS": "Windows",
                     "RUNNER_TEMP": str(runner_temp),
                 }
             )
@@ -258,9 +270,13 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     result = subprocess.run(
                         ["cmd.exe", "/d", "/c", command],
                         capture_output=True,
-                        check=True,
                         env=native_env,
                         text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
                     )
                     self.assertEqual(result.stdout.splitlines(), [value])
 
