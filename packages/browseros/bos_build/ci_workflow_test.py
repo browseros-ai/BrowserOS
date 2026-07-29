@@ -192,5 +192,53 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         )
 
 
+class ChromiumGitRunbookTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        runbook_path = (
+            REPO_ROOT
+            / "packages"
+            / "browseros"
+            / "bos_build"
+            / "docs"
+            / "warpbuild-ci.md"
+        )
+        cls.runbook = runbook_path.read_text(encoding="utf-8")
+
+    def test_release_flow_puts_windows_git_bootstrap_before_source_ensure(self):
+        release_flow = self.runbook.split(
+            "## Release lane flow",
+            maxsplit=1,
+        )[1].split("## Caching strategy", maxsplit=1)[0]
+
+        bootstrap_index = release_flow.index("`GIT_CONFIG_GLOBAL`")
+        source_ensure_index = release_flow.index(
+            "`browseros source ensure --step checkout`"
+        )
+        self.assertLess(bootstrap_index, source_ensure_index)
+        self.assertIn(
+            "`$RUNNER_TEMP/browseros-global.gitconfig`",
+            release_flow,
+        )
+
+    def test_missing_global_config_failure_has_deterministic_recovery(self):
+        heading = "## Troubleshooting: depot_tools cannot read global Git config"
+        self.assertIn(heading, self.runbook)
+        troubleshooting = self.runbook.split(heading, maxsplit=1)[1].split(
+            "\n## ",
+            maxsplit=1,
+        )[0]
+
+        self.assertIn(
+            "C:/Users/runneradmin/.gitconfig",
+            troubleshooting,
+        )
+        self.assertIn("gclient exit `9009`", troubleshooting)
+        self.assertIn("PATH Git", troubleshooting)
+        self.assertIn("depot_tools `git.bat`", troubleshooting)
+        self.assertIn("`GIT_CONFIG_GLOBAL`", troubleshooting)
+        self.assertIn("do not modify the runner image", troubleshooting)
+
+
 if __name__ == "__main__":
     unittest.main()

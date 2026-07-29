@@ -126,24 +126,31 @@ used for unsigned verification with `sign=false`. Both lanes pass
 
 The reusable workflow performs the per-platform recipe:
 
-1. `actions/checkout` + `astral-sh/setup-uv`.
-2. Restore the pinned chromium checkout from cache (see below).
-3. `browseros source ensure --step checkout` — ensures depot_tools and
+1. `actions/checkout`.
+2. On Windows, select
+   `$RUNNER_TEMP/browseros-global.gitconfig` through `GIT_CONFIG_GLOBAL`,
+   write depot_tools' required Git settings with PATH Git, and export the
+   selection to every later step. This is deliberately after repository
+   checkout but before any Chromium/depot_tools operation. Linux and macOS
+   skip the step.
+3. `astral-sh/setup-uv`, resolve the Chromium pin and paths, then restore the
+   pinned chromium checkout from cache (see below).
+4. `browseros source ensure --step checkout` — ensures depot_tools and
    `src` at the tag from `packages/browseros/CHROMIUM_VERSION`. No-op when
    the cache is warm and the pin unchanged.
-4. `uv run browseros build --modules clean ...` — the standard clean module
+5. `uv run browseros build --modules clean ...` — the standard clean module
    resets the tree (it also deletes hook-managed toolchains like
    `third_party/llvm-build`, which the next step restores).
-5. `browseros source ensure --step sync` — `gclient sync -D
+6. `browseros source ensure --step sync` — `gclient sync -D
    --no-history --shallow`, exactly what the git_setup module runs.
-6. Save the cache (only when the restore missed, i.e. first run per pin).
-7. `uv run browseros build --profile release-ci --product <product>
+7. Save the cache (only when the restore missed, i.e. first run per pin).
+8. `uv run browseros build --profile release-ci --product <product>
    --arch <arch> --chromium-src .../src`, with signing and R2 upload flags
    resolved from workflow inputs.
-8. Upload release build artifacts to the Actions run with 14-day retention.
+9. Upload release build artifacts to the Actions run with 14-day retention.
 
 The `release-ci` profile is the release preset minus `clean`/`git_setup`
-(steps 4-5 replace them). Why not run `git_setup` as-is: it does
+(steps 5-6 replace them). Why not run `git_setup` as-is: it does
 `git fetch --tags`, which on the shallow CI clone would pull objects for all
 ~70k chromium tags; the script instead fetches exactly the pinned tag at depth
 2. On Windows the `mini_installer` module builds the installer that the signing
@@ -218,6 +225,30 @@ The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next run is cold again for that version. To force a fresh
 checkout, bump the `v1` in the cache key (workflow) — for Windows also delete
 the old object under `ci-cache/chromium/` in R2.
+
+## Troubleshooting: depot_tools cannot read global Git config
+
+The Windows failure signature is
+`fatal: unable to read config file 'C:/Users/runneradmin/.gitconfig'`, followed
+by depot_tools' recommended core settings, a stray `'failed' is not
+recognized` message, and gclient exit `9009`. This occurs after the runner has
+started; it is not an Azure provisioning, cache, or clean failure.
+
+The reusable workflow does not depend on the runner account's HOME, XDG, or
+AppData mapping. Its Windows-only bootstrap selects a disposable file under
+`RUNNER_TEMP` with `GIT_CONFIG_GLOBAL`, writes the four Chromium settings plus
+`depot-tools.allowGlobalGitConfig=true`, and verifies each value before source
+setup. It uses PATH Git intentionally because depot_tools may not exist on a
+cold checkout. Later depot_tools `git.bat` and `gclient.bat` processes inherit
+the same `GIT_CONFIG_GLOBAL`, so warm and cold checkouts share one explicit
+configuration.
+
+If this signature returns, inspect the "Configure Git for depot_tools" step and
+confirm its five read-back checks passed and its `GITHUB_ENV` assignment names
+the temporary file. Fix the workflow contract; do not modify the runner image
+or create `C:/Users/runneradmin/.gitconfig` manually. WarpBuild runners are
+ephemeral, and account-level repair would disappear with the VM while
+reintroducing HOME-resolution ambiguity.
 
 ## Troubleshooting: jobs stuck in `queued`
 
