@@ -167,6 +167,9 @@ describe('RunningGrid', () => {
         card.getAttribute('data-session-card'),
       ),
     ).toEqual(['session-a', 'session-b'])
+    expect(container.querySelector('section')?.classList).toContain(
+      'ph-no-capture',
+    )
     const stopB = container.querySelector('[data-stop-session="session-b"]')
     if (!stopB) throw new Error('session-b Stop button missing')
     await act(async () => {

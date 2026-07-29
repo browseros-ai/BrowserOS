@@ -105,7 +105,10 @@ export function SidebarPrivacy({ expanded = false }: SidebarPrivacyProps) {
             BrowserClaw collects anonymous, aggregate usage (which agents
             connect and which screens you open) to improve the product. It never
             collects the pages you browse, your prompts, tool inputs or outputs,
-            or any page content. No account or personal data is used.
+            or any page content. One in five analytics sessions may also record
+            interactions with the BrowserClaw cockpit. All inputs are masked,
+            and task, audit, and replay content is blocked from those
+            recordings. No account or personal data is used.
           </DialogDescription>
         </DialogHeader>
         <label

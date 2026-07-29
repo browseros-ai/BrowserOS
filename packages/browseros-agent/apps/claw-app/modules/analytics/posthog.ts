@@ -11,18 +11,21 @@
  * analytics never runs on the pages the user browses.
  *
  * posthog-js defaults are aggressively disabled: no autocapture (would
- * read DOM text), no session recording, no automatic pageviews, no
- * `/decide` calls, and no person profiles. Auto-captured location
- * properties (`$current_url` etc.) are stripped so even the cockpit's
- * own extension URL never leaves. Identity is the server's anonymous
- * install UUID, set via `bootstrap.distinctID` (no `identify`, no PII).
+ * read DOM text), no automatic pageviews, no `/decide` calls, and no
+ * person profiles. A 20% sample of consenting cockpit sessions may be
+ * recorded with inputs masked and task-bearing DOM blocked. Auto-captured
+ * location properties (`$current_url` etc.) are stripped so even the
+ * cockpit's own extension URL never leaves. Identity is the server's
+ * anonymous install UUID, set via `bootstrap.distinctID` (no `identify`,
+ * no PII).
  *
  * Gated on a build-time project write key (`VITE_CLAW_POSTHOG_KEY`) and
  * the user's consent. With no key, or before consent, nothing is
  * initialised and every capture no-ops.
  */
 
-import posthog from 'posthog-js'
+import posthog, { type PostHogConfig } from 'posthog-js'
+import 'posthog-js/dist/posthog-recorder'
 
 const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
 const HOST =
@@ -44,13 +47,24 @@ const STRIPPED_PROPS = [
 
 let initialised = false
 
-function init(distinctId: string): void {
-  initialised = true
-  posthog.init(KEY as string, {
+export function sanitizeProperties(
+  properties: Record<string, unknown>,
+): Record<string, unknown> {
+  const cleaned = { ...properties }
+  for (const key of STRIPPED_PROPS) delete cleaned[key]
+  return cleaned
+}
+
+export function createPostHogConfig(
+  distinctId: string,
+): Partial<PostHogConfig> {
+  return {
     api_host: HOST,
     autocapture: false,
     capture_pageview: false,
     capture_pageleave: false,
+    disable_external_dependency_loading: true,
+    // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,
     // No feature-flag / /decide round-trips: we only send events.
@@ -61,12 +75,47 @@ function init(distinctId: string): void {
     // Share the server's anonymous install id so both surfaces map to
     // one install, without identify().
     bootstrap: { distinctID: distinctId },
-    sanitize_properties: (props) => {
-      const cleaned: Record<string, unknown> = { ...props }
-      for (const key of STRIPPED_PROPS) delete cleaned[key]
-      return cleaned
+    sanitize_properties: sanitizeProperties,
+    session_recording: {
+      blockClass: 'ph-no-capture',
+      collectFonts: false,
+      maskAllInputs: true,
+      recordBody: false,
+      recordCrossOriginIframes: false,
+      recordHeaders: false,
+      sampleRate: 0.2,
     },
-  })
+  }
+}
+
+interface RecordingConsentClient {
+  opt_in_capturing(): void
+  opt_out_capturing(): void
+  startSessionRecording(): void
+  stopSessionRecording(): void
+}
+
+/**
+ * Keeps capture consent and session recording in lockstep. Starting without
+ * an override is important: it lets session_recording.sampleRate decide.
+ */
+export function reconcileSessionRecording(
+  client: RecordingConsentClient,
+  enabled: boolean,
+  isInitialised: boolean,
+): void {
+  if (enabled) {
+    if (isInitialised) client.opt_in_capturing()
+    client.startSessionRecording()
+  } else if (isInitialised) {
+    client.stopSessionRecording()
+    client.opt_out_capturing()
+  }
+}
+
+function init(distinctId: string): void {
+  initialised = true
+  posthog.init(KEY as string, createPostHogConfig(distinctId))
 }
 
 /**
@@ -82,10 +131,11 @@ export function applyTelemetry(input: {
 }): void {
   if (!KEY || !input.distinctId) return
   if (input.enabled) {
-    if (!initialised) init(input.distinctId)
-    else posthog.opt_in_capturing()
-  } else if (initialised) {
-    posthog.opt_out_capturing()
+    const wasInitialised = initialised
+    if (!wasInitialised) init(input.distinctId)
+    reconcileSessionRecording(posthog, true, wasInitialised)
+  } else {
+    reconcileSessionRecording(posthog, false, initialised)
   }
 }
 

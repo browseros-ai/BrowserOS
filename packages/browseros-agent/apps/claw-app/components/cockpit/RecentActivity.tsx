@@ -43,7 +43,7 @@ export function RecentActivity() {
   const tail = ordered.slice(5)
 
   return (
-    <section className="space-y-4">
+    <section className="ph-no-capture space-y-4">
       <SectionHeader />
       {query.isPending ? (
         <BentoSkeleton />
