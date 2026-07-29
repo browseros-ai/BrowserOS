@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act, type ComponentProps, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
+import * as _popover from '@/components/ui/popover'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cancelHooks from '@/modules/api/cancel.hooks'
 import * as _focusHooks from '@/modules/api/focus.hooks'
@@ -43,6 +44,7 @@ mock.module('@/modules/api/focus.hooks', () => ({
 }))
 
 mock.module('@/components/ui/popover', () => ({
+  ..._popover,
   Popover: ({ children }: { children?: ReactNode }) => <>{children}</>,
   PopoverTrigger: (props: ComponentProps<'button'>) => <button {...props} />,
   PopoverContent: (props: ComponentProps<'div'>) => (

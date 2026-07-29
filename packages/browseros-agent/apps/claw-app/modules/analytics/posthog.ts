@@ -11,13 +11,13 @@
  * analytics never runs on the pages the user browses.
  *
  * posthog-js defaults are aggressively disabled: no autocapture (would
- * read DOM text), no automatic pageviews, no `/decide` calls, and no
- * person profiles. A 20% sample of consenting cockpit sessions may be
- * recorded with inputs masked and task-bearing DOM blocked. Auto-captured
- * location properties (`$current_url` etc.) are stripped so even the
- * cockpit's own extension URL never leaves. Identity is the server's
- * anonymous install UUID, set via `bootstrap.distinctID` (no `identify`,
- * no PII).
+ * read DOM text), no automatic pageviews, no feature-flag polling, and
+ * no person profiles. A 20% sample of consenting cockpit sessions may be
+ * recorded with inputs masked, task-bearing DOM blocked, and replay URLs
+ * replaced by a fixed token. Auto-captured location properties
+ * (`$current_url` etc.) are stripped so even the cockpit's own extension
+ * URL never leaves. Identity is the server's anonymous install UUID, set
+ * via `bootstrap.distinctID` (no `identify`, no PII).
  *
  * Gated on a build-time project write key (`VITE_CLAW_POSTHOG_KEY`) and
  * the user's consent. With no key, or before consent, nothing is
@@ -31,6 +31,7 @@ const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
 const HOST =
   (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined) ??
   'https://us.i.posthog.com'
+const REDACTED_REPLAY_URL = 'browserclaw://redacted'
 
 /** Auto-added properties that could carry a url/referrer; always removed. */
 const STRIPPED_PROPS = [
@@ -55,6 +56,13 @@ export function sanitizeProperties(
   return cleaned
 }
 
+/** Removes route, session, and local API identifiers from replay URLs. */
+export function maskCapturedReplayRequest<T extends { name: string }>(
+  request: T,
+): T {
+  return { ...request, name: REDACTED_REPLAY_URL }
+}
+
 export function createPostHogConfig(
   distinctId: string,
 ): Partial<PostHogConfig> {
@@ -64,12 +72,17 @@ export function createPostHogConfig(
     capture_pageview: false,
     capture_pageleave: false,
     disable_external_dependency_loading: true,
+    disable_capture_url_hashes: true,
     // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,
     // Session replay needs PostHog's remote config, but BrowserClaw does not use
-    // feature flags and should not evaluate them during initialization.
+    // feature flags. Fetch config once, without evaluating or polling flags.
     advanced_disable_feature_flags_on_first_load: true,
+    remote_config_refresh_interval_ms: 0,
+    // Do not persist browser location metadata outside the event sanitizer.
+    save_campaign_params: false,
+    save_referrer: false,
     // We never call identify(), so never create a person profile.
     person_profiles: 'never',
     persistence: 'localStorage',
@@ -81,6 +94,7 @@ export function createPostHogConfig(
       blockClass: 'ph-no-capture',
       collectFonts: false,
       maskAllInputs: true,
+      maskCapturedNetworkRequestFn: maskCapturedReplayRequest,
       recordBody: false,
       recordCrossOriginIframes: false,
       recordHeaders: false,
@@ -90,7 +104,7 @@ export function createPostHogConfig(
 }
 
 interface RecordingConsentClient {
-  opt_in_capturing(): void
+  opt_in_capturing(options?: { captureEventName?: string | null | false }): void
   opt_out_capturing(): void
   startSessionRecording(): void
   stopSessionRecording(): void
@@ -106,7 +120,9 @@ export function reconcileSessionRecording(
   isInitialised: boolean,
 ): void {
   if (enabled) {
-    if (isInitialised) client.opt_in_capturing()
+    // The server state is authoritative, so clear any stale SDK-local opt-out.
+    // Suppress PostHog's own opt-in event; BrowserClaw sends its allowlisted one.
+    client.opt_in_capturing({ captureEventName: false })
     client.startSessionRecording()
   } else if (isInitialised) {
     client.stopSessionRecording()

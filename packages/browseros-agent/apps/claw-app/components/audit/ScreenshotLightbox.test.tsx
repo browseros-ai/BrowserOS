@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { parseHTML } from 'linkedom'
 import { act, type ComponentProps, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
+import * as _dialog from '@/components/ui/dialog'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 
 mock.module('@/modules/api/audit.hooks', () => ({
@@ -10,6 +11,7 @@ mock.module('@/modules/api/audit.hooks', () => ({
 }))
 
 mock.module('@/components/ui/dialog', () => ({
+  ..._dialog,
   Dialog: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DialogClose: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DialogContent: ({
