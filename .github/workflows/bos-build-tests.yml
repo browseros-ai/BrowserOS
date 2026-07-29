@@ -12,6 +12,8 @@ on:
       - "packages/browseros/uv.lock"
       - "tools/release_secrets/**"
       - ".github/workflows/bos-build-tests.yml"
+      - ".github/workflows/release-linux.yml"
+      - ".github/workflows/release-windows.yml"
 
 jobs:
   tests:

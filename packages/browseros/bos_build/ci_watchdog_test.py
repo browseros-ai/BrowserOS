@@ -143,6 +143,20 @@ class WatchdogFilterTest(unittest.TestCase):
                 self.assertIn('if [ "$failures" -ge 3 ]; then', run)
                 self.assertNotIn("--jq", run)
 
+    def test_release_workflow_changes_trigger_these_tests(self):
+        test_workflow = self.load_workflow("bos-build-tests.yml")
+        # PyYAML's YAML 1.1 resolver treats the GitHub Actions `on` key as a
+        # boolean, so accept either representation here.
+        triggers = test_workflow.get("on", test_workflow.get(True))
+        pull_request_paths = triggers["pull_request"]["paths"]
+
+        for workflow_name in self.WORKFLOWS:
+            with self.subTest(workflow=workflow_name):
+                self.assertIn(
+                    f".github/workflows/{workflow_name}",
+                    pull_request_paths,
+                )
+
 
 class WarpBuildRunbookTest(unittest.TestCase):
     @classmethod
