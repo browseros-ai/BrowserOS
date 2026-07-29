@@ -67,8 +67,9 @@ export function createPostHogConfig(
     // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,
-    // No feature-flag / /decide round-trips: we only send events.
-    advanced_disable_decide: true,
+    // Session replay needs PostHog's remote config, but BrowserClaw does not use
+    // feature flags and should not evaluate them during initialization.
+    advanced_disable_feature_flags_on_first_load: true,
     // We never call identify(), so never create a person profile.
     person_profiles: 'never',
     persistence: 'localStorage',

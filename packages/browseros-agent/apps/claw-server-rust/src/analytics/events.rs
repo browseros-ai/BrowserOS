@@ -51,6 +51,13 @@ const KNOWN_CLIENTS: [&str; 15] = [
     "browseros-cli",
 ];
 
+const CLIENT_ALIASES: [(&str, &str); 4] = [
+    ("codex-mcp-client", "codex"),
+    ("codex-posthog-dashboard", "codex"),
+    ("codex-browserclaw", "codex"),
+    ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
+];
+
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
     "Claude Code",
     "Codex",
@@ -285,11 +292,17 @@ fn bucket_client_name(raw: &str) -> String {
             separator_pending = true;
         }
     }
-    match slug.as_str() {
-        "browserclaw-claude-desktop-wrapper" => "claude-desktop".to_string(),
-        value if value.starts_with("codex-") => "codex".to_string(),
-        value if KNOWN_CLIENTS.contains(&value) => slug,
-        _ => "unrecognized-client".to_string(),
+    if let Some((_, canonical)) = CLIENT_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == slug.as_str())
+    {
+        return (*canonical).to_string();
+    }
+
+    if KNOWN_CLIENTS.contains(&slug.as_str()) {
+        slug
+    } else {
+        "unrecognized-client".to_string()
     }
 }
 
@@ -427,6 +440,9 @@ mod tests {
             "user@example.com",
             "/home/user/secret",
             r"C:\Users\someone",
+            "codex@example.com",
+            "codex://private",
+            "/codex/home/user",
         ] {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),

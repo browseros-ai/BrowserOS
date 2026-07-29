@@ -12,6 +12,8 @@ describe('BrowserClaw PostHog privacy', () => {
     expect(config.bootstrap).toEqual({
       distinctID: 'anonymous-install-id',
     })
+    expect(config.advanced_disable_decide).toBeUndefined()
+    expect(config.advanced_disable_feature_flags_on_first_load).toBe(true)
     expect(config.disable_external_dependency_loading).toBe(true)
     expect(config.disable_session_recording).toBe(true)
     expect(config.session_recording).toEqual({

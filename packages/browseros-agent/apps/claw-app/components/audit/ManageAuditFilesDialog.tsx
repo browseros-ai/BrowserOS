@@ -112,7 +112,7 @@ export function ManageAuditFilesDialog() {
           </Button>
         }
       />
-      <DialogContent className="max-w-md">
+      <DialogContent className="ph-no-capture max-w-md">
         <DialogHeader>
           <DialogTitle>Manage audit files</DialogTitle>
           <DialogDescription>
@@ -155,7 +155,7 @@ export function ManageAuditFilesDialog() {
             <SelectTrigger id="audit-retention">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="ph-no-capture">
               <SelectItem value="7" label="7 days">
                 7 days
               </SelectItem>
@@ -202,7 +202,7 @@ export function ManageAuditFilesDialog() {
               </Button>
             }
           />
-          <AlertDialogContent>
+          <AlertDialogContent className="ph-no-capture">
             <AlertDialogHeader>
               <AlertDialogTitle>Clean up audit data now?</AlertDialogTitle>
               <AlertDialogDescription>

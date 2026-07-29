@@ -30,7 +30,7 @@ export function TabCountChip({
         <Layers className="size-2.5" />
         {browserTabs.length} tabs
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-2" align="end">
+      <PopoverContent className="ph-no-capture w-72 p-2" align="end">
         <ul className="flex flex-col gap-1">
           {browserTabs.map((tab) => {
             const selected = tab.browserTabId === selectedBrowserTabId

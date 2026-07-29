@@ -48,7 +48,7 @@ export function ScreenshotLightbox({
     <Dialog open={screenshotId !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[92vh] w-auto max-w-[94vw] flex-col gap-2 bg-transparent p-0 shadow-none ring-0 sm:max-w-[94vw]"
+        className="ph-no-capture flex max-h-[92vh] w-auto max-w-[94vw] flex-col gap-2 bg-transparent p-0 shadow-none ring-0 sm:max-w-[94vw]"
       >
         <DialogTitle className="sr-only">Screenshot preview</DialogTitle>
         {screenshotId !== null && (
