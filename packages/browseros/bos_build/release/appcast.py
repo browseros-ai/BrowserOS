@@ -11,6 +11,7 @@ from ..core.step import Step, ValidationError
 from ..lib.utils import log_error, log_info
 from ..lib.r2 import BOTO3_AVAILABLE
 from .common import fetch_all_release_metadata
+from .common import validate_release_metadata
 from .feeds.publisher import FeedPublisher
 from .feeds.render import render_browser_appcast
 from .feeds.spec import browser_feeds_for_product
@@ -28,12 +29,22 @@ class AppcastModule(Step):
         product_id: str = "browseros",
         publish: bool = False,
         allow_downgrade: bool = False,
+        platforms: str | None = None,
+        macos_arch: str = "universal",
+        source_sha: str = "",
+        workflow_run_id: str = "",
+        workflow_run_attempt: str = "",
         publisher=None,
         fetch_metadata=None,
     ):
         self.product_id = product_id
         self.publish = publish
         self.allow_downgrade = allow_downgrade
+        self.platforms = platforms
+        self.macos_arch = macos_arch
+        self.source_sha = source_sha
+        self.workflow_run_id = workflow_run_id
+        self.workflow_run_attempt = workflow_run_attempt
         self._publisher = publisher
         self._fetch_metadata = fetch_metadata or fetch_all_release_metadata
 
@@ -69,6 +80,17 @@ class AppcastModule(Step):
             raise RuntimeError(
                 f"No release metadata found for version {version} "
                 f"(product {self.product_id})"
+            )
+        if self.platforms is not None:
+            metadata = validate_release_metadata(
+                metadata,
+                version=version,
+                product_id=self.product_id,
+                platforms=self.platforms,
+                macos_arch=self.macos_arch,
+                source_sha=self.source_sha,
+                workflow_run_id=self.workflow_run_id,
+                workflow_run_attempt=self.workflow_run_attempt,
             )
 
         publisher = self._publisher or FeedPublisher(env=ctx.env)
