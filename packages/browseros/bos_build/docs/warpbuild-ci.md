@@ -19,7 +19,7 @@ nightly lanes use the repo-scoped Mac Mini runner instead; see
 | Platform | Label | Image | Compute | Disk |
 | --- | --- | --- | --- | --- |
 | Linux x64 | `warp-custom-browseros-ubuntu-2204-x64-32x` | Ubuntu 22.04 | `Standard_D32alds_v7` | P40, 2048 GB |
-| Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32ls_v5` | P30, 1024 GB |
+| Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32as_v5` | P30, 1024 GB |
 | macOS arm64 | `warp-macos-26-arm64-12x` | macOS 26 | M4 Pro, 12 vCPU / 44 GB | 500 GB |
 
 WarpBuild provisions the Linux and Windows runners in the BrowserOS Azure
@@ -31,8 +31,12 @@ compute SKUs and disk capacities mirror the source Azure build VMs, but they
 do not clone or retain those VMs' persistent disks.
 
 WarpBuild's Windows Server 2025 image is Hypervisor Generation 1, so its VM
-family must accept a Gen1 image. Dlsv5 supports both Generation 1 and 2, making
-`Standard_D32ls_v5` compatible; Dalsv7 is Generation 2-only, so
+family must accept a Gen1 image. `Standard_D32as_v5` supports both Generation 1
+and 2, making the current 32-vCPU/128-GiB configuration image-compatible. A
+live smoke run successfully provisioned its VM and registered a GitHub runner.
+`Standard_D32ls_v5` is Gen1-compatible too, but it was rejected for this stack
+after East US returned HTTP 409 `SkuNotAvailable`; that is a regional-capacity
+failure, not an image-generation mismatch. Dalsv7 is Generation 2-only, so
 `Standard_D32als_v7` fails during Azure VM creation before a runner can
 register with GitHub.
 
@@ -98,10 +102,18 @@ leaves `queued`:
    configurations listed above. Also check Azure quota and regional capacity
    for their VM SKUs when provisioning fails.
 
-Smoke test after changing either:
-`gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false`,
-then watch the build job leave `queued` within ~5 minutes (`gh run watch`).
-Only do this when you intentionally want to spend Azure compute time.
+Smoke test the platform whose runner configuration changed:
+
+```bash
+gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false
+gh workflow run release-windows.yml \
+  -f products=browserclaw \
+  -f sign=false \
+  -f upload_to_r2=false
+```
+
+Then watch its build job leave `queued` within ~5 minutes (`gh run watch`).
+Only dispatch one when you intentionally want to spend Azure compute time.
 
 ## Release lane flow
 
@@ -229,8 +241,12 @@ Causes, in the order to check:
    open the BYOC stack's launch errors and inspect `LaunchInstances`. An Azure
    400 that reports an image/VM-size generation mismatch means the image and
    selected VM family support different Hypervisor Generations; choose a
-   Gen1-compatible size for the current Windows image. Also check subscription
-   quota and East US capacity for the configured VM SKU.
+   Gen1-compatible size for the current Windows image. An Azure 409
+   `SkuNotAvailable` is different: the requested SKU has no capacity for that
+   subscription, location, or zone. Check quota and regional capacity in the
+   configured region, then choose a regionally available Gen1-compatible size.
+   `Standard_D32as_v4` is the verified-family fallback if D32as v5 is
+   unavailable, but confirm its capacity in East US before switching.
 4. **WarpBuild incident** — check their dashboard.
 
 Mechanics worth knowing:

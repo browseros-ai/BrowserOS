@@ -175,7 +175,11 @@ class WarpBuildRunbookTest(unittest.TestCase):
         self.assertIn(
             "| Windows x64 | "
             "`warp-custom-browseros-windows-2025-x64-32x` | "
-            "Windows Server 2025 | `Standard_D32ls_v5` | P30, 1024 GB |",
+            "Windows Server 2025 | `Standard_D32as_v5` | P30, 1024 GB |",
+            self.runbook,
+        )
+        self.assertNotIn(
+            "Windows Server 2025 | `Standard_D32ls_v5` |",
             self.runbook,
         )
         self.assertNotIn(
@@ -188,13 +192,26 @@ class WarpBuildRunbookTest(unittest.TestCase):
             "WarpBuild's Windows Server 2025 image is Hypervisor Generation 1",
             self.runbook,
         )
-        self.assertIn("Dlsv5 supports both Generation 1 and 2", self.runbook)
+        self.assertRegex(
+            self.runbook,
+            r"`Standard_D32as_v5` supports both Generation 1\s+and 2",
+        )
         self.assertIn("Dalsv7 is Generation 2-only", self.runbook)
+
+    def test_windows_capacity_history_is_distinct_from_compatibility(self):
+        self.assertIn(
+            "`Standard_D32ls_v5` is Gen1-compatible",
+            self.runbook,
+        )
+        self.assertIn("East US returned HTTP 409 `SkuNotAvailable`", self.runbook)
 
     def test_troubleshooting_calls_out_stack_launch_errors(self):
         self.assertIn("BYOC stack's launch errors", self.runbook)
         self.assertIn("LaunchInstances", self.runbook)
         self.assertIn("image/VM-size generation mismatch", self.runbook)
+        self.assertIn("regional capacity", self.runbook)
+        self.assertIn("regionally available Gen1-compatible size", self.runbook)
+        self.assertIn("`Standard_D32as_v4`", self.runbook)
 
 
 if __name__ == "__main__":
