@@ -20,6 +20,7 @@ from ...lib.paths import get_package_root
 from ...lib.r2 import get_r2_client
 from ...lib.utils import log_error, log_info, log_success, log_warning
 from .render import (
+    SPARKLE_NS,
     extract_appcast_item_count,
     extract_appcast_version,
     extract_channel_metadata,
@@ -31,6 +32,121 @@ from .spec import EXTENSIONS, FeedSpec, all_feeds, update_manifest_feed
 
 BACKUP_PREFIX = "feeds-history"
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _strict_dotted_version(value: Optional[str]) -> Optional[tuple[int, ...]]:
+    """Parse only a nonempty sequence of numeric dotted components."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    parts = stripped.split(".")
+    if not stripped or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _has_single_direct_channel(root: ET.Element) -> bool:
+    channels = [
+        element
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "channel"
+    ]
+    return (
+        len(channels) == 1
+        and channels[0] in list(root)
+        and _xml_local_name(channels[0].tag) == "channel"
+    )
+
+
+def _strict_appcast_versions(content: str) -> Optional[List[str]]:
+    """Return every direct item's strict Sparkle version, or None if unsafe."""
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return None
+    if root.tag != "rss" or not _has_single_direct_channel(root):
+        return None
+
+    channel = next(
+        element
+        for element in root
+        if _xml_local_name(element.tag) == "channel"
+    )
+    direct_items = [
+        element
+        for element in channel
+        if _xml_local_name(element.tag) == "item"
+    ]
+    all_items = [
+        element
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "item"
+    ]
+    if len(all_items) != len(direct_items) or any(
+        item not in direct_items for item in all_items
+    ):
+        return None
+
+    versions: List[str] = []
+    version_tag = f"{{{SPARKLE_NS}}}version"
+    for item in direct_items:
+        version_elements = [
+            element for element in item if element.tag == version_tag
+        ]
+        if len(version_elements) != 1:
+            return None
+        value = version_elements[0].text
+        if _strict_dotted_version(value) is None:
+            return None
+        versions.append(value.strip())
+    return versions
+
+
+def _is_empty_appcast_shell(content: str) -> bool:
+    """Whether content is an unambiguously unpopulated RSS appcast.
+
+    BrowserClaw's Windows feeds were provisioned before their first release
+    with one whitespace-only ``<item>``.  Treat that shape, and the equivalent
+    shell with no items, as first publication.  Any item attributes, text, or
+    children make the live document meaningful and therefore unguardable.
+    """
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return False
+    if root.tag != "rss":
+        return False
+    if not _has_single_direct_channel(root):
+        return False
+    channel = next(
+        element
+        for element in root
+        if _xml_local_name(element.tag) == "channel"
+    )
+    direct_items = [
+        element
+        for element in channel
+        if _xml_local_name(element.tag) == "item"
+    ]
+    all_items = [
+        element
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "item"
+    ]
+    if len(all_items) != len(direct_items) or any(
+        item not in direct_items for item in all_items
+    ):
+        return False
+    return all(
+        not item.attrib
+        and not list(item)
+        and not (item.text or "").strip()
+        for item in direct_items
+    )
 
 
 def _default_http_head(url: str) -> int:
@@ -144,14 +260,13 @@ class FeedPublisher:
         if not self._check_channel_metadata(spec, content):
             return False
 
-        # A single-item appcast must carry its version even on a first
-        # publish to an absent key — the guard below only runs against live.
-        if (
-            spec.kind in ("browser", "server")
-            and extract_appcast_version(content) is None
-        ):
-            self._log_appcast_version_error(spec, content)
-            return False
+        # Every appcast item must carry exactly one strict version, even on a
+        # first publish to an absent key — the guard below only runs live.
+        if spec.kind in ("browser", "server"):
+            new_versions = _strict_appcast_versions(content)
+            if not new_versions:
+                self._log_appcast_version_error(spec, content)
+                return False
 
         if not self._check_download_urls(spec, content):
             return False
@@ -288,14 +403,43 @@ class FeedPublisher:
     def _guard_appcast_version(
         self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool
     ) -> bool:
-        new_version = extract_appcast_version(content)
-        if new_version is None:
+        new_versions = _strict_appcast_versions(content)
+        if not new_versions:
             self._log_appcast_version_error(spec, content)
             return False
+        new_version = max(
+            new_versions,
+            key=lambda value: tuple(int(part) for part in value.split(".")),
+        )
 
-        live_version = extract_appcast_version(live)
-        if live_version is None:
+        if not self._check_well_formed(spec, live):
+            return False
+        try:
+            live_root = ET.fromstring(live)
+        except ET.ParseError:
+            return False
+        if not _has_single_direct_channel(live_root):
+            log_error(
+                f"{spec.key}: live appcast must contain exactly one direct "
+                "<channel>; refusing to publish."
+            )
+            return False
+        if not self._check_channel_metadata(spec, live):
+            return False
+
+        live_versions = _strict_appcast_versions(live)
+        if not live_versions:
+            if _is_empty_appcast_shell(live):
+                log_info(
+                    f"{spec.key}: live appcast is an empty shell "
+                    "(first population)"
+                )
+                return True
             return self._refuse_unguardable_live(spec, allow_downgrade)
+        live_version = max(
+            live_versions,
+            key=lambda value: tuple(int(part) for part in value.split(".")),
+        )
 
         return self._refuse_downgrade(
             spec, f"{spec.key}", new_version, live_version, allow_downgrade
@@ -305,9 +449,23 @@ class FeedPublisher:
         if extract_appcast_item_count(content) == 0:
             log_error(f"{spec.key}: new content has no <item> entries")
             return
-        log_error(
-            f"{spec.key}: new content has <item> entries but no sparkle:version"
-        )
+        version = extract_appcast_version(content)
+        if version is not None:
+            if _strict_dotted_version(version) is None:
+                log_error(
+                    f"{spec.key}: new content has invalid sparkle:version "
+                    f"{version!r}; expected numeric dotted components"
+                )
+                return
+            log_error(
+                f"{spec.key}: every direct <item> must contain exactly one "
+                "numeric dotted sparkle:version"
+            )
+        else:
+            log_error(
+                f"{spec.key}: new content has <item> entries but no "
+                "sparkle:version"
+            )
 
     def _guard_manifest_versions(
         self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool

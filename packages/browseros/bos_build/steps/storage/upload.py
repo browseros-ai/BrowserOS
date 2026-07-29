@@ -2,6 +2,7 @@
 """Upload module for BrowserOS build artifacts to Cloudflare R2"""
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -102,6 +103,14 @@ def generate_release_json(
         "build_date": datetime.now(timezone.utc).isoformat(),
         "artifacts": {},
     }
+    actions_provenance = {
+        "source_sha": os.environ.get("GITHUB_SHA", ""),
+        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+        "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+    }
+    release_data.update(
+        {key: value for key, value in actions_provenance.items() if value}
+    )
 
     # Sparkle (macOS) and WinSparkle (Windows) both compare against this
     # epoch-prefixed BrowserOS version in the appcast (Context.get_sparkle_version).
@@ -130,6 +139,14 @@ def generate_release_json(
 
 def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
     if not existing:
+        return new
+
+    provenance_fields = (
+        "source_sha",
+        "workflow_run_id",
+        "workflow_run_attempt",
+    )
+    if any(existing.get(field) != new.get(field) for field in provenance_fields):
         return new
 
     merged = dict(existing)
