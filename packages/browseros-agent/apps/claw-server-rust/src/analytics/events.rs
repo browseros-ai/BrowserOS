@@ -33,7 +33,7 @@ const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-const KNOWN_CLIENTS: [&str; 14] = [
+const KNOWN_CLIENTS: [&str; 15] = [
     "claude-desktop",
     "claude-code",
     "claude-ai",
@@ -48,6 +48,7 @@ const KNOWN_CLIENTS: [&str; 14] = [
     "cline",
     "continue",
     "goose",
+    "browseros-cli",
 ];
 
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
@@ -284,10 +285,11 @@ fn bucket_client_name(raw: &str) -> String {
             separator_pending = true;
         }
     }
-    if KNOWN_CLIENTS.contains(&slug.as_str()) {
-        slug
-    } else {
-        "other".to_string()
+    match slug.as_str() {
+        "browserclaw-claude-desktop-wrapper" => "claude-desktop".to_string(),
+        value if value.starts_with("codex-") => "codex".to_string(),
+        value if KNOWN_CLIENTS.contains(&value) => slug,
+        _ => "unrecognized-client".to_string(),
     }
 }
 
@@ -369,6 +371,7 @@ mod tests {
             "Cline",
             "Continue",
             "Goose",
+            "browseros-cli",
         ];
         let expected = [
             "claude-desktop",
@@ -385,6 +388,7 @@ mod tests {
             "cline",
             "continue",
             "goose",
+            "browseros-cli",
         ];
 
         for (raw, expected) in known.into_iter().zip(expected) {
@@ -396,7 +400,26 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_content_shaped_client_names_become_other() {
+    fn known_mcp_aliases_collapse_to_stable_client_buckets() {
+        for raw in [
+            "codex-mcp-client",
+            "codex-posthog-dashboard",
+            "Codex BrowserClaw",
+        ] {
+            assert_eq!(
+                AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
+                Some(json!({ "client_name": "codex" }))
+            );
+        }
+        assert_eq!(
+            AGENT_SESSION_STARTED
+                .sanitize(&json!({ "client_name": "browserclaw-claude-desktop-wrapper" })),
+            Some(json!({ "client_name": "claude-desktop" }))
+        );
+    }
+
+    #[test]
+    fn unknown_or_content_shaped_client_names_become_unrecognized_client() {
         for raw in [
             "",
             "my-secret-internal-tool",
@@ -407,7 +430,7 @@ mod tests {
         ] {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
-                Some(json!({ "client_name": "other" }))
+                Some(json!({ "client_name": "unrecognized-client" }))
             );
         }
     }
