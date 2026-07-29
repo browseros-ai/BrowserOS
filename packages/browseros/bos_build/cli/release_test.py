@@ -5,6 +5,7 @@ import re
 import os
 import unittest
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest import mock
 
 from typer.testing import CliRunner
@@ -283,6 +284,11 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
                 "download_and_upload_artifacts",
                 return_value=[("BrowserClaw_installer.exe", True)],
             ),
+            mock.patch.object(
+                github_module,
+                "resolve_github_tag_target",
+                return_value=target,
+            ),
         ):
             result = self.invoke_create("--target", target)
 
@@ -291,6 +297,31 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
         self.assertIn("## BrowserClaw v0.49.0", args[3])
         self.assertEqual(args[0], "browserclaw/v0.49.0")
         self.assertEqual(args[5], target)
+
+    def test_created_release_target_mismatch_blocks_asset_upload(self):
+        target = "a" * 40
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(True, "https://github.com/release"),
+            ),
+            mock.patch.object(
+                github_module,
+                "resolve_github_tag_target",
+                return_value="b" * 40,
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+            ) as upload,
+        ):
+            result = self.invoke_create("--target", target)
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("not requested target", plain_output(result))
+        upload.assert_not_called()
 
     def test_existing_release_remains_refreshable_when_uploads_succeed(self):
         with (
@@ -391,6 +422,88 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             initial_assets,
         )
 
+    def test_skip_upload_preserves_existing_draft_assets(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "Release browserclaw/v0.49.0 already exists"),
+            ),
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                return_value={"isDraft": True, "assets": ["keep.exe", "keep.zip"]},
+            ),
+            mock.patch.object(
+                github_module,
+                "delete_github_release_asset",
+            ) as delete,
+            mock.patch.object(github_module, "edit_github_release"),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+            ) as upload,
+        ):
+            result = self.invoke_create(
+                "--platforms",
+                "windows",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+                "--skip-upload",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        delete.assert_not_called()
+        upload.assert_not_called()
+
+    def test_tag_resolver_treats_only_missing_ref_422_as_absent(self):
+        tag = "browserclaw/v0.49.0"
+        missing = SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "HTTP/2.0 422 Unprocessable Entity\n"
+                "Content-Type: application/json\n\n"
+                f'{{"message":"No commit found for SHA: {tag}"}}'
+            ),
+            stderr="gh: no commit",
+        )
+        unrelated = SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "HTTP/2.0 422 Unprocessable Entity\n"
+                "Content-Type: application/json\n\n"
+                '{"message":"Validation Failed"}'
+            ),
+            stderr="gh: validation failed",
+        )
+
+        with mock.patch.object(
+            github_module.subprocess,
+            "run",
+            side_effect=[missing, unrelated],
+        ) as run:
+            self.assertIsNone(
+                github_module.resolve_github_tag_target(
+                    tag,
+                    "browseros-ai/BrowserOS",
+                )
+            )
+            with self.assertRaisesRegex(RuntimeError, "Could not resolve Git tag"):
+                github_module.resolve_github_tag_target(
+                    tag,
+                    "browseros-ai/BrowserOS",
+                )
+
+        self.assertIn(
+            "commits/browserclaw%2Fv0.49.0",
+            run.call_args_list[0].args[0][-1],
+        )
+
 
 class PublishCliIntegrityTest(unittest.TestCase):
     def invoke_publish(self, *extra: str):
@@ -484,7 +597,7 @@ class PublishCliIntegrityTest(unittest.TestCase):
                 publish_module,
                 "copy_to_download_path",
                 return_value=True,
-            ),
+            ) as copy,
         ):
             result = self.invoke_publish(
                 "--platform",
@@ -495,6 +608,7 @@ class PublishCliIntegrityTest(unittest.TestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("requested platform win", plain_output(result))
+        copy.assert_not_called()
 
 
 if __name__ == "__main__":

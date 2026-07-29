@@ -297,6 +297,48 @@ class PublisherTestCase(unittest.TestCase):
                 self.assertFalse(ok)
                 self.assertEqual(self.client.calls, [])
 
+    def test_every_populated_live_item_requires_one_strict_version(self):
+        bad_items = (
+            (
+                "malformed",
+                "<item><sparkle:version>garbage</sparkle:version></item>",
+            ),
+            ("versionless", "<item><title>old release</title></item>"),
+        )
+        for label, bad_item in bad_items:
+            with self.subTest(item=label):
+                live = _mac_appcast("10000.0.46.0.0").replace(
+                    "  </channel>",
+                    f"    {bad_item}\n  </channel>",
+                )
+                publisher = self._publisher({"appcast.xml": live.encode()})
+
+                ok = publisher.publish(
+                    feed_by_key("appcast.xml"),
+                    _mac_appcast("10000.0.48.0.0"),
+                    publish=True,
+                )
+
+                self.assertFalse(ok)
+                self.assertEqual(self.client.calls, [])
+
+    def test_every_new_appcast_item_requires_one_strict_version(self):
+        content = _mac_appcast().replace(
+            "  </channel>",
+            "    <item><title>versionless</title></item>\n  </channel>",
+        )
+        publisher = self._publisher()
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            content,
+            publish=True,
+            allow_downgrade=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
     def test_populated_wrong_channel_live_appcast_fails_closed(self):
         live = _mac_appcast("10000.0.46.0.0").replace(
             "<title>BrowserOS</title>",

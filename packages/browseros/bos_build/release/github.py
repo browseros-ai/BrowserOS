@@ -2,10 +2,12 @@
 """GitHub module - Create GitHub releases from R2 artifacts"""
 
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from ..core.context import Context
 from ..core.step import Step, ValidationError
@@ -126,6 +128,80 @@ def inspect_github_release(tag: str, repo: str) -> Dict:
         if isinstance(asset, dict) and asset.get("name")
     ]
     return document
+
+
+def resolve_github_tag_target(tag: str, repo: str) -> Optional[str]:
+    """Resolve a release tag to its commit, distinguishing 404 from API errors."""
+    tag_uri = quote(tag, safe="")
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--include",
+            f"repos/{repo}/commits/{tag_uri}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = (result.stdout or "").replace("\r\n", "\n")
+    match = re.match(r"HTTP/\S+\s+(\d{3})", output)
+    status = match.group(1) if match else ""
+    _, separator, body = output.partition("\n\n")
+    document = None
+    if separator:
+        try:
+            document = json.loads(body)
+        except json.JSONDecodeError:
+            document = None
+
+    if status == "404":
+        return None
+    if (
+        status == "422"
+        and isinstance(document, dict)
+        and document.get("message") == f"No commit found for SHA: {tag}"
+    ):
+        return None
+    if status != "200" or result.returncode != 0:
+        detail = (result.stderr or output or "no response").strip()
+        raise RuntimeError(
+            f"Could not resolve Git tag {tag} "
+            f"(HTTP {status or 'unknown'}, gh rc={result.returncode}): {detail}"
+        )
+
+    if not separator:
+        raise RuntimeError(f"GitHub returned no JSON body while resolving tag {tag}")
+    if document is None:
+        raise RuntimeError(f"GitHub returned invalid JSON while resolving tag {tag}")
+    target = document.get("sha") if isinstance(document, dict) else None
+    if not isinstance(target, str) or not target:
+        raise RuntimeError(f"GitHub returned no commit SHA while resolving tag {tag}")
+    return target
+
+
+def verify_github_release_target(
+    tag: str,
+    repo: str,
+    expected_target: str,
+    release: Optional[Dict] = None,
+) -> Dict:
+    """Verify a draft points at the immutable workflow commit before mutation."""
+    if not expected_target:
+        return release or {}
+
+    resolved_target = resolve_github_tag_target(tag, repo)
+    current_release = release
+    if resolved_target is None:
+        current_release = current_release or inspect_github_release(tag, repo)
+        resolved_target = current_release.get("targetCommitish")
+
+    if resolved_target != expected_target:
+        raise RuntimeError(
+            f"Release {tag} resolves to {resolved_target or 'no target'}, "
+            f"not requested target {expected_target}"
+        )
+    return current_release or {}
 
 
 def edit_github_release(
@@ -317,6 +393,12 @@ class GithubModule(Step):
 
         if success:
             log_success(f"Release created: {result}")
+            try:
+                verify_github_release_target(tag, repo, self.target)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not verify release target for {tag}: {exc}"
+                ) from exc
         else:
             if "already exists" in result:
                 log_warning(result)
@@ -331,7 +413,18 @@ class GithubModule(Step):
                         f"Release {tag} already exists and is not a draft; "
                         "refusing to modify live release assets"
                     )
-                if self.platforms is not None:
+                try:
+                    verify_github_release_target(
+                        tag,
+                        repo,
+                        self.target,
+                        release=existing,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not verify release target for {tag}: {exc}"
+                    ) from exc
+                if self.platforms is not None and not self.skip_upload:
                     for asset in existing.get("assets", []):
                         try:
                             delete_github_release_asset(tag, repo, asset)
@@ -380,6 +473,17 @@ class GithubModule(Step):
                         f"Release {tag} is no longer a draft; refusing to "
                         "accept the asset upload"
                     )
+                try:
+                    verify_github_release_target(
+                        tag,
+                        repo,
+                        self.target,
+                        release=final_release,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not verify final release target for {tag}: {exc}"
+                    ) from exc
                 actual_assets = set(final_release.get("assets", []))
                 if actual_assets != expected_assets:
                     raise RuntimeError(

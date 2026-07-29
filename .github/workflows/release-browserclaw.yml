@@ -946,20 +946,36 @@ jobs:
               echo "::error::GitHub release $tag already exists and is not a draft; refusing to modify live release assets."
               exit 1
             fi
+          elif [ "$release_status" = "404" ]; then
+            release_json=""
+          else
+            echo "::error::Could not inspect release $tag (HTTP ${release_status:-unknown}, gh rc=$release_probe_rc); refusing to assume it is absent."
+            exit 1
+          fi
 
-            set +e
-            tag_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/commits/$tag_uri" 2>&1)"
-            tag_probe_rc=$?
-            set -e
-            tag_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$tag_probe")"
-            if [ "$tag_status" = "200" ] && [ "$tag_probe_rc" -eq 0 ]; then
-              tag_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$tag_probe")"
-              actual_target="$(jq -r '.sha' <<< "$tag_json")"
-              if [ "$actual_target" != "$GITHUB_SHA" ]; then
-                echo "::error::Draft release $tag resolves to $actual_target, not workflow SHA $GITHUB_SHA. Delete/recreate the draft tag or dispatch a new version."
-                exit 1
-              fi
-            elif [ "$tag_status" = "404" ]; then
+          set +e
+          tag_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/commits/$tag_uri" 2>&1)"
+          tag_probe_rc=$?
+          set -e
+          tag_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$tag_probe")"
+          tag_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$tag_probe")"
+          tag_absent=false
+          if [ "$tag_status" = "404" ]; then
+            tag_absent=true
+          elif [ "$tag_status" = "422" ]; then
+            tag_error="$(jq -r '.message // ""' <<< "$tag_json" 2>/dev/null || true)"
+            if [ "$tag_error" = "No commit found for SHA: $tag" ]; then
+              tag_absent=true
+            fi
+          fi
+          if [ "$tag_status" = "200" ] && [ "$tag_probe_rc" -eq 0 ]; then
+            actual_target="$(jq -r '.sha' <<< "$tag_json")"
+            if [ "$actual_target" != "$GITHUB_SHA" ]; then
+              echo "::error::Release tag $tag resolves to $actual_target, not workflow SHA $GITHUB_SHA. Delete/recreate the tag or dispatch a new version."
+              exit 1
+            fi
+          elif [ "$tag_absent" = "true" ]; then
+            if [ -n "$release_json" ]; then
               target_commitish="$(jq -r '.target_commitish // ""' <<< "$release_json")"
               if [ "$target_commitish" != "$GITHUB_SHA" ]; then
                 gh release edit "$tag" --target "$GITHUB_SHA"
@@ -969,14 +985,9 @@ jobs:
                   exit 1
                 fi
               fi
-            else
-              echo "::error::Could not resolve existing draft tag $tag (HTTP ${tag_status:-unknown}, gh rc=$tag_probe_rc)."
-              exit 1
             fi
-          elif [ "$release_status" = "404" ]; then
-            :
           else
-            echo "::error::Could not inspect release $tag (HTTP ${release_status:-unknown}, gh rc=$release_probe_rc); refusing to assume it is absent."
+            echo "::error::Could not resolve release tag $tag (HTTP ${tag_status:-unknown}, gh rc=$tag_probe_rc)."
             exit 1
           fi
 

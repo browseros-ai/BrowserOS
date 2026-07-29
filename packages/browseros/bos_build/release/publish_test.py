@@ -60,14 +60,26 @@ class PublishModuleIntegrityTest(unittest.TestCase):
         module = PublishModule(platforms=["win"])
         ctx = SimpleNamespace(
             release_version="0.49.0",
-            env=SimpleNamespace(),
+            env=SimpleNamespace(
+                r2_cdn_base_url="https://cdn.browseros.com",
+                r2_bucket="bucket",
+            ),
             product=get_product_descriptor("browserclaw"),
         )
 
         with (
             mock.patch(
                 "bos_build.release.publish.fetch_all_release_metadata",
-                return_value={"win": {"artifacts": {}}},
+                return_value={
+                    "win": {
+                        "artifacts": {
+                            "x64_installer": {
+                                "filename": "BrowserClaw_installer.exe",
+                                "url": "https://cdn.browseros.com/installer.exe",
+                            }
+                        }
+                    }
+                },
             ),
             mock.patch(
                 "bos_build.release.publish.get_r2_client",
@@ -155,10 +167,12 @@ class PublishModuleIntegrityTest(unittest.TestCase):
             mock.patch(
                 "bos_build.release.publish.copy_to_download_path",
                 return_value=True,
-            ),
+            ) as copy,
             self.assertRaisesRegex(RuntimeError, "requested platform win"),
         ):
             module.execute(ctx)
+
+        copy.assert_not_called()
 
 
 if __name__ == "__main__":

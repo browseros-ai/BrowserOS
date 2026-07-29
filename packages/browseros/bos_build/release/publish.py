@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Publish module - Copy versioned artifacts to download/ paths for fresh installs"""
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..core.context import Context
 from ..core.step import Step, ValidationError
-from ..lib.utils import log_info, log_error, log_success, log_warning
+from ..lib.utils import log_info, log_error, log_success
 from ..lib.r2 import BOTO3_AVAILABLE, get_r2_client
 from .common import (
     PLATFORMS,
@@ -78,6 +78,26 @@ class PublishModule(Step):
                 f"{', '.join(missing_platforms)}"
             )
 
+        candidates: Dict[str, List[Tuple[str, str, str]]] = {}
+        for platform in self.platforms:
+            release = metadata[platform]
+            artifacts = release.get("artifacts", {})
+            platform_mapping = get_download_path_mapping(ctx.product).get(platform, {})
+            platform_candidates: List[Tuple[str, str, str]] = []
+            for artifact_key, artifact in artifacts.items():
+                if artifact_key not in platform_mapping:
+                    continue
+                dest_path = platform_mapping[artifact_key]
+                source_key = _release_source_key(ctx, platform, version, artifact)
+                platform_candidates.append(
+                    (artifact["filename"], source_key, dest_path)
+                )
+            if not platform_candidates:
+                raise RuntimeError(
+                    f"No promotable artifacts found for requested platform {platform}"
+                )
+            candidates[platform] = platform_candidates
+
         log_info(f"\n{'='*60}")
         log_info(f"Publishing v{version} to download/ paths")
         log_info(f"{'='*60}")
@@ -88,37 +108,15 @@ class PublishModule(Step):
 
         results: List[Tuple[str, str, bool]] = []
 
-        for platform in self.platforms:
-            platform_result_start = len(results)
-            if platform not in metadata:
-                log_warning(f"Skipping {platform}: no release metadata")
-                continue
-
-            release = metadata[platform]
-            artifacts = release.get("artifacts", {})
-            platform_mapping = get_download_path_mapping(ctx.product).get(platform, {})
-
+        for platform, platform_candidates in candidates.items():
             log_info(f"\n{PLATFORM_DISPLAY_NAMES[platform]}:")
-
-            for artifact_key, artifact in artifacts.items():
-                if artifact_key not in platform_mapping:
-                    log_info(f"  Skipping {artifact_key}: no download path mapping")
-                    continue
-
-                dest_path = platform_mapping[artifact_key]
-                source_key = _release_source_key(ctx, platform, version, artifact)
-
-                log_info(f"  Copying {artifact['filename']} → {dest_path}")
+            for filename, source_key, dest_path in platform_candidates:
+                log_info(f"  Copying {filename} → {dest_path}")
                 success = copy_to_download_path(client, env.r2_bucket, source_key, dest_path)
-                results.append((artifact["filename"], dest_path, success))
+                results.append((filename, dest_path, success))
 
                 if success:
                     log_success(f"    ✓ Published to {env.r2_cdn_base_url}/{dest_path}")
-
-            if len(results) == platform_result_start:
-                raise RuntimeError(
-                    f"No promotable artifacts found for requested platform {platform}"
-                )
 
         log_info(f"\n{'='*60}")
         succeeded = sum(1 for _, _, ok in results if ok)

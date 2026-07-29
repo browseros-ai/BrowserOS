@@ -817,6 +817,22 @@ fi
                 0,
                 "not workflow SHA",
             ),
+            (
+                "orphaned-tag-mismatch",
+                self.api_probe(404, '{"message":"Not Found"}'),
+                1,
+                self.api_probe(200, f'{{"sha":"{other_sha}"}}'),
+                0,
+                "not workflow SHA",
+            ),
+            (
+                "unrelated-tag-lookup-error",
+                self.api_probe(404, '{"message":"Not Found"}'),
+                1,
+                self.api_probe(422, '{"message":"Validation Failed"}'),
+                1,
+                "Could not resolve release tag",
+            ),
         )
         for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
             for label, release, release_rc, tag, tag_rc, error in cases:
@@ -837,12 +853,21 @@ fi
     def test_finalize_accepts_verified_absence_or_matching_draft_target(self):
         sha = "a" * 40
         for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
+            expected_tag = (
+                "browserclaw/v0.49.0"
+                if product == "browserclaw"
+                else "v0.49.0"
+            )
+            missing_tag = self.api_probe(
+                422,
+                f'{{"message":"No commit found for SHA: {expected_tag}"}}',
+            )
             cases = (
                 (
                     "absent",
                     self.api_probe(404, '{"message":"Not Found"}'),
                     1,
-                    "",
+                    missing_tag,
                     1,
                 ),
                 (
@@ -862,7 +887,7 @@ fi
                         '{"draft":true,"target_commitish":"old"}',
                     ),
                     0,
-                    self.api_probe(404, '{"message":"Not Found"}'),
+                    missing_tag,
                     1,
                 ),
             )
@@ -886,17 +911,28 @@ fi
                     uv_calls = Path(env["FAKE_UV_CALLS"]).read_text(
                         encoding="utf-8"
                     )
-                    self.assertIn("release github create", uv_calls)
+                    for token in (
+                        "release github create",
+                        "--version 0.49.0",
+                        "--draft",
+                        f"--product {product}",
+                        "--platforms all",
+                        "--macos-arch universal",
+                        f"--source-sha {sha}",
+                        "--workflow-run-id 30418029456",
+                        "--workflow-run-attempt 2",
+                        f"--target {sha}",
+                    ):
+                        self.assertIn(token, uv_calls)
                     gh_calls = (root / "gh-calls").read_text(encoding="utf-8")
-                    expected_tag = (
-                        "browserclaw%2Fv0.49.0"
-                        if product == "browserclaw"
-                        else "v0.49.0"
+                    expected_tag_uri = expected_tag.replace("/", "%2F")
+                    self.assertIn(
+                        f"/releases/tags/{expected_tag_uri}",
+                        gh_calls,
                     )
-                    self.assertIn(f"/releases/tags/{expected_tag}", gh_calls)
                     if label == "untagged-draft-retarget":
                         self.assertIn(
-                            f"release edit {expected_tag.replace('%2F', '/')} "
+                            f"release edit {expected_tag} "
                             f"--target {sha}",
                             gh_calls,
                         )
