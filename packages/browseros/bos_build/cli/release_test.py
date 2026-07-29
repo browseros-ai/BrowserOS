@@ -158,16 +158,24 @@ def _configured_r2_env():
 def _github_metadata(product: str = "browserclaw"):
     prefix = "BrowserClaw" if product == "browserclaw" else "BrowserOS"
     filename = f"{prefix}_v0.49.0_x64_installer.exe"
+    zip_filename = f"{prefix}_v0.49.0_x64_installer.zip"
     return {
         "win": {
             "product": product,
             "version": "0.49.0",
             "platform": "win",
             "chromium_version": "140.0.0.0",
+            "source_sha": "a" * 40,
+            "workflow_run_id": "123",
+            "workflow_run_attempt": "1",
             "artifacts": {
                 "x64_installer": {
                     "filename": filename,
                     "url": f"https://cdn.browseros.com/{filename}",
+                },
+                "x64_zip": {
+                    "filename": zip_filename,
+                    "url": f"https://cdn.browseros.com/{zip_filename}",
                 },
             },
         }
@@ -281,6 +289,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, plain_output(result))
         args = create.call_args.args
         self.assertIn("## BrowserClaw v0.49.0", args[3])
+        self.assertEqual(args[0], "browserclaw/v0.49.0")
         self.assertEqual(args[5], target)
 
     def test_existing_release_remains_refreshable_when_uploads_succeed(self):
@@ -296,10 +305,91 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
                 "download_and_upload_artifacts",
                 return_value=[("BrowserClaw_installer.exe", True)],
             ),
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                return_value={"isDraft": True, "assets": []},
+            ),
+            mock.patch.object(github_module, "edit_github_release") as edit,
         ):
             result = self.invoke_create()
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
+        self.assertEqual(edit.call_args.args[0], "browserclaw/v0.49.0")
+
+    def test_existing_published_release_is_never_refreshable(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "Release browserclaw/v0.49.0 already exists"),
+            ),
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                return_value={"isDraft": False, "assets": []},
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+            ) as upload,
+        ):
+            result = self.invoke_create()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("not a draft", plain_output(result))
+        upload.assert_not_called()
+
+    def test_contracted_refresh_reconciles_and_verifies_exact_assets(self):
+        metadata = _github_metadata()
+        expected = {
+            artifact["filename"]
+            for artifact in metadata["win"]["artifacts"].values()
+        }
+        initial_assets = ["BrowserOS_v0.49.0_universal.dmg", "stale.bin"]
+        with (
+            self.patches(metadata),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "Release browserclaw/v0.49.0 already exists"),
+            ),
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                side_effect=[
+                    {"isDraft": True, "assets": initial_assets},
+                    {"isDraft": True, "assets": sorted(expected)},
+                ],
+            ),
+            mock.patch.object(
+                github_module,
+                "delete_github_release_asset",
+            ) as delete,
+            mock.patch.object(github_module, "edit_github_release"),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[(filename, True) for filename in sorted(expected)],
+            ),
+        ):
+            result = self.invoke_create(
+                "--platforms",
+                "windows",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+                "--workflow-run-attempt",
+                "1",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        self.assertEqual(
+            [call.args[2] for call in delete.call_args_list],
+            initial_assets,
+        )
 
 
 class PublishCliIntegrityTest(unittest.TestCase):
@@ -364,6 +454,47 @@ class PublishCliIntegrityTest(unittest.TestCase):
             result = self.invoke_publish("--platform", "win")
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
+
+    def test_mixed_request_fails_when_one_platform_has_no_promotable_assets(self):
+        metadata = {
+            "macos": {
+                "artifacts": {
+                    "universal": {
+                        "filename": "BrowserClaw_v0.49.0_universal.dmg",
+                        "url": (
+                            "https://cdn.browseros.com/releases/browserclaw/"
+                            "0.49.0/macos/BrowserClaw_v0.49.0_universal.dmg"
+                        ),
+                    }
+                }
+            },
+            "win": {
+                "artifacts": {
+                    "unknown": {
+                        "filename": "unknown.bin",
+                        "url": "https://cdn.browseros.com/unknown.bin",
+                    }
+                }
+            },
+        }
+        with (
+            self.patches(metadata),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module,
+                "copy_to_download_path",
+                return_value=True,
+            ),
+        ):
+            result = self.invoke_publish(
+                "--platform",
+                "macos",
+                "--platform",
+                "win",
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("requested platform win", plain_output(result))
 
 
 if __name__ == "__main__":

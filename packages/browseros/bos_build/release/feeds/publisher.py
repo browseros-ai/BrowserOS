@@ -33,6 +33,34 @@ BACKUP_PREFIX = "feeds-history"
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _strict_dotted_version(value: Optional[str]) -> Optional[tuple[int, ...]]:
+    """Parse only a nonempty sequence of numeric dotted components."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    parts = stripped.split(".")
+    if not stripped or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _has_single_direct_channel(root: ET.Element) -> bool:
+    channels = [
+        element
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "channel"
+    ]
+    return (
+        len(channels) == 1
+        and channels[0] in list(root)
+        and _xml_local_name(channels[0].tag) == "channel"
+    )
+
+
 def _is_empty_appcast_shell(content: str) -> bool:
     """Whether content is an unambiguously unpopulated RSS appcast.
 
@@ -47,14 +75,32 @@ def _is_empty_appcast_shell(content: str) -> bool:
         return False
     if root.tag != "rss":
         return False
-    channel = root.find("channel")
-    if channel is None:
+    if not _has_single_direct_channel(root):
+        return False
+    channel = next(
+        element
+        for element in root
+        if _xml_local_name(element.tag) == "channel"
+    )
+    direct_items = [
+        element
+        for element in channel
+        if _xml_local_name(element.tag) == "item"
+    ]
+    all_items = [
+        element
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "item"
+    ]
+    if len(all_items) != len(direct_items) or any(
+        item not in direct_items for item in all_items
+    ):
         return False
     return all(
         not item.attrib
         and not list(item)
         and not (item.text or "").strip()
-        for item in channel.findall("item")
+        for item in direct_items
     )
 
 
@@ -171,10 +217,9 @@ class FeedPublisher:
 
         # A single-item appcast must carry its version even on a first
         # publish to an absent key — the guard below only runs against live.
-        if (
-            spec.kind in ("browser", "server")
-            and extract_appcast_version(content) is None
-        ):
+        if spec.kind in ("browser", "server") and _strict_dotted_version(
+            extract_appcast_version(content)
+        ) is None:
             self._log_appcast_version_error(spec, content)
             return False
 
@@ -314,15 +359,28 @@ class FeedPublisher:
         self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool
     ) -> bool:
         new_version = extract_appcast_version(content)
-        if new_version is None:
+        if _strict_dotted_version(new_version) is None:
             self._log_appcast_version_error(spec, content)
             return False
 
+        if not self._check_well_formed(spec, live):
+            return False
+        try:
+            live_root = ET.fromstring(live)
+        except ET.ParseError:
+            return False
+        if not _has_single_direct_channel(live_root):
+            log_error(
+                f"{spec.key}: live appcast must contain exactly one direct "
+                "<channel>; refusing to publish."
+            )
+            return False
+        if not self._check_channel_metadata(spec, live):
+            return False
+
         live_version = extract_appcast_version(live)
-        if live_version is None:
+        if _strict_dotted_version(live_version) is None:
             if _is_empty_appcast_shell(live):
-                if not self._check_channel_metadata(spec, live):
-                    return False
                 log_info(
                     f"{spec.key}: live appcast is an empty shell "
                     "(first population)"
@@ -337,6 +395,13 @@ class FeedPublisher:
     def _log_appcast_version_error(self, spec: FeedSpec, content: str) -> None:
         if extract_appcast_item_count(content) == 0:
             log_error(f"{spec.key}: new content has no <item> entries")
+            return
+        version = extract_appcast_version(content)
+        if version is not None:
+            log_error(
+                f"{spec.key}: new content has invalid sparkle:version "
+                f"{version!r}; expected numeric dotted components"
+            )
             return
         log_error(
             f"{spec.key}: new content has <item> entries but no sparkle:version"

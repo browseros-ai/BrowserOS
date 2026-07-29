@@ -89,6 +89,7 @@ class PublishModule(Step):
         results: List[Tuple[str, str, bool]] = []
 
         for platform in self.platforms:
+            platform_result_start = len(results)
             if platform not in metadata:
                 log_warning(f"Skipping {platform}: no release metadata")
                 continue
@@ -113,6 +114,11 @@ class PublishModule(Step):
 
                 if success:
                     log_success(f"    ✓ Published to {env.r2_cdn_base_url}/{dest_path}")
+
+            if len(results) == platform_result_start:
+                raise RuntimeError(
+                    f"No promotable artifacts found for requested platform {platform}"
+                )
 
         log_info(f"\n{'='*60}")
         succeeded = sum(1 for _, _, ok in results if ok)

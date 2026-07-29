@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GitHub module - Create GitHub releases from R2 artifacts"""
 
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,7 +24,7 @@ from .common import (
 
 
 def create_github_release(
-    version: str,
+    tag: str,
     repo: str,
     title: str,
     notes: str,
@@ -35,7 +36,7 @@ def create_github_release(
         "gh",
         "release",
         "create",
-        f"v{version}",
+        tag,
         "--repo",
         repo,
         "--title",
@@ -52,9 +53,11 @@ def create_github_release(
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        if "already exists" in e.stderr:
-            return False, f"Release v{version} already exists"
-        return False, e.stderr
+        stderr = e.stderr or str(e)
+        normalized_error = stderr.lower().replace("_", " ")
+        if "already exist" in normalized_error:
+            return False, f"Release {tag} already exists"
+        return False, stderr
 
 
 def download_file(url: str, dest: Path) -> bool:
@@ -70,11 +73,11 @@ def download_file(url: str, dest: Path) -> bool:
         return False
 
 
-def upload_to_github_release(version: str, repo: str, file_path: Path) -> bool:
+def upload_to_github_release(tag: str, repo: str, file_path: Path) -> bool:
     """Upload file to existing GitHub release"""
     try:
         subprocess.run(
-            ["gh", "release", "upload", f"v{version}", str(file_path), "--repo", repo],
+            ["gh", "release", "upload", tag, str(file_path), "--repo", repo],
             check=True,
             capture_output=True,
         )
@@ -91,8 +94,87 @@ def normalize_version(version: str) -> str:
     return version
 
 
+def github_release_tag(version: str, product_id: str) -> str:
+    """Return the product-owned Git tag for a browser release."""
+    normalized = normalize_version(version)
+    if product_id == "browseros":
+        return f"v{normalized}"
+    return f"{product_id}/v{normalized}"
+
+
+def inspect_github_release(tag: str, repo: str) -> Dict:
+    """Read a release or raise; callers must never treat API failure as absence."""
+    result = subprocess.run(
+        [
+            "gh",
+            "release",
+            "view",
+            tag,
+            "--repo",
+            repo,
+            "--json",
+            "isDraft,assets,targetCommitish",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    document = json.loads(result.stdout)
+    document["assets"] = [
+        asset["name"]
+        for asset in document.get("assets", [])
+        if isinstance(asset, dict) and asset.get("name")
+    ]
+    return document
+
+
+def edit_github_release(
+    tag: str,
+    repo: str,
+    title: str,
+    notes: str,
+) -> None:
+    """Refresh release presentation after validating draft ownership."""
+    subprocess.run(
+        [
+            "gh",
+            "release",
+            "edit",
+            tag,
+            "--repo",
+            repo,
+            "--title",
+            title,
+            "--notes",
+            notes,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def delete_github_release_asset(tag: str, repo: str, asset: str) -> None:
+    """Delete one stale asset from a validated draft release."""
+    subprocess.run(
+        [
+            "gh",
+            "release",
+            "delete-asset",
+            tag,
+            asset,
+            "--repo",
+            repo,
+            "--yes",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
 def download_and_upload_artifacts(
-    version: str,
+    tag: str,
     repo: str,
     metadata: Dict[str, Dict],
     platforms: Optional[List[str]] = None,
@@ -122,7 +204,7 @@ def download_and_upload_artifacts(
                     continue
 
                 log_info(f"  Uploading {filename}...")
-                if upload_to_github_release(version, repo, local_path):
+                if upload_to_github_release(tag, repo, local_path):
                     log_success(f"  Uploaded {filename}")
                     results.append((filename, True))
                 else:
@@ -190,6 +272,7 @@ class GithubModule(Step):
     def execute(self, ctx: Context) -> None:
         version = ctx.release_version
         tag_version = normalize_version(version)
+        tag = github_release_tag(tag_version, ctx.product.id)
         repo = ctx.github_repo
 
         metadata = fetch_all_release_metadata(version, ctx.env, ctx.product.id)
@@ -208,7 +291,7 @@ class GithubModule(Step):
             )
 
         log_info(f"\n{'='*60}")
-        log_info(f"Creating GitHub Release: v{tag_version}")
+        log_info(f"Creating GitHub Release: {tag}")
         log_info(f"{'='*60}")
 
         for platform, release in metadata.items():
@@ -219,12 +302,12 @@ class GithubModule(Step):
         log_info(f"  Draft: {self.draft}")
 
         # Create release
-        release_title = self.title or f"v{tag_version}"
+        release_title = self.title or f"{ctx.product.display_name} v{tag_version}"
         notes = generate_release_notes(tag_version, metadata, ctx.product)
 
         log_info("\nCreating GitHub release...")
         success, result = create_github_release(
-            tag_version,
+            tag,
             repo,
             release_title,
             notes,
@@ -237,6 +320,31 @@ class GithubModule(Step):
         else:
             if "already exists" in result:
                 log_warning(result)
+                try:
+                    existing = inspect_github_release(tag, repo)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not inspect existing release {tag}: {exc}"
+                    ) from exc
+                if existing.get("isDraft") is not True:
+                    raise RuntimeError(
+                        f"Release {tag} already exists and is not a draft; "
+                        "refusing to modify live release assets"
+                    )
+                if self.platforms is not None:
+                    for asset in existing.get("assets", []):
+                        try:
+                            delete_github_release_asset(tag, repo, asset)
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"Failed to delete stale draft asset {asset}: {exc}"
+                            ) from exc
+                try:
+                    edit_github_release(tag, repo, release_title, notes)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to refresh draft release {tag}: {exc}"
+                    ) from exc
             else:
                 raise RuntimeError(f"Failed to create release: {result}")
 
@@ -244,7 +352,7 @@ class GithubModule(Step):
         if not self.skip_upload:
             log_info("\nUploading artifacts to GitHub release...")
             results = download_and_upload_artifacts(
-                tag_version,
+                tag,
                 repo,
                 metadata,
                 platforms=list(metadata),
@@ -255,6 +363,29 @@ class GithubModule(Step):
             failed = [f for f, ok in results if not ok]
             if failed:
                 raise RuntimeError(f"Failed to upload: {', '.join(failed)}")
+            if self.platforms is not None:
+                expected_assets = {
+                    artifact["filename"]
+                    for release in metadata.values()
+                    for artifact in release["artifacts"].values()
+                }
+                try:
+                    final_release = inspect_github_release(tag, repo)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not verify release assets for {tag}: {exc}"
+                    ) from exc
+                if final_release.get("isDraft") is not True:
+                    raise RuntimeError(
+                        f"Release {tag} is no longer a draft; refusing to "
+                        "accept the asset upload"
+                    )
+                actual_assets = set(final_release.get("assets", []))
+                if actual_assets != expected_assets:
+                    raise RuntimeError(
+                        f"Release {tag} asset set mismatch: expected "
+                        f"{sorted(expected_assets)}, got {sorted(actual_assets)}"
+                    )
 
         # Print appcast snippet
         if "macos" in metadata:
@@ -275,4 +406,4 @@ class GithubModule(Step):
                     print(generate_appcast_item(artifact, tag_version, sparkle_version, build_date))
 
         log_info(f"\n{'='*60}")
-        log_success(f"Release v{tag_version} complete!")
+        log_success(f"Release {tag} complete!")

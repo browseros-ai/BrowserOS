@@ -370,6 +370,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "GITHUB_OUTPUT": str(output),
             "GITHUB_RUN_ATTEMPT": "2",
             "GITHUB_RUN_ID": "30418029456",
+            "GITHUB_REPOSITORY": "browseros-ai/BrowserOS",
             "GITHUB_SHA": "a" * 40,
             "GITHUB_STEP_SUMMARY": str(summary),
             "GITHUB_WORKSPACE": str(root),
@@ -377,6 +378,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "INPUT_GITHUB_RELEASE_DRAFT": "true",
             "INPUT_MACOS_ARCH": "universal",
             "INPUT_PLATFORMS": "all",
+            "INPUT_UPLOAD_TO_R2": "true",
             "PRODUCT": product,
             "PRODUCT_LABEL": (
                 "BrowserClaw" if product == "browserclaw" else "BrowserOS"
@@ -387,7 +389,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def install_fake_uv(self, root: Path) -> Path:
         fake_bin = root / "fake-bin"
-        fake_bin.mkdir()
+        fake_bin.mkdir(exist_ok=True)
         uv = fake_bin / "uv"
         uv.write_text(
             """#!/usr/bin/env bash
@@ -416,6 +418,34 @@ fi
         uv.chmod(0o755)
         return fake_bin
 
+    def install_fake_gh(self, root: Path) -> Path:
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir(exist_ok=True)
+        gh = fake_bin / "gh"
+        gh.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_GH_CALLS"
+if [ "$1" = "api" ] && [[ "$*" == *"/releases/tags/"* ]]; then
+  printf '%s\\n' "$FAKE_RELEASE_PROBE"
+  exit "$FAKE_RELEASE_RC"
+fi
+if [ "$1" = "api" ] && [[ "$*" == *"/commits/"* ]]; then
+  printf '%s\\n' "$FAKE_TAG_PROBE"
+  exit "$FAKE_TAG_RC"
+fi
+if [ "$1" = "release" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' "$FAKE_VERIFIED_TARGET"
+fi
+""",
+            encoding="utf-8",
+        )
+        gh.chmod(0o755)
+        return fake_bin
+
+    def api_probe(self, status: int, body: str) -> str:
+        return f"HTTP/2.0 {status} Status\nContent-Type: application/json\n\n{body}"
+
     def run_stage_script(
         self,
         workflow_name: str,
@@ -426,6 +456,8 @@ fi
         extensions: str = "skip",
         extension_files: list[str] | None = None,
         extensions_rc: int = 0,
+        platforms: str = "all",
+        upload_to_r2: bool = True,
     ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
         script = self.named_step(
             workflow_name,
@@ -447,6 +479,47 @@ fi
                 "FAKE_EXTENSION_FILES": " ".join(extension_files),
                 "FAKE_EXTENSIONS_RC": str(extensions_rc),
                 "INPUT_EXTENSIONS": extensions,
+                "INPUT_PLATFORMS": platforms,
+                "INPUT_UPLOAD_TO_R2": str(upload_to_r2).lower(),
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            }
+        )
+        return self.run_shell(script, env=env, cwd=workdir), root, env
+
+    def run_finalize_script(
+        self,
+        workflow_name: str,
+        product: str,
+        *,
+        release_probe: str,
+        release_rc: int,
+        tag_probe: str = "",
+        tag_rc: int = 1,
+        verified_target: str = "",
+    ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
+        script = self.named_step(
+            workflow_name,
+            "finalize",
+            "Create or refresh draft GitHub release",
+        )["run"]
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        workdir = root / "packages" / "browseros"
+        workdir.mkdir(parents=True)
+        fake_bin = self.install_fake_uv(root)
+        self.install_fake_gh(root)
+        env = self.workflow_env(root, product)
+        env.update(
+            {
+                "FAKE_APPCAST_FILES": "",
+                "FAKE_EXTENSION_FILES": "",
+                "FAKE_GH_CALLS": str(root / "gh-calls"),
+                "FAKE_RELEASE_PROBE": release_probe,
+                "FAKE_RELEASE_RC": str(release_rc),
+                "FAKE_TAG_PROBE": tag_probe,
+                "FAKE_TAG_RC": str(tag_rc),
+                "FAKE_VERIFIED_TARGET": verified_target,
                 "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
             }
         )
@@ -575,7 +648,103 @@ fi
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("should_stage=false", gate)
-            self.assertIn("no update feeds", gate)
+            self.assertIn("no browser appcast or extension feed", gate)
+
+    def test_linux_extension_only_staging_ignores_browser_r2_switch(self):
+        extension_files = [
+            "update-manifest.alpha.xml",
+            "extensions.alpha.json",
+            "bundled-manifest.xml",
+        ]
+        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
+            gate_script = self.named_step(
+                workflow_name,
+                "stage_updates",
+                "Evaluate staged feed gate",
+            )["run"]
+            with self.subTest(workflow=workflow_name), tempfile.TemporaryDirectory() as tmp:
+                gate_root = Path(tmp)
+                gate_output = gate_root / "output"
+                gate_env = {
+                    **self.workflow_env(gate_root, product),
+                    "GITHUB_OUTPUT": str(gate_output),
+                    "INPUT_PLATFORMS": "linux",
+                    "INPUT_EXTENSIONS": "alpha",
+                    "INPUT_INCLUDE_SERVERS": "false",
+                    "INPUT_UPLOAD_TO_R2": "false",
+                    "PREFLIGHT_RESULT": "success",
+                    "ONBOARD_RESULT": "skipped",
+                    "SERVER_RESULT": "skipped",
+                    "LINUX_RESULT": "success",
+                    "WINDOWS_RESULT": "skipped",
+                    "MACOS_RESULT": "skipped",
+                    "EXTENSIONS_RESULT": "success",
+                }
+                gate_result = self.run_shell(
+                    gate_script,
+                    env=gate_env,
+                    cwd=gate_root,
+                )
+                gate = gate_output.read_text(encoding="utf-8")
+
+            self.assertEqual(gate_result.returncode, 0, gate_result.stderr)
+            self.assertIn("should_stage=true", gate)
+
+            result, root, env = self.run_stage_script(
+                workflow_name,
+                product,
+                [],
+                extensions="alpha",
+                extension_files=extension_files,
+                platforms="linux",
+                upload_to_r2=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+            staged = sorted(
+                path.name
+                for path in (root / "staged-update-feeds").rglob("*")
+                if path.is_file()
+            )
+            self.assertEqual(staged, sorted(extension_files))
+            calls = Path(env["FAKE_UV_CALLS"]).read_text(encoding="utf-8")
+            self.assertNotIn("release appcast", calls)
+            self.assertIn("release extensions", calls)
+            summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
+            self.assertIn("Browser artifact promotion skipped", summary)
+
+    def test_partial_stage_summary_preserves_promotion_contract(self):
+        for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
+            expected = [f"appcast{infix}-win.xml"]
+            with self.subTest(workflow=workflow_name):
+                result, _, env = self.run_stage_script(
+                    workflow_name,
+                    product,
+                    expected,
+                    platforms="windows",
+                )
+
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+                )
+                summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("--platform win", summary)
+                for token in (
+                    "--platforms windows",
+                    "--macos-arch universal",
+                    f"--source-sha {'a' * 40}",
+                    "--workflow-run-id 30418029456",
+                    "--workflow-run-attempt 2",
+                    "--publish",
+                ):
+                    self.assertIn(token, summary)
 
     def test_literal_finalize_gates_require_successful_staging(self):
         for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
@@ -614,6 +783,124 @@ fi
                     if stage_result == "failure":
                         self.assertIn("staged feed result is failure", gate)
 
+    def test_finalize_release_inspection_and_tag_target_fail_closed(self):
+        sha = "a" * 40
+        other_sha = "b" * 40
+        cases = (
+            (
+                "inspection-error",
+                self.api_probe(500, '{"message":"server error"}'),
+                1,
+                "",
+                1,
+                "Could not inspect release",
+            ),
+            (
+                "published",
+                self.api_probe(
+                    200,
+                    f'{{"draft":false,"target_commitish":"{sha}"}}',
+                ),
+                0,
+                "",
+                1,
+                "not a draft",
+            ),
+            (
+                "tag-mismatch",
+                self.api_probe(
+                    200,
+                    f'{{"draft":true,"target_commitish":"{sha}"}}',
+                ),
+                0,
+                self.api_probe(200, f'{{"sha":"{other_sha}"}}'),
+                0,
+                "not workflow SHA",
+            ),
+        )
+        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
+            for label, release, release_rc, tag, tag_rc, error in cases:
+                with self.subTest(workflow=workflow_name, failure=label):
+                    result, root, _ = self.run_finalize_script(
+                        workflow_name,
+                        product,
+                        release_probe=release,
+                        release_rc=release_rc,
+                        tag_probe=tag,
+                        tag_rc=tag_rc,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(error, result.stdout + result.stderr)
+                    self.assertFalse((root / "uv-calls").exists())
+
+    def test_finalize_accepts_verified_absence_or_matching_draft_target(self):
+        sha = "a" * 40
+        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
+            cases = (
+                (
+                    "absent",
+                    self.api_probe(404, '{"message":"Not Found"}'),
+                    1,
+                    "",
+                    1,
+                ),
+                (
+                    "matching-draft",
+                    self.api_probe(
+                        200,
+                        f'{{"draft":true,"target_commitish":"{sha}"}}',
+                    ),
+                    0,
+                    self.api_probe(200, f'{{"sha":"{sha}"}}'),
+                    0,
+                ),
+                (
+                    "untagged-draft-retarget",
+                    self.api_probe(
+                        200,
+                        '{"draft":true,"target_commitish":"old"}',
+                    ),
+                    0,
+                    self.api_probe(404, '{"message":"Not Found"}'),
+                    1,
+                ),
+            )
+            for label, release, release_rc, tag, tag_rc in cases:
+                with self.subTest(workflow=workflow_name, state=label):
+                    result, root, env = self.run_finalize_script(
+                        workflow_name,
+                        product,
+                        release_probe=release,
+                        release_rc=release_rc,
+                        tag_probe=tag,
+                        tag_rc=tag_rc,
+                        verified_target=sha,
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+                    )
+                    uv_calls = Path(env["FAKE_UV_CALLS"]).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertIn("release github create", uv_calls)
+                    gh_calls = (root / "gh-calls").read_text(encoding="utf-8")
+                    expected_tag = (
+                        "browserclaw%2Fv0.49.0"
+                        if product == "browserclaw"
+                        else "v0.49.0"
+                    )
+                    self.assertIn(f"/releases/tags/{expected_tag}", gh_calls)
+                    if label == "untagged-draft-retarget":
+                        self.assertIn(
+                            f"release edit {expected_tag.replace('%2F', '/')} "
+                            f"--target {sha}",
+                            gh_calls,
+                        )
+
     def test_release_workflows_pin_source_and_draft_to_workflow_sha(self):
         reusable = (WORKFLOW_DIR / "build-browseros.yml").read_text(
             encoding="utf-8"
@@ -624,8 +911,14 @@ fi
             workflow = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
             self.assertNotIn("github.ref_name", workflow)
             self.assertNotIn("ref: ${{ github.ref }}", workflow)
-            self.assertIn('gh release edit "$tag" --target "$GITHUB_SHA"', workflow)
+            self.assertIn('actual_target" != "$GITHUB_SHA"', workflow)
+            self.assertIn('release_status" = "404"', workflow)
             self.assertIn('--target "$GITHUB_SHA"', workflow)
+
+        browserclaw = (WORKFLOW_DIR / "release-browserclaw.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('echo "browserclaw/v$major.$minor.$build"', browserclaw)
 
     def test_top_level_release_changes_trigger_build_system_tests(self):
         workflow = self.load_workflow("bos-build-tests.yml")

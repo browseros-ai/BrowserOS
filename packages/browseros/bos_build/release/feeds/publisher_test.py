@@ -244,6 +244,75 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
 
+    def test_duplicate_channel_with_populated_item_is_not_an_empty_shell(self):
+        populated_channel = _mac_appcast().split("<channel>", 1)[1].split(
+            "</channel>", 1
+        )[0]
+        live = _empty_mac_appcast().replace(
+            "</rss>",
+            f"  <channel>{populated_channel}</channel>\n</rss>",
+        )
+        publisher = self._publisher({"appcast.xml": live.encode()})
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast("10000.0.48.0.0"),
+            publish=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_item_outside_the_single_channel_is_not_an_empty_shell(self):
+        live = _empty_mac_appcast().replace(
+            "</rss>",
+            "<item><title>meaningful old release</title></item>\n</rss>",
+        )
+        publisher = self._publisher({"appcast.xml": live.encode()})
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast("10000.0.48.0.0"),
+            publish=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_malformed_live_appcast_version_fails_closed(self):
+        for live_version in ("garbage", "10000.0.beta"):
+            with self.subTest(live_version=live_version):
+                live = _mac_appcast().replace(
+                    "10000.0.47.0.2",
+                    live_version,
+                )
+                publisher = self._publisher({"appcast.xml": live.encode()})
+
+                ok = publisher.publish(
+                    feed_by_key("appcast.xml"),
+                    _mac_appcast("10000.0.48.0.0"),
+                    publish=True,
+                )
+
+                self.assertFalse(ok)
+                self.assertEqual(self.client.calls, [])
+
+    def test_populated_wrong_channel_live_appcast_fails_closed(self):
+        live = _mac_appcast("10000.0.46.0.0").replace(
+            "<title>BrowserOS</title>",
+            "<title>BrowserClaw</title>",
+        )
+        publisher = self._publisher({"appcast.xml": live.encode()})
+
+        ok = publisher.publish(
+            feed_by_key("appcast.xml"),
+            _mac_appcast(),
+            publish=True,
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
     def test_downgrade_refused_without_flag(self):
         publisher = self._publisher(
             {"appcast.xml": _mac_appcast("10000.0.48.0.0").encode()}
@@ -490,7 +559,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
 
-    def test_unparseable_live_replaced_with_flag_after_backup(self):
+    def test_unparseable_live_remains_blocked_with_override(self):
         publisher = self._publisher({"appcast.xml": b"garbage <not xml"})
 
         ok = publisher.publish(
@@ -500,9 +569,8 @@ class PublisherTestCase(unittest.TestCase):
             allow_downgrade=True,
         )
 
-        self.assertTrue(ok)
-        self.assertEqual(self.client.calls[0][0], "copy")
-        self.assertEqual(self.client.calls[1][0], "put")
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
 
     def test_extensions_json_for_wrong_channel_refused(self):
         publisher = self._publisher()

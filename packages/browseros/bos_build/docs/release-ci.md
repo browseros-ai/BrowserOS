@@ -225,9 +225,13 @@ uv run browseros release github create --version <version> --draft --product bro
 uv run browseros release github create --version <version> --draft --product browserclaw
 ```
 
-If the target GitHub release already exists and is published, the workflow
-refuses to modify it. If it is still a draft, matching product assets are
-removed first so reruns refresh the draft from current R2 artifacts.
+BrowserOS owns the `vX.Y.Z` release namespace; BrowserClaw owns
+`browserclaw/vX.Y.Z`, so same-version releases cannot share notes or assets.
+If the target release already exists and is published, or its existing Git tag
+does not resolve to the workflow SHA, the workflow refuses to modify it.
+Verified same-target drafts are refreshed by replacing their complete asset
+set, updating title and notes, and checking that the final assets exactly match
+the selected current-run R2 metadata.
 
 ## Staged Update Feed Artifacts
 

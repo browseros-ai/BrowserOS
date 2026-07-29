@@ -373,10 +373,6 @@ jobs:
           should_stage=true
           reasons=()
 
-          if [ "$INPUT_UPLOAD_TO_R2" != "true" ]; then
-            should_stage=false
-            reasons+=("upload_to_r2=false, so there are no browser R2 release objects to render against")
-          fi
           if [ -z "${VERSION:-}" ]; then
             should_stage=false
             reasons+=("release version was not resolved")
@@ -400,9 +396,9 @@ jobs:
             should_stage=false
             reasons+=("extension result is $EXTENSIONS_RESULT")
           fi
-          if [ "$INPUT_PLATFORMS" = "linux" ] && [ "$INPUT_EXTENSIONS" = "skip" ]; then
+          if [ "$INPUT_EXTENSIONS" = "skip" ] && { [ "$INPUT_PLATFORMS" = "linux" ] || [ "$INPUT_UPLOAD_TO_R2" != "true" ]; }; then
             should_stage=false
-            reasons+=("no update feeds are selected for a Linux-only release with extensions skipped")
+            reasons+=("no browser appcast or extension feed is selected")
           fi
 
           reason="ready"
@@ -456,19 +452,21 @@ jobs:
           mkdir -p "$artifact_root" "$appcast_dir" "$extensions_dir"
 
           appcast_targets=()
-          if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "macos" ]; then
-            case "$INPUT_MACOS_ARCH" in
-              arm64) appcast_targets+=(appcast.xml) ;;
-              x64) appcast_targets+=(appcast-x86_64.xml) ;;
-              universal) appcast_targets+=(appcast.xml appcast-x86_64.xml) ;;
-              *)
-                echo "::error::Unsupported macOS architecture: $INPUT_MACOS_ARCH"
-                exit 1
-                ;;
-            esac
-          fi
-          if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "windows" ]; then
-            appcast_targets+=(appcast-win.xml)
+          if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
+            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "macos" ]; then
+              case "$INPUT_MACOS_ARCH" in
+                arm64) appcast_targets+=(appcast.xml) ;;
+                x64) appcast_targets+=(appcast-x86_64.xml) ;;
+                universal) appcast_targets+=(appcast.xml appcast-x86_64.xml) ;;
+                *)
+                  echo "::error::Unsupported macOS architecture: $INPUT_MACOS_ARCH"
+                  exit 1
+                  ;;
+              esac
+            fi
+            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "windows" ]; then
+              appcast_targets+=(appcast-win.xml)
+            fi
           fi
           extension_targets=()
           if [ "$INPUT_EXTENSIONS" != "skip" ]; then
@@ -584,6 +582,13 @@ jobs:
             fi
           fi
 
+          publish_platform_args=()
+          case "$INPUT_PLATFORMS" in
+            all) publish_platform_args=(--platform linux --platform win --platform macos) ;;
+            windows) publish_platform_args=(--platform win) ;;
+            linux|macos) publish_platform_args=(--platform "$INPUT_PLATFORMS") ;;
+          esac
+
           {
             echo "has_files=$([ "${#staged_files[@]}" -gt 0 ] && echo true || echo false)"
             echo "files<<EOF"
@@ -635,11 +640,17 @@ jobs:
             echo
             echo '```bash'
             echo "cd packages/browseros"
-            echo "uv run browseros release publish --version $VERSION --product $PRODUCT"
-            if [ "$appcast_rc" -eq 0 ]; then
-              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --publish"
+            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
+              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]}"
             else
-              echo "# Appcast publish blocked: resolve the staging warning and rerun the preview before publishing."
+              echo "# Browser artifact promotion skipped: upload_to_r2=false."
+            fi
+            if [ "$appcast_rc" -eq 0 ] && [ "${#appcast_targets[@]}" -gt 0 ]; then
+              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --platforms $INPUT_PLATFORMS --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT --publish"
+            elif [ "${#appcast_targets[@]}" -gt 0 ]; then
+              echo "# Appcast publish blocked: resolve the staging error and rerun the preview before publishing."
+            else
+              echo "# Browser appcast publish skipped: no macOS or Windows appcast was selected."
             fi
             if [ "$INPUT_EXTENSIONS" != "skip" ]; then
               if [ "$extensions_rc" -eq 0 ]; then
@@ -892,22 +903,52 @@ jobs:
           }
 
           tag="$(normalize_tag "$VERSION")"
-          if release_json="$(gh release view "$tag" --json isDraft,assets,targetCommitish --jq '{isDraft, targetCommitish, assets: [.assets[].name]}' 2>/dev/null)"; then
-            is_draft="$(jq -r '.isDraft' <<< "$release_json")"
+          tag_uri="$(jq -rn --arg value "$tag" '$value | @uri')"
+          set +e
+          release_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri" 2>&1)"
+          release_probe_rc=$?
+          set -e
+          release_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$release_probe")"
+
+          if [ "$release_status" = "200" ] && [ "$release_probe_rc" -eq 0 ]; then
+            release_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$release_probe")"
+            is_draft="$(jq -r '.draft' <<< "$release_json")"
             if [ "$is_draft" != "true" ]; then
               echo "::error::GitHub release $tag already exists and is not a draft; refusing to modify live release assets."
               exit 1
             fi
-            gh release edit "$tag" --target "$GITHUB_SHA"
 
-            mapfile -t assets < <(
-              jq -r --arg prefix "BrowserOS_v${VERSION}_" \
-                '.assets[] | select(startswith($prefix))' <<< "$release_json"
-            )
-            for asset in "${assets[@]}"; do
-              echo "Deleting stale draft asset $asset from $tag"
-              gh release delete-asset "$tag" "$asset" --yes
-            done
+            set +e
+            tag_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/commits/$tag_uri" 2>&1)"
+            tag_probe_rc=$?
+            set -e
+            tag_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$tag_probe")"
+            if [ "$tag_status" = "200" ] && [ "$tag_probe_rc" -eq 0 ]; then
+              tag_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$tag_probe")"
+              actual_target="$(jq -r '.sha' <<< "$tag_json")"
+              if [ "$actual_target" != "$GITHUB_SHA" ]; then
+                echo "::error::Draft release $tag resolves to $actual_target, not workflow SHA $GITHUB_SHA. Delete/recreate the draft tag or dispatch a new version."
+                exit 1
+              fi
+            elif [ "$tag_status" = "404" ]; then
+              target_commitish="$(jq -r '.target_commitish // ""' <<< "$release_json")"
+              if [ "$target_commitish" != "$GITHUB_SHA" ]; then
+                gh release edit "$tag" --target "$GITHUB_SHA"
+                verified_target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
+                if [ "$verified_target" != "$GITHUB_SHA" ]; then
+                  echo "::error::Draft release $tag target remained $verified_target instead of $GITHUB_SHA."
+                  exit 1
+                fi
+              fi
+            else
+              echo "::error::Could not resolve existing draft tag $tag (HTTP ${tag_status:-unknown}, gh rc=$tag_probe_rc)."
+              exit 1
+            fi
+          elif [ "$release_status" = "404" ]; then
+            :
+          else
+            echo "::error::Could not inspect release $tag (HTTP ${release_status:-unknown}, gh rc=$release_probe_rc); refusing to assume it is absent."
+            exit 1
           fi
 
           uv run browseros release github create \
