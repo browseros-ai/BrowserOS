@@ -100,6 +100,27 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Configure Git for depot_tools
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+
+          git_config="$RUNNER_TEMP/browseros-global.gitconfig"
+          export GIT_CONFIG_GLOBAL="$git_config"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$git_config" >> "$GITHUB_ENV"
+
+          git config --global --replace-all core.autocrlf false
+          git config --global --replace-all core.filemode false
+          git config --global --replace-all core.fscache true
+          git config --global --replace-all core.preloadindex true
+          git config --global --replace-all depot-tools.allowGlobalGitConfig true
+
+          test "$(git config --global --get core.autocrlf)" = false
+          test "$(git config --global --get core.filemode)" = false
+          test "$(git config --global --get core.fscache)" = true
+          test "$(git config --global --get core.preloadindex)" = true
+          test "$(git config --global --get depot-tools.allowGlobalGitConfig)" = true
+
       # v8.x.y releases exist but astral-sh publishes no floating `v8`
       # major tag - `@v8` is unresolvable and kills the job in Set up job.
       - uses: astral-sh/setup-uv@v8.3.2
