@@ -170,6 +170,18 @@ class WarpBuildRunbookTest(unittest.TestCase):
             / "warpbuild-ci.md"
         )
         cls.runbook = runbook_path.read_text(encoding="utf-8")
+        paragraphs = [
+            " ".join(paragraph.split())
+            for paragraph in cls.runbook.split("\n\n")
+        ]
+        cls.windows_generation_guidance = next(
+            paragraph
+            for paragraph in paragraphs
+            if paragraph.startswith(
+                "WarpBuild's Windows Server 2025 image is "
+                "Hypervisor Generation 1"
+            )
+        )
         troubleshooting = cls.runbook.split(
             "## Troubleshooting: jobs stuck in `queued`",
             maxsplit=1,
@@ -195,20 +207,24 @@ class WarpBuildRunbookTest(unittest.TestCase):
     def test_windows_image_generation_constraint_is_documented(self):
         self.assertIn(
             "WarpBuild's Windows Server 2025 image is Hypervisor Generation 1",
-            self.runbook,
+            self.windows_generation_guidance,
         )
         self.assertRegex(
-            self.runbook,
+            self.windows_generation_guidance,
             r"`Standard_D32as_v5` supports both Generation 1\s+and 2",
         )
-        self.assertIn("Dalsv7 is Generation 2-only", self.runbook)
+        self.assertIn(
+            "Dalsv7 is Generation 2-only",
+            self.windows_generation_guidance,
+        )
 
     def test_windows_capacity_history_is_distinct_from_compatibility(self):
-        self.assertIn(
-            "`Standard_D32ls_v5` is Gen1-compatible",
-            self.runbook,
+        self.assertRegex(
+            self.windows_generation_guidance,
+            r"`Standard_D32ls_v5` is Gen1-compatible [^.]* "
+            r"East US returned HTTP 409 `SkuNotAvailable`; [^.]* "
+            r"regional-capacity failure, not an image-generation mismatch",
         )
-        self.assertIn("East US returned HTTP 409 `SkuNotAvailable`", self.runbook)
 
     def test_troubleshooting_calls_out_stack_launch_errors(self):
         self.assertIn("BYOC stack's launch errors", self.troubleshooting)
