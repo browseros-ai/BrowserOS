@@ -22,6 +22,24 @@ EXPECTED_GIT_CONFIG = {
 }
 
 
+def git_bash_path() -> str:
+    """Return Git for Windows' Bash instead of the unrelated WSL stub."""
+    if os.name != "nt":
+        return "bash"
+
+    result = subprocess.run(
+        ["git", "--exec-path"],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    git_install_root = Path(result.stdout.strip()).parents[2]
+    git_bash = git_install_root / "bin" / "bash.exe"
+    if not git_bash.is_file():
+        raise AssertionError(f"Git Bash not found at {git_bash}")
+    return str(git_bash)
+
+
 class ChromiumBuildWorkflowTest(unittest.TestCase):
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         workflow_path = WORKFLOW_DIR / workflow_name
@@ -125,7 +143,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             )
 
             subprocess.run(
-                ["bash", "-c", script],
+                [git_bash_path(), "-c", script],
                 check=True,
                 env=env,
             )
@@ -158,7 +176,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 )
 
             subprocess.run(
-                ["bash", "-c", script],
+                [git_bash_path(), "-c", script],
                 check=True,
                 env=env,
             )
@@ -206,7 +224,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 }
             )
             subprocess.run(
-                ["bash", "-c", script],
+                [git_bash_path(), "-c", script],
                 check=True,
                 env=bash_env,
             )
