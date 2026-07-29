@@ -18,6 +18,7 @@ from .common import (
     generate_release_notes,
     get_repo_from_git,
     check_gh_cli,
+    validate_release_metadata,
 )
 
 
@@ -27,6 +28,7 @@ def create_github_release(
     title: str,
     notes: str,
     draft: bool = True,
+    target: str = "",
 ) -> Tuple[bool, str]:
     """Create GitHub release via gh CLI"""
     cmd = [
@@ -43,6 +45,8 @@ def create_github_release(
     ]
     if draft:
         cmd.append("--draft")
+    if target:
+        cmd.extend(["--target", target])
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -57,7 +61,7 @@ def download_file(url: str, dest: Path) -> bool:
     """Download file from URL using curl"""
     try:
         subprocess.run(
-            ["curl", "-L", "-o", str(dest), url],
+            ["curl", "--fail", "--show-error", "-L", "-o", str(dest), url],
             check=True,
             capture_output=True,
         )
@@ -140,10 +144,22 @@ class GithubModule(Step):
         draft: bool = True,
         skip_upload: bool = False,
         title: Optional[str] = None,
+        platforms: Optional[str] = None,
+        macos_arch: str = "universal",
+        source_sha: str = "",
+        workflow_run_id: str = "",
+        workflow_run_attempt: str = "",
+        target: str = "",
     ):
         self.draft = draft
         self.skip_upload = skip_upload
         self.title = title
+        self.platforms = platforms
+        self.macos_arch = macos_arch
+        self.source_sha = source_sha
+        self.workflow_run_id = workflow_run_id
+        self.workflow_run_attempt = workflow_run_attempt
+        self.target = target
 
     def validate(self, ctx: Context) -> None:
         if not BOTO3_AVAILABLE:
@@ -178,8 +194,18 @@ class GithubModule(Step):
 
         metadata = fetch_all_release_metadata(version, ctx.env, ctx.product.id)
         if not metadata:
-            log_error(f"No release metadata found for version {version}")
-            return
+            raise RuntimeError(f"No release metadata found for version {version}")
+        if self.platforms is not None:
+            metadata = validate_release_metadata(
+                metadata,
+                version=version,
+                product_id=ctx.product.id,
+                platforms=self.platforms,
+                macos_arch=self.macos_arch,
+                source_sha=self.source_sha,
+                workflow_run_id=self.workflow_run_id,
+                workflow_run_attempt=self.workflow_run_attempt,
+            )
 
         log_info(f"\n{'='*60}")
         log_info(f"Creating GitHub Release: v{tag_version}")
@@ -194,10 +220,17 @@ class GithubModule(Step):
 
         # Create release
         release_title = self.title or f"v{tag_version}"
-        notes = generate_release_notes(tag_version, metadata)
+        notes = generate_release_notes(tag_version, metadata, ctx.product)
 
         log_info("\nCreating GitHub release...")
-        success, result = create_github_release(tag_version, repo, release_title, notes, self.draft)
+        success, result = create_github_release(
+            tag_version,
+            repo,
+            release_title,
+            notes,
+            self.draft,
+            self.target,
+        )
 
         if success:
             log_success(f"Release created: {result}")
@@ -205,17 +238,23 @@ class GithubModule(Step):
             if "already exists" in result:
                 log_warning(result)
             else:
-                log_error(f"Failed to create release: {result}")
-                return
+                raise RuntimeError(f"Failed to create release: {result}")
 
         # Upload artifacts
         if not self.skip_upload:
             log_info("\nUploading artifacts to GitHub release...")
-            results = download_and_upload_artifacts(tag_version, repo, metadata)
+            results = download_and_upload_artifacts(
+                tag_version,
+                repo,
+                metadata,
+                platforms=list(metadata),
+            )
 
+            if not results:
+                raise RuntimeError("No release artifacts found to upload")
             failed = [f for f, ok in results if not ok]
             if failed:
-                log_warning(f"Failed to upload: {', '.join(failed)}")
+                raise RuntimeError(f"Failed to upload: {', '.join(failed)}")
 
         # Print appcast snippet
         if "macos" in metadata:

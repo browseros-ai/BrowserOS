@@ -4,10 +4,11 @@
 import unittest
 from types import SimpleNamespace
 from typing import cast
+from unittest import mock
 
 from ..core.context import Context
 from ..core.products import get_product_descriptor
-from .publish import _release_source_key
+from .publish import PublishModule, _release_source_key
 
 
 class ReleaseSourceKeyTest(unittest.TestCase):
@@ -52,6 +53,63 @@ class ReleaseSourceKeyTest(unittest.TestCase):
                 product=get_product_descriptor(product),
             ),
         )
+
+
+class PublishModuleIntegrityTest(unittest.TestCase):
+    def test_missing_r2_client_raises(self):
+        module = PublishModule(platforms=["win"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(),
+            product=get_product_descriptor("browserclaw"),
+        )
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value={"win": {"artifacts": {}}},
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=None,
+            ),
+            self.assertRaisesRegex(RuntimeError, "R2 client"),
+        ):
+            module.execute(ctx)
+
+    def test_zero_mapped_artifacts_raises(self):
+        module = PublishModule(platforms=["win"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_bucket="bucket",
+                r2_cdn_base_url="https://cdn.browseros.com",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+        metadata = {
+            "win": {
+                "artifacts": {
+                    "unknown": {
+                        "filename": "unknown.bin",
+                        "url": "https://cdn.browseros.com/unknown.bin",
+                    }
+                }
+            }
+        }
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value=metadata,
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=object(),
+            ),
+            self.assertRaisesRegex(RuntimeError, "No promotable artifacts"),
+        ):
+            module.execute(ctx)
 
 
 if __name__ == "__main__":

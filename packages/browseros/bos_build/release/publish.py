@@ -55,6 +55,12 @@ class PublishModule(Step):
 
         if not ctx.release_version:
             raise ValidationError("--version is required")
+        invalid = sorted(set(self.platforms) - set(PLATFORMS))
+        if invalid:
+            raise ValidationError(
+                f"Unknown platform(s): {', '.join(invalid)}. "
+                f"Valid: {', '.join(PLATFORMS)}"
+            )
 
     def execute(self, ctx: Context) -> None:
         version = ctx.release_version
@@ -62,8 +68,15 @@ class PublishModule(Step):
 
         metadata = fetch_all_release_metadata(version, env, ctx.product.id)
         if not metadata:
-            log_error(f"No release metadata found for version {version}")
-            return
+            raise RuntimeError(f"No release metadata found for version {version}")
+        missing_platforms = [
+            platform for platform in self.platforms if platform not in metadata
+        ]
+        if missing_platforms:
+            raise RuntimeError(
+                "Missing release metadata for requested platform(s): "
+                f"{', '.join(missing_platforms)}"
+            )
 
         log_info(f"\n{'='*60}")
         log_info(f"Publishing v{version} to download/ paths")
@@ -71,8 +84,7 @@ class PublishModule(Step):
 
         client = get_r2_client(env)
         if not client:
-            log_error("Failed to create R2 client")
-            return
+            raise RuntimeError("Failed to create R2 client")
 
         results: List[Tuple[str, str, bool]] = []
 
@@ -106,13 +118,16 @@ class PublishModule(Step):
         succeeded = sum(1 for _, _, ok in results if ok)
         failed = sum(1 for _, _, ok in results if not ok)
 
-        if failed == 0:
-            log_success(f"Published {succeeded} artifact(s) to download/ paths")
-        else:
-            log_warning(f"Published {succeeded}/{succeeded + failed} artifact(s)")
+        if not results:
+            raise RuntimeError("No promotable artifacts found in release metadata")
+        if failed:
             for filename, dest, ok in results:
                 if not ok:
                     log_error(f"  Failed: {filename} → {dest}")
+            raise RuntimeError(
+                f"Failed to publish {failed}/{succeeded + failed} artifact(s)"
+            )
+        log_success(f"Published {succeeded} artifact(s) to download/ paths")
 
 
 def _release_source_key(

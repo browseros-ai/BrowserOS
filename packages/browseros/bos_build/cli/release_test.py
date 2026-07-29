@@ -2,13 +2,17 @@
 """CLI surface tests for the release subcommands."""
 
 import re
+import os
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 from typer.testing import CliRunner
 
 from bos_build.browseros import app
 from bos_build.cli import release as release_cli
+from bos_build.release import github as github_module
+from bos_build.release import publish as publish_module
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -136,6 +140,230 @@ class CreateReleaseContextTest(unittest.TestCase):
         ctx = release_cli.create_release_context("1.0.0")
 
         self.assertEqual(ctx.product.id, "browseros")
+
+
+def _configured_r2_env():
+    return mock.patch.dict(
+        os.environ,
+        {
+            "R2_ACCOUNT_ID": "account",
+            "R2_ACCESS_KEY_ID": "key",
+            "R2_SECRET_ACCESS_KEY": "secret",
+            "R2_BUCKET": "bucket",
+        },
+        clear=False,
+    )
+
+
+def _github_metadata(product: str = "browserclaw"):
+    prefix = "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+    filename = f"{prefix}_v0.49.0_x64_installer.exe"
+    return {
+        "win": {
+            "product": product,
+            "version": "0.49.0",
+            "platform": "win",
+            "chromium_version": "140.0.0.0",
+            "artifacts": {
+                "x64_installer": {
+                    "filename": filename,
+                    "url": f"https://cdn.browseros.com/{filename}",
+                },
+            },
+        }
+    }
+
+
+class GithubCreateCliIntegrityTest(unittest.TestCase):
+    def invoke_create(self, *extra: str):
+        return invoke(
+            "github",
+            "create",
+            "--version",
+            "0.49.0",
+            "--product",
+            "browserclaw",
+            "--repo",
+            "browseros-ai/BrowserOS",
+            *extra,
+        )
+
+    @contextmanager
+    def patches(self, metadata=None):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(github_module, "BOTO3_AVAILABLE", True),
+            mock.patch.object(github_module, "check_gh_cli", return_value=True),
+            mock.patch.object(
+                github_module,
+                "fetch_all_release_metadata",
+                return_value=_github_metadata() if metadata is None else metadata,
+            ),
+        ):
+            yield
+
+    def test_create_failure_makes_actual_cli_exit_nonzero(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "GitHub API unavailable"),
+            ),
+        ):
+            result = self.invoke_create()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("GitHub API unavailable", plain_output(result))
+
+    def test_missing_metadata_makes_actual_cli_exit_nonzero(self):
+        with self.patches(metadata={}):
+            result = self.invoke_create()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("No release metadata", plain_output(result))
+
+    def test_failed_asset_transfer_makes_actual_cli_exit_nonzero(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(True, "https://github.com/release"),
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[("BrowserClaw_installer.exe", False)],
+            ),
+        ):
+            result = self.invoke_create()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("BrowserClaw_installer.exe", plain_output(result))
+
+    def test_zero_asset_candidates_makes_actual_cli_exit_nonzero(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(True, "https://github.com/release"),
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[],
+            ),
+        ):
+            result = self.invoke_create()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("No release artifacts", plain_output(result))
+
+    def test_success_pins_target_and_uses_product_notes(self):
+        target = "a" * 40
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(True, "https://github.com/release"),
+            ) as create,
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[("BrowserClaw_installer.exe", True)],
+            ),
+        ):
+            result = self.invoke_create("--target", target)
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        args = create.call_args.args
+        self.assertIn("## BrowserClaw v0.49.0", args[3])
+        self.assertEqual(args[5], target)
+
+    def test_existing_release_remains_refreshable_when_uploads_succeed(self):
+        with (
+            self.patches(),
+            mock.patch.object(
+                github_module,
+                "create_github_release",
+                return_value=(False, "Release v0.49.0 already exists"),
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[("BrowserClaw_installer.exe", True)],
+            ),
+        ):
+            result = self.invoke_create()
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+
+
+class PublishCliIntegrityTest(unittest.TestCase):
+    def invoke_publish(self, *extra: str):
+        return invoke(
+            "publish",
+            "--version",
+            "0.49.0",
+            "--product",
+            "browserclaw",
+            *extra,
+        )
+
+    @contextmanager
+    def patches(self, metadata):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(publish_module, "BOTO3_AVAILABLE", True),
+            mock.patch.object(
+                publish_module,
+                "fetch_all_release_metadata",
+                return_value=metadata,
+            ),
+        ):
+            yield
+
+    def test_missing_requested_platform_makes_actual_cli_exit_nonzero(self):
+        with (
+            self.patches(_github_metadata()),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+        ):
+            result = self.invoke_publish()
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("missing release metadata", plain_output(result).lower())
+
+    def test_copy_failure_makes_actual_cli_exit_nonzero(self):
+        with (
+            self.patches(_github_metadata()),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module,
+                "copy_to_download_path",
+                return_value=False,
+            ),
+        ):
+            result = self.invoke_publish("--platform", "win")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Failed to publish", plain_output(result))
+
+    def test_explicit_partial_platform_can_succeed(self):
+        with (
+            self.patches(_github_metadata()),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module,
+                "copy_to_download_path",
+                return_value=True,
+            ),
+        ):
+            result = self.invoke_publish("--platform", "win")
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
 
 
 if __name__ == "__main__":
