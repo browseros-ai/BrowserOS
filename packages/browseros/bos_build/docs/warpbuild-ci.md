@@ -19,7 +19,7 @@ nightly lanes use the repo-scoped Mac Mini runner instead; see
 | Platform | Label | Image | Compute | Disk |
 | --- | --- | --- | --- | --- |
 | Linux x64 | `warp-custom-browseros-ubuntu-2204-x64-32x` | Ubuntu 22.04 | `Standard_D32alds_v7` | P40, 2048 GB |
-| Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32als_v7` | P30, 1024 GB |
+| Windows x64 | `warp-custom-browseros-windows-2025-x64-32x` | Windows Server 2025 | `Standard_D32ls_v5` | P30, 1024 GB |
 | macOS arm64 | `warp-macos-26-arm64-12x` | macOS 26 | M4 Pro, 12 vCPU / 44 GB | 500 GB |
 
 WarpBuild provisions the Linux and Windows runners in the BrowserOS Azure
@@ -29,6 +29,12 @@ They are ephemeral:
 the VM and build disk are created for a job and discarded afterward. Their
 compute SKUs and disk capacities mirror the source Azure build VMs, but they
 do not clone or retain those VMs' persistent disks.
+
+WarpBuild's Windows Server 2025 image is Hypervisor Generation 1, so its VM
+family must accept a Gen1 image. Dlsv5 supports both Generation 1 and 2, making
+`Standard_D32ls_v5` compatible; Dalsv7 is Generation 2-only, so
+`Standard_D32als_v7` fails during Azure VM creation before a runner can
+register with GitHub.
 
 There is no 32-core macOS tier; 12x is WarpBuild's largest Mac. The macOS
 label is kept in the runner catalog for future reusable `build-browseros.yml`
@@ -219,9 +225,12 @@ Causes, in the order to check:
    label with the two exact custom labels above in
    https://app.warpbuild.com/. An unsupported label queues forever;
    WarpBuild reports no error back to GitHub.
-3. **Azure BYOC stack** — confirm the connection and stack are healthy,
-   then check subscription quota and East US capacity for the configured
-   VM SKU.
+3. **Azure BYOC stack** — confirm the connection and stack are healthy, then
+   open the BYOC stack's launch errors and inspect `LaunchInstances`. An Azure
+   400 that reports an image/VM-size generation mismatch means the image and
+   selected VM family support different Hypervisor Generations; choose a
+   Gen1-compatible size for the current Windows image. Also check subscription
+   quota and East US capacity for the configured VM SKU.
 4. **WarpBuild incident** — check their dashboard.
 
 Mechanics worth knowing:
@@ -235,9 +244,11 @@ Mechanics worth knowing:
   loudly without cancelling while any build is in progress. In that mixed
   case, cancel the run manually once the live builds finish — a still-queued
   job otherwise pins the group for up to 24h with no watcher left.
-- Fixing the root cause does not revive already-queued jobs: WarpBuild
-  provisions on the `workflow_job.queued` webhook, which has already
-  fired. Cancel the stuck run and re-dispatch.
+- Do not rely on a configuration fix to repair the current release.
+  Unsupported labels need a new `workflow_job.queued` webhook; Azure launch
+  failures may be retried while a job is queued, but the lane's watchdog may
+  already have failed. After correcting the configuration, cancel the stuck
+  run and re-dispatch according to the release procedure.
 - A job that IS picked up but dies in "Set up job" within seconds with
   `Unable to resolve action <owner>/<name>@vN` has nothing to do with
   WarpBuild: the floating major tag does not exist upstream (e.g.

@@ -136,5 +136,44 @@ class WatchdogFilterTest(unittest.TestCase):
                 self.assertNotIn("--jq", run)
 
 
+class WarpBuildRunbookTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        runbook_path = (
+            REPO_ROOT
+            / "packages"
+            / "browseros"
+            / "bos_build"
+            / "docs"
+            / "warpbuild-ci.md"
+        )
+        cls.runbook = runbook_path.read_text(encoding="utf-8")
+
+    def test_windows_runner_table_uses_live_sku(self):
+        self.assertIn(
+            "| Windows x64 | "
+            "`warp-custom-browseros-windows-2025-x64-32x` | "
+            "Windows Server 2025 | `Standard_D32ls_v5` | P30, 1024 GB |",
+            self.runbook,
+        )
+        self.assertNotIn(
+            "Windows Server 2025 | `Standard_D32als_v7` |",
+            self.runbook,
+        )
+
+    def test_windows_image_generation_constraint_is_documented(self):
+        self.assertIn(
+            "WarpBuild's Windows Server 2025 image is Hypervisor Generation 1",
+            self.runbook,
+        )
+        self.assertIn("Dlsv5 supports both Generation 1 and 2", self.runbook)
+        self.assertIn("Dalsv7 is Generation 2-only", self.runbook)
+
+    def test_troubleshooting_calls_out_stack_launch_errors(self):
+        self.assertIn("BYOC stack's launch errors", self.runbook)
+        self.assertIn("LaunchInstances", self.runbook)
+        self.assertIn("image/VM-size generation mismatch", self.runbook)
+
+
 if __name__ == "__main__":
     unittest.main()
