@@ -11,10 +11,10 @@
  * analytics never runs on the pages the user browses.
  *
  * posthog-js defaults are aggressively disabled: no autocapture (would
- * read DOM text), no automatic pageviews, no feature-flag polling, and
- * no person profiles. A 20% sample of consenting cockpit sessions may be
- * recorded with inputs masked, task-bearing DOM blocked, and replay URLs
- * replaced by a fixed token. Auto-captured location properties
+ * read DOM text), no automatic pageviews, no feature-flag polling, no
+ * console recording, and no person profiles. A 20% sample of consenting
+ * cockpit sessions may be recorded with inputs masked, task-bearing DOM
+ * blocked, and replay URLs replaced by a fixed token. Auto-captured location properties
  * (`$current_url` etc.) are stripped so even the cockpit's own extension
  * URL never leaves. Identity is the server's anonymous install UUID, set
  * via `bootstrap.distinctID` (no `identify`, no PII).
@@ -73,6 +73,7 @@ export function createPostHogConfig(
     capture_pageleave: false,
     disable_external_dependency_loading: true,
     disable_capture_url_hashes: true,
+    enable_recording_console_log: false,
     // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,

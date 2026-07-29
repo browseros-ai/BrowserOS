@@ -20,6 +20,7 @@ describe('BrowserClaw PostHog privacy', () => {
     expect(config.save_referrer).toBe(false)
     expect(config.disable_capture_url_hashes).toBe(true)
     expect(config.disable_external_dependency_loading).toBe(true)
+    expect(config.enable_recording_console_log).toBe(false)
     expect(config.disable_session_recording).toBe(true)
     expect(config.session_recording).toEqual({
       blockClass: 'ph-no-capture',
