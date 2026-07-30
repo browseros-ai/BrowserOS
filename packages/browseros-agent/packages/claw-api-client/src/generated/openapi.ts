@@ -1003,6 +1003,8 @@ export interface operations {
       query?: {
         /** @description Ignored client cache-busting token for preview URLs. */
         refresh?: number
+        /** @description Capture a specific owned browser tab instead of the session's most recently active tab. Resolves to preview_not_found when the session does not own the requested tab. */
+        browserTabId?: number
       }
       header?: never
       path: {
@@ -1012,7 +1014,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description Fresh viewport JPEG from the session's most recently active currently owned browser tab. */
+      /** @description Fresh viewport JPEG from a session-owned browser tab, either the requested browserTabId or the most recently active owned tab. */
       200: {
         headers: {
           [name: string]: unknown

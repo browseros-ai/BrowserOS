@@ -103,9 +103,16 @@ preview:
           type: integer
           format: int64
           minimum: 0
+      - name: browserTabId
+        in: query
+        required: false
+        description: Capture a specific owned browser tab instead of the session's most recently active tab. Resolves to preview_not_found when the session does not own the requested tab.
+        schema:
+          type: integer
+          format: int64
     responses:
       '200':
-        description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.
+        description: Fresh viewport JPEG from a session-owned browser tab, either the requested browserTabId or the most recently active owned tab.
         content:
           image/jpeg:
             schema:

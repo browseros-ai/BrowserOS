@@ -12,11 +12,19 @@ import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 
 const cancelCalls: Array<{ sessionId: string }> = []
 const focusCalls: Array<{ browserTabId: number }> = []
+const previewCalls: Array<{ sessionId: string; browserTabId?: number }> = []
 const invalidatedQueryKeys: unknown[] = []
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
-  useSessionPreviewUrl: () => null,
+  useSessionPreviewUrl: (
+    sessionId: string,
+    _refresh: number,
+    browserTabId?: number,
+  ) => {
+    previewCalls.push({ sessionId, browserTabId })
+    return null
+  },
 }))
 
 mock.module('@/modules/api/cancel.hooks', () => ({
@@ -103,6 +111,7 @@ let queryClient: QueryClient
 beforeEach(async () => {
   cancelCalls.length = 0
   focusCalls.length = 0
+  previewCalls.length = 0
   invalidatedQueryKeys.length = 0
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -257,5 +266,52 @@ describe('RunningGrid', () => {
       watch.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
     expect(focusCalls).toEqual([{ browserTabId: 42 }])
+  })
+
+  it('previews and watches a tab picked from the switcher, then follows live', async () => {
+    const liveTab = browserTab({ browserTabId: 41 })
+    const otherTab = browserTab({
+      browserTabId: 42,
+      title: 'Other',
+      url: 'https://other.test/x',
+    })
+    await render([
+      session({ selectedTab: liveTab, browserTabs: [liveTab, otherTab] }),
+    ])
+
+    // Default follows the live target: Watch targets tab 41 and the preview is
+    // session scoped (no explicit browserTabId).
+    expect(
+      container.querySelector('[data-watch-browser-tab="41"]'),
+    ).not.toBeNull()
+    expect(previewCalls.at(-1)?.browserTabId).toBeUndefined()
+
+    const pick = container.querySelector('[data-select-browser-tab="42"]')
+    if (!pick) throw new Error('tab 42 switcher row missing')
+    await act(async () => {
+      pick.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+
+    // The card now previews and watches tab 42, flagged as a last frame since
+    // it is not the live target.
+    expect(previewCalls.at(-1)).toMatchObject({ browserTabId: 42 })
+    const card = container.querySelector('[data-session-card="session-live"]')
+    expect(card?.textContent).toContain('Last frame')
+    const watch = container.querySelector('[data-watch-browser-tab="42"]')
+    if (!watch) throw new Error('Watch button for tab 42 missing')
+    await act(async () => {
+      watch.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(focusCalls).toEqual([{ browserTabId: 42 }])
+
+    // Follow live returns the card to the live target.
+    const followLive = card?.querySelector('[data-follow-live="session-live"]')
+    if (!followLive) throw new Error('Follow live control missing')
+    await act(async () => {
+      followLive.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(
+      container.querySelector('[data-watch-browser-tab="41"]'),
+    ).not.toBeNull()
   })
 })

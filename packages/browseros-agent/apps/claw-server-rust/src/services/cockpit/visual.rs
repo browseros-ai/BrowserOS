@@ -79,23 +79,29 @@ impl SessionVisualService {
         })
     }
 
-    pub async fn capture(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
+    pub async fn capture(
+        &self,
+        session_id: &str,
+        preferred_tab_id: Option<i64>,
+    ) -> AppResult<Option<Vec<u8>>> {
         let session_key = SessionId::new(session_id);
         let Some(session) = self.sessions.lookup(&session_key).await else {
             return Ok(None);
         };
-        self.capture_with_session(&session, true).await
+        self.capture_with_session(&session, true, preferred_tab_id)
+            .await
     }
 
     /// Captures through a teardown-owned session lease after live request resolution has stopped.
     pub async fn capture_for_session(&self, session: &Arc<Session>) -> AppResult<Option<Vec<u8>>> {
-        self.capture_with_session(session, false).await
+        self.capture_with_session(session, false, None).await
     }
 
     async fn capture_with_session(
         &self,
         session: &Arc<Session>,
         require_live_at_end: bool,
+        preferred_tab_id: Option<i64>,
     ) -> AppResult<Option<Vec<u8>>> {
         let session_id = session.id().as_str();
         self.session_tabs.drain_writes().await;
@@ -113,7 +119,9 @@ impl SessionVisualService {
             .list_open_session_tabs(&[session_id.to_string()])
             .await?;
         let activity = self.tab_activity.reconcile_pages(&pages).await;
-        let Some(candidate) = select_candidate(session_id, &ownership, &pages, &activity) else {
+        let Some(candidate) =
+            select_candidate(session_id, &ownership, &pages, &activity, preferred_tab_id)
+        else {
             return Ok(None);
         };
         if !self.in_flight.begin(candidate.page_id).await {
@@ -177,6 +185,7 @@ fn select_candidate(
     ownership: &[crate::db::entities::session_tabs::Model],
     pages: &[PageInfo],
     activity: &[TabActivityRecord],
+    preferred_tab_id: Option<i64>,
 ) -> Option<CaptureCandidate> {
     let pages_by_tab = pages
         .iter()
@@ -207,6 +216,14 @@ fn select_candidate(
             })
         })
         .collect::<Vec<_>>();
+    // A requested tab wins over recency, but only among tabs the session still
+    // owns; an unowned or closed tab yields None so the caller returns
+    // preview_not_found rather than silently previewing a different tab.
+    if let Some(preferred_tab_id) = preferred_tab_id {
+        return candidates
+            .into_iter()
+            .find(|candidate| candidate.tab_id == preferred_tab_id);
+    }
     candidates.sort_by(|left, right| {
         right
             .last_activity_at

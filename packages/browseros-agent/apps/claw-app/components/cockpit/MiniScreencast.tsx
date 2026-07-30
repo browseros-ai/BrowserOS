@@ -9,6 +9,8 @@ interface MiniScreencastProps {
   site: string
   sessionId: string
   live?: boolean
+  /** Previews a specific owned tab; omitted follows the session's active tab. */
+  browserTabId?: number
   /** AgentRunningCard overrides the compact default to fill its preview zone. */
   className?: string
 }
@@ -28,8 +30,14 @@ interface DecodedPreviewFrame {
  * can never be shown as another.
  */
 export function MiniScreencast({ sessionId, ...props }: MiniScreencastProps) {
+  // Re-key on the tab too: switching the previewed tab clears the prior
+  // frame immediately so one tab is never briefly shown as another.
   return (
-    <SessionMiniScreencast key={sessionId} sessionId={sessionId} {...props} />
+    <SessionMiniScreencast
+      key={`${sessionId}:${props.browserTabId ?? ''}`}
+      sessionId={sessionId}
+      {...props}
+    />
   )
 }
 
@@ -37,10 +45,11 @@ function SessionMiniScreencast({
   site,
   sessionId,
   live,
+  browserTabId,
   className,
 }: MiniScreencastProps) {
   const [refresh, setRefresh] = useState(Date.now)
-  const incomingSrc = useSessionPreviewUrl(sessionId, refresh)
+  const incomingSrc = useSessionPreviewUrl(sessionId, refresh, browserTabId)
   const [decodedFrame, setDecodedFrame] = useState<DecodedPreviewFrame | null>(
     null,
   )

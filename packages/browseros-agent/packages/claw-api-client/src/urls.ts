@@ -20,11 +20,15 @@ export function buildSessionPreviewUrl(
     '{sessionId}',
     encodeURIComponent(request.sessionId),
   )
-  const refresh =
-    request.refresh === undefined
-      ? ''
-      : `?refresh=${encodeURIComponent(request.refresh.toString())}`
-  return `${withoutTrailingSlash(baseUrl)}${path}${refresh}`
+  const params = new URLSearchParams()
+  if (request.refresh !== undefined) {
+    params.set('refresh', request.refresh.toString())
+  }
+  if (request.browserTabId !== undefined) {
+    params.set('browserTabId', request.browserTabId.toString())
+  }
+  const query = params.toString()
+  return `${withoutTrailingSlash(baseUrl)}${path}${query ? `?${query}` : ''}`
 }
 
 export function buildSessionScreenshotUrl(

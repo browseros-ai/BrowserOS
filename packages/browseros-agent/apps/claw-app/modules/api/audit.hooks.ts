@@ -114,13 +114,18 @@ export function taskScreenshotUrl(
   return buildSessionScreenshotUrl(baseUrl, { sessionId, screenshotId })
 }
 
-/** Absolute URL for a fresh live-session JPEG; `refresh` only busts browser caches. */
+/**
+ * Absolute URL for a fresh live-session JPEG; `refresh` only busts browser
+ * caches. A `browserTabId` previews that specific owned tab instead of the
+ * session's most recently active one.
+ */
 export function sessionPreviewUrl(
   sessionId: string,
   refresh: number,
   baseUrl = apiBaseUrl(),
+  browserTabId?: number,
 ): string {
-  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh })
+  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh, browserTabId })
 }
 
 /**
@@ -150,11 +155,12 @@ export function useTaskScreenshotBaseUrl(): string | null {
 export function useSessionPreviewUrl(
   sessionId: string,
   refresh: number,
+  browserTabId?: number,
 ): string | null {
   const baseUrl = useResolvedApiBaseUrl()
   return baseUrl === null
     ? null
-    : sessionPreviewUrl(sessionId, refresh, baseUrl)
+    : sessionPreviewUrl(sessionId, refresh, baseUrl, browserTabId)
 }
 
 /**

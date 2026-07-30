@@ -1512,6 +1512,67 @@ async fn session_preview_selects_most_recent_owned_tab_deterministically() -> an
 }
 
 #[tokio::test]
+async fn session_preview_targets_a_requested_owned_tab() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let session_id = fixture.primary.id().as_str().to_string();
+
+    // Make tab 102 (page 8) the most recently active so the default selection
+    // would pick it; the requested tab must still win.
+    app.state.tab_activity.set_now_for_testing(300);
+    app.state
+        .tab_activity
+        .record_tool(RecordToolInput {
+            target_id: TargetId::from("target-8".to_string()),
+            tab_id: 102,
+            page_id: 8,
+            session_id: session_id.clone(),
+            agent_id: fixture.primary.convo_id().as_str().to_string(),
+            slug: "codex".to_string(),
+            tool_name: "snapshot".to_string(),
+        })
+        .await;
+
+    // A requested owned tab wins over recency: tab 101 previews page 7.
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions/{session_id}/preview?browserTabId=101"),
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes[2], 7);
+
+    // The other owned tab previews its own page.
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions/{session_id}/preview?browserTabId=102"),
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes[2], 8);
+
+    // A tab the session does not own resolves to preview_not_found.
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions/{session_id}/preview?browserTabId=999"),
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json_body(&bytes)?["code"], "preview_not_found");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn preview_rejects_disconnected_session_after_browser_reconciliation() -> anyhow::Result<()> {
     let app = test_app().await?;
     let fixture = seed_live_fixture(&app).await?;
