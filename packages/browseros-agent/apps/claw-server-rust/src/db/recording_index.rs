@@ -16,8 +16,9 @@ use crate::{
     error::{AppError, AppResult},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, QuerySelect, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait,
+    FromQueryResult, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Statement,
+    TransactionTrait, sea_query::Expr,
 };
 
 #[derive(Clone)]
@@ -182,6 +183,123 @@ impl RecordingIndex {
             .one(self.db.connection())
             .await?
             .map_or(0, |row| row.payload_bytes))
+    }
+
+    /// The un-migrated document with the smallest DB-blob payload (smallest first,
+    /// so extraction relieves the database quickly). Returns (document_id, bytes).
+    pub async fn smallest_unmigrated_document(&self) -> AppResult<Option<(String, i64)>> {
+        let row = self
+            .db
+            .connection()
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT document_id AS document_id, LENGTH(events_ndjson) AS sz \
+                 FROM recording_payloads ORDER BY sz ASC LIMIT 1",
+            ))
+            .await?;
+        match row {
+            Some(row) => Ok(Some((
+                row.try_get::<String>("", "document_id")?,
+                row.try_get::<i64>("", "sz")?,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    /// Number of documents whose payload still lives in the DB blob.
+    pub async fn unmigrated_document_count(&self) -> AppResult<i64> {
+        let row = self
+            .db
+            .connection()
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS n FROM recording_payloads",
+            ))
+            .await?;
+        Ok(row.map_or(0, |row| row.try_get::<i64>("", "n").unwrap_or(0)))
+    }
+
+    /// Sets the committed on-disk length for a document once its blob is written
+    /// to a file.
+    pub async fn set_payload_bytes(&self, document_id: &str, bytes: i64) -> AppResult<()> {
+        RecordingStreams::update_many()
+            .col_expr(recording_streams::Column::PayloadBytes, Expr::value(bytes))
+            .filter(recording_streams::Column::DocumentId.eq(document_id))
+            .exec(self.db.connection())
+            .await?;
+        Ok(())
+    }
+
+    /// Removes the DB-blob payload once it has been written to a file.
+    pub async fn delete_payload_blob(&self, document_id: &str) -> AppResult<()> {
+        RecordingPayloads::delete_by_id(document_id.to_string())
+            .exec(self.db.connection())
+            .await?;
+        Ok(())
+    }
+
+    /// The oldest recording document, used to free space during disk-full recovery.
+    pub async fn oldest_document_id(&self) -> AppResult<Option<String>> {
+        Ok(RecordingStreams::find()
+            .order_by_asc(recording_streams::Column::LastEventAt)
+            .one(self.db.connection())
+            .await?
+            .map(|row| row.document_id))
+    }
+
+    /// Returns freed pages to the OS when the database is in incremental
+    /// auto-vacuum mode; a no-op on a legacy database (which needs a full VACUUM).
+    pub async fn incremental_reclaim(&self) -> AppResult<()> {
+        self.db
+            .connection()
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA incremental_vacuum",
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Seeds a pre-migration document (metadata with `payload_bytes = 0` plus a DB
+    /// blob) to exercise the file migration in tests.
+    #[cfg(test)]
+    pub async fn seed_legacy_payload(
+        &self,
+        document_id: &str,
+        tab_id: i64,
+        events_ndjson: &str,
+        first_event_at: i64,
+        last_event_at: i64,
+        event_count: i64,
+    ) -> AppResult<()> {
+        let conn = self.db.connection();
+        conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO recording_streams (document_id, tab_id, target_id, first_event_at, \
+             last_event_at, size_bytes, event_count, has_gap, payload_bytes) \
+             VALUES (?, ?, NULL, ?, ?, ?, ?, 0, 0)",
+            [
+                document_id.to_string().into(),
+                tab_id.into(),
+                first_event_at.into(),
+                last_event_at.into(),
+                i64::try_from(events_ndjson.len())
+                    .unwrap_or(i64::MAX)
+                    .into(),
+                event_count.into(),
+            ],
+        ))
+        .await?;
+        conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO recording_payloads (document_id, events_ndjson) VALUES (?, ?)",
+            [
+                document_id.to_string().into(),
+                events_ndjson.to_string().into(),
+            ],
+        ))
+        .await?;
+        Ok(())
     }
 
     /// Records a batch's metadata after its events were appended to the document's

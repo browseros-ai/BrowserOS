@@ -53,6 +53,18 @@ pub struct RetentionSweepResult {
     pub claims_deleted: u64,
 }
 
+/// One step of migrating a document's rrweb payload from the SQLite blob to its
+/// on-disk replay file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationStep {
+    /// A document's blob was extracted to its file (with its byte length).
+    Migrated(i64),
+    /// The disk was full; the oldest recording was dropped to recover space.
+    Recovered,
+    /// No un-migrated documents remain.
+    Done,
+}
+
 /// Stores each Chrome document stream (metadata in SQLite, rrweb payload on disk
 /// under `replays_root`) and its durable batch acceptance ledger.
 pub struct RecordingStore {
@@ -323,6 +335,104 @@ impl RecordingStore {
         })
     }
 
+    /// Migrates every remaining DB-blob payload to its file, smallest first, then
+    /// stops. Yields between documents so it never starves live recording traffic.
+    pub fn spawn_payload_migration(self: Arc<Self>, cancel: CancellationToken) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut migrated = 0u64;
+            let mut since_reclaim = 0u64;
+            loop {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                match self.migrate_next_document().await {
+                    Ok(MigrationStep::Done) => {
+                        if migrated > 0 {
+                            let _ = self.index.incremental_reclaim().await;
+                            info!(migrated, "recording payload migration finished");
+                        }
+                        return;
+                    }
+                    Ok(MigrationStep::Migrated(_)) => {
+                        migrated += 1;
+                        since_reclaim += 1;
+                        if since_reclaim >= 64 {
+                            let _ = self.index.incremental_reclaim().await;
+                            since_reclaim = 0;
+                        }
+                    }
+                    Ok(MigrationStep::Recovered) => {
+                        tokio::select! {
+                            () = cancel.cancelled() => return,
+                            () = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        }
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "recording payload migration step failed");
+                        tokio::select! {
+                            () = cancel.cancelled() => return,
+                            () = tokio::time::sleep(Duration::from_secs(30)) => {}
+                        }
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+    }
+
+    /// Extracts one un-migrated document's blob to its replay file (smallest
+    /// first). Falls into disk-full recovery (drop the oldest recording) when a
+    /// write runs out of space, restoring functionality rather than failing.
+    pub async fn migrate_next_document(&self) -> AppResult<MigrationStep> {
+        let Some((document_id, _size)) = self.index.smallest_unmigrated_document().await? else {
+            return Ok(MigrationStep::Done);
+        };
+        match self.migrate_document(&document_id).await {
+            Ok(bytes) => Ok(MigrationStep::Migrated(bytes)),
+            Err(AppError::Io { source, .. }) if is_disk_full(&source) => {
+                self.recover_disk_space().await?;
+                Ok(MigrationStep::Recovered)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn migrate_document(&self, document_id: &str) -> AppResult<i64> {
+        let lock = self.lock_for(document_id).await;
+        let guard = lock.lock().await;
+        let result = async {
+            let Some(payload) = self.index.payload(document_id).await? else {
+                // No blob left (already migrated): drop any stale marker so it is
+                // not reprocessed.
+                self.index.delete_payload_blob(document_id).await?;
+                return Ok(0);
+            };
+            // The blob is the whole payload, so write from a committed length of 0.
+            let bytes = self.append_payload_file(document_id, 0, &payload).await?;
+            self.index.set_payload_bytes(document_id, bytes).await?;
+            self.index.delete_payload_blob(document_id).await?;
+            Ok(bytes)
+        }
+        .await;
+        drop(guard);
+        self.release_lock(document_id, &lock).await;
+        result
+    }
+
+    /// Drops the oldest recording (blob, file, and row) to reclaim space when the
+    /// disk is full, then returns freed pages to the OS where possible.
+    async fn recover_disk_space(&self) -> AppResult<()> {
+        if let Some(document_id) = self.index.oldest_document_id().await? {
+            warn!(
+                document_id,
+                "audit disk full: dropping oldest recording to recover functionality"
+            );
+            self.delete_document(&document_id).await?;
+        }
+        let _ = self.index.incremental_reclaim().await;
+        Ok(())
+    }
+
     pub async fn close(&self) {}
 
     async fn delete_document(&self, document_id: &str) -> AppResult<bool> {
@@ -434,6 +544,12 @@ async fn remove_file(path: &PathBuf, id: &str) -> bool {
             false
         }
     }
+}
+
+/// Whether an IO error is an out-of-disk condition.
+fn is_disk_full(error: &std::io::Error) -> bool {
+    // ENOSPC (28) on unix; ERROR_HANDLE_DISK_FULL (39) / ERROR_DISK_FULL (112) on windows.
+    matches!(error.raw_os_error(), Some(28 | 39 | 112))
 }
 
 #[must_use]
@@ -625,6 +741,61 @@ mod tests {
         assert!(index.stream(orphan).await?.is_none());
         assert!(!index.batch_exists(orphan, "orphan").await?);
         assert!(!index.payload_exists(orphan).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migrates_a_db_blob_to_its_replay_file() -> anyhow::Result<()> {
+        let (_dir, index, store) = setup().await?;
+        let ndjson = "{\"ts\":10}\n{\"ts\":20}\n";
+        index
+            .seed_legacy_payload("doc-legacy", 7, ndjson, 10, 20, 2)
+            .await?;
+        // Before migration the read falls back to the DB blob.
+        assert_eq!(store.read_range("doc-legacy", 0, 100).await?.len(), 2);
+
+        assert!(matches!(
+            store.migrate_next_document().await?,
+            MigrationStep::Migrated(_)
+        ));
+        assert_eq!(index.unmigrated_document_count().await?, 0);
+        assert!(matches!(
+            store.migrate_next_document().await?,
+            MigrationStep::Done
+        ));
+
+        // After migration the same events are served from the file.
+        assert!(store.replay_path_for("doc-legacy").exists());
+        assert_eq!(store.read_range("doc-legacy", 0, 100).await?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncommitted_file_residue_is_truncated_on_next_append() -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt as _;
+        let (_dir, _index, store) = setup().await?;
+        store
+            .append_batch("doc", 3, None, &[event(10)], "batch-a", false)
+            .await?;
+        // Simulate a crash after a file append that never committed its batch:
+        // extra bytes past the committed length.
+        let path = store.replay_path_for("doc");
+        let mut residue = fs::OpenOptions::new().append(true).open(&path).await?;
+        residue.write_all(b"{\"ts\":999}\n").await?;
+        residue.sync_all().await?;
+        drop(residue);
+
+        // The next real append truncates the residue back to the committed length.
+        store
+            .append_batch("doc", 3, None, &[event(20)], "batch-b", false)
+            .await?;
+        let timestamps: Vec<i64> = store
+            .read_range("doc", 0, 1000)
+            .await?
+            .into_iter()
+            .map(|event| event.ts)
+            .collect();
+        assert_eq!(timestamps, vec![10, 20]);
         Ok(())
     }
 }
