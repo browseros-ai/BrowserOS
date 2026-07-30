@@ -22,42 +22,52 @@ import 'rrweb-player/dist/style.css'
 // `.replayer-wrapper` styling.
 import { Replayer } from 'rrweb'
 
-export interface ReplayPlayerHandle {
-  seek(ms: number): void
-  play(ms: number): void
-  pause(): void
-  setSpeed(speed: number): void
-  getCurrentTime(): number
-}
-
 interface ReplayViewportProps {
   site: string
-  /** The frame whose caption is currently displayed in the overlay. */
-  frame: ReplayFrame | undefined
-  /** Every playable document lifecycle in the selected tab. */
+  /**
+   * Globally current action. Drives the caption only — it may belong to a tab
+   * other than the visible one, or to no tab at all.
+   */
+  action: ReplayFrame | undefined
+  /** Address bar for the visible tab, resolved independently of the caption. */
+  url: string | null
+  /** Every playable document lifecycle in the visible tab. */
   events: readonly ReplayEvent[]
-  /** Called when the rrweb Replayer mounts or is destroyed. */
-  onPlayerReady: (handle: ReplayPlayerHandle | null) => void
+  /** Seconds into this tab's own rrweb stream, already clamped to its range. */
+  trackTime: number
+  /**
+   * False when global time sits outside the recorded range. The player then
+   * holds a boundary frame — first checkpoint or final state — while global
+   * activity keeps running.
+   */
+  live: boolean
+  isPlaying: boolean
+  speed: number
 }
 
-/** Displays the selected tab's rrweb replay inside the audit browser chrome. */
+/** Displays the visible tab's rrweb replay inside the audit browser chrome. */
 export function ReplayViewport({
   site,
-  frame,
+  action,
+  url,
   events,
-  onPlayerReady,
+  trackTime,
+  live,
+  isPlaying,
+  speed,
 }: ReplayViewportProps) {
-  // Prefer the current frame's full URL so the address bar shows
-  // exactly where the agent was at this instant. Falls back to the
-  // task-level site (a hostname) when the frame carries no url
-  // (e.g. `run`, `windows`, `tab_groups` dispatches).
-  const addressBar = frame?.url ?? site
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm">
-      <Chrome url={addressBar} />
+      <Chrome url={url ?? site} />
       <div className="relative flex flex-1 items-stretch justify-center overflow-hidden bg-bg-sunken">
-        <PlayerCanvas events={events} onReady={onPlayerReady} />
-        {frame && <Caption frame={frame} />}
+        <PlayerCanvas
+          events={events}
+          trackTime={trackTime}
+          live={live}
+          isPlaying={isPlaying}
+          speed={speed}
+        />
+        {action && <Caption action={action} />}
       </div>
     </div>
   )
@@ -79,9 +89,15 @@ function Chrome({ url }: { url: string }) {
   )
 }
 
-interface PlayerCanvasProps {
+interface PlayerTarget {
+  trackTime: number
+  live: boolean
+  isPlaying: boolean
+  speed: number
+}
+
+interface PlayerCanvasProps extends PlayerTarget {
   events: readonly ReplayEvent[]
-  onReady: (handle: ReplayPlayerHandle | null) => void
 }
 
 /**
@@ -93,6 +109,10 @@ const DEFAULT_RECORDED_SIZE = { width: 1280, height: 720 }
 // rrweb casts events strictly before the target; 0ms can leave the first
 // snapshot blank while paused.
 const MIN_RENDER_SEEK_MS = 1
+// rrweb runs its own timer while playing, so it and the global clock drift
+// apart continuously. Re-seeking every frame would stutter the replay; this is
+// the gap at which a viewer would notice the caption leading the picture.
+const DRIFT_TOLERANCE_MS = 250
 
 function readRecordedSize(events: readonly ReplayEvent[]): {
   width: number
@@ -111,9 +131,31 @@ function readRecordedSize(events: readonly ReplayEvent[]): {
   return { width, height }
 }
 
-/** Mounts rrweb's imperative Replayer and exposes the narrow playback handle. */
-function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
+function alignPlayer(replayer: Replayer, target: PlayerTarget): void {
+  const ms = Math.max(MIN_RENDER_SEEK_MS, target.trackTime * 1000)
+  replayer.setConfig({ speed: target.speed })
+  if (target.isPlaying && target.live) replayer.play(ms)
+  else replayer.pause(ms)
+}
+
+/** Mounts rrweb's imperative Replayer and keeps it on the projected time. */
+function PlayerCanvas({
+  events,
+  trackTime,
+  live,
+  isPlaying,
+  speed,
+}: PlayerCanvasProps) {
   const mountRef = useRef<HTMLDivElement>(null)
+  const replayerRef = useRef<Replayer | null>(null)
+  const appliedRef = useRef<PlayerTarget | null>(null)
+  // Latest committed target, so a player built for a newly selected tab lands
+  // on the current global position instead of the one that requested it.
+  const targetRef = useRef<PlayerTarget>({ trackTime, live, isPlaying, speed })
+  useEffect(() => {
+    targetRef.current = { trackTime, live, isPlaying, speed }
+  })
+
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
@@ -162,15 +204,15 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
       observer.observe(mount)
     }
 
-    onReady({
-      seek: (ms) => replayer.pause(Math.max(MIN_RENDER_SEEK_MS, ms)),
-      play: (ms) => replayer.play(ms),
-      pause: () => replayer.pause(),
-      setSpeed: (speed) => replayer.setConfig({ speed }),
-      getCurrentTime: () => replayer.getCurrentTime(),
-    })
+    replayerRef.current = replayer
+    // Positioning here rather than waiting for the alignment effect keeps
+    // reconstruction inside one commit, so a tab switch never paints an
+    // unpositioned frame.
+    alignPlayer(replayer, targetRef.current)
+    appliedRef.current = targetRef.current
     return () => {
-      onReady(null)
+      replayerRef.current = null
+      appliedRef.current = null
       observer?.disconnect()
       try {
         replayer.destroy()
@@ -179,7 +221,31 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
       }
       mount.replaceChildren()
     }
-  }, [events, onReady])
+  }, [events])
+
+  useEffect(() => {
+    const replayer = replayerRef.current
+    const applied = appliedRef.current
+    if (!replayer || !applied) return
+    const target = { trackTime, live, isPlaying, speed }
+    const controlChanged =
+      applied.speed !== speed ||
+      applied.isPlaying !== isPlaying ||
+      applied.live !== live
+    if (!controlChanged) {
+      if (applied.isPlaying && applied.live) {
+        const drift = Math.abs(
+          replayer.getCurrentTime() - target.trackTime * 1000,
+        )
+        appliedRef.current = target
+        if (drift <= DRIFT_TOLERANCE_MS) return
+      } else if (applied.trackTime === target.trackTime) {
+        return
+      }
+    }
+    alignPlayer(replayer, target)
+    appliedRef.current = target
+  }, [trackTime, live, isPlaying, speed])
 
   return (
     <div
@@ -190,11 +256,14 @@ function PlayerCanvas({ events, onReady }: PlayerCanvasProps) {
   )
 }
 
-function Caption({ frame }: { frame: ReplayFrame }) {
-  const verb = VERB_META[frame.verb]
-  const kind = KIND_STYLE[frame.kind]
+function Caption({ action }: { action: ReplayFrame }) {
+  const verb = VERB_META[action.verb]
+  const kind = KIND_STYLE[action.kind]
   return (
-    <div className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-full bg-ink-deep/90 px-4 py-2 shadow-xl backdrop-blur">
+    <div
+      data-replay-caption
+      className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-full bg-ink-deep/90 px-4 py-2 shadow-xl backdrop-blur"
+    >
       <span
         className={cn(
           'flex size-5 items-center justify-center rounded-md text-white',
@@ -204,7 +273,7 @@ function Caption({ frame }: { frame: ReplayFrame }) {
         <verb.Icon className="size-3" />
       </span>
       <span className="truncate font-semibold text-white/90 text-xs">
-        {frame.caption}
+        {action.caption}
       </span>
     </div>
   )

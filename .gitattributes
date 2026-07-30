@@ -10,3 +10,6 @@ scripts/*.py linguist-generated
 # Mark build directories as generated
 build/* linguist-generated
 docs/videos/** filter=lfs diff=lfs merge=lfs -text
+
+# This Chromium CDP protocol file is hashed as raw bytes; never rewrite line endings.
+packages/browseros-agent/crates/browseros-cdp/protocol/protocol.json -text

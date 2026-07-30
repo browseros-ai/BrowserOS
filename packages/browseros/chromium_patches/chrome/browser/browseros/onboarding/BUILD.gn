@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..4b3ae75acf7793612ff587b86d45645b580a8a3a
 --- /dev/null
 +++ b/chrome/browser/browseros/onboarding/BUILD.gn
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,64 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -20,6 +20,7 @@ index 0000000000000000000000000000000000000000..4b3ae75acf7793612ff587b86d45645b
 +  "icon/48.png",
 +  "icon/96.png",
 +  "icon/128.png",
++  "icon/keychain-prompt.png",
 +]
 +
 +generate_grd("build_resources_grd") {

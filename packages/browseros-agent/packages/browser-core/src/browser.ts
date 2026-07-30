@@ -1,4 +1,3 @@
-import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import type { CdpBackend } from './backends/types'
 import type { PageInfo } from './core/pages'
 import { BrowserSession } from './core/session'
@@ -21,24 +20,6 @@ export class Browser {
   /** Browser-core session shared by MCP and the in-process agent. */
   get session(): BrowserSession {
     return this.core
-  }
-
-  /** Resolves a window's active page to the CDP session used by screencast. */
-  async getActivePageForWindow(windowId: number): Promise<{
-    targetId: string
-    session: ProtocolApi
-    url: string
-  }> {
-    return this.core.pages.getActiveSessionForWindow(windowId)
-  }
-
-  /** Resolves a BrowserOS page id to the CDP session used by screencast. */
-  async getPageSession(pageId: number): Promise<{
-    targetId: string
-    session: ProtocolApi
-    url: string
-  }> {
-    return this.core.pages.getSession(pageId)
   }
 
   async listPages(): Promise<PageInfo[]> {

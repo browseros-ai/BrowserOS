@@ -10,15 +10,15 @@ use crate::{
                 RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs, TabClaims,
                 TabRecordings,
             },
-            recording_batches, recording_payloads, recording_streams, session_tabs, tab_claims,
-            tab_recordings,
+            recording_batches, recording_streams, session_tabs, tab_claims, tab_recordings,
         },
     },
     error::{AppError, AppResult},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, QuerySelect, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait,
+    FromQueryResult, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Statement,
+    TransactionTrait, sea_query::Expr,
 };
 
 #[derive(Clone)]
@@ -33,7 +33,6 @@ pub struct AppendDocumentBatch<'a> {
     /// Best-effort target attribution: a later persisted batch may fill an initial absence but
     /// never replace a stored target id.
     pub target_id: Option<&'a str>,
-    pub payload: String,
     pub first_event_at: i64,
     pub last_event_at: i64,
     pub size_bytes: i64,
@@ -42,6 +41,9 @@ pub struct AppendDocumentBatch<'a> {
     /// On a newly accepted non-empty batch, recorder gap evidence or malformed lines dropped by the
     /// server become sticky for the document stream; any replay selecting that stream is incomplete.
     pub has_gap: bool,
+    /// New absolute committed length of the document's on-disk replay file after
+    /// this batch's events were appended.
+    pub payload_bytes: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +56,7 @@ pub struct RecordingStreamRow {
     pub size_bytes: i64,
     pub event_count: i64,
     pub has_gap: bool,
+    pub payload_bytes: i64,
 }
 
 impl From<recording_streams::Model> for RecordingStreamRow {
@@ -67,6 +70,7 @@ impl From<recording_streams::Model> for RecordingStreamRow {
             size_bytes: row.size_bytes,
             event_count: row.event_count,
             has_gap: row.has_gap,
+            payload_bytes: row.payload_bytes,
         }
     }
 }
@@ -162,7 +166,151 @@ impl RecordingIndex {
         Ok(total.unwrap_or(0))
     }
 
-    pub async fn append_document_batch(&self, input: AppendDocumentBatch<'_>) -> AppResult<bool> {
+    /// Whether this document has already durably accepted `batch_id`.
+    pub async fn batch_accepted(&self, document_id: &str, batch_id: &str) -> AppResult<bool> {
+        Ok(
+            RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
+                .one(self.db.connection())
+                .await?
+                .is_some(),
+        )
+    }
+
+    /// Committed byte length of the document's on-disk replay file (0 when the
+    /// stream does not exist yet or predates the file migration).
+    pub async fn committed_payload_bytes(&self, document_id: &str) -> AppResult<i64> {
+        Ok(RecordingStreams::find_by_id(document_id.to_string())
+            .one(self.db.connection())
+            .await?
+            .map_or(0, |row| row.payload_bytes))
+    }
+
+    /// The un-migrated document with the smallest DB-blob payload (smallest first,
+    /// so extraction relieves the database quickly). Returns (document_id, bytes).
+    pub async fn smallest_unmigrated_document(&self) -> AppResult<Option<(String, i64)>> {
+        let row = self
+            .db
+            .connection()
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT document_id AS document_id, LENGTH(events_ndjson) AS sz \
+                 FROM recording_payloads ORDER BY sz ASC LIMIT 1",
+            ))
+            .await?;
+        match row {
+            Some(row) => Ok(Some((
+                row.try_get::<String>("", "document_id")?,
+                row.try_get::<i64>("", "sz")?,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    /// Number of documents whose payload still lives in the DB blob.
+    pub async fn unmigrated_document_count(&self) -> AppResult<i64> {
+        let row = self
+            .db
+            .connection()
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS n FROM recording_payloads",
+            ))
+            .await?;
+        Ok(row.map_or(0, |row| row.try_get::<i64>("", "n").unwrap_or(0)))
+    }
+
+    /// Marks a document's replay file authoritative in one transaction: sets the
+    /// committed length and drops the now-redundant DB blob together. Atomic so a
+    /// crash can never leave `payload_bytes` set while the blob survives, a state
+    /// a later append plus background migration would resolve by truncating the
+    /// appended events off the file.
+    pub async fn finalize_extraction(&self, document_id: &str, bytes: i64) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        async {
+            RecordingStreams::update_many()
+                .col_expr(recording_streams::Column::PayloadBytes, Expr::value(bytes))
+                .filter(recording_streams::Column::DocumentId.eq(document_id))
+                .exec(&txn)
+                .await?;
+            RecordingPayloads::delete_by_id(document_id.to_string())
+                .exec(&txn)
+                .await?;
+            txn.commit().await?;
+            Ok::<(), AppError>(())
+        }
+        .await
+    }
+
+    /// The oldest recording document, used to free space during disk-full recovery.
+    pub async fn oldest_document_id(&self) -> AppResult<Option<String>> {
+        Ok(RecordingStreams::find()
+            .order_by_asc(recording_streams::Column::LastEventAt)
+            .one(self.db.connection())
+            .await?
+            .map(|row| row.document_id))
+    }
+
+    /// Returns freed pages to the OS when the database is in incremental
+    /// auto-vacuum mode; a no-op on a legacy database (which needs a full VACUUM).
+    pub async fn incremental_reclaim(&self) -> AppResult<()> {
+        self.db
+            .connection()
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA incremental_vacuum",
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Seeds a pre-migration document (metadata with `payload_bytes = 0` plus a DB
+    /// blob) to exercise the file migration in tests.
+    #[cfg(test)]
+    pub async fn seed_legacy_payload(
+        &self,
+        document_id: &str,
+        tab_id: i64,
+        events_ndjson: &str,
+        first_event_at: i64,
+        last_event_at: i64,
+        event_count: i64,
+    ) -> AppResult<()> {
+        let conn = self.db.connection();
+        conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO recording_streams (document_id, tab_id, target_id, first_event_at, \
+             last_event_at, size_bytes, event_count, has_gap, payload_bytes) \
+             VALUES (?, ?, NULL, ?, ?, ?, ?, 0, 0)",
+            [
+                document_id.to_string().into(),
+                tab_id.into(),
+                first_event_at.into(),
+                last_event_at.into(),
+                i64::try_from(events_ndjson.len())
+                    .unwrap_or(i64::MAX)
+                    .into(),
+                event_count.into(),
+            ],
+        ))
+        .await?;
+        conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO recording_payloads (document_id, events_ndjson) VALUES (?, ?)",
+            [
+                document_id.to_string().into(),
+                events_ndjson.to_string().into(),
+            ],
+        ))
+        .await?;
+        Ok(())
+    }
+
+    /// Records a batch's metadata after its events were appended to the document's
+    /// on-disk replay file, where `input.payload_bytes` is the file's new committed
+    /// length. Idempotent: an already-accepted batch is a no-op, so a duplicate
+    /// append leaves only uncommitted trailing file bytes that the next append
+    /// truncates away. Callers serialize per document.
+    pub async fn commit_batch(&self, input: AppendDocumentBatch<'_>) -> AppResult<()> {
         let txn = self.db.connection().begin().await?;
         async {
             if RecordingBatches::find_by_id((
@@ -173,10 +321,7 @@ impl RecordingIndex {
             .await?
             .is_some()
             {
-                return Ok(false);
-            }
-            if input.event_count == 0 {
-                return Ok(true);
+                return Ok(());
             }
             if let Some(existing) = RecordingStreams::find_by_id(input.document_id.to_string())
                 .one(&txn)
@@ -202,6 +347,7 @@ impl RecordingIndex {
                     .unwrap()
                     .saturating_add(input.event_count));
                 update.has_gap = Set(update.has_gap.unwrap() || input.has_gap);
+                update.payload_bytes = Set(input.payload_bytes);
                 update.update(&txn).await?;
             } else {
                 RecordingStreams::insert(recording_streams::ActiveModel {
@@ -213,23 +359,7 @@ impl RecordingIndex {
                     size_bytes: Set(input.size_bytes),
                     event_count: Set(input.event_count),
                     has_gap: Set(input.has_gap),
-                })
-                .exec(&txn)
-                .await?;
-            }
-            if let Some(existing) = RecordingPayloads::find_by_id(input.document_id.to_string())
-                .one(&txn)
-                .await?
-            {
-                let mut update = existing.into_active_model();
-                let mut events_ndjson = update.events_ndjson.take().unwrap_or_default();
-                events_ndjson.push_str(&input.payload);
-                update.events_ndjson = Set(events_ndjson);
-                update.update(&txn).await?;
-            } else {
-                RecordingPayloads::insert(recording_payloads::ActiveModel {
-                    document_id: Set(input.document_id.to_string()),
-                    events_ndjson: Set(input.payload),
+                    payload_bytes: Set(input.payload_bytes),
                 })
                 .exec(&txn)
                 .await?;
@@ -242,7 +372,7 @@ impl RecordingIndex {
             .exec(&txn)
             .await?;
             txn.commit().await?;
-            Ok::<bool, AppError>(true)
+            Ok::<(), AppError>(())
         }
         .await
     }
@@ -270,6 +400,17 @@ impl RecordingIndex {
             .map(RecordingStreamRow::from)
             .collect();
         Ok((claims, streams))
+    }
+
+    /// Every live recording stream's document id, for the replay-file orphan
+    /// sweep to distinguish tracked files from drift left by a crashed writer.
+    pub async fn all_document_ids(&self) -> AppResult<Vec<String>> {
+        Ok(RecordingStreams::find()
+            .select_only()
+            .column(recording_streams::Column::DocumentId)
+            .into_tuple::<String>()
+            .all(self.db.connection())
+            .await?)
     }
 
     pub async fn legacy_recordings_before(

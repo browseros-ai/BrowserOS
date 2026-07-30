@@ -65,6 +65,10 @@ export const MCP_PROMO_BANNER_CLICKED_EVENT =
   'settings.mcp_promo_banner.clicked'
 
 /** @public */
+export const BROWSERCLAW_MCP_BANNER_CLICKED_EVENT =
+  'settings.browserclaw_mcp_banner.clicked'
+
+/** @public */
 export const BROWSERCLAW_PROMO_BANNER_CLICKED_EVENT =
   'ui.browserclaw_promo_banner.clicked'
 

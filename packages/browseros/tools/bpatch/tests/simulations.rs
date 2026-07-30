@@ -43,12 +43,14 @@ fn top_level_help_teaches_chromium_workflow() -> Result<()> {
     assert!(stdout.contains("bpatch init /abs/path/to/chromium_patches"));
     assert!(stdout.contains("Or run bpatch init from inside chromium_patches."));
     assert!(stdout.contains("Run bpatch from inside a Chromium checkout."));
+    assert!(stdout.contains("Run bpatch ls from any directory to show configured machine paths."));
     assert!(stdout.contains("GLOBAL FLAGS:"));
     assert!(
         stdout.contains("--store <STORE>  Overrides the config file for store-reading commands.")
     );
     assert!(stdout.contains("--json           Emits a single JSON object"));
     assert!(stdout.contains("EXAMPLES:"));
+    assert!(stdout.contains("bpatch ls"));
     assert!(stdout.contains("bpatch status"));
     assert!(stdout.contains("bpatch diff"));
     assert!(stdout.contains("bpatch apply"));
@@ -72,6 +74,25 @@ fn top_level_help_teaches_chromium_workflow() -> Result<()> {
     assert!(short_stderr.is_empty());
     assert!(!short_stdout.contains("GETTING STARTED:"));
     assert!(!short_stdout.contains("EXIT CODES:"));
+    Ok(())
+}
+
+#[test]
+fn ls_help_explains_machine_level_scope() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_bpatch"))
+        .args(["ls", "--help"])
+        .output()
+        .context("running bpatch ls --help")?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.is_empty());
+    assert!(stdout.contains("List the configured chromium_patches store"));
+    assert!(stdout.contains("bpatch ls"));
+    assert!(stdout.contains("bpatch --store /abs/path/to/chromium_patches ls --json"));
+    assert!(stdout.contains("does not accept -C/--checkout"));
+    assert!(stdout.contains("lists machine config, not a checkout target"));
     Ok(())
 }
 
@@ -1308,6 +1329,162 @@ fn checkout_aliases_and_paths_target_fixture_from_unrelated_cwd() -> Result<()> 
         "{}",
         json["reason"]
     );
+    Ok(())
+}
+
+#[test]
+fn ls_lists_store_and_registered_checkouts_from_unrelated_cwd() -> Result<()> {
+    let scenario = applied_rev1_scenario()?;
+    let second_checkout = FixtureRepo::new()?;
+    write_apply_base(&second_checkout)?;
+    let home = tempfile::tempdir()?;
+    write_bpatch_config(
+        home.path(),
+        Some(&scenario.store_dir),
+        &[
+            ("ch-2", second_checkout.path()),
+            ("ch-1", scenario.checkout.path()),
+        ],
+    )?;
+    let unrelated = tempfile::tempdir()?;
+    let config = home.path().join(".config/bpatch/config.toml");
+
+    let human = run_bpatch_with_home(unrelated.path(), None, strs(&["ls"]), home.path())?;
+    assert_eq!(human.code, 0, "{}", human.stderr);
+    assert!(human.stderr.is_empty());
+    assert!(
+        human
+            .stdout
+            .contains(&format!("config     {}", config.display()))
+    );
+    assert!(
+        human
+            .stdout
+            .contains(&format!("store      {}", scenario.store_dir.display()))
+    );
+    let ch1 = format!("  {:<16} {}", "ch-1", scenario.checkout.path().display());
+    let ch2 = format!("  {:<16} {}", "ch-2", second_checkout.path().display());
+    assert!(human.stdout.contains(&ch1));
+    assert!(human.stdout.contains(&ch2));
+    assert!(
+        human.stdout.find(&ch1).expect("ch-1 listed")
+            < human.stdout.find(&ch2).expect("ch-2 listed"),
+        "{}",
+        human.stdout
+    );
+
+    let json_out =
+        run_bpatch_with_home(unrelated.path(), None, strs(&["ls", "--json"]), home.path())?;
+    assert_eq!(json_out.code, 0, "{}", json_out.stderr);
+    assert!(json_out.stderr.is_empty());
+    assert_eq!(json_out.stdout.lines().count(), 1);
+    let json = parse_json(&json_out.stdout)?;
+    assert_eq!(json["result"], "listed");
+    assert_eq!(json["store"], scenario.store_dir.display().to_string());
+    assert_eq!(json["config"], config.display().to_string());
+    assert_eq!(json["exit"], 0);
+    assert_eq!(
+        json["checkouts"]["ch-1"],
+        scenario.checkout.path().display().to_string()
+    );
+    assert_eq!(
+        json["checkouts"]["ch-2"],
+        second_checkout.path().display().to_string()
+    );
+
+    let store_override = unrelated.path().join("missing-chromium-patches");
+    let override_out = run_bpatch_with_home(
+        unrelated.path(),
+        Some(&store_override),
+        strs(&["ls", "--json"]),
+        home.path(),
+    )?;
+    assert_eq!(override_out.code, 0, "{}", override_out.stderr);
+    let json = parse_json(&override_out.stdout)?;
+    assert_eq!(json["store"], store_override.display().to_string());
+    assert_eq!(
+        json["checkouts"]["ch-1"],
+        scenario.checkout.path().display().to_string()
+    );
+
+    let scoped = run_bpatch_with_home(
+        unrelated.path(),
+        None,
+        strs(&["-C", "ch-1", "ls", "--json"]),
+        home.path(),
+    )?;
+    assert_eq!(scoped.code, 1);
+    let json = parse_json(&scoped.stdout)?;
+    assert_eq!(json["result"], "error");
+    assert!(
+        json["reason"]
+            .as_str()
+            .unwrap()
+            .contains("ls does not accept -C/--checkout")
+    );
+    Ok(())
+}
+
+#[test]
+fn ls_handles_missing_empty_and_malformed_config() -> Result<()> {
+    let unrelated = tempfile::tempdir()?;
+
+    let missing_home = tempfile::tempdir()?;
+    let missing = run_bpatch_with_home(unrelated.path(), None, strs(&["ls"]), missing_home.path())?;
+    assert_eq!(missing.code, 0, "{}", missing.stderr);
+    assert!(missing.stderr.is_empty());
+    assert!(missing.stdout.contains("store      not configured"));
+    assert!(missing.stdout.contains("checkouts  none"));
+
+    let missing_json = run_bpatch_with_home(
+        unrelated.path(),
+        None,
+        strs(&["ls", "--json"]),
+        missing_home.path(),
+    )?;
+    assert_eq!(missing_json.code, 0, "{}", missing_json.stderr);
+    let json = parse_json(&missing_json.stdout)?;
+    assert_eq!(json["result"], "listed");
+    assert!(json["store"].is_null());
+    assert_eq!(json["checkouts"].as_object().unwrap().len(), 0);
+    assert_eq!(json["exit"], 0);
+
+    let empty_home = tempfile::tempdir()?;
+    let empty_config_dir = empty_home.path().join(".config/bpatch");
+    fs::create_dir_all(&empty_config_dir)?;
+    fs::write(
+        empty_config_dir.join("config.toml"),
+        "custom = \"preserve\"\n",
+    )?;
+    let empty = run_bpatch_with_home(unrelated.path(), None, strs(&["ls"]), empty_home.path())?;
+    assert_eq!(empty.code, 0, "{}", empty.stderr);
+    assert!(empty.stdout.contains("store      not configured"));
+    assert!(empty.stdout.contains("checkouts  none"));
+
+    let malformed_home = tempfile::tempdir()?;
+    let malformed_config_dir = malformed_home.path().join(".config/bpatch");
+    fs::create_dir_all(&malformed_config_dir)?;
+    fs::write(malformed_config_dir.join("config.toml"), "store = [")?;
+    let malformed_json = run_bpatch_with_home(
+        unrelated.path(),
+        None,
+        strs(&["ls", "--json"]),
+        malformed_home.path(),
+    )?;
+    assert_eq!(malformed_json.code, 1);
+    let json = parse_json(&malformed_json.stdout)?;
+    assert_eq!(json["result"], "error");
+    let reason = json["reason"].as_str().expect("reason string");
+    assert!(reason.contains("parsing"));
+    assert!(reason.contains("config.toml"));
+    assert!(reason.contains("expected"));
+
+    let malformed_human =
+        run_bpatch_with_home(unrelated.path(), None, strs(&["ls"]), malformed_home.path())?;
+    assert_eq!(malformed_human.code, 1);
+    assert!(malformed_human.stdout.is_empty());
+    assert!(malformed_human.stderr.contains("error: parsing"));
+    assert!(malformed_human.stderr.contains("expected"));
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for chromium source provisioning."""
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,148 @@ class GclientConfigTest(unittest.TestCase):
             (root / ".gclient").write_text(spec)
             provision.ensure_gclient_config(root)
             self.assertEqual((root / ".gclient").read_text(), spec)
+
+
+class DepotToolsRecoveryTest(unittest.TestCase):
+    def _git(self, cwd: Path, *args: str, check: bool = True):
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            check=check,
+            text=True,
+        )
+
+    def _create_depot_tools(self, root: Path) -> tuple[Path, Path]:
+        depot_tools = root / "depot_tools"
+        depot_tools.mkdir()
+        self._git(depot_tools, "init")
+        self._git(depot_tools, "config", "user.name", "BrowserOS test")
+        self._git(depot_tools, "config", "user.email", "ci@example.invalid")
+        tracked = depot_tools / "gclient.py"
+        tracked.write_bytes(b"first line\nsecond line\n")
+        self._git(depot_tools, "add", tracked.name)
+        self._git(depot_tools, "commit", "-m", "initial")
+        return depot_tools, tracked
+
+    def _tracked_status(self, depot_tools: Path) -> str:
+        return self._git(
+            depot_tools,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+        ).stdout
+
+    def test_authorized_repair_normalizes_only_crlf_and_preserves_untracked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            tracked.write_bytes(b"first line\r\nsecond line\r\n")
+            untracked = depot_tools / "local-note.txt"
+            untracked.write_text("preserve me")
+            self.assertTrue(self._tracked_status(depot_tools))
+
+            provision.ensure_depot_tools(root, repair_cached_depot_tools=True)
+
+            self.assertEqual(tracked.read_bytes(), b"first line\nsecond line\n")
+            self.assertEqual(self._tracked_status(depot_tools), "")
+            self.assertEqual(untracked.read_text(), "preserve me")
+
+    def test_authorized_repair_leaves_clean_checkout_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            before = tracked.stat().st_mtime_ns
+
+            provision.ensure_depot_tools(root, repair_cached_depot_tools=True)
+
+            self.assertEqual(self._tracked_status(depot_tools), "")
+            self.assertEqual(tracked.stat().st_mtime_ns, before)
+
+    def test_authorized_repair_rejects_and_preserves_substantive_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            changed = b"first line\nchanged content\n"
+            tracked.write_bytes(changed)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "substantive tracked changes",
+            ):
+                provision.ensure_depot_tools(root, repair_cached_depot_tools=True)
+
+            self.assertEqual(tracked.read_bytes(), changed)
+            self.assertTrue(self._tracked_status(depot_tools))
+
+    def test_authorized_repair_rejects_trailing_whitespace_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            changed = b"first line \nsecond line\n"
+            tracked.write_bytes(changed)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "substantive tracked changes",
+            ):
+                provision.ensure_depot_tools(
+                    root,
+                    repair_cached_depot_tools=True,
+                )
+
+            self.assertEqual(tracked.read_bytes(), changed)
+            self.assertTrue(self._tracked_status(depot_tools))
+
+    def test_authorized_repair_rejects_hidden_index_flags(self):
+        for index_flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(index_flag=index_flag):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    depot_tools, tracked = self._create_depot_tools(root)
+                    self._git(
+                        depot_tools,
+                        "update-index",
+                        index_flag,
+                        tracked.name,
+                    )
+                    changed = b"first line\nhidden substantive change\n"
+                    tracked.write_bytes(changed)
+                    self.assertEqual(self._tracked_status(depot_tools), "")
+
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "non-default index flags",
+                    ):
+                        provision.ensure_depot_tools(
+                            root,
+                            repair_cached_depot_tools=True,
+                        )
+
+                    self.assertEqual(tracked.read_bytes(), changed)
+
+    def test_default_preserves_dirty_developer_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            depot_tools, tracked = self._create_depot_tools(root)
+            changed = b"first line\r\nsecond line\r\n"
+            tracked.write_bytes(changed)
+
+            provision.ensure_depot_tools(root)
+
+            self.assertEqual(tracked.read_bytes(), changed)
+            self.assertTrue(self._tracked_status(depot_tools))
+
+    def test_authorized_repair_rejects_invalid_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "depot_tools" / ".git").mkdir(parents=True)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "not a valid Git worktree",
+            ):
+                provision.ensure_depot_tools(root, repair_cached_depot_tools=True)
 
 
 class CheckoutCommandsTest(unittest.TestCase):

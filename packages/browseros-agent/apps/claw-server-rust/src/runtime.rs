@@ -97,6 +97,13 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "recording payload migration",
+                handle: state
+                    .recordings
+                    .clone()
+                    .spawn_payload_migration(shutdown.child_token()),
+            },
+            BackgroundTask {
                 name: "session efficiency reconciliation",
                 handle: tokio::spawn({
                     let session_efficiency = state.session_efficiency.clone();
@@ -545,7 +552,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );
@@ -573,7 +579,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );

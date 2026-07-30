@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
+import type { ReplayEvent } from '@/modules/api/replay.hooks'
 import type { ReplayTabData } from './replay.data'
 import {
   buildReplayDocumentIds,
@@ -15,24 +15,8 @@ import {
 import {
   type BuildTabViewInput,
   buildTabView,
-  tabSeekForFrame,
+  isPlayableTabView,
 } from './tab-view'
-
-function frame(
-  t: number,
-  tabId: number | null,
-  extra: Partial<ReplayFrame> = {},
-): ReplayFrame {
-  return {
-    t,
-    kind: 'action',
-    verb: 'read',
-    node: 'test',
-    caption: 'test',
-    tabId,
-    ...extra,
-  }
-}
 
 function event(
   ts: number,
@@ -77,10 +61,8 @@ function makeInput(
   overrides: Partial<BuildTabViewInput> = {},
 ): BuildTabViewInput {
   return {
-    frames: [],
     tabs: [],
     eventsForTab: () => [],
-    startedAtMs: 1_000_000,
     ...overrides,
   }
 }
@@ -89,11 +71,13 @@ describe('buildTabView', () => {
   it('returns empty without a selected tab', () => {
     const view = buildTabView(makeInput(), null)
     expect(view.events).toEqual([])
-    expect(view.frames).toEqual([])
+    expect(view.originMs).toBeNull()
+    expect(view.endMs).toBeNull()
     expect(view.totalSeconds).toBe(0)
+    expect(isPlayableTabView(view)).toBe(false)
   })
 
-  it('merges every document lifecycle and action from one tab', () => {
+  it('merges every document lifecycle from one tab into one track', () => {
     const events = [
       event(1_001_000, 'document-a', 1, 0),
       event(1_001_001, 'document-a', 1, 4),
@@ -107,7 +91,6 @@ describe('buildTabView', () => {
     ]
     const catalog = buildReplayEventCatalog(events)
     const input = makeInput({
-      frames: [frame(1, 1), frame(5, 1), frame(6, 2)],
       tabs: [
         tab(1, [
           {
@@ -136,8 +119,10 @@ describe('buildTabView', () => {
       'document-b',
       'document-b',
     ])
-    expect(view.frames.map(({ t }) => t)).toEqual([0, 4])
+    expect(view.originMs).toBe(1_001_000)
+    expect(view.endMs).toBe(1_006_000)
     expect(view.totalSeconds).toBe(5)
+    expect(isPlayableTabView(view)).toBe(true)
   })
 
   it('keeps a merged tab event array stable across audit polling', () => {
@@ -163,24 +148,16 @@ describe('buildTabView', () => {
       ]),
     ]
     const first = buildTabView(
-      makeInput({
-        frames: [frame(1, 1)],
-        tabs,
-        eventsForTab: catalog.eventsForTab,
-      }),
+      makeInput({ tabs, eventsForTab: catalog.eventsForTab }),
       1,
     )
     const afterAuditPoll = buildTabView(
-      makeInput({
-        frames: [frame(1, 1), frame(2, 1)],
-        tabs,
-        eventsForTab: catalog.eventsForTab,
-      }),
+      makeInput({ tabs, eventsForTab: catalog.eventsForTab }),
       1,
     )
 
+    // Stable identity keeps the single rrweb player alive across polls.
     expect(afterAuditPoll.events).toBe(first.events)
-    expect(afterAuditPoll.frames).not.toBe(first.frames)
   })
 
   it('reuses the playable stream after leading orphan mutations', () => {
@@ -206,6 +183,8 @@ describe('buildTabView', () => {
     const second = buildTabView(input, 1)
     expect(first.events.map(({ type }) => type)).toEqual([2, 3])
     expect(second.events).toBe(first.events)
+    // Bounds follow the playable slice, not the discarded orphan mutation.
+    expect(first.originMs).toBe(1_004_000)
     expect(first.incompleteUntilMs).toBe(3_000)
     expect(first.knownIncomplete).toBe(true)
   })
@@ -248,6 +227,7 @@ describe('buildTabView', () => {
     const view = buildTabView(input, 1)
     expect(view.hasFullSnapshot).toBe(false)
     expect(view.knownIncomplete).toBe(true)
+    expect(isPlayableTabView(view)).toBe(false)
   })
 
   it('reports a generic gap when omissions occur before and during playback', () => {
@@ -340,73 +320,5 @@ describe('catalog ordering', () => {
         ['stream-only'],
       ),
     ).toEqual(['first', 'later', 'stream-only'])
-  })
-})
-
-describe('tabSeekForFrame', () => {
-  it('switches tabs using dispatch tab identity and the tab clock', () => {
-    const selectedFrame = frame(12, 2, { dispatchId: 22 })
-    const events = [
-      event(1_010_000, 'document-b', 2),
-      event(1_015_000, 'document-b', 2, 3),
-    ]
-    const input = makeInput({
-      frames: [frame(1, 1), selectedFrame],
-      tabs: [
-        tab(1, [
-          {
-            documentId: 'document-a',
-            firstEventAt: 1_001_000,
-            lastEventAt: 1_005_000,
-          },
-        ]),
-        tab(2, [
-          {
-            documentId: 'document-b',
-            firstEventAt: 1_010_000,
-            lastEventAt: 1_015_000,
-          },
-        ]),
-      ],
-      eventsForTab: buildReplayEventCatalog(events).eventsForTab,
-    })
-
-    expect(tabSeekForFrame(input, 1, selectedFrame)).toEqual({
-      tabId: 2,
-      seconds: 2,
-    })
-  })
-
-  it('does not reset the clock for an action after navigation', () => {
-    const selectedFrame = frame(12, 1, { dispatchId: 22 })
-    const events = [
-      event(1_001_000, 'document-a'),
-      event(1_005_000, 'document-a', 1, 3),
-      event(1_010_000, 'document-b'),
-      event(1_015_000, 'document-b', 1, 3),
-    ]
-    const input = makeInput({
-      frames: [selectedFrame],
-      tabs: [
-        tab(1, [
-          {
-            documentId: 'document-a',
-            firstEventAt: 1_001_000,
-            lastEventAt: 1_005_000,
-          },
-          {
-            documentId: 'document-b',
-            firstEventAt: 1_010_000,
-            lastEventAt: 1_015_000,
-          },
-        ]),
-      ],
-      eventsForTab: buildReplayEventCatalog(events).eventsForTab,
-    })
-
-    expect(tabSeekForFrame(input, 1, selectedFrame)).toEqual({
-      tabId: 1,
-      seconds: 11,
-    })
   })
 })

@@ -19,17 +19,22 @@ export function VisualRail() {
         }}
       />
       <div className="relative flex items-center gap-2.5">
-        <div className="flex size-[38px] items-center justify-center rounded-[11px] bg-accent font-extrabold text-card text-lg">
-          B
-        </div>
+        {/* Must stay a literal public path: importing the asset or inlining it
+            breaks scripts/verify-chromium-build.ts (allowlist, no data: URLs). */}
+        <img
+          alt=""
+          aria-hidden
+          className="size-[38px] rounded-[11px]"
+          src="/icon/128.png"
+        />
         <div className="font-extrabold text-[17px] tracking-tight">
           BrowserClaw
         </div>
       </div>
       <div className="relative">
         <div className="mb-[18px] font-serif text-[23px] text-ink italic leading-snug">
-          &ldquo;Let your AI <span className="text-accent">actually</span> use
-          the web.&rdquo;
+          &ldquo;Your agents&rsquo; browser.{' '}
+          <span className="text-accent">Not yours.</span>&rdquo;
         </div>
         <div className="flex flex-col gap-3">
           {FEATURES.map((f) => {
@@ -68,7 +73,8 @@ const FEATURES = [
   },
   {
     icon: ShieldCheck,
-    title: 'Yours to keep.',
-    description: 'Everything runs on your machine.',
+    title: 'Everything stays local.',
+    description:
+      'All data is stored on this machine. Open source and privacy-first.',
   },
 ] as const

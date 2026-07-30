@@ -26,6 +26,7 @@ const EXPECTED_RESOURCE_FILES = [
   'icon/48.png',
   'icon/96.png',
   'icon/128.png',
+  'icon/keychain-prompt.png',
 ] as const
 
 describe('claw onboard resources build', () => {

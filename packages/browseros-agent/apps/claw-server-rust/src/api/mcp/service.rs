@@ -636,12 +636,13 @@ mod tests {
             .instructions
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("BrowserClaw instructions missing"))?;
-        assert!(instructions.contains("BrowserClaw, the browser for agents"));
-        // Run stays the multi-step code-mode option on the full tool surface.
-        assert!(instructions.contains("For multi-step browser flows, use run"));
-        assert!(instructions.contains("browser.observe(pageId).snapshot()"));
+        assert!(instructions.contains("BrowserClaw — the browser for agents"));
+        assert!(instructions.contains("run does real multi-step"));
         assert!(instructions.contains(
             "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
+        ));
+        assert!(instructions.contains(
+            "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
         ));
         assert!(
             instructions

@@ -5,7 +5,7 @@
  */
 
 import type { RecordingMetadata } from '@browseros/claw-api'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
 import {
@@ -29,6 +29,8 @@ import {
   EMPTY_REPLAY_EVENTS,
   type ReplayEventCatalog,
 } from './replay-events'
+
+const EVENT_SNAPSHOT_RETRY_MS = 10_000
 
 export interface ReplaySegmentData {
   documentId: string
@@ -54,10 +56,10 @@ export interface ReplayData {
   site: string
   startedAt: string
   /**
-   * Raw session start in ms since epoch. Used by `buildTabView` to
-   * translate a frame's session-relative `t` into tab-relative time.
-   * `startedAt` above is the formatted date string; this is the
-   * machine-readable original.
+   * Raw session start in ms since epoch. `session-replay.ts` adds it to a
+   * frame's session-relative `t` to recover the absolute timestamp it needs to
+   * place actions against rrweb's absolute event stream. `startedAt` above is
+   * the formatted date string; this is the machine-readable original.
    */
   startedAtMs: number
   duration: string
@@ -69,18 +71,10 @@ export interface ReplayData {
   frames: ReplayFrame[]
   complete: boolean | null
   tabs: ReplayTabData[]
+  /** True once events for the current metadata revision resolve, including 404-empty. */
+  eventsLoaded: boolean
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
-
-// `buildTabView` and the `TabView` shape live in `./tab-view.ts` so
-// tests can import them without dragging the react-query-kit hook
-// graph. Re-exported here for backward-compat with existing
-// callers that reach it through this module.
-export {
-  buildTabView,
-  EMPTY_TAB_VIEW,
-  type TabView,
-} from './tab-view'
 
 export interface UseReplayDataResult {
   replay: ReplayData | null
@@ -101,25 +95,99 @@ export function useReplayData(): UseReplayDataResult {
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
-  const eventsQuery = useReplayEvents({
-    variables: { sessionId },
-    enabled: sessionId.length > 0,
-  })
   const metadataRevision = replayEventsRevision(metadataQuery.data)
+  const sessionRevision =
+    metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
+  const eventsQuery = useReplayEvents({
+    variables: { sessionId, revision: sessionRevision ?? '' },
+    enabled: false,
+  })
   const requestedRevision = useRef<string | null>(null)
+  const requestGenerationRef = useRef(0)
+  const retryTimerRef = useRef<number | null>(null)
+  const mountedRef = useRef(false)
+  const [refreshAttempt, setRefreshAttempt] = useState(0)
+  const [resolvedEventSnapshot, setResolvedEventSnapshot] = useState<{
+    sessionId: string
+    revision: string
+    events: readonly ReplayEvent[]
+  } | null>(null)
   useEffect(() => {
-    if (metadataRevision === null) return
-    const sessionRevision = `${sessionId}:${metadataRevision}`
-    if (requestedRevision.current === sessionRevision) return
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshAttempt re-arms the same revision after query retries are exhausted.
+  useEffect(() => {
+    if (
+      sessionRevision === null ||
+      requestedRevision.current === sessionRevision
+    ) {
+      return
+    }
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
     requestedRevision.current = sessionRevision
-    void eventsQuery.refetch()
-  }, [eventsQuery.refetch, metadataRevision, sessionId])
-  const events = eventsQuery.data?.events ?? EMPTY_REPLAY_EVENTS
+    const requestGeneration = ++requestGenerationRef.current
+    // Metadata owns event downloads so each accepted payload can be attributed
+    // to the exact revision that requested it, even when revisions race.
+    void (async () => {
+      try {
+        const result = await eventsQuery.refetch()
+        if (
+          result.isSuccess &&
+          result.data &&
+          mountedRef.current &&
+          requestGenerationRef.current === requestGeneration &&
+          requestedRevision.current === sessionRevision
+        ) {
+          setResolvedEventSnapshot({
+            sessionId,
+            revision: sessionRevision,
+            events: result.data.events,
+          })
+          return
+        }
+      } catch {}
+      if (
+        mountedRef.current &&
+        requestGenerationRef.current === requestGeneration &&
+        requestedRevision.current === sessionRevision
+      ) {
+        requestedRevision.current = null
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null
+          setRefreshAttempt((attempt) => attempt + 1)
+        }, EVENT_SNAPSHOT_RETRY_MS)
+      }
+    })()
+  }, [eventsQuery.refetch, refreshAttempt, sessionId, sessionRevision])
+  const hasCurrentSessionSnapshot =
+    resolvedEventSnapshot?.sessionId === sessionId
+  const eventsLoaded =
+    sessionRevision !== null &&
+    hasCurrentSessionSnapshot &&
+    resolvedEventSnapshot?.revision === sessionRevision
+  const events = hasCurrentSessionSnapshot
+    ? resolvedEventSnapshot.events
+    : EMPTY_REPLAY_EVENTS
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
-    return buildReplayData(taskQuery.data, eventCatalog, metadataQuery.data)
-  }, [taskQuery.data, eventCatalog, metadataQuery.data])
+    return buildReplayData(
+      taskQuery.data,
+      eventCatalog,
+      metadataQuery.data,
+      eventsLoaded,
+    )
+  }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
 
   return {
     replay,
@@ -134,6 +202,7 @@ function buildReplayData(
   detail: TaskDetail,
   eventCatalog: ReplayEventCatalog,
   metadata: RecordingMetadata | undefined,
+  eventsLoaded: boolean,
 ): ReplayData {
   const { session: task, dispatches } = detail
   const sessionStartMs = task.startedAt
@@ -172,6 +241,7 @@ function buildReplayData(
     frames,
     complete: metadata?.complete ?? null,
     tabs,
+    eventsLoaded,
     eventsForTab: eventCatalog.eventsForTab,
   }
 }
@@ -239,7 +309,12 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   evaluate: 'type',
 }
 
-function mapDispatchToFrame(
+/**
+ * One audit row as a replay frame. `t` is completion; `durationMs` rides along
+ * untouched so `session-replay.ts` can approximate when the tool began without
+ * a second source of truth for timing.
+ */
+export function mapDispatchToFrame(
   row: ToolDispatchRow,
   sessionStartMs: number,
   targetTabs: ReadonlyMap<string, number>,
@@ -256,6 +331,7 @@ function mapDispatchToFrame(
   const caption = buildCaption(row, verb, isError, cancelled)
   return {
     t,
+    durationMs: row.durationMs,
     kind,
     verb,
     node,

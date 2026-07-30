@@ -77,13 +77,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONCURRENCY_GROUP: release-linux
+          RUNNER_LABEL: warp-custom-browseros-ubuntu-2204-x64-32x
+          JOB_FILTER: >-
+            [.jobs[]
+            | select(any(.labels[]?; . == $runner_label))
+            | {name, status}]
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + 20 * 60 ))
           failures=0
           while :; do
-            if jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name != "queue-watchdog") | select(.status != "completed") | {name, status}]')"; then
+            if response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100")" \
+              && jobs="$(jq -c --arg runner_label "$RUNNER_LABEL" "$JOB_FILTER" <<<"$response")"; then
               failures=0
             else
               failures=$(( failures + 1 ))
@@ -104,7 +109,7 @@ jobs:
             if [ "$(date +%s)" -ge "$deadline" ]; then
               doc="packages/browseros/bos_build/docs/warpbuild-ci.md"
               if [ "$total" -eq 0 ]; then
-                echo "::error::queue-watchdog matched no build jobs - were the matrix job names changed? Fix the filter; not cancelling."
+                echo "::error::queue-watchdog matched no build jobs - did the lane's runner label change? Fix the filter; not cancelling."
                 exit 1
               fi
               stuck="$(jq -r '[.[] | select(.status == "queued") | .name] | join(", ")' <<<"$jobs")"

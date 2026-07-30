@@ -1,6 +1,6 @@
 # Provenance
 
-Inlined snapshot of `acpx-ai-provider` from https://github.com/DaniAkash/acpx (monorepo path `packages/acpx-ai-provider`).
+Inlined snapshot of `acpx-ai-provider` from https://github.com/DaniAkash/agent-toolkit (monorepo path `packages/acpx-ai-provider`). The repository was previously named `DaniAkash/acpx`; historical metadata in the pinned tag may still use that name.
 
 - Upstream commit: `ffb54400bf581e61c4cfcba3dccfcb72bc5cd44d`
 - Upstream tag: `acpx-ai-provider-v0.0.6`

@@ -141,12 +141,7 @@ export function OnboardingV2() {
             onContinue={() => setStep(2)}
           />
         )}
-        {step === 2 && (
-          <ReadyStep
-            imported={importPhase === 'imported'}
-            onDone={finishOnboarding}
-          />
-        )}
+        {step === 2 && <ReadyStep onDone={finishOnboarding} />}
       </OnboardingShell>
     </Form>
   )

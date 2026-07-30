@@ -69,7 +69,6 @@ export const useSessions = createInfiniteQuery<
     }),
   initialPageParam: undefined,
   getNextPageParam: (last) => last.nextCursor,
-  refetchInterval: 3000,
   // Keep the prior pages visible while a new filter set loads so the
   // adjacent filter controls remain mounted and retain keyboard focus.
   placeholderData: (previous) => previous,

@@ -8,6 +8,7 @@ pub mod diff;
 pub mod extract;
 pub mod feature;
 pub mod init;
+pub mod ls;
 pub mod render;
 pub mod status;
 
@@ -42,6 +43,7 @@ use crate::store::{self, Store};
   Or run bpatch init from inside chromium_patches.
   Pass --store /abs/path/to/chromium_patches on store-reading commands.
   Run bpatch from inside a Chromium checkout.
+  Run bpatch ls from any directory to show configured machine paths.
 
 GLOBAL FLAGS:
   --store <STORE>  Overrides the config file for store-reading commands.
@@ -51,6 +53,7 @@ GLOBAL FLAGS:
 EXAMPLES:
   Setup:
     bpatch init /abs/path/to/chromium_patches
+    bpatch ls
 
   Daily loop:
     bpatch status
@@ -158,6 +161,18 @@ pub enum Command {
 "#
     )]
     Alias(alias::AliasArgs),
+    /// List configured patch store and checkout aliases.
+    #[command(
+        long_about = "List the configured chromium_patches store and registered Chromium checkout aliases without requiring checkout discovery.",
+        after_long_help = r#"EXAMPLE:
+  bpatch ls
+  bpatch --store /abs/path/to/chromium_patches ls --json
+
+NOTE:
+  bpatch ls does not accept -C/--checkout because it lists machine config, not a checkout target.
+"#
+    )]
+    Ls,
     /// Write the patch store path to the user config.
     #[command(
         long_about = "Canonicalize a chromium_patches store directory, validate that it contains bpatch metadata, and write it to ~/.config/bpatch/config.toml while preserving other config keys and comments.",
@@ -305,7 +320,7 @@ impl Command {
             Self::Apply(args) => args.checkout.as_deref(),
             Self::Annotate(args) => args.checkout.as_deref(),
             Self::Continue(args) => args.checkout.as_deref(),
-            Self::Extract(_) | Self::Feature(_) | Self::Alias(_) | Self::Init(_) => None,
+            Self::Extract(_) | Self::Feature(_) | Self::Alias(_) | Self::Ls | Self::Init(_) => None,
         }
     }
 }
@@ -344,6 +359,21 @@ fn run_inner(cli: &Cli) -> Result<i32> {
             );
         }
         return alias::run(args, cli.json);
+    }
+    if matches!(&cli.command, Command::Ls) {
+        if cli.checkout.is_some() {
+            bail!(
+                "ls does not accept -C/--checkout; it lists machine config and does not target a checkout"
+            );
+        }
+        let config_path = config_path();
+        let report = ls::run(cli.store.as_deref(), &config_path)?;
+        write_output(
+            cli.json,
+            &ls::render_json(&report)?,
+            &ls::render_human(&report),
+        )?;
+        return Ok(report.exit_code());
     }
     if let Command::Init(args) = &cli.command {
         let report = init::run(args, &config_path())?;
@@ -420,6 +450,7 @@ fn run_inner(cli: &Cli) -> Result<i32> {
         Command::Extract(args) => run_extract(cli, args, &checkout, &store_dir),
         Command::Feature(args) => run_feature(cli, args, &state_ctx, &store_dir),
         Command::Alias(_) => unreachable!("alias dispatches before checkout/store discovery"),
+        Command::Ls => unreachable!("ls dispatches before checkout/store discovery"),
         Command::Init(_) => unreachable!("init dispatches before checkout/store discovery"),
         Command::Abort(_) => {
             let report = abort::run(&state_ctx);

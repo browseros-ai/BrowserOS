@@ -10,158 +10,83 @@ import { useLocation } from 'react-router'
 import { StatusBadge } from '@/components/cockpit/StatusBadge'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { ReplayFrame } from '@/modules/api/replay.hooks'
 import { EventTimeline } from './EventTimeline'
 import { PlaybackTransport } from './PlaybackTransport'
-import { type ReplayPlayerHandle, ReplayViewport } from './ReplayViewport'
-import { buildTabView, EMPTY_TAB_VIEW, useReplayData } from './replay.data'
-import { frameIndexAt } from './replay.helpers'
-import { tabSeekForFrame } from './tab-view'
+import { ReplayViewport } from './ReplayViewport'
+import { useReplayData } from './replay.data'
+import {
+  buildSessionReplayPlan,
+  EMPTY_SESSION_REPLAY_PLAN,
+  type ReplayAction,
+} from './session-replay'
 import { usePlayback } from './use-playback'
 
-/** Renders the audit replay page and syncs rrweb playback to the transport UI. */
+/**
+ * Renders the audit replay page.
+ *
+ * The page owns one global activity clock and asks the session plan which tool
+ * is current and which tab to show. Nothing here accumulates camera state, so a
+ * backward seek, a forward seek, and a live data refresh all land on the same
+ * answer. The operator can pin a tab to inspect it; that pins the camera only —
+ * the clock and the action schedule never fork.
+ */
 export function Replay() {
   const { replay, isLoading, navigate } = useReplayData()
   const location = useLocation()
-  const [selectedTabId, setSelectedTabId] = useState<number | null>(null)
-  const playerHandleRef = useRef<ReplayPlayerHandle | null>(null)
-  const playbackTimeRef = useRef(0)
-  const playbackSpeedRef = useRef(1)
-  const playbackIsPlayingRef = useRef(true)
-  const pendingTabSeekRef = useRef<number | null>(null)
+  const [pinnedTabId, setPinnedTabId] = useState<number | null>(null)
+  const activeSessionRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    if (!replay) return
-    const firstTab = replay.tabs[0]
-    if (!firstTab) {
-      if (selectedTabId !== null) {
-        pendingTabSeekRef.current = 0
-        setSelectedTabId(null)
-      }
-      return
-    }
-    const selectedTab = replay.tabs.find((tab) => tab.tabId === selectedTabId)
-    if (!selectedTab) {
-      if (selectedTabId !== null) pendingTabSeekRef.current = 0
-      setSelectedTabId(firstTab.tabId)
-    }
-  }, [replay, selectedTabId])
-
-  const tabViewInput = useMemo(
-    () =>
-      replay
-        ? {
-            frames: replay.frames,
-            tabs: replay.tabs,
-            eventsForTab: replay.eventsForTab,
-            startedAtMs: replay.startedAtMs,
-          }
-        : null,
+  const plan = useMemo(
+    () => (replay ? buildSessionReplayPlan(replay) : EMPTY_SESSION_REPLAY_PLAN),
     [replay],
   )
-  const perTabView = useMemo(
-    () =>
-      tabViewInput ? buildTabView(tabViewInput, selectedTabId) : EMPTY_TAB_VIEW,
-    [selectedTabId, tabViewInput],
-  )
-
-  const playbackTotalSeconds = perTabView.hasFullSnapshot
-    ? perTabView.totalSeconds
-    : 0
-  const playback = usePlayback(playbackTotalSeconds)
+  const playback = usePlayback(plan.durationSeconds)
+  const { pause, play, seek, togglePlay: togglePlayback } = playback
 
   useEffect(() => {
-    playbackTimeRef.current = playback.time
-  }, [playback.time])
-
-  useEffect(() => {
-    playbackSpeedRef.current = playback.speed
-    playerHandleRef.current?.setSpeed(playback.speed)
-  }, [playback.speed])
-
-  useEffect(() => {
-    playbackIsPlayingRef.current = playback.isPlaying
-  }, [playback.isPlaying])
-
-  useEffect(() => {
-    if (!playerHandleRef.current) return
-    if (playback.isPlaying) {
-      playerHandleRef.current.play(playbackTimeRef.current * 1000)
-    } else {
-      playerHandleRef.current.pause()
+    const sessionId = replay?.sessionId
+    if (sessionId === undefined || activeSessionRef.current === sessionId) {
+      return
     }
-  }, [playback.isPlaying])
-
-  useEffect(() => {
-    if (!playback.isPlaying || playbackTotalSeconds === 0) return
-    let rafId = 0
-    let active = true
-    const sync = () => {
-      if (!active) return
-      const handle = playerHandleRef.current
-      const keepGoing = handle
-        ? playback.syncFromPlayer(handle.getCurrentTime() / 1000)
-        : true
-      if (keepGoing) rafId = window.requestAnimationFrame(sync)
-    }
-    rafId = window.requestAnimationFrame(sync)
-    return () => {
-      active = false
-      window.cancelAnimationFrame(rafId)
-    }
-  }, [playback.isPlaying, playback.syncFromPlayer, playbackTotalSeconds])
-
-  const seekTo = useCallback(
-    (seconds: number) => {
-      const next = playback.seek(seconds)
-      playbackTimeRef.current = next
-      playbackIsPlayingRef.current = false
-      playerHandleRef.current?.seek(next * 1000)
-    },
-    [playback.seek],
-  )
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tab changes must flush pending seeks even when consecutive tabs have the same duration.
-  useEffect(() => {
-    const pendingSeconds = pendingTabSeekRef.current
-    if (pendingSeconds === null) return
-    pendingTabSeekRef.current = null
-    seekTo(pendingSeconds)
-  }, [seekTo, selectedTabId])
+    activeSessionRef.current = sessionId
+    setPinnedTabId(null)
+    seek(0)
+    play()
+  }, [replay?.sessionId, play, seek])
 
   const selectTab = useCallback(
     (value: string) => {
       const tabId = Number(value)
-      if (!replay || !Number.isSafeInteger(tabId)) return
-      if (tabId === selectedTabId) return
-      pendingTabSeekRef.current = 0
-      setSelectedTabId(tabId)
+      if (!Number.isSafeInteger(tabId)) return
+      pause()
+      setPinnedTabId(tabId)
     },
-    [replay, selectedTabId],
+    [pause],
   )
 
-  const selectFrame = useCallback(
-    (frame: ReplayFrame) => {
-      if (!tabViewInput) return
-      const tabSeek = tabSeekForFrame(tabViewInput, selectedTabId, frame)
-      if (tabSeek.tabId !== null && tabSeek.tabId !== selectedTabId) {
-        pendingTabSeekRef.current = tabSeek.seconds
-        setSelectedTabId(tabSeek.tabId)
-        return
-      }
-      seekTo(tabSeek.seconds)
+  const resumeFollow = useCallback(() => setPinnedTabId(null), [])
+
+  // Play always resumes automatic following; pause leaves a pin in place so an
+  // operator can stop, inspect a tab, and step around without losing it.
+  const togglePlay = useCallback(() => {
+    if (!playback.isPlaying) setPinnedTabId(null)
+    togglePlayback()
+  }, [playback.isPlaying, togglePlayback])
+
+  const selectAction = useCallback(
+    (action: ReplayAction) => {
+      setPinnedTabId(null)
+      seek(action.startAt)
     },
-    [seekTo, selectedTabId, tabViewInput],
+    [seek],
   )
 
-  const onPlayerReady = useCallback((handle: ReplayPlayerHandle | null) => {
-    playerHandleRef.current = handle
-    if (!handle) return
-    const ms = playbackTimeRef.current * 1000
-    handle.setSpeed(playbackSpeedRef.current)
-    handle.seek(ms)
-    if (playbackIsPlayingRef.current) handle.play(ms)
-  }, [])
+  const transportPlayback = { ...playback, togglePlay }
+  const state = plan.stateAt(playback.time)
+  const visibleTabId = pinnedTabId ?? state.tabId
+  const track = plan.trackFor(visibleTabId)
+  const view = plan.viewFor(visibleTabId)
+  const projection = plan.project(visibleTabId, playback.time)
 
   if (isLoading || !replay) {
     return (
@@ -190,14 +115,6 @@ export function Replay() {
     typeof (location.state as { from: unknown }).from === 'string'
   const back = () =>
     cameFromInAppFlow ? navigate(-1) : navigate(`/audit/${replay.sessionId}`)
-  const currentTabFrameIndex = frameIndexAt(perTabView.frames, playback.time)
-  const currentTabFrame = perTabView.frames[currentTabFrameIndex]
-  const currentTimelineFrameIndex =
-    currentTabFrame?.dispatchId !== undefined
-      ? replay.frames.findIndex(
-          (frame) => frame.dispatchId === currentTabFrame.dispatchId,
-        )
-      : -1
   const stats: { label: string; value: string }[] = [
     { label: 'Duration', value: replay.duration },
     { label: 'Steps', value: replay.steps },
@@ -245,60 +162,90 @@ export function Replay() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-          {replay.tabs.length > 1 && selectedTabId !== null && (
-            <Tabs value={selectedTabId.toString()} onValueChange={selectTab}>
-              <TabsList variant="line">
-                {replay.tabs.map(({ tabId }, idx) => (
-                  <TabsTrigger key={tabId} value={tabId.toString()}>
-                    Tab {idx + 1}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+          {replay.tabs.length > 1 && (
+            <div className="flex min-h-9 items-center gap-3">
+              <Tabs
+                value={visibleTabId === null ? '' : visibleTabId.toString()}
+                onValueChange={selectTab}
+              >
+                <TabsList variant="line">
+                  {replay.tabs.map(({ tabId }, idx) => (
+                    <TabsTrigger
+                      key={tabId}
+                      value={tabId.toString()}
+                      onClick={
+                        tabId === visibleTabId
+                          ? () => selectTab(tabId.toString())
+                          : undefined
+                      }
+                    >
+                      Tab {idx + 1}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+              {pinnedTabId !== null && (
+                <button
+                  type="button"
+                  data-resume-follow
+                  onClick={resumeFollow}
+                  className="ml-auto shrink-0 rounded-full bg-accent-tint px-2.5 py-1 font-semibold text-accent-ink text-xs"
+                >
+                  Resume follow
+                </button>
+              )}
+            </div>
           )}
-          {perTabView.incompleteUntilMs !== null && (
+          {view.incompleteUntilMs !== null && (
             <div
               role="status"
               className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
             >
               Recording incomplete — playback starts at{' '}
-              {formatIncompleteOffset(perTabView.incompleteUntilMs)}
+              {formatIncompleteOffset(view.incompleteUntilMs)}
             </div>
           )}
-          {perTabView.incompleteUntilMs === null &&
-            perTabView.knownIncomplete && (
-              <div
-                role="status"
-                className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
-              >
-                Recording incomplete — this replay contains a known gap
-              </div>
-            )}
-          {perTabView.hasFullSnapshot ? (
-            <>
-              <ReplayViewport
-                site={replay.site}
-                frame={currentTabFrame}
-                events={perTabView.events}
-                onPlayerReady={onPlayerReady}
-              />
+          {view.incompleteUntilMs === null && view.knownIncomplete && (
+            <div
+              role="status"
+              className="rounded-lg border border-amber/30 bg-amber-tint px-3 py-2 font-medium text-ink-2 text-xs"
+            >
+              Recording incomplete — this replay contains a known gap
+            </div>
+          )}
+          <div className="relative flex min-h-0 flex-1 flex-col gap-3">
+            <div className="flex min-h-0 flex-1">
+              {track ? (
+                <ReplayViewport
+                  site={replay.site}
+                  action={state.currentAction?.frame}
+                  url={plan.urlAt(visibleTabId, playback.time)}
+                  events={track.view.events}
+                  trackTime={projection.trackTime}
+                  live={projection.live}
+                  isPlaying={playback.isPlaying}
+                  speed={playback.speed}
+                />
+              ) : (
+                <div className="flex flex-1 items-center justify-center rounded-2xl border border-border-2 bg-card text-ink-3 text-sm shadow-sm">
+                  No visual recording for this tab
+                </div>
+              )}
+            </div>
+            {plan.durationSeconds > 0 && (
               <PlaybackTransport
-                playback={playback}
-                totalSeconds={perTabView.totalSeconds}
-                frames={perTabView.frames}
-                onSeek={seekTo}
+                playback={transportPlayback}
+                totalSeconds={plan.durationSeconds}
+                actions={plan.actions}
+                onSeek={seek}
               />
-            </>
-          ) : (
-            <div className="flex flex-1 items-center justify-center rounded-2xl border border-border-2 bg-card text-ink-3 text-sm shadow-sm">
-              No visual recording for this tab
-            </div>
-          )}
+            )}
+          </div>
         </div>
         <EventTimeline
-          frames={replay.frames}
-          currentFrameIndex={currentTimelineFrameIndex}
-          onSelectFrame={selectFrame}
+          actions={plan.actions}
+          currentIndex={state.currentIndex}
+          onSelectAction={selectAction}
         />
       </div>
     </div>

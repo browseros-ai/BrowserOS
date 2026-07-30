@@ -98,7 +98,33 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Configure Git for depot_tools
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            git_config_dir="$(cd "$RUNNER_TEMP" && pwd -W)"
+          else
+            git_config_dir="$(cd "$RUNNER_TEMP" && pwd)"
+          fi
+          git_config="$git_config_dir/browseros-global.gitconfig"
+          export GIT_CONFIG_GLOBAL="$git_config"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$git_config" >> "$GITHUB_ENV"
+
+          git config --global --replace-all core.autocrlf false
+          git config --global --replace-all core.filemode false
+          git config --global --replace-all core.fscache true
+          git config --global --replace-all core.preloadindex true
+          git config --global --replace-all depot-tools.allowGlobalGitConfig true
+
+          test "$(git config --global --get core.autocrlf)" = false
+          test "$(git config --global --get core.filemode)" = false
+          test "$(git config --global --get core.fscache)" = true
+          test "$(git config --global --get core.preloadindex)" = true
+          test "$(git config --global --get depot-tools.allowGlobalGitConfig)" = true
 
       # v8.x.y releases exist but astral-sh publishes no floating `v8`
       # major tag - `@v8` is unresolvable and kills the job in Set up job.
@@ -127,7 +153,7 @@ jobs:
 
           {
             echo "version=$version"
-            echo "cache_key=chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-$version"
+            echo "cache_key=chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-$version"
           } >> "$GITHUB_OUTPUT"
           {
             echo "CHROMIUM_ROOT=$parent/chromium"
@@ -142,7 +168,7 @@ jobs:
           path: ${{ env.CHROMIUM_ROOT }}
           key: ${{ steps.pin.outputs.cache_key }}
           restore-keys: |
-            chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v1-
+            chromium-src-${{ inputs.platform }}-${{ inputs.arch }}-v2-
 
       - name: Restore chromium checkout (R2)
         if: runner.os == 'Windows'
@@ -162,7 +188,8 @@ jobs:
         run: |
           set -euo pipefail
           uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step checkout
+            --root "$CHROMIUM_ROOT" --step checkout \
+            --repair-cached-depot-tools
 
       - name: Reset chromium tree (clean module)
         working-directory: packages/browseros
@@ -178,7 +205,8 @@ jobs:
         run: |
           set -euo pipefail
           uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step sync
+            --root "$CHROMIUM_ROOT" --step sync \
+            --repair-cached-depot-tools
 
       # Save immediately after sync: the tree is pristine (no BrowserOS or
       # BrowserClaw patches, no out/ dir), which keeps the cache deterministic

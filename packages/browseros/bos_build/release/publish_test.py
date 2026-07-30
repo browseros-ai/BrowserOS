@@ -4,10 +4,11 @@
 import unittest
 from types import SimpleNamespace
 from typing import cast
+from unittest import mock
 
 from ..core.context import Context
 from ..core.products import get_product_descriptor
-from .publish import _release_source_key
+from .publish import PublishModule, _release_source_key
 
 
 class ReleaseSourceKeyTest(unittest.TestCase):
@@ -52,6 +53,126 @@ class ReleaseSourceKeyTest(unittest.TestCase):
                 product=get_product_descriptor(product),
             ),
         )
+
+
+class PublishModuleIntegrityTest(unittest.TestCase):
+    def test_missing_r2_client_raises(self):
+        module = PublishModule(platforms=["win"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_cdn_base_url="https://cdn.browseros.com",
+                r2_bucket="bucket",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value={
+                    "win": {
+                        "artifacts": {
+                            "x64_installer": {
+                                "filename": "BrowserClaw_installer.exe",
+                                "url": "https://cdn.browseros.com/installer.exe",
+                            }
+                        }
+                    }
+                },
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=None,
+            ),
+            self.assertRaisesRegex(RuntimeError, "R2 client"),
+        ):
+            module.execute(ctx)
+
+    def test_zero_mapped_artifacts_raises(self):
+        module = PublishModule(platforms=["win"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_bucket="bucket",
+                r2_cdn_base_url="https://cdn.browseros.com",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+        metadata = {
+            "win": {
+                "artifacts": {
+                    "unknown": {
+                        "filename": "unknown.bin",
+                        "url": "https://cdn.browseros.com/unknown.bin",
+                    }
+                }
+            }
+        }
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value=metadata,
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=object(),
+            ),
+            self.assertRaisesRegex(RuntimeError, "No promotable artifacts"),
+        ):
+            module.execute(ctx)
+
+    def test_each_requested_platform_requires_a_promotable_artifact(self):
+        module = PublishModule(platforms=["macos", "win"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_bucket="bucket",
+                r2_cdn_base_url="https://cdn.browseros.com",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+        metadata = {
+            "macos": {
+                "artifacts": {
+                    "universal": {
+                        "filename": "BrowserClaw_v0.49.0_universal.dmg",
+                        "url": (
+                            "https://cdn.browseros.com/releases/browserclaw/"
+                            "0.49.0/macos/BrowserClaw_v0.49.0_universal.dmg"
+                        ),
+                    }
+                }
+            },
+            "win": {
+                "artifacts": {
+                    "unknown": {
+                        "filename": "unknown.bin",
+                        "url": "https://cdn.browseros.com/unknown.bin",
+                    }
+                }
+            },
+        }
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value=metadata,
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=object(),
+            ),
+            mock.patch(
+                "bos_build.release.publish.copy_to_download_path",
+                return_value=True,
+            ) as copy,
+            self.assertRaisesRegex(RuntimeError, "requested platform win"),
+        ):
+            module.execute(ctx)
+
+        copy.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,24 +1,26 @@
 import { Layers } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ReplayFrame } from '@/modules/api/replay.hooks'
 import { formatTime, KIND_STYLE, VERB_META } from './replay.helpers'
+import type { ReplayAction } from './session-replay'
 
 interface EventTimelineProps {
-  frames: readonly ReplayFrame[]
-  currentFrameIndex: number
-  onSelectFrame: (frame: ReplayFrame) => void
+  /** Every tool in the session, globally ordered — not filtered by tab. */
+  actions: readonly ReplayAction[]
+  /** Index of the globally current action; -1 before the first one starts. */
+  currentIndex: number
+  onSelectAction: (action: ReplayAction) => void
 }
 
 /**
- * Right-rail vertical event list. Each row corresponds to one frame
- * in the recording. Past frames are full-opacity, future frames dim,
- * and the row matching the playhead gets an accent-tint background.
- * Clicking a row seeks the player to that frame.
+ * Right-rail vertical list of the session's tools in chronological order.
+ * Rows are stamped with the action's activity start, which is both where the
+ * row becomes current and where clicking it seeks. Past rows are full-opacity,
+ * future rows dim, and the current row gets an accent-tint background.
  */
 export function EventTimeline({
-  frames,
-  currentFrameIndex,
-  onSelectFrame,
+  actions,
+  currentIndex,
+  onSelectAction,
 }: EventTimelineProps) {
   return (
     <aside className="flex w-[320px] shrink-0 flex-col border-border border-l bg-card">
@@ -27,20 +29,18 @@ export function EventTimeline({
         Action timeline
       </header>
       <div className="flex flex-1 flex-col overflow-y-auto px-3 py-2">
-        {frames.map((frame, i) => {
-          const seen = currentFrameIndex >= 0 && i <= currentFrameIndex
-          const isCurrent = i === currentFrameIndex
+        {actions.map((action, i) => {
+          const { frame } = action
+          const seen = currentIndex >= 0 && i <= currentIndex
+          const isCurrent = i === currentIndex
           const verb = VERB_META[frame.verb]
           const kind = KIND_STYLE[frame.kind]
-          const showConnector = i < frames.length - 1
+          const showConnector = i < actions.length - 1
           return (
             <button
               type="button"
-              key={
-                frame.dispatchId ??
-                `frame-${frame.kind}-${frame.verb}-${frame.t}-${i}`
-              }
-              onClick={() => onSelectFrame(frame)}
+              key={frame.dispatchId ?? `action-${action.sourceIndex}`}
+              onClick={() => onSelectAction(action)}
               className={cn(
                 'flex gap-3 rounded-lg p-2.5 text-left transition-opacity',
                 isCurrent && 'bg-accent-tint',
@@ -67,7 +67,7 @@ export function EventTimeline({
                     {verb.label}
                   </span>
                   <span className="ml-auto font-mono text-[10.5px] text-ink-3">
-                    {formatTime(frame.t)}
+                    {formatTime(action.startAt)}
                   </span>
                 </div>
                 <p className="mt-0.5 text-ink-2 text-xs leading-snug">

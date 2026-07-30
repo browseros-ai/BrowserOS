@@ -2,6 +2,7 @@ import { type FC, useCallback, useEffect, useState } from 'react'
 import { getMcpServerUrl } from '@/lib/browseros/helpers'
 import type { McpTool } from '@/lib/mcp/client'
 import { sendServerMessage } from '@/lib/messaging/server/serverMessages'
+import { BrowserClawMcpBanner } from './BrowserClawMcpBanner'
 import { IntegrationsSection } from './IntegrationsSection'
 import { MCPServerHeader } from './MCPServerHeader'
 import { MCPToolsSection } from './MCPToolsSection'
@@ -82,6 +83,8 @@ export const MCPSettingsPage: FC = () => {
         error={urlError}
         onServerRestart={loadServerUrlAndTools}
       />
+
+      <BrowserClawMcpBanner />
 
       <IntegrationsSection serverUrl={serverUrl} />
 

@@ -160,6 +160,101 @@ class AppcastModuleTest(unittest.TestCase):
             [c.key for c in self.publisher.calls], ["appcast-claw.xml"]
         )
 
+    def test_all_universal_contract_renders_exactly_three_browserclaw_feeds(self):
+        metadata = {
+            "macos": {
+                **_macos_release("arm64", "x64", "universal"),
+                "product": "browserclaw",
+                "version": "0.47.0.2",
+                "platform": "macos",
+                "source_sha": "a" * 40,
+                "workflow_run_id": "123",
+                "workflow_run_attempt": "1",
+            },
+            "win": {
+                **_win_release("x64_installer"),
+                "product": "browserclaw",
+                "version": "0.47.0.2",
+                "platform": "win",
+                "source_sha": "a" * 40,
+                "workflow_run_id": "123",
+                "workflow_run_attempt": "1",
+                "artifacts": {
+                    **_win_release("x64_installer")["artifacts"],
+                    "x64_zip": _artifact(
+                        "BrowserClaw_v0.47.0.2_x64_installer.zip"
+                    ),
+                },
+            },
+            "linux": {
+                "product": "browserclaw",
+                "version": "0.47.0.2",
+                "platform": "linux",
+                "source_sha": "a" * 40,
+                "workflow_run_id": "123",
+                "workflow_run_attempt": "1",
+                "artifacts": {
+                    "x64_appimage": _artifact(
+                        "BrowserClaw_v0.47.0.2_x64.AppImage"
+                    ),
+                    "x64_deb": _artifact(
+                        "BrowserClaw_v0.47.0.2_amd64.deb"
+                    ),
+                },
+            },
+        }
+        module = self._module(
+            metadata,
+            product_id="browserclaw",
+            platforms="all",
+            macos_arch="universal",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+            workflow_run_attempt="1",
+        )
+
+        module.execute(self._ctx())
+
+        self.assertEqual(
+            [call.key for call in self.publisher.calls],
+            [
+                "appcast-claw.xml",
+                "appcast-claw-x86_64.xml",
+                "appcast-claw-win.xml",
+            ],
+        )
+
+    def test_contract_rejects_stale_release_metadata_before_rendering(self):
+        metadata = {
+            "win": {
+                **_win_release("x64_installer"),
+                "product": "browseros",
+                "version": "0.47.0.2",
+                "platform": "win",
+                "source_sha": "old",
+                "workflow_run_id": "122",
+                "workflow_run_attempt": "1",
+                "artifacts": {
+                    **_win_release("x64_installer")["artifacts"],
+                    "x64_zip": _artifact(
+                        "BrowserOS_v0.47.0.2_x64_installer.zip"
+                    ),
+                },
+            },
+        }
+        module = self._module(
+            metadata,
+            platforms="windows",
+            source_sha="new",
+            workflow_run_id="123",
+            workflow_run_attempt="1",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "source_sha"):
+            module.execute(self._ctx())
+
+        self.assertEqual(self.publisher.calls, [])
+
     def test_validate_refuses_publishing_unpublishable_feed(self):
         # Every real product now has a client, so synthesize an unpublishable
         # feed set to exercise the gate itself.

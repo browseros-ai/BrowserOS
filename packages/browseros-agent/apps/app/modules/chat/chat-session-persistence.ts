@@ -15,3 +15,15 @@ export function getPersistableMessages(messages: UIMessage[]) {
     messages.filter((message) => message.parts?.length > 0),
   )
 }
+
+/**
+ * Whether a chat's history may be written to durable storage or the cloud.
+ * False in incognito so nothing is saved (#1189); the `isTemporaryChat` seam
+ * lets a future "temporary chat" toggle opt out the same way.
+ */
+export function shouldPersistHistory(
+  isIncognito: boolean,
+  isTemporaryChat = false,
+): boolean {
+  return !isIncognito && !isTemporaryChat
+}

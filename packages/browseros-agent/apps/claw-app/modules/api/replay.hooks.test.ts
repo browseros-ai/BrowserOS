@@ -23,8 +23,12 @@ mock.module('./client', () => ({
     }),
 }))
 
-const { fetchReplayEvents, fetchReplayMetadata, replayEventsRevision } =
-  await import('./replay.hooks')
+const {
+  fetchReplayEvents,
+  fetchReplayMetadata,
+  replayEventsRevision,
+  useReplayEvents,
+} = await import('./replay.hooks')
 
 afterAll(() => mock.restore())
 
@@ -34,6 +38,21 @@ beforeEach(() => {
 })
 
 describe('replay queries', () => {
+  it('isolates event snapshots by metadata revision', () => {
+    expect(
+      Array.from(
+        useReplayEvents.getKey({
+          sessionId: 'session-1',
+          revision: 'revision-2',
+        }),
+      ),
+    ).toEqual([
+      'replay',
+      'events',
+      { sessionId: 'session-1', revision: 'revision-2' },
+    ])
+  })
+
   it('changes the event revision when late recording metadata advances', () => {
     const metadata = {
       hasData: true,

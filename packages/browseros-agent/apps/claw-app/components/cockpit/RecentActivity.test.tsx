@@ -77,6 +77,7 @@ describe('RecentActivity', () => {
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
+    expect(html).toContain('ph-no-capture')
     // DONE is the silent default in the editorial cockpit; the tile
     // instead carries a mono meta line with the dispatch count.
     expect(html).toContain('4 tools')

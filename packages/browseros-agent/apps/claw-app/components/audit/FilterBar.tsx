@@ -84,7 +84,7 @@ export function FilterBar({
           )}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-52">
+        <DropdownMenuContent align="start" className="ph-no-capture min-w-52">
           <DropdownMenuItem onClick={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
             {selectedAgentSlug === null && <Check className="size-3.5" />}
@@ -118,7 +118,7 @@ export function FilterBar({
           {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-44">
+        <DropdownMenuContent align="start" className="ph-no-capture min-w-44">
           <DropdownMenuItem onClick={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
@@ -154,7 +154,7 @@ export function FilterBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="max-h-64 min-w-52 overflow-y-auto"
+            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto"
           >
             <DropdownMenuItem onClick={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
