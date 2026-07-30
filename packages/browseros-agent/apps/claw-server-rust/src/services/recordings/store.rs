@@ -3,13 +3,15 @@
 use crate::{
     clock::now_epoch_ms,
     db::{AppendDocumentBatch, RecordingIndex},
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, IoPath},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::SeekFrom, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    fs,
+    fs::{self, OpenOptions},
+    io::{AsyncSeekExt, AsyncWriteExt},
     sync::Mutex,
     task::JoinHandle,
     time::{MissedTickBehavior, interval},
@@ -51,9 +53,11 @@ pub struct RetentionSweepResult {
     pub claims_deleted: u64,
 }
 
-/// Stores each Chrome document stream and its durable batch acceptance ledger.
+/// Stores each Chrome document stream (metadata in SQLite, rrweb payload on disk
+/// under `replays_root`) and its durable batch acceptance ledger.
 pub struct RecordingStore {
     root: PathBuf,
+    replays_root: PathBuf,
     index: Arc<RecordingIndex>,
     document_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
@@ -62,12 +66,14 @@ impl RecordingStore {
     #[must_use]
     pub fn new(
         root: PathBuf,
+        replays_root: PathBuf,
         index: Arc<RecordingIndex>,
         _max_open_handles: usize,
         _idle_handle: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             root,
+            replays_root,
             index,
             document_locks: Mutex::new(HashMap::new()),
         })
@@ -102,6 +108,12 @@ impl RecordingStore {
         batch_id: &str,
         has_gap: bool,
     ) -> AppResult<bool> {
+        if self.index.batch_accepted(document_id, batch_id).await? {
+            return Ok(false);
+        }
+        if events.is_empty() {
+            return Ok(true);
+        }
         let mut payload = String::new();
         for event in events {
             payload.push_str(&serde_json::to_string(event)?);
@@ -119,20 +131,93 @@ impl RecordingStore {
             .unwrap_or_default();
         let size_bytes = i64::try_from(payload.len()).unwrap_or(i64::MAX);
         let event_count = i64::try_from(events.len()).unwrap_or(i64::MAX);
+        // Append to the on-disk replay file, then record the batch. The
+        // per-document lock serializes this; a crash between the two truncates
+        // back to the committed length on the next append (see append_payload_file).
+        let committed = self.index.committed_payload_bytes(document_id).await?;
+        let payload_bytes = self
+            .append_payload_file(document_id, committed, &payload)
+            .await?;
         self.index
-            .append_document_batch(AppendDocumentBatch {
+            .commit_batch(AppendDocumentBatch {
                 document_id,
                 tab_id,
                 target_id,
-                payload,
                 first_event_at,
                 last_event_at,
                 size_bytes,
                 event_count,
                 batch_id,
                 has_gap,
+                payload_bytes,
             })
+            .await?;
+        Ok(true)
+    }
+
+    /// Appends the batch payload to the document's `replays/` file. Truncates to
+    /// `committed` first (dropping bytes an interrupted prior append never
+    /// committed) and clamps to the file's actual length (an externally
+    /// deleted/truncated file never zero-pads). Returns the new committed length.
+    async fn append_payload_file(
+        &self,
+        document_id: &str,
+        committed: i64,
+        payload: &str,
+    ) -> AppResult<i64> {
+        let path = self.replay_path_for(document_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.with_path(parent)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
             .await
+            .with_path(&path)?;
+        let current = file.metadata().await.with_path(&path)?.len();
+        let base = committed.clamp(0, i64::try_from(current).unwrap_or(i64::MAX));
+        let base_u64 = u64::try_from(base).unwrap_or(0);
+        file.set_len(base_u64).await.with_path(&path)?;
+        file.seek(SeekFrom::Start(base_u64))
+            .await
+            .with_path(&path)?;
+        file.write_all(payload.as_bytes()).await.with_path(&path)?;
+        file.sync_all().await.with_path(&path)?;
+        Ok(base.saturating_add(i64::try_from(payload.len()).unwrap_or(i64::MAX)))
+    }
+
+    /// Loads a document's committed NDJSON payload, file-first, falling back to
+    /// the DB blob for a document that predates the file migration.
+    async fn load_payload(&self, document_id: &str) -> AppResult<Option<String>> {
+        let committed = self.index.committed_payload_bytes(document_id).await?;
+        if committed > 0 {
+            let path = self.replay_path_for(document_id);
+            let bytes = match fs::read(&path).await {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(source) => {
+                    return Err(AppError::Io {
+                        path: Some(path),
+                        source,
+                    });
+                }
+            };
+            let limit = usize::try_from(committed)
+                .unwrap_or(usize::MAX)
+                .min(bytes.len());
+            return Ok(Some(String::from_utf8_lossy(&bytes[..limit]).into_owned()));
+        }
+        self.index.payload(document_id).await
+    }
+
+    fn replay_path_for(&self, document_id: &str) -> PathBuf {
+        let key = replay_key(document_id);
+        self.replays_root
+            .join(replay_shard(&key))
+            .join(format!("{key}.ndjson"))
     }
 
     pub async fn read_range(
@@ -141,7 +226,7 @@ impl RecordingStore {
         from: i64,
         to: i64,
     ) -> AppResult<Vec<RecordedEvent>> {
-        let Some(payload) = self.index.payload(document_id).await? else {
+        let Some(payload) = self.load_payload(document_id).await? else {
             return Ok(Vec::new());
         };
         Ok(read_payload_range(&payload, from, to))
@@ -243,7 +328,14 @@ impl RecordingStore {
     async fn delete_document(&self, document_id: &str) -> AppResult<bool> {
         let lock = self.lock_for(document_id).await;
         let guard = lock.lock().await;
-        let result = async { self.index.delete_document(document_id).await }.await;
+        let result = async {
+            let deleted = self.index.delete_document(document_id).await?;
+            if deleted {
+                remove_file(&self.replay_path_for(document_id), document_id).await;
+            }
+            Ok(deleted)
+        }
+        .await;
         drop(guard);
         self.release_lock(document_id, &lock).await;
         result
@@ -361,6 +453,23 @@ fn sanitize_id(id: &str) -> String {
         .collect()
 }
 
+/// Collision-free, filesystem-safe single-segment key for a document id (the
+/// replay file stem). base64url yields only `[A-Za-z0-9_-]`.
+fn replay_key(document_id: &str) -> String {
+    URL_SAFE_NO_PAD.encode(document_id.as_bytes())
+}
+
+/// Two-character shard directory for a replay key so `replays/` never becomes a
+/// single directory with one file per recording.
+fn replay_shard(key: &str) -> String {
+    let prefix: String = key.chars().take(2).collect();
+    if prefix.is_empty() {
+        "_".to_string()
+    } else {
+        prefix
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +484,7 @@ mod tests {
         ));
         let store = RecordingStore::new(
             dir.path().join("recordings"),
+            dir.path().join("replays"),
             index.clone(),
             10,
             Duration::from_secs(1),
@@ -408,6 +518,7 @@ mod tests {
         );
         let recreated = RecordingStore::new(
             store.root.clone(),
+            store.replays_root.clone(),
             index.clone(),
             10,
             Duration::from_secs(1),

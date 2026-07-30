@@ -10,8 +10,7 @@ use crate::{
                 RecordingBatches, RecordingPayloads, RecordingStreams, SessionTabs, TabClaims,
                 TabRecordings,
             },
-            recording_batches, recording_payloads, recording_streams, session_tabs, tab_claims,
-            tab_recordings,
+            recording_batches, recording_streams, session_tabs, tab_claims, tab_recordings,
         },
     },
     error::{AppError, AppResult},
@@ -33,7 +32,6 @@ pub struct AppendDocumentBatch<'a> {
     /// Best-effort target attribution: a later persisted batch may fill an initial absence but
     /// never replace a stored target id.
     pub target_id: Option<&'a str>,
-    pub payload: String,
     pub first_event_at: i64,
     pub last_event_at: i64,
     pub size_bytes: i64,
@@ -42,6 +40,9 @@ pub struct AppendDocumentBatch<'a> {
     /// On a newly accepted non-empty batch, recorder gap evidence or malformed lines dropped by the
     /// server become sticky for the document stream; any replay selecting that stream is incomplete.
     pub has_gap: bool,
+    /// New absolute committed length of the document's on-disk replay file after
+    /// this batch's events were appended.
+    pub payload_bytes: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -164,7 +165,31 @@ impl RecordingIndex {
         Ok(total.unwrap_or(0))
     }
 
-    pub async fn append_document_batch(&self, input: AppendDocumentBatch<'_>) -> AppResult<bool> {
+    /// Whether this document has already durably accepted `batch_id`.
+    pub async fn batch_accepted(&self, document_id: &str, batch_id: &str) -> AppResult<bool> {
+        Ok(
+            RecordingBatches::find_by_id((document_id.to_string(), batch_id.to_string()))
+                .one(self.db.connection())
+                .await?
+                .is_some(),
+        )
+    }
+
+    /// Committed byte length of the document's on-disk replay file (0 when the
+    /// stream does not exist yet or predates the file migration).
+    pub async fn committed_payload_bytes(&self, document_id: &str) -> AppResult<i64> {
+        Ok(RecordingStreams::find_by_id(document_id.to_string())
+            .one(self.db.connection())
+            .await?
+            .map_or(0, |row| row.payload_bytes))
+    }
+
+    /// Records a batch's metadata after its events were appended to the document's
+    /// on-disk replay file, where `input.payload_bytes` is the file's new committed
+    /// length. Idempotent: an already-accepted batch is a no-op, so a duplicate
+    /// append leaves only uncommitted trailing file bytes that the next append
+    /// truncates away. Callers serialize per document.
+    pub async fn commit_batch(&self, input: AppendDocumentBatch<'_>) -> AppResult<()> {
         let txn = self.db.connection().begin().await?;
         async {
             if RecordingBatches::find_by_id((
@@ -175,10 +200,7 @@ impl RecordingIndex {
             .await?
             .is_some()
             {
-                return Ok(false);
-            }
-            if input.event_count == 0 {
-                return Ok(true);
+                return Ok(());
             }
             if let Some(existing) = RecordingStreams::find_by_id(input.document_id.to_string())
                 .one(&txn)
@@ -204,6 +226,7 @@ impl RecordingIndex {
                     .unwrap()
                     .saturating_add(input.event_count));
                 update.has_gap = Set(update.has_gap.unwrap() || input.has_gap);
+                update.payload_bytes = Set(input.payload_bytes);
                 update.update(&txn).await?;
             } else {
                 RecordingStreams::insert(recording_streams::ActiveModel {
@@ -215,24 +238,7 @@ impl RecordingIndex {
                     size_bytes: Set(input.size_bytes),
                     event_count: Set(input.event_count),
                     has_gap: Set(input.has_gap),
-                    payload_bytes: Set(0),
-                })
-                .exec(&txn)
-                .await?;
-            }
-            if let Some(existing) = RecordingPayloads::find_by_id(input.document_id.to_string())
-                .one(&txn)
-                .await?
-            {
-                let mut update = existing.into_active_model();
-                let mut events_ndjson = update.events_ndjson.take().unwrap_or_default();
-                events_ndjson.push_str(&input.payload);
-                update.events_ndjson = Set(events_ndjson);
-                update.update(&txn).await?;
-            } else {
-                RecordingPayloads::insert(recording_payloads::ActiveModel {
-                    document_id: Set(input.document_id.to_string()),
-                    events_ndjson: Set(input.payload),
+                    payload_bytes: Set(input.payload_bytes),
                 })
                 .exec(&txn)
                 .await?;
@@ -245,7 +251,7 @@ impl RecordingIndex {
             .exec(&txn)
             .await?;
             txn.commit().await?;
-            Ok::<bool, AppError>(true)
+            Ok::<(), AppError>(())
         }
         .await
     }

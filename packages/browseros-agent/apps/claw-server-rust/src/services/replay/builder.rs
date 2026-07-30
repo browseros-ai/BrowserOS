@@ -352,6 +352,7 @@ mod tests {
         ));
         let recordings = RecordingStore::new(
             dir.path().join("recordings"),
+            dir.path().join("replays"),
             index.clone(),
             10,
             Duration::from_secs(1),
