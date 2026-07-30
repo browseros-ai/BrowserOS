@@ -399,6 +399,17 @@ impl RecordingIndex {
         Ok((claims, streams))
     }
 
+    /// Every live recording stream's document id, for the replay-file orphan
+    /// sweep to distinguish tracked files from drift left by a crashed writer.
+    pub async fn all_document_ids(&self) -> AppResult<Vec<String>> {
+        Ok(RecordingStreams::find()
+            .select_only()
+            .column(recording_streams::Column::DocumentId)
+            .into_tuple::<String>()
+            .all(self.db.connection())
+            .await?)
+    }
+
     pub async fn legacy_recordings_before(
         &self,
         cutoff: i64,

@@ -8,7 +8,13 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, io::SeekFrom, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    io::SeekFrom,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     fs::{self, OpenOptions},
     io::{AsyncSeekExt, AsyncWriteExt},
@@ -22,6 +28,11 @@ use tracing::{info, warn};
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub const RECORDING_ORPHAN_TTL_MS: i64 = 60 * 60 * 1000;
+/// Grace window before a replay file with no stream row is treated as orphaned,
+/// so a fresh append whose stream commit is still in flight is never swept.
+const ORPHAN_FILE_GRACE_MS: i64 = 5 * 60 * 1000;
+/// Per-run scan cap so a pathological `replays/` directory cannot hang the sweep.
+const MAX_ORPHAN_FILE_SCAN: usize = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +61,7 @@ pub struct LegacyRecordedEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetentionSweepResult {
     pub recordings_deleted: u64,
+    pub orphan_files_deleted: u64,
     pub claims_deleted: u64,
 }
 
@@ -299,13 +311,72 @@ impl RecordingStore {
             }
         }
 
+        let known: HashSet<String> = self.index.all_document_ids().await?.into_iter().collect();
+        let orphan_files_deleted = self.sweep_orphan_replays(&known, now).await;
+
         Ok(RetentionSweepResult {
             recordings_deleted,
+            orphan_files_deleted,
             claims_deleted: self
                 .index
                 .delete_released_claims_before(retention_cutoff)
                 .await?,
         })
+    }
+
+    /// Deletes replay files whose document has no live stream row (drift from a
+    /// crashed writer or a best-effort partial unlink that removed the row but
+    /// not the file). Skips files younger than the grace window so an in-flight
+    /// append is never mistaken for an orphan, and caps the scan. Best-effort:
+    /// unreadable directories and failed unlinks are ignored, never surfaced.
+    async fn sweep_orphan_replays(&self, known: &HashSet<String>, now: i64) -> u64 {
+        let mut deleted = 0u64;
+        let mut scanned = 0usize;
+        let Ok(mut shards) = fs::read_dir(&self.replays_root).await else {
+            return 0;
+        };
+        while scanned <= MAX_ORPHAN_FILE_SCAN
+            && let Ok(Some(shard)) = shards.next_entry().await
+        {
+            if !shard
+                .file_type()
+                .await
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Ok(mut files) = fs::read_dir(shard.path()).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = files.next_entry().await {
+                scanned += 1;
+                if scanned > MAX_ORPHAN_FILE_SCAN {
+                    return deleted;
+                }
+                let name = entry.file_name();
+                let Some(document_id) = name
+                    .to_str()
+                    .and_then(|name| name.strip_suffix(".ndjson"))
+                    .and_then(decode_replay_key)
+                else {
+                    continue; // foreign / non-key file: leave alone
+                };
+                if known.contains(&document_id) {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata().await else {
+                    continue;
+                };
+                if !meta.is_file() || replay_file_too_young(&meta, now) {
+                    continue;
+                }
+                if fs::remove_file(entry.path()).await.is_ok() {
+                    deleted += 1;
+                }
+            }
+        }
+        deleted
     }
 
     /// Runs recording retention immediately and then hourly.
@@ -324,6 +395,7 @@ impl RecordingStore {
                         match self.sweep_retention(retention_days, now_epoch_ms()).await {
                             Ok(result) => info!(
                                 recordings_deleted = result.recordings_deleted,
+                                orphan_files_deleted = result.orphan_files_deleted,
                                 claims_deleted = result.claims_deleted,
                                 "recording retention sweep finished"
                             ),
@@ -575,6 +647,26 @@ fn replay_key(document_id: &str) -> String {
     URL_SAFE_NO_PAD.encode(document_id.as_bytes())
 }
 
+/// Decodes a replay file stem (base64url of the document id) back to the
+/// document id. Returns None for a foreign file whose name is not a replay key.
+fn decode_replay_key(stem: &str) -> Option<String> {
+    String::from_utf8(URL_SAFE_NO_PAD.decode(stem).ok()?).ok()
+}
+
+/// Whether a replay file is within the orphan grace window, i.e. recent enough
+/// to still be an in-flight append whose stream row has not committed yet.
+fn replay_file_too_young(meta: &std::fs::Metadata, now: i64) -> bool {
+    let Some(mtime_ms) = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+    else {
+        return false;
+    };
+    now.saturating_sub(mtime_ms) < ORPHAN_FILE_GRACE_MS
+}
+
 /// Two-character shard directory for a replay key so `replays/` never becomes a
 /// single directory with one file per recording.
 fn replay_shard(key: &str) -> String {
@@ -734,6 +826,7 @@ mod tests {
             store.sweep_retention(7, now).await?,
             RetentionSweepResult {
                 recordings_deleted: 1,
+                orphan_files_deleted: 0,
                 claims_deleted: 0,
             }
         );
@@ -767,6 +860,37 @@ mod tests {
         // After migration the same events are served from the file.
         assert!(store.replay_path_for("doc-legacy").exists());
         assert_eq!(store.read_range("doc-legacy", 0, 100).await?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn orphan_replay_files_are_swept_while_tracked_files_are_kept() -> anyhow::Result<()> {
+        let (_dir, index, store) = setup().await?;
+        // A tracked recording: its replay file must survive the sweep.
+        store
+            .append_batch("keep-doc", 5, None, &[event(10)], "batch-a", false)
+            .await?;
+        let kept = store.replay_path_for("keep-doc");
+        assert!(kept.exists());
+
+        // An orphan replay file: a valid replay key with no stream row behind it.
+        let orphan = store.replay_path_for("ghost-doc");
+        if let Some(parent) = orphan.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(&orphan, b"{\"ts\":1}\n").await?;
+        // A foreign file whose stem is not a replay key (the `.` is outside the
+        // base64url alphabet, so decoding fails) must be left alone.
+        let foreign = store.replays_root.join("zz").join("my.notes.ndjson");
+        fs::create_dir_all(store.replays_root.join("zz")).await?;
+        fs::write(&foreign, b"keep me\n").await?;
+
+        let known: HashSet<String> = index.all_document_ids().await?.into_iter().collect();
+        // now = i64::MAX so neither file is inside the young-file grace window.
+        assert_eq!(store.sweep_orphan_replays(&known, i64::MAX).await, 1);
+        assert!(kept.exists());
+        assert!(!orphan.exists());
+        assert!(foreign.exists());
         Ok(())
     }
 
