@@ -33,7 +33,11 @@ Core loop inside a script: snapshot -> act -> verify.
   carry [ref=eN] handles.
 - act by ref, then read back the result and verify before moving on.
 - Refs go stale when the page changes (navigate, submit, re-render), re-snapshot before reusing them within the script.
+- Keep the pageId newPage returns and reuse it across the whole task; do not
+  reopen the page for each step.
 - Still loading? browser.wait on text/selector you expect, not a bare sleep.
+- Extract with browser.evaluate(pageId, { code }) (an async body, use return) or
+  { func } (a function to invoke), in one pass rather than many refining runs.
 - Compose the whole flow in one script: loop over items, paginate, extract in
   bulk, branch on what you find. That is the point of run.
 

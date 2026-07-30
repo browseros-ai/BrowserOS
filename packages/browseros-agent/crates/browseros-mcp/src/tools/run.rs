@@ -49,7 +49,7 @@ Read / wait / capture:
   browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   browser.grep(pageId, { pattern })  -> matching lines as a STRING
   browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready (default is a timed pause of `value` ms). There is no `ms` option; a plain pause is { value: 3000 }.
-  browser.screenshot(pageId) / evaluate(pageId, { code }) / pdf(pageId)
+  browser.screenshot(pageId) / evaluate(pageId, { code } | { func }) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page).
