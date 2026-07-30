@@ -42,8 +42,7 @@ Prefer act over JavaScript for single interactions. run does real multi-step
 flows and bulk extraction in one call; evaluate is one-shot page-context JS.
 
 Parallelize when it helps: independent subtasks get their own tabs — at most
-5 at a time unless the user asks for more. windows creates a separate window
-when a task needs isolation.
+5 at a time unless the user asks for more.
 
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserClaw and check the cockpit;
@@ -56,8 +55,9 @@ mod tests {
     use super::BROWSERCLAW_MCP_INSTRUCTIONS;
 
     #[test]
-    fn prompt_recommends_only_ordinary_window_isolation() {
+    fn prompt_uses_tabs_not_windows_for_parallel_work() {
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("independent subtasks get their own tabs"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("hidden window"));
-        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("separate window"));
+        assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("separate window"));
     }
 }
