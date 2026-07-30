@@ -158,7 +158,14 @@ impl RecordingStore {
         // Append to the on-disk replay file, then record the batch. The
         // per-document lock serializes this; a crash between the two truncates
         // back to the committed length on the next append (see append_payload_file).
-        let committed = self.index.committed_payload_bytes(document_id).await?;
+        // A legacy document may still hold its whole payload in the DB blob with
+        // payload_bytes == 0; extract it to the file first so this batch appends
+        // after those events, otherwise the background migration would later
+        // truncate the file back to the blob and lose this batch.
+        let committed = match self.index.committed_payload_bytes(document_id).await? {
+            0 => self.extract_blob_locked(document_id).await?,
+            committed => committed,
+        };
         let payload_bytes = self
             .append_payload_file(document_id, committed, &payload)
             .await?;
@@ -472,23 +479,26 @@ impl RecordingStore {
     async fn migrate_document(&self, document_id: &str) -> AppResult<i64> {
         let lock = self.lock_for(document_id).await;
         let guard = lock.lock().await;
-        let result = async {
-            let Some(payload) = self.index.payload(document_id).await? else {
-                // No blob left (already migrated): drop any stale marker so it is
-                // not reprocessed.
-                self.index.delete_payload_blob(document_id).await?;
-                return Ok(0);
-            };
-            // The blob is the whole payload, so write from a committed length of 0.
-            let bytes = self.append_payload_file(document_id, 0, &payload).await?;
-            self.index.set_payload_bytes(document_id, bytes).await?;
-            self.index.delete_payload_blob(document_id).await?;
-            Ok(bytes)
-        }
-        .await;
+        let result = self.extract_blob_locked(document_id).await;
         drop(guard);
         self.release_lock(document_id, &lock).await;
         result
+    }
+
+    /// Extracts a document's entire DB-blob payload to the start of its replay
+    /// file and deletes the blob, assuming the caller holds the document lock.
+    /// Returns the committed file length, or 0 when no blob remains (a new
+    /// document, or one a concurrent step already migrated). Idempotent.
+    async fn extract_blob_locked(&self, document_id: &str) -> AppResult<i64> {
+        let Some(payload) = self.index.payload(document_id).await? else {
+            return Ok(0);
+        };
+        // The blob predates any file append, so it always occupies the file from
+        // committed length 0.
+        let bytes = self.append_payload_file(document_id, 0, &payload).await?;
+        self.index.set_payload_bytes(document_id, bytes).await?;
+        self.index.delete_payload_blob(document_id).await?;
+        Ok(bytes)
     }
 
     /// Drops the oldest recording (blob, file, and row) to reclaim space when the
@@ -860,6 +870,44 @@ mod tests {
         // After migration the same events are served from the file.
         assert!(store.replay_path_for("doc-legacy").exists());
         assert_eq!(store.read_range("doc-legacy", 0, 100).await?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn appending_to_an_unmigrated_legacy_document_preserves_both_payloads()
+    -> anyhow::Result<()> {
+        let (_dir, index, store) = setup().await?;
+        let doc = "018f47a7-1c2b-7def-8123-0123456789ab";
+        // Pre-upgrade state: a stream row with its whole payload still in the DB
+        // blob, never file-migrated (payload_bytes == 0).
+        index
+            .seed_legacy_payload(doc, 11, "{\"ts\":10}\n{\"ts\":20}\n", 10, 20, 2)
+            .await?;
+
+        // A new batch for the SAME document arrives before background migration
+        // reaches it. The blob must be extracted first, not overwritten.
+        assert!(
+            store
+                .append_batch(doc, 11, None, &[event(30)], "new-batch", false)
+                .await?
+        );
+
+        // The inline extraction consumed the blob, so migration has nothing left
+        // to move and cannot truncate the file back to the blob.
+        assert_eq!(index.unmigrated_document_count().await?, 0);
+        assert!(matches!(
+            store.migrate_next_document().await?,
+            MigrationStep::Done
+        ));
+
+        // Every event survives, legacy first then the new batch.
+        let timestamps: Vec<i64> = store
+            .read_range(doc, 0, 1000)
+            .await?
+            .into_iter()
+            .map(|event| event.ts)
+            .collect();
+        assert_eq!(timestamps, vec![10, 20, 30]);
         Ok(())
     }
 
