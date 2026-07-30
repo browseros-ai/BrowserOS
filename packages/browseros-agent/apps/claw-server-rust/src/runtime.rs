@@ -97,6 +97,13 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "recording payload migration",
+                handle: state
+                    .recordings
+                    .clone()
+                    .spawn_payload_migration(shutdown.child_token()),
+            },
+            BackgroundTask {
                 name: "session efficiency reconciliation",
                 handle: tokio::spawn({
                     let session_efficiency = state.session_efficiency.clone();

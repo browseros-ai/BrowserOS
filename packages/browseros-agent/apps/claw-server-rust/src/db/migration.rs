@@ -18,7 +18,44 @@ impl MigratorTrait for Migrator {
             Box::new(m0009_rebase_screenshot_baseline::Migration),
             Box::new(m0010_sum_session_efficiency_durations::Migration),
             Box::new(m0011_use_session_durations_for_efficiency::Migration),
+            Box::new(m0012_recording_payload_files::Migration),
         ]
+    }
+}
+
+mod m0012_recording_payload_files {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0012_recording_payload_files"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Committed length of each recording's on-disk replay file. 0 for
+            // existing rows, whose payload still lives in recording_payloads
+            // until the background migration extracts it to a file.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "ALTER TABLE recording_streams ADD COLUMN payload_bytes INTEGER NOT NULL DEFAULT 0",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("ALTER TABLE recording_streams DROP COLUMN payload_bytes")
+                .await?;
+            Ok(())
+        }
     }
 }
 

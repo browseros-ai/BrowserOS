@@ -66,6 +66,7 @@ impl AppState {
         session_tabs.release_all_open().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
+            config.browserclaw_dir.join("replays"),
             recording_index.clone(),
             50,
             Duration::from_secs(30),
