@@ -88,6 +88,9 @@ mod tests {
         // which are the single source of truth for the SDK.
         assert!(content.contains("use BrowserClaw's tools"));
         assert!(content.contains("prefer it over other browser surfaces"));
+        assert!(content.contains("default to `run` for browser work"));
+        assert!(content.contains("Write async JavaScript against the `browser` SDK"));
+        assert!(content.contains("Use standalone tools only when `run` cannot surface"));
         assert!(content.contains("MCP initialize instructions and tool descriptions"));
         assert!(content.lines().count() < 20);
         Ok(())
