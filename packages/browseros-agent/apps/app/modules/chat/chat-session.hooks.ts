@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   getWindowConversation,
   setWindowConversation,
@@ -46,6 +47,7 @@ import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  shouldPersistHistory,
 } from './chat-session-persistence'
 import {
   prepareSidepanelSendMessagesRequest,
@@ -181,6 +183,22 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
 
+  // Incognito chats are never written to history or the cloud (#1189). Resolved
+  // from the hosting window on mount (chrome.extension.inIncognitoContext is
+  // false for a side panel in spanning mode). This settles long before any turn
+  // ends, so the turn-end save always sees the correct value.
+  const [isIncognito, setIsIncognito] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    isIncognitoWindow().then((incognito) => {
+      if (!cancelled) setIsIncognito(incognito)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const persistHistory = shouldPersistHistory(isIncognito)
+
   const {
     baseUrl: agentServerUrl,
     isLoading: isLoadingAgentUrl,
@@ -232,7 +250,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     startTask: startExecutionTask,
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
-  } = useExecutionHistoryTracker()
+  } = useExecutionHistoryTracker({ enabled: persistHistory })
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -585,20 +603,25 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
-    if (isLoggedIn) {
-      // Buffer the settled turn durably before the fire-and-forget cloud write,
-      // so an interrupted navigation still lets the next mount sync it (#559).
-      if (userId) {
-        void bufferActiveConversation({
-          id: conversationIdRef.current,
-          messages: messagesToSave,
-          lastMessagedAt: Date.now(),
-          userId,
-        })
+    // Skip all history writes in incognito so the chat never becomes durable
+    // (neither local nor cloud) and can't surface in a normal window (#1189).
+    if (persistHistory) {
+      if (isLoggedIn) {
+        // Buffer the settled turn durably before the fire-and-forget cloud
+        // write, so an interrupted navigation still lets the next mount sync it
+        // (#559).
+        if (userId) {
+          void bufferActiveConversation({
+            id: conversationIdRef.current,
+            messages: messagesToSave,
+            lastMessagedAt: Date.now(),
+            userId,
+          })
+        }
+        saveRemoteConversation(conversationIdRef.current, messagesToSave)
+      } else {
+        saveLocalConversation(conversationIdRef.current, messagesToSave)
       }
-      saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    } else {
-      saveLocalConversation(conversationIdRef.current, messagesToSave)
     }
 
     invalidateCredits()
@@ -612,7 +635,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // at turn end above. This effect's deps are the auth pair, not messages, so
   // the unmount write runs once, not on every token.
   useEffect(() => {
-    if (!isLoggedIn || !userId) return
+    if (!persistHistory || !isLoggedIn || !userId) return
     const writeBuffer = () => {
       const latest = getPersistableMessages(messagesRef.current)
       if (latest.length === 0) return
@@ -631,17 +654,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       document.removeEventListener('visibilitychange', onHide)
       writeBuffer()
     }
-  }, [isLoggedIn, userId])
+  }, [persistHistory, isLoggedIn, userId])
 
   // On mount (and on sign-in), push any buffered in-flight conversations for the
   // current user to the cloud so an interrupted chat still lands in history. It
   // is never restored into the active conversation; recovery is via history.
   useEffect(() => {
-    if (!isLoggedIn || !userId) return
+    if (!persistHistory || !isLoggedIn || !userId) return
     void flushActiveConversationBuffer(userId, (conversations) =>
       uploadConversations(conversations, userId),
     )
-  }, [isLoggedIn, userId])
+  }, [persistHistory, isLoggedIn, userId])
 
   useEffect(() => {
     if (chatError) invalidateCredits()
@@ -825,6 +848,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoading: isLoadingProviders || isLoadingAgentUrl,
     canSend,
     isSyncing: !isIntegrationsSynced,
+    isIncognito,
     isRestoringConversation,
     agentUrlError,
     chatError,

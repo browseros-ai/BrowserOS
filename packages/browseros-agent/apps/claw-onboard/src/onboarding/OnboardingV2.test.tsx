@@ -81,18 +81,27 @@ afterEach(() => {
 describe('OnboardingV2 shell', () => {
   it('lands on step 0 with the welcome heading and primary CTA', () => {
     const html = renderApp()
-    expect(html).toContain('The browser your agents')
-    expect(html).toContain('drive')
-    expect(html).toContain('Start setup')
+    expect(html).toContain('Your second browser. For your')
+    expect(html).toContain('agents.')
+    expect(html).toContain('Set it up')
+  })
+
+  // The screen must not read as a Chrome replacement: BrowserClaw is a
+  // secondary browser whose user is an agent, not the person installing it.
+  it('states the secondary-browser position rather than reselling the product', () => {
+    const html = renderApp()
+    expect(html).toContain('Not a Chrome replacement.')
+    expect(html).not.toContain('Let your AI')
+    expect(html).not.toContain('actually')
   })
 
   it('renders the visual rail with the v2 quote and three feature blocks', () => {
     const html = renderApp()
     expect(html).toContain('BrowserClaw')
-    expect(html).toContain('Let your AI')
+    expect(html).toContain('Not yours.')
     expect(html).toContain('Signed in as you.')
     expect(html).toContain('Watch every step.')
-    expect(html).toContain('Yours to keep.')
+    expect(html).toContain('Everything stays local.')
   })
 
   it('renders a full-page main landmark without the fake macOS window chrome', () => {

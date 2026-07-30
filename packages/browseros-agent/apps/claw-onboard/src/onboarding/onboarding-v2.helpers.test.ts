@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'bun:test'
+import type { BrowserOSImportSource } from './browseros-onboarding-api'
 import {
+  AGENT_LOGIN_ITEMS,
   completedImportItemCount,
   DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
+  defaultImportItemsForSource,
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
   importSourceSelectionChangeFor,
+  loginItemsForSource,
   MOCK_BROWSEROS_IMPORT_SOURCES,
   STARTER_PROMPTS,
   sanitizeImportSelection,
   selectableItemsForSource,
   selectedSourceById,
+  splitImportSelection,
   startImportRequestFor,
 } from './onboarding-v2.helpers'
 
@@ -58,7 +63,9 @@ describe('source selection helpers', () => {
       ),
     ).toEqual({
       selectedSourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
-      selectedItems: selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+      selectedItems: defaultImportItemsForSource(
+        MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      ),
     })
   })
 
@@ -111,7 +118,7 @@ describe('source selection helpers', () => {
   it('builds the Chromium start-import request for one source', () => {
     expect(startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual({
       sourceId: 'chrome-work',
-      items: MOCK_BROWSEROS_IMPORT_SOURCES[0].recommendedItems,
+      items: ['cookies', 'passwords'],
     })
   })
 
@@ -144,6 +151,52 @@ describe('source selection helpers', () => {
         supportedItems: [],
       }),
     ).toBeNull()
+  })
+})
+
+describe('login-scoped import defaults', () => {
+  it('treats only cookies and passwords as agent login items', () => {
+    expect([...AGENT_LOGIN_ITEMS]).toEqual(['cookies', 'passwords'])
+  })
+
+  it('picks the login items a profile actually supports', () => {
+    expect(loginItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual([
+      'cookies',
+      'passwords',
+    ])
+  })
+
+  // The whole point of the reframe: browsing setup must not ride along by
+  // default, because no MCP tool exposes any of it to an agent.
+  it('defaults to logins only, never the browsing setup', () => {
+    for (const source of MOCK_BROWSEROS_IMPORT_SOURCES) {
+      expect(defaultImportItemsForSource(source)).toEqual([
+        'cookies',
+        'passwords',
+      ])
+    }
+  })
+
+  // A profile with no logins must still offer something, or the step dead-ends
+  // on a disabled button the way it did before #1795.
+  it('falls back to the Chromium recommendation when a profile has no logins', () => {
+    const historyOnly: BrowserOSImportSource = {
+      ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      supportedItems: ['history', 'bookmarks'],
+      recommendedItems: ['history'],
+    }
+
+    expect(loginItemsForSource(historyOnly)).toEqual([])
+    expect(defaultImportItemsForSource(historyOnly)).toEqual(['history'])
+  })
+
+  it('splits a selection into logins and opted-in extras', () => {
+    expect(
+      splitImportSelection(['history', 'cookies', 'extensions', 'passwords']),
+    ).toEqual({
+      loginItems: ['cookies', 'passwords'],
+      extraItems: ['history', 'extensions'],
+    })
   })
 })
 

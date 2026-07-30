@@ -33,8 +33,8 @@ export function VisualRail() {
       </div>
       <div className="relative">
         <div className="mb-[18px] font-serif text-[23px] text-ink italic leading-snug">
-          &ldquo;Let your AI <span className="text-accent">actually</span> use
-          the web.&rdquo;
+          &ldquo;Your agents&rsquo; browser.{' '}
+          <span className="text-accent">Not yours.</span>&rdquo;
         </div>
         <div className="flex flex-col gap-3">
           {FEATURES.map((f) => {
@@ -73,7 +73,8 @@ const FEATURES = [
   },
   {
     icon: ShieldCheck,
-    title: 'Yours to keep.',
-    description: 'Everything runs on your machine.',
+    title: 'Everything stays local.',
+    description:
+      'All data is stored on this machine. Open source and privacy-first.',
   },
 ] as const

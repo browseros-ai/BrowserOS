@@ -12,6 +12,11 @@ on:
       - "packages/browseros/uv.lock"
       - "tools/release_secrets/**"
       - ".github/workflows/bos-build-tests.yml"
+      - ".github/workflows/build-browseros.yml"
+      - ".github/workflows/release-browseros.yml"
+      - ".github/workflows/release-browserclaw.yml"
+      - ".github/workflows/release-linux.yml"
+      - ".github/workflows/release-windows.yml"
 
 jobs:
   tests:
@@ -50,3 +55,20 @@ jobs:
       - name: Run vendor_uploads tests
         working-directory: packages/browseros/tools/vendor_uploads
         run: uv run python -m unittest discover -s vendor_uploads -t . -p "*_test.py"
+
+  windows-git-bootstrap:
+    name: Windows Git bootstrap / Git Bash + native Git
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Verify Windows Git bootstrap
+        shell: bash
+        working-directory: packages/browseros
+        run: uv run python -m unittest bos_build.ci_workflow_test -v

@@ -2,14 +2,14 @@
   "name": "@browseros/claw-onboard",
   "type": "module",
   "private": true,
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Standalone Vite app for the BrowserClaw onboarding flow.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:chromium": "tsc --noEmit && vite build --mode chromium && bun scripts/verify-chromium-build.ts",
     "preview": "vite preview",
-    "test": "bun test",
+    "test": "bun run ../../scripts/run-bun-test.ts ./apps/claw-onboard",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check",
     "lint:fix": "bunx biome check --write --unsafe"

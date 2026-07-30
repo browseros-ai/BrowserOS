@@ -178,7 +178,42 @@ async fn ready_after<T, E>(
     Ok(running)
 }
 
+/// On the very first launch, register BrowserClaw in every detected harness so
+/// the user does not have to connect each one by hand. Runs once, guarded by a
+/// marker in the BrowserClaw dir; an existing install is seeded without sweeping
+/// so a returning user's manual disconnects are preserved.
+async fn run_first_launch_auto_connect(state: &AppState) {
+    use claw_server_rust::services::first_run;
+    if first_run::is_first_run_connect_done(&state.config.browserclaw_dir).await {
+        return;
+    }
+    match state
+        .harness
+        .first_run_connect(&state.config.public_mcp_url())
+        .await
+    {
+        Ok(outcome) => {
+            info!(
+                connected = outcome.connected,
+                failed = outcome.failed,
+                already_linked = outcome.already_linked,
+                seeded_existing = outcome.seeded_existing,
+                "first-run harness auto-connect settled"
+            );
+            if let Err(err) =
+                first_run::mark_first_run_connect_done(&state.config.browserclaw_dir).await
+            {
+                error!(error = %err, "failed to persist first-run auto-connect marker");
+            }
+        }
+        // Listing the harnesses failed: leave the marker unset so the next
+        // launch retries the sweep rather than skipping it forever.
+        Err(err) => error!(error = %err, "first-run harness auto-connect skipped: listing failed"),
+    }
+}
+
 async fn heal_boot_config(state: &AppState) {
+    run_first_launch_auto_connect(state).await;
     // Re-point every connected agent at the current canonical URL first (the
     // proxy port may have moved on this app launch), then repair any config
     // that still drifted from the now-current manifest spec.

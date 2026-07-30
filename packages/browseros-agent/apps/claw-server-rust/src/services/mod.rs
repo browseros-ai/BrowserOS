@@ -2,6 +2,7 @@ pub mod audit;
 pub mod audit_settings;
 pub mod browser;
 pub mod cockpit;
+pub mod first_run;
 pub mod harness;
 pub mod harness_skills;
 pub mod profiles;

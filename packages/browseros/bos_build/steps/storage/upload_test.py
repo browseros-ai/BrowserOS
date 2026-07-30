@@ -10,6 +10,7 @@ from unittest import mock
 from bos_build.core.context import ArtifactRegistry
 from bos_build.steps.storage.upload import (
     _get_artifact_key,
+    generate_release_json,
     merge_release_metadata,
     upload_release_artifacts,
 )
@@ -44,6 +45,26 @@ def _upload_ctx(
 
 
 class UploadMetadataTest(unittest.TestCase):
+    def test_release_json_records_actions_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            "os.environ",
+            {
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_RUN_ID": "30418029456",
+                "GITHUB_RUN_ATTEMPT": "2",
+            },
+            clear=False,
+        ):
+            release = generate_release_json(
+                _upload_ctx(Path(tmp)),
+                [{"filename": "BrowserOS_v1.2.3_x64.AppImage", "size": 12}],
+                "linux",
+            )
+
+        self.assertEqual(release["source_sha"], "a" * 40)
+        self.assertEqual(release["workflow_run_id"], "30418029456")
+        self.assertEqual(release["workflow_run_attempt"], "2")
+
     def test_linux_x64_artifacts_use_x64_keys(self) -> None:
         self.assertEqual(
             _get_artifact_key("BrowserOS_v1.2.3_x64.AppImage", "linux"),
@@ -265,6 +286,43 @@ class UploadMetadataTest(unittest.TestCase):
             merged["artifacts"]["x64_appimage"]["filename"], "new.AppImage"
         )
         self.assertEqual(merged["artifacts"]["x64_appimage"]["size"], 2)
+
+    def test_merge_release_metadata_replaces_an_earlier_run(self) -> None:
+        existing = {
+            "source_sha": "old",
+            "workflow_run_id": "1",
+            "workflow_run_attempt": "1",
+            "artifacts": {"arm64_deb": {"filename": "stale.deb"}},
+        }
+        new = {
+            "source_sha": "new",
+            "workflow_run_id": "2",
+            "workflow_run_attempt": "1",
+            "artifacts": {"x64_deb": {"filename": "current.deb"}},
+        }
+
+        merged = merge_release_metadata(existing, new)
+
+        self.assertEqual(merged, new)
+        self.assertNotIn("arm64_deb", merged["artifacts"])
+
+    def test_merge_release_metadata_replaces_an_earlier_attempt(self) -> None:
+        existing = {
+            "source_sha": "same",
+            "workflow_run_id": "2",
+            "workflow_run_attempt": "1",
+            "artifacts": {"arm64_deb": {"filename": "stale.deb"}},
+        }
+        new = {
+            "source_sha": "same",
+            "workflow_run_id": "2",
+            "workflow_run_attempt": "2",
+            "artifacts": {"x64_deb": {"filename": "current.deb"}},
+        }
+
+        merged = merge_release_metadata(existing, new)
+
+        self.assertEqual(merged, new)
 
 
 if __name__ == "__main__":

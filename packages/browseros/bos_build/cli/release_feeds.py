@@ -70,6 +70,31 @@ def appcast_command(
     allow_downgrade: bool = typer.Option(
         False, "--allow-downgrade", help="Override the version-downgrade guard"
     ),
+    platforms: str | None = typer.Option(
+        None,
+        "--platforms",
+        help="Release platform selection: all, linux, windows, or macos",
+    ),
+    macos_arch: str = typer.Option(
+        "universal",
+        "--macos-arch",
+        help="Expected macOS artifact set: arm64, x64, or universal",
+    ),
+    source_sha: str = typer.Option(
+        "",
+        "--source-sha",
+        help="Require release metadata from this source commit",
+    ),
+    workflow_run_id: str = typer.Option(
+        "",
+        "--workflow-run-id",
+        help="Require release metadata from this Actions run",
+    ),
+    workflow_run_attempt: str = typer.Option(
+        "",
+        "--workflow-run-attempt",
+        help="Require release metadata from this Actions run attempt",
+    ),
 ):
     """Generate complete browser appcast feeds from R2 release metadata.
 
@@ -85,7 +110,14 @@ def appcast_command(
     _execute(
         ctx,
         AppcastModule(
-            product_id=product, publish=publish, allow_downgrade=allow_downgrade
+            product_id=product,
+            publish=publish,
+            allow_downgrade=allow_downgrade,
+            platforms=platforms,
+            macos_arch=macos_arch,
+            source_sha=source_sha,
+            workflow_run_id=workflow_run_id,
+            workflow_run_attempt=workflow_run_attempt,
         ),
     )
 

@@ -63,7 +63,10 @@ function getFinishedStatus(
 
 const WRITE_THROTTLE_MS = 400
 
-export function useExecutionHistoryTracker() {
+export function useExecutionHistoryTracker(options?: { enabled?: boolean }) {
+  // When disabled (incognito), the active task is still tracked in memory so the
+  // live in-session view works, but nothing is written to storage (#1189).
+  const enabled = options?.enabled ?? true
   const activeTaskRef = useRef<ExecutionTaskRecord | null>(null)
   const lastSavedKeyRef = useRef('')
   const pendingWritesRef = useRef<Map<string, ExecutionTaskRecord>>(new Map())
@@ -132,11 +135,12 @@ export function useExecutionHistoryTracker() {
   const persistTask = useCallback(
     (task: ExecutionTaskRecord, options?: { immediate?: boolean }) => {
       activeTaskRef.current = task
+      if (!enabled) return
       const immediate = options?.immediate ?? task.status !== 'running'
       if (!immediate && taskChangeKey(task) === lastSavedKeyRef.current) return
       scheduleWrite(task, immediate)
     },
-    [scheduleWrite],
+    [scheduleWrite, enabled],
   )
 
   const startTask = useCallback(

@@ -543,7 +543,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );
@@ -571,7 +570,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );

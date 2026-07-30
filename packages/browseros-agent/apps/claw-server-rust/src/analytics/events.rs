@@ -33,7 +33,7 @@ const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-const KNOWN_CLIENTS: [&str; 14] = [
+const KNOWN_CLIENTS: [&str; 15] = [
     "claude-desktop",
     "claude-code",
     "claude-ai",
@@ -48,6 +48,14 @@ const KNOWN_CLIENTS: [&str; 14] = [
     "cline",
     "continue",
     "goose",
+    "browseros-cli",
+];
+
+const CLIENT_ALIASES: [(&str, &str); 4] = [
+    ("codex-mcp-client", "codex"),
+    ("codex-posthog-dashboard", "codex"),
+    ("codex-browserclaw", "codex"),
+    ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
 ];
 
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
@@ -284,10 +292,17 @@ fn bucket_client_name(raw: &str) -> String {
             separator_pending = true;
         }
     }
+    if let Some((_, canonical)) = CLIENT_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == slug.as_str())
+    {
+        return (*canonical).to_string();
+    }
+
     if KNOWN_CLIENTS.contains(&slug.as_str()) {
         slug
     } else {
-        "other".to_string()
+        "unrecognized-client".to_string()
     }
 }
 
@@ -369,6 +384,7 @@ mod tests {
             "Cline",
             "Continue",
             "Goose",
+            "browseros-cli",
         ];
         let expected = [
             "claude-desktop",
@@ -385,6 +401,7 @@ mod tests {
             "cline",
             "continue",
             "goose",
+            "browseros-cli",
         ];
 
         for (raw, expected) in known.into_iter().zip(expected) {
@@ -396,7 +413,26 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_content_shaped_client_names_become_other() {
+    fn known_mcp_aliases_collapse_to_stable_client_buckets() {
+        for raw in [
+            "codex-mcp-client",
+            "codex-posthog-dashboard",
+            "Codex BrowserClaw",
+        ] {
+            assert_eq!(
+                AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
+                Some(json!({ "client_name": "codex" }))
+            );
+        }
+        assert_eq!(
+            AGENT_SESSION_STARTED
+                .sanitize(&json!({ "client_name": "browserclaw-claude-desktop-wrapper" })),
+            Some(json!({ "client_name": "claude-desktop" }))
+        );
+    }
+
+    #[test]
+    fn unknown_or_content_shaped_client_names_become_unrecognized_client() {
         for raw in [
             "",
             "my-secret-internal-tool",
@@ -404,10 +440,13 @@ mod tests {
             "user@example.com",
             "/home/user/secret",
             r"C:\Users\someone",
+            "codex@example.com",
+            "codex://private",
+            "/codex/home/user",
         ] {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
-                Some(json!({ "client_name": "other" }))
+                Some(json!({ "client_name": "unrecognized-client" }))
             );
         }
     }

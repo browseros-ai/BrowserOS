@@ -310,10 +310,8 @@ fn format_states(node: &AxNode) -> Vec<String> {
                     states.push("indeterminate".to_string());
                 }
             }
-            "disabled" => {
-                if value == Some(&Value::Bool(true)) {
-                    states.push("disabled".to_string());
-                }
+            "disabled" if value == Some(&Value::Bool(true)) => {
+                states.push("disabled".to_string());
             }
             "expanded" => {
                 if value == Some(&Value::Bool(true)) {
@@ -322,15 +320,11 @@ fn format_states(node: &AxNode) -> Vec<String> {
                     states.push("collapsed".to_string());
                 }
             }
-            "required" => {
-                if value == Some(&Value::Bool(true)) {
-                    states.push("required".to_string());
-                }
+            "required" if value == Some(&Value::Bool(true)) => {
+                states.push("required".to_string());
             }
-            "selected" => {
-                if value == Some(&Value::Bool(true)) {
-                    states.push("selected".to_string());
-                }
+            "selected" if value == Some(&Value::Bool(true)) => {
+                states.push("selected".to_string());
             }
             "level" => {
                 if let Some(value) = value {

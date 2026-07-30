@@ -6,38 +6,48 @@ import { StepWrap } from '../components/StepWrap'
 import { STARTER_PROMPTS } from '../onboarding-v2.helpers'
 
 interface ReadyStepProps {
-  imported: boolean
   onDone: () => void
 }
 
+const CONNECT_STEPS = [
+  <>
+    Open the MCP page and click{' '}
+    <strong className="font-semibold">Connect</strong> next to your tool.
+  </>,
+  <>Restart Claude Code once, so it picks up the connection.</>,
+  <>Paste a task into Claude Code&rsquo;s chat:</>,
+]
+
 /**
- * Final onboarding step. Points at the MCP page for harness link-up, and
- * confirms the import only when one actually landed — users who skipped the
- * import step reach this step too. The reconnect path from Welcome bypasses
- * this step and completes onboarding directly.
+ * Final onboarding step. The connection itself happens on the MCP page, so this
+ * step's job is to say exactly what to do there and where the copied prompt
+ * goes — naming Claude Code rather than leaving the destination implied. The
+ * restart gets its own step because an agent that has not reloaded its MCP
+ * config looks broken rather than unconnected.
  */
-export function ReadyStep({ imported, onDone }: ReadyStepProps) {
+export function ReadyStep({ onDone }: ReadyStepProps) {
   return (
     <StepWrap>
       <DisplayHeading>
-        {imported ? (
-          <>
-            Logins <Em>imported.</Em>
-          </>
-        ) : (
-          <>
-            Connect your <Em>AI.</Em>
-          </>
-        )}
+        Last step: <Em>connect.</Em>
       </DisplayHeading>
       <StepCopy>
-        One step left. Open the MCP page in BrowserClaw and link your AI: Claude
-        Code, Cursor, Codex, or any other. Your agent runs tasks in this
-        browser. You watch, approve, and audit.
+        Your agents can&rsquo;t reach this browser yet. Three things:
       </StepCopy>
-      <div className="mb-2.5 font-bold text-[12.5px] text-ink-2">
-        Once connected, try one of these.
-      </div>
+      <ol className="mb-5 flex flex-col gap-2.5">
+        {CONNECT_STEPS.map((content, index) => (
+          <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length static copy, no DOM identity to preserve
+            key={index}
+            className="flex items-start gap-2.5 text-[13.5px] text-ink-2"
+          >
+            <span className="mt-px flex size-[19px] shrink-0 items-center justify-center rounded-md bg-accent font-bold text-[11px] text-card">
+              {index + 1}
+            </span>
+            <span>{content}</span>
+          </li>
+        ))}
+      </ol>
       <div className="mb-6 flex flex-col gap-2.5">
         {STARTER_PROMPTS.slice(0, 2).map((prompt) => (
           <StarterPromptTile key={prompt} prompt={prompt} />
@@ -45,7 +55,7 @@ export function ReadyStep({ imported, onDone }: ReadyStepProps) {
       </div>
       <Button type="button" size="lg" onClick={onDone}>
         <PlugZap className="size-4" />
-        Connect your AI
+        Open the MCP page
       </Button>
     </StepWrap>
   )

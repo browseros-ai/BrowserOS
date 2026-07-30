@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - name: Resolve release version
         id: version
@@ -226,7 +226,7 @@ jobs:
       contents: write
       pull-requests: write
     with:
-      ref: ${{ github.ref_name }}
+      ref: ${{ github.sha }}
     secrets: inherit
 
   server_browserclaw:
@@ -237,7 +237,7 @@ jobs:
     permissions:
       contents: write
     with:
-      ref: ${{ github.ref_name }}
+      ref: ${{ github.sha }}
       publish_ota: false
     secrets: inherit
 
@@ -306,7 +306,7 @@ jobs:
       bump: none
       commit_version: false
       upload_to_r2: ${{ inputs.upload_to_r2 }}
-      ref: ${{ github.ref_name }}
+      ref: ${{ github.sha }}
     secrets: inherit
 
   release_extensions:
@@ -327,7 +327,7 @@ jobs:
     with:
       version: ${{ needs.preflight.outputs.extensions_version }}
       extension: browserclaw
-      branch: ${{ github.ref_name }}
+      branch: ${{ github.sha }}
     secrets: inherit
 
   stage_updates:
@@ -351,6 +351,7 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       EXTENSIONS_VERSION: ${{ needs.preflight.outputs.extensions_version }}
       INPUT_PLATFORMS: ${{ inputs.platforms }}
+      INPUT_MACOS_ARCH: ${{ inputs.macos_arch }}
       INPUT_INCLUDE_SERVERS: ${{ inputs.include_servers }}
       INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
       INPUT_EXTENSIONS: ${{ inputs.extensions }}
@@ -386,10 +387,6 @@ jobs:
           should_stage=true
           reasons=()
 
-          if [ "$INPUT_UPLOAD_TO_R2" != "true" ]; then
-            should_stage=false
-            reasons+=("upload_to_r2=false, so there are no browser R2 release objects to render against")
-          fi
           if [ -z "${VERSION:-}" ]; then
             should_stage=false
             reasons+=("release version was not resolved")
@@ -419,6 +416,10 @@ jobs:
             should_stage=false
             reasons+=("extension result is $EXTENSIONS_RESULT")
           fi
+          if [ "$INPUT_EXTENSIONS" = "skip" ] && { [ "$INPUT_PLATFORMS" = "linux" ] || [ "$INPUT_UPLOAD_TO_R2" != "true" ]; }; then
+            should_stage=false
+            reasons+=("no browser appcast or extension feed is selected")
+          fi
 
           reason="ready"
           if [ "${#reasons[@]}" -gt 0 ]; then
@@ -443,7 +444,7 @@ jobs:
       - uses: actions/checkout@v7
         if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - uses: astral-sh/setup-uv@v8.3.2
         if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
@@ -470,12 +471,23 @@ jobs:
           rm -rf "$artifact_root"
           mkdir -p "$artifact_root" "$appcast_dir" "$extensions_dir"
 
-          appcast_targets=(
-            appcast-claw.xml
-            appcast-claw-x86_64.xml
-            appcast-claw-win.xml
-            appcast-claw-win-arm64.xml
-          )
+          appcast_targets=()
+          if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
+            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "macos" ]; then
+              case "$INPUT_MACOS_ARCH" in
+                arm64) appcast_targets+=(appcast-claw.xml) ;;
+                x64) appcast_targets+=(appcast-claw-x86_64.xml) ;;
+                universal) appcast_targets+=(appcast-claw.xml appcast-claw-x86_64.xml) ;;
+                *)
+                  echo "::error::Unsupported macOS architecture: $INPUT_MACOS_ARCH"
+                  exit 1
+                  ;;
+              esac
+            fi
+            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "windows" ]; then
+              appcast_targets+=(appcast-claw-win.xml)
+            fi
+          fi
           extension_targets=()
           if [ "$INPUT_EXTENSIONS" != "skip" ]; then
             if [ "$INPUT_EXTENSIONS" = "alpha" ]; then
@@ -493,19 +505,32 @@ jobs:
             fi
           fi
 
-          for file in "${appcast_targets[@]}"; do
-            rm -f "$appcast_dir/$file"
-          done
+          if [ "${#appcast_targets[@]}" -gt 0 ]; then
+            for file in "${appcast_targets[@]}"; do
+              rm -f "$appcast_dir/$file"
+            done
+          fi
           for file in update-manifest.xml update-manifest.alpha.xml extensions.json extensions.alpha.json bundled-manifest.xml; do
             rm -f "$extensions_dir/$file"
           done
 
-          set +e
-          uv run browseros release appcast --version "$VERSION" --product "$PRODUCT" > "$appcast_log" 2>&1
-          appcast_rc=$?
-          set -e
+          appcast_rc=0
+          if [ "${#appcast_targets[@]}" -gt 0 ]; then
+            set +e
+            uv run browseros release appcast \
+              --version "$VERSION" \
+              --product "$PRODUCT" \
+              --platforms "$INPUT_PLATFORMS" \
+              --macos-arch "$INPUT_MACOS_ARCH" \
+              --source-sha "$GITHUB_SHA" \
+              --workflow-run-id "$GITHUB_RUN_ID" \
+              --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+              > "$appcast_log" 2>&1
+            appcast_rc=$?
+            set -e
+          fi
           if [ "$appcast_rc" -ne 0 ]; then
-            echo "::warning::Appcast staging failed for $PRODUCT v$VERSION; see step summary."
+            echo "::error::Appcast staging failed for $PRODUCT v$VERSION; see step summary."
           fi
 
           extensions_rc=0
@@ -515,19 +540,40 @@ jobs:
             extensions_rc=$?
             set -e
             if [ "$extensions_rc" -ne 0 ]; then
-              echo "::warning::Extension feed staging failed for $EXTENSION_NAME v$EXTENSIONS_VERSION; see step summary."
+              echo "::error::Extension feed staging failed for $EXTENSION_NAME v$EXTENSIONS_VERSION; see step summary."
             fi
           fi
 
-          if [ "$appcast_rc" -ne 0 ]; then
+          if [ "$appcast_rc" -eq 0 ] && [ "${#appcast_targets[@]}" -gt 0 ]; then
             for file in "${appcast_targets[@]}"; do
-              rm -f "$appcast_dir/$file"
+              if [ ! -f "$appcast_dir/$file" ]; then
+                echo "Missing expected staged appcast: $file" >> "$appcast_log"
+                appcast_rc=1
+              fi
             done
           fi
-          if [ "$extensions_rc" -ne 0 ]; then
+          if [ "$extensions_rc" -eq 0 ] && [ "${#extension_targets[@]}" -gt 0 ]; then
             for file in "${extension_targets[@]}"; do
-              rm -f "$extensions_dir/$file"
+              if [ ! -f "$extensions_dir/$file" ]; then
+                echo "Missing expected staged extension feed: $file" >> "$extensions_log"
+                extensions_rc=1
+              fi
             done
+          fi
+
+          if [ "$appcast_rc" -ne 0 ]; then
+            if [ "${#appcast_targets[@]}" -gt 0 ]; then
+              for file in "${appcast_targets[@]}"; do
+                rm -f "$appcast_dir/$file"
+              done
+            fi
+          fi
+          if [ "$extensions_rc" -ne 0 ]; then
+            if [ "${#extension_targets[@]}" -gt 0 ]; then
+              for file in "${extension_targets[@]}"; do
+                rm -f "$extensions_dir/$file"
+              done
+            fi
           fi
 
           staged_files=()
@@ -542,20 +588,33 @@ jobs:
           }
 
           if [ "$appcast_rc" -eq 0 ]; then
-            for file in "${appcast_targets[@]}"; do
-              copy_if_exists "$appcast_dir/$file" "packages/browseros/$appcast_dir/$file"
-            done
+            if [ "${#appcast_targets[@]}" -gt 0 ]; then
+              for file in "${appcast_targets[@]}"; do
+                copy_if_exists "$appcast_dir/$file" "packages/browseros/$appcast_dir/$file"
+              done
+            fi
           fi
           if [ "$extensions_rc" -eq 0 ]; then
-            for file in "${extension_targets[@]}"; do
-              copy_if_exists "$extensions_dir/$file" "updates/extensions/$file"
-            done
+            if [ "${#extension_targets[@]}" -gt 0 ]; then
+              for file in "${extension_targets[@]}"; do
+                copy_if_exists "$extensions_dir/$file" "updates/extensions/$file"
+              done
+            fi
           fi
+
+          publish_platform_args=()
+          case "$INPUT_PLATFORMS" in
+            all) publish_platform_args=(--platform linux --platform win --platform macos) ;;
+            windows) publish_platform_args=(--platform win) ;;
+            linux|macos) publish_platform_args=(--platform "$INPUT_PLATFORMS") ;;
+          esac
 
           {
             echo "has_files=$([ "${#staged_files[@]}" -gt 0 ] && echo true || echo false)"
             echo "files<<EOF"
-            printf '%s\n' "${staged_files[@]}"
+            if [ "${#staged_files[@]}" -gt 0 ]; then
+              printf '%s\n' "${staged_files[@]}"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -574,7 +633,7 @@ jobs:
             echo "### Staged files"
             echo
             if [ "${#staged_files[@]}" -eq 0 ]; then
-              echo "- No XML/JSON files were staged. Review warnings below before promoting."
+              echo "- No XML/JSON files were staged."
             else
               for file in "${staged_files[@]}"; do
                 echo "- \`$file\`"
@@ -582,7 +641,7 @@ jobs:
             fi
             echo
             if [ "$appcast_rc" -ne 0 ]; then
-              echo "### Appcast staging warning"
+              echo "### Appcast staging error"
               echo
               echo '```text'
               tail -n 120 "$appcast_log"
@@ -590,7 +649,7 @@ jobs:
               echo
             fi
             if [ "$extensions_rc" -ne 0 ]; then
-              echo "### Extension feed staging warning"
+              echo "### Extension feed staging error"
               echo
               echo '```text'
               tail -n 120 "$extensions_log"
@@ -601,11 +660,17 @@ jobs:
             echo
             echo '```bash'
             echo "cd packages/browseros"
-            echo "uv run browseros release publish --version $VERSION --product $PRODUCT"
-            if [ "$appcast_rc" -eq 0 ]; then
-              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --publish"
+            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
+              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT"
             else
-              echo "# Appcast publish blocked: resolve the staging warning and rerun the preview before publishing."
+              echo "# Browser artifact promotion skipped: upload_to_r2=false."
+            fi
+            if [ "$appcast_rc" -eq 0 ] && [ "${#appcast_targets[@]}" -gt 0 ]; then
+              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --platforms $INPUT_PLATFORMS --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT --publish"
+            elif [ "${#appcast_targets[@]}" -gt 0 ]; then
+              echo "# Appcast publish blocked: resolve the staging error and rerun the preview before publishing."
+            else
+              echo "# Browser appcast publish skipped: no macOS or Windows appcast was selected."
             fi
             if [ "$INPUT_EXTENSIONS" != "skip" ]; then
               if [ "$extensions_rc" -eq 0 ]; then
@@ -622,6 +687,14 @@ jobs:
               echo "Draft GitHub release: skipped because github_release_draft=false."
             fi
           } >> "$summary"
+
+          if [ "$appcast_rc" -ne 0 ] || [ "$extensions_rc" -ne 0 ]; then
+            exit 1
+          fi
+          if [ "${#staged_files[@]}" -eq 0 ]; then
+            echo "::error::Feed staging was selected but produced no files."
+            exit 1
+          fi
 
       - name: Upload staged update feeds
         if: ${{ steps.stage_feeds.outputs.has_files == 'true' }}
@@ -806,6 +879,10 @@ jobs:
             should_create=false
             reasons+=("extension result is $EXTENSIONS_RESULT")
           fi
+          if [ "$STAGE_UPDATES_RESULT" != "success" ]; then
+            should_create=false
+            reasons+=("staged feed result is $STAGE_UPDATES_RESULT")
+          fi
 
           reason="ready"
           if [ "${#reasons[@]}" -gt 0 ]; then
@@ -830,7 +907,7 @@ jobs:
       - uses: actions/checkout@v7
         if: ${{ steps.release_gate.outputs.should_create == 'true' }}
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - uses: astral-sh/setup-uv@v8.3.2
         if: ${{ steps.release_gate.outputs.should_create == 'true' }}
@@ -851,28 +928,72 @@ jobs:
             local version="$1"
             local major minor build _rest
             IFS='.' read -r major minor build _rest <<< "$version"
-            echo "v$major.$minor.$build"
+            echo "browserclaw/v$major.$minor.$build"
           }
 
           tag="$(normalize_tag "$VERSION")"
-          if release_json="$(gh release view "$tag" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}' 2>/dev/null)"; then
-            is_draft="$(jq -r '.isDraft' <<< "$release_json")"
+          tag_uri="$(jq -rn --arg value "$tag" '$value | @uri')"
+          set +e
+          release_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri" 2>&1)"
+          release_probe_rc=$?
+          set -e
+          release_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$release_probe")"
+
+          if [ "$release_status" = "200" ] && [ "$release_probe_rc" -eq 0 ]; then
+            release_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$release_probe")"
+            is_draft="$(jq -r '.draft' <<< "$release_json")"
             if [ "$is_draft" != "true" ]; then
               echo "::error::GitHub release $tag already exists and is not a draft; refusing to modify live release assets."
               exit 1
             fi
+          elif [ "$release_status" = "404" ]; then
+            release_json=""
+          else
+            echo "::error::Could not inspect release $tag (HTTP ${release_status:-unknown}, gh rc=$release_probe_rc); refusing to assume it is absent."
+            exit 1
+          fi
 
-            mapfile -t assets < <(
-              jq -r --arg prefix "BrowserClaw_v${VERSION}_" \
-                '.assets[] | select(startswith($prefix))' <<< "$release_json"
-            )
-            for asset in "${assets[@]}"; do
-              echo "Deleting stale draft asset $asset from $tag"
-              gh release delete-asset "$tag" "$asset" --yes
-            done
+          set +e
+          tag_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/commits/$tag_uri" 2>&1)"
+          tag_probe_rc=$?
+          set -e
+          tag_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$tag_probe")"
+          tag_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$tag_probe")"
+          tag_absent=false
+          if [ "$tag_status" = "404" ]; then
+            tag_absent=true
+          elif [ "$tag_status" = "422" ]; then
+            tag_error="$(jq -r '.message // ""' <<< "$tag_json" 2>/dev/null || true)"
+            if [ "$tag_error" = "No commit found for SHA: $tag" ]; then
+              tag_absent=true
+            fi
+          fi
+          if [ "$tag_status" = "200" ] && [ "$tag_probe_rc" -eq 0 ]; then
+            actual_target="$(jq -r '.sha' <<< "$tag_json")"
+            if [ "$actual_target" != "$GITHUB_SHA" ]; then
+              echo "::error::Release tag $tag resolves to $actual_target, not workflow SHA $GITHUB_SHA. Delete/recreate the tag or dispatch a new version."
+              exit 1
+            fi
+          elif [ "$tag_absent" = "true" ]; then
+            if [ -n "$release_json" ]; then
+              target_commitish="$(jq -r '.target_commitish // ""' <<< "$release_json")"
+              if [ "$target_commitish" != "$GITHUB_SHA" ]; then
+                echo "::error::Untagged draft release $tag targets $target_commitish, not workflow SHA $GITHUB_SHA. Refusing to retarget a draft that may already contain assets; use a new version or recreate the draft."
+                exit 1
+              fi
+            fi
+          else
+            echo "::error::Could not resolve release tag $tag (HTTP ${tag_status:-unknown}, gh rc=$tag_probe_rc)."
+            exit 1
           fi
 
           uv run browseros release github create \
             --version "$VERSION" \
             --draft \
-            --product "$PRODUCT"
+            --product "$PRODUCT" \
+            --platforms "$INPUT_PLATFORMS" \
+            --macos-arch "$INPUT_MACOS_ARCH" \
+            --source-sha "$GITHUB_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --target "$GITHUB_SHA"
