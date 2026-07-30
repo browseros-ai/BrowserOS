@@ -219,23 +219,26 @@ impl RecordingIndex {
         Ok(row.map_or(0, |row| row.try_get::<i64>("", "n").unwrap_or(0)))
     }
 
-    /// Sets the committed on-disk length for a document once its blob is written
-    /// to a file.
-    pub async fn set_payload_bytes(&self, document_id: &str, bytes: i64) -> AppResult<()> {
-        RecordingStreams::update_many()
-            .col_expr(recording_streams::Column::PayloadBytes, Expr::value(bytes))
-            .filter(recording_streams::Column::DocumentId.eq(document_id))
-            .exec(self.db.connection())
-            .await?;
-        Ok(())
-    }
-
-    /// Removes the DB-blob payload once it has been written to a file.
-    pub async fn delete_payload_blob(&self, document_id: &str) -> AppResult<()> {
-        RecordingPayloads::delete_by_id(document_id.to_string())
-            .exec(self.db.connection())
-            .await?;
-        Ok(())
+    /// Marks a document's replay file authoritative in one transaction: sets the
+    /// committed length and drops the now-redundant DB blob together. Atomic so a
+    /// crash can never leave `payload_bytes` set while the blob survives, a state
+    /// a later append plus background migration would resolve by truncating the
+    /// appended events off the file.
+    pub async fn finalize_extraction(&self, document_id: &str, bytes: i64) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        async {
+            RecordingStreams::update_many()
+                .col_expr(recording_streams::Column::PayloadBytes, Expr::value(bytes))
+                .filter(recording_streams::Column::DocumentId.eq(document_id))
+                .exec(&txn)
+                .await?;
+            RecordingPayloads::delete_by_id(document_id.to_string())
+                .exec(&txn)
+                .await?;
+            txn.commit().await?;
+            Ok::<(), AppError>(())
+        }
+        .await
     }
 
     /// The oldest recording document, used to free space during disk-full recovery.

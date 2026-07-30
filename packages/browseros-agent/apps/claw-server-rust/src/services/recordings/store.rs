@@ -486,18 +486,19 @@ impl RecordingStore {
     }
 
     /// Extracts a document's entire DB-blob payload to the start of its replay
-    /// file and deletes the blob, assuming the caller holds the document lock.
+    /// file and drops the blob, assuming the caller holds the document lock.
     /// Returns the committed file length, or 0 when no blob remains (a new
     /// document, or one a concurrent step already migrated). Idempotent.
     async fn extract_blob_locked(&self, document_id: &str) -> AppResult<i64> {
         let Some(payload) = self.index.payload(document_id).await? else {
             return Ok(0);
         };
-        // The blob predates any file append, so it always occupies the file from
-        // committed length 0.
+        // A blob only ever exists while payload_bytes is 0, so it always occupies
+        // the file from committed length 0. Setting the committed length and
+        // dropping the blob commit atomically, so no crash can leave the blob
+        // behind for a later append and migration to truncate over.
         let bytes = self.append_payload_file(document_id, 0, &payload).await?;
-        self.index.set_payload_bytes(document_id, bytes).await?;
-        self.index.delete_payload_blob(document_id).await?;
+        self.index.finalize_extraction(document_id, bytes).await?;
         Ok(bytes)
     }
 
@@ -908,6 +909,26 @@ mod tests {
             .map(|event| event.ts)
             .collect();
         assert_eq!(timestamps, vec![10, 20, 30]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalizing_extraction_commits_length_and_blob_removal_atomically() -> anyhow::Result<()>
+    {
+        let (_dir, index, _store) = setup().await?;
+        index
+            .seed_legacy_payload("doc", 11, "{\"ts\":1}\n{\"ts\":2}\n", 1, 2, 2)
+            .await?;
+        assert_eq!(index.unmigrated_document_count().await?, 1);
+        assert_eq!(index.committed_payload_bytes("doc").await?, 0);
+
+        index.finalize_extraction("doc", 18).await?;
+
+        // Both effects land together. Were they not one transaction, a crash
+        // between them could leave a nonzero committed length with the blob still
+        // present, which a later append and migration would truncate over.
+        assert_eq!(index.committed_payload_bytes("doc").await?, 18);
+        assert_eq!(index.unmigrated_document_count().await?, 0);
         Ok(())
     }
 
