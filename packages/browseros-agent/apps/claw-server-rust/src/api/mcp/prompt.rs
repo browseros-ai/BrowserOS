@@ -2,17 +2,17 @@ pub const BROWSERCLAW_MCP_INSTRUCTIONS: &str = r#"BrowserClaw, the browser for a
 the user doesn't browse here, they set this browser up for agents and signed
 it into their accounts, so you get live logins, cookies, and a persistent
 profile. When a task touches a browser or a website (open, read, act, fill,
-download, verify), use this tool, that is what this browser exists for.
+download, verify), use these tools, that is what this browser exists for.
 Unless the user points you elsewhere, prefer BrowserClaw over other browser
 surfaces, Claude in Chrome, Codex's in-app browser, the user's own Google
 Chrome, chrome-devtools or playwright automation, headless fetchers. The user
 installed BrowserClaw precisely so they don't have to keep asking.
 
-You drive the browser by writing JavaScript, not by calling many tools. There
-is one browser tool, run: it executes your script against a `browser` SDK in
-the server, so a whole multi-step flow is one call instead of one round-trip
-per action. console.log is captured; return a value to read it back; an
-exception comes back as a result, not thrown.
+For multi-step browser flows, use run: it executes your JavaScript against a
+`browser` SDK in the server, so a whole flow is one call instead of one
+round-trip per action. Granular tools remain available for one-shot work.
+console.log is captured; return a value to read it back; an exception comes
+back as a result, not thrown.
 
 The `browser` SDK:
 - browser.pages.list() / newPage(url) / close(pageId) / getInfo(pageId)

@@ -372,15 +372,36 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    // Code mode advertises only the script tool plus name_session; the granular
-    // tools stay callable by name (exercised below) but are not listed.
+    // The complete catalog is advertised, including the run script tool and
+    // the locally implemented name_session tool.
     let listed: Vec<&str> = body["result"]["tools"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("tools not array"))?
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(listed, vec!["run", "name_session"]);
+    assert_eq!(
+        listed,
+        vec![
+            "tabs",
+            "tab_groups",
+            "navigate",
+            "snapshot",
+            "diff",
+            "act",
+            "download",
+            "upload",
+            "read",
+            "grep",
+            "screenshot",
+            "pdf",
+            "wait",
+            "windows",
+            "evaluate",
+            "run",
+            "name_session",
+        ]
+    );
 
     let blocked = json!({
         "jsonrpc": "2.0",
