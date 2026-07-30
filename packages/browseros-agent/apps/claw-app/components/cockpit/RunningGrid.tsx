@@ -78,7 +78,9 @@ export function RunningGrid({ sessions }: RunningGridProps) {
           const pinned =
             rawPin !== undefined &&
             session.browserTabs.some((tab) => tab.browserTabId === rawPin)
-          const liveTabId = session.selectedTab?.browserTabId
+          // The live target is the most recently active owned tab (browserTabs
+          // is activity-sorted); the sticky selectedTab would lag tab switches.
+          const liveTabId = session.browserTabs[0]?.browserTabId
           const shownTabId = pinned ? rawPin : liveTabId
           return (
             <AgentRunningCard

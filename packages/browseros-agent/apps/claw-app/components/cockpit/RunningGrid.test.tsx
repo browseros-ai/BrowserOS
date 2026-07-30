@@ -314,4 +314,19 @@ describe('RunningGrid', () => {
       container.querySelector('[data-watch-browser-tab="41"]'),
     ).not.toBeNull()
   })
+
+  it('follows the most recently active tab, not the sticky selection', async () => {
+    const recent = browserTab({ browserTabId: 41 })
+    const stale = browserTab({ browserTabId: 42 })
+    // browserTabs is activity-sorted (most recent first); selectedTab is a
+    // stale sticky pick that must not drive the card.
+    await render([
+      session({ selectedTab: stale, browserTabs: [recent, stale] }),
+    ])
+
+    expect(
+      container.querySelector('[data-watch-browser-tab="41"]'),
+    ).not.toBeNull()
+    expect(container.querySelector('[data-watch-browser-tab="42"]')).toBeNull()
+  })
 })

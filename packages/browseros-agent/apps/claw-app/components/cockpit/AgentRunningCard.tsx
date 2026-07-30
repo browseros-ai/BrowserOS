@@ -45,7 +45,7 @@ export function AgentRunningCard({
   const shownTab =
     session.browserTabs.find(
       (tab) => tab.browserTabId === selectedBrowserTabId,
-    ) ?? session.selectedTab
+    ) ?? session.browserTabs[0]
   const active = session.state === 'active'
   const isLiveTab =
     shownTab != null && shownTab.browserTabId === liveBrowserTabId
@@ -62,6 +62,7 @@ export function AgentRunningCard({
         <MiniScreencast
           site={site}
           live={showingLive}
+          poll={isLiveTab}
           sessionId={session.sessionId}
           browserTabId={pinned ? shownTab?.browserTabId : undefined}
           className="h-full w-full"

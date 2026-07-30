@@ -11,6 +11,8 @@ interface MiniScreencastProps {
   live?: boolean
   /** Previews a specific owned tab; omitted follows the session's active tab. */
   browserTabId?: number
+  /** Refreshes on an interval; false captures once and freezes the last frame. */
+  poll?: boolean
   /** AgentRunningCard overrides the compact default to fill its preview zone. */
   className?: string
 }
@@ -46,6 +48,7 @@ function SessionMiniScreencast({
   sessionId,
   live,
   browserTabId,
+  poll = true,
   className,
 }: MiniScreencastProps) {
   const [refresh, setRefresh] = useState(Date.now)
@@ -60,12 +63,16 @@ function SessionMiniScreencast({
       : null
 
   useEffect(() => {
+    // A pinned background tab freezes on its last frame: skip the interval so
+    // the preview stops re-capturing and does not keep consuming the session's
+    // limited capture slots.
+    if (!poll) return
     const timer = window.setInterval(
       () => setRefresh(Date.now()),
       PREVIEW_REFRESH_MS,
     )
     return () => window.clearInterval(timer)
-  }, [])
+  }, [poll])
 
   useEffect(() => {
     if (incomingSrc === null) return
