@@ -54,6 +54,7 @@ pub struct RecordingStreamRow {
     pub size_bytes: i64,
     pub event_count: i64,
     pub has_gap: bool,
+    pub payload_bytes: i64,
 }
 
 impl From<recording_streams::Model> for RecordingStreamRow {
@@ -67,6 +68,7 @@ impl From<recording_streams::Model> for RecordingStreamRow {
             size_bytes: row.size_bytes,
             event_count: row.event_count,
             has_gap: row.has_gap,
+            payload_bytes: row.payload_bytes,
         }
     }
 }
@@ -213,6 +215,7 @@ impl RecordingIndex {
                     size_bytes: Set(input.size_bytes),
                     event_count: Set(input.event_count),
                     has_gap: Set(input.has_gap),
+                    payload_bytes: Set(0),
                 })
                 .exec(&txn)
                 .await?;
