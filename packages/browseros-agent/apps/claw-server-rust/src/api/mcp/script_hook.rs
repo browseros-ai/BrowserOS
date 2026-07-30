@@ -220,6 +220,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 opens_page,
                 inputs,
                 description: format!("Saved helper for {host}"),
+                session: String::new(),
             };
             helpers::save_helper(&self.call.state.config.browserclaw_dir, &meta, source)
                 .map_err(|error| format!("could not save helper: {error}"))

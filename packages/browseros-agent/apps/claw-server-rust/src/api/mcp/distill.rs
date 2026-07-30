@@ -13,7 +13,13 @@ use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use tracing::warn;
+
+/// A distilled flow with fewer than this many actions is not worth a helper; more
+/// than the ceiling signals exploration or a retry loop rather than a crisp macro.
+const MIN_ACTIONS: usize = 2;
+const MAX_ACTIONS: usize = 8;
 
 /// Observer that distills a successful script run into a candidate helper keyed
 /// by the host of the single page the flow drove.
@@ -47,6 +53,11 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
                 None => return Ok(()),
             },
         };
+        // Quality gate: skip exploration and retry loops so only crisp, proven
+        // flows become helpers.
+        if !is_distillable(&source) {
+            return Ok(());
+        }
         let steps = source.matches("await browser").count();
         let input_count = source.matches("inputs.field").count();
         // An opened-page macro has the `(browser, inputs)` signature; a search-by-URL
@@ -56,28 +67,52 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
         let inputs = build_inputs(&source, input_count);
         let description = describe(&host, steps, opens_page, is_search);
         // A search-by-URL flow gets one canonical descriptive name per host; other
-        // flows keep a content hash so identical flows dedupe on re-run.
+        // flows dedupe across sessions by normalized shape, so the same flow
+        // re-derived elsewhere supersedes rather than piling up.
         let name = if is_search {
             format!("search-{host}")
         } else {
-            format!("candidate-{}", short_hash(&source))
+            format!("candidate-{}", short_hash(&normalize_shape(&source)))
         };
+        let dir = &context.call.state.config.browserclaw_dir;
+        let session = identity.session.convo_id().as_str().to_string();
+        // Hard per-session cap: a single session contributes at most one candidate
+        // per host, the richest qualifying flow it produced. If it already has an
+        // equal-or-richer candidate here, keep that one.
+        let rank = (u8::from(opens_page), steps);
+        let mine: Vec<HelperMeta> = helpers::list_helper_meta(dir, &host)
+            .into_iter()
+            .filter(|meta| meta.candidate && meta.session == session)
+            .collect();
+        if mine
+            .iter()
+            .any(|meta| candidate_rank(dir, &host, meta) >= rank)
+        {
+            return Ok(());
+        }
         let meta = HelperMeta {
-            name,
-            host,
+            name: name.clone(),
+            host: host.clone(),
             last_verified: now_epoch_ms(),
             agent: identity.agent.slug().to_string(),
             candidate: true,
             opens_page,
             inputs,
             description,
+            session,
         };
-        let dir = &context.call.state.config.browserclaw_dir;
         if let Err(error) = helpers::save_helper(dir, &meta, &source) {
             warn!(error = %error, "distilled candidate helper save failed");
+            return Ok(());
         }
-        // Bound accumulation: keep only the most recent candidates per host.
-        helpers::prune_candidates(dir, &meta.host, helpers::MAX_CANDIDATES_PER_HOST);
+        // Enforce the per-session cap: drop this session's now-superseded candidates.
+        for old in mine {
+            if old.name != name {
+                helpers::remove_helper(dir, &host, &old.name);
+            }
+        }
+        // Bound accumulation across sessions: keep only the most recent candidates.
+        helpers::prune_candidates(dir, &host, helpers::MAX_CANDIDATES_PER_HOST);
         Ok(())
     })
 }
@@ -320,17 +355,87 @@ async fn page_host(session: &BrowserSession, page_id: u64) -> Option<String> {
 /// field read into a URL via `encodeURIComponent` is a search query; the rest are
 /// generic input values. Drives the documented call form.
 fn build_inputs(source: &str, count: usize) -> BTreeMap<String, String> {
+    let mut labeled_search = false;
     (0..count)
         .map(|index| {
             let field = format!("field{index}");
-            let desc = if source.contains(&format!("encodeURIComponent(inputs.{field})")) {
-                "search query"
-            } else {
-                "input value"
-            };
+            // Only the first field read into a URL is the search query; the rest
+            // are generic input values.
+            let is_search = !labeled_search
+                && source.contains(&format!("encodeURIComponent(inputs.{field})"));
+            if is_search {
+                labeled_search = true;
+            }
+            let desc = if is_search { "search query" } else { "input value" };
             (field, desc.to_string())
         })
         .collect()
+}
+
+/// Whether a distilled flow is worth saving as a helper: a sane action count, and
+/// no more than one search navigation (multiple is a re-search loop, not a macro).
+fn is_distillable(source: &str) -> bool {
+    let actions = source.matches("await browser").count();
+    if !(MIN_ACTIONS..=MAX_ACTIONS).contains(&actions) {
+        return false;
+    }
+    source
+        .matches("encodeURIComponent(inputs.field")
+        .count()
+        <= 1
+}
+
+/// The (opensPage, action-count) rank of an existing candidate, read from its
+/// source. A search helper (opensPage) outranks a passed-page one; among the
+/// same kind, more actions wins.
+fn candidate_rank(dir: &Path, host: &str, meta: &HelperMeta) -> (u8, usize) {
+    let actions = helpers::read_helper_source(dir, host, &meta.name)
+        .map(|source| source.matches("await browser").count())
+        .unwrap_or(0);
+    (u8::from(meta.opens_page), actions)
+}
+
+/// A structural skeleton of a distilled source: string literals (refs, URLs,
+/// values) collapsed to a placeholder and input indices normalized, so the same
+/// flow re-derived with different specifics hashes the same and supersedes rather
+/// than accumulating.
+fn normalize_shape(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(character) = chars.next() {
+        if character == '"' {
+            // Skip the string body; refs, URLs, and values all live in quotes.
+            while let Some(inner) = chars.next() {
+                match inner {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => break,
+                    _ => {}
+                }
+            }
+            out.push_str("\"S\"");
+        } else {
+            out.push(character);
+        }
+    }
+    collapse_input_indices(&out)
+}
+
+/// Replaces `inputs.field<n>` with `inputs.fieldN`, so the number of inputs does
+/// not fork the shape.
+fn collapse_input_indices(source: &str) -> String {
+    let needle = "inputs.field";
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(pos) = rest.find(needle) {
+        out.push_str(&rest[..pos]);
+        out.push_str(needle);
+        out.push('N');
+        rest = rest[pos + needle.len()..].trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A one-line human summary of the distilled flow for the helper's frontmatter.
@@ -522,6 +627,37 @@ mod tests {
             Some("input value")
         );
         assert_eq!(describe("example.com", 3, false, false), "Replays 3 step(s) on example.com");
+    }
+
+    #[test]
+    fn is_distillable_rejects_loops_and_oversized_flows() {
+        let clean = "async (browser, inputs = {}) => {\n  const page = await browser.pages.newPage(\"x\" + encodeURIComponent(inputs.field0));\n  await browser.wait(page, {});\n}";
+        assert!(is_distillable(clean));
+        // A re-search loop (more than one search navigation) is rejected.
+        let loop_src = "await browser a encodeURIComponent(inputs.field0) await browser b encodeURIComponent(inputs.field1)";
+        assert!(!is_distillable(loop_src));
+        // Too many actions signals exploration.
+        assert!(!is_distillable(&"await browser x ".repeat(12)));
+        // Too few is rejected.
+        assert!(!is_distillable("await browser x"));
+    }
+
+    #[test]
+    fn normalize_shape_is_stable_across_refs_and_values() {
+        let a = "async (browser, page, inputs = {}) => {\n  await browser.input(page).fill(\"e5\", inputs.field0);\n  await browser.input(page).click(\"e6\");\n}";
+        let b = "async (browser, page, inputs = {}) => {\n  await browser.input(page).fill(\"e9\", inputs.field0);\n  await browser.input(page).click(\"e42\");\n}";
+        assert_eq!(normalize_shape(a), normalize_shape(b));
+        // A structurally different flow differs.
+        let c = "async (browser, page, inputs = {}) => {\n  await browser.input(page).click(\"e6\");\n}";
+        assert_ne!(normalize_shape(a), normalize_shape(c));
+    }
+
+    #[test]
+    fn build_inputs_labels_only_the_first_search_field() {
+        let two_search = "newPage(\"a\" + encodeURIComponent(inputs.field0)); nav(page).goto(\"b\" + encodeURIComponent(inputs.field1));";
+        let inputs = build_inputs(two_search, 2);
+        assert_eq!(inputs.get("field0").map(String::as_str), Some("search query"));
+        assert_eq!(inputs.get("field1").map(String::as_str), Some("input value"));
     }
 
     #[test]

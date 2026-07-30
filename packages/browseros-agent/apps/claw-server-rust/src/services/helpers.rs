@@ -45,6 +45,10 @@ pub struct HelperMeta {
     /// One-line human summary of what the helper does.
     #[serde(default)]
     pub description: String,
+    /// The conversation/session id that produced this candidate, so distillation
+    /// can cap a single session to one candidate per host (empty for hand-saved).
+    #[serde(default)]
+    pub session: String,
 }
 
 /// A single safe path segment: non-empty, not a traversal token, limited to an
@@ -221,6 +225,9 @@ fn render_frontmatter(meta: &HelperMeta) -> String {
     out.push_str(&format!("candidate: {}\n", meta.candidate));
     out.push_str(&format!("opensPage: {}\n", meta.opens_page));
     out.push_str(&format!("description: {}\n", yaml_str(&meta.description)));
+    if !meta.session.is_empty() {
+        out.push_str(&format!("session: {}\n", yaml_str(&meta.session)));
+    }
     if meta.inputs.is_empty() {
         out.push_str("inputs: {}\n");
     } else {
@@ -335,16 +342,25 @@ pub fn has_any_helpers(browserclaw_dir: &Path) -> bool {
 }
 
 /// Cap on auto-distilled candidate helpers kept per host, so reuse-driven
-/// candidates do not accumulate unbounded.
-pub const MAX_CANDIDATES_PER_HOST: usize = 10;
+/// candidates do not accumulate unbounded. Small because the per-session cap and
+/// shape deduping already keep candidate churn low.
+pub const MAX_CANDIDATES_PER_HOST: usize = 5;
 
-/// Evicts the oldest candidate helpers for a host beyond `keep`. Only files
-/// whose frontmatter marks them `candidate:true` are eligible; promoted or
-/// hand-saved helpers are never removed.
+/// Deletes a helper file, if present. Used by the distiller to supersede a
+/// session's earlier candidate. No-op for an unsafe host/name or a missing file.
+pub fn remove_helper(browserclaw_dir: &Path, host: &str, name: &str) {
+    if let Some(path) = helper_path(browserclaw_dir, host, name) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// Evicts the oldest candidate helpers for a host beyond `keep`. Eligible files
+/// are `candidate:true` passed-page helpers; the canonical `opensPage` search
+/// helper is protected, as are promoted or hand-saved helpers.
 pub fn prune_candidates(browserclaw_dir: &Path, host: &str, keep: usize) {
     let mut candidates: Vec<HelperMeta> = list_helper_meta(browserclaw_dir, host)
         .into_iter()
-        .filter(|meta| meta.candidate)
+        .filter(|meta| meta.candidate && !meta.opens_page)
         .collect();
     if candidates.len() <= keep {
         return;
@@ -376,6 +392,7 @@ pub fn list_helper_meta(browserclaw_dir: &Path, host: &str) -> Vec<HelperMeta> {
                 opens_page: false,
                 inputs: BTreeMap::new(),
                 description: String::new(),
+                session: String::new(),
             }))
         })
         .collect()
@@ -396,6 +413,7 @@ mod tests {
             opens_page: true,
             inputs: BTreeMap::from([("field0".to_string(), "search query".to_string())]),
             description: "Opens amazon.in search for a query".to_string(),
+            session: "convo-1".to_string(),
         }
     }
 
@@ -523,6 +541,37 @@ mod tests {
         assert_eq!(listed[0].agent, "codex");
         assert_eq!(listed[0].inputs.get("field0").map(String::as_str), Some("search query"));
         assert_eq!(listed[0].description, "Opens amazon.in search for a query");
+        assert_eq!(listed[0].session, "convo-1");
+        Ok(())
+    }
+
+    #[test]
+    fn prune_never_evicts_the_opens_page_search_helper() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let root = dir.path();
+        // The canonical opensPage search helper (a candidate) must survive a
+        // burst of passed-page fragments.
+        save_helper(root, &search_meta(), "async (browser, inputs = {}) => { return 1; }")?;
+        let fragment = |name: &str, verified: i64| HelperMeta {
+            name: name.to_string(),
+            host: "amazon.in".to_string(),
+            last_verified: verified,
+            agent: String::new(),
+            candidate: true,
+            opens_page: false,
+            inputs: BTreeMap::new(),
+            description: String::new(),
+            session: String::new(),
+        };
+        for i in 1..=4 {
+            save_helper(root, &fragment(&format!("candidate-{i}"), i), "async () => 1")?;
+        }
+        prune_candidates(root, "amazon.in", 1);
+        let names: Vec<String> = list_helper_meta(root, "amazon.in")
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect();
+        assert!(names.contains(&"search-amazon".to_string()), "search helper evicted: {names:?}");
         Ok(())
     }
 
@@ -546,9 +595,11 @@ mod tests {
             last_verified: verified,
             agent: String::new(),
             candidate,
-            opens_page: true,
+            // Passed-page candidates are the evictable kind.
+            opens_page: false,
             inputs: BTreeMap::new(),
             description: String::new(),
+            session: String::new(),
         };
         // A promoted (candidate:false) helper must survive pruning.
         save_helper(root, &helper("keep-me", 500, false), "async () => 1")?;

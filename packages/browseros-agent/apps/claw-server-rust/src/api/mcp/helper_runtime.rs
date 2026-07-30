@@ -219,6 +219,7 @@ mod tests {
                 "search query".to_string(),
             )]),
             description: format!("Opens {host} search for a query"),
+            session: String::new(),
         }
     }
 
