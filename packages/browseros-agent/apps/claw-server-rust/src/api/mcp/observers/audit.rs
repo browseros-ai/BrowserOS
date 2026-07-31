@@ -187,7 +187,7 @@ pub(crate) async fn persist_screenshot(
     dispatch_id: &DispatchId,
     row_id: i64,
 ) {
-    let bytes = match state.visuals.capture(session_id).await {
+    let bytes = match state.visuals.capture(session_id, None).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return,
         Err(error) => {
