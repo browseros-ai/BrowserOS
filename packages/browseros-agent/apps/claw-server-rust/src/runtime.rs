@@ -260,6 +260,8 @@ mod tests {
             result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,

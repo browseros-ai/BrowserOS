@@ -54,7 +54,14 @@ pub struct RecordToolDispatchInput {
     pub args_json: String,
     pub result_meta: String,
     pub duration_ms: i64,
+    /// When the dispatch started, so a long-running script tool sorts before the
+    /// child primitives it recorded while executing. `None` falls back to the
+    /// write time (fine for fast granular tools and child rows).
+    pub created_at: Option<i64>,
     pub dispatch_id: DispatchId,
+    /// Parent script dispatch when this row is a primitive executed inside a
+    /// `run`/`execute` script; `None` for ordinary top-level tool dispatches.
+    pub parent_dispatch_id: Option<DispatchId>,
     /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
     pub tool_input_token_estimate: i64,
     /// Approximate semantic content returned by BrowserClaw after result effects.
@@ -255,7 +262,7 @@ impl AuditLog {
     pub async fn append_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
         let result = ToolDispatches::insert(tool_dispatches::ActiveModel {
             id: NotSet,
-            created_at: Set(now_epoch_ms()),
+            created_at: Set(input.created_at.unwrap_or_else(now_epoch_ms)),
             agent_id: Set(input.agent_id),
             slug: Set(input.slug),
             agent_label: Set(input.agent_label),
@@ -273,6 +280,7 @@ impl AuditLog {
             tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
             token_estimator_version: Set(input.token_estimator_version.max(0)),
             dispatch_id: Set(Some(input.dispatch_id.into_inner())),
+            parent_dispatch_id: Set(input.parent_dispatch_id.map(DispatchId::into_inner)),
             has_screenshot: Set(false),
         })
         .exec(self.db.connection())
@@ -687,6 +695,10 @@ async fn query_dispatches_for_session<C: ConnectionTrait>(
 ) -> AppResult<Vec<ToolDispatchRow>> {
     Ok(ToolDispatches::find()
         .filter(tool_dispatches::Column::SessionId.eq(session_id))
+        // created_at first so a script tool (stamped with its start) sorts
+        // before the child primitives it recorded while executing; id breaks
+        // ties for rows written in the same millisecond.
+        .order_by_asc(tool_dispatches::Column::CreatedAt)
         .order_by_asc(tool_dispatches::Column::Id)
         .all(conn)
         .await?)
@@ -886,6 +898,8 @@ mod tests {
             result_meta: result_meta(is_error, false, &json!({ "page": 1 }), 1),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 11,
             tool_output_token_estimate: 22,
             token_estimator_version: 1,

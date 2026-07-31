@@ -78,17 +78,21 @@ mod tests {
     use super::{embedded_browserclaw_skill, load_browserclaw_skill};
 
     #[test]
-    fn harness_skills_embedded_resource_is_concise_and_actionable()
+    fn harness_skills_embedded_resource_is_a_concise_pointer()
     -> Result<(), Box<dyn std::error::Error>> {
         let content = embedded_browserclaw_skill();
         assert!(content.starts_with("---\nname: browserclaw\n"));
         assert!(content.contains("description:"));
-        assert!(content.contains("task-owned tabs"));
-        assert!(content.contains("snapshot -> act -> verify"));
-        assert!(content.contains("untrusted data"));
-        assert!(content.contains("name_session"));
-        assert!(content.contains("unprompted"));
-        assert!(content.lines().count() < 60);
+        // A pointer skill: it steers the agent to BrowserClaw for browser work
+        // and defers the how-to to the MCP instructions and tool descriptions,
+        // which are the single source of truth for the SDK.
+        assert!(content.contains("use BrowserClaw's tools"));
+        assert!(content.contains("prefer it over other browser surfaces"));
+        assert!(content.contains("default to `run` for browser work"));
+        assert!(content.contains("Write async JavaScript against the `browser` SDK"));
+        assert!(content.contains("Use standalone tools only when `run` cannot surface"));
+        assert!(content.contains("MCP initialize instructions and tool descriptions"));
+        assert!(content.lines().count() < 20);
         Ok(())
     }
 

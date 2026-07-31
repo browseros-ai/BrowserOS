@@ -6,6 +6,7 @@ pub mod diff;
 pub mod download;
 pub mod evaluate;
 pub mod grep;
+pub mod history;
 pub mod navigate;
 pub mod pdf;
 pub mod read;
@@ -23,6 +24,7 @@ pub fn catalog() -> Vec<ToolDef> {
     vec![
         tabs::definition(),
         tab_groups::definition(),
+        history::definition(),
         navigate::definition(),
         snapshot::definition(),
         diff::definition(),

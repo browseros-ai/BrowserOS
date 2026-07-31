@@ -109,6 +109,7 @@ fn fake_ctx() -> ToolCtx {
         defaults: BrowserToolDefaults::default(),
         cancel: CancellationToken::new(),
         output_files: create_browser_output_file_access(),
+        inner_call_hook: None,
     })
 }
 
@@ -182,6 +183,37 @@ impl CdpConnection for HarnessConnection {
                     Ok(json!({ "tab": tab }))
                 }
                 "Browser.createTab" => Ok(json!({ "tab": new_harness_tab() })),
+                "History.getRecent" => {
+                    if params.get("maxResults") == Some(&json!(2)) {
+                        Ok(json!({
+                            "entries": [
+                                {
+                                    "id": "entry-1",
+                                    "url": "https://example.test/first",
+                                    "title": "First visit",
+                                    "lastVisitTime": 1_785_456_000_000_f64,
+                                    "visitCount": 4,
+                                    "typedCount": 1
+                                },
+                                {
+                                    "id": "entry-2",
+                                    "url": "https://example.test/second",
+                                    "title": "",
+                                    "lastVisitTime": 1_785_369_600_000_f64,
+                                    "visitCount": 1,
+                                    "typedCount": 0
+                                }
+                            ]
+                        }))
+                    } else if params.get("maxResults") == Some(&json!(100)) {
+                        Ok(json!({ "entries": [] }))
+                    } else {
+                        Err(CdpError::Protocol {
+                            code: -1,
+                            message: format!("unexpected History.getRecent params: {params}"),
+                        })
+                    }
+                }
                 "Target.attachToTarget" => {
                     let session =
                         if params.get("targetId").and_then(Value::as_str) == Some("target-2") {
@@ -359,6 +391,7 @@ async fn harness_ctx() -> (ToolCtx, Arc<HarnessConnection>, u32) {
             defaults: BrowserToolDefaults::default(),
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
+            inner_call_hook: None,
         }),
         connection,
         page,
@@ -400,6 +433,7 @@ fn catalog_order_matches_typescript_registry() {
         vec![
             "tabs",
             "tab_groups",
+            "history",
             "navigate",
             "snapshot",
             "diff",
@@ -429,6 +463,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
         vec![
             ("tabs", true),
             ("tab_groups", false),
+            ("history", false),
             ("navigate", true),
             ("snapshot", true),
             ("diff", true),
@@ -457,7 +492,7 @@ fn tab_and_window_schemas_omit_hidden_controls() {
     let windows_schema = Value::Object(windows.input_schema.as_ref().clone());
     assert_eq!(
         windows_schema.pointer("/properties/action/enum"),
-        Some(&json!(["list", "create", "close", "activate"]))
+        Some(&json!(["list", "create", "close"]))
     );
     for property in ["hidden", "visible", "activate"] {
         assert!(
@@ -468,6 +503,35 @@ fn tab_and_window_schemas_omit_hidden_controls() {
         );
     }
     assert!(!windows.description.contains("hidden"));
+    assert!(!windows.description.contains("activate"));
+}
+
+#[test]
+fn history_schema_stays_narrow_and_defaults_to_100() {
+    let history = tool_by_name("history");
+    let schema = Value::Object(history.input_schema.as_ref().clone());
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("history schema should have properties"));
+    assert_eq!(properties.keys().collect::<Vec<_>>(), vec!["maxResults"]);
+    assert_eq!(
+        schema.pointer("/properties/maxResults/type"),
+        Some(&json!("integer"))
+    );
+    assert_eq!(
+        schema.pointer("/properties/maxResults/minimum"),
+        Some(&json!(1))
+    );
+    assert_eq!(
+        schema.pointer("/properties/maxResults/default"),
+        Some(&json!(100))
+    );
+    assert_eq!(
+        schema.get("additionalProperties"),
+        Some(&json!({ "not": {} }))
+    );
+    assert!(schema.get("required").is_none());
 }
 
 #[test]
@@ -742,6 +806,106 @@ async fn retired_hidden_inputs_are_rejected() {
             "{name} accepted retired hidden input"
         );
     }
+}
+
+#[tokio::test]
+async fn history_forwards_max_results_and_returns_full_entries() {
+    let (ctx, connection, _page) = harness_ctx().await;
+    let result = execute_tool(&tool_by_name("history"), json!({ "maxResults": 2 }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("history should return a tool result: {err}"));
+
+    assert!(!result.is_error);
+    assert_eq!(
+        result.structured_content,
+        Some(json!({
+            "entries": [
+                {
+                    "id": "entry-1",
+                    "url": "https://example.test/first",
+                    "title": "First visit",
+                    "lastVisitTime": 1_785_456_000_000_f64,
+                    "visitCount": 4,
+                    "typedCount": 1
+                },
+                {
+                    "id": "entry-2",
+                    "url": "https://example.test/second",
+                    "title": "",
+                    "lastVisitTime": 1_785_369_600_000_f64,
+                    "visitCount": 1,
+                    "typedCount": 0
+                }
+            ],
+            "count": 2
+        }))
+    );
+    let text = result_text(&result);
+    assert!(text.contains("First visit"));
+    assert!(text.contains("https://example.test/first"));
+    assert!(text.contains("last visited 2026-07-31T00:00:00Z"));
+    assert!(text.contains("4 visits"));
+    assert!(text.contains("https://example.test/second"));
+    assert!(connection.calls().iter().any(|call| {
+        call.method == "History.getRecent"
+            && call.params == json!({ "maxResults": 2 })
+            && call.session.is_none()
+    }));
+}
+
+#[tokio::test]
+async fn history_defaults_to_100_and_handles_empty_history() {
+    let (ctx, connection, _page) = harness_ctx().await;
+    let result = execute_tool(&tool_by_name("history"), json!({}), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("history should return a tool result: {err}"));
+
+    assert!(!result.is_error);
+    assert_eq!(result_text(&result), "(no history)");
+    assert_eq!(
+        result.structured_content,
+        Some(json!({ "entries": [], "count": 0 }))
+    );
+    assert!(connection.calls().iter().any(|call| {
+        call.method == "History.getRecent"
+            && call.params == json!({ "maxResults": 100 })
+            && call.session.is_none()
+    }));
+}
+
+#[tokio::test]
+async fn history_rejects_invalid_or_unknown_inputs() {
+    for args in [
+        json!({ "maxResults": 0 }),
+        json!({ "maxResults": -1 }),
+        json!({ "maxResults": 1.5 }),
+        json!({ "maxResults": "10" }),
+        json!({ "query": "example" }),
+    ] {
+        let result = execute_tool(&tool_by_name("history"), args, &fake_ctx())
+            .await
+            .unwrap_or_else(|err| panic!("history should return a tool result: {err}"));
+        assert!(result.is_error);
+        assert!(
+            result_text(&result).starts_with("Invalid arguments for history:"),
+            "unexpected validation result: {}",
+            result_text(&result)
+        );
+    }
+}
+
+#[tokio::test]
+async fn retired_window_activate_action_is_rejected() {
+    let tool = tool_by_name("windows");
+    let result = execute_tool(
+        &tool,
+        json!({ "action": "activate", "windowId": 1 }),
+        &fake_ctx(),
+    )
+    .await
+    .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+    assert!(result.is_error);
+    assert!(result_text(&result).starts_with("Invalid arguments for windows:"));
 }
 
 #[tokio::test]

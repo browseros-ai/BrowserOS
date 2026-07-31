@@ -30,6 +30,9 @@ pub struct BrowserToolOptions {
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
+    /// Host hook a script tool invokes around each primitive; `None` outside
+    /// the host (unit tests, non-host callers), which disables the hook.
+    pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
 }
 
 #[derive(Clone)]
@@ -38,6 +41,8 @@ pub struct ToolCtx {
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
+    /// See [`BrowserToolOptions::inner_call_hook`].
+    pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
 }
 
 impl ToolCtx {
@@ -48,6 +53,7 @@ impl ToolCtx {
             defaults: options.defaults,
             cancel: options.cancel,
             output_files: options.output_files,
+            inner_call_hook: options.inner_call_hook,
         }
     }
 
@@ -58,6 +64,49 @@ impl ToolCtx {
             Ok(())
         }
     }
+}
+
+/// Host-injected hook a script tool (`run`/`execute`) calls around each browser
+/// primitive so the host can enforce per-primitive ownership and record the
+/// primitive as a child audit row. `browseros-mcp` cannot reach the host's
+/// guards or audit store, so the host implements this and passes it in via
+/// [`ToolCtx::inner_call_hook`].
+pub trait InnerCallHook: Send + Sync {
+    /// Authorize a primitive about to run against the caller's ownership.
+    /// `page` is the primitive's target page id, when it addresses one.
+    /// `Err(reason)` rejects the primitive and the reason is surfaced to the
+    /// script as a thrown error.
+    fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Record a completed inner primitive as a child audit row.
+    fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
+
+    /// Signal that the script just created a page. The host claims and groups
+    /// it exactly as a `tabs new` would, so a script's tabs get the agent's
+    /// tab group, ownership, and the cockpit ownership window.
+    fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()>;
+
+    /// Tag each page from a `pages.list` result with its ownership bucket so the
+    /// script can tell its own tabs from the user's and other agents' tabs, the
+    /// same tri-bucket view the granular `tabs list` tool returns. `browseros-mcp`
+    /// cannot compute ownership, so the host annotates. The default returns the
+    /// pages unchanged, which is correct when no host is attached.
+    fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { pages.to_vec() })
+    }
+}
+
+/// A completed inner primitive handed to [`InnerCallHook::record`].
+#[derive(Debug, Clone, Copy)]
+pub struct InnerCallRecord<'a> {
+    /// The bridge method that ran, e.g. `"input.click"` or `"nav.goto"`.
+    pub method: &'a str,
+    /// Target page id, when the primitive addressed a specific page.
+    pub page: Option<u32>,
+    /// Whether the primitive failed.
+    pub is_error: bool,
+    /// Wall-clock duration of the primitive in milliseconds.
+    pub duration_ms: i64,
 }
 
 #[derive(Clone)]

@@ -4,6 +4,7 @@ pub mod guards;
 pub mod naming;
 pub mod observers;
 mod prompt;
+pub mod script_hook;
 mod service;
 mod timeouts;
 

@@ -1,6 +1,10 @@
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id, result_page_id};
-use browseros_core::PageId;
+use crate::AppState;
+use crate::api::mcp::dispatch::{
+    ToolEffect, ToolEffectContext, ToolIdentity, extract_page_id, result_page_id,
+};
+use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
+use std::sync::Arc;
 
 /// Updates ownership for successful tab creation and closure results.
 pub fn apply(
@@ -17,46 +21,15 @@ pub fn apply(
             let Some(page_id) = result_page_id(context.result) else {
                 return Ok(None);
             };
-            if let Some(browser) = &context.call.browser_session
-                && let Some(info) = browser.pages.get_info(PageId(page_id)).await
-            {
-                let target_id = info.target_id.as_str().to_string();
-                context
-                    .call
-                    .state
-                    .tab_activity
-                    .record_tool(crate::services::cockpit::RecordToolInput {
-                        target_id: info.target_id,
-                        tab_id: info.tab_id.0,
-                        page_id,
-                        session_id: context.call.session_id.as_str().to_string(),
-                        agent_id: identity.session.convo_id().as_str().to_string(),
-                        slug: identity.agent.slug().to_string(),
-                        tool_name: "tabs".to_string(),
-                    })
-                    .await;
-                let session_id = context.call.session_id.as_str().to_string();
-                let agent_id = identity.session.convo_id().as_str().to_string();
-                let claimed_at = context.call.started_at_ms;
-                context
-                    .call
-                    .state
-                    .session_tabs
-                    .enqueue_claim_tab_for_session(
-                        info.tab_id.0,
-                        Some(target_id),
-                        session_id,
-                        agent_id,
-                        claimed_at,
-                    );
-            }
-            context
-                .call
-                .state
-                .sessions
-                .ownership()
-                .claim_page(identity.ownership_key.clone(), PageId(page_id))
-                .await;
+            record_new_page(
+                &context.call.state,
+                identity,
+                context.call.browser_session.as_ref(),
+                context.call.session_id.as_str(),
+                page_id,
+                context.call.started_at_ms,
+            )
+            .await;
         } else if context.call.flags.close_page
             && let Some(page_id) = extract_page_id(context.call)
         {
@@ -86,6 +59,49 @@ pub fn apply(
         }
         Ok(None)
     })
+}
+
+/// Records a newly created page as owned by the agent: tab activity, the
+/// session-tab ownership window, and the page-ownership claim. Shared by the
+/// tabs-new effect and the code-mode script hook so a page a script opens is
+/// claimed the same way a `tabs new` page is.
+pub(crate) async fn record_new_page(
+    state: &AppState,
+    identity: &ToolIdentity,
+    browser: Option<&Arc<BrowserSession>>,
+    session_id: &str,
+    page_id: u32,
+    claimed_at: i64,
+) {
+    if let Some(browser) = browser
+        && let Some(info) = browser.pages.get_info(PageId(page_id)).await
+    {
+        let target_id = info.target_id.as_str().to_string();
+        state
+            .tab_activity
+            .record_tool(crate::services::cockpit::RecordToolInput {
+                target_id: info.target_id,
+                tab_id: info.tab_id.0,
+                page_id,
+                session_id: session_id.to_string(),
+                agent_id: identity.session.convo_id().as_str().to_string(),
+                slug: identity.agent.slug().to_string(),
+                tool_name: "tabs".to_string(),
+            })
+            .await;
+        state.session_tabs.enqueue_claim_tab_for_session(
+            info.tab_id.0,
+            Some(target_id),
+            session_id.to_string(),
+            identity.session.convo_id().as_str().to_string(),
+            claimed_at,
+        );
+    }
+    state
+        .sessions
+        .ownership()
+        .claim_page(identity.ownership_key.clone(), PageId(page_id))
+        .await;
 }
 
 const _: ToolEffect = apply;

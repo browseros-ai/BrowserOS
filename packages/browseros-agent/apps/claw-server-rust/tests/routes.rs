@@ -372,12 +372,35 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    // The complete catalog is advertised, including the run script tool and
+    // the locally implemented name_session tool.
+    let listed: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools not array"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
     assert_eq!(
-        body["result"]["tools"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tools not array"))?
-            .len(),
-        17
+        listed,
+        vec![
+            "tabs",
+            "tab_groups",
+            "navigate",
+            "snapshot",
+            "diff",
+            "act",
+            "download",
+            "upload",
+            "read",
+            "grep",
+            "screenshot",
+            "pdf",
+            "wait",
+            "windows",
+            "evaluate",
+            "run",
+            "name_session",
+        ]
     );
 
     let blocked = json!({
@@ -1448,6 +1471,8 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 1,
             dispatch_id: DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,

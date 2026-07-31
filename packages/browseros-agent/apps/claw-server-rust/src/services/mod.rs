@@ -5,6 +5,7 @@ pub mod cockpit;
 pub mod first_run;
 pub mod harness;
 pub mod harness_skills;
+pub mod helpers;
 pub mod profiles;
 pub mod recordings;
 pub mod replay;

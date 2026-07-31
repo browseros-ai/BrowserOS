@@ -491,6 +491,10 @@ export interface components {
       durationMs?: number
       /** Format: int64 */
       screenshotId?: number
+      /** @description Stable ULID for this dispatch. A script dispatch's primitives reference it via parentDispatchId, so the cockpit can group them under it. */
+      dispatchKey?: string
+      /** @description Set on a primitive recorded inside a script (run) dispatch; equals that script dispatch's dispatchKey. */
+      parentDispatchId?: string
     }
     CancelSessionResponse: {
       status: components['schemas']['SessionStatus']

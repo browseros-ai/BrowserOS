@@ -336,6 +336,8 @@ fn contract_dispatch(
     dispatch.args_json = row.args_json;
     dispatch.result_meta = row.result_meta;
     dispatch.duration_ms = row.duration_ms;
+    dispatch.dispatch_key = row.dispatch_id;
+    dispatch.parent_dispatch_id = row.parent_dispatch_id;
     dispatch
 }
 

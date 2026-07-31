@@ -48,7 +48,11 @@ fn spawn_tab_group_work(call: ToolCall, page_id: Option<u32>) -> JoinHandle<()> 
     tokio::spawn(run_tab_group_work(call, page_id))
 }
 
-async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
+/// Ensures the calling agent's tab group exists and, when `page_id` is set,
+/// places that page in it. Shared by the tab-groups effect and the code-mode
+/// script hook so a page a script opens joins the agent's group the same way a
+/// `tabs new` page does.
+pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     let (Some(identity), Some(browser), Some(tab_groups)) = (
         call.identity.as_ref(),
         call.browser_session.as_ref(),
@@ -440,6 +444,7 @@ async fn dispatch_tab_groups(
         defaults: BrowserToolDefaults::default(),
         cancel: operation_cancel.clone(),
         output_files,
+        inner_call_hook: None,
     });
     let execution = timeout(TAB_GROUP_OPERATION, execute_tool(tab_groups, args, &ctx)).await;
     let result = match execution {
