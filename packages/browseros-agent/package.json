@@ -9,6 +9,7 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "lefthook install || true",
     "dev:watch": "./tools/dev/run.sh watch",
     "dev:watch:new": "./tools/dev/run.sh watch --new",
     "dev:claw:watch": "./tools/dev/run.sh watch --claw",
@@ -92,9 +93,6 @@
     "typescript": "^7.0.2",
     "yaml": "2.9.0"
   },
-  "trustedDependencies": [
-    "lefthook"
-  ],
   "engines": {
     "bun": "1.3.6",
     "node": "please-use-bun",

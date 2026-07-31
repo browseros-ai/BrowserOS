@@ -111,7 +111,6 @@
     "wxt": "^0.20.27"
   },
   "trustedDependencies": [
-    "esbuild",
-    "lefthook"
+    "esbuild"
   ]
 }
