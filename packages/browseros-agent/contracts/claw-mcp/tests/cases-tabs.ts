@@ -296,18 +296,18 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'windows: activate focuses the target window',
+    name: 'windows: retired activate action is rejected',
     async run(ctx) {
-      const created = expectOk(
-        await ctx.mcp.callTool('windows', { action: 'create' }),
+      const error = expectError(
+        await ctx.mcp.callTool('windows', {
+          action: 'activate',
+          windowId: 99_999,
+        }),
+        'windows activate',
       )
-      const windowId = Number(created.match(/\b(\d+)\b/)?.[1])
-      const activated = await ctx.mcp.callTool('windows', {
-        action: 'activate',
-        windowId,
-      })
-      expectOk(activated, 'windows activate')
-      await ctx.mcp.callTool('windows', { action: 'close', windowId })
+      if (!error.includes('unknown variant `activate`')) {
+        throw new Error(`unexpected windows activate error: ${error}`)
+      }
     },
   },
   {
