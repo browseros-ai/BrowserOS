@@ -4,6 +4,7 @@ import { download } from './download'
 import { evaluate } from './evaluate'
 import type { ToolDefinition } from './framework'
 import { grep } from './grep'
+import { history } from './history'
 import { navigate } from './navigate'
 import { pdf } from './pdf'
 import { read } from './read'
@@ -19,6 +20,7 @@ import { windows } from './windows'
 export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   tabs,
   tab_groups,
+  history,
   navigate,
   snapshot,
   diff,
