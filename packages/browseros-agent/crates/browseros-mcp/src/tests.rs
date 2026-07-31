@@ -492,7 +492,7 @@ fn tab_and_window_schemas_omit_hidden_controls() {
     let windows_schema = Value::Object(windows.input_schema.as_ref().clone());
     assert_eq!(
         windows_schema.pointer("/properties/action/enum"),
-        Some(&json!(["list", "create", "close", "activate"]))
+        Some(&json!(["list", "create", "close"]))
     );
     for property in ["hidden", "visible", "activate"] {
         assert!(
@@ -503,6 +503,7 @@ fn tab_and_window_schemas_omit_hidden_controls() {
         );
     }
     assert!(!windows.description.contains("hidden"));
+    assert!(!windows.description.contains("activate"));
 }
 
 #[test]
@@ -891,6 +892,20 @@ async fn history_rejects_invalid_or_unknown_inputs() {
             result_text(&result)
         );
     }
+}
+
+#[tokio::test]
+async fn retired_window_activate_action_is_rejected() {
+    let tool = tool_by_name("windows");
+    let result = execute_tool(
+        &tool,
+        json!({ "action": "activate", "windowId": 1 }),
+        &fake_ctx(),
+    )
+    .await
+    .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+    assert!(result.is_error);
+    assert!(result_text(&result).starts_with("Invalid arguments for windows:"));
 }
 
 #[tokio::test]

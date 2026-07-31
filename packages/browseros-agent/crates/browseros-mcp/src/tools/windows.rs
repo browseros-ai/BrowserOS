@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "Manage browser windows: list, create, close, or activate windows.";
+const DESCRIPTION: &str = "Manage browser windows: list, create, or close windows.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -16,7 +16,7 @@ enum WindowsAction {
     List,
     Create,
     Close,
-    Activate,
+    // Intentionally omit Activate so MCP callers cannot steal window focus.
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -24,7 +24,7 @@ enum WindowsAction {
 struct WindowsArgs {
     #[serde(default)]
     action: WindowsAction,
-    /// Window id for close and activate.
+    /// Window id for close.
     #[serde(rename = "windowId")]
     window_id: Option<i64>,
 }
@@ -68,18 +68,6 @@ fn handler<'a>(
                 text_result(
                     format!("closed window {window_id}"),
                     Some(json!({ "action": "close", "windowId": window_id })),
-                )
-            }
-            WindowsAction::Activate => {
-                let Some(window_id) = args.window_id else {
-                    return Ok(Some(error_result(
-                        "windows activate: windowId is required.",
-                    )));
-                };
-                ctx.session.windows.activate(WindowId(window_id)).await?;
-                text_result(
-                    format!("activated window {window_id}"),
-                    Some(json!({ "action": "activate", "windowId": window_id })),
                 )
             }
         };
