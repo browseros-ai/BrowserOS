@@ -5,6 +5,7 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const DEFAULT_MAX_RESULTS: u32 = 100;
 const DESCRIPTION: &str = "\
@@ -97,13 +98,26 @@ fn format_history(entries: &[HistoryEntry]) -> String {
         };
         lines.push(format!(
             "- {destination} — last visited {}; {} {}; {} typed",
-            entry.last_visit_time,
+            format_visit_time(entry.last_visit_time),
             entry.visit_count,
             pluralize(entry.visit_count, "visit", "visits"),
             entry.typed_count,
         ));
     }
     lines.join("\n")
+}
+
+fn format_visit_time(milliseconds: f64) -> String {
+    if !milliseconds.is_finite() {
+        return milliseconds.to_string();
+    }
+    let Some(nanoseconds) = (milliseconds.trunc() as i128).checked_mul(1_000_000) else {
+        return milliseconds.to_string();
+    };
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds)
+        .ok()
+        .and_then(|timestamp| timestamp.format(&Rfc3339).ok())
+        .unwrap_or_else(|| milliseconds.to_string())
 }
 
 fn pluralize(value: i64, singular: &'static str, plural: &'static str) -> &'static str {

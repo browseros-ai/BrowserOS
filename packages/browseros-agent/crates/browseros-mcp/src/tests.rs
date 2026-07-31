@@ -842,6 +842,7 @@ async fn history_forwards_max_results_and_returns_full_entries() {
     let text = result_text(&result);
     assert!(text.contains("First visit"));
     assert!(text.contains("https://example.test/first"));
+    assert!(text.contains("last visited 2026-07-31T00:00:00Z"));
     assert!(text.contains("4 visits"));
     assert!(text.contains("https://example.test/second"));
     assert!(connection.calls().iter().any(|call| {

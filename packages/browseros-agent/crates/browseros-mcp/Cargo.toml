@@ -18,6 +18,7 @@ rmcp.workspace = true
 schemars.workspace = true
 http.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tracing.workspace = true
 base64.workspace = true
 imagesize.workspace = true

@@ -48,8 +48,14 @@ function formatHistory(entries: HistoryEntry[]): string {
       : entry.url
     const visits = entry.visitCount === 1 ? 'visit' : 'visits'
     lines.push(
-      `- ${destination} — last visited ${entry.lastVisitTime}; ${entry.visitCount} ${visits}; ${entry.typedCount} typed`,
+      `- ${destination} — last visited ${formatVisitTime(entry.lastVisitTime)}; ${entry.visitCount} ${visits}; ${entry.typedCount} typed`,
     )
   }
   return lines.join('\n')
+}
+
+function formatVisitTime(milliseconds: number): string {
+  const timestamp = new Date(milliseconds)
+  if (Number.isNaN(timestamp.getTime())) return String(milliseconds)
+  return timestamp.toISOString().replace('.000Z', 'Z')
 }
