@@ -36,6 +36,51 @@ export type MessageSegment =
 
 const NUDGE_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
 
+// Some local models (observed via LM Studio) leak raw Harmony-style channel
+// scaffold tokens like "<|channel|>" or the malformed "<channel|>" into
+// plain text/reasoning output instead of confining them to a structured
+// field. Matches only bracket+pipe token shapes ("<|word|>", "<|word>",
+// "<word|>") so real HTML-like text (e.g. "<div>") and markdown tables
+// ("| a | b |") are never touched.
+const SCAFFOLD_TOKEN_PATTERN = /<\|[a-zA-Z_]+\|?>|<[a-zA-Z_]+\|>/g
+
+export function stripScaffoldTokens(text: string): string {
+  return text
+    .replace(SCAFFOLD_TOKEN_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function pushTextSegment(
+  segments: MessageSegment[],
+  messageId: string,
+  index: number,
+  rawText: string,
+): number {
+  const text = stripScaffoldTokens(rawText)
+  if (!text) return index
+  segments.push({ type: 'text', key: `${messageId}-text-${index}`, text })
+  return index + 1
+}
+
+function pushReasoningSegment(
+  segments: MessageSegment[],
+  messageId: string,
+  index: number,
+  rawText: string,
+  isPartStreaming: boolean,
+): number {
+  const text = stripScaffoldTokens(rawText)
+  if (!text) return index
+  segments.push({
+    type: 'reasoning',
+    key: `${messageId}-reasoning-${index}`,
+    text,
+    isStreaming: isPartStreaming,
+  })
+  return index + 1
+}
+
 function parseNudgeOutput(output: unknown): NudgeData | null {
   try {
     // output is { content: [{ type: "text", text: "JSON..." }], isError: false }
@@ -87,22 +132,21 @@ export const getMessageSegments = (
 
     if (part.type === 'text') {
       flushToolBatch()
-      segments.push({
-        type: 'text',
-        key: `${message.id}-text-${textSegmentCount}`,
-        text: part.text,
-      })
-      textSegmentCount++
+      textSegmentCount = pushTextSegment(
+        segments,
+        message.id,
+        textSegmentCount,
+        part.text,
+      )
     } else if (part.type === 'reasoning') {
       flushToolBatch()
-      segments.push({
-        type: 'reasoning',
-        key: `${message.id}-reasoning-${reasoningSegmentCount}`,
-        text: part.text,
-        isStreaming:
-          isStreaming && i === message.parts.length - 1 && isLastMessage,
-      })
-      reasoningSegmentCount++
+      reasoningSegmentCount = pushReasoningSegment(
+        segments,
+        message.id,
+        reasoningSegmentCount,
+        part.text,
+        isStreaming && i === message.parts.length - 1 && isLastMessage,
+      )
     } else if (part.type?.startsWith('tool-') || part.type === 'dynamic-tool') {
       const toolPart = part as {
         toolCallId: string
