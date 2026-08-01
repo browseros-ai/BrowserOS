@@ -8,6 +8,7 @@ const providerTypeEnum = z.enum([
   'openai-compatible',
   'google',
   'openrouter',
+  'orcarouter',
   'azure',
   'ollama',
   'lmstudio',

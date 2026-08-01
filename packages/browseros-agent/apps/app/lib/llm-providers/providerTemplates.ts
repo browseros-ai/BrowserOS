@@ -125,6 +125,19 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openrouter',
   }),
+  {
+    // Not in the models.dev catalog, so spelled out like Moonshot rather
+    // than going through enrichTemplate().
+    id: 'orcarouter',
+    name: 'OrcaRouter',
+    defaultBaseUrl: 'https://api.orcarouter.ai/v1',
+    defaultModelId: 'anthropic/claude-sonnet-4.6',
+    supportsImages: true,
+    contextWindow: 1000000,
+    apiKeyUrl: 'https://www.orcarouter.ai/console',
+    setupGuideUrl:
+      'https://docs.browseros.com/features/bring-your-own-llm#orcarouter',
+  },
   enrichTemplate('lmstudio', {
     defaultModelId: 'openai/gpt-oss-20b',
     defaultBaseUrl: 'http://localhost:1234/v1',
@@ -159,6 +172,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
   { value: 'google', label: 'Gemini' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'orcarouter', label: 'OrcaRouter' },
   { value: 'azure', label: 'Azure' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
@@ -193,6 +207,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'openai-compatible': '',
   google: 'https://generativelanguage.googleapis.com/v1beta',
   openrouter: 'https://openrouter.ai/api/v1',
+  orcarouter: 'https://api.orcarouter.ai/v1',
   azure: '',
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',
