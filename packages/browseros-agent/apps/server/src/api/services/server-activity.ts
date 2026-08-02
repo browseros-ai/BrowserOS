@@ -85,4 +85,10 @@ export class ServerActivity {
       this.turnRegistry.hasRunning()
     )
   }
+
+  async waitUntilIdle(): Promise<void> {
+    while (this.isBusy()) {
+      await Bun.sleep(25)
+    }
+  }
 }

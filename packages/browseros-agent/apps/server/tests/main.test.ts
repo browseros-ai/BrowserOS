@@ -113,6 +113,41 @@ describe('Application.start', () => {
 
     expect(exit).toHaveBeenCalledTimes(1)
   })
+
+  it('stops new requests and drains active work before AgentPond shutdown', async () => {
+    const {
+      Application,
+      activityWaitUntilIdle,
+      serverStop,
+      shutdownAgentPondTracing,
+    } = await setupApplicationTest()
+    let finishDrain: (() => void) | undefined
+    activityWaitUntilIdle.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDrain = resolve
+        }),
+    )
+    const exit = spyOn(process, 'exit').mockImplementation(
+      (() => undefined) as never,
+    )
+    const app = new Application(config)
+    await app.start()
+
+    app.stop('SIGTERM')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(serverStop).toHaveBeenCalledTimes(1)
+    expect(activityWaitUntilIdle).toHaveBeenCalledTimes(1)
+    expect(shutdownAgentPondTracing).not.toHaveBeenCalled()
+    expect(exit).not.toHaveBeenCalled()
+
+    finishDrain?.()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(shutdownAgentPondTracing).toHaveBeenCalledTimes(1)
+    expect(exit).toHaveBeenCalledTimes(1)
+  })
 })
 
 async function setupApplicationTest() {
@@ -129,7 +164,15 @@ async function setupApplicationTest() {
   const sentryModule = await import('../src/lib/sentry')
 
   const createHttpServer = spyOn(apiServer, 'createHttpServer')
-  createHttpServer.mockImplementation(async () => ({}) as never)
+  const serverStop = mock(async () => {})
+  const activityWaitUntilIdle = mock(async () => {})
+  createHttpServer.mockImplementation(
+    async () =>
+      ({
+        server: { stop: serverStop },
+        activity: { waitUntilIdle: activityWaitUntilIdle },
+      }) as never,
+  )
 
   const cdpConnect = mock(async () => {})
   spyOn(cdpModule.CdpBackend.prototype, 'connect').mockImplementation(
@@ -190,12 +233,14 @@ async function setupApplicationTest() {
   const { Application } = await import('../src/main')
   return {
     Application,
+    activityWaitUntilIdle,
     browserModule,
     cdpConnect,
     createHttpServer,
     loggerError,
     loggerInfo,
     loggerWarn,
+    serverStop,
     initializeDb,
     shutdownAgentPondTracing,
   }

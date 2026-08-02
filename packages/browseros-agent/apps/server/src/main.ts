@@ -39,6 +39,7 @@ import { VERSION } from './version'
 
 export class Application {
   private config: ServerConfig
+  private httpServer?: Awaited<ReturnType<typeof createHttpServer>>
   private stopping = false
 
   constructor(config: ServerConfig) {
@@ -74,7 +75,7 @@ export class Application {
     const browserSession = browser.session
 
     try {
-      await createHttpServer({
+      this.httpServer = await createHttpServer({
         port: this.config.serverPort,
         host: '0.0.0.0',
         version: VERSION,
@@ -148,12 +149,35 @@ export class Application {
     logger.info('Shutting down server...', { reason })
     removeServerConfigSync()
 
-    // Immediate exit keeps the port free; signal exits stay non-zero so Chromium restarts us.
+    // Signal exits stay non-zero so Chromium restarts us.
     const code =
       reason === 'SIGTERM' || reason === 'SIGINT'
         ? EXIT_CODES.SIGNAL_KILL
         : EXIT_CODES.SUCCESS
-    void shutdownAgentPondTracing().finally(() => process.exit(code))
+    void this.drainAndExit(code)
+  }
+
+  private async drainAndExit(code: number): Promise<void> {
+    try {
+      if (this.httpServer) {
+        void this.httpServer.server.stop().catch((error) => {
+          logger.warn('Failed to stop accepting HTTP connections', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+        await this.httpServer.activity.waitUntilIdle()
+      }
+    } catch (error) {
+      logger.warn('Failed to drain active server work', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      try {
+        await shutdownAgentPondTracing()
+      } finally {
+        process.exit(code)
+      }
+    }
   }
 
   private async initCoreServices(): Promise<void> {

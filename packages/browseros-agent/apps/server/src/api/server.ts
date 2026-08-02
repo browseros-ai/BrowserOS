@@ -135,6 +135,7 @@ export async function createHttpServer(config: HttpServerConfig) {
   return {
     app,
     server,
+    activity,
     config,
   }
 }
