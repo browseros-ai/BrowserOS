@@ -86,6 +86,33 @@ describe('Application.start', () => {
     )
     expect(warnedAboutIdentity).toBe(true)
   })
+
+  it('waits for AgentPond shutdown and ignores duplicate stop requests', async () => {
+    const { Application, shutdownAgentPondTracing } =
+      await setupApplicationTest()
+    let finishShutdown: (() => void) | undefined
+    shutdownAgentPondTracing.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishShutdown = resolve
+        }),
+    )
+    const exit = spyOn(process, 'exit').mockImplementation(
+      (() => undefined) as never,
+    )
+    const app = new Application(config)
+
+    app.stop('SIGTERM')
+    app.stop('SIGTERM')
+
+    expect(shutdownAgentPondTracing).toHaveBeenCalledTimes(1)
+    expect(exit).not.toHaveBeenCalled()
+
+    finishShutdown?.()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    expect(exit).toHaveBeenCalledTimes(1)
+  })
 })
 
 async function setupApplicationTest() {
@@ -94,6 +121,7 @@ async function setupApplicationTest() {
   const cdpModule = await import('@browseros/browser-core/backends/cdp')
   const runtimeModule = await import('../src/lib/agents/runtime')
   const browserosDir = await import('../src/lib/browseros-dir')
+  const agentPondModule = await import('../src/agent/agentpond-tracing')
   const dbModule = await import('../src/lib/db')
   const identityModule = await import('../src/lib/identity')
   const loggerModule = await import('../src/lib/logger')
@@ -143,6 +171,11 @@ async function setupApplicationTest() {
   spyOn(metricsModule.metrics, 'isEnabled').mockImplementation(() => true)
   spyOn(metricsModule.metrics, 'log').mockImplementation(() => {})
 
+  const shutdownAgentPondTracing = spyOn(
+    agentPondModule,
+    'shutdownAgentPondTracing',
+  ).mockImplementation(async () => {})
+
   spyOn(sentryModule.Sentry, 'setContext').mockImplementation(() => {})
   spyOn(sentryModule.Sentry, 'setUser').mockImplementation(() => {})
   spyOn(sentryModule.Sentry, 'captureException').mockImplementation(() => {})
@@ -164,5 +197,6 @@ async function setupApplicationTest() {
     loggerInfo,
     loggerWarn,
     initializeDb,
+    shutdownAgentPondTracing,
   }
 }

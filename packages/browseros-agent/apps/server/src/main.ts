@@ -13,6 +13,7 @@ import path from 'node:path'
 import { CdpBackend } from '@browseros/browser-core/backends/cdp'
 import { Browser } from '@browseros/browser-core/browser'
 import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
+import { shutdownAgentPondTracing } from './agent/agentpond-tracing'
 import { createHttpServer } from './api/server'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
@@ -38,6 +39,7 @@ import { VERSION } from './version'
 
 export class Application {
   private config: ServerConfig
+  private stopping = false
 
   constructor(config: ServerConfig) {
     this.config = config
@@ -140,6 +142,9 @@ export class Application {
   }
 
   stop(reason?: string): void {
+    if (this.stopping) return
+    this.stopping = true
+
     logger.info('Shutting down server...', { reason })
     removeServerConfigSync()
 
@@ -148,7 +153,7 @@ export class Application {
       reason === 'SIGTERM' || reason === 'SIGINT'
         ? EXIT_CODES.SIGNAL_KILL
         : EXIT_CODES.SUCCESS
-    process.exit(code)
+    void shutdownAgentPondTracing().finally(() => process.exit(code))
   }
 
   private async initCoreServices(): Promise<void> {

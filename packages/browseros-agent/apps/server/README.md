@@ -78,6 +78,14 @@ The agent loop uses the [Vercel AI SDK](https://sdk.vercel.ai) to orchestrate mu
 - **MCP client** — connects to external MCP servers for additional tool access (40+ app integrations)
 - **Tool adapter** — bridges MCP tool definitions to AI SDK tool format
 
+### Optional AI tracing
+
+Set `FILES_SDK_PROVIDER=fs` and `FILES_SDK_ROOT` before startup to export
+content-free OpenInference traces to a local AgentPond store. Tracing is
+otherwise disabled. The integration records model, operation, timing, and token
+metadata, but not prompts or responses. Shutdown waits for pending trace writes
+before the server process exits.
+
 ### Provider Factory
 
 The provider factory (`src/agent/provider-factory.ts`) creates AI SDK providers from runtime configuration, supporting hot-swapping between providers without restart.

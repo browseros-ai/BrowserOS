@@ -26,6 +26,7 @@ import { metrics } from '../lib/metrics'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
 import { createReadTool } from '../tools/filesystem/read'
 import { isAcpProvider } from './acp-providers'
+import { agentPondTelemetry } from './agentpond-tracing'
 import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
 import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
@@ -373,6 +374,9 @@ export class AiSdkAgent {
       tools,
       stopWhen: [stepCountIs(AGENT_LIMITS.MAX_TURNS)],
       prepareStep,
+      ...(agentPondTelemetry
+        ? { experimental_telemetry: agentPondTelemetry }
+        : {}),
       ...(isChatGPTPro && {
         providerOptions: {
           openai: {

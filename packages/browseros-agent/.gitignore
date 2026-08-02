@@ -63,6 +63,7 @@ web_modules/
 .claude/*
 !.claude/skills/
 !.claude/commands/
+.agentpond/
 .llm/
 .worktrees/
 

@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "agentpond": {
+      "source": "marcusschiesser/agentpond",
+      "sourceType": "github",
+      "skillPath": "skills/agentpond/SKILL.md",
+      "computedHash": "c4640a4854f6feca75e4e4471f18ffde9e269abbb997003bae4e09f0154cb7b5"
+    },
+    "agentpond-instrumentation": {
+      "source": "marcusschiesser/agentpond",
+      "sourceType": "github",
+      "skillPath": "skills/agentpond-instrumentation/SKILL.md",
+      "computedHash": "5ad9643eeddf83b8dbc5b83bd18418f5855387df23491eb3701259ea29dffd54"
+    },
     "ai-sdk": {
       "source": "vercel/ai",
       "sourceType": "github",
