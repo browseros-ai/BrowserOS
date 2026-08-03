@@ -94,19 +94,21 @@ async fn stream_session_preview(
 
         // Subscribe before the bootstrap reads so no batch is lost in the gap.
         let mut receiver = state.live_recordings.subscribe(&document.document_id).await;
-        let bootstrap = match state.replay.document_events(&document.document_id).await {
-            Ok(events) => bootstrap_from_last_snapshot(events),
-            Err(_) => return,
-        };
-        // Read the accepted batch ids AFTER the events so this set is a superset:
-        // a batch whose events are in the bootstrap is guaranteed to be listed
-        // here, so forwarding can skip it and never double-apply a batch that
-        // raced the read.
+        // Read the accepted batch ids BEFORE the events so the id set is a SUBSET
+        // of what the bootstrap covers. A batch that lands between the two reads
+        // is then carried by the bootstrap AND forwarded live (a harmless
+        // duplicate) rather than dropped: rrweb tolerates a repeated incremental
+        // event far better than a gap. Reading the ids after the events would
+        // instead drop such a batch (id present, events missing from bootstrap).
         let bootstrapped: HashSet<String> =
             match state.replay.accepted_batch_ids(&document.document_id).await {
                 Ok(ids) => ids.into_iter().collect(),
                 Err(_) => return,
             };
+        let bootstrap = match state.replay.document_events(&document.document_id).await {
+            Ok(events) => bootstrap_from_last_snapshot(events),
+            Err(_) => return,
+        };
 
         if send_switch(&tx, &document).await.is_err() {
             return;
@@ -122,8 +124,12 @@ async fn stream_session_preview(
                 () = tx.closed() => return,
                 _ = ticker.tick() => {
                     match state.replay.live_document(&session_id, browser_tab_id).await {
+                        // Document moved, or the session released its last owned
+                        // tab (None): stop forwarding the now-stale document and
+                        // let the outer loop re-resolve, or go idle.
                         Ok(Some(next)) if next.document_id != document.document_id => break,
-                        Ok(_) => {}
+                        Ok(None) => break,
+                        Ok(Some(_)) => {}
                         Err(_) => return,
                     }
                 }
