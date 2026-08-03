@@ -356,7 +356,6 @@
   },
   "trustedDependencies": [
     "esbuild",
-    "lefthook",
   ],
   "overrides": {
     "@vitejs/plugin-react": "^5.0.0",
