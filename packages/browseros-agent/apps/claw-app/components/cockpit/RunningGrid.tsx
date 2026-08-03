@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
@@ -14,22 +15,19 @@ export function RunningGrid({ sessions }: RunningGridProps) {
   const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
+  const [pinnedTabBySession, setPinnedTabBySession] = useState<
+    Record<string, number>
+  >({})
 
   if (sessions.length === 0) return null
 
-  const onWatch = (session: LiveSessionCardRecord) => {
-    const browserTabId = session.selectedTab?.browserTabId
-    if (browserTabId === undefined) return
+  const onWatch = (browserTabId: number) => {
     focus.mutate(
       { browserTabId },
       {
         onError: (err) => {
           // eslint-disable-next-line no-console
-          console.warn('focus browser tab failed', {
-            sessionId: session.sessionId,
-            browserTabId,
-            err,
-          })
+          console.warn('focus browser tab failed', { browserTabId, err })
         },
       },
     )
@@ -75,18 +73,46 @@ export function RunningGrid({ sessions }: RunningGridProps) {
         </span>
       </header>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {sessions.map((session) => (
-          <AgentRunningCard
-            key={session.sessionId}
-            session={session}
-            onWatch={session.selectedTab ? () => onWatch(session) : undefined}
-            onStop={() => onStop(session.sessionId)}
-            isFocusPending={
-              pendingBrowserTabId === session.selectedTab?.browserTabId
-            }
-            isCancelPending={cancelPendingSessionId === session.sessionId}
-          />
-        ))}
+        {sessions.map((session) => {
+          const rawPin = pinnedTabBySession[session.sessionId]
+          const pinned =
+            rawPin !== undefined &&
+            session.browserTabs.some((tab) => tab.browserTabId === rawPin)
+          // The live target is the most recently active owned tab (browserTabs
+          // is activity-sorted); a sticky selection would lag tab switches.
+          const liveTabId = session.browserTabs[0]?.browserTabId
+          const shownTabId = pinned ? rawPin : liveTabId
+          return (
+            <AgentRunningCard
+              key={session.sessionId}
+              session={session}
+              selectedBrowserTabId={shownTabId}
+              liveBrowserTabId={liveTabId}
+              pinned={pinned}
+              onSelectTab={(browserTabId) =>
+                setPinnedTabBySession((prev) => {
+                  const next = { ...prev }
+                  if (browserTabId === liveTabId) delete next[session.sessionId]
+                  else next[session.sessionId] = browserTabId
+                  return next
+                })
+              }
+              onFollowLive={() =>
+                setPinnedTabBySession((prev) => {
+                  const next = { ...prev }
+                  delete next[session.sessionId]
+                  return next
+                })
+              }
+              onWatch={
+                shownTabId !== undefined ? () => onWatch(shownTabId) : undefined
+              }
+              onStop={() => onStop(session.sessionId)}
+              isFocusPending={pendingBrowserTabId === shownTabId}
+              isCancelPending={cancelPendingSessionId === session.sessionId}
+            />
+          )
+        })}
       </div>
     </section>
   )

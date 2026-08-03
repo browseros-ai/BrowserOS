@@ -147,6 +147,11 @@ export function useTaskScreenshotBaseUrl(): string | null {
   return useResolvedApiBaseUrl()
 }
 
+/** The resolved claw-server API base, or null until the server-port pref loads. */
+export function useApiBaseUrl(): string | null {
+  return useResolvedApiBaseUrl()
+}
+
 export function useSessionPreviewUrl(
   sessionId: string,
   refresh: number,

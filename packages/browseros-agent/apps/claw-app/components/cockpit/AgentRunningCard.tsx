@@ -1,11 +1,19 @@
 import { ExternalLink, RefreshCw, Square } from 'lucide-react'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { formatToolTrail, siteOf } from '@/screens/cockpit/cockpit.helpers'
-import { MiniScreencast } from './MiniScreencast'
+import { LivePreview } from './LivePreview'
 import { TabCountChip } from './TabCountChip'
 
 interface SessionRunningCardProps {
   session: LiveSessionCardRecord
+  /** The owned tab shown on the card: the reader's pick, else the live target. */
+  selectedBrowserTabId?: number
+  /** The session's current live target tab, for the live-versus-last-frame marker. */
+  liveBrowserTabId?: number
+  /** True once the reader pins a tab instead of following the live target. */
+  pinned?: boolean
+  onSelectTab?: (browserTabId: number) => void
+  onFollowLive?: () => void
   onWatch?: () => void
   onStop: () => void
   isFocusPending?: boolean
@@ -13,25 +21,37 @@ interface SessionRunningCardProps {
 }
 
 /**
- * One card per connected session in the Running now strip. The selected
- * browser-tab preview dominates the top; the caption carries parent session
- * identity, recent tools, and Watch / Stop actions. Sessions without browser
- * tabs keep the same card shell so Stop remains available.
+ * One card per connected session in the Running now strip. The shown browser
+ * tab's live rrweb preview dominates the top; the caption carries parent session
+ * identity, recent tools, and Watch / Stop actions. The tab chip switches which
+ * owned tab the card previews. A pinned tab that is no longer the agent's live
+ * target shows its last frame rather than a false live view.
  *
- * The LIVE indicator uses light blue rather than the vivid brand accent,
- * which is near-invisible on the dark caption block.
+ * The LIVE indicator uses light blue rather than the vivid brand accent, which
+ * is near-invisible on the dark caption block.
  */
 export function AgentRunningCard({
   session,
+  selectedBrowserTabId,
+  liveBrowserTabId,
+  pinned,
+  onSelectTab,
+  onFollowLive,
   onWatch,
   onStop,
   isFocusPending,
   isCancelPending,
 }: SessionRunningCardProps) {
-  const selectedTab = session.selectedTab
+  const shownTab =
+    session.browserTabs.find(
+      (tab) => tab.browserTabId === selectedBrowserTabId,
+    ) ?? session.browserTabs[0]
   const active = session.state === 'active'
+  const isLiveTab =
+    shownTab != null && shownTab.browserTabId === liveBrowserTabId
+  const showingLive = active && isLiveTab
   const trail = formatToolTrail(session.recentTools)
-  const site = selectedTab ? siteOf(selectedTab.url) : 'No browser activity'
+  const site = shownTab ? siteOf(shownTab.url) : 'No browser activity'
 
   return (
     <div
@@ -39,17 +59,20 @@ export function AgentRunningCard({
       className="group relative flex h-[300px] flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40"
     >
       <div className="relative flex-1 overflow-hidden">
-        <MiniScreencast
+        <LivePreview
           site={site}
-          live={active}
+          live={showingLive}
           sessionId={session.sessionId}
+          browserTabId={pinned ? shownTab?.browserTabId : undefined}
           className="h-full w-full"
         />
-        {selectedTab && (
+        {shownTab && onSelectTab && (
           <div className="absolute top-3 right-3">
             <TabCountChip
               browserTabs={session.browserTabs}
-              selectedBrowserTabId={selectedTab.browserTabId}
+              selectedBrowserTabId={shownTab.browserTabId}
+              liveBrowserTabId={liveBrowserTabId}
+              onSelectTab={onSelectTab}
             />
           </div>
         )}
@@ -65,33 +88,43 @@ export function AgentRunningCard({
             <span className="truncate text-white">{session.label}</span>
             <span className="shrink-0 text-white/45">{session.harness}</span>
           </span>
-          <span
-            className={
-              active
-                ? 'inline-flex shrink-0 items-center gap-1.5 text-[#8fb4ff]'
-                : 'shrink-0 text-white/45'
-            }
-          >
-            {active && (
+          {showingLive ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-[#8fb4ff]">
               <span
                 aria-hidden
                 className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff] shadow-[0_0_8px_hsl(221_100%_78%/0.6)]"
               />
-            )}
-            {active ? 'LIVE' : 'Idle'}
-          </span>
+              LIVE
+            </span>
+          ) : active && pinned && !isLiveTab ? (
+            <span className="inline-flex shrink-0 items-center gap-2 text-white/45">
+              Last frame
+              {onFollowLive && (
+                <button
+                  type="button"
+                  data-follow-live={session.sessionId}
+                  onClick={onFollowLive}
+                  className="text-[#8fb4ff] uppercase tracking-[0.08em] transition hover:text-white"
+                >
+                  Follow live
+                </button>
+              )}
+            </span>
+          ) : (
+            <span className="shrink-0 text-white/45">Idle</span>
+          )}
         </div>
         <h3 className="truncate font-semibold text-[14px] text-white leading-tight">
-          {selectedTab?.title || session.name || site}
+          {shownTab?.title || session.name || site}
         </h3>
         <p className="truncate font-mono text-[11px] text-white/60">
-          {trail || (selectedTab ? site : 'Waiting for browser activity')}
+          {trail || (shownTab ? site : 'Waiting for browser activity')}
         </p>
         <div className="mt-1 flex items-center gap-2 border-white/10 border-t pt-2">
-          {selectedTab && onWatch && (
+          {shownTab && onWatch && (
             <button
               type="button"
-              data-watch-browser-tab={selectedTab.browserTabId}
+              data-watch-browser-tab={shownTab.browserTabId}
               onClick={onWatch}
               disabled={isFocusPending}
               className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-white/10 px-2 py-1.5 font-mono text-[10.5px] text-white/90 uppercase tracking-[0.08em] transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
