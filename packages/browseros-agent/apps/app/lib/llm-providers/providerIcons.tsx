@@ -27,6 +27,8 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'openai-compatible': OpenAI,
   google: Gemini,
   openrouter: OpenRouter,
+  // No @lobehub/icons entry yet; falls back to the generic Bot icon.
+  orcarouter: null,
   azure: Azure,
   ollama: Ollama,
   lmstudio: LmStudio,

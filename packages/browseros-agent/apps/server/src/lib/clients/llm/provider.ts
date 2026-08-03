@@ -173,6 +173,18 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createOrcaRouterModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.apiKey) throw new Error('OrcaRouter provider requires apiKey')
+  // OrcaRouter takes a flat `reasoning_effort`, not OpenRouter's nested
+  // `reasoning` block, so it goes through the OpenAI-compatible provider
+  // rather than createOpenRouter().
+  return createOpenAICompatible({
+    name: 'orcarouter',
+    baseURL: config.baseUrl || EXTERNAL_URLS.ORCAROUTER_API,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
@@ -206,6 +218,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OPENAI]: createOpenAIModel,
   [LLM_PROVIDERS.GOOGLE]: createGoogleModel,
   [LLM_PROVIDERS.OPENROUTER]: createOpenRouterModel,
+  [LLM_PROVIDERS.ORCAROUTER]: createOrcaRouterModel,
   [LLM_PROVIDERS.AZURE]: createAzureModel,
   [LLM_PROVIDERS.OLLAMA]: createOllamaModel,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioModel,

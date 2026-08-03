@@ -467,6 +467,20 @@ function createMoonshotFactory(
   })
 }
 
+function createOrcaRouterFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.apiKey) throw new Error('OrcaRouter provider requires apiKey')
+  // OrcaRouter takes a flat `reasoning_effort`, not OpenRouter's nested
+  // `reasoning` block, so it goes through the OpenAI-compatible provider
+  // rather than createOpenRouter().
+  return createOpenAICompatible({
+    name: 'orcarouter',
+    baseURL: config.baseUrl || EXTERNAL_URLS.ORCAROUTER_API,
+    apiKey: config.apiKey,
+  })
+}
+
 function createQwenCodeFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -506,6 +520,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OPENAI]: createOpenAIFactory,
   [LLM_PROVIDERS.GOOGLE]: createGoogleFactory,
   [LLM_PROVIDERS.OPENROUTER]: createOpenRouterFactory,
+  [LLM_PROVIDERS.ORCAROUTER]: createOrcaRouterFactory,
   [LLM_PROVIDERS.AZURE]: createAzureFactory,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioFactory,
   [LLM_PROVIDERS.OLLAMA]: createOllamaFactory,

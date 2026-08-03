@@ -5,6 +5,7 @@ export type ProviderType =
   | 'openai-compatible'
   | 'google'
   | 'openrouter'
+  | 'orcarouter'
   | 'azure'
   | 'ollama'
   | 'lmstudio'
