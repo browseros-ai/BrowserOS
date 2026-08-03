@@ -1,4 +1,4 @@
-use super::{RecordingEventInput, RecordingStore};
+use super::{LiveRecordingBus, RecordingEventInput, RecordingStore};
 use crate::{
     error::AppResult,
     services::browser::{BrowserService, TabRegistry},
@@ -9,6 +9,7 @@ pub struct RecordingIngestService {
     recordings: Arc<RecordingStore>,
     browser: Arc<BrowserService>,
     tabs: Arc<TabRegistry>,
+    live: Arc<LiveRecordingBus>,
 }
 
 impl RecordingIngestService {
@@ -16,11 +17,13 @@ impl RecordingIngestService {
         recordings: Arc<RecordingStore>,
         browser: Arc<BrowserService>,
         tabs: Arc<TabRegistry>,
+        live: Arc<LiveRecordingBus>,
     ) -> Arc<Self> {
         Arc::new(Self {
             recordings,
             browser,
             tabs,
+            live,
         })
     }
 
@@ -37,7 +40,8 @@ impl RecordingIngestService {
             .tabs
             .resolve(tab_id, session, self.browser.state().epoch)
             .await;
-        self.recordings
+        let accepted = self
+            .recordings
             .append_batch(
                 document_id,
                 tab_id,
@@ -46,6 +50,13 @@ impl RecordingIngestService {
                 batch_id,
                 has_gap,
             )
-            .await
+            .await?;
+        // Fan the freshly accepted events out to any live-preview subscribers.
+        // A duplicate (already-accepted) batch is not republished so a
+        // reconnecting subscriber never double-applies it.
+        if accepted && !events.is_empty() {
+            self.live.publish(document_id, Arc::from(events)).await;
+        }
+        Ok(accepted)
     }
 }

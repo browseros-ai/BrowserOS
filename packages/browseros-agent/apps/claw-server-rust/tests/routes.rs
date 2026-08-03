@@ -1243,6 +1243,21 @@ async fn live_projection_filters_external_close() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn recording_live_stream_rejects_an_unknown_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    assert_eq!(
+        request_status(
+            &app.router,
+            "GET",
+            "/api/v1/sessions/does-not-exist/recording/live",
+        )
+        .await?,
+        StatusCode::NOT_FOUND,
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_projection_refreshes_metadata_and_preview_uses_current_target() -> anyhow::Result<()>
 {
     let mock = MockCdp::start().await?;

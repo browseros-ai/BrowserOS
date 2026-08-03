@@ -20,6 +20,7 @@ use ulid::Ulid;
 pub(crate) mod audit;
 mod cockpit;
 mod connections;
+mod live;
 mod previews;
 mod recordings;
 mod replay;
@@ -70,6 +71,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/sessions/{session_id}/recording/events",
             get(replay::download_events),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/recording/live",
+            get(live::live),
         )
         .route(
             "/api/v1/recordings/events",

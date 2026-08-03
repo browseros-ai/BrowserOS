@@ -60,10 +60,50 @@ pub struct ReplayService {
     index: Arc<RecordingIndex>,
 }
 
+/// The recording document a session's live preview should currently follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveDocument {
+    pub document_id: String,
+    pub tab_id: i64,
+    pub target_id: Option<String>,
+}
+
 impl ReplayService {
     #[must_use]
     pub fn new(recordings: Arc<RecordingStore>, index: Arc<RecordingIndex>) -> Arc<Self> {
         Arc::new(Self { recordings, index })
+    }
+
+    /// The document a session's live preview should follow: the most recently
+    /// active document the session owns, optionally pinned to one browser tab.
+    /// Returns None when the session has no recorded document yet. Resolution is
+    /// scoped to the session's own tab-ownership windows, so it cannot surface
+    /// another session's recording.
+    pub async fn live_document(
+        &self,
+        session_id: &str,
+        browser_tab_id: Option<i64>,
+    ) -> AppResult<Option<LiveDocument>> {
+        let best = self
+            .index
+            .stream_matches(session_id)
+            .await?
+            .into_iter()
+            .filter(|row| browser_tab_id.is_none_or(|tab| row.tab_id == tab))
+            .max_by_key(|row| row.last_event_at);
+        Ok(best.map(|row| LiveDocument {
+            document_id: row.document_id,
+            tab_id: row.tab_id,
+            target_id: row.target_id,
+        }))
+    }
+
+    /// All committed rrweb events for one document, oldest first, for
+    /// bootstrapping a live preview.
+    pub async fn document_events(&self, document_id: &str) -> AppResult<Vec<RecordedEvent>> {
+        self.recordings
+            .read_range(document_id, i64::MIN, i64::MAX)
+            .await
     }
 
     pub async fn read_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
@@ -395,6 +435,95 @@ mod tests {
         assert_eq!(meta.tabs.len(), 1);
         assert_eq!(meta.tabs[0].segments.len(), 2);
         assert!(!meta.complete);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_document_follows_newest_owned_tab_can_pin_and_never_leaks_sessions()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        // session-a owns tab 11 (older) and tab 12 (newest). session-b owns tab
+        // 13, whose newest event predates session-a's tab 12: a global max would
+        // wrongly pick tab 12, so returning tab 13 proves per-session scoping.
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ab",
+                11,
+                Some("target-a"),
+                &[event(100, "a")],
+                "batch-a",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ac",
+                12,
+                Some("target-b"),
+                &[event(200, "b")],
+                "batch-b",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ad",
+                13,
+                Some("target-c"),
+                &[event(150, "c")],
+                "batch-c",
+                false,
+            )
+            .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 11, Some("target-a"), 0, None)
+            .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 12, Some("target-b"), 0, None)
+            .await?;
+        index
+            .insert_session_tab("session-b", "agent-b", 13, Some("target-c"), 0, None)
+            .await?;
+        let replay = ReplayService::new(recordings, index);
+
+        // Auto-follow resolves to the most recently active owned document.
+        let Some(live) = replay.live_document("session-a", None).await? else {
+            anyhow::bail!("expected a live document");
+        };
+        assert_eq!(live.tab_id, 12);
+        assert_eq!(live.document_id, "018f47a7-1c2b-7def-8123-0123456789ac");
+
+        // Pinning follows the requested owned tab instead.
+        let Some(pinned) = replay.live_document("session-a", Some(11)).await? else {
+            anyhow::bail!("expected a pinned document");
+        };
+        assert_eq!(pinned.tab_id, 11);
+        assert_eq!(pinned.document_id, "018f47a7-1c2b-7def-8123-0123456789ab");
+
+        // Scoping: session-b sees only its own tab 13, never session-a's newer tab.
+        let Some(other) = replay.live_document("session-b", None).await? else {
+            anyhow::bail!("expected session-b's own document");
+        };
+        assert_eq!(other.tab_id, 13);
+
+        // An unknown session and an unowned tab both resolve to nothing.
+        assert!(
+            replay
+                .live_document("session-unknown", None)
+                .await?
+                .is_none()
+        );
+        assert!(replay.live_document("session-a", Some(99)).await?.is_none());
         Ok(())
     }
 }
