@@ -84,11 +84,17 @@ impl ReplayService {
         session_id: &str,
         browser_tab_id: Option<i64>,
     ) -> AppResult<Option<LiveDocument>> {
+        // stream_matches carries every window the session ever owned, including
+        // released ones, because replay reconstruction needs them. Live follow
+        // wants only the tab the session is currently driving, so an open claim
+        // (released_at IS NULL) is required; a fully released session yields None
+        // and the caller transitions the stream to idle.
         let best = self
             .index
             .stream_matches(session_id)
             .await?
             .into_iter()
+            .filter(|row| row.released_at.is_none())
             .filter(|row| browser_tab_id.is_none_or(|tab| row.tab_id == tab))
             .max_by_key(|row| row.last_event_at);
         Ok(best.map(|row| LiveDocument {
@@ -500,6 +506,50 @@ mod tests {
         index
             .insert_session_tab("session-b", "agent-b", 13, Some("target-c"), 0, None)
             .await?;
+        // Released ownership windows are historical, not live. Both tabs below
+        // have release timestamps at or after their events, so stream_matches
+        // still returns them for replay; only live follow must exclude them.
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ae",
+                14,
+                Some("target-d"),
+                &[event(300, "d")],
+                "batch-d",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789af",
+                15,
+                Some("target-e"),
+                &[event(200, "e")],
+                "batch-e",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789b0",
+                16,
+                Some("target-f"),
+                &[event(100, "f")],
+                "batch-f",
+                false,
+            )
+            .await?;
+        // session-c: tab 14 released (newer event), tab 15 open (older event).
+        index
+            .insert_session_tab("session-c", "agent-c", 14, Some("target-d"), 0, Some(500))
+            .await?;
+        index
+            .insert_session_tab("session-c", "agent-c", 15, Some("target-e"), 0, None)
+            .await?;
+        // session-d: its only tab is released.
+        index
+            .insert_session_tab("session-d", "agent-d", 16, Some("target-f"), 0, Some(200))
+            .await?;
         let replay = ReplayService::new(recordings, index);
 
         // Auto-follow resolves to the most recently active owned document.
@@ -530,6 +580,15 @@ mod tests {
                 .is_none()
         );
         assert!(replay.live_document("session-a", Some(99)).await?.is_none());
+
+        // Auto-follow skips the newer released tab 14 for the still-open tab 15.
+        let Some(open_only) = replay.live_document("session-c", None).await? else {
+            anyhow::bail!("expected the still-open tab");
+        };
+        assert_eq!(open_only.tab_id, 15);
+        // A fully released session resolves to nothing, so the SSE stream goes
+        // idle instead of replaying its former document.
+        assert!(replay.live_document("session-d", None).await?.is_none());
         Ok(())
     }
 
