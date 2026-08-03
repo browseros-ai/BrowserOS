@@ -55,7 +55,9 @@ impl RecordingIngestService {
         // A duplicate (already-accepted) batch is not republished so a
         // reconnecting subscriber never double-applies it.
         if accepted && !events.is_empty() {
-            self.live.publish(document_id, Arc::from(events)).await;
+            self.live
+                .publish(document_id, batch_id, Arc::from(events))
+                .await;
         }
         Ok(accepted)
     }

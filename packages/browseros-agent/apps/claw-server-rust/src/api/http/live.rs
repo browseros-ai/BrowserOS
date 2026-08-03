@@ -17,8 +17,15 @@ use axum::{
 use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::json;
-use std::convert::Infallible;
-use tokio::sync::{broadcast, mpsc};
+use std::{collections::HashSet, convert::Infallible};
+use tokio::{
+    sync::{broadcast, mpsc},
+    time::{Duration, MissedTickBehavior, interval},
+};
+
+/// How often an auto-following stream re-checks which document the session is
+/// live on, so it switches when the agent navigates or changes tabs.
+const RESOLVE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct LiveParams {
@@ -47,74 +54,100 @@ pub(super) async fn live(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// Resolves the session's live document, bootstraps a late joiner from the most
-/// recent full snapshot, then forwards freshly ingested batches. Ends when the
-/// client disconnects (the mpsc receiver drops) or the subscriber falls behind.
+/// Follows the session's live document: (re)resolves which document to show,
+/// bootstraps a late joiner from the most recent full snapshot, then forwards
+/// freshly ingested batches until the followed document moves (auto-follow) or
+/// the client disconnects. Auto-follow re-resolves on a timer so navigating or
+/// switching tabs re-points the preview instead of freezing on a stale document.
 async fn stream_session_preview(
     state: AppState,
     session_id: String,
     browser_tab_id: Option<i64>,
     tx: mpsc::Sender<Result<Event, Infallible>>,
 ) {
-    let document = match state
-        .replay
-        .live_document(&session_id, browser_tab_id)
-        .await
-    {
-        Ok(Some(document)) => document,
-        Ok(None) => {
-            let _ = tx.send(Ok(control("idle", "no-recording"))).await;
-            return;
-        }
-        Err(_) => return,
-    };
-
-    // Subscribe before the bootstrap read so no batch is lost in the gap between
-    // reading stored events and forwarding live ones.
-    let mut receiver = state.live_recordings.subscribe(&document.document_id).await;
-
-    let bootstrap = match state.replay.document_events(&document.document_id).await {
-        Ok(events) => bootstrap_from_last_snapshot(events),
-        Err(_) => return,
-    };
-    let mut last_ts = bootstrap.last().map_or(i64::MIN, |event| event.ts);
-
-    if send_switch(&tx, &document).await.is_err() {
-        return;
-    }
-    if !bootstrap.is_empty() && send_events(&tx, "bootstrap", &bootstrap).await.is_err() {
-        return;
-    }
+    let mut ticker = interval(RESOLVE_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut announced_idle = false;
 
     loop {
-        tokio::select! {
-            () = tx.closed() => return,
-            received = receiver.recv() => match received {
-                Ok(batch) => {
-                    // Drop anything already covered by the bootstrap so a batch
-                    // that landed during the read gap is never applied twice.
-                    let fresh: Vec<RecordedEvent> = batch
-                        .events
-                        .iter()
-                        .filter(|event| event.ts > last_ts)
-                        .cloned()
-                        .collect();
-                    if fresh.is_empty() {
-                        continue;
-                    }
-                    last_ts = fresh.last().map_or(last_ts, |event| event.ts);
-                    if send_events(&tx, "append", &fresh).await.is_err() {
-                        return;
-                    }
-                }
-                // Fell too far behind the writer: reconnect and re-bootstrap
-                // instead of applying stale, gapped frames.
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let _ = tx.send(Ok(control("reset", "lagged"))).await;
+        let document = match state
+            .replay
+            .live_document(&session_id, browser_tab_id)
+            .await
+        {
+            Ok(Some(document)) => document,
+            Ok(None) => {
+                // No recorded document yet; wait for one to appear (or a pinned
+                // tab to come back) rather than closing the stream.
+                if !announced_idle && tx.send(Ok(control("idle", "no-recording"))).await.is_err() {
                     return;
                 }
-                Err(broadcast::error::RecvError::Closed) => return,
-            },
+                announced_idle = true;
+                tokio::select! {
+                    () = tx.closed() => return,
+                    _ = ticker.tick() => continue,
+                }
+            }
+            Err(_) => return,
+        };
+        announced_idle = false;
+
+        // Subscribe before the bootstrap reads so no batch is lost in the gap.
+        let mut receiver = state.live_recordings.subscribe(&document.document_id).await;
+        let bootstrap = match state.replay.document_events(&document.document_id).await {
+            Ok(events) => bootstrap_from_last_snapshot(events),
+            Err(_) => return,
+        };
+        // Read the accepted batch ids AFTER the events so this set is a superset:
+        // a batch whose events are in the bootstrap is guaranteed to be listed
+        // here, so forwarding can skip it and never double-apply a batch that
+        // raced the read.
+        let bootstrapped: HashSet<String> =
+            match state.replay.accepted_batch_ids(&document.document_id).await {
+                Ok(ids) => ids.into_iter().collect(),
+                Err(_) => return,
+            };
+
+        if send_switch(&tx, &document).await.is_err() {
+            return;
+        }
+        if !bootstrap.is_empty() && send_events(&tx, "bootstrap", &bootstrap).await.is_err() {
+            return;
+        }
+
+        // Forward live batches until the followed document changes or the client
+        // leaves; then the outer loop re-resolves and re-bootstraps.
+        loop {
+            tokio::select! {
+                () = tx.closed() => return,
+                _ = ticker.tick() => {
+                    match state.replay.live_document(&session_id, browser_tab_id).await {
+                        Ok(Some(next)) if next.document_id != document.document_id => break,
+                        Ok(_) => {}
+                        Err(_) => return,
+                    }
+                }
+                received = receiver.recv() => match received {
+                    // Skip whole batches the bootstrap already covered (batch id
+                    // is the durable accept identity); every other batch is new
+                    // and forwarded intact, so no distinct event is ever dropped.
+                    Ok(batch) if bootstrapped.contains(batch.batch_id.as_ref()) => {}
+                    Ok(batch) => {
+                        if send_events(&tx, "append", &batch.events).await.is_err() {
+                            return;
+                        }
+                    }
+                    // Fell behind the writer: re-bootstrap from a fresh snapshot
+                    // instead of applying gapped frames.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if tx.send(Ok(control("reset", "lagged"))).await.is_err() {
+                            return;
+                        }
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+            }
         }
     }
 }

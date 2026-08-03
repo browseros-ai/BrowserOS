@@ -106,6 +106,12 @@ impl ReplayService {
             .await
     }
 
+    /// Batch ids already durably accepted for a document, so a live subscriber
+    /// can de-duplicate a forwarded batch against what its bootstrap captured.
+    pub async fn accepted_batch_ids(&self, document_id: &str) -> AppResult<Vec<String>> {
+        self.index.accepted_batch_ids(document_id).await
+    }
+
     pub async fn read_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
         let matches = self.matches(session_id).await?;
         let mut events = Vec::new();
@@ -524,6 +530,35 @@ mod tests {
                 .is_none()
         );
         assert!(replay.live_document("session-a", Some(99)).await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accepted_batch_ids_lists_every_committed_batch_for_a_document() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        let doc = "018f47a7-1c2b-7def-8123-0123456789ab";
+        recordings
+            .append_batch(doc, 11, None, &[event(1, "a")], "batch-a", false)
+            .await?;
+        recordings
+            .append_batch(doc, 11, None, &[event(2, "b")], "batch-b", false)
+            .await?;
+        let replay = ReplayService::new(recordings, index);
+
+        let mut ids = replay.accepted_batch_ids(doc).await?;
+        ids.sort();
+        assert_eq!(ids, vec!["batch-a".to_string(), "batch-b".to_string()]);
+        assert!(replay.accepted_batch_ids("other-doc").await?.is_empty());
         Ok(())
     }
 }
