@@ -51,6 +51,7 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
         session_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
+        tab_cleanup_grace: Duration::from_secs(180),
         replay_retention_days: 7,
         dev_mode: false,
         auth_token: None,

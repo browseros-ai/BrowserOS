@@ -14,7 +14,8 @@ use crate::{
 };
 use sea_orm::{
     ActiveValue::{NotSet, Set},
-    ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
+    ColumnTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, Statement,
+    TransactionTrait,
     sea_query::Expr,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -88,6 +89,11 @@ enum ClaimWrite {
         released_at: i64,
     },
     Flush(oneshot::Sender<()>),
+}
+
+#[derive(FromQueryResult)]
+struct OrphanedTabId {
+    tab_id: i64,
 }
 
 impl SessionTabLedger {
@@ -301,6 +307,26 @@ impl SessionTabLedger {
             .order_by_asc(session_tabs::Column::TabId)
             .all(self.db.connection())
             .await?)
+    }
+
+    /// Chrome tab ids that were agent-owned but now have no open owner and whose
+    /// most recent release is older than `released_before`. These are the
+    /// finished-agent tabs eligible for cleanup: a tab still owned by any live
+    /// session (an open row) or released within the grace window is excluded, and
+    /// a tab that was never agent-owned has no row here at all.
+    pub async fn list_orphaned_owned_tabs(&self, released_before: i64) -> AppResult<Vec<i64>> {
+        let rows = OrphanedTabId::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r#"SELECT tab_id
+                 FROM session_tabs
+                GROUP BY tab_id
+               HAVING SUM(CASE WHEN released_at IS NULL THEN 1 ELSE 0 END) = 0
+                  AND MAX(released_at) < ?"#,
+            [released_before.into()],
+        ))
+        .all(self.db.connection())
+        .await?;
+        Ok(rows.into_iter().map(|row| row.tab_id).collect())
     }
 
     /// Returns current durable ownership for one session and Chrome tab.
@@ -641,6 +667,71 @@ mod tests {
             .await?
             .unwrap_or_else(|| panic!("queued tab claim missing"));
         assert_eq!(claim.released_at, Some(150));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn orphaned_tabs_lists_released_tabs_past_the_cutoff_only() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // tab 11: claimed then released at 100 -> orphaned.
+        ledger.enqueue_claim_tab_for_session(
+            11,
+            Some("t-a".to_string()),
+            "session-a".to_string(),
+            "agent-a".to_string(),
+            50,
+        );
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseTabForSession {
+            tab_id: 11,
+            session_id: "session-a".to_string(),
+            released_at: 100,
+        });
+        // tab 12: still open -> a live owner, never orphaned.
+        ledger.enqueue_claim_tab_for_session(
+            12,
+            Some("t-b".to_string()),
+            "session-b".to_string(),
+            "agent-b".to_string(),
+            60,
+        );
+        // tab 13: released at 500 -> still inside a later grace window.
+        ledger.enqueue_claim_tab_for_session(
+            13,
+            Some("t-c".to_string()),
+            "session-c".to_string(),
+            "agent-c".to_string(),
+            70,
+        );
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseTabForSession {
+            tab_id: 13,
+            session_id: "session-c".to_string(),
+            released_at: 500,
+        });
+        // tab 14: transferred to a live session (one released + one open row) -> spared.
+        ledger.enqueue_claim_tab_for_session(
+            14,
+            Some("t-d".to_string()),
+            "session-d".to_string(),
+            "agent-d".to_string(),
+            80,
+        );
+        ledger.enqueue_claim_tab_for_session(
+            14,
+            Some("t-e".to_string()),
+            "session-e".to_string(),
+            "agent-e".to_string(),
+            90,
+        );
+        ledger.drain_writes().await;
+
+        // cutoff 200: only tab 11 released before it; tab 12 open, tab 13 too recent.
+        assert_eq!(ledger.list_orphaned_owned_tabs(200).await?, vec![11]);
+        // cutoff 600: tabs 11 and 13; tab 12 (open) and tab 14 (live owner) excluded.
+        let mut past = ledger.list_orphaned_owned_tabs(600).await?;
+        past.sort_unstable();
+        assert_eq!(past, vec![11, 13]);
         Ok(())
     }
 }

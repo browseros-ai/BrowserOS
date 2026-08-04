@@ -564,6 +564,7 @@ async fn test_router(browserclaw_dir: &Path, home: &Path) -> anyhow::Result<Rout
         session_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
+        tab_cleanup_grace: Duration::from_secs(180),
         replay_retention_days: 7,
         dev_mode: false,
         auth_token: None,

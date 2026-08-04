@@ -13,3 +13,4 @@ pub mod runtime_file;
 pub mod screenshots;
 pub mod session_efficiency;
 pub mod sessions;
+pub mod tab_cleanup;
