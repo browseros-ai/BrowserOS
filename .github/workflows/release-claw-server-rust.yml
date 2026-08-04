@@ -1,7 +1,7 @@
 # Required secrets: CLAW_POSTHOG_KEY, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 # R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
 # publish_ota is true.
-name: "Release: BrowserClaw Server (Rust)"
+name: "Release: BrowserClaw Server"
 
 on:
   push:
@@ -106,7 +106,7 @@ jobs:
           NOTES_FILE="/tmp/release-notes.md"
 
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial BrowserClaw Server Rust release." > "$CHANGELOG_FILE"
+            echo "Initial BrowserClaw Server release." > "$CHANGELOG_FILE"
           else
             git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$CHANGELOG_FILE"
             if [ ! -s "$CHANGELOG_FILE" ]; then
@@ -129,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          TITLE="BrowserClaw Server (Rust) - v$VERSION"
+          TITLE="BrowserClaw Server - v$VERSION"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \

@@ -49,7 +49,7 @@ function buildRustBinaryStep(): string {
 
 describe('release-claw-server-rust workflow', () => {
   it('uses the BrowserClaw product tag trigger and workflow_call contract', () => {
-    expect(workflow).toContain('name: "Release: BrowserClaw Server (Rust)"')
+    expect(workflow).toContain('name: "Release: BrowserClaw Server"')
     expect(workflow).toContain('"claw-server/v*"')
     expect(workflow).not.toContain('"claw-server-rust/v*"')
     expect(workflow).toContain('workflow_call:')
