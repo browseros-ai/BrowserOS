@@ -4,7 +4,7 @@ description: "One-click setup for the AI tools we support. A Claude Desktop exte
 keywords: ["connect agent to BrowserOS neo", "BrowserOS neo MCP", "browser MCP server", "Streamable HTTP MCP", "Claude Desktop MCP"]
 ---
 
-BrowserOS neo is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/browserclaw/mcp/manual) with the endpoint URL below.
+BrowserOS neo is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/neo/mcp/manual) with the endpoint URL below.
 
 ## The endpoint URL
 
@@ -24,7 +24,11 @@ Under the endpoint URL you'll see the list of AI tools we support out of the box
   <img src="/images/browserclaw--mcp-install-board.png" alt="BrowserOS neo connect page showing an endpoint URL at the top and the supported AI tools listed underneath, each with a Connect button on the right." />
 </Frame>
 
-Today the supported AI tools are **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **Antigravity**, **VS Code**, and **Zed**. Behind the scenes, BrowserOS neo writes a single entry named `BrowserClaw` into the AI tool's own MCP config file, pointing at the endpoint URL above. That compatibility key stays unchanged, so existing connections keep working.
+Today the supported AI tools are **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **Antigravity**, **VS Code**, and **Zed**. Behind the scenes, BrowserOS neo writes a single entry named `BrowserClaw` into the AI tool's own MCP config file, pointing at the endpoint URL above. Nothing else changes.
+
+<Note>
+The entry really is called `BrowserClaw`, the product's old name, not `BrowserOS neo`. That is what you will see if you open the config file yourself, and it is the name your AI tool knows the browser by.
+</Note>
 
 <Tip>
 The board updates as soon as your AI tool actually loads the config. If you don't see the row flip to **Connected**, restart the AI tool once and come back.
@@ -46,10 +50,10 @@ Title: Add one-click support for <AI tool name>
 While you're waiting for one-click support, two other paths work with almost every AI tool.
 
 <CardGroup cols={2}>
-  <Card title="Claude Desktop and Cowork" icon="messages" href="/browserclaw/mcp/claude-desktop">
+  <Card title="Claude Desktop and Cowork" icon="messages" href="/neo/mcp/claude-desktop">
     Install the BrowserOS neo extension into Claude Desktop with a single file.
   </Card>
-  <Card title="Manual URL setup" icon="wrench" href="/browserclaw/mcp/manual">
+  <Card title="Manual URL setup" icon="wrench" href="/neo/mcp/manual">
     Guided setup for Hermes Agent, Vercel AI SDK, OpenClaw, and other MCP-compatible AI tools.
   </Card>
 </CardGroup>
@@ -57,10 +61,10 @@ While you're waiting for one-click support, two other paths work with almost eve
 ## Where to next
 
 <CardGroup cols={2}>
-  <Card title="How BrowserOS neo works" icon="play" href="/browserclaw/how-it-works">
+  <Card title="How BrowserOS neo works" icon="play" href="/neo/how-it-works">
     A guided walkthrough from install to your first AI-driven session.
   </Card>
-  <Card title="Your dashboard" icon="binoculars" href="/browserclaw/cockpit">
+  <Card title="Your dashboard" icon="binoculars" href="/neo/cockpit">
     Every part of the new-tab dashboard and what it tells you.
   </Card>
 </CardGroup>

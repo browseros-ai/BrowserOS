@@ -20,6 +20,10 @@ keywords: ["Claude Desktop MCP", "Claude Cowork MCP", "BrowserOS neo Claude Desk
   </Step>
 </Steps>
 
+<Note>
+The repo and the `.mcpb` file still carry the product's old name, BrowserClaw. Only the product was renamed, not the release artifacts, so download the file spelled exactly as above.
+</Note>
+
 ## Verify
 
 Open BrowserOS neo, then in Claude Desktop ask:
@@ -40,19 +44,19 @@ The extension is a small forwarding wrapper: Claude Desktop talks to it locally,
 
 ## Troubleshooting
 
-**Claude says "BrowserOS neo is not running".** Open BrowserOS neo. The local server starts with the app.
+**Claude says `BrowserClaw is not running`.** Open BrowserOS neo. The local server starts with the app. The message uses the old product name because it comes from the extension, which still ships under it.
 
 **The extension does not load.** Restart Claude Desktop. If it still fails, remove the extension from Settings and install the latest release again.
 
-**Claude is not using BrowserOS neo when it should.** Say "Use BrowserOS neo for this" the first time and Claude picks up the tools.
+**Claude is not using the browser when it should.** Say `Use BrowserClaw for this` the first time and Claude picks up the tools. That is the name of the MCP entry, so it is the name Claude recognizes.
 
 ## Where to next
 
 <CardGroup cols={2}>
-  <Card title="How BrowserOS neo works" icon="play" href="/browserclaw/how-it-works">
+  <Card title="How BrowserOS neo works" icon="play" href="/neo/how-it-works">
     A guided walkthrough from install to your first AI-driven session.
   </Card>
-  <Card title="One-click setup" icon="plug" href="/browserclaw/mcp">
+  <Card title="One-click setup" icon="plug" href="/neo/mcp">
     The AI tools we support with one click today.
   </Card>
 </CardGroup>
