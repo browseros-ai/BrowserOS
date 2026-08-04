@@ -68,11 +68,30 @@ pub async fn sweep_orphaned_tabs(
         .map(|page| (page.tab_id.0, page.page_id.clone()))
         .collect();
 
+    // The candidate set is a snapshot; between it and the close a live session
+    // could reclaim a tab or the user could bring one to the foreground. Re-check
+    // both the instant before each close to shrink that window to a negligible
+    // residual (CDP has no atomic close-if-unowned-and-inactive). The freshest
+    // foreground read is a single `get_active` taken just before the loop.
+    let foreground = session
+        .pages
+        .get_active()
+        .await
+        .ok()
+        .flatten()
+        .map(|page| page.tab_id.0);
+
     let mut closed = 0;
     for tab_id in tabs_to_close(&orphaned, &live) {
         let Some(page_id) = page_by_tab.get(&tab_id) else {
             continue;
         };
+        if Some(tab_id) == foreground {
+            continue;
+        }
+        if session_tabs.open_owner_exists(tab_id).await? {
+            continue;
+        }
         match session.pages.close(page_id.clone()).await {
             Ok(()) => closed += 1,
             Err(error) => warn!(tab_id, error = %error, "agent tab cleanup close failed"),

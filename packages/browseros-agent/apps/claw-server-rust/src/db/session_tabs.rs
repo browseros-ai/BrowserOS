@@ -342,6 +342,18 @@ impl SessionTabLedger {
             .one(self.db.connection())
             .await?)
     }
+
+    /// Whether any live session currently owns this Chrome tab (an open row).
+    /// Cleanup re-checks this the instant before closing so a tab reclaimed after
+    /// the orphan snapshot is not closed out from under a running session.
+    pub async fn open_owner_exists(&self, tab_id: i64) -> AppResult<bool> {
+        Ok(SessionTabs::find()
+            .filter(session_tabs::Column::TabId.eq(tab_id))
+            .filter(session_tabs::Column::ReleasedAt.is_null())
+            .one(self.db.connection())
+            .await?
+            .is_some())
+    }
 }
 
 async fn run_claim_writes(db: Database, mut receiver: mpsc::UnboundedReceiver<ClaimWrite>) {
@@ -732,6 +744,28 @@ mod tests {
         let mut past = ledger.list_orphaned_owned_tabs(600).await?;
         past.sort_unstable();
         assert_eq!(past, vec![11, 13]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_owner_exists_reflects_live_ownership() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // tab 21: open -> owned.
+        ledger.enqueue_claim_tab_for_session(21, None, "s-a".to_string(), "a-a".to_string(), 10);
+        // tab 22: claimed then released -> not owned.
+        ledger.enqueue_claim_tab_for_session(22, None, "s-b".to_string(), "a-b".to_string(), 10);
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseTabForSession {
+            tab_id: 22,
+            session_id: "s-b".to_string(),
+            released_at: 20,
+        });
+        ledger.drain_writes().await;
+
+        assert!(ledger.open_owner_exists(21).await?);
+        assert!(!ledger.open_owner_exists(22).await?);
+        assert!(!ledger.open_owner_exists(99).await?);
         Ok(())
     }
 }
