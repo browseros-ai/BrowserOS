@@ -24,6 +24,12 @@ export interface AppendRecordingEventsResponse {
      * @memberof AppendRecordingEventsResponse
      */
     accepted: number;
+    /**
+     * True when the tab's session has ended and the recorder should stop.
+     * @type {boolean}
+     * @memberof AppendRecordingEventsResponse
+     */
+    stop: boolean;
 }
 
 /**

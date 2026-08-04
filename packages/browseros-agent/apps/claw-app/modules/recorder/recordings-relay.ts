@@ -42,10 +42,11 @@ export interface RecordingsRelay {
     hasGap?: boolean,
   ) => Promise<void>
   onTabRecoveredAfterLoss: (listener: (tabId: number) => void) => () => void
+  onTabRecordingRetired: (listener: (tabId: number) => void) => () => void
 }
 
 type SendOutcome =
-  | { kind: 'success'; gapToken?: string }
+  | { kind: 'success'; gapToken?: string; stop?: boolean }
   | { kind: 'unsupported' }
   | { kind: 'invalid'; error: unknown }
   | { kind: 'oversize'; error: unknown }
@@ -78,6 +79,7 @@ export function createRecordingsRelay(
   const clearTimer = options.clearTimeout ?? globalThis.clearTimeout
   const encoder = new TextEncoder()
   const recoveredListeners = new Set<(tabId: number) => void>()
+  const retiredListeners = new Set<(tabId: number) => void>()
   const lastWarningAt = new Map<string, number>()
   const capabilities = new Map<string, IngestCapability>()
   let retryTimer: TimerHandle | null = null
@@ -261,14 +263,18 @@ export function createRecordingsRelay(
       }
 
       const gap = await outbox.getGap(batch.documentId)
-      await client.appendRecordingEvents({
+      const response = await client.appendRecordingEvents({
         xRecordingTabId: batch.tabId,
         xRecordingDocumentId: batch.documentId,
         xRecordingBatchId: batch.batchId,
         xRecordingHasGap: gap ? true : undefined,
         body: batch.ndjson,
       })
-      return { kind: 'success', gapToken: gap?.token }
+      return {
+        kind: 'success',
+        gapToken: gap?.token,
+        stop: response.stop === true,
+      }
     } catch (error) {
       if (error instanceof ApiResponseError) {
         if (error.response.status === 413) return { kind: 'oversize', error }
@@ -300,6 +306,20 @@ export function createRecordingsRelay(
         warnRateLimited(
           'recovery-listener',
           '[browseros-claw replay] recovery listener failed',
+          error,
+        )
+      }
+    }
+  }
+
+  function notifyRetired(tabId: number): void {
+    for (const listener of retiredListeners) {
+      try {
+        listener(tabId)
+      } catch (error) {
+        warnRateLimited(
+          'retire-listener',
+          '[browseros-claw replay] retire listener failed',
           error,
         )
       }
@@ -349,6 +369,7 @@ export function createRecordingsRelay(
         if (outcome.kind === 'success') {
           lastWarningAt.delete('transient-send')
           if (outcome.gapToken) notifyRecovered(batch.tabId)
+          if (outcome.stop) notifyRetired(batch.tabId)
         } else {
           warnRateLimited(
             outcome.kind,
@@ -398,6 +419,10 @@ export function createRecordingsRelay(
     onTabRecoveredAfterLoss(listener) {
       recoveredListeners.add(listener)
       return () => recoveredListeners.delete(listener)
+    },
+    onTabRecordingRetired(listener) {
+      retiredListeners.add(listener)
+      return () => retiredListeners.delete(listener)
     },
   }
 }

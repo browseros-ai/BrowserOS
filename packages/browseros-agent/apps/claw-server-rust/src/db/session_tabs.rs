@@ -96,6 +96,12 @@ struct OrphanedTabId {
     tab_id: i64,
 }
 
+#[derive(FromQueryResult)]
+struct TabOwnershipCounts {
+    total: i64,
+    open_rows: i64,
+}
+
 impl SessionTabLedger {
     pub fn new(db: Database) -> Self {
         let (claim_writes, receiver) = mpsc::unbounded_channel();
@@ -353,6 +359,25 @@ impl SessionTabLedger {
             .one(self.db.connection())
             .await?
             .is_some())
+    }
+
+    /// Whether the recorder for this Chrome tab should stop: the tab was
+    /// agent-owned but its ownership has fully ended (a row exists and none is
+    /// open). A tab with no row yet (its claim is still landing) or an open row
+    /// keeps recording, so the start of a recording is never cut off and a live
+    /// session is never silenced; only post-session tabs stop.
+    pub async fn tab_recording_should_stop(&self, tab_id: i64) -> AppResult<bool> {
+        let counts = TabOwnershipCounts::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r#"SELECT COUNT(*) AS total,
+                      COALESCE(SUM(CASE WHEN released_at IS NULL THEN 1 ELSE 0 END), 0) AS open_rows
+                 FROM session_tabs
+                WHERE tab_id = ?"#,
+            [tab_id.into()],
+        ))
+        .one(self.db.connection())
+        .await?;
+        Ok(counts.is_some_and(|counts| counts.total > 0 && counts.open_rows == 0))
     }
 }
 
@@ -766,6 +791,28 @@ mod tests {
         assert!(ledger.open_owner_exists(21).await?);
         assert!(!ledger.open_owner_exists(22).await?);
         assert!(!ledger.open_owner_exists(99).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tab_recording_should_stop_only_after_ownership_ends() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // Never owned (claim may still be landing) -> keep recording.
+        assert!(!ledger.tab_recording_should_stop(31).await?);
+        // Open row (live session) -> keep recording.
+        ledger.enqueue_claim_tab_for_session(32, None, "s-a".to_string(), "a-a".to_string(), 10);
+        ledger.drain_writes().await;
+        assert!(!ledger.tab_recording_should_stop(32).await?);
+        // Released (ownership ended) -> stop.
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseTabForSession {
+            tab_id: 32,
+            session_id: "s-a".to_string(),
+            released_at: 20,
+        });
+        ledger.drain_writes().await;
+        assert!(ledger.tab_recording_should_stop(32).await?);
         Ok(())
     }
 }

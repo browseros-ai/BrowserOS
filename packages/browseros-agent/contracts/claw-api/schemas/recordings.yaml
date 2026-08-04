@@ -80,9 +80,12 @@ RecordingSegmentMetadata:
 AppendRecordingEventsResponse:
   type: object
   additionalProperties: false
-  required: [accepted]
+  required: [accepted, stop]
   properties:
     accepted:
       type: integer
       format: int64
       minimum: 0
+    stop:
+      type: boolean
+      description: True when the tab's session has ended and the recorder should stop.
