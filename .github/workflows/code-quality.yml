@@ -49,6 +49,14 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Cache bun install
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('packages/browseros-agent/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
       - name: Install dependencies
         run: bun ci
 
@@ -60,6 +68,16 @@ jobs:
 
       - name: Run codegen
         run: bun run --cwd apps/app codegen
+
+      # Turbo caches typecheck per package, keyed by each package's source; the
+      # GHA cache carries `.turbo` across runs so unchanged packages are hits.
+      - name: Cache Turbo
+        uses: actions/cache@v6.1.0
+        with:
+          path: packages/browseros-agent/.turbo
+          key: turbo-typecheck-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-typecheck-${{ runner.os }}-
 
       - name: Run Typecheck
         run: bun run typecheck

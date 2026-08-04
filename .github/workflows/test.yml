@@ -97,6 +97,14 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Cache bun install
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('packages/browseros-agent/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
       - name: Setup Rust
         if: matrix.needs_rust == true
         # Pinned so the clippy lint set is deterministic and matches local dev;

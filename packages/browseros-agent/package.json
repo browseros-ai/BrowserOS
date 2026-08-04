@@ -54,7 +54,8 @@
     "test:fixtures": "bun apps/server/tests/__fixtures__/browser-fixtures/serve.ts",
     "test:main": "bun run ./scripts/run-test-suite.ts main",
     "check": "bun run lint && bun run typecheck && bun run fallow",
-    "typecheck": "bun run --filter '*' typecheck",
+    "typecheck": "turbo run typecheck",
+    "typecheck:all": "bun run --filter '*' typecheck",
     "lint": "bunx @biomejs/biome check",
     "fallow": "fallow check",
     "lint:fix": "bunx @biomejs/biome check --write --unsafe",
@@ -89,6 +90,7 @@
     "lefthook": "^2.1.10",
     "openapi-typescript": "7.13.0",
     "picocolors": "^1.1.1",
+    "turbo": "^2.10.8",
     "typedoc": "^0.28.20",
     "typescript": "^7.0.2",
     "yaml": "2.9.0"
