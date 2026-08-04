@@ -10,7 +10,7 @@
  * chrome-extension origin).
  *
  * Placeholder line-up: two BrowserOS videos fill the grid. Every tile plays
- * the same holdover clip for now; real per-video `videoUrl`s and branded
+ * the same onboarding recording for now; real per-video `videoUrl`s and branded
  * `poster`s drop in later without touching layout.
  */
 
@@ -25,16 +25,16 @@ export interface OnboardingVideo {
   span: VideoSpan
   /** Optional poster URL; falls back to the YouTube thumbnail. */
   poster?: string
-  /** Optional self-hosted video URL; falls back to the shared holdover clip. */
+  /** Optional self-hosted video URL; falls back to the shared onboarding recording. */
   videoUrl?: string
 }
 
 /**
- * Temporary self-hosted clip every tile plays until per-video `videoUrl`s
- * exist. This is the previous single first-run demo.
+ * The shared onboarding recording every tile plays until per-video `videoUrl`s
+ * exist.
  */
-const PLACEHOLDER_VIDEO_URL =
-  'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4'
+const ONBOARDING_VIDEO_URL =
+  'https://cdn.browseros.com/artifacts/claw/onboarding-recording/video.mp4'
 
 const CAN_AI_AUTOMATE = {
   youtubeId: 'rIZ8OBHL7Zo',
@@ -64,5 +64,5 @@ export function posterFor(video: OnboardingVideo): string {
 }
 
 export function videoUrlFor(video: OnboardingVideo): string {
-  return video.videoUrl ?? PLACEHOLDER_VIDEO_URL
+  return video.videoUrl ?? ONBOARDING_VIDEO_URL
 }
