@@ -83,10 +83,10 @@ mod tests {
         let content = embedded_browserclaw_skill();
         assert!(content.starts_with("---\nname: browserclaw\n"));
         assert!(content.contains("description:"));
-        // A pointer skill: it steers the agent to BrowserClaw for browser work
+        // A pointer skill: it steers the agent to BrowserOS neo for browser work
         // and defers the how-to to the MCP instructions and tool descriptions,
         // which are the single source of truth for the SDK.
-        assert!(content.contains("use BrowserClaw's tools"));
+        assert!(content.contains("use BrowserOS neo's tools"));
         assert!(content.contains("prefer it over other browser surfaces"));
         assert!(content.contains("default to `run` for browser work"));
         assert!(content.contains("Write async JavaScript against the `browser` SDK"));

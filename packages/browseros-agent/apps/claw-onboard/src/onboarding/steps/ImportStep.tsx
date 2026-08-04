@@ -247,7 +247,7 @@ export function ImportStep({
             </div>
             <div className="text-[12.5px] text-ink-2">
               {state.error?.message ??
-                "BrowserClaw couldn't finish this import. Try again below, or refresh the profile list."}
+                "BrowserOS neo couldn't finish this import. Try again below, or refresh the profile list."}
             </div>
           </div>
           <div className="flex flex-wrap gap-2.5">

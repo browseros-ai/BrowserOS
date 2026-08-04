@@ -60,7 +60,7 @@ def _release_metadata(
     run_id: str = "123",
     run_attempt: str = "1",
 ) -> dict:
-    prefix = "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+    prefix = "BrowserOS_neo" if product == "browserclaw" else "BrowserOS"
     return {
         "product": product,
         "version": version,
@@ -160,7 +160,7 @@ class ReleaseContractTest(unittest.TestCase):
             get_product_descriptor("browserclaw"),
         )
 
-        self.assertIn("## BrowserClaw v0.49.0", notes)
+        self.assertIn("## BrowserOS neo v0.49.0", notes)
         self.assertNotIn("## BrowserOS v", notes)
 
 
@@ -185,18 +185,18 @@ BROWSEROS_DOWNLOAD_GOLDEN = {
 
 BROWSERCLAW_DOWNLOAD_GOLDEN = {
     "macos": {
-        "arm64": "download/BrowserClaw-arm64.dmg",
-        "x64": "download/BrowserClaw-x86_64.dmg",
-        "universal": "download/BrowserClaw.dmg",
+        "arm64": "download/BrowserOS_neo-arm64.dmg",
+        "x64": "download/BrowserOS_neo-x86_64.dmg",
+        "universal": "download/BrowserOS_neo.dmg",
     },
     "win": {
-        "x64_installer": "download/BrowserClaw_installer.exe",
+        "x64_installer": "download/BrowserOS_neo_installer.exe",
     },
     "linux": {
-        "x64_appimage": "download/BrowserClaw.AppImage",
-        "x64_deb": "download/BrowserClaw.deb",
-        "arm64_appimage": "download/BrowserClaw-arm64.AppImage",
-        "arm64_deb": "download/BrowserClaw-arm64.deb",
+        "x64_appimage": "download/BrowserOS_neo.AppImage",
+        "x64_deb": "download/BrowserOS_neo.deb",
+        "arm64_appimage": "download/BrowserOS_neo-arm64.AppImage",
+        "arm64_deb": "download/BrowserOS_neo-arm64.deb",
     },
 }
 

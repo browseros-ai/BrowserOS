@@ -1,7 +1,7 @@
-# BrowserClaw release is dispatch-only. It builds versioned artifacts, stages
+# BrowserOS neo release is dispatch-only. It builds versioned artifacts, stages
 # update-feed XML/JSON files as an Actions artifact, and leaves live promotion
 # to the operator.
-name: "Release: BrowserClaw (full)"
+name: "Release: BrowserOS neo (full)"
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ on:
         type: boolean
         default: true
       extensions:
-        description: "Build/upload the BrowserClaw extension CRX and stage this feed channel"
+        description: "Build/upload the BrowserOS neo extension CRX and stage this feed channel"
         type: choice
         default: alpha
         options:
@@ -43,7 +43,7 @@ on:
           - alpha
           - prod
       extensions_version:
-        description: "BrowserClaw extension version to release when extensions is not skip"
+        description: "BrowserOS neo extension version to release when extensions is not skip"
         required: false
         type: string
         default: ""
@@ -143,7 +143,7 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Resolved BrowserClaw extension version: $version"
+          echo "Resolved BrowserOS neo extension version: $version"
 
       - name: Validate selected lane configuration
         env:
@@ -218,7 +218,7 @@ jobs:
           fi
 
   onboard_browserclaw:
-    name: BrowserClaw onboarding resources
+    name: BrowserOS neo onboarding resources
     needs: preflight
     if: ${{ inputs.include_servers }}
     uses: ./.github/workflows/release-claw-onboard.yml
@@ -310,7 +310,7 @@ jobs:
     secrets: inherit
 
   release_extensions:
-    name: BrowserClaw extension CRX
+    name: BrowserOS neo extension CRX
     needs: [preflight, release_linux, release_windows, release_macos]
     if: >-
       ${{
@@ -346,7 +346,7 @@ jobs:
       contents: read
     env:
       PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
+      PRODUCT_LABEL: BrowserOS neo
       EXTENSION_NAME: browserclaw
       VERSION: ${{ needs.preflight.outputs.version }}
       EXTENSIONS_VERSION: ${{ needs.preflight.outputs.extensions_version }}
@@ -398,7 +398,7 @@ jobs:
           if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
             if [ "$ONBOARD_RESULT" != "success" ]; then
               should_stage=false
-              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
+              reasons+=("BrowserOS neo onboarding result is $ONBOARD_RESULT")
             fi
             if [ "$SERVER_RESULT" != "success" ]; then
               should_stage=false
@@ -722,7 +722,7 @@ jobs:
       contents: write
     env:
       PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
+      PRODUCT_LABEL: BrowserOS neo
       VERSION: ${{ needs.preflight.outputs.version }}
       INPUT_PLATFORMS: ${{ inputs.platforms }}
       INPUT_INCLUDE_SERVERS: ${{ inputs.include_servers }}
@@ -765,19 +765,19 @@ jobs:
             local platform="$1"
             case "$platform" in
               linux)
-                printf '%s' "browserclaw-release-ci-linux-x64<br>BrowserClaw_v${version}_x64.AppImage<br>BrowserClaw_v${version}_amd64.deb"
+                printf '%s' "browserclaw-release-ci-linux-x64<br>BrowserOS_neo_v${version}_x64.AppImage<br>BrowserOS_neo_v${version}_amd64.deb"
                 ;;
               windows)
-                printf '%s' "browserclaw-release-ci-windows-x64<br>BrowserClaw_v${version}_x64_installer.exe<br>BrowserClaw_v${version}_x64_installer.zip"
+                printf '%s' "browserclaw-release-ci-windows-x64<br>BrowserOS_neo_v${version}_x64_installer.exe<br>BrowserOS_neo_v${version}_x64_installer.zip"
                 ;;
               macos)
-                printf '%s' "BrowserClaw_v${version}_${INPUT_MACOS_ARCH}<br>BrowserClaw_v${version}_${INPUT_MACOS_ARCH}.dmg"
+                printf '%s' "BrowserOS_neo_v${version}_${INPUT_MACOS_ARCH}<br>BrowserOS_neo_v${version}_${INPUT_MACOS_ARCH}.dmg"
                 ;;
             esac
           }
 
           {
-            echo "## BrowserClaw release summary"
+            echo "## BrowserOS neo release summary"
             echo
             echo "- Version: \`$version\`"
             echo "- Platforms: \`$INPUT_PLATFORMS\`"
@@ -804,7 +804,7 @@ jobs:
             echo "### Server resources"
             echo
             if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-              echo "- BrowserClaw onboarding resources: \`$ONBOARD_RESULT\`"
+              echo "- BrowserOS neo onboarding resources: \`$ONBOARD_RESULT\`"
               echo "- BrowserClaw server resources: \`$SERVER_RESULT\`"
             else
               echo "- BrowserClaw server resources: \`skipped\`"
@@ -813,9 +813,9 @@ jobs:
             echo "### Extension CRX"
             echo
             if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "- BrowserClaw extension: \`$EXTENSIONS_RESULT\`"
+              echo "- BrowserOS neo extension: \`$EXTENSIONS_RESULT\`"
             else
-              echo "- BrowserClaw extension: \`skipped\`"
+              echo "- BrowserOS neo extension: \`skipped\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -861,7 +861,7 @@ jobs:
           if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
             if [ "$ONBOARD_RESULT" != "success" ]; then
               should_create=false
-              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
+              reasons+=("BrowserOS neo onboarding result is $ONBOARD_RESULT")
             fi
             if [ "$SERVER_RESULT" != "success" ]; then
               should_create=false

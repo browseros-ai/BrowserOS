@@ -611,7 +611,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "INPUT_UPLOAD_TO_R2": "true",
             "PRODUCT": product,
             "PRODUCT_LABEL": (
-                "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+                "BrowserOS neo" if product == "browserclaw" else "BrowserOS"
             ),
             "RUNNER_TEMP": str(runner_temp),
             "VERSION": "0.49.0",

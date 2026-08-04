@@ -1,5 +1,5 @@
 # Required secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
-name: "Release: BrowserClaw Onboarding"
+name: "Release: BrowserOS neo Onboarding"
 
 on:
   push:
@@ -89,7 +89,7 @@ jobs:
           changelog="/tmp/release-changelog.md"
           notes="/tmp/release-notes.md"
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial BrowserClaw Onboarding release." > "$changelog"
+            echo "Initial BrowserOS neo Onboarding release." > "$changelog"
           else
             git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$changelog"
             if [ ! -s "$changelog" ]; then
@@ -110,7 +110,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          title="BrowserClaw Onboarding - v$VERSION"
+          title="BrowserOS neo Onboarding - v$VERSION"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --title "$title" --notes-file /tmp/release-notes.md
           else
@@ -185,7 +185,7 @@ jobs:
       - name: Summarize onboarding resource keys
         run: |
           {
-            echo "### BrowserClaw Onboarding resource publish"
+            echo "### BrowserOS neo Onboarding resource publish"
             echo
             echo "- Version: \`$VERSION\`"
             echo "- GitHub release: \`$RELEASE_TAG\`"

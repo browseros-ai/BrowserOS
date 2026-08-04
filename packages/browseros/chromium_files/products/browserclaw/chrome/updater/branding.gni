@@ -7,8 +7,8 @@ import("//build/config/chrome_build.gni")
 if (is_chrome_branded) {
   import("//chrome/updater/internal/branding_google.gni")
 } else {
-  browser_name = "BrowserClaw"
-  browser_product_name = "BrowserClaw"
+  browser_name = "BrowserOS neo"
+  browser_product_name = "BrowserOS neo"
   crash_product_name = "BrowserClawUpdater"
   crash_upload_url = "https://clients2.google.com/cr/staging_report"
   help_center_url = "http://support.google.com/installer/"
@@ -28,8 +28,8 @@ if (is_chrome_branded) {
       "Copyright 2020 BrowserOS. All rights reserved."
   updater_product_full_name = "BrowserClawUpdater"
   updater_product_full_name_dashed_lowercase = "browserclaw-updater"
-  updater_product_full_display_name = "BrowserClaw Updater"
-  updater_metainstaller_name = "BrowserClaw Installer"
+  updater_product_full_display_name = "BrowserOS neo Updater"
+  updater_metainstaller_name = "BrowserOS neo Installer"
   mac_team_identifier = "PLACEHOLDER"
   updater_appid = "{FED2A220-734C-4AAE-A099-913417CABFE6}"
   browser_appid = "{FA2AFFF8-647B-477C-A5D2-905BA8DB9B82}"

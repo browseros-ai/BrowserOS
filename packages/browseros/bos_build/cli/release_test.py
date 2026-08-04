@@ -157,7 +157,7 @@ def _configured_r2_env():
 
 
 def _github_metadata(product: str = "browserclaw"):
-    prefix = "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+    prefix = "BrowserOS_neo" if product == "browserclaw" else "BrowserOS"
     filename = f"{prefix}_v0.49.0_x64_installer.exe"
     zip_filename = f"{prefix}_v0.49.0_x64_installer.zip"
     return {
@@ -243,13 +243,13 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             mock.patch.object(
                 github_module,
                 "download_and_upload_artifacts",
-                return_value=[("BrowserClaw_installer.exe", False)],
+                return_value=[("BrowserOS_neo_installer.exe", False)],
             ),
         ):
             result = self.invoke_create()
 
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("BrowserClaw_installer.exe", plain_output(result))
+        self.assertIn("BrowserOS_neo_installer.exe", plain_output(result))
 
     def test_zero_asset_candidates_makes_actual_cli_exit_nonzero(self):
         with (
@@ -282,7 +282,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             mock.patch.object(
                 github_module,
                 "download_and_upload_artifacts",
-                return_value=[("BrowserClaw_installer.exe", True)],
+                return_value=[("BrowserOS_neo_installer.exe", True)],
             ),
             mock.patch.object(
                 github_module,
@@ -294,7 +294,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         args = create.call_args.args
-        self.assertIn("## BrowserClaw v0.49.0", args[3])
+        self.assertIn("## BrowserOS neo v0.49.0", args[3])
         self.assertEqual(args[0], "browserclaw/v0.49.0")
         self.assertEqual(args[5], target)
 
@@ -334,7 +334,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
             mock.patch.object(
                 github_module,
                 "download_and_upload_artifacts",
-                return_value=[("BrowserClaw_installer.exe", True)],
+                return_value=[("BrowserOS_neo_installer.exe", True)],
             ),
             mock.patch.object(
                 github_module,
@@ -424,8 +424,8 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
 
     def test_partial_refresh_never_deletes_other_platform_assets(self):
         existing_assets = [
-            "BrowserClaw_v0.49.0_universal.dmg",
-            "BrowserClaw_v0.49.0_x64_installer.exe",
+            "BrowserOS_neo_v0.49.0_universal.dmg",
+            "BrowserOS_neo_v0.49.0_x64_installer.exe",
         ]
         with (
             self.patches(),
@@ -668,10 +668,10 @@ class PublishCliIntegrityTest(unittest.TestCase):
             "macos": {
                 "artifacts": {
                     "universal": {
-                        "filename": "BrowserClaw_v0.49.0_universal.dmg",
+                        "filename": "BrowserOS_neo_v0.49.0_universal.dmg",
                         "url": (
                             "https://cdn.browseros.com/releases/browserclaw/"
-                            "0.49.0/macos/BrowserClaw_v0.49.0_universal.dmg"
+                            "0.49.0/macos/BrowserOS_neo_v0.49.0_universal.dmg"
                         ),
                     }
                 }

@@ -205,7 +205,7 @@ jobs:
                 SCOPE_PATH="packages/browseros-agent/apps/app"
                 ;;
               browserclaw)
-                TITLE="BrowserClaw Extension - v$VERSION"
+                TITLE="BrowserOS neo Extension - v$VERSION"
                 KIND="in-repo"
                 SCOPE_PATH="packages/browseros-agent/apps/claw-app"
                 ;;

@@ -70,7 +70,7 @@ class BundledExtensionsManifestTest(unittest.TestCase):
         self.assertEqual(
             get_product_descriptor("browserclaw").required_extension_ids,
             (
-                (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+                (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
                 (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
             ),
         )
@@ -104,7 +104,7 @@ class BundledExtensionsManifestTest(unittest.TestCase):
     def test_missing_required_entry_names_product_and_extension(self) -> None:
         cases = (
             ("browseros", BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-            ("browserclaw", BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+            ("browserclaw", BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
         )
         for product, missing_id, missing_name in cases:
             with self.subTest(product=product):

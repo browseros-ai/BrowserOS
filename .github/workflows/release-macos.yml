@@ -394,12 +394,12 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Upload BrowserClaw DMG artifact
+      - name: Upload BrowserOS neo DMG artifact
         if: ${{ always() && steps.bump.outputs.version != '' && needs.resolve_inputs.outputs.build_browserclaw == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: BrowserClaw_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserClaw_*.dmg
+          name: BrowserOS_neo_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
+          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
 

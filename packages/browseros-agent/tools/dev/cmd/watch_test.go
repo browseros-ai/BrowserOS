@@ -44,8 +44,8 @@ func TestWatchModeSelectsBrowserClaw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watchMode returned error: %v", err)
 	}
-	if mode != "BrowserClaw" {
-		t.Fatalf("expected BrowserClaw mode, got %q", mode)
+	if mode != "BrowserOS neo" {
+		t.Fatalf("expected BrowserOS neo mode, got %q", mode)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 
 	for _, want := range []string{
 		"BROWSEROS_PRODUCT=browserclaw",
-		"BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw",
+		"BROWSEROS_BINARY=/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
 		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
 	} {

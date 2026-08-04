@@ -1,4 +1,4 @@
-//! Canonical BrowserClaw HTTP API and shared request middleware.
+//! Canonical BrowserOS neo HTTP API and shared request middleware.
 
 use super::mcp::streamable_http_service;
 use crate::{
@@ -167,7 +167,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
             CanonicalError::new(
                 StatusCode::FORBIDDEN,
                 "forbidden",
-                "recording ingest is restricted to BrowserClaw",
+                "recording ingest is restricted to BrowserOS neo",
                 Some(&request_id),
             )
             .into_response()

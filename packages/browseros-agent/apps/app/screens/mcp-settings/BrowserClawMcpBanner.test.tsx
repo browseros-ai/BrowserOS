@@ -85,11 +85,11 @@ describe('BrowserClawMcpBanner', () => {
   it('renders the MCP-specific BrowserClaw pitch', () => {
     const html = render()
 
-    expect(html).toContain('For better MCP support, use BrowserClaw')
+    expect(html).toContain('For better MCP support, use BrowserOS neo')
     expect(html).toContain(
       'A browser built for AI agents — a bigger MCP toolset, your real logins, and session replay',
     )
-    expect(html).toContain('browserclaw.ai')
+    expect(html).toContain('Learn more')
   })
 
   it('is permanent: renders only the CTA, with no dismiss control', () => {

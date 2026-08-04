@@ -1,14 +1,14 @@
 ---
 title: "Privacy and data"
-description: "Everything BrowserClaw records about your work stays on your computer. Anonymous product events help us improve the app, and they're opt-out. This page walks through both."
-keywords: ["BrowserClaw privacy", "AI browser privacy", "local-first browser", "no telemetry AI browser"]
+description: "Everything BrowserOS neo records about your work stays on your computer. Anonymous product events help us improve the app, and they're opt-out. This page walks through both."
+keywords: ["BrowserOS neo privacy", "AI browser privacy", "local-first browser", "no telemetry AI browser"]
 ---
 
-Everything BrowserClaw records about your work stays on your computer. No cloud sync, no account, no server-side history of what your agents did. This page walks through exactly what stays local, what leaves as anonymous product events, and what your AI's own provider handles.
+Everything BrowserOS neo records about your work stays on your computer. No cloud sync, no account, no server-side history of what your agents did. This page walks through exactly what stays local, what leaves as anonymous product events, and what your AI's own provider handles.
 
 ## What stays on your machine
 
-Your history, cookies, logged-in sessions, downloads, and every recording of what your agents did live in BrowserClaw's local browser profile on your disk. Sessions and screenshots the [audit and replay](/browserclaw/audit-and-replay) pages show you all live under `~/.browserclaw/`.
+Your history, cookies, logged-in sessions, downloads, and every recording of what your agents did live in BrowserOS neo's local browser profile on your disk. Sessions and screenshots the [audit and replay](/browserclaw/audit-and-replay) pages show you all live under `~/.browserclaw/`.
 
 None of it uploads. There is no cloud sync, no server-side account, no shared history.
 
@@ -30,13 +30,13 @@ The following never leaves your machine, not in any stream, not in any log:
 
 ## Anonymous product events
 
-BrowserClaw sends a small amount of anonymous usage data so we can see how the product is used and fix rough edges. It's on by default and off with one toggle in Settings.
+BrowserOS neo sends a small amount of anonymous usage data so we can see how the product is used and fix rough edges. It's on by default and off with one toggle in Settings.
 
 Here's every field that goes out:
 
 - Startup and shutdown
 - Which AI tools connect and disconnect (the tool's name from a fixed list, plus session end times)
-- BrowserClaw version and your operating system
+- BrowserOS neo version and your operating system
 
 None of the fields in the "never leaves" list above are in this stream. There is no user identifier. There is no page content.
 
@@ -44,18 +44,18 @@ These events go to [PostHog](https://posthog.com), a product analytics service. 
 
 ## Your AI's own provider
 
-When your AI works in BrowserClaw, the AI itself (Claude Code, Cursor, Codex, and so on) talks to its own vendor with your prompts. What that vendor does with the data is governed by their privacy policy, not ours. BrowserClaw does not intermediate that leg.
+When your AI works in BrowserOS neo, the AI itself (Claude Code, Cursor, Codex, and so on) talks to its own vendor with your prompts. What that vendor does with the data is governed by their privacy policy, not ours. BrowserOS neo does not intermediate that leg.
 
 ## The Claude Desktop extension
 
 The [Claude Desktop extension](/browserclaw/mcp/claude-desktop) (the `.mcpb` file you drop onto Settings) collects zero data. No analytics, no telemetry, no error reporting, no user identifiers.
 
-The extension is a small forwarder: Claude Desktop asks it something, it hands the call to BrowserClaw on your own machine, and passes the result back to Claude Desktop. It talks to no service on the internet on its own. Nothing kept, nothing sent.
+The extension is a small forwarder: Claude Desktop asks it something, it hands the call to BrowserOS neo on your own machine, and passes the result back to Claude Desktop. It talks to no service on the internet on its own. Nothing kept, nothing sent.
 
 ## Read the full policies
 
 <CardGroup cols={2}>
-  <Card title="BrowserClaw privacy policy" icon="scroll" href="https://browseros.com/privacy/browserclaw/">
+  <Card title="BrowserOS neo privacy policy" icon="scroll" href="https://browseros.com/privacy/browserclaw/">
     Every field, every promise, in legal-clean wording.
   </Card>
   <Card title="Claude Desktop extension privacy" icon="scroll" href="https://browseros.com/privacy/browserclaw-extension/">
@@ -70,6 +70,6 @@ The extension is a small forwarder: Claude Desktop asks it something, it hands t
     Every step your agents take, on your disk.
   </Card>
   <Card title="Your tabs and agent tabs" icon="grid-2" href="/browserclaw/tabs-and-isolation">
-    How BrowserClaw sorts your tabs and your AI's tabs.
+    How BrowserOS neo sorts your tabs and your AI's tabs.
   </Card>
 </CardGroup>

@@ -52,7 +52,7 @@ describe('cockpit onboarding copy', () => {
 
   it('starter prompt is the streaming-price research task', () => {
     expect(STARTER_PROMPT).toBe(
-      'Using BrowserClaw, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV',
+      'Using BrowserOS neo, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV',
     )
   })
 

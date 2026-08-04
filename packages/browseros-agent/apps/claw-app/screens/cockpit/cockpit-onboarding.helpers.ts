@@ -60,7 +60,7 @@ export const MANAGE_COPY = {
 export const STARTER_PROMPT_LABEL = 'Paste this prompt into your agent.'
 
 export const STARTER_PROMPT =
-  'Using BrowserClaw, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
+  'Using BrowserOS neo, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
 
 export const CONNECTED_COPY = {
   suffix: 'connected',

@@ -546,7 +546,7 @@ fn reconcile_skill_warning(
 fn with_skill_retry_message(message: String, warning: Option<String>) -> String {
     match warning {
         Some(warning) => format!(
-            "{message} BrowserClaw skill reconciliation needs a retry on restart or reconnect: {warning}"
+            "{message} BrowserOS neo skill reconciliation needs a retry on restart or reconnect: {warning}"
         ),
         None => message,
     }

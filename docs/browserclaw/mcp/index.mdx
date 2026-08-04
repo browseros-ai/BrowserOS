@@ -1,14 +1,14 @@
 ---
 title: "Connect your agent"
 description: "One-click setup for the AI tools we support. A Claude Desktop extension. A copyable endpoint URL for everything else."
-keywords: ["connect agent to BrowserClaw", "BrowserClaw MCP", "browser MCP server", "Streamable HTTP MCP", "Claude Desktop MCP"]
+keywords: ["connect agent to BrowserOS neo", "BrowserOS neo MCP", "browser MCP server", "Streamable HTTP MCP", "Claude Desktop MCP"]
 ---
 
-BrowserClaw is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/browserclaw/mcp/manual) with the endpoint URL below.
+BrowserOS neo is one MCP server, at one URL, on your own machine. Any AI tool that supports MCP can use it. This page covers the one-click board for the tools we support today. For anything else, [set it up manually](/browserclaw/mcp/manual) with the endpoint URL below.
 
 ## The endpoint URL
 
-Open a new tab in BrowserClaw and click **MCP** in the sidebar. The top of the page shows the endpoint URL:
+Open a new tab in BrowserOS neo and click **MCP** in the sidebar. The top of the page shows the endpoint URL:
 
 ```text
 http://127.0.0.1:9200/mcp
@@ -21,10 +21,10 @@ That address is local to your computer. Nothing crosses the network. Click **Cop
 Under the endpoint URL you'll see the list of AI tools we support out of the box. Find yours, click **Connect**, and restart the AI tool.
 
 <Frame caption="One endpoint, one click per supported AI tool.">
-  <img src="/images/browserclaw--mcp-install-board.png" alt="BrowserClaw connect page showing an endpoint URL at the top and the supported AI tools listed underneath, each with a Connect button on the right." />
+  <img src="/images/browserclaw--mcp-install-board.png" alt="BrowserOS neo connect page showing an endpoint URL at the top and the supported AI tools listed underneath, each with a Connect button on the right." />
 </Frame>
 
-Today the supported AI tools are **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **Antigravity**, **VS Code**, and **Zed**. Behind the scenes, BrowserClaw writes a single entry named `BrowserClaw` into the AI tool's own MCP config file, pointing at the endpoint URL above. Nothing else changes.
+Today the supported AI tools are **Claude Code**, **Codex**, **Cursor**, **OpenCode**, **Antigravity**, **VS Code**, and **Zed**. Behind the scenes, BrowserOS neo writes a single entry named `BrowserClaw` into the AI tool's own MCP config file, pointing at the endpoint URL above. That compatibility key stays unchanged, so existing connections keep working.
 
 <Tip>
 The board updates as soon as your AI tool actually loads the config. If you don't see the row flip to **Connected**, restart the AI tool once and come back.
@@ -40,14 +40,14 @@ Title: Add one-click support for <AI tool name>
 - Name and link to the AI tool
 - Which config file it uses for MCP servers (path + format)
 - A link to that AI tool's MCP setup docs
-- Whether you're already using BrowserClaw with it via the manual setup
+- Whether you're already using BrowserOS neo with it via the manual setup
 ```
 
 While you're waiting for one-click support, two other paths work with almost every AI tool.
 
 <CardGroup cols={2}>
   <Card title="Claude Desktop and Cowork" icon="messages" href="/browserclaw/mcp/claude-desktop">
-    Install the BrowserClaw extension into Claude Desktop with a single file.
+    Install the BrowserOS neo extension into Claude Desktop with a single file.
   </Card>
   <Card title="Manual URL setup" icon="wrench" href="/browserclaw/mcp/manual">
     Guided setup for Hermes Agent, Vercel AI SDK, OpenClaw, and other MCP-compatible AI tools.
@@ -57,7 +57,7 @@ While you're waiting for one-click support, two other paths work with almost eve
 ## Where to next
 
 <CardGroup cols={2}>
-  <Card title="How BrowserClaw works" icon="play" href="/browserclaw/how-it-works">
+  <Card title="How BrowserOS neo works" icon="play" href="/browserclaw/how-it-works">
     A guided walkthrough from install to your first AI-driven session.
   </Card>
   <Card title="Your dashboard" icon="binoculars" href="/browserclaw/cockpit">

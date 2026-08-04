@@ -14,7 +14,7 @@ const browserClawWorkflow = readFileSync(
 
 describe('release-claw-onboard workflow', () => {
   it('owns an independent onboarding release contract', () => {
-    expect(workflow).toContain('name: "Release: BrowserClaw Onboarding"')
+    expect(workflow).toContain('name: "Release: BrowserOS neo Onboarding"')
     expect(workflow).toContain('"claw-onboard/v*"')
     expect(workflow).toContain('workflow_call:')
     expect(workflow).toContain(

@@ -391,7 +391,7 @@ jobs:
               echo "value=BrowserOS" >> "$GITHUB_OUTPUT"
               ;;
             browserclaw)
-              echo "value=BrowserClaw" >> "$GITHUB_OUTPUT"
+              echo "value=BrowserOS_neo" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::product must be one of: browseros, browserclaw"

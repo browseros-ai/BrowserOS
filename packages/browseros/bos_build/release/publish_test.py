@@ -37,12 +37,12 @@ class ReleaseSourceKeyTest(unittest.TestCase):
             ctx,
             "macos",
             "0.31.0",
-            {"filename": "BrowserClaw_v0.31.0_universal.dmg"},
+            {"filename": "BrowserOS_neo_v0.31.0_universal.dmg"},
         )
 
         self.assertEqual(
             key,
-            "releases/browserclaw/0.31.0/macos/BrowserClaw_v0.31.0_universal.dmg",
+            "releases/browserclaw/0.31.0/macos/BrowserOS_neo_v0.31.0_universal.dmg",
         )
 
     def _ctx(self, product: str) -> Context:
@@ -74,7 +74,7 @@ class PublishModuleIntegrityTest(unittest.TestCase):
                     "win": {
                         "artifacts": {
                             "x64_installer": {
-                                "filename": "BrowserClaw_installer.exe",
+                                "filename": "BrowserOS_neo_installer.exe",
                                 "url": "https://cdn.browseros.com/installer.exe",
                             }
                         }
@@ -137,10 +137,10 @@ class PublishModuleIntegrityTest(unittest.TestCase):
             "macos": {
                 "artifacts": {
                     "universal": {
-                        "filename": "BrowserClaw_v0.49.0_universal.dmg",
+                        "filename": "BrowserOS_neo_v0.49.0_universal.dmg",
                         "url": (
                             "https://cdn.browseros.com/releases/browserclaw/"
-                            "0.49.0/macos/BrowserClaw_v0.49.0_universal.dmg"
+                            "0.49.0/macos/BrowserOS_neo_v0.49.0_universal.dmg"
                         ),
                     }
                 }
