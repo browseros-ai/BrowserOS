@@ -150,12 +150,8 @@ function StartPanel({
   )
 }
 
-const MAX_CHIPS = 4
-
 function AgentChips({ harnesses }: { harnesses: readonly string[] }) {
   if (harnesses.length === 0) return null
-  const shown = harnesses.slice(0, MAX_CHIPS)
-  const extra = harnesses.length - shown.length
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-1.5 text-ink-2">
@@ -165,7 +161,7 @@ function AgentChips({ harnesses }: { harnesses: readonly string[] }) {
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {shown.map((harness) => (
+        {harnesses.map((harness) => (
           <span
             key={harness}
             className="rounded-full border border-border-2 bg-muted px-2.5 py-1 font-mono text-[11px] text-ink-2"
@@ -173,11 +169,6 @@ function AgentChips({ harnesses }: { harnesses: readonly string[] }) {
             {harness}
           </span>
         ))}
-        {extra > 0 && (
-          <span className="rounded-full border border-border-2 bg-muted px-2.5 py-1 font-mono text-[11px] text-ink-3">
-            +{extra}
-          </span>
-        )}
       </div>
     </div>
   )

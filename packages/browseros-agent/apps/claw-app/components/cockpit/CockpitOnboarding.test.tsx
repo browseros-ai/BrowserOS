@@ -66,6 +66,24 @@ describe('CockpitOnboarding', () => {
     expect(html).toContain('2 connected')
   })
 
+  it('waiting: shows every connected agent as a chip, never a +N overflow', () => {
+    const harnesses = [
+      'Claude Code',
+      'Codex',
+      'Cursor',
+      'OpenCode',
+      'Gemini',
+      'Cline',
+      'Zed',
+    ]
+    const html = render('waiting', harnesses)
+    expect(html).toContain('7 connected')
+    for (const harness of harnesses) {
+      expect(html).toContain(harness)
+    }
+    expect(html).not.toContain('+3')
+  })
+
   it('waiting: retains the starter prompt tile so the reader can still copy', () => {
     const html = render('waiting', ['Claude Code'])
     expect(html).toContain(
