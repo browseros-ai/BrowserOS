@@ -203,7 +203,9 @@ class Context:
 
     def get_extensions_manifest_url(self) -> str:
         """Get CDN URL for bundled extensions manifest"""
-        return "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        return self.env.bundled_extensions_manifest_url or (
+            "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        )
 
     def get_entitlements_dir(self) -> Path:
         """Get entitlements directory"""

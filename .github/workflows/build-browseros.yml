@@ -47,6 +47,26 @@ on:
         required: false
         type: boolean
         default: false
+      browseros_server_version:
+        description: "Exact BrowserOS server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_server_version:
+        description: "Exact BrowserClaw server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_onboard_version:
+        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      bundled_extensions_manifest_url:
+        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+        required: false
+        type: string
+        default: ""
       ref:
         description: "Optional checkout ref override; empty uses the caller ref"
         required: false
@@ -340,6 +360,10 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.browseros_server_version }}
+          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.browserclaw_server_version }}
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.browserclaw_onboard_version }}
+          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.bundled_extensions_manifest_url }}
 
           # macOS signing and notarization.
           MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}

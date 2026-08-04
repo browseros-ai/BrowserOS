@@ -44,6 +44,13 @@ def git_bash_path() -> str:
 
 
 class ChromiumBuildWorkflowTest(unittest.TestCase):
+    RESOURCE_INPUT_ENV = {
+        "browseros_server_version": "BROWSEROS_SERVER_RESOURCE_VERSION",
+        "browserclaw_server_version": "BROWSERCLAW_SERVER_RESOURCE_VERSION",
+        "browserclaw_onboard_version": "BROWSERCLAW_ONBOARD_RESOURCE_VERSION",
+        "bundled_extensions_manifest_url": "BUNDLED_EXTENSIONS_MANIFEST_URL",
+    }
+
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         workflow_path = WORKFLOW_DIR / workflow_name
         return yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
@@ -58,6 +65,67 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             for step in self.build_steps()
             if step.get("name") == GIT_BOOTSTRAP_STEP
         )
+
+    def test_build_workflow_exposes_resource_inputs_to_build_environment(self):
+        workflow = self.load_workflow("build-browseros.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        build_step = next(
+            step
+            for step in self.build_steps()
+            if step.get("name") == "Build ${{ inputs.product }}"
+        )
+
+        for input_name, env_name in self.RESOURCE_INPUT_ENV.items():
+            with self.subTest(input=input_name):
+                self.assertEqual(
+                    {"required": False, "type": "string", "default": ""},
+                    {
+                        key: inputs[input_name][key]
+                        for key in ("required", "type", "default")
+                    },
+                )
+                self.assertEqual(
+                    f"${{{{ inputs.{input_name} }}}}",
+                    build_step["env"][env_name],
+                )
+
+    def test_reusable_platform_workflows_forward_resource_inputs(self):
+        for workflow_name in ("release-linux.yml", "release-windows.yml"):
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                triggers = workflow.get("on", workflow.get(True))
+                inputs = triggers["workflow_call"]["inputs"]
+                build_with = workflow["jobs"]["build"]["with"]
+
+                for input_name in self.RESOURCE_INPUT_ENV:
+                    self.assertFalse(inputs[input_name]["required"])
+                    self.assertEqual(inputs[input_name]["default"], "")
+                    self.assertEqual(inputs[input_name]["type"], "string")
+                    self.assertEqual(
+                        f"${{{{ inputs.{input_name} }}}}",
+                        build_with[input_name],
+                    )
+
+    def test_persistent_macos_build_receives_resource_inputs(self):
+        workflow = self.load_workflow("release-macos.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        build_step = next(
+            step
+            for step in workflow["jobs"]["build"]["steps"]
+            if step.get("name") == "Build selected products"
+        )
+
+        for input_name, env_name in self.RESOURCE_INPUT_ENV.items():
+            with self.subTest(input=input_name):
+                self.assertFalse(inputs[input_name]["required"])
+                self.assertEqual(inputs[input_name]["default"], "")
+                self.assertEqual(inputs[input_name]["type"], "string")
+                self.assertEqual(
+                    f"${{{{ inputs.{input_name} }}}}",
+                    build_step["env"][env_name],
+                )
 
     def test_git_bootstrap_is_windows_only_and_immediately_after_checkout(self):
         steps = self.build_steps()
