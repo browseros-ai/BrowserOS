@@ -28,10 +28,12 @@ describe('CockpitOnboarding', () => {
     const html = render('first-run')
     expect(html).toContain('You watch. Your agent')
     expect(html).toContain('works.')
-    // The feature video renders as a poster with a play affordance; no
-    // iframe or self-hosted source is present until the lightbox opens.
-    expect(html).toContain('Can AI Agents Finally Automate the Web?')
-    expect(html).toContain('Play: ')
+    // The hero plays the onboarding recording inline and autoplays; there is no
+    // poster-to-lightbox step and no youtube embed (blocked from the extension
+    // origin).
+    expect(html).toContain('<video')
+    expect(html.toLowerCase()).toContain('autoplay')
+    expect(html).toContain('onboarding-recording/video.mp4')
     expect(html).not.toContain('youtube-nocookie.com/embed')
     expect(html).toContain('Hand off your first task')
     expect(html).toContain('Copy task')
