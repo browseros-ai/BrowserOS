@@ -250,7 +250,7 @@ describe('Cockpit (v2)', () => {
     })
     expect(firstRun).toContain('You watch. Your agent')
     expect(firstRun).toContain('Hand off your first task')
-    expect(firstRun).toContain('Can AI Agents Finally Automate the Web?')
+    expect(firstRun).toContain('onboarding-recording/video.mp4')
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
 
