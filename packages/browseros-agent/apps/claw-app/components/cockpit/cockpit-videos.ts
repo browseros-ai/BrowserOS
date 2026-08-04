@@ -36,6 +36,10 @@ export interface OnboardingVideo {
 const ONBOARDING_VIDEO_URL =
   'https://cdn.browseros.com/artifacts/claw/onboarding-recording/video.mp4'
 
+/** Thumbnail for the featured onboarding recording, from its YouTube upload. */
+const ONBOARDING_POSTER_URL =
+  'https://i.ytimg.com/vi/AF05B1O9nq8/maxresdefault.jpg'
+
 const CAN_AI_AUTOMATE = {
   youtubeId: 'rIZ8OBHL7Zo',
   title: 'Can AI Agents Finally Automate the Web?',
@@ -49,7 +53,12 @@ const FUTURE_OF_BROWSING = {
 } as const
 
 export const ONBOARDING_VIDEOS: readonly OnboardingVideo[] = [
-  { id: 'v1', span: 'featured', ...CAN_AI_AUTOMATE },
+  {
+    id: 'v1',
+    span: 'featured',
+    ...CAN_AI_AUTOMATE,
+    poster: ONBOARDING_POSTER_URL,
+  },
   { id: 'v2', span: 'default', ...FUTURE_OF_BROWSING },
   { id: 'v3', span: 'default', ...CAN_AI_AUTOMATE },
   { id: 'v4', span: 'default', ...FUTURE_OF_BROWSING },
