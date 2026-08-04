@@ -57,11 +57,10 @@ export const MANAGE_COPY = {
   href: '/mcp',
 } as const
 
-export const STARTER_PROMPT_LABEL =
-  'Paste this into Claude Code, Cursor, or Codex.'
+export const STARTER_PROMPT_LABEL = 'Paste this prompt into your agent.'
 
 export const STARTER_PROMPT =
-  'Use BrowserClaw. Book me the cheapest morning flight from SFO to NYC next Friday.'
+  'Using BrowserClaw, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
 
 export const CONNECTED_COPY = {
   suffix: 'connected',
