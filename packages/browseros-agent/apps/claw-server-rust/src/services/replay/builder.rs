@@ -106,10 +106,13 @@ impl ReplayService {
 
     /// All committed rrweb events for one document, oldest first, for
     /// bootstrapping a live preview.
-    pub async fn document_events(&self, document_id: &str) -> AppResult<Vec<RecordedEvent>> {
-        self.recordings
-            .read_range(document_id, i64::MIN, i64::MAX)
-            .await
+    /// A document's committed events with the committed byte length they were
+    /// read at, so a live subscriber forwards only batches past that cutoff.
+    pub async fn document_events_committed(
+        &self,
+        document_id: &str,
+    ) -> AppResult<(Vec<RecordedEvent>, i64)> {
+        self.recordings.read_committed(document_id).await
     }
 
     /// Batch ids already durably accepted for a document, so a live subscriber

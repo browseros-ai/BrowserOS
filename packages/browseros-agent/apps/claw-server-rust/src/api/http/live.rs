@@ -17,7 +17,7 @@ use axum::{
 use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::json;
-use std::{collections::HashSet, convert::Infallible};
+use std::convert::Infallible;
 use tokio::{
     sync::{broadcast, mpsc},
     time::{Duration, MissedTickBehavior, interval},
@@ -92,23 +92,24 @@ async fn stream_session_preview(
         };
         announced_idle = false;
 
-        // Subscribe before the bootstrap reads so no batch is lost in the gap.
+        // Subscribe before the bootstrap read so no batch is lost between the
+        // read and the live feed.
         let mut receiver = state.live_recordings.subscribe(&document.document_id).await;
-        // Read the accepted batch ids BEFORE the events so the id set is a SUBSET
-        // of what the bootstrap covers. A batch that lands between the two reads
-        // is then carried by the bootstrap AND forwarded live (a harmless
-        // duplicate) rather than dropped: rrweb tolerates a repeated incremental
-        // event far better than a gap. Reading the ids after the events would
-        // instead drop such a batch (id present, events missing from bootstrap).
-        let bootstrapped: HashSet<String> =
-            match state.replay.accepted_batch_ids(&document.document_id).await {
-                Ok(ids) => ids.into_iter().collect(),
-                Err(_) => return,
-            };
-        let bootstrap = match state.replay.document_events(&document.document_id).await {
-            Ok(events) => bootstrap_from_last_snapshot(events),
+        // The bootstrap reads the file up to a committed byte length; a live
+        // batch is forwarded only when its end offset exceeds that length.
+        // Batches are atomic and contiguous, so this cutoff is exact: the
+        // bootstrap never re-applies a batch it already carried (no duplicate)
+        // and never skips one it did not (no gap). Reading the length and the
+        // events together keeps the cutoff and the bootstrap consistent.
+        let (events, committed_len) = match state
+            .replay
+            .document_events_committed(&document.document_id)
+            .await
+        {
+            Ok(pair) => pair,
             Err(_) => return,
         };
+        let bootstrap = bootstrap_from_last_snapshot(events);
 
         if send_switch(&tx, &document).await.is_err() {
             return;
@@ -134,10 +135,10 @@ async fn stream_session_preview(
                     }
                 }
                 received = receiver.recv() => match received {
-                    // Skip whole batches the bootstrap already covered (batch id
-                    // is the durable accept identity); every other batch is new
-                    // and forwarded intact, so no distinct event is ever dropped.
-                    Ok(batch) if bootstrapped.contains(batch.batch_id.as_ref()) => {}
+                    // Skip batches the bootstrap already covered; anything past
+                    // the committed cutoff is new and forwarded intact, so no
+                    // distinct event is dropped or double-applied.
+                    Ok(batch) if batch.end_offset <= committed_len => {}
                     Ok(batch) => {
                         if send_events(&tx, "append", &batch.events).await.is_err() {
                             return;

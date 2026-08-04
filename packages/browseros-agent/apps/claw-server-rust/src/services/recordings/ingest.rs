@@ -40,7 +40,7 @@ impl RecordingIngestService {
             .tabs
             .resolve(tab_id, session, self.browser.state().epoch)
             .await;
-        let accepted = self
+        let outcome = self
             .recordings
             .append_batch(
                 document_id,
@@ -51,14 +51,17 @@ impl RecordingIngestService {
                 has_gap,
             )
             .await?;
-        // Fan the freshly accepted events out to any live-preview subscribers.
-        // A duplicate (already-accepted) batch is not republished so a
-        // reconnecting subscriber never double-applies it.
-        if accepted && !events.is_empty() {
+        // Fan the freshly accepted events out to any live-preview subscribers,
+        // tagged with the document's committed length after this batch. A
+        // subscriber forwards the batch only when that length exceeds what its
+        // bootstrap already read, so a batch the bootstrap captured is never
+        // double-applied. `committed_len` is `Some` only for a newly accepted,
+        // non-empty batch, so a duplicate or empty batch is never republished.
+        if let Some(committed_len) = outcome.committed_len {
             self.live
-                .publish(document_id, batch_id, Arc::from(events))
+                .publish(document_id, committed_len, Arc::from(events))
                 .await;
         }
-        Ok(accepted)
+        Ok(outcome.accepted)
     }
 }
