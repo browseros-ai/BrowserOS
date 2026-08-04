@@ -12,6 +12,10 @@ use browseros_core::PageId;
 use std::{collections::HashMap, time::Duration};
 use tracing::warn;
 
+/// Grace after a session finishes before its still-open tabs are closed, so the
+/// user can glance at the result before the tabs disappear.
+const CLEANUP_GRACE: Duration = Duration::from_secs(3 * 60);
+
 /// One tab the browser currently reports open.
 struct LiveTab {
     tab_id: i64,
@@ -38,10 +42,9 @@ fn tabs_to_close(orphaned: &[i64], live: &[LiveTab]) -> Vec<i64> {
 pub async fn sweep_orphaned_tabs(
     session_tabs: &SessionTabLedger,
     browser: &BrowserService,
-    grace: Duration,
     now: i64,
 ) -> AppResult<usize> {
-    let cutoff = now.saturating_sub(i64::try_from(grace.as_millis()).unwrap_or(i64::MAX));
+    let cutoff = now.saturating_sub(i64::try_from(CLEANUP_GRACE.as_millis()).unwrap_or(i64::MAX));
     let orphaned = session_tabs.list_orphaned_owned_tabs(cutoff).await?;
     if orphaned.is_empty() {
         return Ok(0);

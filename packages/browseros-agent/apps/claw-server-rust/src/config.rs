@@ -13,9 +13,6 @@ const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 const DEFAULT_SESSION_RETENTION_MS: u64 = 2 * 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
-/// Grace after a session finishes before its still-open tabs are closed, so the
-/// user can glance at the result first.
-const DEFAULT_TAB_CLEANUP_GRACE_MS: u64 = 3 * 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
@@ -65,7 +62,6 @@ pub struct Config {
     pub session_idle: Duration,
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
-    pub tab_cleanup_grace: Duration,
     pub replay_retention_days: u64,
     pub dev_mode: bool,
     pub auth_token: Option<String>,
@@ -206,11 +202,6 @@ impl Config {
                 env,
                 "CLAW_SESSION_SWEEP_INTERVAL_MS",
                 DEFAULT_SESSION_SWEEP_INTERVAL_MS,
-            )),
-            tab_cleanup_grace: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_TAB_CLEANUP_GRACE_MS",
-                DEFAULT_TAB_CLEANUP_GRACE_MS,
             )),
             replay_retention_days: sidecar
                 .replay
