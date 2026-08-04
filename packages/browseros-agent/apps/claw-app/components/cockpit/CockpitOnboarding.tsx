@@ -24,6 +24,7 @@ import { Check } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink } from 'react-router'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   CONNECTED_COPY,
   FOOTER_COPY,
@@ -56,6 +57,7 @@ export function CockpitOnboarding({
       ? PANEL_COPY.waiting
       : PANEL_COPY.tieBack
   const flagCopied = () => {
+    track(AnalyticsEvent.OnboardingTaskCopied)
     setPromptCopied(true)
     window.setTimeout(() => setPromptCopied(false), 8000)
   }
@@ -186,6 +188,9 @@ function OnboardingFooter() {
     <div className="flex items-center gap-5 pt-1 text-[12.5px]">
       <NavLink
         to={MANAGE_COPY.href}
+        onClick={() =>
+          track(AnalyticsEvent.OnboardingLinkClicked, { link: 'manage' })
+        }
         className="text-ink-2 underline decoration-border-2 underline-offset-2 transition hover:decoration-ink-2"
       >
         {MANAGE_COPY.label}
@@ -194,6 +199,9 @@ function OnboardingFooter() {
         href={FOOTER_COPY.docsHref}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={() =>
+          track(AnalyticsEvent.OnboardingLinkClicked, { link: 'docs' })
+        }
         className="text-ink-2 underline decoration-border-2 underline-offset-2 transition hover:decoration-ink-2"
       >
         {FOOTER_COPY.docs}

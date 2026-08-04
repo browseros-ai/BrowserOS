@@ -13,6 +13,7 @@
 import { ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { ONBOARDING_VIDEOS, type OnboardingVideo } from './cockpit-videos'
 import { VideoLightbox } from './VideoLightbox'
 import { VideoTile } from './VideoTile'
@@ -30,6 +31,15 @@ function readCollapsed(): boolean {
 export function VideoRail() {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [active, setActive] = useState<OnboardingVideo | null>(null)
+
+  const openVideo = (video: OnboardingVideo) => {
+    track(AnalyticsEvent.OnboardingVideoOpened, {
+      tileId: video.id,
+      span: video.span,
+      surface: 'rail',
+    })
+    setActive(video)
+  }
 
   const toggle = () => {
     setCollapsed((prev) => {
@@ -80,7 +90,7 @@ export function VideoRail() {
               <VideoTile
                 key={video.id}
                 video={video}
-                onPlay={setActive}
+                onPlay={openVideo}
                 variant="rail"
               />
             ))}

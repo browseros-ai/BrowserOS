@@ -10,6 +10,7 @@
 
 import { Play } from 'lucide-react'
 import { useState } from 'react'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   ONBOARDING_VIDEOS,
   type OnboardingVideo,
@@ -25,7 +26,14 @@ export function VideoFeature() {
     <>
       <button
         type="button"
-        onClick={() => setOpen(video)}
+        onClick={() => {
+          track(AnalyticsEvent.OnboardingVideoOpened, {
+            tileId: video.id,
+            span: video.span,
+            surface: 'onboarding',
+          })
+          setOpen(video)
+        }}
         aria-label={`Play: ${video.title}`}
         className="group relative aspect-video w-full overflow-hidden rounded-3xl border border-border-2 bg-muted text-left shadow-sm outline-none ring-1 ring-foreground/5 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background md:aspect-auto md:h-full"
       >

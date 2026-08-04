@@ -8,7 +8,9 @@
  * as posters and no video streams until the reader asks for one.
  */
 
+import { useRef } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { type OnboardingVideo, posterFor, videoUrlFor } from './cockpit-videos'
 
 interface VideoLightboxProps {
@@ -16,12 +18,24 @@ interface VideoLightboxProps {
   onClose: () => void
 }
 
+function videoMeta(video: OnboardingVideo) {
+  return { tileId: video.id, span: video.span }
+}
+
 export function VideoLightbox({ video, onClose }: VideoLightboxProps) {
+  // `onPlay` fires both on the initial autoplay and on every resume after a
+  // pause. Track the tile whose playback has started so the first play reads as
+  // "played" and later plays as "resumed"; cleared on close so a re-open starts
+  // fresh.
+  const startedTileId = useRef<string | null>(null)
   return (
     <Dialog
       open={video !== null}
       onOpenChange={(open) => {
-        if (!open) onClose()
+        if (!open) {
+          startedTileId.current = null
+          onClose()
+        }
       }}
     >
       <DialogContent className="w-full gap-0 overflow-hidden p-0 sm:max-w-3xl">
@@ -38,6 +52,29 @@ export function VideoLightbox({ video, onClose }: VideoLightboxProps) {
                 autoPlay
                 playsInline
                 className="h-full w-full"
+                onPlay={() => {
+                  if (startedTileId.current === video.id) {
+                    track(
+                      AnalyticsEvent.OnboardingVideoResumed,
+                      videoMeta(video),
+                    )
+                    return
+                  }
+                  startedTileId.current = video.id
+                  track(AnalyticsEvent.OnboardingVideoPlayed, videoMeta(video))
+                }}
+                onPause={(event) => {
+                  // Reaching the end also fires pause; only a mid-play pause is
+                  // a real "paused".
+                  if (event.currentTarget.ended) return
+                  track(AnalyticsEvent.OnboardingVideoPaused, videoMeta(video))
+                }}
+                onEnded={() =>
+                  track(
+                    AnalyticsEvent.OnboardingVideoCompleted,
+                    videoMeta(video),
+                  )
+                }
               />
             </div>
             <div className="flex flex-col gap-1 p-5">

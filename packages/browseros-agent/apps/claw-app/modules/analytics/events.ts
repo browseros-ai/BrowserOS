@@ -16,6 +16,13 @@ export const AnalyticsEvent = {
   ReplayViewed: 'replay_viewed',
   TaskDetailViewed: 'task_detail_viewed',
   OptOutToggled: 'analytics_opt_out_toggled',
+  OnboardingVideoOpened: 'onboarding_video_opened',
+  OnboardingVideoPlayed: 'onboarding_video_played',
+  OnboardingVideoPaused: 'onboarding_video_paused',
+  OnboardingVideoResumed: 'onboarding_video_resumed',
+  OnboardingVideoCompleted: 'onboarding_video_completed',
+  OnboardingTaskCopied: 'onboarding_task_copied',
+  OnboardingLinkClicked: 'onboarding_link_clicked',
 } as const
 
 export type AnalyticsEventName =
