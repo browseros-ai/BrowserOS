@@ -7,6 +7,6 @@
     <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.123.0.crx" version="0.0.123.0"/>
   </app>
   <app appid="pjimfkbpehlcllblajnpfamdfjhhlgkc">
-    <updatecheck codebase="https://cdn.browseros.com/extensions/browserclaw-0.1.7.0.crx" version="0.1.7.0"/>
+    <updatecheck codebase="https://cdn.browseros.com/extensions/browserclaw-0.1.3.0.crx" version="0.1.3.0"/>
   </app>
 </gupdate>

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Rails-enforcing feed publisher — the only write path to live feed keys.
-
-Every PUT is preceded by: well-formed check, spec title/link match (the
-alpha→prod byte-copy killer), HEAD-200 on every referenced download, a
-downgrade guard against the live object, and a feeds-history backup.
-Dry-run is the default; callers must opt into writing with publish=True.
-"""
+"""Publish update feeds through validation, backups, and downgrade guards."""
 
 import difflib
 import json
@@ -13,7 +7,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence
 
 from ...lib.env import EnvConfig
 from ...lib.paths import get_package_root
@@ -28,7 +22,13 @@ from .render import (
     extract_manifest_versions,
     parse_dotted_version,
 )
-from .spec import EXTENSIONS, FeedSpec, all_feeds, update_manifest_feed
+from .spec import (
+    EXTENSIONS,
+    FeedSpec,
+    all_feeds,
+    feed_by_key,
+    update_manifest_feed,
+)
 
 BACKUP_PREFIX = "feeds-history"
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -107,13 +107,7 @@ def _strict_appcast_versions(content: str) -> Optional[List[str]]:
 
 
 def _is_empty_appcast_shell(content: str) -> bool:
-    """Whether content is an unambiguously unpopulated RSS appcast.
-
-    BrowserClaw's Windows feeds were provisioned before their first release
-    with one whitespace-only ``<item>``.  Treat that shape, and the equivalent
-    shell with no items, as first publication.  Any item attributes, text, or
-    children make the live document meaningful and therefore unguardable.
-    """
+    """Recognize only unambiguously unpopulated RSS appcasts."""
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
@@ -159,14 +153,8 @@ def _default_http_head(url: str) -> int:
         return 0
 
 
-def _default_appcast_staging_dir() -> Path:
-    return get_package_root() / "bos_build" / "config" / "appcast"
-
-
-def _default_extensions_staging_dir() -> Path:
-    # <monorepo>/updates/extensions — the tracked home of the extension
-    # manifests (bundled_extensions_test reads it), mirroring api-worker.
-    return get_package_root().parent.parent / "updates" / "extensions"
+def _default_staging_root() -> Path:
+    return get_package_root().parent.parent / "updates"
 
 
 @dataclass
@@ -184,6 +172,7 @@ class FeedPublisher:
         env: Optional[EnvConfig] = None,
         r2_client=None,
         http_head: Optional[Callable[[str], int]] = None,
+        staging_root: Optional[Path] = None,
         appcast_staging_dir: Optional[Path] = None,
         extensions_staging_dir: Optional[Path] = None,
         now: Optional[Callable[[], datetime]] = None,
@@ -191,12 +180,12 @@ class FeedPublisher:
         self.env = env or EnvConfig()
         self._client = r2_client
         self.http_head = http_head or _default_http_head
-        self._appcast_staging_dir = (
-            appcast_staging_dir or _default_appcast_staging_dir()
-        )
-        self._extensions_staging_dir = (
-            extensions_staging_dir or _default_extensions_staging_dir()
-        )
+        root = staging_root or _default_staging_root()
+        self._staging_dirs = {
+            "browser": appcast_staging_dir or root / "browser",
+            "server": appcast_staging_dir or root / "server",
+            "extensions": extensions_staging_dir or root / "extensions",
+        }
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     @property
@@ -208,12 +197,7 @@ class FeedPublisher:
         return self._client
 
     def fetch_live(self, key: str) -> Optional[str]:
-        """Live object content from R2 (authoritative — CDN caches xml 60s).
-
-        Decodes with errors="replace": a binary/corrupt live object must
-        still read as "exists" so the guard fails closed and the backup runs,
-        rather than being mistaken for a first publish.
-        """
+        """Read authoritative live content while preserving corrupt objects."""
         try:
             response = self.client.get_object(Bucket=self.env.r2_bucket, Key=key)
             return response["Body"].read().decode("utf-8", errors="replace")
@@ -222,9 +206,60 @@ class FeedPublisher:
 
     def staging_path(self, spec: FeedSpec) -> Path:
         basename = spec.key.rsplit("/", 1)[-1]
-        if spec.kind == "extensions":
-            return self._extensions_staging_dir / basename
-        return self._appcast_staging_dir / basename
+        try:
+            directory = self._staging_dirs[spec.kind]
+        except KeyError as e:
+            raise ValueError(f"Unknown feed kind: {spec.kind}") from e
+        return directory / basename
+
+    def publish_staged(
+        self,
+        keys: Sequence[str],
+        publish: bool = False,
+        allow_downgrade: bool = False,
+    ) -> bool:
+        """Publish selected files from the tracked updates directory."""
+        unique_keys = list(dict.fromkeys(keys))
+        if not unique_keys:
+            log_error("Select at least one feed key")
+            return False
+
+        try:
+            specs = [feed_by_key(key) for key in unique_keys]
+        except ValueError as e:
+            log_error(str(e))
+            return False
+
+        staged = []
+        for spec in specs:
+            path = self.staging_path(spec)
+            try:
+                content = path.read_text()
+            except (OSError, UnicodeError) as e:
+                log_error(f"{spec.key}: cannot read local feed {path}: {e}")
+                return False
+            staged.append((spec, content))
+
+        if publish:
+            for spec, content in staged:
+                if not self.publish(
+                    spec,
+                    content,
+                    allow_downgrade=allow_downgrade,
+                    verbose=False,
+                    stage=False,
+                ):
+                    return False
+
+        for spec, content in staged:
+            if not self.publish(
+                spec,
+                content,
+                publish=publish,
+                allow_downgrade=allow_downgrade,
+            ):
+                return False
+        return True
 
     def publish(
         self,
@@ -235,13 +270,7 @@ class FeedPublisher:
         verbose: bool = True,
         stage: bool = True,
     ) -> bool:
-        """Run the rails for one feed; write only when publish=True.
-
-        verbose=False keeps the rails (and their errors) but skips the
-        content/diff dump — for preflight passes that precede a real write.
-        stage=False lets multi-file publishers validate every feed before
-        writing any local staging files.
-        """
+        """Validate one feed and write only when publish is true."""
         log_info(f"\n── {spec.key} " + "─" * max(0, 50 - len(spec.key)))
 
         if not spec.publishable:
@@ -333,11 +362,7 @@ class FeedPublisher:
         return True
 
     def _check_channel_metadata(self, spec: FeedSpec, content: str) -> bool:
-        """Rendered/provided content must carry this spec's channel identity.
-
-        This is the rail that makes the historical failure — an alpha file
-        byte-copied onto the prod key — impossible to publish.
-        """
+        """Require content to carry the selected channel identity."""
         if spec.kind in ("browser", "server"):
             title, link = extract_channel_metadata(content)
             if title != spec.title or link != spec.link:

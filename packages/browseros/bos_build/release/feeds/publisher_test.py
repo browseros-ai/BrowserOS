@@ -100,8 +100,7 @@ class PublisherTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
-        self.appcast_staging = root / "config" / "appcast"
-        self.extensions_staging = root / "updates" / "extensions"
+        self.staging_root = root / "updates"
         self.head_calls = []
 
     def _publisher(self, objects=None, head_status=200):
@@ -117,9 +116,32 @@ class PublisherTestCase(unittest.TestCase):
             env=SimpleNamespace(r2_bucket="browseros"),
             r2_client=self.client,
             http_head=fake_head,
-            appcast_staging_dir=self.appcast_staging,
-            extensions_staging_dir=self.extensions_staging,
+            staging_root=self.staging_root,
             now=lambda: FIXED_NOW,
+        )
+
+    def _write_staged(self, publisher, key, content):
+        path = publisher.staging_path(feed_by_key(key))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return path
+
+    def test_staging_path_routes_each_feed_kind(self):
+        publisher = self._publisher()
+
+        self.assertEqual(
+            publisher.staging_path(feed_by_key("appcast.xml")),
+            self.staging_root / "browser" / "appcast.xml",
+        )
+        self.assertEqual(
+            publisher.staging_path(feed_by_key("appcast-server.xml")),
+            self.staging_root / "server" / "appcast-server.xml",
+        )
+        self.assertEqual(
+            publisher.staging_path(
+                feed_by_key("extensions/bundled-manifest.xml")
+            ),
+            self.staging_root / "extensions" / "bundled-manifest.xml",
         )
 
     def test_dry_run_stages_without_r2_writes(self):
@@ -131,7 +153,7 @@ class PublisherTestCase(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
-        staged = self.appcast_staging / "appcast.xml"
+        staged = self.staging_root / "browser" / "appcast.xml"
         self.assertEqual(staged.read_text(), _mac_appcast())
 
     def test_dry_run_stage_false_does_not_write_staging_file(self):
@@ -145,7 +167,9 @@ class PublisherTestCase(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
-        self.assertFalse((self.appcast_staging / "appcast.xml").exists())
+        self.assertFalse(
+            (self.staging_root / "browser" / "appcast.xml").exists()
+        )
 
     def test_publish_backs_up_live_before_put(self):
         live = _mac_appcast("10000.0.46.0.0").encode()
@@ -163,7 +187,7 @@ class PublisherTestCase(unittest.TestCase):
                 ("put", "appcast.xml", "application/xml"),
             ],
         )
-        staged = self.appcast_staging / "appcast.xml"
+        staged = self.staging_root / "browser" / "appcast.xml"
         self.assertEqual(staged.read_text(), _mac_appcast())
 
     def test_publish_without_live_object_skips_backup(self):
@@ -188,7 +212,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
         self.assertEqual(
-            (self.appcast_staging / "appcast.xml").read_text(),
+            (self.staging_root / "browser" / "appcast.xml").read_text(),
             _mac_appcast(),
         )
 
@@ -366,7 +390,7 @@ class PublisherTestCase(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
-        self.assertFalse(self.appcast_staging.exists())
+        self.assertFalse((self.staging_root / "browser").exists())
 
     def test_downgrade_allowed_with_flag(self):
         publisher = self._publisher(
@@ -403,7 +427,6 @@ class PublisherTestCase(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_channel_metadata_mismatch_refused(self):
-        # The alpha→prod byte-copy bug: alpha-rendered content on the prod key.
         alpha_content = render_server_appcast(
             server_feed("browseros-server", "alpha"),
             "0.0.9",
@@ -497,8 +520,61 @@ class PublisherTestCase(unittest.TestCase):
             self.client.calls,
             [("put", "extensions/extensions.alpha.json", "application/json")],
         )
-        staged = self.extensions_staging / "extensions.alpha.json"
+        staged = self.staging_root / "extensions" / "extensions.alpha.json"
         self.assertTrue(staged.exists())
+
+    def test_publish_staged_preflights_full_batch_before_live_writes(self):
+        publisher = self._publisher()
+        self._write_staged(publisher, "appcast.xml", _mac_appcast())
+        self._write_staged(
+            publisher,
+            "appcast-x86_64.xml",
+            "<rss><channel>",
+        )
+
+        ok = publisher.publish_staged(
+            ["appcast.xml", "appcast-x86_64.xml"], publish=True
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_publish_staged_defaults_to_dry_run(self):
+        publisher = self._publisher()
+        key = "extensions/extensions.alpha.json"
+        self._write_staged(publisher, key, render_extensions_json("alpha"))
+
+        self.assertTrue(publisher.publish_staged([key]))
+
+        self.assertEqual(self.client.calls, [])
+
+    def test_publish_staged_writes_after_successful_preflight(self):
+        publisher = self._publisher()
+        key = "extensions/extensions.alpha.json"
+        self._write_staged(publisher, key, render_extensions_json("alpha"))
+
+        self.assertTrue(publisher.publish_staged([key], publish=True))
+
+        self.assertEqual(
+            self.client.calls,
+            [("put", key, "application/json")],
+        )
+
+    def test_publish_staged_refuses_unknown_key_before_rails(self):
+        publisher = self._publisher()
+
+        with mock.patch.object(publisher, "publish") as publish:
+            self.assertFalse(publisher.publish_staged(["unknown.xml"]))
+
+        publish.assert_not_called()
+
+    def test_publish_staged_refuses_missing_local_file_before_rails(self):
+        publisher = self._publisher()
+
+        with mock.patch.object(publisher, "publish") as publish:
+            self.assertFalse(publisher.publish_staged(["appcast.xml"]))
+
+        publish.assert_not_called()
 
     def test_malformed_new_content_refused(self):
         publisher = self._publisher()

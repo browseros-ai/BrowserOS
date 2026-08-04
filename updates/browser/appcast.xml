@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+  xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BrowserOS</title>
+    <link>https://cdn.browseros.com/appcast.xml</link>
+    <description>Most recent changes with links to updates.</description>
+    <language>en</language>
+
+    <!-- Updates -->
+    <item>
+      <title>BrowserOS - 0.46.25</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>7948.97</sparkle:version>
+      <sparkle:shortVersionString>0.46.25</sparkle:shortVersionString>
+      <pubDate>Fri, 19 Jun 2026 06:41:33 +0000</pubDate>
+      <link>https://browseros.com</link>
+      <enclosure
+        url="http://cdn.browseros.com/releases/0.46.25/macos/BrowserOS_v0.46.25_arm64.dmg"
+        sparkle:edSignature="ydNC6ps5NgWLDjHaEfGfUcSKTrAZ0ltzHjMGsTeIziYtRe69kC7DHCP3229kH9FAb1pBj8AcazQdau3GMFDACg=="
+        length="265462841"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+    </item>
+
+  </channel>
+</rss>

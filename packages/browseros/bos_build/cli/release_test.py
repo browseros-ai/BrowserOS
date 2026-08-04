@@ -3,8 +3,11 @@
 
 import re
 import os
+import subprocess
+import tempfile
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,6 +15,7 @@ from typer.testing import CliRunner
 
 from bos_build.browseros import app
 from bos_build.cli import release as release_cli
+from bos_build.cli import release_feeds
 from bos_build.release import github as github_module
 from bos_build.release import publish as publish_module
 
@@ -128,6 +132,99 @@ class ReleaseVersionRequiredTest(unittest.TestCase):
 
     def test_download_requires_version(self):
         self.assertNotEqual(invoke("download").exit_code, 0)
+
+
+class FeedPublisherCliTest(unittest.TestCase):
+    def test_publish_local_defaults_to_dry_run(self):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(release_feeds, "FeedPublisher") as publisher,
+        ):
+            publisher.return_value.publish_staged.return_value = True
+
+            result = invoke(
+                "feeds",
+                "publish-local",
+                "appcast.xml",
+                "extensions/bundled-manifest.xml",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        publisher.return_value.publish_staged.assert_called_once_with(
+            ["appcast.xml", "extensions/bundled-manifest.xml"],
+            publish=False,
+            allow_downgrade=False,
+        )
+
+    def test_publish_local_forwards_explicit_write_flags(self):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(release_feeds, "FeedPublisher") as publisher,
+        ):
+            publisher.return_value.publish_staged.return_value = True
+
+            result = invoke(
+                "feeds",
+                "publish-local",
+                "appcast.xml",
+                "--publish",
+                "--allow-downgrade",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        publisher.return_value.publish_staged.assert_called_once_with(
+            ["appcast.xml"],
+            publish=True,
+            allow_downgrade=True,
+        )
+
+    def test_publish_local_failure_exits_nonzero(self):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(release_feeds, "FeedPublisher") as publisher,
+        ):
+            publisher.return_value.publish_staged.return_value = False
+
+            result = invoke("feeds", "publish-local", "unknown.xml")
+
+        self.assertNotEqual(result.exit_code, 0)
+
+    def test_upload_menu_expands_grouped_extension_choices(self):
+        repo_root = Path(__file__).resolve().parents[4]
+        upload_script = repo_root / "updates" / "upload.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            capture = tmp_path / "args"
+            fake_uv = tmp_path / "uv"
+            fake_uv.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE"\n'
+            )
+            fake_uv.chmod(0o755)
+            env = {
+                **os.environ,
+                "CAPTURE": str(capture),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            }
+
+            result = subprocess.run(
+                ["bash", str(upload_script)],
+                input="13,15\nn\n",
+                text=True,
+                capture_output=True,
+                cwd=tmp_path,
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(
+                capture.read_text().splitlines(),
+                [
+                    "run browseros release feeds publish-local "
+                    "extensions/extensions.json "
+                    "extensions/update-manifest.xml "
+                    "extensions/bundled-manifest.xml"
+                ],
+            )
 
 
 class CreateReleaseContextTest(unittest.TestCase):
