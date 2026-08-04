@@ -251,7 +251,7 @@ describe('Cockpit (v2)', () => {
     expect(firstRun).toContain('You watch. Your agent')
     expect(firstRun).toContain('Set up MCP endpoint')
     expect(firstRun).toContain(
-      'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
+      'https://cdn.browseros.com/artifacts/claw/onboarding-recording/video.mp4',
     )
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
