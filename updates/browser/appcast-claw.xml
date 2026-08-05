@@ -1,11 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-  xmlns:dc="http://purl.org/dc/elements/1.1/">
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>BrowserOS neo</title>
+    <title>BrowserClaw</title>
     <link>https://cdn.browseros.com/appcast-claw.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
+
+    <item>
+      <title>BrowserClaw - 0.48.1</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>10000.0.48.1.0</sparkle:version>
+      <sparkle:shortVersionString>0.48.1</sparkle:shortVersionString>
+      <pubDate>Wed, 22 Jul 2026 21:02:28 +0000</pubDate>
+      <link>https://www.browseros.com/</link>
+      <enclosure
+        url="http://cdn.browseros.com/releases/browserclaw/0.48.1/macos/BrowserClaw_v0.48.1_universal.dmg"
+        sparkle:edSignature="zC2UWP3BfH9YSGZJg5fM+tHL6mKy9i44t4+HTvPe0YcI7ccgCzX2D48Dqbj2yUUAMdWKnAJHyVDLK8950oC8Bw=="
+        length="271543676"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+    </item>
 
   </channel>
 </rss>
