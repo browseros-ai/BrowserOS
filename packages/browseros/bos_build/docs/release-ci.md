@@ -265,7 +265,8 @@ Production server promotion remains explicit.
 
 A bare dispatch of either standalone server workflow defaults
 `publish_ota=true`. After finalization has updated every resource `latest` alias,
-the workflow generates all five alpha OTA payloads, publishes the product's
+the workflow signs macOS and Windows payloads on native runners, generates both
+Linux payloads, requires all five appcast fragments, publishes the product's
 live alpha appcast through the guarded feed publisher, and commits the deployed
 snapshot under `updates/server/`. Pass `publish_ota=false` only when a
 standalone run should stop after component finalization. Reusable calls remain
@@ -273,7 +274,8 @@ opt-in, and the release tag created by finalization cannot enter the OTA
 publication job.
 
 Promote the live alpha appcast to production only with the product-specific
-`browseros ota server promote --publish` command.
+`browseros ota server promote --product <browseros|browserclaw> --publish`
+command.
 
 The server finalizers also enforce monotonic publication. If a newer version
 became public while browsers were building, an older prepared release cannot

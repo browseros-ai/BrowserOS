@@ -170,9 +170,15 @@ describe('release-claw-server-rust workflow', () => {
     expect(ota).toContain('- finalize')
     expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
+    expect(ota).toContain('product: browserclaw')
     expect(ota).toContain(
-      'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
+      `version: ${dollar}{{ needs.prepare.outputs.version }}`,
     )
+    expect(ota).toContain(
+      `release_sha: ${dollar}{{ needs.prepare.outputs.release_sha }}`,
+    )
+    expect(ota).toContain('secrets: inherit')
   })
 
   it('publishes and persists standalone alpha releases by default', () => {
@@ -181,21 +187,8 @@ describe('release-claw-server-rust workflow', () => {
     expect(dispatch).toContain('publish_ota:')
     expect(dispatch).toContain('default: true')
     expect(browserclawWorkflow.match(/publish_ota: false/g)).toHaveLength(2)
-    expect(ota).toContain(
-      'uv run browseros ota server release-appcast --channel alpha --product browserclaw --publish',
-    )
-    expect(ota).toContain(
-      'packages/browseros-agent/scripts/release/commit-update-snapshot.sh',
-    )
     expect(ota).toContain('updates/server/appcast-claw-server.alpha.xml')
     expect(ota).not.toContain('updates/server/appcast-server.alpha.xml')
-    expect(ota).not.toContain('--channel prod')
-
-    const generateIndex = ota.indexOf('ota server release --version')
-    const publishIndex = ota.indexOf('ota server release-appcast')
-    const snapshotIndex = ota.indexOf('commit-update-snapshot.sh')
-    expect(publishIndex).toBeGreaterThan(generateIndex)
-    expect(snapshotIndex).toBeGreaterThan(publishIndex)
   })
 
   it('reflects the version only after finalization', () => {
