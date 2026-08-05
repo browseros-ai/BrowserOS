@@ -336,7 +336,7 @@ export class ChatService {
           totalMessages: session.agent.messages.length,
         })
 
-        if (session?.scheduledPageId) {
+        if (session.scheduledPageId) {
           const pageId = session.scheduledPageId
           session.scheduledPageId = undefined
           this.closeScheduledPage(pageId, request.conversationId)
