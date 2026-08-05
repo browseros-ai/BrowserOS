@@ -34,9 +34,11 @@ describe('release-extensions workflow', () => {
     expect(call).toMatch(/version:[\s\S]*required: false/)
     expect(call).toMatch(/mode:[\s\S]*default: "build"/)
     expect(call).toMatch(/defer_finalize:[\s\S]*default: false/)
-    expect(call).toContain('value: ${{ jobs.prepare.outputs.version }}')
-    expect(call).toContain('value: ${{ jobs.prepare.outputs.tag }}')
-    expect(call).toContain('value: ${{ jobs.prepare.outputs.release_sha }}')
+    expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.version }}`)
+    expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.tag }}`)
+    expect(call).toContain(
+      `value: ${'$'}{{ jobs.prepare.outputs.release_sha }}`,
+    )
   })
 
   it('reserves only private drafts before the extension build', () => {
@@ -73,7 +75,9 @@ describe('release-extensions workflow', () => {
     expect(build).toContain('gh release upload')
     expect(build).toContain('needs.prepare.outputs.version')
     expect(build).toContain('needs.prepare.outputs.release_sha')
-    expect(build).toContain('${{ github.run_id }}-${{ github.run_attempt }}')
+    expect(build).toContain(
+      `${'$'}{{ github.run_id }}-${'$'}{{ github.run_attempt }}`,
+    )
     expect(build.indexOf('browseros ext release')).toBeLessThan(
       build.indexOf('gh release upload'),
     )
@@ -125,7 +129,7 @@ describe('release-extensions workflow', () => {
     const start = browserClawWorkflow.indexOf(
       '- name: Validate selected lane configuration',
     )
-    const end = browserClawWorkflow.indexOf('  server_browserclaw:', start)
+    const end = browserClawWorkflow.indexOf('  build_onboarding:', start)
     expect(start).toBeGreaterThanOrEqual(0)
     expect(end).toBeGreaterThan(start)
     const preflight = browserClawWorkflow.slice(start, end)
