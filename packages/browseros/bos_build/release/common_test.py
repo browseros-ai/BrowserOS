@@ -126,6 +126,22 @@ class ReleaseContractTest(unittest.TestCase):
                 workflow_run_attempt="1",
             )
 
+    def test_one_run_accepts_platforms_from_different_rerun_attempts(self):
+        self.metadata["win"]["workflow_run_attempt"] = "2"
+
+        selected = validate_release_metadata(
+            self.metadata,
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="all",
+            macos_arch="universal",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+        )
+
+        self.assertEqual(selected["linux"]["workflow_run_attempt"], "1")
+        self.assertEqual(selected["win"]["workflow_run_attempt"], "2")
+
     def test_missing_or_extra_artifact_keys_are_rejected(self):
         del self.metadata["win"]["artifacts"]["x64_zip"]
         self.metadata["win"]["artifacts"]["arm64_zip"] = {
@@ -259,7 +275,12 @@ class ListAllVersionsTest(unittest.TestCase):
     def test_paginates_truncated_listings(self):
         prefix = "releases/browseros/"
         client = _FakeR2Client(
-            {prefix: [_page(prefix, ["0.29.0"], next_token=1), _page(prefix, ["0.31.0"])]}
+            {
+                prefix: [
+                    _page(prefix, ["0.29.0"], next_token=1),
+                    _page(prefix, ["0.31.0"]),
+                ]
+            }
         )
 
         with mock.patch.object(common, "get_r2_client", return_value=client):
