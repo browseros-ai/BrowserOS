@@ -154,6 +154,7 @@ class FeedPublisherCliTest(unittest.TestCase):
             ["appcast.xml", "extensions/bundled-manifest.xml"],
             publish=False,
             allow_downgrade=False,
+            repair_invalid_live=False,
         )
 
     def test_publish_local_forwards_explicit_write_flags(self):
@@ -176,6 +177,52 @@ class FeedPublisherCliTest(unittest.TestCase):
             ["appcast.xml"],
             publish=True,
             allow_downgrade=True,
+            repair_invalid_live=False,
+        )
+
+    def test_publish_local_forwards_repair_flag_without_implying_publish(self):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(release_feeds, "FeedPublisher") as publisher,
+        ):
+            publisher.return_value.publish_staged.return_value = True
+
+            result = invoke(
+                "feeds",
+                "publish-local",
+                "appcast-server.xml",
+                "--repair-invalid-live",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        publisher.return_value.publish_staged.assert_called_once_with(
+            ["appcast-server.xml"],
+            publish=False,
+            allow_downgrade=False,
+            repair_invalid_live=True,
+        )
+
+    def test_publish_local_forwards_repair_and_publish_independently(self):
+        with (
+            _configured_r2_env(),
+            mock.patch.object(release_feeds, "FeedPublisher") as publisher,
+        ):
+            publisher.return_value.publish_staged.return_value = True
+
+            result = invoke(
+                "feeds",
+                "publish-local",
+                "appcast-server.xml",
+                "--repair-invalid-live",
+                "--publish",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        publisher.return_value.publish_staged.assert_called_once_with(
+            ["appcast-server.xml"],
+            publish=True,
+            allow_downgrade=False,
+            repair_invalid_live=True,
         )
 
     def test_publish_local_failure_exits_nonzero(self):
@@ -196,9 +243,7 @@ class FeedPublisherCliTest(unittest.TestCase):
             tmp_path = Path(tmp)
             capture = tmp_path / "args"
             fake_uv = tmp_path / "uv"
-            fake_uv.write_text(
-                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE"\n'
-            )
+            fake_uv.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CAPTURE"\n')
             fake_uv.chmod(0o755)
             env = {
                 **os.environ,
@@ -224,6 +269,26 @@ class FeedPublisherCliTest(unittest.TestCase):
                     "extensions/update-manifest.xml "
                     "extensions/bundled-manifest.xml"
                 ],
+            )
+            script = upload_script.read_text()
+            self.assertNotIn("--repair-invalid-live", script)
+            self.assertNotIn("--allow-downgrade", script)
+
+    def test_repair_flag_is_absent_from_routine_commands_and_workflows(self):
+        self.assertNotIn(
+            "--repair-invalid-live", plain_output(invoke("appcast", "--help"))
+        )
+        self.assertNotIn(
+            "--repair-invalid-live", plain_output(invoke("extensions", "--help"))
+        )
+        repo_root = Path(__file__).resolve().parents[4]
+        for workflow in (
+            "release-browseros.yml",
+            "release-browserclaw.yml",
+        ):
+            self.assertNotIn(
+                "--repair-invalid-live",
+                (repo_root / ".github" / "workflows" / workflow).read_text(),
             )
 
 
@@ -472,8 +537,7 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
     def test_contracted_refresh_reconciles_and_verifies_exact_assets(self):
         metadata = _github_metadata()
         expected = {
-            artifact["filename"]
-            for artifact in metadata["win"]["artifacts"].values()
+            artifact["filename"] for artifact in metadata["win"]["artifacts"].values()
         }
         initial_assets = [sorted(expected)[0]]
         with (

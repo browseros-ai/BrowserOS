@@ -2,7 +2,9 @@
 """Publish update feeds through validation, backups, and downgrade guards."""
 
 import difflib
+import hashlib
 import json
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +34,12 @@ from .spec import (
 
 BACKUP_PREFIX = "feeds-history"
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+_SPARKLE_VERSION_RE = re.compile(
+    r"<sparkle:version\s*>\s*([0-9]+(?:\.[0-9]+)*)\s*</sparkle:version\s*>"
+)
+_APP_BLOCK_RE = re.compile(r"<app\b([^>]*)>(.*?)</app\s*>", re.DOTALL)
+_APP_ID_RE = re.compile(r'\bappid\s*=\s*["\']([^"\']+)["\']')
+_VERSION_ATTR_RE = re.compile(r'\bversion\s*=\s*["\']([0-9]+(?:\.[0-9]+)*)["\']')
 
 
 def _xml_local_name(tag: str) -> str:
@@ -49,11 +57,31 @@ def _strict_dotted_version(value: Optional[str]) -> Optional[tuple[int, ...]]:
     return tuple(int(part) for part in parts)
 
 
+def _content_sha256(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _recover_appcast_versions(content: str) -> List[str]:
+    return [match.group(1) for match in _SPARKLE_VERSION_RE.finditer(content)]
+
+
+def _recover_manifest_versions(content: str) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for block in _APP_BLOCK_RE.finditer(content):
+        app_id = _APP_ID_RE.search(block.group(1))
+        version = _VERSION_ATTR_RE.search(block.group(2))
+        if app_id is None or version is None:
+            continue
+        previous = versions.get(app_id.group(1))
+        if previous is not None and previous != version.group(1):
+            return {}
+        versions[app_id.group(1)] = version.group(1)
+    return versions
+
+
 def _has_single_direct_channel(root: ET.Element) -> bool:
     channels = [
-        element
-        for element in root.iter()
-        if _xml_local_name(element.tag) == "channel"
+        element for element in root.iter() if _xml_local_name(element.tag) == "channel"
     ]
     return (
         len(channels) == 1
@@ -72,19 +100,13 @@ def _strict_appcast_versions(content: str) -> Optional[List[str]]:
         return None
 
     channel = next(
-        element
-        for element in root
-        if _xml_local_name(element.tag) == "channel"
+        element for element in root if _xml_local_name(element.tag) == "channel"
     )
     direct_items = [
-        element
-        for element in channel
-        if _xml_local_name(element.tag) == "item"
+        element for element in channel if _xml_local_name(element.tag) == "item"
     ]
     all_items = [
-        element
-        for element in root.iter()
-        if _xml_local_name(element.tag) == "item"
+        element for element in root.iter() if _xml_local_name(element.tag) == "item"
     ]
     if len(all_items) != len(direct_items) or any(
         item not in direct_items for item in all_items
@@ -94,15 +116,71 @@ def _strict_appcast_versions(content: str) -> Optional[List[str]]:
     versions: List[str] = []
     version_tag = f"{{{SPARKLE_NS}}}version"
     for item in direct_items:
-        version_elements = [
-            element for element in item if element.tag == version_tag
-        ]
+        version_elements = [element for element in item if element.tag == version_tag]
         if len(version_elements) != 1:
             return None
         value = version_elements[0].text
         if _strict_dotted_version(value) is None:
             return None
         versions.append(value.strip())
+    return versions
+
+
+def _has_complete_appcast_download_urls(content: str) -> bool:
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return False
+    if root.tag != "rss" or not _has_single_direct_channel(root):
+        return False
+
+    channel = next(
+        element for element in root if _xml_local_name(element.tag) == "channel"
+    )
+    items = [element for element in channel if _xml_local_name(element.tag) == "item"]
+    if not items:
+        return False
+    for item in items:
+        enclosures = [
+            element for element in item if _xml_local_name(element.tag) == "enclosure"
+        ]
+        if not enclosures or any(
+            not (enclosure.get("url") or "").strip() for enclosure in enclosures
+        ):
+            return False
+    return True
+
+
+def _strict_manifest_versions(content: str) -> Optional[dict[str, str]]:
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return None
+    if _xml_local_name(root.tag) != "gupdate":
+        return None
+
+    apps = [element for element in root if _xml_local_name(element.tag) == "app"]
+    all_apps = [
+        element for element in root.iter() if _xml_local_name(element.tag) == "app"
+    ]
+    if not apps or len(apps) != len(all_apps):
+        return None
+
+    versions: dict[str, str] = {}
+    for app in apps:
+        app_id = app.get("appid")
+        updatechecks = [
+            element for element in app if _xml_local_name(element.tag) == "updatecheck"
+        ]
+        if not app_id or len(updatechecks) != 1:
+            return None
+        version = updatechecks[0].get("version")
+        codebase = updatechecks[0].get("codebase")
+        if _strict_dotted_version(version) is None or not (codebase or "").strip():
+            return None
+        if app_id in versions:
+            return None
+        versions[app_id] = version.strip()
     return versions
 
 
@@ -117,28 +195,20 @@ def _is_empty_appcast_shell(content: str) -> bool:
     if not _has_single_direct_channel(root):
         return False
     channel = next(
-        element
-        for element in root
-        if _xml_local_name(element.tag) == "channel"
+        element for element in root if _xml_local_name(element.tag) == "channel"
     )
     direct_items = [
-        element
-        for element in channel
-        if _xml_local_name(element.tag) == "item"
+        element for element in channel if _xml_local_name(element.tag) == "item"
     ]
     all_items = [
-        element
-        for element in root.iter()
-        if _xml_local_name(element.tag) == "item"
+        element for element in root.iter() if _xml_local_name(element.tag) == "item"
     ]
     if len(all_items) != len(direct_items) or any(
         item not in direct_items for item in all_items
     ):
         return False
     return all(
-        not item.attrib
-        and not list(item)
-        and not (item.text or "").strip()
+        not item.attrib and not list(item) and not (item.text or "").strip()
         for item in direct_items
     )
 
@@ -217,6 +287,7 @@ class FeedPublisher:
         keys: Sequence[str],
         publish: bool = False,
         allow_downgrade: bool = False,
+        repair_invalid_live: bool = False,
     ) -> bool:
         """Publish selected files from the tracked updates directory."""
         unique_keys = list(dict.fromkeys(keys))
@@ -246,6 +317,7 @@ class FeedPublisher:
                     spec,
                     content,
                     allow_downgrade=allow_downgrade,
+                    repair_invalid_live=repair_invalid_live,
                     verbose=False,
                     stage=False,
                 ):
@@ -257,6 +329,7 @@ class FeedPublisher:
                 content,
                 publish=publish,
                 allow_downgrade=allow_downgrade,
+                repair_invalid_live=repair_invalid_live,
             ):
                 return False
         return True
@@ -267,6 +340,7 @@ class FeedPublisher:
         content: str,
         publish: bool = False,
         allow_downgrade: bool = False,
+        repair_invalid_live: bool = False,
         verbose: bool = True,
         stage: bool = True,
     ) -> bool:
@@ -279,7 +353,7 @@ class FeedPublisher:
                 f"product-aware sparkle_glue update URLs has not landed, so "
                 f"no shipped {spec.product} client polls this key."
             )
-            if publish:
+            if publish or repair_invalid_live:
                 log_error(message)
                 return False
             log_warning(f"DRY-RUN ONLY — {message}")
@@ -296,13 +370,29 @@ class FeedPublisher:
             if not new_versions:
                 self._log_appcast_version_error(spec, content)
                 return False
+            if not _has_complete_appcast_download_urls(content):
+                log_error(
+                    f"{spec.key}: every appcast item must have an enclosure "
+                    "and every enclosure must have a download URL"
+                )
+                return False
+        elif spec.key.endswith(".xml") and _strict_manifest_versions(content) is None:
+            log_error(
+                f"{spec.key}: manifest must contain only complete, strictly "
+                "versioned extension entries"
+            )
+            return False
 
         if not self._check_download_urls(spec, content):
             return False
 
         live = self.fetch_live(spec.key)
         if live is not None and not self._check_version_guard(
-            spec, content, live, allow_downgrade
+            spec,
+            content,
+            live,
+            allow_downgrade,
+            repair_invalid_live,
         ):
             return False
 
@@ -385,9 +475,7 @@ class FeedPublisher:
                 log_error(f"{spec.key}: 'extensions' is not an object")
                 return False
             urls = {
-                config.get("external_update_url")
-                if isinstance(config, dict)
-                else None
+                config.get("external_update_url") if isinstance(config, dict) else None
                 for config in extensions.values()
             }
             if urls - {expected}:
@@ -409,24 +497,45 @@ class FeedPublisher:
             status = self.http_head(url)
             if status != 200:
                 log_error(
-                    f"{spec.key}: download URL check failed "
-                    f"(HTTP {status}): {url}"
+                    f"{spec.key}: download URL check failed (HTTP {status}): {url}"
                 )
                 return False
         return True
 
     def _check_version_guard(
-        self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool
+        self,
+        spec: FeedSpec,
+        content: str,
+        live: str,
+        allow_downgrade: bool,
+        repair_invalid_live: bool = False,
     ) -> bool:
         if spec.key.endswith(".json"):
             return True
 
         if spec.kind in ("browser", "server"):
-            return self._guard_appcast_version(spec, content, live, allow_downgrade)
-        return self._guard_manifest_versions(spec, content, live, allow_downgrade)
+            return self._guard_appcast_version(
+                spec,
+                content,
+                live,
+                allow_downgrade,
+                repair_invalid_live,
+            )
+        return self._guard_manifest_versions(
+            spec,
+            content,
+            live,
+            allow_downgrade,
+            repair_invalid_live,
+        )
 
     def _guard_appcast_version(
-        self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool
+        self,
+        spec: FeedSpec,
+        content: str,
+        live: str,
+        allow_downgrade: bool,
+        repair_invalid_live: bool = False,
     ) -> bool:
         new_versions = _strict_appcast_versions(content)
         if not new_versions:
@@ -437,29 +546,76 @@ class FeedPublisher:
             key=lambda value: tuple(int(part) for part in value.split(".")),
         )
 
-        if not self._check_well_formed(spec, live):
-            return False
         try:
             live_root = ET.fromstring(live)
         except ET.ParseError:
+            if repair_invalid_live:
+                return self._repair_invalid_appcast(
+                    spec,
+                    content,
+                    live,
+                    new_version,
+                    "malformed live appcast XML",
+                    allow_downgrade,
+                )
+            self._check_well_formed(spec, live)
             return False
         if not _has_single_direct_channel(live_root):
+            reason = "live appcast does not have one direct channel"
+            if repair_invalid_live:
+                return self._repair_invalid_appcast(
+                    spec,
+                    content,
+                    live,
+                    new_version,
+                    reason,
+                    allow_downgrade,
+                )
             log_error(
                 f"{spec.key}: live appcast must contain exactly one direct "
                 "<channel>; refusing to publish."
             )
             return False
-        if not self._check_channel_metadata(spec, live):
+        title, link = extract_channel_metadata(live)
+        if title != spec.title or link != spec.link:
+            reason = f"live channel metadata mismatch (title={title!r}, link={link!r})"
+            if repair_invalid_live:
+                live_versions = _strict_appcast_versions(live)
+                if not live_versions:
+                    log_error(
+                        f"{spec.key}: wrong-channel live appcast has no "
+                        "strict version; refusing repair."
+                    )
+                    return False
+                return self._repair_invalid_appcast(
+                    spec,
+                    content,
+                    live,
+                    new_version,
+                    reason,
+                    allow_downgrade,
+                    require_live_version=True,
+                    known_live_versions=live_versions,
+                )
+            self._check_channel_metadata(spec, live)
             return False
 
         live_versions = _strict_appcast_versions(live)
         if not live_versions:
             if _is_empty_appcast_shell(live):
                 log_info(
-                    f"{spec.key}: live appcast is an empty shell "
-                    "(first population)"
+                    f"{spec.key}: live appcast is an empty shell (first population)"
                 )
                 return True
+            if repair_invalid_live:
+                return self._repair_invalid_appcast(
+                    spec,
+                    content,
+                    live,
+                    new_version,
+                    "live appcast has no strict version",
+                    allow_downgrade,
+                )
             return self._refuse_unguardable_live(spec, allow_downgrade)
         live_version = max(
             live_versions,
@@ -469,6 +625,52 @@ class FeedPublisher:
         return self._refuse_downgrade(
             spec, f"{spec.key}", new_version, live_version, allow_downgrade
         )
+
+    def _repair_invalid_appcast(
+        self,
+        spec: FeedSpec,
+        content: str,
+        live: str,
+        new_version: str,
+        reason: str,
+        allow_downgrade: bool,
+        require_live_version: bool = False,
+        known_live_versions: Optional[Sequence[str]] = None,
+    ) -> bool:
+        if not _has_complete_appcast_download_urls(content):
+            log_error(
+                f"{spec.key}: repair appcast has missing download URLs; "
+                "refusing to replace invalid live content."
+            )
+            return False
+
+        live_versions = (
+            list(known_live_versions)
+            if known_live_versions is not None
+            else _recover_appcast_versions(live)
+        )
+        if require_live_version and not live_versions:
+            log_error(
+                f"{spec.key}: wrong-channel live appcast has no recoverable "
+                "strict version; refusing repair."
+            )
+            return False
+        if live_versions:
+            live_version = max(
+                live_versions,
+                key=lambda value: tuple(int(part) for part in value.split(".")),
+            )
+            if not self._refuse_downgrade(
+                spec,
+                spec.key,
+                new_version,
+                live_version,
+                allow_downgrade,
+            ):
+                return False
+
+        self._log_repair_warning(spec, reason, live, content)
+        return True
 
     def _log_appcast_version_error(self, spec: FeedSpec, content: str) -> None:
         if extract_appcast_item_count(content) == 0:
@@ -488,19 +690,59 @@ class FeedPublisher:
             )
         else:
             log_error(
-                f"{spec.key}: new content has <item> entries but no "
-                "sparkle:version"
+                f"{spec.key}: new content has <item> entries but no sparkle:version"
             )
 
     def _guard_manifest_versions(
-        self, spec: FeedSpec, content: str, live: str, allow_downgrade: bool
+        self,
+        spec: FeedSpec,
+        content: str,
+        live: str,
+        allow_downgrade: bool,
+        repair_invalid_live: bool = False,
     ) -> bool:
         live_versions = extract_manifest_versions(live)
         if not live_versions:
+            if repair_invalid_live:
+                new_versions = _strict_manifest_versions(content)
+                if not new_versions:
+                    log_error(
+                        f"{spec.key}: repair manifest must contain only "
+                        "complete, strictly versioned extension entries."
+                    )
+                    return False
+                recovered = _recover_manifest_versions(live)
+                if recovered and not self._guard_manifest_version_maps(
+                    spec,
+                    new_versions,
+                    recovered,
+                    allow_downgrade,
+                ):
+                    return False
+                try:
+                    ET.fromstring(live)
+                    reason = "live manifest has no parseable versions"
+                except ET.ParseError:
+                    reason = "malformed live manifest XML"
+                self._log_repair_warning(spec, reason, live, content)
+                return True
             return self._refuse_unguardable_live(spec, allow_downgrade)
 
         new_versions = extract_manifest_versions(content)
+        return self._guard_manifest_version_maps(
+            spec,
+            new_versions,
+            live_versions,
+            allow_downgrade,
+        )
 
+    def _guard_manifest_version_maps(
+        self,
+        spec: FeedSpec,
+        new_versions: dict[str, str],
+        live_versions: dict[str, str],
+        allow_downgrade: bool,
+    ) -> bool:
         removed = sorted(set(live_versions) - set(new_versions))
         if removed:
             if not allow_downgrade:
@@ -525,9 +767,20 @@ class FeedPublisher:
                 return False
         return True
 
-    def _refuse_unguardable_live(
-        self, spec: FeedSpec, allow_downgrade: bool
-    ) -> bool:
+    def _log_repair_warning(
+        self,
+        spec: FeedSpec,
+        reason: str,
+        live: str,
+        content: str,
+    ) -> None:
+        log_warning(
+            f"REPAIR INVALID LIVE — {spec.key}: {reason}; "
+            f"old_sha256={_content_sha256(live)} "
+            f"new_sha256={_content_sha256(content)}"
+        )
+
+    def _refuse_unguardable_live(self, spec: FeedSpec, allow_downgrade: bool) -> bool:
         """A live object we cannot version-compare fails closed, not open."""
         if allow_downgrade:
             log_warning(
@@ -639,7 +892,7 @@ class FeedPublisher:
         if not keys:
             return None
         # Timestamps are fixed-width UTC, so lexical max is newest.
-        return max(keys)[len(prefix):]
+        return max(keys)[len(prefix) :]
 
     def _backup_live(self, key: str) -> bool:
         timestamp = self._now().strftime(_TIMESTAMP_FORMAT)

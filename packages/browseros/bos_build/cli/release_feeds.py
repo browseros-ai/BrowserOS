@@ -159,8 +159,7 @@ def feeds_status():
     statuses = FeedPublisher(env=env).collect_status()
 
     header = (
-        f"{'KEY':<42} {'KIND':<10} {'CHANNEL':<7} "
-        f"{'LIVE VERSION':<58} LAST PUBLISHED"
+        f"{'KEY':<42} {'KIND':<10} {'CHANNEL':<7} {'LIVE VERSION':<58} LAST PUBLISHED"
     )
     print(header)
     print("-" * len(header))
@@ -188,6 +187,11 @@ def feeds_publish_local(
         "--allow-downgrade",
         help="Override the version-downgrade guard",
     ),
+    repair_invalid_live: bool = typer.Option(
+        False,
+        "--repair-invalid-live",
+        help="Repair an invalid live object after monotonic safety checks",
+    ),
 ):
     """Validate or publish selected files from the tracked updates directory."""
     env = EnvConfig()
@@ -202,6 +206,7 @@ def feeds_publish_local(
         keys,
         publish=publish,
         allow_downgrade=allow_downgrade,
+        repair_invalid_live=repair_invalid_live,
     ):
         raise typer.Exit(1)
 

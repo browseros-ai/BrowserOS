@@ -33,6 +33,7 @@ def _appcast(bundle_id: str, channel: str, version: str | None = None) -> str:
         item = f"""
     <item>
       <sparkle:version>{version}</sparkle:version>
+      <enclosure url="https://cdn.browseros.com/server/test.zip" />
     </item>
 """
     return f"""\
@@ -83,9 +84,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         )
 
     def test_empty_default_feed_names_selection_and_hints_browserclaw(self):
-        self.paths["browseros-server"].write_text(
-            _appcast("browseros-server", "prod")
-        )
+        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
         self.paths["browserclaw-server"].write_text(
             _appcast("browserclaw-server", "prod", "0.0.12")
         )
@@ -119,9 +118,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         publisher_factory.assert_not_called()
 
     def test_missing_sibling_feed_does_not_mask_empty_error(self):
-        self.paths["browseros-server"].write_text(
-            _appcast("browseros-server", "prod")
-        )
+        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
 
         with (
             mock.patch.object(
@@ -146,9 +143,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
             mock.patch.object(
                 ota_cli, "get_appcast_path", side_effect=self._get_appcast_path
             ),
-            mock.patch.object(
-                ota_cli, "_feed_publisher", side_effect=self._publisher
-            ),
+            mock.patch.object(ota_cli, "_feed_publisher", side_effect=self._publisher),
         ):
             result = self._invoke("--product", "browserclaw")
 
