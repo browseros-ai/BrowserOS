@@ -35,7 +35,6 @@ _UPDATE_FEED_EXTENSION_NAMES = frozenset(
     extension.name for extension in FEED_EXTENSIONS if extension.in_update_feed
 )
 _UPDATE_MANIFEST_URL = f"{CDN_BASE_URL}/extensions/update-manifest.xml"
-_AUTO_VERSION_EXTENSION_NAMES = frozenset({"agent", "browserclaw"})
 _SOURCE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _CRX_BINDING_SCHEMA = "browseros-extension-crx-v1"
 
@@ -234,10 +233,10 @@ def resolve_extension_version(
     names = extension_names(extension)
     if requested_version:
         return normalize_extension_version(requested_version)
-    if len(names) != 1 or names[0] not in _AUTO_VERSION_EXTENSION_NAMES:
+    if len(names) != 1:
         raise ValueError(
-            f"Extension '{extension}' requires an explicit version; automatic "
-            "allocation is limited to agent and browserclaw"
+            f"Extension '{extension}' requires an explicit version shared by all "
+            "selected extensions"
         )
     if not release_sha:
         raise ValueError("Automatic extension version allocation requires a source SHA")

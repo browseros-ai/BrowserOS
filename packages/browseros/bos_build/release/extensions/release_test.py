@@ -280,19 +280,49 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
             ):
                 normalize_extension_version(version)
 
-    def test_all_and_external_extensions_refuse_automatic_versions(self) -> None:
-        for extension in ("all", "controller", "bugreporter"):
-            with (
-                self.subTest(extension=extension),
-                self.assertRaisesRegex(ValueError, "explicit version"),
-            ):
-                resolve_extension_version(
-                    extension=extension,
-                    requested_version="",
-                    release_sha="source",
-                    release_records=[],
-                    manifest_contents=[],
-                )
+    def test_external_extensions_allocate_automatic_versions(self) -> None:
+        self.assertEqual(
+            resolve_extension_version(
+                extension="bugreporter",
+                requested_version="",
+                release_sha="new-source",
+                release_records=[
+                    {
+                        "tag_name": "ext-bugreporter/v54.0.1.0",
+                        "release_sha": "old-source",
+                    }
+                ],
+                manifest_contents=[
+                    render_update_manifest({"bugreporter": "54.0.2.0"})
+                ],
+            ),
+            "54.0.3.0",
+        )
+        self.assertEqual(
+            resolve_extension_version(
+                extension="controller",
+                requested_version="",
+                release_sha="new-source",
+                release_records=[
+                    {
+                        "tag_name": "ext-controller/v2.3.4.0",
+                        "release_sha": "old-source",
+                    }
+                ],
+                manifest_contents=[],
+            ),
+            "2.3.5.0",
+        )
+
+    def test_all_requires_an_explicit_shared_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "explicit version"):
+            resolve_extension_version(
+                extension="all",
+                requested_version="",
+                release_sha="source",
+                release_records=[],
+                manifest_contents=[],
+            )
 
 
 class BoundCrxTest(unittest.TestCase):
