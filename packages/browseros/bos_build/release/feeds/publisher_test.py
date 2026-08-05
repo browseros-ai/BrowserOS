@@ -236,6 +236,17 @@ class PublisherTestCase(unittest.TestCase):
         staged = self.staging_root / "browser" / "appcast.xml"
         self.assertEqual(staged.read_text(), _mac_appcast())
 
+    def test_publish_identical_live_feed_is_idempotent(self):
+        content = _mac_appcast()
+        publisher = self._publisher({"appcast.xml": content.encode()})
+
+        ok = publisher.publish(feed_by_key("appcast.xml"), content, publish=True)
+
+        self.assertTrue(ok)
+        self.assertEqual(self.client.calls, [])
+        staged = self.staging_root / "browser" / "appcast.xml"
+        self.assertEqual(staged.read_text(), content)
+
     def test_publish_without_live_object_skips_backup(self):
         publisher = self._publisher()
 
@@ -984,7 +995,7 @@ class PublisherTestCase(unittest.TestCase):
                 repair_invalid_live=True,
             )
         )
-        self.assertEqual(len(self.client.calls), 4)
+        self.assertEqual(len(self.client.calls), 2)
 
         self.client.calls.clear()
         self.assertTrue(
@@ -994,7 +1005,7 @@ class PublisherTestCase(unittest.TestCase):
                 repair_invalid_live=True,
             )
         )
-        self.assertEqual(len(self.client.calls), 4)
+        self.assertEqual(self.client.calls, [])
 
     def test_repaired_snapshots_preserve_versions_and_original_payloads(self):
         updates = Path(__file__).resolve().parents[5] / "updates"

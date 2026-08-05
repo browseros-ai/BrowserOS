@@ -436,6 +436,11 @@ class FeedPublisher:
         ):
             return False
 
+        if publish and live == content:
+            staging = self.stage(spec, content)
+            log_success(f"Already published {spec.url} (staging: {staging})")
+            return True
+
         if verbose:
             self._print_content_and_diff(spec, content, live)
 
