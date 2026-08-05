@@ -68,9 +68,9 @@
       "name": "BrowserOS agent skill",
       "source": {
         "type": "local",
-        "path": "resources/skills/browserclaw/SKILL.md"
+        "path": "apps/server/resources/skills/browseros/SKILL.md"
       },
-      "destination": "resources/skills/browserclaw/SKILL.md"
+      "destination": "resources/skills/browseros/SKILL.md"
     }
   ]
 }

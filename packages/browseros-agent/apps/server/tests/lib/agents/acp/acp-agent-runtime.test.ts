@@ -30,7 +30,7 @@ import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
 
 const SKILL = [
   '---',
-  'name: browserclaw',
+  'name: browseros',
   'description: BrowserOS browser skill',
   '---',
   'Use BrowserOS for browser work.',
@@ -56,7 +56,7 @@ async function runtimeFixture(options: {
   const root = await mkdtemp(join(tmpdir(), 'acp-agent-runtime-'))
   temporaryDirectories.push(root)
   const resourcesDir = join(root, 'resources')
-  const skillDir = join(resourcesDir, 'skills', 'browserclaw')
+  const skillDir = join(resourcesDir, 'skills', 'browseros')
   await mkdir(skillDir, { recursive: true })
   await writeFile(join(skillDir, 'SKILL.md'), SKILL)
 

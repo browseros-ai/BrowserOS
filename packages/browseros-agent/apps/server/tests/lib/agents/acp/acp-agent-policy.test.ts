@@ -13,7 +13,7 @@ import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
 
 const SKILL = [
   '---',
-  'name: browserclaw',
+  'name: browseros',
   'description: BrowserOS browser skill',
   '---',
   'Use BrowserOS for every browser task.',
@@ -33,7 +33,7 @@ afterEach(async () => {
 async function createResourcesDir(): Promise<string> {
   const resourcesDir = await mkdtemp(join(tmpdir(), 'acp-policy-'))
   temporaryDirectories.push(resourcesDir)
-  const skillDir = join(resourcesDir, 'skills', 'browserclaw')
+  const skillDir = join(resourcesDir, 'skills', 'browseros')
   await mkdir(skillDir, { recursive: true })
   await writeFile(join(skillDir, 'SKILL.md'), SKILL)
   return resourcesDir

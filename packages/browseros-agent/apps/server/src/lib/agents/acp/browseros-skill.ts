@@ -8,12 +8,9 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const SKILL_PATH = join('skills', 'browserclaw', 'SKILL.md')
+const SKILL_PATH = join('skills', 'browseros', 'SKILL.md')
 const SOURCE_SKILL_PATH = fileURLToPath(
-  new URL(
-    '../../../../../../resources/skills/browserclaw/SKILL.md',
-    import.meta.url,
-  ),
+  new URL('../../../../resources/skills/browseros/SKILL.md', import.meta.url),
 )
 
 export async function loadBrowserOsSkill(
@@ -29,7 +26,7 @@ export async function loadBrowserOsSkill(
     try {
       const content = await readFile(path, 'utf8')
       if (isBrowserOsSkill(content)) return content.replace(/\r\n/g, '\n')
-      failures.push(`${path}: invalid browserclaw skill`)
+      failures.push(`${path}: invalid BrowserOS skill`)
     } catch (error) {
       failures.push(
         `${path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -43,7 +40,7 @@ export async function loadBrowserOsSkill(
 function isBrowserOsSkill(content: string): boolean {
   const normalized = content.replace(/\r\n/g, '\n')
   return (
-    normalized.startsWith('---\nname: browserclaw\n') &&
+    normalized.startsWith('---\nname: browseros\n') &&
     normalized.includes('\n---\n')
   )
 }

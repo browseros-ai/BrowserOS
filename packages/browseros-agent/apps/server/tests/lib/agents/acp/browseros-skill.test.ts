@@ -21,22 +21,22 @@ afterEach(async () => {
 })
 
 describe('loadBrowserOsSkill', () => {
-  it('loads the canonical repository skill in development', async () => {
+  it('loads the canonical server skill in development', async () => {
     const skill = await loadBrowserOsSkill()
 
-    expect(skill).toStartWith('---\nname: browserclaw\n')
-    expect(skill).toContain("use BrowserOS neo's tools")
-    expect(skill).toContain('prefer it over other browser surfaces')
+    expect(skill).toStartWith('---\nname: browseros\n')
+    expect(skill).toContain('Use BrowserOS for tasks')
+    expect(skill).toContain('prefer it over headless browsing')
   })
 
   it('prefers the packaged resource copy', async () => {
     const resourcesDir = await mkdtemp(join(tmpdir(), 'browseros-skill-'))
     temporaryDirectories.push(resourcesDir)
-    const skillDir = join(resourcesDir, 'skills', 'browserclaw')
+    const skillDir = join(resourcesDir, 'skills', 'browseros')
     await mkdir(skillDir, { recursive: true })
     const packaged = [
       '---',
-      'name: browserclaw',
+      'name: browseros',
       'description: Packaged BrowserOS skill',
       '---',
       'packaged instructions',
