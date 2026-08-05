@@ -116,12 +116,25 @@ class ShowPlanPresetTest(_ProfileMixin):
         self.assertIn("x64 (", result.output)
         self.assertIn("arm64 (", result.output)
 
-    def test_bundle_local_extensions_switch_reflected(self):
-        path = self._profile("preset: release\nbundle_local_extensions: true\n")
+    def test_resource_mode_switch_reflected(self):
+        path = self._profile("preset: release\nresource_mode: source\n")
         with scrubbed_env():
             result = invoke("--profile", str(path), "--show-plan")
         self.assertEqual(result.exit_code, 0, combined(result))
-        self.assertIn("bundle_local_extensions=True", result.output)
+        self.assertIn("resource_mode=source", result.output)
+        self.assertIn("prepare_common_resources", plan_lines(result.output))
+
+    def test_prepared_resources_requires_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "release",
+                "--prepared-resources",
+                "/tmp/prepared",
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("source mode", combined(result))
 
     def test_profile_skip_unions_with_cli_skip(self):
         path = self._profile("preset: release\nskip: [upload]\n")
@@ -402,6 +415,8 @@ class GnArgPlumbingTest(_ProfileMixin):
             clean=None,
             provision=None,
             download=None,
+            resource_mode=None,
+            prepared_resources=None,
             sign=None,
             upload=None,
             build_type=None,
@@ -425,18 +440,31 @@ class GnArgPlumbingTest(_ProfileMixin):
         for ctx, _steps in runs:
             self.assertEqual(ctx.extra_gn_args, ("symbol_level=2",))
 
-    def test_preset_build_runs_carry_bundle_local_extensions(self):
-        profile_path = self._profile("preset: release\nbundle_local_extensions: true\n")
+    def test_preset_build_runs_carry_source_resource_identity(self):
+        profile_path = self._profile("preset: release\nresource_mode: source\n")
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
-            with scrubbed_env():
+            prepared = Path(tmp) / "prepared"
+            with (
+                scrubbed_env(),
+                mock.patch(
+                    "bos_build.cli.build._resolve_source_sha",
+                    return_value="a" * 40,
+                ),
+            ):
                 projection = _resolve_preset(
-                    **self._preset_kwargs(profile=profile_path, chromium_src=m.src)
+                    **self._preset_kwargs(
+                        profile=profile_path,
+                        chromium_src=m.src,
+                        prepared_resources=prepared,
+                    )
                 )
                 runs = projection.build_runs()
         self.assertTrue(runs)
         for ctx, _steps in runs:
-            self.assertTrue(ctx.bundle_local_extensions)
+            self.assertEqual(ctx.resource_mode, "source")
+            self.assertEqual(ctx.prepared_resources, prepared.resolve())
+            self.assertEqual(ctx.source_sha, "a" * 40)
 
     def test_modules_profile_build_runs_carry_extra_gn_args(self):
         profile_path = self._profile("modules: [clean]\n")

@@ -285,6 +285,14 @@ class ServerResourceBuilder:
             raise RuntimeError(f"Cannot build {target.id}: {action}")
         return bundle
 
+    def preflight(self, *, product: str, target: str) -> None:
+        """Validate host and tool support for one server target."""
+        try:
+            target_spec = TARGETS[target]
+        except KeyError as exc:
+            raise ValueError(f"Unknown server target {target}") from exc
+        self._preflight(product, target_spec)
+
     def prepare(
         self,
         *,

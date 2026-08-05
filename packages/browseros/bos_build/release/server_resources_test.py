@@ -197,12 +197,7 @@ class ServerResourceBuilderTest(unittest.TestCase):
                 source_sha=SOURCE_SHA,
             )
         with self.assertRaisesRegex(RuntimeError, "install Bun"):
-            builder.prepare(
-                product="browseros",
-                target="linux-x64",
-                version="0.0.128",
-                source_sha=SOURCE_SHA,
-            )
+            builder.preflight(product="browseros", target="linux-x64")
 
     def test_validation_rejects_version_source_and_checksum_drift(self) -> None:
         destination = self.browseros / "resources/binaries/browseros_server/linux-x64"

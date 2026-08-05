@@ -31,14 +31,30 @@ class GetAppPathTest(unittest.TestCase):
             "https://cdn.browseros.com/extensions/bundled-manifest.xml",
         )
 
-    def test_bundle_local_extensions_defaults_off(self):
+    def test_resource_mode_defaults_to_published(self):
         ctx = Context(
             chromium_src=Path("/nonexistent-src"),
             architecture="arm64",
             build_type="release",
         )
 
-        self.assertFalse(ctx.bundle_local_extensions)
+        self.assertEqual(ctx.resource_mode, "published")
+        self.assertIsNone(ctx.prepared_resources)
+
+    def test_source_identity_is_carried_without_mutating_it(self):
+        prepared = Path("/tmp/prepared")
+        ctx = Context(
+            chromium_src=Path("/nonexistent-src"),
+            architecture="arm64",
+            build_type="release",
+            resource_mode="source",
+            prepared_resources=prepared,
+            source_sha="a" * 40,
+        )
+
+        self.assertEqual(ctx.resource_mode, "source")
+        self.assertEqual(ctx.prepared_resources, prepared)
+        self.assertEqual(ctx.source_sha, "a" * 40)
 
     def test_arch_build_ignores_stale_universal_app(self):
         # Regression: a leftover out/Default_universal app must never hijack

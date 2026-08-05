@@ -3,6 +3,7 @@
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -11,6 +12,7 @@ import typer
 
 from ..core.context import Context
 from ..core.checkout_lock import CheckoutLockError, ChromiumCheckoutLock
+from ..core.products import get_product_descriptor
 from ..lib.paths import get_package_root
 from ..core.pipeline import validate_pipeline, show_available_modules
 from ..core.planner import (
@@ -125,6 +127,16 @@ def main(
         None,
         "--download/--no-download",
         help="Preset mode: toggle downloading server resources from R2",
+    ),
+    resource_mode: Optional[str] = typer.Option(
+        None,
+        "--resource-mode",
+        help="Preset mode: resource provider (published or source)",
+    ),
+    prepared_resources: Optional[Path] = typer.Option(
+        None,
+        "--prepared-resources",
+        help="Validated common-resource directory for source mode",
     ),
     skip: Optional[str] = typer.Option(
         None,
@@ -252,6 +264,10 @@ def main(
         )
         raise typer.Exit(1)
 
+    if (resource_mode is not None or prepared_resources is not None) and not has_preset:
+        log_error("--resource-mode/--prepared-resources require preset/profile mode")
+        raise typer.Exit(1)
+
     # Plan projection happens before the banner and before anything touches
     # the chromium checkout, so --show-plan works on a machine without one.
     if has_preset:
@@ -263,6 +279,8 @@ def main(
             clean=clean,
             provision=provision,
             download=download,
+            resource_mode=resource_mode,
+            prepared_resources=prepared_resources,
             sign=sign,
             upload=upload,
             build_type=build_type,
@@ -490,6 +508,8 @@ def _resolve_preset(
     clean: Optional[bool],
     provision: Optional[str],
     download: Optional[bool],
+    resource_mode: Optional[str],
+    prepared_resources: Optional[Path],
     sign: Optional[bool],
     upload: Optional[bool],
     build_type: Optional[str],
@@ -519,6 +539,8 @@ def _resolve_preset(
                 clean=clean,
                 provision=provision,
                 download=download,
+                resource_mode=resource_mode,
+                prepared_resources=prepared_resources,
                 sign=sign,
                 upload=upload,
                 build_type=build_type,
@@ -545,6 +567,8 @@ def _resolve_preset(
             overrides["provision"] = provision
         if download is not None:
             overrides["download"] = download
+        if resource_mode is not None:
+            overrides["resource_mode"] = resource_mode
         if sign is not None:
             overrides["sign"] = sign
         if upload is not None:
@@ -556,6 +580,8 @@ def _resolve_preset(
                 switches, skip=tuple(dict.fromkeys((*switches.skip, *cli_skip)))
             )
         switches = switches.resolved()
+        if prepared_resources is not None and switches.resource_mode != "source":
+            raise ValueError("--prepared-resources requires source mode")
 
         # Runs execute sequentially (universal is three runs on one tree),
         # so --from resumes the run timeline, not each run.
@@ -569,8 +595,10 @@ def _resolve_preset(
             f"Switches: clean={switches.clean} provision={switches.provision} "
             f"download={switches.download} sign={switches.sign} "
             f"upload={switches.upload} "
-            f"bundle_local_extensions={switches.bundle_local_extensions}",
+            f"resource_mode={switches.resource_mode}",
         ]
+        if prepared_resources is not None:
+            header.append(f"Prepared resources: {prepared_resources.resolve()}")
         if switches.skip:
             header.append(f"Skip: {', '.join(switches.skip)}")
         if from_ is not None:
@@ -598,7 +626,7 @@ def _resolve_preset(
                     f"✓ PRESET MODE: clean={switches.clean} "
                     f"provision={switches.provision} download={switches.download} "
                     f"sign={switches.sign} upload={switches.upload} "
-                    f"bundle_local_extensions={switches.bundle_local_extensions}"
+                    f"resource_mode={switches.resource_mode}"
                 )
                 if switches.skip:
                     log_info(f"✓ PRESET MODE: skip={','.join(switches.skip)}")
@@ -608,6 +636,20 @@ def _resolve_preset(
                     log_info(
                         f"✓ PRESET MODE: gn-arg overrides={','.join(extra_gn_args)}"
                     )
+                source_sha = ""
+                common_dir = prepared_resources.resolve() if prepared_resources else None
+                if switches.resource_mode == "source":
+                    package_root = get_package_root()
+                    source_sha = _resolve_source_sha(package_root.parent.parent)
+                    if common_dir is None:
+                        common_dir = (
+                            package_root
+                            / "resources"
+                            / "binaries"
+                            / "prepared_common"
+                            / switches.product
+                            / source_sha
+                        )
                 return [
                     (
                         Context(
@@ -615,9 +657,12 @@ def _resolve_preset(
                             architecture=run_arch,
                             plan_architectures=tuple(switches.architectures),
                             build_type=switches.build_type,
-                            product=switches.product,
+                            product=get_product_descriptor(switches.product),
                             extra_gn_args=extra_gn_args,
-                            bundle_local_extensions=switches.bundle_local_extensions,
+                            resource_mode=switches.resource_mode,
+                            prepared_resources=common_dir,
+                            prepared_resources_supplied=prepared_resources is not None,
+                            source_sha=source_sha,
                         ),
                         steps,
                     )
@@ -642,6 +687,8 @@ def _resolve_modules_profile(
     clean: Optional[bool],
     provision: Optional[str],
     download: Optional[bool],
+    resource_mode: Optional[str],
+    prepared_resources: Optional[Path],
     sign: Optional[bool],
     upload: Optional[bool],
     build_type: Optional[str],
@@ -661,6 +708,8 @@ def _resolve_modules_profile(
         "--clean/--no-clean": clean,
         "--provision": provision,
         "--download/--no-download": download,
+        "--resource-mode": resource_mode,
+        "--prepared-resources": prepared_resources,
         "--sign/--no-sign": sign,
         "--upload/--no-upload": upload,
         "--skip": skip,
@@ -790,3 +839,22 @@ def _resolve_chromium_src(
     if not src.exists() and not allow_missing:
         raise ValueError(f"chromium_src does not exist: {src}")
     return src
+
+
+def _resolve_source_sha(repo_root: Path) -> str:
+    """Return the exact clean checkout commit used by source resources."""
+    for args in (("diff", "--quiet"), ("diff", "--cached", "--quiet")):
+        result = subprocess.run(["git", *args], cwd=repo_root)
+        if result.returncode:
+            raise ValueError("source mode requires a clean tracked checkout")
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    sha = result.stdout.strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        raise ValueError("source mode could not resolve a full checkout SHA")
+    return sha
