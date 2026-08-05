@@ -7,7 +7,12 @@
 import type { Browser } from '@browseros/browser-core/browser'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
-import { createAgentUIStreamResponse, type UIMessage } from 'ai'
+import {
+  consumeStream,
+  createAgentUIStreamResponse,
+  createUIMessageStreamResponse,
+  type UIMessage,
+} from 'ai'
 import { isAcpProvider } from '../../agent/acp-providers'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
@@ -17,12 +22,23 @@ import {
 } from '../../agent/message-validation'
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
+import {
+  AcpAgentRuntime,
+  type AcpAgentStreamInput,
+} from '../../lib/agents/acp/acp-agent-runtime'
 import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
+import type { AcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
+import { DbAcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
 import type { ServerActivity } from '../services/server-activity'
-import type { BrowserContext, ChatRequest } from '../types'
+import type {
+  AcpChatRequest,
+  BrowserContext,
+  BrowserOsChatRequest,
+  ChatRequest,
+} from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 import {
   describeMcpChange,
@@ -45,14 +61,40 @@ export interface ChatServiceDeps {
    *  <resourcesDir>/bin/third_party/bun can be located. */
   resourcesDir?: string | null
   activity?: ServerActivity
+  acpAgentStore?: Pick<AcpAgentStore, 'get'>
+  acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'cancel' | 'close'>
 }
 
 export class ChatService {
-  constructor(private deps: ChatServiceDeps) {}
+  private acpAgentStore: Pick<AcpAgentStore, 'get'> | undefined
+  private acpRuntime:
+    | Pick<AcpAgentRuntime, 'stream' | 'cancel' | 'close'>
+    | undefined
+  private readonly acpMessages = new Map<string, UIMessage[]>()
+  private readonly acpConversationAgents = new Map<string, string>()
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: chat request orchestration; refactor tracked separately
+  constructor(private deps: ChatServiceDeps) {
+    this.acpAgentStore = deps.acpAgentStore
+    this.acpRuntime = deps.acpRuntime
+  }
+
   async processMessage(
     request: ChatRequest,
+    abortSignal: AbortSignal,
+  ): Promise<Response> {
+    if (request.target?.type === 'claude' || request.target?.type === 'codex') {
+      return this.processAcpMessage(request as AcpChatRequest, abortSignal)
+    }
+
+    return this.processBrowserOsMessage(
+      request as BrowserOsChatRequest,
+      abortSignal,
+    )
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction
+  private async processBrowserOsMessage(
+    request: BrowserOsChatRequest,
     abortSignal: AbortSignal,
   ): Promise<Response> {
     const { sessionStore } = this.deps
@@ -412,6 +454,17 @@ export class ChatService {
   async deleteSession(
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
+    let acpDeleted = false
+    const acpAgentId = this.acpConversationAgents.get(conversationId)
+    if (acpAgentId) {
+      await this.getAcpRuntime().close(acpAgentId, conversationId, {
+        discardPersistentState: true,
+      })
+      this.acpConversationAgents.delete(conversationId)
+      this.acpMessages.delete(`${acpAgentId}:${conversationId}`)
+      acpDeleted = true
+    }
+
     const session = this.deps.sessionStore.get(conversationId)
     if (session?.scheduledPageId) {
       const pageId = session.scheduledPageId
@@ -419,7 +472,114 @@ export class ChatService {
       this.closeScheduledPage(pageId, conversationId)
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
-    return { deleted, sessionCount: this.deps.sessionStore.count() }
+    return {
+      deleted: deleted || acpDeleted,
+      sessionCount: this.deps.sessionStore.count(),
+    }
+  }
+
+  private async processAcpMessage(
+    request: AcpChatRequest,
+    abortSignal: AbortSignal,
+  ): Promise<Response> {
+    const agent = await this.getAcpAgentStore().get(request.target.agentId)
+    if (!agent)
+      return Response.json({ error: 'Unknown agent' }, { status: 404 })
+    if (agent.type !== request.target.type) {
+      return Response.json({ error: 'Agent type mismatch' }, { status: 400 })
+    }
+
+    const browserContext = await resolveBrowserContextPageIds(
+      this.deps.browser,
+      request.browserContext,
+    )
+    const userContent = formatUserMessage(
+      request.message,
+      browserContext,
+      request.selectedText,
+      request.selectedTextSource,
+    )
+    const promptText = request.userSystemPrompt?.trim()
+      ? `${request.userSystemPrompt.trim()}\n\n${userContent}`
+      : userContent
+    const historyKey = `${agent.id}:${request.conversationId}`
+    const history: UIMessage[] =
+      this.acpMessages.get(historyKey) ??
+      (request.previousConversation ?? []).map((message) => ({
+        id: crypto.randomUUID(),
+        role: message.role,
+        parts: [{ type: 'text' as const, text: message.content }],
+      }))
+    const messageId = crypto.randomUUID()
+    const files = (request.attachments ?? []).map((attachment) => ({
+      type: 'file' as const,
+      mediaType: attachment.mediaType,
+      url: attachment.data.startsWith('data:')
+        ? attachment.data
+        : `data:${attachment.mediaType};base64,${attachment.data}`,
+    }))
+    const visibleUserMessage: UIMessage = {
+      id: messageId,
+      role: 'user',
+      parts: [
+        ...(request.message
+          ? [{ type: 'text' as const, text: request.message }]
+          : []),
+        ...files,
+      ],
+    }
+    history.push(visibleUserMessage)
+    this.acpMessages.set(historyKey, history)
+    this.acpConversationAgents.set(request.conversationId, agent.id)
+
+    const promptMessages = history.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            parts: [{ type: 'text' as const, text: promptText }, ...files],
+          }
+        : message,
+    )
+    const streamInput: AcpAgentStreamInput = {
+      agent: {
+        ...agent,
+        workingDirectory: request.userWorkingDir ?? agent.workingDirectory,
+      },
+      conversationId: request.conversationId,
+      messages: promptMessages,
+      browserContext,
+      abortSignal,
+      onFinish: ({ messages }) => {
+        const existingIds = new Set(history.map((message) => message.id))
+        history.push(
+          ...messages.filter((message) => !existingIds.has(message.id)),
+        )
+      },
+    }
+    const stream = await this.getAcpRuntime().stream(streamInput)
+    const response = createUIMessageStreamResponse({
+      stream,
+      consumeSseStream: consumeStream,
+    })
+    return (
+      this.deps.activity?.trackChatResponse(response, abortSignal) ?? response
+    )
+  }
+
+  private getAcpAgentStore(): Pick<AcpAgentStore, 'get'> {
+    this.acpAgentStore ??= new DbAcpAgentStore()
+    return this.acpAgentStore
+  }
+
+  private getAcpRuntime(): Pick<
+    AcpAgentRuntime,
+    'stream' | 'cancel' | 'close'
+  > {
+    this.acpRuntime ??= new AcpAgentRuntime({
+      serverPort: this.deps.serverPort,
+      resourcesDir: this.deps.resourcesDir,
+    })
+    return this.acpRuntime
   }
 
   private closeScheduledPage(pageId: number, conversationId: string): void {

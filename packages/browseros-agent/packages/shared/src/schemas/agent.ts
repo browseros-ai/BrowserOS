@@ -5,7 +5,7 @@ export const AcpAgentTypeSchema: z.ZodEnum<['claude', 'codex']> = z.enum([
   'codex',
 ])
 
-const BrowserOsAgentTargetSchema: z.ZodObject<{
+export const BrowserOsAgentTargetSchema: z.ZodObject<{
   type: z.ZodLiteral<'browseros'>
   providerId: z.ZodString
 }> = z.object({
@@ -13,7 +13,7 @@ const BrowserOsAgentTargetSchema: z.ZodObject<{
   providerId: z.string().min(1),
 })
 
-const ClaudeAgentTargetSchema: z.ZodObject<{
+export const ClaudeAgentTargetSchema: z.ZodObject<{
   type: z.ZodLiteral<'claude'>
   agentId: z.ZodString
 }> = z.object({
@@ -21,7 +21,7 @@ const ClaudeAgentTargetSchema: z.ZodObject<{
   agentId: z.string().uuid(),
 })
 
-const CodexAgentTargetSchema: z.ZodObject<{
+export const CodexAgentTargetSchema: z.ZodObject<{
   type: z.ZodLiteral<'codex'>
   agentId: z.ZodString
 }> = z.object({
@@ -42,5 +42,14 @@ export const AgentTargetSchema: z.ZodDiscriminatedUnion<
   CodexAgentTargetSchema,
 ])
 
+export const AcpAgentTargetSchema: z.ZodDiscriminatedUnion<
+  'type',
+  [typeof ClaudeAgentTargetSchema, typeof CodexAgentTargetSchema]
+> = z.discriminatedUnion('type', [
+  ClaudeAgentTargetSchema,
+  CodexAgentTargetSchema,
+])
+
 export type AcpAgentType = z.infer<typeof AcpAgentTypeSchema>
 export type AgentTarget = z.infer<typeof AgentTargetSchema>
+export type AcpAgentTarget = z.infer<typeof AcpAgentTargetSchema>

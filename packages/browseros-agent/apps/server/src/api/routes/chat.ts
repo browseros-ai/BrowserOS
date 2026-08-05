@@ -47,19 +47,22 @@ export function createChatRoutes(deps: ChatRouteDeps) {
   return new Hono()
     .post('/', zValidator('json', ChatRequestSchema), async (c) => {
       const request = c.req.valid('json')
+      const provider =
+        'provider' in request ? request.provider : request.target.type
+      const model = 'model' in request ? request.model : undefined
+      const baseUrl = 'baseUrl' in request ? request.baseUrl : undefined
 
-      // Sentry + metrics (HTTP concerns only)
       Sentry.getCurrentScope().setTag(
         'request-type',
         request.isScheduledTask ? 'schedule' : 'chat',
       )
       Sentry.setContext('request', {
-        provider: request.provider,
-        model: request.model,
-        baseUrl: request.baseUrl
+        provider,
+        model,
+        baseUrl: baseUrl
           ? (() => {
               try {
-                return new URL(request.baseUrl).origin
+                return new URL(baseUrl).origin
               } catch {
                 return undefined
               }
@@ -68,14 +71,14 @@ export function createChatRoutes(deps: ChatRouteDeps) {
       })
 
       metrics.log('chat.request', {
-        provider: request.provider,
-        model: request.model,
+        provider,
+        model,
       })
 
       logger.info('Chat request received', {
         conversationId: request.conversationId,
-        provider: request.provider,
-        model: request.model,
+        provider,
+        model,
       })
 
       return service.processMessage(request, c.req.raw.signal)
