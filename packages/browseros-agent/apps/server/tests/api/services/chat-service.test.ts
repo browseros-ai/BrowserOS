@@ -81,6 +81,7 @@ mock.module('../../../src/lib/clients/llm/config', () => ({
 
 mock.module('../../../src/lib/logger', () => ({
   logger: {
+    error: mock(() => {}),
     info: mock(() => {}),
     warn: mock(() => {}),
     debug: mock(() => {}),
@@ -523,16 +524,11 @@ describe('ChatService Klavis session rebuilds', () => {
       firstCreateConfig?.outputFileAccess,
     )
 
-    // Persisted form stays the raw user text — TKT-774. The Klavis
-    // context-change notice and the formatted user envelope go only
-    // into the transient prompt copy fed to the LLM.
     expect(secondAgent.messages).toHaveLength(2)
     const persistedRebuiltMessage =
       secondAgent.messages[1]?.parts[0]?.text ?? ''
     expect(persistedRebuiltMessage).toBe('check integrations again')
 
-    // Prompt copy (what the agent loop actually saw) carries the
-    // context-change prefix so the model knows about the new tools.
     const promptRebuiltMessage =
       lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
     expect(promptRebuiltMessage).toContain(
@@ -685,8 +681,6 @@ describe('ChatService chat/agent mode switches', () => {
     expect(firstConfig?.resolvedConfig?.chatMode).toBe(true)
     expect(secondConfig?.resolvedConfig?.chatMode).toBe(false)
 
-    // The model-visible half: the prompt copy carries the transition notice,
-    // while the persisted message stays the raw user text.
     const promptText = lastPromptUiMessages?.at(-1)?.parts[0]?.text ?? ''
     expect(promptText).toContain('The user switched to agent mode')
     expect(secondAgent.messages.at(-1)?.parts[0]?.text).toBe(
@@ -761,10 +755,6 @@ describe('ChatService chat/agent mode switches', () => {
 })
 
 describe('ChatService single-rebuild reconciliation', () => {
-  // When several session inputs change in the same turn, the session must be
-  // rebuilt exactly once (one AiSdkAgent.create beyond the initial build), and
-  // every applicable change notice must still reach the model.
-
   beforeEach(() => {
     resolveLLMConfigSpy.mockImplementation(async () => ({
       provider: 'openai',
@@ -831,7 +821,6 @@ describe('ChatService single-rebuild reconciliation', () => {
       new AbortController().signal,
     )
 
-    // One initial build + exactly one rebuild covering both changes.
     expect(createAgentSpy.mock.calls.length - before).toBe(2)
     expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
 
@@ -887,9 +876,6 @@ describe('ChatService single-rebuild reconciliation', () => {
   })
 
   it('keeps the workspace notice when MCP servers also change in the same turn', async () => {
-    // Regression guard for the fix. The previous flag-based flow rebuilt on the
-    // MCP branch first, which restamped session.workingDir and silently dropped
-    // the workspace notice. Reading a pre-rebuild snapshot emits both.
     const firstAgent = createFakeAgent()
     const secondAgent = createFakeAgent()
     agentToReturn = firstAgent
@@ -926,7 +912,6 @@ describe('ChatService single-rebuild reconciliation', () => {
       new AbortController().signal,
     )
 
-    // Still a single rebuild for both changes.
     expect(createAgentSpy.mock.calls.length - before).toBe(2)
     expect(firstAgent.dispose).toHaveBeenCalledTimes(1)
 
