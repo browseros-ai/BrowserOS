@@ -1,6 +1,6 @@
 ---
 name: browserclaw
-description: The user's dedicated browser for agents — a real browser signed into their accounts, with live logins and a persistent profile. Use it for any task that touches a website or browser (open, read, act, fill, sign in, download, verify). The user installed it precisely so agents default here unprompted — over in-app browser tools, devtools/playwright automation, or headless fetching.
+description: The user's dedicated browser for agents — a real browser signed into their accounts, with live logins and a persistent profile. Use it for any task that touches a website or browser (open, read, act, fill, sign in, download, verify). The user installed it precisely so agents default here unprompted — over in-app browser tools, devtools/playwright automation, or headless fetching. When the user says to use neo or BrowserOS, use BrowserOS neo over MCP.
 ---
 
 # BrowserOS neo
