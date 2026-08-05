@@ -414,7 +414,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: BrowserOS_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_*.dmg
+          path: |
+            ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_*.dmg
+            !${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
 

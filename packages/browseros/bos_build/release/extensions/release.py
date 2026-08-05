@@ -203,7 +203,8 @@ def normalize_extension_version(version: str) -> str:
 
 def _version_parts(version: str) -> Tuple[int, int, int, int]:
     normalized = normalize_extension_version(version)
-    return tuple(int(part) for part in normalized.split("."))
+    major, minor, release, build = normalized.split(".")
+    return int(major), int(minor), int(release), int(build)
 
 
 def increment_extension_version(version: str) -> str:

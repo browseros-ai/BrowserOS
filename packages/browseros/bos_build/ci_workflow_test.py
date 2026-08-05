@@ -946,6 +946,22 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     self.assertIn("--workflow-run-id", metadata_script)
                     self.assertNotIn("--workflow-run-attempt", metadata_script)
 
+    def test_macos_product_artifact_globs_do_not_overlap(self):
+        workflow = self.load_workflow("release-macos.yml")
+        upload_steps = {
+            step["name"]: step
+            for step in workflow["jobs"]["build"]["steps"]
+            if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+        }
+        browseros_path = upload_steps["Upload BrowserOS DMG artifact"]["with"][
+            "path"
+        ]
+        neo_path = upload_steps["Upload BrowserOS neo DMG artifact"]["with"]["path"]
+
+        self.assertIn("/BrowserOS_*.dmg\n!", browseros_path)
+        self.assertIn("/BrowserOS_neo_*.dmg", browseros_path)
+        self.assertTrue(neo_path.endswith("/BrowserOS_neo_*.dmg"))
+
     def test_literal_component_gate_truth_table(self):
         sha = "a" * 40
         products = {
