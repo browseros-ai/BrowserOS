@@ -101,6 +101,8 @@ describe('release-claw-server-rust workflow', () => {
       `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
     expect(attach).toContain(`GH_REPO: ${dollar}{{ github.repository }}`)
+    expect(attach).toContain('--target "$RELEASE_SHA"')
+    expect(attach).not.toContain('--verify-tag')
   })
 
   it('recovers completed targets before rebuilding missing targets', () => {
