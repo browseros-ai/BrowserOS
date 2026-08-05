@@ -234,8 +234,9 @@ jobs:
     permissions:
       contents: read
     outputs:
-      browserclaw_onboard_version: ${{ steps.components.outputs.onboard_version }}
-      browserclaw_server_version: ${{ steps.components.outputs.server_version }}
+      browseros_server_version: ${{ steps.plan.outputs.browseros_server_version }}
+      browserclaw_onboard_version: ${{ steps.plan.outputs.browserclaw_onboard_version }}
+      browserclaw_server_version: ${{ steps.plan.outputs.browserclaw_server_version }}
       extension_tag: ${{ steps.components.outputs.extension_tag }}
       extension_version: ${{ steps.components.outputs.extension_version }}
       manifest_url: ${{ steps.plan.outputs.manifest_url }}
@@ -304,7 +305,6 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
 
       - name: Download bundled extension manifest
-        if: ${{ inputs.extensions != 'skip' }}
         run: |
           set -euo pipefail
           curl --fail --location --retry 3 \
@@ -332,13 +332,13 @@ jobs:
             --run-id "$GITHUB_RUN_ID"
             --run-attempt "$GITHUB_RUN_ATTEMPT"
             --components-json "$COMPONENTS_JSON"
+            --bundled-manifest "$RUNNER_TEMP/bundled-manifest.xml"
             --output-dir "$RUNNER_TEMP/release-plan"
             --github-output "$GITHUB_OUTPUT"
           )
           if [ "$EXTENSION_SELECTED" = "true" ]; then
             args+=(
               --extension-name browserclaw
-              --bundled-manifest "$RUNNER_TEMP/bundled-manifest.xml"
             )
           fi
           uv run python -m bos_build.release.plan "${args[@]}"
@@ -361,6 +361,7 @@ jobs:
     with:
       products: browserclaw
       upload_to_r2: ${{ inputs.upload_to_r2 }}
+      browseros_server_version: ${{ needs.release_plan.outputs.browseros_server_version }}
       browserclaw_server_version: ${{ needs.release_plan.outputs.browserclaw_server_version }}
       browserclaw_onboard_version: ${{ needs.release_plan.outputs.browserclaw_onboard_version }}
       bundled_extensions_manifest_url: ${{ needs.release_plan.outputs.manifest_url }}
@@ -378,6 +379,7 @@ jobs:
       products: browserclaw
       upload_to_r2: ${{ inputs.upload_to_r2 }}
       sign: ${{ inputs.sign_windows }}
+      browseros_server_version: ${{ needs.release_plan.outputs.browseros_server_version }}
       browserclaw_server_version: ${{ needs.release_plan.outputs.browserclaw_server_version }}
       browserclaw_onboard_version: ${{ needs.release_plan.outputs.browserclaw_onboard_version }}
       bundled_extensions_manifest_url: ${{ needs.release_plan.outputs.manifest_url }}
@@ -401,6 +403,7 @@ jobs:
       commit_version: false
       upload_to_r2: ${{ inputs.upload_to_r2 }}
       ref: ${{ needs.release_plan.outputs.source_sha }}
+      browseros_server_version: ${{ needs.release_plan.outputs.browseros_server_version }}
       browserclaw_server_version: ${{ needs.release_plan.outputs.browserclaw_server_version }}
       browserclaw_onboard_version: ${{ needs.release_plan.outputs.browserclaw_onboard_version }}
       bundled_extensions_manifest_url: ${{ needs.release_plan.outputs.manifest_url }}
@@ -499,15 +502,7 @@ jobs:
             echo
             echo "Successful no-op: ${{ steps.stage_gate.outputs.reason }}."
             echo
-            echo "Browser artifact promotion remains manual:"
-            echo '```bash'
-            echo "cd packages/browseros"
-            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-              echo "uv run browseros release publish --version $VERSION --product $PRODUCT --platform linux --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID"
-            else
-              echo "# Browser artifact promotion skipped: upload_to_r2=false."
-            fi
-            echo '```'
+            echo "Promotion guidance is withheld until the final release gate."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v7
@@ -608,32 +603,12 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          publish_platform_args=()
-          case "$INPUT_PLATFORMS" in
-            all) publish_platform_args=(--platform linux --platform win --platform macos) ;;
-            windows) publish_platform_args=(--platform win) ;;
-            linux|macos) publish_platform_args=(--platform "$INPUT_PLATFORMS") ;;
-          esac
           {
             echo "## Update-feed preview"
             echo
             for file in "${staged_files[@]}"; do echo "- \`$file\`"; done
             echo
-            echo "### Manual promote commands"
-            echo '```bash'
-            echo "cd packages/browseros"
-            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID"
-            else
-              echo "# Browser artifact promotion skipped: upload_to_r2=false."
-            fi
-            if [ "${#appcast_targets[@]}" -gt 0 ]; then
-              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --platforms $INPUT_PLATFORMS --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID --publish"
-            fi
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "uv run browseros release extensions --channel $INPUT_EXTENSIONS --set $EXTENSION_NAME=$EXTENSIONS_VERSION --publish"
-            fi
-            echo '```'
+            echo "Promotion guidance is withheld until the final release gate."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
@@ -707,6 +682,7 @@ jobs:
     permissions:
       contents: write
     env:
+      BROWSER_GATE_RESULT: ${{ needs.browser_gate.result }}
       EXTENSION_BUILD_RESULT: ${{ needs.build_extension.result }}
       EXTENSION_FINALIZE_RESULT: ${{ needs.finalize_extension.result }}
       EXTENSIONS_VERSION: ${{ needs.release_plan.outputs.extension_version }}
@@ -742,6 +718,32 @@ jobs:
       - name: Write release summary
         run: |
           set -euo pipefail
+          promotion_ready=true
+          require_promotion_result() {
+            if [ "$2" != "$3" ]; then promotion_ready=false; fi
+          }
+          require_promotion_result preflight "$PREFLIGHT_RESULT" success
+          require_promotion_result release-plan "$PLAN_RESULT" success
+          require_promotion_result browser-gate "$BROWSER_GATE_RESULT" success
+          require_promotion_result staged-feed "$STAGE_UPDATES_RESULT" success
+          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
+            require_promotion_result onboarding-build "$ONBOARD_BUILD_RESULT" success
+            require_promotion_result onboarding-finalize "$ONBOARD_FINALIZE_RESULT" success
+            require_promotion_result server-build "$SERVER_BUILD_RESULT" success
+            require_promotion_result server-finalize "$SERVER_FINALIZE_RESULT" success
+          else
+            require_promotion_result onboarding-build "$ONBOARD_BUILD_RESULT" skipped
+            require_promotion_result onboarding-finalize "$ONBOARD_FINALIZE_RESULT" skipped
+            require_promotion_result server-build "$SERVER_BUILD_RESULT" skipped
+            require_promotion_result server-finalize "$SERVER_FINALIZE_RESULT" skipped
+          fi
+          if [ "$INPUT_EXTENSIONS" != "skip" ]; then
+            require_promotion_result extension-build "$EXTENSION_BUILD_RESULT" success
+            require_promotion_result extension-finalize "$EXTENSION_FINALIZE_RESULT" success
+          else
+            require_promotion_result extension-build "$EXTENSION_BUILD_RESULT" skipped
+            require_promotion_result extension-finalize "$EXTENSION_FINALIZE_RESULT" skipped
+          fi
           publish_platform_args=()
           case "$INPUT_PLATFORMS" in
             all) publish_platform_args=(--platform linux --platform win --platform macos) ;;
@@ -755,7 +757,7 @@ jobs:
             echo "- Fixed source SHA: \`${SOURCE_SHA:-unresolved}\`"
             echo "- Release plan: \`$PLAN_RESULT\`"
             echo "- Release plan URL: \`${PLAN_URL:-unavailable}\`"
-            echo "- Exact bundled manifest: \`${MANIFEST_URL:-live manifest (extension skipped)}\`"
+            echo "- Exact bundled manifest: \`${MANIFEST_URL:-unavailable}\`"
             echo "- Feed preview: \`$STAGE_UPDATES_RESULT\` (${FEED_REASON:-unavailable})"
             echo "- Feed artifact: \`${FEED_ARTIFACT:-none}\`"
             echo
@@ -775,24 +777,31 @@ jobs:
             echo
             echo "### Manual promotion"
             echo
-            echo '```bash'
-            echo "cd packages/browseros"
-            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID"
+            if [ "$promotion_ready" = "true" ]; then
+              echo '```bash'
+              echo "cd packages/browseros"
+              if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
+                echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID"
+              else
+                echo "# Browser artifact promotion skipped: upload_to_r2=false."
+              fi
+              if [ "$FEED_HAS_FILES" != "true" ]; then
+                echo "# No XML/JSON feed was staged: ${FEED_REASON:-no feed surface}."
+              fi
+              if [ "$INPUT_UPLOAD_TO_R2" = "true" ] && { [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "windows" ] || [ "$INPUT_PLATFORMS" = "macos" ]; }; then
+                echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --platforms $INPUT_PLATFORMS --macos-arch $INPUT_MACOS_ARCH --source-sha $SOURCE_SHA --workflow-run-id $GITHUB_RUN_ID --publish"
+              fi
+              if [ "$INPUT_EXTENSIONS" != "skip" ]; then
+                echo "uv run browseros release extensions --channel $INPUT_EXTENSIONS --set browserclaw=$EXTENSIONS_VERSION --publish"
+              fi
+              echo '```'
+              echo
+              echo "Server OTA appcasts under \`updates/server\` remain a separate explicit promotion."
+              if [ "$INPUT_EXTENSIONS" != "skip" ]; then
+                echo "Promote \`$EXTENSIONS_VERSION\` from \`$INPUT_EXTENSIONS\` only after inspecting the staged feeds."
+              fi
             else
-              echo "# Browser artifact promotion skipped: upload_to_r2=false."
-            fi
-            if [ "$FEED_HAS_FILES" != "true" ]; then
-              echo "# No XML/JSON feed was staged: ${FEED_REASON:-no feed surface}."
-            fi
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "uv run browseros release extensions --channel $INPUT_EXTENSIONS --set browserclaw=$EXTENSIONS_VERSION --publish"
-            fi
-            echo '```'
-            echo
-            echo "Server OTA appcasts under \`updates/server\` remain a separate explicit promotion."
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "Promote \`$EXTENSIONS_VERSION\` from \`$INPUT_EXTENSIONS\` only after inspecting the staged feeds."
+              echo "Promotion commands withheld because the selected release lanes did not all succeed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

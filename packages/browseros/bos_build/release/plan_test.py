@@ -10,6 +10,7 @@ from pathlib import Path
 from .feeds.render import extract_enclosure_urls, extract_manifest_versions
 from .feeds.spec import EXTENSIONS, extension_by_name
 from .plan import Component, PlanResult, _write_github_output, create_release_plan
+from .resource_pins import RESOURCE_FAMILIES, ResourceObjectPin, ResourcePin
 
 
 SOURCE_SHA = "a" * 40
@@ -85,6 +86,39 @@ def bundled_manifest(versions: dict[str, str] | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def resource_pins(components: list[Component]) -> dict[str, ResourcePin]:
+    selected = {
+        {
+            "browseros-server": "browseros_server",
+            "browserclaw-server": "browserclaw_server",
+            "browserclaw-onboard": "browserclaw_onboard",
+        }[component.name]: component
+        for component in components
+        if component.name
+        in {"browseros-server", "browserclaw-server", "browserclaw-onboard"}
+    }
+    pins = {}
+    for index, family in enumerate(RESOURCE_FAMILIES, start=1):
+        component = selected.get(family.name)
+        version = component.version if component else f"0.0.{index}"
+        pins[family.name] = ResourcePin(
+            family.name,
+            version,
+            tuple(
+                ResourceObjectPin(
+                    target=target,
+                    key=family.version_key(version, target),
+                    etag=f'"{family.name}-{target}"',
+                    size=index,
+                    sha256="",
+                    release_sha=component.source_sha if component else "",
+                )
+                for target in family.targets
+            ),
+        )
+    return pins
+
+
 class ReleasePlanTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = FakeR2Client()
@@ -106,18 +140,20 @@ class ReleasePlanTest(unittest.TestCase):
         run_id: str = "30418029456",
         run_attempt: str = "2",
         cdn_base_url: str = "https://cdn.browseros.com",
+        include_manifest: bool = True,
     ):
+        selected_components = components or []
         manifest_path = None
-        if manifest is not None:
+        if include_manifest:
             manifest_path = root / "input-bundled-manifest.xml"
-            manifest_path.write_text(manifest, encoding="utf-8")
+            manifest_path.write_text(manifest or bundled_manifest(), encoding="utf-8")
         return create_release_plan(
             product=product,
             browser_version="0.49.0",
             source_sha=source_sha,
             run_id=run_id,
             run_attempt=run_attempt,
-            components=components or [],
+            components=selected_components,
             extension_name=extension_name if manifest is not None else "",
             bundled_manifest_path=manifest_path,
             output_dir=root / "output",
@@ -125,6 +161,7 @@ class ReleasePlanTest(unittest.TestCase):
             bucket="browseros",
             cdn_base_url=cdn_base_url,
             http_head=self.probe,
+            resource_pins=resource_pins(selected_components),
         )
 
     def test_selected_extension_preserves_other_pins_and_overrides_one(self) -> None:
@@ -164,7 +201,7 @@ class ReleasePlanTest(unittest.TestCase):
             self.assertEqual(self.client.objects[result.manifest_key], manifest_bytes)
             self.assertIn(result.manifest_url, self.probed)
 
-    def test_skipped_extension_emits_empty_manifest_url(self) -> None:
+    def test_skipped_extension_emits_an_immutable_manifest_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.create(
                 Path(temp_dir),
@@ -175,10 +212,23 @@ class ReleasePlanTest(unittest.TestCase):
                 ],
             )
 
-            self.assertEqual(result.manifest_url, "")
-            self.assertEqual(result.manifest_key, "")
-            self.assertIsNone(result.manifest_path)
-            self.assertEqual(len(self.client.objects), 1)
+            self.assertNotIn("latest", result.manifest_url)
+            self.assertTrue(result.manifest_key.endswith("/bundled-manifest.xml"))
+            self.assertIsNotNone(result.manifest_path)
+            self.assertEqual(
+                extract_manifest_versions(result.manifest_path.read_text()),
+                extract_manifest_versions(bundled_manifest()),
+            )
+            self.assertEqual(len(self.client.objects), 2)
+            for extension in EXTENSIONS:
+                self.assertIn(
+                    extension.crx_url(
+                        extract_manifest_versions(bundled_manifest())[
+                            extension.extension_id
+                        ]
+                    ),
+                    self.probed,
+                )
 
     def test_plan_bytes_and_keys_are_deterministic_for_one_attempt(self) -> None:
         components = [
@@ -211,6 +261,34 @@ class ReleasePlanTest(unittest.TestCase):
             )
             self.assertTrue(
                 all("sha256" in put["Metadata"] for put in self.client.puts)
+            )
+            self.assertTrue(
+                all(
+                    put["Metadata"]["object-schema"] == "browseros-release-plan-v2"
+                    for put in self.client.puts
+                )
+            )
+
+    def test_plan_records_every_resource_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = self.create(Path(temp_dir))
+            plan = json.loads(result.plan_path.read_text())
+
+            self.assertEqual(plan["schema_version"], 2)
+            self.assertEqual(
+                result.resource_versions,
+                {
+                    "browserclaw_onboard": "0.0.3",
+                    "browserclaw_server": "0.0.2",
+                    "browseros_server": "0.0.1",
+                },
+            )
+            self.assertEqual(
+                {
+                    name: value["version"]
+                    for name, value in plan["resource_pins"].items()
+                },
+                result.resource_versions,
             )
 
     def test_retry_rejects_same_bytes_with_conflicting_binding(self) -> None:
@@ -362,6 +440,13 @@ class ReleasePlanTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(ValueError, "selected extension"):
                 self.create(Path(temp_dir), manifest=bundled_manifest())
+
+    def test_release_plan_requires_a_manifest_snapshot_when_extension_is_skipped(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "manifest snapshot"):
+                self.create(Path(temp_dir), include_manifest=False)
 
     def test_extension_component_cannot_hide_behind_skipped_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -536,6 +621,7 @@ class ReleasePlanTest(unittest.TestCase):
                 manifest_path=None,
                 manifest_key="",
                 manifest_url="",
+                resource_versions={},
             )
             with self.assertRaisesRegex(ValueError, "unsafe output"):
                 _write_github_output(root / "github-output", result)

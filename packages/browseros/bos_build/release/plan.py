@@ -18,6 +18,12 @@ from ..lib.env import EnvConfig
 from ..lib.r2 import get_r2_client
 from .feeds.render import GUPDATE_NS, render_update_manifest
 from .feeds.spec import EXTENSIONS, extension_by_name
+from .resource_pins import (
+    COMPONENT_RESOURCE_FAMILY,
+    RESOURCE_FAMILIES,
+    ResourcePin,
+    resolve_resource_pins,
+)
 
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -71,6 +77,7 @@ class PlanResult:
     manifest_path: Path | None
     manifest_key: str
     manifest_url: str
+    resource_versions: dict[str, str]
 
 
 def _sha256(content: bytes) -> str:
@@ -315,17 +322,55 @@ def _render_manifest(
     extension_name: str,
     extension_version: str,
 ) -> bytes:
-    if extension_name not in _EXTENSION_COMPONENT:
-        raise ValueError(f"unknown selected extension: {extension_name}")
-    if not _EXTENSION_VERSION_RE.fullmatch(extension_version):
-        raise ValueError(f"invalid selected extension version: {extension_version}")
     versions = _manifest_versions(path.read_text(encoding="utf-8"))
-    versions[extension_name] = extension_version
+    if extension_name:
+        if extension_name not in _EXTENSION_COMPONENT:
+            raise ValueError(f"unknown selected extension: {extension_name}")
+        if not _EXTENSION_VERSION_RE.fullmatch(extension_version):
+            raise ValueError(f"invalid selected extension version: {extension_version}")
+        versions[extension_name] = extension_version
+    elif extension_version:
+        raise ValueError("extension version provided without a selected extension")
     rendered = render_update_manifest(versions).encode("utf-8")
     validated = _manifest_versions(rendered.decode("utf-8"))
     if validated != versions:
         raise RuntimeError("generated bundled manifest did not preserve exact pins")
     return rendered
+
+
+def _validated_resource_pins(
+    pins: dict[str, ResourcePin],
+    prepared: dict[str, tuple[str, str]],
+) -> dict[str, ResourcePin]:
+    families = {family.name: family for family in RESOURCE_FAMILIES}
+    if set(pins) != set(families):
+        raise ValueError(
+            "resource pins must contain exactly: " + ", ".join(sorted(families))
+        )
+    for name, family in families.items():
+        pin = pins[name]
+        if pin.name != name or not _SERVER_VERSION_RE.fullmatch(pin.version):
+            raise ValueError(f"invalid resource pin for {name}")
+        objects = {item.target: item for item in pin.objects}
+        if set(objects) != set(family.targets) or len(objects) != len(pin.objects):
+            raise ValueError(f"invalid resource targets for {name}")
+        for target, item in objects.items():
+            if (
+                item.key != family.version_key(pin.version, target)
+                or not item.etag
+                or item.size < 0
+                or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
+                or (item.release_sha and not _SHA_RE.fullmatch(item.release_sha))
+            ):
+                raise ValueError(f"invalid resource object for {name}/{target}")
+        prepared_identity = prepared.get(name)
+        if prepared_identity is not None:
+            version, release_sha = prepared_identity
+            if pin.version != version or any(
+                item.release_sha != release_sha for item in pin.objects
+            ):
+                raise ValueError(f"prepared resource pin mismatch for {name}")
+    return pins
 
 
 def create_release_plan(
@@ -343,8 +388,9 @@ def create_release_plan(
     bucket: str,
     cdn_base_url: str,
     http_head: Callable[[str], int] = _default_http_head,
+    resource_pins: dict[str, ResourcePin] | None = None,
 ) -> PlanResult:
-    """Create, upload, and verify one release plan and optional manifest."""
+    """Create, upload, and verify one release plan and manifest."""
     if not _BROWSER_VERSION_RE.fullmatch(browser_version):
         raise ValueError(f"invalid browser version: {browser_version}")
     if not _SHA_RE.fullmatch(source_sha):
@@ -383,14 +429,35 @@ def create_release_plan(
         raise ValueError(
             "extension component was provided while selected extension is empty"
         )
+    if bundled_manifest_path is None:
+        raise ValueError("a bundled manifest snapshot is required")
+
+    prepared_resources = {
+        COMPONENT_RESOURCE_FAMILY[component.name]: (
+            component.version,
+            component.source_sha,
+        )
+        for component in selected
+        if component.name in COMPONENT_RESOURCE_FAMILY
+    }
+    if resource_pins is None:
+        resource_pins = resolve_resource_pins(
+            client,
+            bucket,
+            prepared_resources,
+        )
+    resource_pins = _validated_resource_pins(resource_pins, prepared_resources)
+    resource_versions = {
+        name: resource_pins[name].version for name in sorted(resource_pins)
+    }
+
     prefix = f"release-plans/{product}/{source_sha}/run-{run_id}-attempt-{run_attempt}"
     if "latest" in prefix.lower():
         raise ValueError("release plan key cannot contain latest")
     plan_key = f"{prefix}/release-plan.json"
-    manifest_key = ""
-    manifest_url = ""
-    manifest_path = None
-    manifest_bytes = None
+    manifest_key = f"{prefix}/bundled-manifest.xml"
+    manifest_url = f"{cdn_base_url}/{manifest_key}"
+    selected_extension_version = ""
 
     if extension_name:
         component_name = _EXTENSION_COMPONENT.get(extension_name)
@@ -399,24 +466,20 @@ def create_release_plan(
             raise ValueError(
                 f"selected extension {extension_name} has no prepared component"
             )
-        if bundled_manifest_path is None:
-            raise ValueError("selected extension requires a bundled manifest")
-        manifest_bytes = _render_manifest(
-            bundled_manifest_path,
-            extension_name,
-            component.version,
-        )
-        crx_url = extension_by_name(extension_name).crx_url(component.version)
-        _verify_url(crx_url, http_head)
-        manifest_key = f"{prefix}/bundled-manifest.xml"
-        manifest_url = f"{cdn_base_url}/{manifest_key}"
-    elif bundled_manifest_path is not None:
-        raise ValueError("bundled manifest provided without a selected extension")
+        selected_extension_version = component.version
+
+    manifest_bytes = _render_manifest(
+        bundled_manifest_path,
+        extension_name,
+        selected_extension_version,
+    )
+    manifest_versions = _manifest_versions(manifest_bytes.decode("utf-8"))
+    for name, version in manifest_versions.items():
+        _verify_url(extension_by_name(name).crx_url(version), http_head)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    if manifest_bytes is not None:
-        manifest_path = output_dir / "bundled-manifest.xml"
-        manifest_path.write_bytes(manifest_bytes)
+    manifest_path = output_dir / "bundled-manifest.xml"
+    manifest_path.write_bytes(manifest_bytes)
 
     plan = {
         "browser_version": browser_version,
@@ -424,7 +487,7 @@ def create_release_plan(
         "objects": {
             "bundled_manifest": {
                 "key": manifest_key,
-                "sha256": _sha256(manifest_bytes) if manifest_bytes else "",
+                "sha256": _sha256(manifest_bytes),
                 "url": manifest_url,
             },
             "release_plan": {
@@ -433,7 +496,10 @@ def create_release_plan(
             },
         },
         "product": product,
-        "schema_version": 1,
+        "resource_pins": {
+            name: resource_pins[name].to_dict() for name in sorted(resource_pins)
+        },
+        "schema_version": 2,
         "source_sha": source_sha,
         "workflow_run_attempt": int(run_attempt),
         "workflow_run_id": run_id,
@@ -443,21 +509,20 @@ def create_release_plan(
     plan_path.write_bytes(plan_bytes)
 
     binding = {
-        "object-schema": "browseros-release-plan-v1",
+        "object-schema": "browseros-release-plan-v2",
         "plan-key": plan_key,
         "product": product,
         "run-attempt": run_attempt,
         "run-id": run_id,
         "source-sha": source_sha,
     }
-    if manifest_path is not None and manifest_bytes is not None:
-        _upload_immutable(
-            client,
-            bucket,
-            manifest_key,
-            manifest_path,
-            {**binding, "object-kind": "bundled-manifest"},
-        )
+    _upload_immutable(
+        client,
+        bucket,
+        manifest_key,
+        manifest_path,
+        {**binding, "object-kind": "bundled-manifest"},
+    )
     _upload_immutable(
         client,
         bucket,
@@ -467,8 +532,7 @@ def create_release_plan(
     )
 
     plan_url = f"{cdn_base_url}/{plan_key}"
-    if manifest_url:
-        _verify_url(manifest_url, http_head)
+    _verify_url(manifest_url, http_head)
     _verify_url(plan_url, http_head)
     return PlanResult(
         plan_path=plan_path,
@@ -477,6 +541,7 @@ def create_release_plan(
         manifest_path=manifest_path,
         manifest_key=manifest_key,
         manifest_url=manifest_url,
+        resource_versions=resource_versions,
     )
 
 
@@ -509,6 +574,10 @@ def _write_github_output(path: Path, result: PlanResult) -> None:
         "plan_key": result.plan_key,
         "plan_path": str(result.plan_path),
         "plan_url": result.plan_url,
+        **{
+            f"{name}_version": version
+            for name, version in result.resource_versions.items()
+        },
     }
     with path.open("a", encoding="utf-8") as output:
         for name, value in values.items():
@@ -527,7 +596,7 @@ def main() -> None:
     parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--components-json", required=True)
     parser.add_argument("--extension-name", default="")
-    parser.add_argument("--bundled-manifest", type=Path)
+    parser.add_argument("--bundled-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--cdn-base-url", default="https://cdn.browseros.com")

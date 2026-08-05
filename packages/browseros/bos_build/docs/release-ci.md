@@ -11,7 +11,7 @@ Both products follow the same publication boundary:
 ```text
 preflight
   -> prepare selected components in parallel
-  -> create immutable release plan and optional bundled manifest
+  -> snapshot immutable resource pins and the bundled manifest into the release plan
   -> build selected browser platforms with exact component pins
   -> validate selected and skipped platform results
   -> preview every selected update feed, or record a successful no-op
@@ -83,10 +83,11 @@ gh workflow run release-browserclaw.yml \
   -f extensions=skip
 ```
 
-When `include_servers=false`, exact server pins are empty and browsers
-deliberately retain the platform workflow's live-`latest` behavior. When
-`extensions=skip`, the run-scoped manifest URL is empty and browser builds use
-the live bundled manifest. The release summary makes both choices visible.
+When `include_servers=false`, the plan snapshots the currently promoted exact
+resource versions without preparing or publishing a component release. When
+`extensions=skip`, it preserves the complete live extension version set in an
+immutable run-scoped manifest without preparing an extension release. Browser
+jobs never receive a blank pin that can fall back to a mutable live object.
 
 ## Immutable release plan
 
@@ -98,15 +99,21 @@ a run/attempt-specific R2 key:
 release-plans/<product>/<source-sha>/run-<run-id>-attempt-<attempt>/release-plan.json
 ```
 
-The plan records the product, browser version, fixed source SHA, run identity,
-and each selected component version/tag/source. R2 creation uses conditional
+The schema-v2 plan records the product, browser version, fixed source SHA, run
+identity, each selected component version/tag/source, and all three server and
+onboarding resource pins. A prepared component supplies its new exact pin. For
+every reused family, the helper reads all `latest` targets, resolves one
+coherent version, verifies the matching versioned objects, then rereads every
+alias to reject a concurrent promotion. Current objects with source-bound R2
+metadata use that binding; legacy objects resolve only when exactly one
+version's ETag and size match every target. R2 creation uses conditional
 `If-None-Match` writes with source, run, plan-key, object-kind, and SHA-256
 bindings. A retry may reuse only byte-identical, binding-identical objects.
 
-When an extension is selected, the helper reads the complete live bundled
-manifest, validates its exact known structure, preserves every other extension
-pin, and overrides only the selected extension. It verifies every versioned CRX
-URL and uploads the result beside the plan:
+The helper always reads the complete live bundled manifest, validates its exact
+known structure, and verifies every versioned CRX URL. It preserves all pins
+when extension release is skipped; otherwise it overrides only the selected
+extension. It uploads the result beside the plan:
 
 ```text
 release-plans/<product>/<source-sha>/run-<run-id>-attempt-<attempt>/bundled-manifest.xml
@@ -131,8 +138,8 @@ The full workflows pass these reusable-workflow inputs:
 
 | Product | Exact inputs |
 | --- | --- |
-| BrowserOS | `browseros_server_version`, `bundled_extensions_manifest_url` |
-| BrowserClaw | `browserclaw_server_version`, `browserclaw_onboard_version`, `bundled_extensions_manifest_url` |
+| BrowserOS | `browseros_server_version`, `browserclaw_server_version`, `browserclaw_onboard_version`, `bundled_extensions_manifest_url` |
+| BrowserClaw | `browseros_server_version`, `browserclaw_server_version`, `browserclaw_onboard_version`, `bundled_extensions_manifest_url` |
 
 Linux and Windows build at the caller's fixed workflow SHA. macOS receives the
 same SHA through its explicit `ref` input. A selected component that fails,
@@ -161,8 +168,9 @@ not use `--allow-downgrade` or `--repair-invalid-live`.
 
 Linux-only with `extensions=skip`, or another selection with no appcast or
 extension surface, is a successful no-op. It is distinct from an upstream
-failure and does not block component finalization. The summary still gives the
-manual browser artifact promotion command.
+failure and does not block component finalization. Preview summaries never
+contain actionable publication commands. The final summary emits them only
+after every selected browser lane and component finalizer succeeds.
 
 After inspecting the artifact and browser draft, publish selected surfaces
 explicitly:

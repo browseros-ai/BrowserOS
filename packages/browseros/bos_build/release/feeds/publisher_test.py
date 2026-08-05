@@ -3,6 +3,7 @@
 
 import hashlib
 import io
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -25,6 +26,11 @@ from .render import (
 from .spec import all_feeds, feed_by_key, server_feed, update_manifest_feed
 
 FIXED_NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+EXTENSION_VERSIONS = {
+    "agent": "0.0.118.0",
+    "bugreporter": "54.0.0.0",
+    "browserclaw": "0.1.7.0",
+}
 
 
 class _FakeExceptions:
@@ -499,33 +505,44 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
 
-    def test_manifest_entry_removal_refused_without_flag(self):
+    def test_manifest_entry_removal_refused_even_with_override(self):
         spec = update_manifest_feed("alpha")
-        live = render_update_manifest({"agent": "0.0.118.0", "bugreporter": "54.0.0.0"})
+        live = render_update_manifest(EXTENSION_VERSIONS)
         publisher = self._publisher({spec.key: live.encode()})
 
-        only_agent = render_update_manifest({"agent": "0.0.118.0"})
-        self.assertFalse(publisher.publish(spec, only_agent, publish=True))
+        missing_browserclaw = render_update_manifest(
+            {
+                name: version
+                for name, version in EXTENSION_VERSIONS.items()
+                if name != "browserclaw"
+            }
+        )
+        self.assertFalse(publisher.publish(spec, missing_browserclaw, publish=True))
         self.assertEqual(self.client.calls, [])
 
-        self.assertTrue(
-            publisher.publish(spec, only_agent, publish=True, allow_downgrade=True)
+        self.assertFalse(
+            publisher.publish(
+                spec,
+                missing_browserclaw,
+                publish=True,
+                allow_downgrade=True,
+                repair_invalid_live=True,
+            )
         )
+        self.assertEqual(self.client.calls, [])
 
     def test_update_manifest_guards_per_extension(self):
         spec = update_manifest_feed("alpha")
-        live = render_update_manifest({"agent": "0.0.118.0", "bugreporter": "54.0.0.0"})
+        live = render_update_manifest(EXTENSION_VERSIONS)
         publisher = self._publisher({spec.key: live.encode()})
 
         downgraded = render_update_manifest(
-            {"agent": "0.0.117.0", "bugreporter": "54.0.0.0"}
+            {**EXTENSION_VERSIONS, "agent": "0.0.117.0"}
         )
         self.assertFalse(publisher.publish(spec, downgraded, publish=True))
         self.assertEqual(self.client.calls, [])
 
-        upgraded = render_update_manifest(
-            {"agent": "0.0.119.0", "bugreporter": "54.0.0.0"}
-        )
+        upgraded = render_update_manifest({**EXTENSION_VERSIONS, "agent": "0.0.119.0"})
         self.assertTrue(publisher.publish(spec, upgraded, publish=True))
 
     def test_default_rejects_all_invalid_live_repair_pairs(self):
@@ -696,15 +713,13 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_repair_refuses_parseable_manifest_downgrade(self):
         spec = update_manifest_feed("alpha")
-        live = render_update_manifest({"agent": "0.0.124.0", "bugreporter": "54.0.0.0"})
+        live = render_update_manifest({**EXTENSION_VERSIONS, "agent": "0.0.124.0"})
         publisher = self._publisher({spec.key: live.encode()})
 
         self.assertFalse(
             publisher.publish(
                 spec,
-                render_update_manifest(
-                    {"agent": "0.0.123.0", "bugreporter": "54.0.0.0"}
-                ),
+                render_update_manifest({**EXTENSION_VERSIONS, "agent": "0.0.123.0"}),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -797,7 +812,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_manifest_with_missing_download_url(self):
-        versions = {"agent": "0.0.123.0"}
+        versions = {**EXTENSION_VERSIONS, "agent": "0.0.123.0"}
         spec = update_manifest_feed("alpha")
         publisher = self._publisher({spec.key: _malformed_manifest(versions).encode()})
         content = render_update_manifest(versions).replace(
@@ -832,7 +847,7 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_repair_refuses_manifest_missing_download_url_with_valid_live(self):
         spec = update_manifest_feed("alpha")
-        live = render_update_manifest({"agent": "0.0.123.0"})
+        live = render_update_manifest({**EXTENSION_VERSIONS, "agent": "0.0.123.0"})
         content = live.replace(' codebase="', ' data-codebase="')
         publisher = self._publisher({spec.key: live.encode()})
 
@@ -1060,6 +1075,186 @@ class PublisherTestCase(unittest.TestCase):
         staged = self.staging_root / "extensions" / "extensions.alpha.json"
         self.assertTrue(staged.exists())
 
+    def test_extension_json_requires_the_exact_canonical_value(self):
+        spec = feed_by_key("extensions/extensions.alpha.json")
+        invalid = [{"extensions": {}}]
+
+        missing = json.loads(render_extensions_json("alpha"))
+        missing["extensions"].pop(next(iter(missing["extensions"])))
+        invalid.append(missing)
+
+        extra = json.loads(render_extensions_json("alpha"))
+        extra["extensions"]["a" * 32] = {
+            "external_update_url": update_manifest_feed("alpha").url
+        }
+        invalid.append(extra)
+
+        alternate_install = json.loads(render_extensions_json("alpha"))
+        next(iter(alternate_install["extensions"].values()))["external_crx"] = (
+            "https://cdn.browseros.com/extensions/agent-0.0.118.0.crx"
+        )
+        invalid.append(alternate_install)
+
+        duplicate_key = render_extensions_json("alpha").replace(
+            '"extensions": {',
+            '"extensions": {}, "extensions": {',
+            1,
+        )
+        invalid_content = [json.dumps(document) for document in invalid]
+        invalid_content.append(duplicate_key)
+
+        for content in invalid_content:
+            with self.subTest(content=content):
+                publisher = self._publisher()
+                self.assertFalse(
+                    publisher.publish(
+                        spec,
+                        content,
+                        publish=True,
+                        allow_downgrade=True,
+                        repair_invalid_live=True,
+                    )
+                )
+                self.assertEqual(self.client.calls, [])
+
+    def test_extension_manifests_require_exact_ids_and_canonical_crx_binding(self):
+        canonical = render_update_manifest(EXTENSION_VERSIONS)
+        invalid = (
+            render_update_manifest(
+                {
+                    name: version
+                    for name, version in EXTENSION_VERSIONS.items()
+                    if name != "browserclaw"
+                }
+            ),
+            canonical.replace("pjimfkbpehlcllblajnpfamdfjhhlgkc", "a" * 32),
+            canonical.replace(
+                "pjimfkbpehlcllblajnpfamdfjhhlgkc",
+                "bflpfmnmnokmjhmgnolecpppdbdophmk",
+            ),
+            canonical.replace(
+                "agent-0.0.118.0.crx",
+                "browserclaw-0.1.7.0.crx",
+            ),
+            canonical.replace(
+                'version="0.0.118.0"',
+                'version="0.0.119.0"',
+            ),
+        )
+
+        for key in (
+            "extensions/update-manifest.alpha.xml",
+            "extensions/bundled-manifest.xml",
+        ):
+            for content in invalid:
+                with self.subTest(key=key, content=content):
+                    publisher = self._publisher()
+                    self.assertFalse(
+                        publisher.publish(
+                            feed_by_key(key),
+                            content,
+                            publish=True,
+                            allow_downgrade=True,
+                            repair_invalid_live=True,
+                        )
+                    )
+                    self.assertEqual(self.client.calls, [])
+                    self.assertEqual(self.head_calls, [])
+
+    def test_publish_staged_extension_pair_writes_manifest_before_json(self):
+        publisher = self._publisher()
+        json_key = "extensions/extensions.alpha.json"
+        manifest_key = "extensions/update-manifest.alpha.xml"
+        self._write_staged(publisher, json_key, render_extensions_json("alpha"))
+        self._write_staged(
+            publisher,
+            manifest_key,
+            render_update_manifest(EXTENSION_VERSIONS),
+        )
+
+        self.assertTrue(
+            publisher.publish_staged([json_key, manifest_key], publish=True)
+        )
+
+        self.assertEqual(
+            [call[1] for call in self.client.calls if call[0] == "put"],
+            [manifest_key, json_key],
+        )
+
+    def test_publish_staged_invalid_extension_json_blocks_the_whole_pair(self):
+        publisher = self._publisher()
+        json_key = "extensions/extensions.alpha.json"
+        manifest_key = "extensions/update-manifest.alpha.xml"
+        self._write_staged(publisher, json_key, '{"extensions": {}}')
+        self._write_staged(
+            publisher,
+            manifest_key,
+            render_update_manifest(EXTENSION_VERSIONS),
+        )
+
+        self.assertFalse(
+            publisher.publish_staged(
+                [json_key, manifest_key],
+                publish=True,
+                allow_downgrade=True,
+                repair_invalid_live=True,
+            )
+        )
+        self.assertEqual(self.client.calls, [])
+
+    def test_publish_staged_json_requires_selected_or_valid_live_manifest(self):
+        json_key = "extensions/extensions.alpha.json"
+        manifest_key = "extensions/update-manifest.alpha.xml"
+
+        publisher = self._publisher()
+        self._write_staged(publisher, json_key, render_extensions_json("alpha"))
+        self.assertFalse(publisher.publish_staged([json_key], publish=True))
+        self.assertEqual(self.client.calls, [])
+
+        publisher = self._publisher(
+            {
+                manifest_key: render_update_manifest(
+                    {
+                        name: version
+                        for name, version in EXTENSION_VERSIONS.items()
+                        if name != "browserclaw"
+                    }
+                ).encode()
+            }
+        )
+        self._write_staged(publisher, json_key, render_extensions_json("alpha"))
+        self.assertFalse(publisher.publish_staged([json_key], publish=True))
+        self.assertEqual(self.client.calls, [])
+
+    def test_publish_staged_keeps_manifest_repair_and_bundled_independent(self):
+        manifest_key = "extensions/update-manifest.alpha.xml"
+        corrected = render_update_manifest(EXTENSION_VERSIONS)
+        publisher = self._publisher(
+            {manifest_key: _malformed_manifest(EXTENSION_VERSIONS).encode()}
+        )
+        self._write_staged(publisher, manifest_key, corrected)
+
+        self.assertTrue(
+            publisher.publish_staged(
+                [manifest_key],
+                publish=True,
+                repair_invalid_live=True,
+            )
+        )
+        self.assertEqual(
+            [call[0] for call in self.client.calls],
+            ["copy", "put"],
+        )
+
+        bundled_key = "extensions/bundled-manifest.xml"
+        publisher = self._publisher()
+        self._write_staged(publisher, bundled_key, corrected)
+        self.assertTrue(publisher.publish_staged([bundled_key], publish=True))
+        self.assertEqual(
+            [call[1] for call in self.client.calls if call[0] == "put"],
+            [bundled_key],
+        )
+
     def test_publish_staged_preflights_full_batch_before_live_writes(self):
         publisher = self._publisher()
         self._write_staged(publisher, "appcast.xml", _mac_appcast())
@@ -1077,7 +1272,10 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_publish_staged_defaults_to_dry_run(self):
-        publisher = self._publisher()
+        manifest_key = "extensions/update-manifest.alpha.xml"
+        publisher = self._publisher(
+            {manifest_key: render_update_manifest(EXTENSION_VERSIONS).encode()}
+        )
         key = "extensions/extensions.alpha.json"
         self._write_staged(publisher, key, render_extensions_json("alpha"))
 
@@ -1086,7 +1284,10 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_publish_staged_writes_after_successful_preflight(self):
-        publisher = self._publisher()
+        manifest_key = "extensions/update-manifest.alpha.xml"
+        publisher = self._publisher(
+            {manifest_key: render_update_manifest(EXTENSION_VERSIONS).encode()}
+        )
         key = "extensions/extensions.alpha.json"
         self._write_staged(publisher, key, render_extensions_json("alpha"))
 

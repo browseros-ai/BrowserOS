@@ -634,6 +634,8 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             },
             "pins": {
                 "browseros_server_version": "browseros_server_version",
+                "browserclaw_server_version": "browserclaw_server_version",
+                "browserclaw_onboard_version": "browserclaw_onboard_version",
                 "bundled_extensions_manifest_url": "manifest_url",
             },
         },
@@ -651,6 +653,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 "finalize_extension": "release-extensions.yml",
             },
             "pins": {
+                "browseros_server_version": "browseros_server_version",
                 "browserclaw_server_version": "browserclaw_server_version",
                 "browserclaw_onboard_version": "browserclaw_onboard_version",
                 "bundled_extensions_manifest_url": "manifest_url",
@@ -762,7 +765,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertIn("unexpectedly ran", gate["run"])
                 self.assertIn("source mismatch", gate["run"])
 
-    def test_browser_calls_receive_only_the_product_plan_pins(self):
+    def test_every_browser_call_receives_every_resource_plan_pin(self):
         all_pins = {
             "browseros_server_version",
             "browserclaw_server_version",
@@ -787,6 +790,53 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                             job["with"]["ref"],
                             "${{ needs.release_plan.outputs.source_sha }}",
                         )
+
+    def test_release_plan_always_snapshots_manifest_and_outputs_all_resource_pins(
+        self,
+    ):
+        expected_outputs = {
+            "browseros_server_version",
+            "browserclaw_server_version",
+            "browserclaw_onboard_version",
+        }
+        for workflow_name, _config in self.FULL_RELEASE_CONFIG.items():
+            with self.subTest(workflow=workflow_name):
+                plan = self.load_workflow(workflow_name)["jobs"]["release_plan"]
+                self.assertTrue(expected_outputs.issubset(plan["outputs"]))
+                download = next(
+                    step
+                    for step in plan["steps"]
+                    if step.get("name") == "Download bundled extension manifest"
+                )
+                self.assertNotIn("if", download)
+                create = next(
+                    step
+                    for step in plan["steps"]
+                    if step.get("name") == "Create immutable release plan"
+                )
+                self.assertIn(
+                    '--bundled-manifest "$RUNNER_TEMP/bundled-manifest.xml"',
+                    create["run"],
+                )
+
+    def test_only_final_success_summary_contains_promotion_commands(self):
+        for workflow_name, _config in self.FULL_RELEASE_CONFIG.items():
+            with self.subTest(workflow=workflow_name):
+                stage = self.named_step(
+                    workflow_name, "stage_updates", "Render staged update feeds"
+                )["run"]
+                summary = self.named_step(
+                    workflow_name, "finalize", "Write release summary"
+                )["run"]
+                self.assertNotIn("release publish --version", stage)
+                self.assertNotIn("--publish", stage)
+                guard = summary.index('if [ "$promotion_ready" = "true" ]')
+                self.assertGreater(summary.index("release publish --version"), guard)
+                self.assertGreater(summary.index("release appcast --version"), guard)
+                self.assertGreater(summary.index("release extensions --channel"), guard)
+                self.assertIn("browser-gate", summary)
+                self.assertIn("-finalize", summary)
+                self.assertIn("Promotion commands withheld", summary)
 
     def test_browser_gate_and_finalizers_enforce_ordering(self):
         for workflow_name, config in self.FULL_RELEASE_CONFIG.items():
@@ -1504,9 +1554,11 @@ fi
             self.assertNotIn("release appcast", calls)
             self.assertIn("release extensions", calls)
             summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
-            self.assertIn("Browser artifact promotion skipped", summary)
+            self.assertIn("withheld until the final release gate", summary)
+            self.assertNotIn("release publish", summary)
+            self.assertNotIn("--publish", summary)
 
-    def test_partial_stage_summary_preserves_promotion_contract(self):
+    def test_partial_stage_summary_withholds_promotion_commands(self):
         for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
             expected = [f"appcast{infix}-win.xml"]
             with self.subTest(workflow=workflow_name):
@@ -1523,24 +1575,11 @@ fi
                     msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
                 )
                 summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
-                self.assertIn("--platform win", summary)
-                self.assertIn(
-                    "release publish --version 0.49.0 "
-                    f"--product {product} --platform win "
-                    "--macos-arch universal "
-                    f"--source-sha {'a' * 40} "
-                    "--workflow-run-id 30418029456",
-                    summary,
-                )
-                for token in (
-                    "--platforms windows",
-                    "--macos-arch universal",
-                    f"--source-sha {'a' * 40}",
-                    "--workflow-run-id 30418029456",
-                    "--publish",
-                ):
-                    self.assertIn(token, summary)
-                self.assertNotIn("--workflow-run-attempt", summary)
+                self.assertIn("withheld until the final release gate", summary)
+                self.assertNotIn("release publish", summary)
+                self.assertNotIn("release appcast", summary)
+                self.assertNotIn("release extensions", summary)
+                self.assertNotIn("--publish", summary)
 
     def test_literal_finalize_gates_require_successful_staging(self):
         for workflow_name, product, _ in self.RELEASE_WORKFLOWS:

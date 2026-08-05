@@ -22,7 +22,9 @@ from .render import (
     extract_channel_metadata,
     extract_enclosure_urls,
     extract_manifest_versions,
+    is_canonical_extensions_json,
     parse_dotted_version,
+    strict_extension_manifest_versions,
 )
 from .spec import (
     EXTENSIONS,
@@ -151,39 +153,6 @@ def _has_complete_appcast_download_urls(content: str) -> bool:
     return True
 
 
-def _strict_manifest_versions(content: str) -> Optional[dict[str, str]]:
-    try:
-        root = ET.fromstring(content)
-    except ET.ParseError:
-        return None
-    if _xml_local_name(root.tag) != "gupdate":
-        return None
-
-    apps = [element for element in root if _xml_local_name(element.tag) == "app"]
-    all_apps = [
-        element for element in root.iter() if _xml_local_name(element.tag) == "app"
-    ]
-    if not apps or len(apps) != len(all_apps):
-        return None
-
-    versions: dict[str, str] = {}
-    for app in apps:
-        app_id = app.get("appid")
-        updatechecks = [
-            element for element in app if _xml_local_name(element.tag) == "updatecheck"
-        ]
-        if not app_id or len(updatechecks) != 1:
-            return None
-        version = updatechecks[0].get("version")
-        codebase = updatechecks[0].get("codebase")
-        if _strict_dotted_version(version) is None or not (codebase or "").strip():
-            return None
-        if app_id in versions:
-            return None
-        versions[app_id] = version.strip()
-    return versions
-
-
 def _is_empty_appcast_shell(content: str) -> bool:
     """Recognize only unambiguously unpopulated RSS appcasts."""
     try:
@@ -282,6 +251,63 @@ class FeedPublisher:
             raise ValueError(f"Unknown feed kind: {spec.kind}") from e
         return directory / basename
 
+    def _prepare_staged_batch(
+        self,
+        staged: List[tuple[FeedSpec, str]],
+        allow_downgrade: bool,
+        repair_invalid_live: bool,
+    ) -> Optional[List[tuple[FeedSpec, str]]]:
+        selected = {spec.key: (spec, content) for spec, content in staged}
+        json_manifests = {}
+        for spec, content in staged:
+            if spec.kind != "extensions" or not spec.key.endswith(".json"):
+                continue
+            if not is_canonical_extensions_json(content, spec.channel):
+                log_error(
+                    f"{spec.key}: extension config must exactly match the "
+                    f"registered {spec.channel} extension set"
+                )
+                return None
+            manifest_spec = update_manifest_feed(spec.channel)
+            json_manifests[spec.key] = manifest_spec.key
+            selected_manifest = selected.get(manifest_spec.key)
+            if selected_manifest is not None:
+                continue
+            live_manifest = self.fetch_live(manifest_spec.key)
+            if live_manifest is None:
+                log_error(
+                    f"{spec.key}: matching manifest {manifest_spec.key} is "
+                    "neither selected nor live"
+                )
+                return None
+            if not self.publish(
+                manifest_spec,
+                live_manifest,
+                allow_downgrade=allow_downgrade,
+                repair_invalid_live=repair_invalid_live,
+                verbose=False,
+                stage=False,
+            ):
+                log_error(
+                    f"{spec.key}: matching live manifest {manifest_spec.key} "
+                    "failed validation"
+                )
+                return None
+
+        ordered = []
+        added = set()
+        for pair in staged:
+            spec, _ = pair
+            manifest_key = json_manifests.get(spec.key)
+            manifest_pair = selected.get(manifest_key) if manifest_key else None
+            if manifest_pair is not None and manifest_key not in added:
+                ordered.append(manifest_pair)
+                added.add(manifest_key)
+            if spec.key not in added:
+                ordered.append(pair)
+                added.add(spec.key)
+        return ordered
+
     def publish_staged(
         self,
         keys: Sequence[str],
@@ -310,6 +336,15 @@ class FeedPublisher:
                 log_error(f"{spec.key}: cannot read local feed {path}: {e}")
                 return False
             staged.append((spec, content))
+
+        prepared = self._prepare_staged_batch(
+            staged,
+            allow_downgrade,
+            repair_invalid_live,
+        )
+        if prepared is None:
+            return False
+        staged = prepared
 
         if publish:
             for spec, content in staged:
@@ -376,12 +411,17 @@ class FeedPublisher:
                     "and every enclosure must have a download URL"
                 )
                 return False
-        elif spec.key.endswith(".xml") and _strict_manifest_versions(content) is None:
-            log_error(
-                f"{spec.key}: manifest must contain only complete, strictly "
-                "versioned extension entries"
+        elif spec.kind == "extensions" and spec.key.endswith(".xml"):
+            versions = strict_extension_manifest_versions(
+                content,
+                include_all_extensions=not spec.channel,
             )
-            return False
+            if versions is None:
+                log_error(
+                    f"{spec.key}: manifest must contain the exact registered "
+                    "extension set with canonical versioned CRX URLs"
+                )
+                return False
 
         if not self._check_download_urls(spec, content):
             return False
@@ -466,23 +506,10 @@ class FeedPublisher:
             return True
 
         if spec.kind == "extensions" and spec.key.endswith(".json"):
-            expected = update_manifest_feed(spec.channel).url
-            document = json.loads(content)
-            extensions = (
-                document.get("extensions") if isinstance(document, dict) else None
-            )
-            if not isinstance(extensions, dict):
-                log_error(f"{spec.key}: 'extensions' is not an object")
-                return False
-            urls = {
-                config.get("external_update_url") if isinstance(config, dict) else None
-                for config in extensions.values()
-            }
-            if urls - {expected}:
+            if not is_canonical_extensions_json(content, spec.channel):
                 log_error(
-                    f"{spec.key}: external_update_url mismatch — got "
-                    f"{sorted(str(u) for u in urls - {expected})}, this "
-                    f"channel requires {expected}. Refusing to publish."
+                    f"{spec.key}: extension config must exactly match the "
+                    f"registered {spec.channel} extension set"
                 )
                 return False
 
@@ -704,7 +731,10 @@ class FeedPublisher:
         live_versions = extract_manifest_versions(live)
         if not live_versions:
             if repair_invalid_live:
-                new_versions = _strict_manifest_versions(content)
+                new_versions = strict_extension_manifest_versions(
+                    content,
+                    include_all_extensions=not spec.channel,
+                )
                 if not new_versions:
                     log_error(
                         f"{spec.key}: repair manifest must contain only "
