@@ -240,11 +240,12 @@ describe('AcpAgentRuntime', () => {
     expect(acpRuntime.setConfigOptionCalls).toEqual([
       { key: 'reasoning_effort', value: 'xhigh' },
     ])
-    const codexConfig = JSON.parse(
-      fixture.providerSettings[0]?.sessionOptions?.env?.CODEX_CONFIG ?? '{}',
-    )
-    expect(codexConfig.model).toBe('gpt-5.4')
-    expect(codexConfig.model_reasoning_effort).toBe('xhigh')
+    expect(fixture.providerSettings[0]?.sessionOptions).toEqual({})
+    const codexCommand =
+      fixture.providerSettings[0]?.agentRegistryOverrides?.codex ?? ''
+    expect(codexCommand).toContain('CODEX_CONFIG=')
+    expect(codexCommand).toContain('"model":"gpt-5.4"')
+    expect(codexCommand).toContain('"model_reasoning_effort":"xhigh"')
   })
 
   it('inlines text files before the turn reaches ACP', async () => {

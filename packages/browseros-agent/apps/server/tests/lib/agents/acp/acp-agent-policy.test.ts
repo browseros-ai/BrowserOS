@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import { buildAcpAgentPolicy } from '../../../../src/lib/agents/acp/acp-agent-policy'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
 
@@ -119,21 +120,54 @@ describe('buildAcpAgentPolicy', () => {
       },
     })
 
-    expect(policy.sessionOptions.env?.CODEX_HOME).toBeUndefined()
-    expect(policy.sessionOptions.env?.INITIAL_AGENT_MODE).toBe(
-      'agent-full-access',
-    )
-    const config = JSON.parse(policy.sessionOptions.env?.CODEX_CONFIG ?? '{}')
-    expect(config).toEqual({
-      developer_instructions: SKILL,
-      model: 'gpt-5.4',
-      model_reasoning_effort: 'high',
-      plugins: {
-        'browser@openai-bundled': { enabled: false },
-        'chrome@openai-bundled': { enabled: false },
-        'computer-use@openai-bundled': { enabled: false },
+    const store = createFileSessionStore({ stateDir: resourcesDir })
+    const timestamp = new Date(0).toISOString()
+    const record: AcpSessionRecord = {
+      schema: 'acpx.session.v1',
+      acpxRecordId: 'codex-record',
+      acpSessionId: 'codex-session',
+      agentCommand: policy.agentRegistryOverrides.codex,
+      cwd: policy.cwd,
+      createdAt: timestamp,
+      lastUsedAt: timestamp,
+      lastSeq: 0,
+      eventLog: {
+        active_path: 'events.jsonl',
+        segment_count: 0,
+        max_segment_bytes: 1024,
+        max_segments: 1,
       },
-    })
+      messages: [],
+      updated_at: timestamp,
+      cumulative_token_usage: {},
+      request_token_usage: {},
+      ...(policy.sessionOptions.env
+        ? {
+            acpx: {
+              session_options: { env: policy.sessionOptions.env },
+            },
+          }
+        : {}),
+    }
+
+    await store.save(record)
+    expect(await store.load(record.acpxRecordId)).toBeDefined()
+    expect(policy.sessionOptions).toEqual({})
+    expect(policy.agentRegistryOverrides.codex).not.toContain('CODEX_HOME')
+    expect(policy.agentRegistryOverrides.codex).toContain('CODEX_CONFIG=')
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      "INITIAL_AGENT_MODE='agent-full-access'",
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"developer_instructions":"---\\nname: browseros',
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain('"model":"gpt-5.4"')
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"model_reasoning_effort":"high"',
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"browser@openai-bundled":{"enabled":false}',
+    )
     expect(policy.mcpServers.map((server) => server.name)).toEqual([
       'browseros',
     ])

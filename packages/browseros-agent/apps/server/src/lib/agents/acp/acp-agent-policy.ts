@@ -44,6 +44,7 @@ export async function buildAcpAgentPolicy(
     agentType: input.agent.type,
     browserosDir: input.browserosDir,
     resourcesDir: input.resourcesDir,
+    spawnEnv: buildSpawnEnvironment(input.agent, skill),
   })
 
   return {
@@ -72,11 +73,20 @@ function buildSessionOptions(
     }
   }
 
+  return {}
+}
+
+function buildSpawnEnvironment(
+  agent: AcpAgentDefinition,
+  skill: string,
+): Record<string, string> | undefined {
+  if (agent.type !== 'codex') return undefined
+
+  // acpx applies its snake_case record policy to SessionAgentOptions.env, so
+  // uppercase process variables must stay on the launcher command.
   return {
-    env: {
-      CODEX_CONFIG: JSON.stringify(buildCodexConfig(agent, skill)),
-      INITIAL_AGENT_MODE: 'agent-full-access',
-    },
+    CODEX_CONFIG: JSON.stringify(buildCodexConfig(agent, skill)),
+    INITIAL_AGENT_MODE: 'agent-full-access',
   }
 }
 

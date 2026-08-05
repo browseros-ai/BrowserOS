@@ -92,6 +92,28 @@ describe('resolveAcpSpawnCommand', () => {
     )
   })
 
+  it('passes Codex process configuration through the bundled launcher', () => {
+    const codexConfig = JSON.stringify({
+      developer_instructions: "Use BrowserOS, not Codex's browser.\n",
+    })
+    const out = resolveAcpSpawnCommand({
+      agentType: 'codex',
+      env: { PATH: '/usr/bin' },
+      resourcesDir: '/fake/resources',
+      spawnEnv: {
+        CODEX_CONFIG: codexConfig,
+        INITIAL_AGENT_MODE: 'agent-full-access',
+      },
+      resolveBundledBun: stubBunPresent,
+    })
+    const split = splitCommandLikeAcpx(out.command)
+
+    expect(split.command).toBe('env')
+    expect(split.args).toContain(`CODEX_CONFIG=${codexConfig}`)
+    expect(split.args).toContain('INITIAL_AGENT_MODE=agent-full-access')
+    expect(split.args).toContain(`PATH=${dirname(FAKE_BUN_PATH)}:/usr/bin`)
+  })
+
   it('falls back to the host npx command when the bundled binary is missing', () => {
     const out = resolveAcpSpawnCommand({
       agentType: 'claude',
@@ -100,6 +122,21 @@ describe('resolveAcpSpawnCommand', () => {
     })
     expect(out?.source).toBe('host-npx-fallback')
     expect(out?.command).toBe(HOST_ACP_ADAPTER_CONFIG.claude.acpCommand)
+  })
+
+  it('passes process configuration through the host npx fallback', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'codex',
+      resourcesDir: '/fake/resources',
+      spawnEnv: { INITIAL_AGENT_MODE: 'agent-full-access' },
+      resolveBundledBun: stubBunMissing,
+    })
+    const split = splitCommandLikeAcpx(out.command)
+
+    expect(split.command).toBe('env')
+    expect(split.args).toContain('INITIAL_AGENT_MODE=agent-full-access')
+    expect(split.args).toContain('npx')
+    expect(split.args).toContain(HOST_ACP_ADAPTER_CONFIG.codex.acpPackageSpec)
   })
 
   it('quotes the bundled bun path so paths with spaces survive', () => {

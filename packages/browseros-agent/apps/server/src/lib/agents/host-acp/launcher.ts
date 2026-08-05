@@ -2,13 +2,6 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Constructs the spawn command for a built-in ACP adapter. Prefers the BrowserOS-shipped Bun at
- * <resourcesDir>/bin/third_party/bun so end-user installs without Node
- * still have a working launcher; falls back to the existing
- * `npx -y …` command when the bundled binary is unavailable
- * (development configurations, third_party not shipped, platforms
- * outside darwin / linux / win32).
  */
 
 import type { AcpAgentType } from '@browseros/shared/schemas/agent'
@@ -29,6 +22,7 @@ export interface ResolveAcpSpawnCommandInput {
   env?: NodeJS.ProcessEnv
   resourcesDir?: string | null
   platform?: NodeJS.Platform
+  spawnEnv?: Readonly<Record<string, string>>
   resolveBundledBun?: typeof resolveBundledBun
 }
 
@@ -46,16 +40,19 @@ export function resolveAcpSpawnCommand(
     return {
       command: wrapCommandWithEnv(
         `${quoteAcpCommandToken(bunPath)} x --bun --silent --package ${quoteAcpCommandToken(config.acpPackageSpec)} ${quoteAcpCommandToken(config.acpBin)}`,
-        withBundledNativeBinaryPath({
-          resourcesDir: input.resourcesDir,
-          env: withBundledBunAcpAdapterEnv({
-            bunPath,
-            browserosDir: input.browserosDir,
-            env: input.env,
+        {
+          ...withBundledNativeBinaryPath({
+            resourcesDir: input.resourcesDir,
+            env: withBundledBunAcpAdapterEnv({
+              bunPath,
+              browserosDir: input.browserosDir,
+              env: input.env,
+              platform: input.platform,
+            }),
             platform: input.platform,
           }),
-          platform: input.platform,
-        }),
+          ...input.spawnEnv,
+        },
       ),
       source: 'bundled-bun',
     }
@@ -66,15 +63,17 @@ export function resolveAcpSpawnCommand(
     env: hostPath,
     platform: input.platform,
   })
-  if (
+  const bundledNativePathAdded =
     pathValue(hostEnv, input.platform) !== pathValue(hostPath, input.platform)
-  ) {
-    return {
-      command: wrapCommandWithEnv(config.acpCommand, hostEnv),
-      source: 'host-npx-fallback',
-    }
+  const spawnEnv = {
+    ...(bundledNativePathAdded ? hostEnv : {}),
+    ...input.spawnEnv,
   }
-  return { command: config.acpCommand, source: 'host-npx-fallback' }
+
+  return {
+    command: wrapCommandWithEnv(config.acpCommand, spawnEnv),
+    source: 'host-npx-fallback',
+  }
 }
 
 function inheritedPath(
