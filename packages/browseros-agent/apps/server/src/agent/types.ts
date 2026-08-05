@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import type { LLMProvider } from '@browseros/shared/schemas/llm'
-import type { McpServerSpec } from '../lib/agents/acpx-provider/buildAcpxProvider'
 
 export interface ProviderConfig {
   provider: LLMProvider
@@ -22,12 +21,6 @@ export interface ProviderConfig {
 export interface ResolvedAgentConfig {
   conversationId: string
   provider: LLMProvider
-  /**
-   * Unique `LlmProviderConfig.id` this request references. Forwarded
-   * from the chat request so the ACP factory can scope the default
-   * workspace path per provider record instead of per provider TYPE
-   * (otherwise every Claude Code provider would share one cwd).
-   */
   providerId?: string
   model: string
   apiKey?: string
@@ -56,29 +49,4 @@ export interface ResolvedAgentConfig {
   origin?: 'sidepanel' | 'newtab'
   /** BrowserOS installation ID for credit-based tracking. */
   browserosId?: string
-
-  /** ACP agent id (claude / codex / custom registry name). Only set
-   *  when provider is one of the ACP-backed types. */
-  acpAgentId?: string
-  /** Shell command for the spawned ACP agent. Only set when provider
-   *  is 'acp-custom'; built-in agents resolve through acpx's registry. */
-  acpCommand?: string
-  /** Fixed cwd the user picked at provider-create time. Used as-is for
-   *  ACP-backed providers; ignored for model-backed ones. */
-  acpFixedWorkspacePath?: string
-  /** MCP servers exposed to the spawned ACP agent. Computed at request
-   *  time from BrowserOS's own /mcp URL plus the user's custom MCP
-   *  servers in browserContext. Only consumed by the ACP factory
-   *  branch; model-backed factories ignore it. */
-  acpMcpServers?: McpServerSpec[]
-
-  /** True iff this is the first turn of the conversation (no session
-   *  cached in the SessionStore). Drives the ACP workspace
-   *  instruction file refresh so subsequent turns do zero fs work. */
-  isNewConversation?: boolean
-
-  /** BrowserOS resources directory. Threaded from HttpServerConfig
-   *  into the ACP factory so the bundled-Bun launcher at
-   *  <resourcesDir>/bin/third_party/bun can be located. */
-  resourcesDir?: string | null
 }

@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { HarnessAgent } from '@/modules/agents/agent-harness-types'
+import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import type { SidepanelChatTargetSelection } from '@/modules/chat/sidepanel-chat-targets'
 import {
   decodeTargetValue,
@@ -21,16 +21,12 @@ import {
 
 export interface LlmProvidersHeaderProps {
   providers: LlmProviderConfig[]
-  agents: HarnessAgent[]
+  agents: AcpAgent[]
   selectedTarget: SidepanelChatTargetSelection
   onSelectTarget: (selection: SidepanelChatTargetSelection) => void
   onAddProvider: () => void
 }
 
-/**
- * Header section for LLM providers with the default-target selector (LLM
- * providers and coding agents) and add button.
- */
 export const LlmProvidersHeader: FC<LlmProvidersHeaderProps> = ({
   providers,
   agents,

@@ -4,23 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { type AgentProbeResult, probeAgent as runProbe } from 'acp-probe'
 import { resolveAcpSpawnCommand } from '../../../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 
 export interface ServerAcpxProbeInput {
-  agentId?: string
-  command?: string
-  cwd?: string
+  type: AcpAgentType
   timeoutMs?: number
-  /**
-   * BrowserOS resources directory. When set, the probe prefers the
-   * bundled Bun launcher at <resourcesDir>/bin/third_party/bun for
-   * built-in agents so end-user installs without Node still resolve
-   * the spawn correctly. Production callers thread this from the
-   * HttpServerConfig.
-   */
   resourcesDir?: string | null
   browserosDir?: string | null
   platform?: NodeJS.Platform
@@ -52,11 +44,7 @@ export interface ServerAcpxProbeResult {
   error?: ServerAcpxProbeError
 }
 
-// 120s gives the cold-cache tarball fetch + extract enough headroom on
-// slow networks (corp VPN, antivirus scanning extracted files) without
-// stranding the user behind a smaller deadline. Warm-cache spawns still
-// return in well under a second so the ceiling is invisible in steady
-// state. Env override is clamped to [1s, 120s] for the same reason.
+// Cold adapter downloads can take two minutes on slow networks.
 const DEFAULT_PROBE_TIMEOUT_MS = 120_000
 const MAX_PROBE_TIMEOUT_MS = 120_000
 
@@ -75,50 +63,28 @@ function resolveTimeout(requested?: number): number {
 export async function probeAcpAgent(
   input: ServerAcpxProbeInput,
 ): Promise<ServerAcpxProbeResult> {
-  if (!input.agentId && !input.command) {
-    throw new Error('Either agentId or command is required')
-  }
   const timeoutMs = resolveTimeout(input.timeoutMs)
 
-  // Built-in agent ids (claude, codex) get rewritten to an explicit
-  // command via the two-tier launcher chain: bundled-Bun preferred,
-  // host-npx-fallback second. Only `launcher === null` (agent id not
-  // in HOST_ACP_ADAPTER_CONFIG) leaves the agentId alone and lets
-  // acp-probe / acpx resolve it via their own registry. `launcherSource`
-  // in the log line distinguishes tier 1 vs tier 2 for runtime traces.
-  let agentId = input.agentId
-  let command = input.command
-  if (!command && agentId) {
-    const launcher = resolveAcpSpawnCommand({
-      agentType: agentId,
-      browserosDir: input.browserosDir ?? getBrowserosDir(),
-      resourcesDir: input.resourcesDir,
-      platform: input.platform,
-    })
-    if (launcher) {
-      command = launcher.command
-      agentId = undefined
-      logger.debug('ACP probe using launcher-resolved command', {
-        originalAgentId: input.agentId,
-        launcherSource: launcher.source,
-      })
-    }
-  }
+  const launcher = resolveAcpSpawnCommand({
+    agentType: input.type,
+    browserosDir: input.browserosDir ?? getBrowserosDir(),
+    resourcesDir: input.resourcesDir,
+    platform: input.platform,
+  })
+  logger.debug('ACP probe using launcher-resolved command', {
+    type: input.type,
+    launcherSource: launcher.source,
+  })
 
   const result = await runProbe({
-    agent: agentId,
-    command,
-    cwd: input.cwd,
+    command: launcher.command,
     authPolicy: 'skip',
     timeoutMs,
   })
   return normalizeProbeResult(result)
 }
 
-// codex-acp encodes effort into the advertised model id when it does not
-// expose a settable configOptions[id=model] picker. Older builds use
-// `model[effort]`; newer builds use `model/effort`. Both forms appear in
-// the wild so we match either.
+// Codex ACP versions encode effort as either model[effort] or model/effort.
 const COMPOUND_MODEL_PATTERN =
   /^(.+?)(?:\[(low|medium|high|xhigh|max)\]|\/(low|medium|high|xhigh|max))$/i
 
@@ -188,14 +154,6 @@ function splitCompoundModels(raw: AgentProbeResult['models']): CompoundSplit {
 }
 
 function normalizeProbeResult(r: AgentProbeResult): ServerAcpxProbeResult {
-  // Priority for the model dropdown source:
-  //   1. configOptions[id=model].options (bare picker, names + descriptions)
-  //   2. r.models, split when compound `model[effort]` / `model/effort`
-  //      ids are present. Falls through to the raw list when ids are
-  //      already bare (e.g. claude).
-  // Effort dropdown source:
-  //   1. r.reasoning.values when the agent exposes configOptions[category=thought_level]
-  //   2. Efforts extracted from compound model ids
   const modelOption = r.configOptions.find((o) => o.id === 'model')
   const pickerOptions =
     modelOption?.type === 'select' ? modelOption.options : undefined

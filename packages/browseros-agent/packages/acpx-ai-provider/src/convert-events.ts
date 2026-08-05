@@ -10,7 +10,6 @@ type TextStream = 'output' | 'thought'
 type BlockKind = TextStream | null
 
 interface ToolCallState {
-  blockId: string
   toolName: string
   emittedText: string
   inputClosed: boolean
@@ -22,7 +21,6 @@ export interface EventTranslatorOptions {
 
 export interface FinishOptions {
   result: AcpRuntimeTurnResult
-  /** Optional usage override; defaults to whatever was accumulated from `status` events. */
   usage?: LanguageModelV2Usage
 }
 
@@ -40,19 +38,7 @@ const STOP_REASON_MAP: Record<string, LanguageModelV2FinishReason> = {
   tool_use: 'tool-calls',
 }
 
-/**
- * Translates `AcpRuntimeEvent`s into AI SDK V2 stream parts.
- *
- * Holds state between `translate()` calls so that text/reasoning blocks
- * open exactly once and tool input deltas are diffed against previously
- * emitted text. Caller is expected to:
- *
- *  1. Call `translate(event)` for each runtime event, enqueuing the
- *     returned parts.
- *  2. After the runtime turn ends (via `turn.events` iterator
- *     completion), call `flush()` to close any open block and then
- *     `finish(result)` to emit the terminal `finish` part.
- */
+/** Converts ACP runtime events into AI SDK stream parts. */
 export class EventTranslator {
   private readonly generateId: () => string
   private currentBlock: BlockKind = null
@@ -83,9 +69,9 @@ export class EventTranslator {
   flush(): LanguageModelV2StreamPart[] {
     const parts: LanguageModelV2StreamPart[] = []
     parts.push(...this.closeCurrentBlock())
-    for (const [, state] of this.toolCalls) {
+    for (const [callId, state] of this.toolCalls) {
       if (!state.inputClosed) {
-        parts.push({ type: 'tool-input-end', id: state.blockId })
+        parts.push({ type: 'tool-input-end', id: callId })
         state.inputClosed = true
       }
     }
@@ -183,14 +169,13 @@ export class EventTranslator {
 
     let state = this.toolCalls.get(callId)
     if (!state) {
-      const blockId = this.generateId()
       const toolName = event.title?.trim() || 'tool'
-      state = { blockId, toolName, emittedText: '', inputClosed: false }
+      state = { toolName, emittedText: '', inputClosed: false }
       this.toolCalls.set(callId, state)
-      parts.push({ type: 'tool-input-start', id: blockId, toolName })
+      parts.push({ type: 'tool-input-start', id: callId, toolName })
     }
 
-    parts.push(...this.appendToolText(state, event.text))
+    parts.push(...this.appendToolText(callId, state, event.text))
 
     if (isTerminalToolStatus(event.status)) {
       parts.push(
@@ -201,6 +186,7 @@ export class EventTranslator {
   }
 
   private appendToolText(
+    callId: string,
     state: ToolCallState,
     text: string,
   ): LanguageModelV2StreamPart[] {
@@ -215,7 +201,7 @@ export class EventTranslator {
     if (!delta) return []
 
     state.emittedText += delta
-    return [{ type: 'tool-input-delta', id: state.blockId, delta }]
+    return [{ type: 'tool-input-delta', id: callId, delta }]
   }
 
   private finalizeToolCall(
@@ -225,7 +211,7 @@ export class EventTranslator {
   ): LanguageModelV2StreamPart[] {
     const parts: LanguageModelV2StreamPart[] = []
     if (!state.inputClosed) {
-      parts.push({ type: 'tool-input-end', id: state.blockId })
+      parts.push({ type: 'tool-input-end', id: callId })
       state.inputClosed = true
     }
     parts.push({
@@ -255,13 +241,7 @@ export class EventTranslator {
       return []
     }
     if (event.tag === 'plan') {
-      // Emit plan as a self-contained reasoning block with its own id.
-      // Doesn't disturb the currently-open text/reasoning block — AI SDK
-      // allows multiple reasoning ids to coexist as long as each is
-      // properly start/end-paired. The `[Plan]` prefix lets consumers
-      // distinguish plan announcements from the agent's chain-of-thought.
-      // Trim because whitespace-only plan updates carry no signal — same
-      // intent as the empty-string case.
+      // A plan is self-contained so it cannot close the current reasoning block.
       const trimmed = event.text.trim()
       if (trimmed.length === 0) return []
       const id = this.generateId()

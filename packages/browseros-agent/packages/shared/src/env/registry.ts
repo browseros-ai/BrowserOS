@@ -133,7 +133,12 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
       'Optional GraphQL schema path; falls back to schema/schema.graphql.',
     secret: false,
     schema: stringSchema,
-    modes: { development: { value: '' } },
+    modes: {
+      development: {
+        value: '/path/to/api-repo/.../schema.graphql',
+        commented: true,
+      },
+    },
   },
   {
     key: 'SENTRY_AUTH_TOKEN',

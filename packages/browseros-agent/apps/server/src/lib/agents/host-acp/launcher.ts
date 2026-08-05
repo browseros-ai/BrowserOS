@@ -2,21 +2,12 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Constructs the spawn command for a built-in ACP adapter. Prefers the BrowserOS-shipped Bun at
- * <resourcesDir>/bin/third_party/bun so end-user installs without Node
- * still have a working launcher; falls back to the existing
- * `npx -y …` command when the bundled binary is unavailable
- * (development configurations, third_party not shipped, platforms
- * outside darwin / linux / win32).
  */
 
+import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { resolveBundledBun, withBundledBunAcpAdapterEnv } from './bundled-bun'
-import {
-  HOST_ACP_ADAPTER_CONFIG,
-  type HostAcpAdapter,
-  hasAcpPackageConfig,
-} from './config'
+import { withBundledNativeBinaryPath } from './bundled-native-binary'
+import { HOST_ACP_ADAPTER_CONFIG } from './config'
 
 export type AcpLauncherSource = 'bundled-bun' | 'host-npx-fallback'
 
@@ -26,35 +17,19 @@ export interface AcpLauncherResolution {
 }
 
 export interface ResolveAcpSpawnCommandInput {
-  agentType: string
+  agentType: AcpAgentType
   browserosDir?: string | null
   env?: NodeJS.ProcessEnv
   resourcesDir?: string | null
   platform?: NodeJS.Platform
-  /**
-   * Extra env baked into the spawn command for this adapter (e.g. a
-   * `CODEX_HOME` overlay that disables Codex's bundled in-app browser).
-   * Merged into both the bundled-Bun and npx-fallback commands.
-   */
-  extraEnv?: Record<string, string>
-  /** Injected for tests; production callers leave it unset. */
+  spawnEnv?: Readonly<Record<string, string>>
   resolveBundledBun?: typeof resolveBundledBun
 }
 
-/**
- * Build the spawn command for a built-in ACP agent.
- *
- * Returns null when:
- *   - the agent type is not a known built-in (e.g. acp-custom; caller
- *     uses the user-supplied command instead), OR
- *   - the registry entry has no package spec.
- */
 export function resolveAcpSpawnCommand(
   input: ResolveAcpSpawnCommandInput,
-): AcpLauncherResolution | null {
-  if (!(input.agentType in HOST_ACP_ADAPTER_CONFIG)) return null
-  const config = HOST_ACP_ADAPTER_CONFIG[input.agentType as HostAcpAdapter]
-  if (!hasAcpPackageConfig(config)) return null
+): AcpLauncherResolution {
+  const config = HOST_ACP_ADAPTER_CONFIG[input.agentType]
 
   const resolve = input.resolveBundledBun ?? resolveBundledBun
   const bunPath = resolve({
@@ -66,25 +41,62 @@ export function resolveAcpSpawnCommand(
       command: wrapCommandWithEnv(
         `${quoteAcpCommandToken(bunPath)} x --bun --silent --package ${quoteAcpCommandToken(config.acpPackageSpec)} ${quoteAcpCommandToken(config.acpBin)}`,
         {
-          ...withBundledBunAcpAdapterEnv({
-            bunPath,
-            browserosDir: input.browserosDir,
-            env: input.env,
+          ...withBundledNativeBinaryPath({
+            resourcesDir: input.resourcesDir,
+            env: withBundledBunAcpAdapterEnv({
+              bunPath,
+              browserosDir: input.browserosDir,
+              env: input.env,
+              platform: input.platform,
+            }),
             platform: input.platform,
           }),
-          ...input.extraEnv,
+          ...input.spawnEnv,
         },
       ),
       source: 'bundled-bun',
     }
   }
-  if (input.extraEnv && Object.keys(input.extraEnv).length > 0) {
-    return {
-      command: wrapCommandWithEnv(config.acpCommand, input.extraEnv),
-      source: 'host-npx-fallback',
-    }
+  const hostPath = inheritedPath(input.env ?? process.env, input.platform)
+  const hostEnv = withBundledNativeBinaryPath({
+    resourcesDir: input.resourcesDir,
+    env: hostPath,
+    platform: input.platform,
+  })
+  const bundledNativePathAdded =
+    pathValue(hostEnv, input.platform) !== pathValue(hostPath, input.platform)
+  const spawnEnv = {
+    ...(bundledNativePathAdded ? hostEnv : {}),
+    ...input.spawnEnv,
   }
-  return { command: config.acpCommand, source: 'host-npx-fallback' }
+
+  return {
+    command: wrapCommandWithEnv(config.acpCommand, spawnEnv),
+    source: 'host-npx-fallback',
+  }
+}
+
+function inheritedPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+  const key =
+    platform === 'win32'
+      ? (Object.keys(env).find((name) => name.toLowerCase() === 'path') ??
+        'Path')
+      : 'PATH'
+  return env[key] ? { [key]: env[key] } : {}
+}
+
+function pathValue(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const key =
+    platform === 'win32'
+      ? Object.keys(env).find((name) => name.toLowerCase() === 'path')
+      : 'PATH'
+  return key ? env[key] : undefined
 }
 
 /** Quotes a token for acpx command splitting while preserving Windows backslashes. */

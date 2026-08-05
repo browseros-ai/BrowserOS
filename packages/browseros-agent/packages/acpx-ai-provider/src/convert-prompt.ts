@@ -9,7 +9,10 @@ import type {
   LanguageModelV2ToolResultOutput,
   LanguageModelV2ToolResultPart,
 } from '@ai-sdk/provider'
-import { convertUint8ArrayToBase64 } from '@ai-sdk/provider-utils'
+import {
+  convertBase64ToUint8Array,
+  convertUint8ArrayToBase64,
+} from '@ai-sdk/provider-utils'
 
 export type ConvertPromptMode = 'fresh' | 'continuation'
 
@@ -116,9 +119,29 @@ function renderPart(
     case 'tool-result':
       return `[Tool result (${part.toolCallId}): ${formatToolOutput(part.output)}]`
     case 'file':
-      attachments.push(toAttachment(part))
-      return undefined
+      return renderFile(part, attachments)
   }
+}
+
+function renderFile(
+  part: LanguageModelV2FilePart,
+  attachments: ConvertPromptAttachment[],
+): string | undefined {
+  if (
+    part.mediaType.startsWith('image/') ||
+    part.mediaType.startsWith('audio/')
+  ) {
+    attachments.push(toAttachment(part))
+    return undefined
+  }
+  if (
+    part.mediaType.startsWith('text/') ||
+    part.mediaType === 'application/json'
+  ) {
+    const label = part.filename ?? part.mediaType
+    return `[File: ${label}]\n${decodeTextFile(part)}`
+  }
+  throw new Error(`Unsupported ACP file type: ${part.mediaType}`)
 }
 
 function formatToolOutput(output: LanguageModelV2ToolResultOutput): string {
@@ -153,6 +176,22 @@ function extractBase64Data(value: string): string {
   if (!value.startsWith('data:')) return value
   const commaIndex = value.indexOf(',')
   return commaIndex >= 0 ? value.slice(commaIndex + 1) : value
+}
+
+function decodeTextFile(part: LanguageModelV2FilePart): string {
+  if (part.data instanceof URL) throw new Error(FILE_URL_NOT_SUPPORTED)
+  if (part.data instanceof Uint8Array) {
+    return new TextDecoder().decode(part.data)
+  }
+  if (part.data.startsWith('data:')) {
+    const commaIndex = part.data.indexOf(',')
+    if (commaIndex < 0) return ''
+    const metadata = part.data.slice(0, commaIndex)
+    const data = part.data.slice(commaIndex + 1)
+    if (!metadata.endsWith(';base64')) return decodeURIComponent(data)
+    return new TextDecoder().decode(convertBase64ToUint8Array(data))
+  }
+  return new TextDecoder().decode(convertBase64ToUint8Array(part.data))
 }
 
 function buildJsonSchemaPrompt(responseFormat: JsonResponseFormat): string {

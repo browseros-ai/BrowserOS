@@ -177,6 +177,7 @@ describe('HTTP Server Integration Tests', () => {
           body: JSON.stringify({
             conversationId,
             message: 'Open amazon.com in a new tab',
+            target: { type: 'browseros', providerId: 'browseros' },
             provider: 'browseros',
             model: 'claude-sonnet-4-20250514',
           }),

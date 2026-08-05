@@ -258,6 +258,50 @@ describe('file attachments', () => {
       'image/jpeg',
     ])
   })
+
+  test('inlines text and JSON files instead of sending unsupported ACP blocks', () => {
+    const out = call([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            filename: 'notes.txt',
+            mediaType: 'text/plain',
+            data: 'data:text/plain;base64,aGVsbG8=',
+          },
+          {
+            type: 'file',
+            filename: 'data.json',
+            mediaType: 'application/json',
+            data: new TextEncoder().encode('{"ok":true}'),
+          },
+        ],
+      },
+    ])
+
+    expect(out.text).toBe(
+      'User: [File: notes.txt]\nhello [File: data.json]\n{"ok":true}',
+    )
+    expect(out.attachments).toEqual([])
+  })
+
+  test('rejects file types ACP cannot represent', () => {
+    expect(() =>
+      call([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              mediaType: 'application/pdf',
+              data: 'Zm9v',
+            },
+          ],
+        },
+      ]),
+    ).toThrow('Unsupported ACP file type: application/pdf')
+  })
 })
 
 describe('mode selection', () => {
