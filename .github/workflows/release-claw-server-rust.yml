@@ -344,8 +344,7 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          "$PYTHON_BIN" -m pip install --user boto3
-          "$PYTHON_BIN" <<'PY'
+          uv run --no-project --with boto3 python <<'PY'
           import hashlib
           import os
           from pathlib import Path
