@@ -14,7 +14,10 @@ describe('BrowserClaw PostHog privacy', () => {
       distinctID: 'anonymous-install-id',
     })
     expect(config.advanced_disable_decide).toBeUndefined()
-    expect(config.advanced_disable_feature_flags_on_first_load).toBe(true)
+    // Remote config (session-replay settings + the cockpit video lineup) must
+    // load once on init, so first-load flag loading is intentionally not
+    // disabled. Polling stays off via remote_config_refresh_interval_ms: 0.
+    expect(config.advanced_disable_feature_flags_on_first_load).toBeUndefined()
     expect(config.remote_config_refresh_interval_ms).toBe(0)
     expect(config.save_campaign_params).toBe(false)
     expect(config.save_referrer).toBe(false)
