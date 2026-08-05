@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const repoRoot = resolve(import.meta.dir, '../../../..')
+const dollar = '$'
 const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/publish-server-ota.yml'),
   'utf8',
@@ -36,7 +37,9 @@ describe('publish-server-ota workflow', () => {
     expect(build).toContain('MACOS_CERTIFICATE_NAME:')
     expect(build).toContain('ESIGNER_USERNAME:')
     expect(build).toContain('SPARKLE_PRIVATE_KEY:')
+    expect(build).toContain(`RELEASE_SHA: ${dollar}{{ inputs.release_sha }}`)
     expect(build).toContain('--platform "$PLATFORM"')
+    expect(build).toContain('--release-sha "$RELEASE_SHA"')
     expect(build).toContain('actions/upload-artifact@v7')
   })
 

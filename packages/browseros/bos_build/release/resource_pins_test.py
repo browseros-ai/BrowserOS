@@ -3,7 +3,11 @@
 
 import unittest
 
-from .resource_pins import RESOURCE_FAMILIES, resolve_resource_pins
+from .resource_pins import (
+    RESOURCE_FAMILIES,
+    resolve_resource_pins,
+    verify_prepared_resource_pin,
+)
 
 
 SOURCE_SHA = "a" * 40
@@ -203,6 +207,46 @@ class ResourcePinsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "source binding mismatch"):
             self.resolve({family.name: ("0.0.2", "b" * 40)})
+
+    def test_verifies_one_prepared_family_without_reading_latest(self) -> None:
+        family = RESOURCE_FAMILIES[0]
+        self.client.add_family(family, "0.0.8", metadata=True)
+
+        pin = verify_prepared_resource_pin(
+            self.client,
+            "browseros",
+            family.name,
+            "0.0.8",
+            SOURCE_SHA,
+        )
+
+        self.assertEqual(pin.version, "0.0.8")
+        self.assertEqual(
+            {item.key for item in pin.objects},
+            {
+                family.version_key("0.0.8", target)
+                for target in family.targets
+            },
+        )
+        self.assertFalse(
+            any("/latest/" in key for key in self.client.head_reads)
+        )
+
+    def test_single_prepared_family_rejects_binding_mismatch(self) -> None:
+        family = RESOURCE_FAMILIES[1]
+        self.client.add_family(family, "0.0.8", metadata=True)
+        target = family.targets[0]
+        key = family.version_key("0.0.8", target)
+        self.client.objects[key]["Metadata"]["sha256"] = "invalid"
+
+        with self.assertRaisesRegex(RuntimeError, "invalid sha256 binding"):
+            verify_prepared_resource_pin(
+                self.client,
+                "browseros",
+                family.name,
+                "0.0.8",
+                SOURCE_SHA,
+            )
 
 
 if __name__ == "__main__":

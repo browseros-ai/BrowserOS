@@ -49,7 +49,7 @@ class BundleDerivationTest(unittest.TestCase):
 
         self.assertEqual(
             module.artifact_key("darwin-arm64"),
-            "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
+            "artifacts/server/0.0.9/browseros-server-resources-darwin-arm64.zip",
         )
         self.assertEqual(
             module.zip_filename("darwin_arm64"),
@@ -63,7 +63,7 @@ class BundleDerivationTest(unittest.TestCase):
 
         self.assertEqual(
             module.artifact_key("darwin-arm64"),
-            "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
+            "claw-server-rust/prod-resources/0.0.9/browseros-claw-server-rust-resources-darwin-arm64.zip",
         )
         self.assertEqual(
             module.zip_filename("darwin_arm64"),
@@ -116,6 +116,22 @@ class BundleDerivationTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValidationError, "nope"):
+            module.validate(ctx)
+
+    def test_validate_requires_the_finalized_release_sha(self):
+        module = ServerOTAModule(version="0.0.9", channel="alpha")
+        ctx = cast(
+            Context,
+            SimpleNamespace(
+                env=SimpleNamespace(
+                    macos_certificate_name="cert",
+                    code_sign_tool_path="tool",
+                    has_r2_config=lambda: True,
+                )
+            ),
+        )
+
+        with self.assertRaisesRegex(ValidationError, "release SHA"):
             module.validate(ctx)
 
 

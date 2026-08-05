@@ -191,24 +191,13 @@ def server_release(
     product: str = typer.Option(
         "browseros", "--product", help="Product whose server bundle to release"
     ),
+    release_sha: str = typer.Option(
+        ...,
+        "--release-sha",
+        help="Immutable source commit bound to the versioned resources",
+    ),
 ):
-    """Publish BrowserOS server OTA update
-
-    Downloads server binaries from R2 (artifacts/server/latest/),
-    signs them, creates Sparkle update packages, and uploads to R2.
-
-    \b
-    Full Release (all platforms):
-      browseros ota server release --version 0.0.69 --channel alpha
-
-    \b
-    Single Platform:
-      browseros ota server release --version 0.0.69 --platform darwin_arm64
-
-    \b
-    Multiple Platforms:
-      browseros ota server release --version 0.0.69 --platform darwin_arm64,darwin_x64
-    """
+    """Publish source-bound server OTA payloads."""
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
 
@@ -219,6 +208,7 @@ def server_release(
         channel=channel,
         platform_filter=platform,
         product_id=product,
+        release_sha=release_sha,
     )
 
     execute_module(ctx, module)
@@ -420,20 +410,7 @@ def test_signing(
 
 @server_app.callback(invoke_without_command=True)
 def server_main(ctx: typer.Context):
-    """BrowserOS Server OTA commands
-
-    \b
-    Release (upload artifacts):
-      browseros ota server release --version 0.0.36
-
-    \b
-    Release Appcast (make live):
-      browseros ota server release-appcast --channel alpha
-
-    \b
-    List Platforms:
-      browseros ota server list-platforms
-    """
+    """Expose BrowserOS server OTA commands."""
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
         typer.echo(
@@ -445,14 +422,7 @@ def server_main(ctx: typer.Context):
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
-    """OTA update automation for BrowserOS
-
-    \b
-    Server OTA:
-      browseros ota server release --version 0.0.36
-      browseros ota server release-appcast --channel alpha
-      browseros ota server list-platforms
-    """
+    """Expose BrowserOS OTA automation."""
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
         typer.echo("Available subcommands: server")

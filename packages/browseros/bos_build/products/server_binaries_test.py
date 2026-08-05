@@ -65,6 +65,12 @@ class MacosServerBinariesTest(unittest.TestCase):
             "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
         )
         self.assertEqual(
+            BROWSEROS_SERVER_BUNDLE.unsigned_artifact_key(
+                "darwin-arm64", version="0.0.9"
+            ),
+            "artifacts/server/0.0.9/browseros-server-resources-darwin-arm64.zip",
+        )
+        self.assertEqual(
             BROWSERCLAW_SERVER_BUNDLE.unsigned_artifact_key("darwin-arm64"),
             "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
         )

@@ -209,6 +209,28 @@ def _verify_prepared(
     return ResourcePin(family.name, version, tuple(objects))
 
 
+def verify_prepared_resource_pin(
+    client,
+    bucket: str,
+    family_name: str,
+    version: str,
+    release_sha: str,
+) -> ResourcePin:
+    """Verify one prepared resource family against its immutable bindings."""
+    family = next(
+        (item for item in RESOURCE_FAMILIES if item.name == family_name),
+        None,
+    )
+    if family is None:
+        raise ValueError(f"unknown prepared resource family: {family_name}")
+    try:
+        return _verify_prepared(client, bucket, family, version, release_sha)
+    except _IncoherentSnapshot as error:
+        raise RuntimeError(
+            f"Could not verify prepared {family_name} {version}: {error}"
+        ) from error
+
+
 def _list_objects(client, bucket: str, prefix: str) -> Iterable[dict]:
     token = None
     while True:

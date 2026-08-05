@@ -266,9 +266,11 @@ Production server promotion remains explicit.
 A bare dispatch of either standalone server workflow defaults
 `publish_ota=true`. After finalization has updated every resource `latest` alias,
 the workflow signs macOS and Windows payloads on native runners, generates both
-Linux payloads, requires all five appcast fragments, publishes the product's
-live alpha appcast through the guarded feed publisher, and commits the deployed
-snapshot under `updates/server/`. Pass `publish_ota=false` only when a
+Linux payloads, and requires all five appcast fragments. Each job reads the
+immutable versioned resource whose metadata matches the finalized source SHA;
+a same-version retry reuses the live signed payload instead of replacing it.
+The final job publishes the product's live alpha appcast through the guarded
+feed publisher and commits the deployed snapshot under `updates/server/`. Pass `publish_ota=false` only when a
 standalone run should stop after component finalization. Reusable calls remain
 opt-in, and the release tag created by finalization cannot enter the OTA
 publication job.

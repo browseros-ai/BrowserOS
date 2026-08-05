@@ -111,6 +111,7 @@ jobs:
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
       SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       VERSION: ${{ inputs.version }}
@@ -192,6 +193,7 @@ jobs:
           set -euo pipefail
           uv run --project packages/browseros browseros ota server release \
             --version "$VERSION" \
+            --release-sha "$RELEASE_SHA" \
             --channel alpha \
             --product "$PRODUCT" \
             --platform "$PLATFORM"
