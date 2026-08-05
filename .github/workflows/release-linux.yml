@@ -15,6 +15,19 @@ on:
         description: "Upload release metadata/artifacts to R2"
         type: boolean
         default: true
+      resource_mode:
+        description: "Resource provider"
+        type: choice
+        options: [published, source]
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
+        type: string
+        default: ""
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       products:
@@ -27,23 +40,23 @@ on:
         required: false
         type: boolean
         default: true
-      browseros_server_version:
-        description: "Exact BrowserOS server resource version; empty uses latest"
+      resource_mode:
+        description: "Resource provider: published or source"
+        required: false
+        type: string
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
         required: false
         type: string
         default: ""
-      browserclaw_server_version:
-        description: "Exact BrowserClaw server resource version; empty uses latest"
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
         required: false
         type: string
         default: ""
-      browserclaw_onboard_version:
-        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
-        required: false
-        type: string
-        default: ""
-      bundled_extensions_manifest_url:
-        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+      ref:
+        description: "Published-mode checkout ref"
         required: false
         type: string
         default: ""
@@ -163,8 +176,8 @@ jobs:
       profile: release-ci
       sign: false
       upload: ${{ inputs.upload_to_r2 }}
-      browseros_server_version: ${{ inputs.browseros_server_version }}
-      browserclaw_server_version: ${{ inputs.browserclaw_server_version }}
-      browserclaw_onboard_version: ${{ inputs.browserclaw_onboard_version }}
-      bundled_extensions_manifest_url: ${{ inputs.bundled_extensions_manifest_url }}
+      resource-mode: ${{ inputs.resource_mode }}
+      candidate-sha: ${{ inputs.candidate_sha }}
+      prepared-resources-artifact: ${{ inputs.prepared_resources_artifact }}
+      ref: ${{ inputs.ref }}
     secrets: inherit

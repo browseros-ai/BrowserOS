@@ -44,11 +44,11 @@ def git_bash_path() -> str:
 
 
 class ChromiumBuildWorkflowTest(unittest.TestCase):
-    RESOURCE_INPUT_ENV = {
-        "browseros_server_version": "BROWSEROS_SERVER_RESOURCE_VERSION",
-        "browserclaw_server_version": "BROWSERCLAW_SERVER_RESOURCE_VERSION",
-        "browserclaw_onboard_version": "BROWSERCLAW_ONBOARD_RESOURCE_VERSION",
-        "bundled_extensions_manifest_url": "BUNDLED_EXTENSIONS_MANIFEST_URL",
+    REMOVED_RESOURCE_INPUTS = {
+        "browseros_server_version",
+        "browserclaw_server_version",
+        "browserclaw_onboard_version",
+        "bundled_extensions_manifest_url",
     }
 
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
@@ -66,31 +66,75 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             if step.get("name") == GIT_BOOTSTRAP_STEP
         )
 
-    def test_build_workflow_exposes_resource_inputs_to_build_environment(self):
+    def test_build_workflow_exposes_source_and_published_resource_modes(self):
         workflow = self.load_workflow("build-browseros.yml")
         triggers = workflow.get("on", workflow.get(True))
         inputs = triggers["workflow_call"]["inputs"]
-        build_step = next(
-            step
-            for step in self.build_steps()
-            if step.get("name") == "Build ${{ inputs.product }}"
+        self.assertEqual(inputs["resource-mode"]["default"], "published")
+        self.assertEqual(inputs["candidate-sha"]["default"], "")
+        self.assertEqual(inputs["prepared-resources-artifact"]["default"], "")
+        self.assertEqual(inputs["lane-artifact-name"]["default"], "")
+        self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+
+        validate = next(
+            step for step in self.build_steps() if step.get("name") == "Validate inputs"
+        )
+        self.assertIn("source mode requires a full candidate-sha", validate["run"])
+        self.assertIn(
+            "source mode requires prepared-resources-artifact", validate["run"]
         )
 
-        for input_name, env_name in self.RESOURCE_INPUT_ENV.items():
-            with self.subTest(input=input_name):
-                self.assertEqual(
-                    {"required": False, "type": "string", "default": ""},
-                    {
-                        key: inputs[input_name][key]
-                        for key in ("required", "type", "default")
-                    },
-                )
-                self.assertEqual(
-                    f"${{{{ inputs.{input_name} }}}}",
-                    build_step["env"][env_name],
-                )
+    def test_source_lane_checks_out_and_verifies_exact_candidate(self):
+        steps = self.build_steps()
+        checkout = next(
+            step
+            for step in steps
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        verify = next(
+            step
+            for step in steps
+            if step.get("name") == "Verify exact candidate checkout"
+        )
 
-    def test_reusable_platform_workflows_forward_resource_inputs(self):
+        self.assertEqual(
+            checkout["with"]["ref"],
+            "${{ inputs.candidate-sha || inputs.ref || github.sha }}",
+        )
+        self.assertEqual(verify["if"], "inputs.resource-mode == 'source'")
+        self.assertIn('git rev-parse HEAD)', verify["run"])
+
+    def test_source_lane_downloads_common_resources_and_emits_attestation(self):
+        steps = self.build_steps()
+        download = next(
+            step
+            for step in steps
+            if step.get("name") == "Download prepared common resources"
+        )
+        build_step = next(
+            step
+            for step in steps
+            if step.get("name") == "Build ${{ inputs.product }}"
+        )
+        upload = next(
+            step for step in steps if step.get("name") == "Upload lane manifest"
+        )
+
+        self.assertEqual(download["uses"], "actions/download-artifact@v8")
+        self.assertEqual(
+            download["with"]["name"], "${{ inputs.prepared-resources-artifact }}"
+        )
+        for value in (
+            '--resource-mode "${{ inputs.resource-mode }}"',
+            '--prepared-resources "$RUNNER_TEMP/prepared-resources"',
+            '--lane-manifest "$RUNNER_TEMP/lane-manifest.json"',
+            'uv run browseros build "${args[@]}"',
+        ):
+            self.assertIn(value, build_step["run"])
+        self.assertEqual(upload["if"], "inputs.resource-mode == 'source'")
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+
+    def test_reusable_platform_workflows_forward_source_contract(self):
         for workflow_name in ("release-linux.yml", "release-windows.yml"):
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
@@ -98,36 +142,78 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 inputs = triggers["workflow_call"]["inputs"]
                 build_with = workflow["jobs"]["build"]["with"]
 
-                for input_name in self.RESOURCE_INPUT_ENV:
-                    self.assertFalse(inputs[input_name]["required"])
-                    self.assertEqual(inputs[input_name]["default"], "")
-                    self.assertEqual(inputs[input_name]["type"], "string")
-                    self.assertEqual(
-                        f"${{{{ inputs.{input_name} }}}}",
-                        build_with[input_name],
-                    )
+                self.assertEqual(inputs["resource_mode"]["default"], "published")
+                self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+                self.assertEqual(
+                    build_with["resource-mode"], "${{ inputs.resource_mode }}"
+                )
+                self.assertEqual(
+                    build_with["candidate-sha"], "${{ inputs.candidate_sha }}"
+                )
+                self.assertEqual(
+                    build_with["prepared-resources-artifact"],
+                    "${{ inputs.prepared_resources_artifact }}",
+                )
+                self.assertEqual(build_with["arch"], "x64")
 
-    def test_persistent_macos_build_receives_resource_inputs(self):
+    def test_persistent_macos_lane_uses_one_source_build(self):
         workflow = self.load_workflow("release-macos.yml")
         triggers = workflow.get("on", workflow.get(True))
         inputs = triggers["workflow_call"]["inputs"]
+        steps = workflow["jobs"]["build"]["steps"]
         build_step = next(
             step
-            for step in workflow["jobs"]["build"]["steps"]
+            for step in steps
             if step.get("name") == "Build selected products"
         )
+        sync = next(
+            step for step in steps if step.get("name") == "Sync build repo to exact ref"
+        )
+        download = next(
+            step
+            for step in steps
+            if step.get("name") == "Download prepared common resources"
+        )
+        upload = next(
+            step for step in steps if step.get("name") == "Upload lane manifest"
+        )
 
-        for input_name, env_name in self.RESOURCE_INPUT_ENV.items():
-            with self.subTest(input=input_name):
-                self.assertFalse(inputs[input_name]["required"])
-                self.assertEqual(inputs[input_name]["default"], "")
-                self.assertEqual(inputs[input_name]["type"], "string")
-                self.assertEqual(
-                    f"${{{{ inputs.{input_name} }}}}",
-                    build_step["env"][env_name],
-                )
+        self.assertEqual(inputs["arch"]["default"], "universal")
+        self.assertEqual(inputs["resource_mode"]["default"], "published")
+        self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+        self.assertIn('git checkout --detach "$CANDIDATE_SHA"', sync["run"])
+        self.assertIn('git rev-parse HEAD)', sync["run"])
+        self.assertEqual(download["uses"], "actions/download-artifact@v8")
+        self.assertEqual(build_step["run"].count("uv run browseros build"), 1)
+        for value in (
+            "--resource-mode",
+            "--prepared-resources",
+            "--lane-manifest",
+        ):
+            self.assertIn(value, build_step["run"])
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
 
-    def test_git_bootstrap_is_windows_only_and_immediately_after_checkout(self):
+    def test_browser_lanes_do_not_receive_extension_build_secrets(self):
+        secret_names = (
+            "BROWSEROS_AGENT_V2_KEY",
+            "BROWSERCLAW_KEY",
+            "VITE_PUBLIC_SENTRY_DSN",
+            "VITE_PUBLIC_POSTHOG_KEY",
+            "VITE_CLAW_POSTHOG_KEY",
+            "SENTRY_AUTH_TOKEN",
+        )
+        for workflow_name in (
+            "build-browseros.yml",
+            "release-linux.yml",
+            "release-windows.yml",
+            "release-macos.yml",
+        ):
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow_name):
+                for secret_name in secret_names:
+                    self.assertNotIn(secret_name, text)
+
+    def test_git_bootstrap_follows_candidate_checkout_and_verification(self):
         steps = self.build_steps()
         checkout_index = next(
             index
@@ -139,8 +225,14 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             for index, step in enumerate(steps)
             if step.get("name") == GIT_BOOTSTRAP_STEP
         )
+        verify_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Verify exact candidate checkout"
+        )
 
-        self.assertEqual(bootstrap_index, checkout_index + 1)
+        self.assertEqual(verify_index, checkout_index + 1)
+        self.assertEqual(bootstrap_index, verify_index + 1)
         self.assertEqual(
             steps[bootstrap_index]["if"],
             "runner.os == 'Windows'",
@@ -1819,7 +1911,9 @@ fi
 
     def test_release_workflows_pin_source_and_draft_to_workflow_sha(self):
         reusable = (WORKFLOW_DIR / "build-browseros.yml").read_text(encoding="utf-8")
-        self.assertIn("ref: ${{ inputs.ref || github.sha }}", reusable)
+        self.assertIn(
+            "ref: ${{ inputs.candidate-sha || inputs.ref || github.sha }}", reusable
+        )
 
         for workflow_name, _, _ in self.RELEASE_WORKFLOWS:
             workflow = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
