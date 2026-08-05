@@ -1,9 +1,6 @@
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import type { AcpAgent, AcpAgentType } from '@/modules/agents/acp-agent-types'
-import {
-  isChatProviderType,
-  resolveChatProvider,
-} from '../../lib/llm-providers/provider-runtime'
+import { resolveChatProvider } from '../../lib/llm-providers/provider-runtime'
 
 export type SidepanelChatTarget =
   | {
@@ -68,12 +65,7 @@ export function buildSidepanelChatTargets({
   providers,
   agents = [],
 }: BuildSidepanelChatTargetsInput): SidepanelChatTarget[] {
-  return [
-    ...providers
-      .filter((provider) => isChatProviderType(provider.type))
-      .map(toLlmTarget),
-    ...agents.map(toAcpTargetForAgent),
-  ]
+  return [...providers.map(toLlmTarget), ...agents.map(toAcpTargetForAgent)]
 }
 
 function toAcpTargetForAgent(agent: AcpAgent): SidepanelChatTarget {

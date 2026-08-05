@@ -1,8 +1,4 @@
-import type { LlmProviderConfig, ProviderType } from './types'
-
-export function isChatProviderType(_type: ProviderType): boolean {
-  return true
-}
+import type { LlmProviderConfig } from './types'
 
 export function findChatProviderById(
   providers: LlmProviderConfig[],
@@ -10,10 +6,6 @@ export function findChatProviderById(
 ): LlmProviderConfig | null {
   if (!providerId) return null
   return providers.find((provider) => provider.id === providerId) ?? null
-}
-
-export function canTestProvider(_provider: LlmProviderConfig): boolean {
-  return true
 }
 
 export function resolveChatProvider(
@@ -26,6 +18,3 @@ export function resolveChatProvider(
   }
   return providers[0] ?? null
 }
-
-export const findCloudChatProviderById = findChatProviderById
-export const resolveCloudChatProvider = resolveChatProvider
