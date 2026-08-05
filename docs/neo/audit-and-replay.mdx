@@ -50,6 +50,10 @@ Everything you see on these pages sits in one folder on your computer: **`~/.bro
 - `~/.browserclaw/screenshots/` is a JPEG per screenshotted step.
 - `~/.browserclaw/replays/` is the recording data per session.
 
+<Note>
+That folder is spelled `.browserclaw`, not `.neo`. It keeps the product's old name so the rename doesn't orphan the history you already have. Type it exactly as written above.
+</Note>
+
 The BrowserOS neo server that reads and writes these files only accepts requests from your own machine. It binds `127.0.0.1`, the local loopback, so nothing on your network can reach it. No account. No telemetry. No cloud sync.
 
 If you want to delete a session or wipe everything, delete the files. That's it.
@@ -63,10 +67,10 @@ If you want to delete a session or wipe everything, delete the files. That's it.
 If you want the full picture, keep reading:
 
 <CardGroup cols={2}>
-  <Card title="Your stuff stays yours" icon="lock" href="/browserclaw/privacy">
+  <Card title="Your stuff stays yours" icon="lock" href="/neo/privacy">
     The full breakdown of what stays on your machine.
   </Card>
-  <Card title="How BrowserOS neo works" icon="play" href="/browserclaw/how-it-works">
+  <Card title="How BrowserOS neo works" icon="play" href="/neo/how-it-works">
     A guided walkthrough from install to your first AI-driven session.
   </Card>
 </CardGroup>

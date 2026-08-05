@@ -22,21 +22,21 @@
       {
         "group": "BrowserOS neo",
         "pages": [
-          "browserclaw/index",
-          "browserclaw/how-it-works",
-          "browserclaw/install",
+          "neo/index",
+          "neo/how-it-works",
+          "neo/install",
           {
             "group": "Connect your agent",
             "pages": [
-              "browserclaw/mcp/index",
-              "browserclaw/mcp/claude-desktop",
-              "browserclaw/mcp/manual"
+              "neo/mcp/index",
+              "neo/mcp/claude-desktop",
+              "neo/mcp/manual"
             ]
           },
-          "browserclaw/cockpit",
-          "browserclaw/tabs-and-isolation",
-          "browserclaw/audit-and-replay",
-          "browserclaw/privacy"
+          "neo/cockpit",
+          "neo/tabs-and-isolation",
+          "neo/audit-and-replay",
+          "neo/privacy"
         ]
       },
       {
@@ -85,15 +85,27 @@
     { "source": "/features/llm-chat-hub", "destination": "/" },
     { "source": "/features/workflows", "destination": "/features/scheduled-tasks" },
     { "source": "/features/qwen-code-oauth", "destination": "/features/bring-your-own-llm" },
-    { "source": "/features/browserclaw", "destination": "/browserclaw" },
-    { "source": "/browserclaw/first-run", "destination": "/browserclaw/how-it-works" },
-    { "source": "/browserclaw/sample-prompts", "destination": "/browserclaw/how-it-works" },
-    { "source": "/browserclaw/agent-profiles", "destination": "/browserclaw/tabs-and-isolation" },
-    { "source": "/browserclaw/permissions-and-boundaries", "destination": "/browserclaw/tabs-and-isolation" },
-    { "source": "/browserclaw/troubleshooting", "destination": "/browserclaw" },
-    { "source": "/browserclaw/comparisons/browseros", "destination": "/browserclaw" },
+    { "source": "/features/browserclaw", "destination": "/neo" },
+    { "source": "/browserclaw", "destination": "/neo" },
+    { "source": "/browserclaw/index", "destination": "/neo" },
+    { "source": "/browserclaw/how-it-works", "destination": "/neo/how-it-works" },
+    { "source": "/browserclaw/install", "destination": "/neo/install" },
+    { "source": "/browserclaw/mcp", "destination": "/neo/mcp" },
+    { "source": "/browserclaw/mcp/index", "destination": "/neo/mcp" },
+    { "source": "/browserclaw/mcp/claude-desktop", "destination": "/neo/mcp/claude-desktop" },
+    { "source": "/browserclaw/mcp/manual", "destination": "/neo/mcp/manual" },
+    { "source": "/browserclaw/cockpit", "destination": "/neo/cockpit" },
+    { "source": "/browserclaw/tabs-and-isolation", "destination": "/neo/tabs-and-isolation" },
+    { "source": "/browserclaw/audit-and-replay", "destination": "/neo/audit-and-replay" },
+    { "source": "/browserclaw/privacy", "destination": "/neo/privacy" },
+    { "source": "/browserclaw/first-run", "destination": "/neo/how-it-works" },
+    { "source": "/browserclaw/sample-prompts", "destination": "/neo/how-it-works" },
+    { "source": "/browserclaw/agent-profiles", "destination": "/neo/tabs-and-isolation" },
+    { "source": "/browserclaw/permissions-and-boundaries", "destination": "/neo/tabs-and-isolation" },
+    { "source": "/browserclaw/troubleshooting", "destination": "/neo" },
+    { "source": "/browserclaw/comparisons/browseros", "destination": "/neo" },
     { "source": "/browserclaw/comparisons/chrome-devtools-mcp", "destination": "/comparisons/chrome-devtools-mcp" },
-    { "source": "/browserclaw/comparisons/browser-use", "destination": "/browserclaw" }
+    { "source": "/browserclaw/comparisons/browser-use", "destination": "/neo" }
   ],
   "logo": {
     "light": "/logo/logo44.png",
