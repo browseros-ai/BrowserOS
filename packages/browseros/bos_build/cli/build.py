@@ -14,6 +14,7 @@ from ..core.context import Context
 from ..core.checkout_lock import CheckoutLockError, ChromiumCheckoutLock
 from ..core.products import get_product_descriptor
 from ..lib.paths import get_package_root
+from ..lib.versions import load_semantic_version
 from ..core.pipeline import validate_pipeline, show_available_modules
 from ..core.planner import (
     Profile,
@@ -138,6 +139,11 @@ def main(
         None,
         "--prepared-resources",
         help="Validated common-resource directory for source mode",
+    ),
+    source_sha: Optional[str] = typer.Option(
+        None,
+        "--source-sha",
+        help="Bind source mode to HEAD while allowing only browser version changes",
     ),
     lane_manifest: Optional[Path] = typer.Option(
         None,
@@ -276,8 +282,15 @@ def main(
         )
         raise typer.Exit(1)
 
-    if (resource_mode is not None or prepared_resources is not None) and not has_preset:
-        log_error("--resource-mode/--prepared-resources require preset/profile mode")
+    if (
+        resource_mode is not None
+        or prepared_resources is not None
+        or source_sha is not None
+    ) and not has_preset:
+        log_error(
+            "--resource-mode/--prepared-resources/--source-sha require "
+            "preset/profile mode"
+        )
         raise typer.Exit(1)
     if lane_manifest is not None and not has_preset:
         log_error("--lane-manifest requires preset/profile mode")
@@ -299,6 +312,7 @@ def main(
             download=download,
             resource_mode=resource_mode,
             prepared_resources=prepared_resources,
+            source_sha=source_sha,
             sign=sign,
             upload=upload,
             build_type=build_type,
@@ -544,6 +558,7 @@ def _resolve_preset(
     skip: Optional[str],
     from_: Optional[str],
     chromium_src: Optional[Path],
+    source_sha: Optional[str] = None,
     extra_gn_args: Tuple[str, ...] = (),
 ) -> _PlanProjection:
     """Resolve preset/profile + CLI overrides into a plan projection.
@@ -559,6 +574,8 @@ def _resolve_preset(
             else Profile(Switches())
         )
         if prof.modules is not None:
+            if source_sha is not None:
+                raise ValueError("--source-sha does not combine with a modules profile")
             return _resolve_modules_profile(
                 prof,
                 preset=preset,
@@ -610,6 +627,8 @@ def _resolve_preset(
         switches = switches.resolved()
         if prepared_resources is not None and switches.resource_mode != "source":
             raise ValueError("--prepared-resources requires source mode")
+        if source_sha is not None and switches.resource_mode != "source":
+            raise ValueError("--source-sha requires source mode")
 
         # Runs execute sequentially (universal is three runs on one tree),
         # so --from resumes the run timeline, not each run.
@@ -627,6 +646,8 @@ def _resolve_preset(
         ]
         if prepared_resources is not None:
             header.append(f"Prepared resources: {prepared_resources.resolve()}")
+        if source_sha is not None:
+            header.append(f"Source SHA: {source_sha}")
         if switches.skip:
             header.append(f"Skip: {', '.join(switches.skip)}")
         if from_ is not None:
@@ -664,11 +685,12 @@ def _resolve_preset(
                     log_info(
                         f"✓ PRESET MODE: gn-arg overrides={','.join(extra_gn_args)}"
                     )
-                source_sha = ""
                 common_dir = prepared_resources.resolve() if prepared_resources else None
                 if switches.resource_mode == "source":
                     package_root = get_package_root()
-                    source_sha = _resolve_source_sha(package_root.parent.parent)
+                    resolved_source_sha = _resolve_source_sha(
+                        package_root.parent.parent, source_sha
+                    )
                     if common_dir is None:
                         common_dir = (
                             package_root
@@ -676,8 +698,11 @@ def _resolve_preset(
                             / "binaries"
                             / "prepared_common"
                             / switches.product
-                            / source_sha
+                            / resolved_source_sha
+                            / load_semantic_version(package_root)
                         )
+                else:
+                    resolved_source_sha = ""
                 return [
                     (
                         Context(
@@ -690,7 +715,7 @@ def _resolve_preset(
                             resource_mode=switches.resource_mode,
                             prepared_resources=common_dir,
                             prepared_resources_supplied=prepared_resources is not None,
-                            source_sha=source_sha,
+                            source_sha=resolved_source_sha,
                         ),
                         steps,
                     )
@@ -884,12 +909,8 @@ def _resolve_chromium_src(
     return src
 
 
-def _resolve_source_sha(repo_root: Path) -> str:
-    """Return the exact clean checkout commit used by source resources."""
-    for args in (("diff", "--quiet"), ("diff", "--cached", "--quiet")):
-        result = subprocess.run(["git", *args], cwd=repo_root)
-        if result.returncode:
-            raise ValueError("source mode requires a clean tracked checkout")
+def _resolve_source_sha(repo_root: Path, expected_sha: Optional[str] = None) -> str:
+    """Return the checkout commit permitted for source-resource provenance."""
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_root,
@@ -900,4 +921,27 @@ def _resolve_source_sha(repo_root: Path) -> str:
     sha = result.stdout.strip()
     if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
         raise ValueError("source mode could not resolve a full checkout SHA")
+    if expected_sha is not None:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_sha):
+            raise ValueError("--source-sha must be a full commit SHA")
+        if sha != expected_sha:
+            raise ValueError("--source-sha does not match HEAD")
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD", "--"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    if changed:
+        allowed = {
+            "packages/browseros/resources/BROWSEROS_VERSION",
+            "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
+        }
+        unexpected = sorted(set(changed) - allowed)
+        if expected_sha is None or unexpected:
+            detail = ", ".join(unexpected or sorted(changed))
+            raise ValueError(
+                "source mode requires a clean tracked checkout; changed: " + detail
+            )
     return sha

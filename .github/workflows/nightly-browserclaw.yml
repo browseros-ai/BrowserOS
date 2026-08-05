@@ -135,65 +135,42 @@ jobs:
         with:
           bun-version: "1.3.6"
 
-      - name: Stage BrowserOS neo nightly resources
-        env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      - name: Setup BrowserOS neo server toolchain
         run: |
           set -euo pipefail
-          agent_root="$BROWSEROS_REPO/packages/browseros-agent"
-          browseros_root="$BROWSEROS_REPO/packages/browseros"
-
-          cd "$agent_root"
-          bun ci
-          bun scripts/build/server.ts --target=darwin-arm64 --ci
-          scripts/build/claw-server-rust-local.sh \
-            --target=darwin-arm64 \
-            --agent-root "$agent_root" \
-            --browseros-root "$browseros_root"
-          bun scripts/build/claw-onboard.ts --ci
-
-          cd "$browseros_root"
-          AGENT_ROOT="$agent_root" BROWSEROS_ROOT="$browseros_root" uv run python - <<'PY'
-          import os
-          import shutil
-          from pathlib import Path
-
-          from bos_build.steps.storage.download import extract_artifact_zip
-
-          agent_root = Path(os.environ["AGENT_ROOT"])
-          browseros_root = Path(os.environ["BROWSEROS_ROOT"])
-          artifacts = [
-              (
-                  agent_root / "dist/prod/server/browseros-server-resources-darwin-arm64.zip",
-                  browseros_root / "resources/binaries/browseros_server/darwin-arm64",
-              ),
-              (
-                  agent_root / "dist/prod/claw-onboard/browseros-claw-onboard-resources.zip",
-                  browseros_root / "resources/binaries/browseros_claw_onboard",
-              ),
-          ]
-
-          for archive, destination in artifacts:
-              if not archive.is_file():
-                  raise SystemExit(f"Missing local server resource archive: {archive}")
-              if destination.exists():
-                  shutil.rmtree(destination)
-              extracted = extract_artifact_zip(archive, destination)
-              print(f"Staged {len(extracted)} file(s) from {archive.name}")
-          PY
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin
 
       - name: Build BrowserOS neo (macOS arm64)
         env:
+          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          NODE_ENV: production
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
           VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
           VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"
-          flags=(--profile nightly-macos --product browserclaw --arch arm64)
+          flags=(
+            --profile nightly-macos
+            --product browserclaw
+            --arch arm64
+            --source-sha "$(git rev-parse HEAD)"
+          )
           if [ "$UPLOAD_TO_R2" != "true" ]; then
             flags+=(--no-upload)
           fi

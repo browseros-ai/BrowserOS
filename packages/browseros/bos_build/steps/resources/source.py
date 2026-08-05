@@ -44,6 +44,7 @@ def _default_common_dir(ctx: Context) -> Path:
         / "resources/binaries/prepared_common"
         / ctx.product.id
         / ctx.source_sha
+        / ctx.semantic_version
     )
 
 

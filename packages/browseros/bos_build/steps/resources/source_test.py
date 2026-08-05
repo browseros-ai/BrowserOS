@@ -95,6 +95,15 @@ class SourceResourcesStepTest(unittest.TestCase):
         self.assertEqual(request.product, "browseros")
         self.assertEqual(request.source_sha, SOURCE_SHA)
         self.assertEqual(dict(request.component_versions), versions)
+        self.assertEqual(
+            request.output_dir,
+            (
+                self.root
+                / "packages/browseros/resources/binaries/prepared_common/browseros"
+                / SOURCE_SHA
+                / "0.31.0"
+            ).resolve(),
+        )
         self.assertIsNotNone(ctx.prepared_resources)
 
     @mock.patch("bos_build.steps.resources.source.load_prepared_resources")

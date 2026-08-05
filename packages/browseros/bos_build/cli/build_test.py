@@ -8,6 +8,7 @@ passing projection test proves the path never needs a chromium checkout.
 import multiprocessing
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,7 +18,12 @@ from unittest import mock
 from typer.testing import CliRunner
 
 from bos_build.browseros import app
-from bos_build.cli.build import _PlanProjection, _parse_toolchain_ids, _resolve_preset
+from bos_build.cli.build import (
+    _PlanProjection,
+    _parse_toolchain_ids,
+    _resolve_preset,
+    _resolve_source_sha,
+)
 from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
 from bos_build.lib.testing import MockChromium
@@ -132,6 +138,18 @@ class ShowPlanPresetTest(_ProfileMixin):
                 "release",
                 "--prepared-resources",
                 "/tmp/prepared",
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("source mode", combined(result))
+
+    def test_source_sha_requires_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "release",
+                "--source-sha",
+                "a" * 40,
                 "--show-plan",
             )
         self.assertNotEqual(result.exit_code, 0)
@@ -486,6 +504,7 @@ class GnArgPlumbingTest(_ProfileMixin):
             skip=None,
             from_=None,
             chromium_src=None,
+            source_sha=None,
             extra_gn_args=("symbol_level=2",),
         )
         kwargs.update(overrides)
@@ -529,6 +548,28 @@ class GnArgPlumbingTest(_ProfileMixin):
             self.assertEqual(ctx.prepared_resources, prepared.resolve())
             self.assertEqual(ctx.source_sha, "a" * 40)
 
+    def test_source_sha_override_reaches_provenance_validation(self):
+        profile_path = self._profile("preset: release\nresource_mode: source\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            m = MockChromium(Path(tmp))
+            with (
+                scrubbed_env(),
+                mock.patch(
+                    "bos_build.cli.build._resolve_source_sha",
+                    return_value="a" * 40,
+                ) as resolve,
+            ):
+                projection = _resolve_preset(
+                    **self._preset_kwargs(
+                        profile=profile_path,
+                        chromium_src=m.src,
+                        source_sha="a" * 40,
+                    )
+                )
+                projection.build_runs()
+
+        resolve.assert_called_once_with(mock.ANY, "a" * 40)
+
     def test_modules_profile_build_runs_carry_extra_gn_args(self):
         profile_path = self._profile("modules: [clean]\n")
         with tempfile.TemporaryDirectory() as tmp:
@@ -541,6 +582,76 @@ class GnArgPlumbingTest(_ProfileMixin):
         self.assertTrue(runs)
         for ctx, _steps in runs:
             self.assertEqual(ctx.extra_gn_args, ("symbol_level=2",))
+
+
+class SourceProvenanceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.version = self.root / "packages/browseros/resources/BROWSEROS_VERSION"
+        self.offset = (
+            self.root / "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"
+        )
+        self.component = (
+            self.root / "packages/browseros-agent/apps/server/package.json"
+        )
+        for path, content in (
+            (self.version, "BROWSEROS_MAJOR=0\n"),
+            (self.offset, "1\n"),
+            (self.component, "{}\n"),
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        subprocess.run(
+            ["git", "init", "--initial-branch=main"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Build test"],
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "build@example.invalid"],
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        self.sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def test_clean_source_resolves_without_override(self) -> None:
+        self.assertEqual(_resolve_source_sha(self.root), self.sha)
+
+    def test_override_allows_only_browser_version_files(self) -> None:
+        self.version.write_text("BROWSEROS_MAJOR=1\n")
+        self.offset.write_text("2\n")
+
+        with self.assertRaisesRegex(ValueError, "clean tracked checkout"):
+            _resolve_source_sha(self.root)
+        self.assertEqual(_resolve_source_sha(self.root, self.sha), self.sha)
+
+        self.component.write_text('{"version":"2"}\n')
+        with self.assertRaisesRegex(ValueError, "package.json"):
+            _resolve_source_sha(self.root, self.sha)
+
+    def test_override_must_match_head(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not match HEAD"):
+            _resolve_source_sha(self.root, "f" * 40)
 
 
 if __name__ == "__main__":

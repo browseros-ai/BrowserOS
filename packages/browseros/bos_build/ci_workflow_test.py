@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -984,6 +985,93 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         paths = triggers["pull_request"]["paths"]
         self.assertIn(".github/workflows/release-browseros.yml", paths)
         self.assertIn(".github/workflows/release-browserclaw.yml", paths)
+
+
+class NightlyWorkflowTest(unittest.TestCase):
+    NIGHTLIES = {
+        "nightly-browseros.yml": {
+            "product": "browseros",
+            "build_step": "Build BrowserOS (macOS arm64)",
+            "extension_secret": "BROWSEROS_AGENT_V2_KEY",
+            "server_secret": "BROWSEROS_CONFIG_URL",
+            "tag": "nightly-browseros",
+        },
+        "nightly-browserclaw.yml": {
+            "product": "browserclaw",
+            "build_step": "Build BrowserOS neo (macOS arm64)",
+            "extension_secret": "BROWSERCLAW_KEY",
+            "server_secret": "CLAW_POSTHOG_KEY",
+            "tag": "nightly-browserclaw",
+        },
+    }
+
+    def load_workflow(self, workflow_name: str) -> dict[str, object]:
+        path = WORKFLOW_DIR / workflow_name
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_nightlies_use_one_source_mode_build_without_inline_staging(self):
+        removed = (
+            "scripts/build/server.ts",
+            "claw-server-rust-local.sh",
+            "extract_artifact_zip",
+            "Stage BrowserOS",
+            "release candidate",
+            "release component",
+        )
+        for workflow_name, config in self.NIGHTLIES.items():
+            workflow = self.load_workflow(workflow_name)
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            build = next(
+                step
+                for step in workflow["jobs"]["build"]["steps"]
+                if step.get("name") == config["build_step"]
+            )
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(text.count("uv run browseros build"), 1)
+                for token in removed:
+                    self.assertNotIn(token, text)
+                for token in (
+                    "--profile nightly-macos",
+                    f"--product {config['product']}",
+                    "--arch arm64",
+                    '--source-sha "$(git rev-parse HEAD)"',
+                ):
+                    self.assertIn(token, build["run"])
+                self.assertIn(config["extension_secret"], build["env"])
+                self.assertIn(config["server_secret"], build["env"])
+                self.assertIn("SPARKLE_PRIVATE_KEY", build["env"])
+                self.assertIn("R2_SECRET_ACCESS_KEY", build["env"])
+
+    def test_nightlies_preserve_browser_version_and_rolling_release_behavior(self):
+        for workflow_name, config in self.NIGHTLIES.items():
+            workflow = self.load_workflow(workflow_name)
+            steps = workflow["jobs"]["build"]["steps"]
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            rolling = next(
+                step for step in steps if step.get("name", "").startswith("Update rolling")
+            )
+            with self.subTest(workflow=workflow_name):
+                self.assertIn(config["tag"], rolling["run"])
+                self.assertIn("gh release create", rolling["run"])
+                self.assertIn("actions/upload-artifact@v7", text)
+                self.assertNotIn("Cargo.lock", text)
+                self.assertNotIn("bun.lock", text)
+                self.assertNotIn("release candidate", text)
+
+    def test_nightly_profile_prepares_common_and_server_once(self):
+        from bos_build.core.planner import load_profile, plan
+
+        profile = load_profile(
+            REPO_ROOT
+            / "packages/browseros/bos_build/profiles/nightly-macos.yaml"
+        ).switches
+        for product in ("browseros", "browserclaw"):
+            switches = replace(profile, product=product).resolved()
+            steps = plan(switches, "arm64", "macos")
+            with self.subTest(product=product):
+                self.assertEqual(steps.count("prepare_common_resources"), 1)
+                self.assertEqual(steps.count("prepare_server_resources"), 1)
+                self.assertNotIn("download_resources", steps)
 
 
 class ChromiumGitRunbookTest(unittest.TestCase):
