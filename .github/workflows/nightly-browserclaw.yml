@@ -139,6 +139,12 @@ jobs:
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+          # server.ts --ci inlines these (REQUIRED_PROD_VARS); placeholders
+          # otherwise — see the matching block in nightly-browseros.yml.
+          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          AGENT_RUNNER_JWT_SECRET: ${{ secrets.AGENT_RUNNER_JWT_SECRET }}
         run: |
           set -euo pipefail
           agent_root="$BROWSEROS_REPO/packages/browseros-agent"

@@ -259,6 +259,14 @@ jobs:
       - name: Stage BrowserOS nightly resources
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
+          # The server build inlines these at compile time (REQUIRED_PROD_VARS in
+          # scripts/build/server/descriptor.ts); without them --ci substitutes
+          # browseros.invalid placeholders and the shipped server cannot reach
+          # the BrowserOS config/credits API.
+          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          AGENT_RUNNER_JWT_SECRET: ${{ secrets.AGENT_RUNNER_JWT_SECRET }}
         run: |
           set -euo pipefail
           agent_root="$BROWSEROS_REPO/packages/browseros-agent"
