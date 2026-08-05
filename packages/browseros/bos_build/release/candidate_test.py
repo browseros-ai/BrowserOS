@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Immutable browser candidate lifecycle tests."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from bos_build.release.candidate import (
     CandidateRecord,
     CandidateRequest,
+    GitHubCandidateBackend,
     PullRequestState,
     ensure_candidate,
     merge_candidate,
@@ -173,6 +176,21 @@ class CandidateEnsureTest(unittest.TestCase):
                 "claw-onboard": "0.0.12",
             },
         )
+
+    def test_github_backend_reads_semantic_browser_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            version_file = root / "packages/browseros/resources/BROWSEROS_VERSION"
+            version_file.parent.mkdir(parents=True)
+            version_file.write_text(
+                "BROWSEROS_MAJOR=0\n"
+                "BROWSEROS_MINOR=49\n"
+                "BROWSEROS_BUILD=2\n"
+                "BROWSEROS_PATCH=0\n"
+            )
+            backend = GitHubCandidateBackend(root, "owner/repo", "main")
+
+            self.assertEqual(backend.read_browser_version(), "0.49.2")
 
 
 class CandidateMergeTest(unittest.TestCase):

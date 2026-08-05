@@ -47,6 +47,7 @@ def _write_outputs(path: Optional[Path], record: CandidateRecord) -> None:
         "candidate_sha": record.candidate_sha,
         "branch": record.branch,
         "browser_version": record.browser_version,
+        "merge_sha": record.merge_sha,
         "pull_request_number": str(record.pull_request_number),
         "pull_request_url": record.pull_request_url,
         "state": record.state,
@@ -54,6 +55,17 @@ def _write_outputs(path: Optional[Path], record: CandidateRecord) -> None:
     with open(output, "a", encoding="utf-8") as stream:
         for key, value in values.items():
             stream.write(f"{key}={value}\n")
+
+
+def _write_summary(path: Optional[Path], record: CandidateRecord) -> None:
+    output = path
+    if output is None and os.environ.get("GITHUB_STEP_SUMMARY"):
+        output = Path(os.environ["GITHUB_STEP_SUMMARY"])
+    if output is None:
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with open(output, "a", encoding="utf-8") as stream:
+        stream.write(record.summary())
 
 
 @app.command("ensure")
@@ -66,6 +78,7 @@ def ensure(
     output: Path = typer.Option(..., "--output"),
     repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
     github_output: Optional[Path] = typer.Option(None, "--github-output"),
+    github_summary: Optional[Path] = typer.Option(None, "--github-summary"),
 ) -> None:
     """Create or recover one candidate and emit its immutable record."""
     try:
@@ -82,6 +95,7 @@ def ensure(
         )
         _write_record(output, record)
         _write_outputs(github_output, record)
+        _write_summary(github_summary, record)
         typer.echo(record.to_json(), nl=False)
     except (
         OSError,
@@ -100,6 +114,7 @@ def merge(
     repo: str = typer.Option(..., "--repo"),
     repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
     github_output: Optional[Path] = typer.Option(None, "--github-output"),
+    github_summary: Optional[Path] = typer.Option(None, "--github-summary"),
 ) -> None:
     """Merge an unchanged candidate after a complete browser gate."""
     try:
@@ -113,6 +128,7 @@ def merge(
         merged = merge_candidate(candidate, gate_document, backend)
         _write_record(record, merged)
         _write_outputs(github_output, merged)
+        _write_summary(github_summary, merged)
         typer.echo(merged.to_json(), nl=False)
     except (
         OSError,

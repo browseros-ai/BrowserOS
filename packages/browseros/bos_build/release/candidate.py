@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
+from ..lib.versions import load_semantic_version
 from .components import (
     AllocationRecord,
     component_by_id,
@@ -76,6 +77,23 @@ class CandidateRecord:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
+
+    def summary(self) -> str:
+        versions = ", ".join(
+            f"{name}={version}"
+            for name, version in sorted(self.component_versions.items())
+        )
+        merge = f"\n- Merge commit: `{self.merge_sha}`" if self.merge_sha else ""
+        return (
+            "## Browser release candidate\n\n"
+            f"- Product: `{self.product}`\n"
+            f"- Parent: `{self.parent_sha}`\n"
+            f"- Candidate: `{self.candidate_sha}`\n"
+            f"- Candidate PR: [#{self.pull_request_number}]({self.pull_request_url})\n"
+            f"- Browser version: `{self.browser_version}`\n"
+            f"- Component versions: {versions}\n"
+            f"- State: `{self.state}`{merge}\n"
+        )
 
     @classmethod
     def from_dict(cls, document: Mapping[str, object]) -> "CandidateRecord":
@@ -437,10 +455,10 @@ class GitHubCandidateBackend:
         return versions
 
     def read_browser_version(self) -> str:
-        path = self.repo_root / "packages/browseros/resources/BROWSEROS_VERSION"
-        version = path.read_text(encoding="utf-8").strip()
+        package_root = self.repo_root / "packages/browseros"
+        version = load_semantic_version(package_root)
         if not version:
-            raise ValueError(f"Browser version is empty: {path}")
+            raise ValueError(f"Browser version is empty: {package_root}")
         return version
 
     def create_candidate(
