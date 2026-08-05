@@ -122,7 +122,7 @@ def _strict_appcast_versions(content: str) -> Optional[List[str]]:
         if len(version_elements) != 1:
             return None
         value = version_elements[0].text
-        if _strict_dotted_version(value) is None:
+        if value is None or _strict_dotted_version(value) is None:
             return None
         versions.append(value.strip())
     return versions
