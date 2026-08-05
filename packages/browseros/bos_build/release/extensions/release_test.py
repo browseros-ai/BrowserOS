@@ -241,6 +241,19 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
             "0.0.125.0",
         )
 
+    def test_committed_manifest_version_is_an_allocation_floor(self) -> None:
+        self.assertEqual(
+            resolve_extension_version(
+                extension="agent",
+                requested_version="",
+                release_sha="new-sha",
+                release_records=[],
+                manifest_contents=[],
+                committed_version="0.0.130",
+            ),
+            "0.0.130.0",
+        )
+
     def test_malformed_historical_versions_are_ignored(self) -> None:
         self.assertEqual(
             resolve_extension_version(

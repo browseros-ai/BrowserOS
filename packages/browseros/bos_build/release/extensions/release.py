@@ -229,6 +229,7 @@ def resolve_extension_version(
     release_sha: str,
     release_records: Sequence[Mapping[str, object]],
     manifest_contents: Sequence[str],
+    committed_version: str = "",
 ) -> str:
     """Resolve an explicit or automatically allocated extension version."""
     names = extension_names(extension)
@@ -282,6 +283,10 @@ def resolve_extension_version(
             allocated.append(_version_parts(version))
 
     maximum = max(allocated, default=(0, 0, 0, 0))
+    if committed_version:
+        committed = _version_parts(committed_version)
+        if committed > maximum:
+            return ".".join(str(part) for part in committed)
     return increment_extension_version(".".join(str(part) for part in maximum))
 
 
