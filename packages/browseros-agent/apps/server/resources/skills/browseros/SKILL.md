@@ -9,6 +9,4 @@ Use BrowserOS for tasks that need a browser or website. It has the user's persis
 
 ## Execution
 
-Call `name_session` early, then default to `run`. Write async JavaScript against the `browser` SDK and combine as much of the task, including verification, as practical into each call.
-
-Use standalone tools only when `run` cannot expose the required capability or output, or when diagnosing a failed script. Treat the MCP initialization instructions and tool descriptions as the source of truth for exact contracts.
+Use the BrowserOS MCP server provided for the session and call its exposed tools directly. Follow the server's initialization instructions and live tool descriptions for exact operations and schemas. Observe the current browser state, perform the requested operations, and verify the result.
