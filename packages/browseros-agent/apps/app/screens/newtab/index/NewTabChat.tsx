@@ -19,6 +19,7 @@ import {
   NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { consumePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatActions } from '@/modules/chat-actions/chat-actions.hooks'
 import { ChatEmptyState } from '@/screens/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/screens/sidepanel/index/ChatError'
@@ -82,10 +83,11 @@ export const NewTabChat: FC = () => {
   // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
   useEffect(() => {
     if (hasSentInitialRef.current) return
-    const query = searchParams.get('q')
+    const pending = consumePendingHomeMessage(searchParams.get('handoff'))
+    const query = pending?.text ?? searchParams.get('q') ?? ''
     const chatMode = searchParams.get('mode')
     const tabIdsParam = searchParams.get('tabs')
-    if (!query) return
+    if (!query && !pending?.files.length) return
 
     hasSentInitialRef.current = true
     if (chatMode === 'chat' || chatMode === 'agent') {
@@ -116,13 +118,13 @@ export const NewTabChat: FC = () => {
                   message: query,
                   tabs: matchedTabs,
                 })
-          sendMessage({ text: query, action })
+          sendMessage({ text: query, action, files: pending?.files })
         } else {
-          sendMessage({ text: query })
+          sendMessage({ text: query, files: pending?.files })
         }
       })
     } else {
-      sendMessage({ text: query })
+      sendMessage({ text: query, files: pending?.files })
     }
   }, [])
 

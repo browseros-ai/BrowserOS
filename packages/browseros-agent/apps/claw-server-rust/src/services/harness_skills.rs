@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::error::{AppError, AppResult};
 
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
-    include_str!("../../resources/skills/browserclaw/SKILL.md");
+    include_str!("../../../../resources/skills/browserclaw/SKILL.md");
 const SKILL_FRONTMATTER_NAME: &str = "browseros-neo";
 const LEGACY_MANAGED_SKILL_DIRECTORY: &str = "browserclaw";
 

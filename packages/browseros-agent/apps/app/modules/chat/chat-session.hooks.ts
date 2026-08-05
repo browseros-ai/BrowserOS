@@ -1,5 +1,5 @@
 import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport, type UIMessage } from 'ai'
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -79,6 +79,16 @@ const getLastUserMessageText = (messages: UIMessage[]) => {
   return ''
 }
 
+const getLastUserMessageFiles = (messages: UIMessage[]) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'user') {
+      return message.parts.filter((part) => part.type === 'file')
+    }
+  }
+  return []
+}
+
 const getResponseAndQueryFromMessageId = (
   messages: UIMessage[],
   messageId: string,
@@ -102,12 +112,9 @@ const getResponseAndQueryFromMessageId = (
 }
 
 export type ChatOrigin = 'sidepanel' | 'newtab'
-export type AgentSessionStrategy = 'conversation' | 'main'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
-  /** ACP agent session id source. Defaults to the conversation id. */
-  agentSessionStrategy?: AgentSessionStrategy
   /** When false, messages are queued until integrations finish syncing. */
   isIntegrationsSynced?: boolean
 }
@@ -379,20 +386,18 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           optionsRef.current?.origin,
           personalizationRef.current,
         )
-        const agentSessionStrategy =
-          optionsRef.current?.agentSessionStrategy ?? 'conversation'
-        const agentSessionId =
-          agentSessionStrategy === 'main' ? 'main' : conversationIdRef.current
-
         const commonRequest = {
           conversationId: conversationIdRef.current,
-          agentSessionId,
           mode: currentMode,
           browserContext: requestBrowserContext,
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
           declinedApps,
+          attachments: getLastUserMessageFiles(messages).map((file) => ({
+            mediaType: file.mediaType,
+            data: file.url,
+          })),
         }
 
         const message = getLastMessageText(messages)
@@ -675,6 +680,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const pendingMessageRef = useRef<{
     text: string
     action?: ChatAction
+    files?: FileUIPart[]
   } | null>(null)
 
   const trackMessageSent = useCallback(() => {
@@ -689,7 +695,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         selectedLlmProvider?.id,
       provider_type: agentTarget ? 'acp' : llmTargetProvider?.type,
       agent_id: agentTarget?.agentId,
-      adapter: agentTarget?.adapter,
+      adapter: agentTarget?.agentType,
       model:
         agentTarget?.modelId ??
         llmTargetProvider?.modelId ??
@@ -698,13 +704,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }, [mode, selectedChatTargetRef, selectedLlmProvider])
 
   const dispatchMessage = useCallback(
-    (text: string) => {
+    (text: string, files?: FileUIPart[]) => {
       trackMessageSent()
       startExecutionTask({
         conversationId: conversationIdRef.current,
         promptText: text,
       })
-      baseSendMessage({ text })
+      baseSendMessage({ text, files })
     },
     [baseSendMessage, startExecutionTask, trackMessageSent],
   )
@@ -725,11 +731,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           return next
         })
       }
-      dispatchMessage(pending.text)
+      dispatchMessage(pending.text, pending.files)
     }
   }, [agentServerUrl, dispatchMessage, isIntegrationsSynced])
 
-  const sendMessage = (params: { text: string; action?: ChatAction }) => {
+  const sendMessage = (params: {
+    text: string
+    action?: ChatAction
+    files?: FileUIPart[]
+  }) => {
     if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
       pendingMessageRef.current = params
       return
@@ -743,7 +753,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         return next
       })
     }
-    dispatchMessage(params.text)
+    dispatchMessage(params.text, params.files)
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -769,9 +779,35 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     return () => unwatch()
   }, [])
 
+  const discardServerSession = useCallback((conversationId: string) => {
+    const serverUrl = agentUrlRef.current
+    if (!serverUrl) return
+    void fetch(`${serverUrl}/chat/${encodeURIComponent(conversationId)}`, {
+      method: 'DELETE',
+      keepalive: true,
+    })
+      .then((response) => {
+        if (!response.ok && response.status !== 404) {
+          throw new Error(`Session cleanup failed (${response.status})`)
+        }
+      })
+      .catch((error) => {
+        sentry.captureException(error, {
+          extra: { conversationId },
+        })
+      })
+  }, [])
+
+  useEffect(
+    () => () => discardServerSession(conversationIdRef.current),
+    [discardServerSession],
+  )
+
   const resetConversationState = () => {
+    const previousConversationId = conversationIdRef.current
     stop()
     void finishExecutionTask({ isAbort: true })
+    discardServerSession(previousConversationId)
     setConversationId(crypto.randomUUID())
     setMessages([])
     setTextToAction(new Map())
@@ -795,7 +831,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       model_id:
         target.kind === 'acp' ? target.modelId : target.provider.modelId,
       agent_id: target.kind === 'acp' ? target.agentId : undefined,
-      adapter: target.kind === 'acp' ? target.adapter : undefined,
+      adapter: target.kind === 'acp' ? target.agentType : undefined,
     })
 
     void selectChatTarget(target).catch((error) => {

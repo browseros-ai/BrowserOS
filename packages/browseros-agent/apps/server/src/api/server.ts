@@ -8,7 +8,6 @@ import { websocket } from 'hono/bun'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { HttpAgentError } from '../agent/errors'
 import { INLINED_ENV } from '../env'
-import { TurnRegistry } from '../lib/agents/turns/active-turn-registry'
 import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
@@ -55,12 +54,7 @@ export async function createHttpServer(config: HttpServerConfig) {
   const klavis = new KlavisService({ browserosId })
   klavis.start()
 
-  // Shared between createAgentRoutes (which owns the lifecycle) and
-  // the nudge MCP route (which needs to push app_connection_request
-  // events into the same active turns). Hoisting here means both
-  // mounts hold the same instance.
-  const turnRegistry = new TurnRegistry()
-  const activity = new ServerActivity(turnRegistry)
+  const activity = new ServerActivity()
 
   const app = createApiRoutes({
     config: { ...config, activity },
@@ -69,7 +63,6 @@ export async function createHttpServer(config: HttpServerConfig) {
       : undefined,
     klavis,
     tokenManager,
-    turnRegistry,
     onShutdown: () => {
       shutdownOAuth()
       void klavis.stop()

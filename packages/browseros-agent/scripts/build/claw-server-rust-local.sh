@@ -117,16 +117,18 @@ destination = (
     / target
 )
 stage_binary = destination / "resources/bin" / runtime_binary
-source_resources = agent_root / "apps/claw-server-rust/resources"
+source_skill = agent_root / "resources/skills/browserclaw/SKILL.md"
 
 if destination.exists():
     shutil.rmtree(destination)
-if not source_resources.is_dir():
-    raise SystemExit(f"Missing server resources: {source_resources}")
+if not source_skill.is_file():
+    raise SystemExit(f"Missing BrowserOS skill: {source_skill}")
 stage_binary.parent.mkdir(parents=True, exist_ok=True)
 shutil.copy2(binary_path, stage_binary)
 stage_binary.chmod(0o755)
-shutil.copytree(source_resources, destination / "resources", dirs_exist_ok=True)
+staged_skill = destination / "resources/skills/browserclaw/SKILL.md"
+staged_skill.parent.mkdir(parents=True, exist_ok=True)
+shutil.copy2(source_skill, staged_skill)
 
 files = sorted(
     path

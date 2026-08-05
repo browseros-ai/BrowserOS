@@ -58,6 +58,10 @@
       "types": "./src/schemas/llm.ts",
       "default": "./src/schemas/llm.ts"
     },
+    "./schemas/agent": {
+      "types": "./src/schemas/agent.ts",
+      "default": "./src/schemas/agent.ts"
+    },
     "./schemas/ui-stream": {
       "types": "./src/schemas/ui-stream.ts",
       "default": "./src/schemas/ui-stream.ts"

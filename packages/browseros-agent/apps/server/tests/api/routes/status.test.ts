@@ -8,17 +8,9 @@ import assert from 'node:assert'
 
 import { createStatusRoute } from '../../../src/api/routes/status'
 import { ServerActivity } from '../../../src/api/services/server-activity'
-import { TurnRegistry } from '../../../src/lib/agents/turns/active-turn-registry'
 
 function createActivity() {
-  const registry = new TurnRegistry({
-    retainAfterDoneMs: 1000,
-    sweepIntervalMs: 60_000,
-  })
-  return {
-    activity: new ServerActivity(registry),
-    registry,
-  }
+  return new ServerActivity()
 }
 
 describe('createStatusRoute', () => {
@@ -57,7 +49,7 @@ describe('createStatusRoute', () => {
   })
 
   it('reports can_update false while a chat stream is open', async () => {
-    const { activity, registry } = createActivity()
+    const activity = createActivity()
     const route = createStatusRoute({ activity })
 
     activity.beginChatStream()
@@ -71,29 +63,10 @@ describe('createStatusRoute', () => {
       status: 'ok',
       can_update: true,
     })
-    registry.stopSweeper()
-  })
-
-  it('reports can_update false while a registry turn is running', async () => {
-    const { activity, registry } = createActivity()
-    const route = createStatusRoute({ activity })
-    const turn = registry.register('agent-1')
-
-    assert.deepStrictEqual(await (await route.request('/')).json(), {
-      status: 'ok',
-      can_update: false,
-    })
-
-    registry.pushEvent(turn.turnId, { type: 'done', stopReason: 'end_turn' })
-    assert.deepStrictEqual(await (await route.request('/')).json(), {
-      status: 'ok',
-      can_update: true,
-    })
-    registry.stopSweeper()
   })
 
   it('reports can_update false while an MCP browser tool is executing', async () => {
-    const { activity, registry } = createActivity()
+    const activity = createActivity()
     const route = createStatusRoute({ activity })
 
     activity.beginMcpToolExecution()
@@ -107,6 +80,5 @@ describe('createStatusRoute', () => {
       status: 'ok',
       can_update: true,
     })
-    registry.stopSweeper()
   })
 })

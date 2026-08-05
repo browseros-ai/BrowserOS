@@ -1,0 +1,179 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+import { afterEach, describe, expect, it } from 'bun:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
+import { buildAcpAgentPolicy } from '../../../../src/lib/agents/acp/acp-agent-policy'
+import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
+
+const SKILL = [
+  '---',
+  'name: browseros',
+  'description: BrowserOS browser skill',
+  '---',
+  'Use BrowserOS for every browser task.',
+  '',
+].join('\n')
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
+  )
+})
+
+async function createResourcesDir(): Promise<string> {
+  const resourcesDir = await mkdtemp(join(tmpdir(), 'acp-policy-'))
+  temporaryDirectories.push(resourcesDir)
+  const skillDir = join(resourcesDir, 'skills', 'browseros')
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(join(skillDir, 'SKILL.md'), SKILL)
+  return resourcesDir
+}
+
+function agent(
+  type: AcpAgentDefinition['type'],
+  patch: Partial<AcpAgentDefinition> = {},
+): AcpAgentDefinition {
+  return {
+    id: `${type}-agent-id`,
+    name: type === 'claude' ? 'Claude Code' : 'Codex',
+    type,
+    createdAt: 1,
+    updatedAt: 1,
+    ...patch,
+  }
+}
+
+describe('buildAcpAgentPolicy', () => {
+  it('builds a Claude session with BrowserOS MCP and appended skill guidance', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('claude', {
+        modelId: 'claude-opus-4-1',
+        workingDirectory: '/work/project',
+      }),
+      conversationId: 'conversation-1',
+      serverPort: 9001,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+      browserContext: {
+        windowId: 42,
+        enabledMcpServers: ['Slack'],
+        customMcpServers: [
+          { name: 'github', url: 'https://mcp.example.com/github' },
+        ],
+      },
+    })
+
+    expect(policy.adapter).toBe('claude')
+    expect(policy.cwd).toBe('/work/project')
+    expect(policy.sessionKey).toBe('acp:claude-agent-id:conversation-1')
+    expect(policy.agentRegistryOverrides.claude).toContain(
+      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+    )
+    expect(policy.mcpServers.map((server) => server.name)).toEqual([
+      'browseros',
+      'github',
+    ])
+    expect(policy.mcpServers[0]).toEqual({
+      type: 'http',
+      name: 'browseros',
+      url: 'http://127.0.0.1:9001/mcp',
+      headers: {
+        'X-BrowserOS-Scope-Id': 'conversation-1',
+        'X-BrowserOS-Default-Window-Id': '42',
+        'X-BrowserOS-Managed-Mcp-Servers': 'Slack',
+      },
+    })
+    expect(policy.sessionOptions).toEqual({
+      model: 'claude-opus-4-1',
+      systemPrompt: { append: SKILL },
+    })
+    expect(policy.fullAccessModeCandidates).toEqual(['bypassPermissions'])
+  })
+
+  it('configures Codex without a copied home and disables competing browser plugins', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('codex', {
+        modelId: 'gpt-5.4',
+        reasoningEffort: 'high',
+      }),
+      conversationId: 'conversation-2',
+      serverPort: 9002,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+      browserContext: {
+        customMcpServers: [
+          { name: 'browseros', url: 'https://wrong.example.com/mcp' },
+        ],
+      },
+    })
+
+    const store = createFileSessionStore({ stateDir: resourcesDir })
+    const timestamp = new Date(0).toISOString()
+    const record: AcpSessionRecord = {
+      schema: 'acpx.session.v1',
+      acpxRecordId: 'codex-record',
+      acpSessionId: 'codex-session',
+      agentCommand: policy.agentRegistryOverrides.codex,
+      cwd: policy.cwd,
+      createdAt: timestamp,
+      lastUsedAt: timestamp,
+      lastSeq: 0,
+      eventLog: {
+        active_path: 'events.jsonl',
+        segment_count: 0,
+        max_segment_bytes: 1024,
+        max_segments: 1,
+      },
+      messages: [],
+      updated_at: timestamp,
+      cumulative_token_usage: {},
+      request_token_usage: {},
+      ...(policy.sessionOptions.env
+        ? {
+            acpx: {
+              session_options: { env: policy.sessionOptions.env },
+            },
+          }
+        : {}),
+    }
+
+    await store.save(record)
+    expect(await store.load(record.acpxRecordId)).toBeDefined()
+    expect(policy.sessionOptions).toEqual({})
+    expect(policy.agentRegistryOverrides.codex).not.toContain('CODEX_HOME')
+    expect(policy.agentRegistryOverrides.codex).toContain('CODEX_CONFIG=')
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      "INITIAL_AGENT_MODE='agent-full-access'",
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"developer_instructions":"---\\nname: browseros',
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain('"model":"gpt-5.4"')
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"model_reasoning_effort":"high"',
+    )
+    expect(policy.agentRegistryOverrides.codex).toContain(
+      '"browser@openai-bundled":{"enabled":false}',
+    )
+    expect(policy.mcpServers.map((server) => server.name)).toEqual([
+      'browseros',
+    ])
+    expect(policy.fullAccessModeCandidates).toEqual([
+      'agent-full-access',
+      'full-access',
+    ])
+  })
+})

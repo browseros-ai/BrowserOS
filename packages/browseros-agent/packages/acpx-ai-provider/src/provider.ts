@@ -115,12 +115,15 @@ export class AcpxProvider {
     }
   }
 
-  async close(reason = 'close'): Promise<void> {
+  async close(
+    reason = 'close',
+    options: { discardPersistentState?: boolean } = {},
+  ): Promise<void> {
     for (const [key, { handle }] of this.handles) {
       await this.runtime.close({
         handle,
         reason,
-        discardPersistentState: false,
+        discardPersistentState: options.discardPersistentState ?? false,
       })
       this.usedKeys.delete(key)
     }

@@ -7,8 +7,14 @@
 import type { Browser } from '@browseros/browser-core/browser'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
-import { createAgentUIStreamResponse, type UIMessage } from 'ai'
-import { isAcpProvider } from '../../agent/acp-providers'
+import {
+  consumeStream,
+  createAgentUIStreamResponse,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type UIMessage,
+  type UIMessageChunk,
+} from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
 import {
@@ -17,12 +23,24 @@ import {
 } from '../../agent/message-validation'
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
-import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
+import {
+  AcpAgentPreparationError,
+  AcpAgentRuntime,
+  AcpAgentSessionBusyError,
+  type AcpAgentStreamInput,
+} from '../../lib/agents/acp/acp-agent-runtime'
+import type { AcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
+import { DbAcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
 import type { ServerActivity } from '../services/server-activity'
-import type { BrowserContext, ChatRequest } from '../types'
+import type {
+  AcpChatRequest,
+  BrowserContext,
+  BrowserOsChatRequest,
+  ChatRequest,
+} from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 import {
   describeMcpChange,
@@ -37,35 +55,48 @@ export interface ChatServiceDeps {
   browserSession: BrowserSession
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
-  /** Port the BrowserOS server bound to. Forwarded into the ACP MCP
-   *  bridge so the spawned agent can dial back into /mcp. */
   serverPort: number
-  /** BrowserOS resources directory. Threaded into ACP-backed config
-   *  resolutions so the bundled-Bun launcher under
-   *  <resourcesDir>/bin/third_party/bun can be located. */
   resourcesDir?: string | null
   activity?: ServerActivity
+  acpAgentStore?: Pick<AcpAgentStore, 'get'>
+  acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'close'>
 }
 
 export class ChatService {
-  constructor(private deps: ChatServiceDeps) {}
+  private acpAgentStore: Pick<AcpAgentStore, 'get'> | undefined
+  private acpRuntime: Pick<AcpAgentRuntime, 'stream' | 'close'> | undefined
+  private readonly acpMessages = new Map<string, UIMessage[]>()
+  private readonly acpConversationAgents = new Map<string, string>()
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: chat request orchestration; refactor tracked separately
+  constructor(private deps: ChatServiceDeps) {
+    this.acpAgentStore = deps.acpAgentStore
+    this.acpRuntime = deps.acpRuntime
+  }
+
   async processMessage(
     request: ChatRequest,
+    abortSignal: AbortSignal,
+  ): Promise<Response> {
+    if (request.target.type === 'claude' || request.target.type === 'codex') {
+      return this.processAcpMessage(request as AcpChatRequest, abortSignal)
+    }
+
+    return this.processBrowserOsMessage(
+      request as BrowserOsChatRequest,
+      abortSignal,
+    )
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction
+  private async processBrowserOsMessage(
+    request: BrowserOsChatRequest,
     abortSignal: AbortSignal,
   ): Promise<Response> {
     const { sessionStore } = this.deps
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
 
-    // Look up the session first so we can stamp isNewConversation onto
-    // agentConfig before it flows down into the ACP factory (which uses
-    // the flag to decide whether to refresh the workspace instruction
-    // file). The original isNewSession flag below stays as-is for the
-    // rest of the chat-service logic.
     let session = sessionStore.get(request.conversationId)
-    const isFirstTurn = !session
 
     const agentConfig: ResolvedAgentConfig = {
       conversationId: request.conversationId,
@@ -87,39 +118,16 @@ export class ChatService {
       userSystemPrompt: request.userSystemPrompt,
       workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
-      // ACP conversations are always agent mode: read-only chat mode is not
-      // enforced for those providers, so the mode toggle is ignored for them.
-      // Pinning chatMode to false keeps the on-disk instruction file and every
-      // (re)built in-band prompt in agent mode, so no request or rebuild can
-      // put an ACP agent into a chat-mode prompt that contradicts it.
-      chatMode: isAcpProvider(llmConfig.provider)
-        ? false
-        : request.mode === 'chat',
+      chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
-      acpAgentId: request.acpAgentId,
-      acpCommand: request.acpCommand,
-      acpFixedWorkspacePath: request.acpFixedWorkspacePath,
-      acpMcpServers: isAcpProvider(llmConfig.provider)
-        ? buildAcpMcpServers({
-            serverPort: this.deps.serverPort,
-            conversationId: request.conversationId,
-            providerId: llmConfig.provider,
-            defaultWindowId: request.browserContext?.windowId,
-            enabledMcpServers: request.browserContext?.enabledMcpServers,
-            customMcpServers: request.browserContext?.customMcpServers,
-          })
-        : undefined,
-      isNewConversation: isFirstTurn,
-      resourcesDir: this.deps.resourcesDir,
     }
 
     let isNewSession = false
     const contextChanges: string[] = []
 
-    // Build stable keys for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
 
     // Snapshot the inputs the cached session was built with, before any
@@ -136,15 +144,7 @@ export class ChatService {
     const mcpChanged = !!prior && prior.mcpServerKey !== mcpServerKey
     const workspaceChanged =
       !!prior && prior.workingDir !== request.userWorkingDir
-    // ACP is excluded: a rebuild cannot deliver a mode change to those agents,
-    // because their instructions live in the workspace instruction file and
-    // ensureWorkspaceInstructionFile() skips whenever isNewConversation is
-    // false - which it is on every rebuild. Rebuilding would leave a fresh
-    // in-band prompt contradicting the stale on-disk block.
-    const modeChanged =
-      !!prior &&
-      !isAcpProvider(llmConfig.provider) &&
-      prior.chatMode !== requestChatMode
+    const modeChanged = !!prior && prior.chatMode !== requestChatMode
 
     // One rebuild reflects every change, because rebuildSession reads the
     // current agentConfig, mcpServerKey, and request. Switching to chat mode
@@ -292,7 +292,6 @@ export class ChatService {
       request.selectedTextSource,
     )
 
-    // Prepend tool-change context when session was rebuilt mid-conversation
     const contextPrefix =
       contextChanges.length > 0
         ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
@@ -309,94 +308,37 @@ export class ChatService {
     const wrappedUserMessageId =
       session.agent.messages[session.agent.messages.length - 1]?.id
 
-    // ACP-backed providers run against a persistent acpx session that
-    // owns the agent's conversation memory natively on disk under
-    // <stateDir>/<sessionKey>/. Re-feeding the full UIMessage history
-    // doubles bookkeeping and, worse, trips the AI SDK validator when
-    // it walks phantom tool-<name> parts emitted by acpx-ai-provider
-    // under freshly-generated "acpx-N" ids (acpx#37). For ACP turns
-    // we send only the new user message — acpx's session/load reads
-    // prior turns from disk transparently. The UI continues to see
-    // the growing transcript via session.agent.messages.
-    //
-    // LLM-API providers are stateless and need the full history on
-    // each turn, so they keep the existing shape verbatim.
-    const isAcp = isAcpProvider(agentConfig.provider)
-    const promptUiMessages: UIMessage[] = isAcp
-      ? [
-          {
-            id: wrappedUserMessageId ?? crypto.randomUUID(),
-            role: 'user',
-            parts: [{ type: 'text', text: promptUserText }],
-          },
-        ]
-      : filterValidMessages(session.agent.messages).map((msg) =>
-          msg.id === wrappedUserMessageId && msg.role === 'user'
-            ? {
-                ...msg,
-                parts: [{ type: 'text' as const, text: promptUserText }],
-              }
-            : msg,
-        )
+    const promptUiMessages: UIMessage[] = filterValidMessages(
+      session.agent.messages,
+    ).map((message) =>
+      message.id === wrappedUserMessageId && message.role === 'user'
+        ? {
+            ...message,
+            parts: [{ type: 'text' as const, text: promptUserText }],
+          }
+        : message,
+    )
 
     const response = await createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
       abortSignal,
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        // The agent loop returns `messages` containing the prompt-
-        // wrapped user text. Restore the raw form before persisting
-        // so subsequent turns see the clean text and the client's
-        // local UIMessage matches what was originally typed.
-        //
-        // ACP path: `messages` is the single user msg we sent plus
-        // the assistant's new reply. The user msg already lives in
-        // session.agent.messages via appendUserMessage; we only need
-        // to restore its raw text and append the new assistant
-        // entries from this turn.
-        //
-        // LLM-API path: `messages` is the full conversation as the
-        // AI SDK reconstructed it. Restore the wrapped user message
-        // and replace the entire session history with the result.
-        if (isAcp) {
-          // Invariant: an id in both `messages` and session means the
-          // AI SDK handed us back something we already have. With the
-          // single-user-msg input shape that means our own user msg —
-          // the only collision we expect. Any new id is a fresh
-          // assistant entry from this turn. acpx never re-emits prior
-          // turns into the AI SDK stream, so this filter cannot drop a
-          // legitimately new message.
-          const existingIds = new Set(session.agent.messages.map((m) => m.id))
-          const newMessages = messages.filter((m) => !existingIds.has(m.id))
-          const updated = session.agent.messages.map((m) =>
-            m.id === wrappedUserMessageId && m.role === 'user'
-              ? {
-                  ...m,
-                  parts: [{ type: 'text' as const, text: request.message }],
-                }
-              : m,
-          )
-          session.agent.messages = filterValidMessages([
-            ...updated,
-            ...newMessages,
-          ])
-        } else {
-          const restored = messages.map((msg) =>
-            msg.id === wrappedUserMessageId && msg.role === 'user'
-              ? {
-                  ...msg,
-                  parts: [{ type: 'text' as const, text: request.message }],
-                }
-              : msg,
-          )
-          session.agent.messages = filterValidMessages(restored)
-        }
+        const restored = messages.map((message) =>
+          message.id === wrappedUserMessageId && message.role === 'user'
+            ? {
+                ...message,
+                parts: [{ type: 'text' as const, text: request.message }],
+              }
+            : message,
+        )
+        session.agent.messages = filterValidMessages(restored)
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
           totalMessages: session.agent.messages.length,
         })
 
-        if (session?.scheduledPageId) {
+        if (session.scheduledPageId) {
           const pageId = session.scheduledPageId
           session.scheduledPageId = undefined
           this.closeScheduledPage(pageId, request.conversationId)
@@ -412,6 +354,17 @@ export class ChatService {
   async deleteSession(
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
+    let acpDeleted = false
+    const acpAgentId = this.acpConversationAgents.get(conversationId)
+    if (acpAgentId) {
+      await this.getAcpRuntime().close(acpAgentId, conversationId, {
+        discardPersistentState: true,
+      })
+      this.acpConversationAgents.delete(conversationId)
+      this.acpMessages.delete(`${acpAgentId}:${conversationId}`)
+      acpDeleted = true
+    }
+
     const session = this.deps.sessionStore.get(conversationId)
     if (session?.scheduledPageId) {
       const pageId = session.scheduledPageId
@@ -419,7 +372,132 @@ export class ChatService {
       this.closeScheduledPage(pageId, conversationId)
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
-    return { deleted, sessionCount: this.deps.sessionStore.count() }
+    return {
+      deleted: deleted || acpDeleted,
+      sessionCount: this.deps.sessionStore.count(),
+    }
+  }
+
+  isAcpSession(conversationId: string): boolean {
+    return this.acpConversationAgents.has(conversationId)
+  }
+
+  private async processAcpMessage(
+    request: AcpChatRequest,
+    abortSignal: AbortSignal,
+  ): Promise<Response> {
+    const agent = await this.getAcpAgentStore().get(request.target.agentId)
+    if (!agent)
+      return Response.json({ error: 'Unknown agent' }, { status: 404 })
+    if (agent.type !== request.target.type) {
+      return Response.json({ error: 'Agent type mismatch' }, { status: 400 })
+    }
+
+    const browserContext = await resolveBrowserContextPageIds(
+      this.deps.browser,
+      request.browserContext,
+    )
+    const userContent = formatUserMessage(
+      request.message,
+      browserContext,
+      request.selectedText,
+      request.selectedTextSource,
+    )
+    const promptText = request.userSystemPrompt?.trim()
+      ? `${request.userSystemPrompt.trim()}\n\n${userContent}`
+      : userContent
+    const historyKey = `${agent.id}:${request.conversationId}`
+    const history: UIMessage[] =
+      this.acpMessages.get(historyKey) ??
+      (request.previousConversation ?? []).map((message) => ({
+        id: crypto.randomUUID(),
+        role: message.role,
+        parts: [{ type: 'text' as const, text: message.content }],
+      }))
+    const priorHistoryLength = history.length
+    const messageId = crypto.randomUUID()
+    const files = (request.attachments ?? []).map((attachment) => ({
+      type: 'file' as const,
+      mediaType: attachment.mediaType,
+      url: attachment.data.startsWith('data:')
+        ? attachment.data
+        : `data:${attachment.mediaType};base64,${attachment.data}`,
+    }))
+    const visibleUserMessage: UIMessage = {
+      id: messageId,
+      role: 'user',
+      parts: [
+        ...(request.message
+          ? [{ type: 'text' as const, text: request.message }]
+          : []),
+        ...files,
+      ],
+    }
+    history.push(visibleUserMessage)
+    this.acpMessages.set(historyKey, history)
+    this.acpConversationAgents.set(request.conversationId, agent.id)
+    const promptMessages = history.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            parts: [{ type: 'text' as const, text: promptText }, ...files],
+          }
+        : message,
+    )
+    const streamInput: AcpAgentStreamInput = {
+      agent: {
+        ...agent,
+        workingDirectory: request.userWorkingDir ?? agent.workingDirectory,
+      },
+      conversationId: request.conversationId,
+      messages: promptMessages,
+      browserContext,
+      abortSignal,
+      onFinish: ({ messages }) => {
+        const existingIds = new Set(history.map((message) => message.id))
+        history.push(
+          ...messages.filter((message) => !existingIds.has(message.id)),
+        )
+      },
+    }
+    let stream: ReadableStream<UIMessageChunk>
+    try {
+      stream = await this.getAcpRuntime().stream(streamInput)
+    } catch (error) {
+      history.length = priorHistoryLength
+      if (error instanceof AcpAgentSessionBusyError) {
+        return Response.json(
+          { error: 'An agent turn is already running' },
+          { status: 409 },
+        )
+      }
+      if (!(error instanceof AcpAgentPreparationError)) throw error
+      stream = createUIMessageStream({
+        execute({ writer }) {
+          writer.write({ type: 'error', errorText: error.message })
+        },
+      })
+    }
+    const response = createUIMessageStreamResponse({
+      stream,
+      consumeSseStream: consumeStream,
+    })
+    return (
+      this.deps.activity?.trackChatResponse(response, abortSignal) ?? response
+    )
+  }
+
+  private getAcpAgentStore(): Pick<AcpAgentStore, 'get'> {
+    this.acpAgentStore ??= new DbAcpAgentStore()
+    return this.acpAgentStore
+  }
+
+  private getAcpRuntime(): Pick<AcpAgentRuntime, 'stream' | 'close'> {
+    this.acpRuntime ??= new AcpAgentRuntime({
+      serverPort: this.deps.serverPort,
+      resourcesDir: this.deps.resourcesDir,
+    })
+    return this.acpRuntime
   }
 
   private closeScheduledPage(pageId: number, conversationId: string): void {

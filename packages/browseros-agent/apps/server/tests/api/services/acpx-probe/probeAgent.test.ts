@@ -68,76 +68,51 @@ function baseProbeResult(overrides: Record<string, unknown> = {}) {
 }
 
 describe('probeAcpAgent — input shape', () => {
-  it('rejects when neither agentId nor command is provided', async () => {
-    await expect(probeAcpAgent({})).rejects.toThrow(
-      'Either agentId or command is required',
-    )
-  })
-
-  it('rewrites a built-in agentId to the tier-2 npx command when no resourcesDir is supplied', async () => {
+  it('rewrites a built-in type to the tier-2 npx command when no resourcesDir is supplied', async () => {
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
-    // With no resourcesDir the launcher returns the host-npx-fallback
-    // shape; probeAcpAgent now honours that and forwards the pinned
-    // command rather than deferring to acpx's own registry.
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
     expect(lastCall?.authPolicy).toBe('skip')
   })
 
-  it('forwards command and cwd for acp-custom', async () => {
-    nextResult = baseProbeResult()
-    await probeAcpAgent({ command: 'my-bin acp', cwd: '/tmp/x' })
-    expect(lastCall?.command).toBe('my-bin acp')
-    expect(lastCall?.cwd).toBe('/tmp/x')
-  })
-
   it('defaults the timeout to 120 seconds', async () => {
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.timeoutMs).toBe(120_000)
   })
 
   it('honours an explicit timeoutMs', async () => {
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude', timeoutMs: 5_000 })
+    await probeAcpAgent({ type: 'claude', timeoutMs: 5_000 })
     expect(lastCall?.timeoutMs).toBe(5_000)
   })
 
   it('honours BROWSEROS_ACPX_PROBE_TIMEOUT_MS when in the [1000, 120000] range', async () => {
     process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '90000'
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.timeoutMs).toBe(90_000)
   })
 
   it('ignores BROWSEROS_ACPX_PROBE_TIMEOUT_MS when below the floor', async () => {
     process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '999'
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.timeoutMs).toBe(120_000)
   })
 
   it('ignores BROWSEROS_ACPX_PROBE_TIMEOUT_MS when above the ceiling', async () => {
     process.env.BROWSEROS_ACPX_PROBE_TIMEOUT_MS = '300000'
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.timeoutMs).toBe(120_000)
   })
 })
 
 describe('probeAcpAgent — bundled-Bun launcher swap', () => {
-  it('rewrites a claude agentId to the bundled-Bun command when the binary exists', async () => {
-    // Mock the bundled-bun resolver to return a fake path. The
-    // probe calls resolveAcpSpawnCommand internally with the
-    // resourcesDir we threaded through; we point it at a stub
-    // implementation via the launcher's resolveBundledBun param
-    // path. Since the probe does not expose that injection,
-    // simulate the same outcome by passing a resourcesDir that
-    // makes the real resolveBundledBun succeed: write a fake bun
-    // into tmpdir/bin/third_party.
-    // Sync fs because some sibling test files partial-mock
-    // `node:fs/promises`. Using the sync API sidesteps that pollution.
+  it('rewrites a claude type to the bundled-Bun command when the binary exists', async () => {
+    // Sync fs avoids sibling node:fs/promises mocks leaking through Bun.
     const fs = await import('node:fs')
     const os = await import('node:os')
     const path = await import('node:path')
@@ -148,7 +123,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     fs.writeFileSync(bunPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
 
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude', resourcesDir: tmpRoot })
+    await probeAcpAgent({ type: 'claude', resourcesDir: tmpRoot })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain(bunPath)
     expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
@@ -158,9 +133,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
 
   it('produces the tier-2 pinned npx command when no resourcesDir is supplied', async () => {
     nextResult = baseProbeResult()
-    await probeAcpAgent({ agentId: 'claude' })
-    // Launcher returns host-npx-fallback; probeAcpAgent forwards its
-    // command instead of leaving agentId in place for acpx to resolve.
+    await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
   })
@@ -168,21 +141,11 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
   it('produces the tier-2 pinned npx command when the bundled bun binary is missing under resourcesDir', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({
-      agentId: 'codex',
+      type: 'codex',
       resourcesDir: '/nonexistent/path/that/has/no/bundled/bun',
     })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain('@agentclientprotocol/codex-acp')
-  })
-
-  it('passes through an explicit command unchanged regardless of resourcesDir', async () => {
-    nextResult = baseProbeResult()
-    await probeAcpAgent({
-      command: 'my-custom-binary acp',
-      resourcesDir: '/some/path',
-    })
-    expect(lastCall?.command).toBe('my-custom-binary acp')
-    expect(lastCall?.agent).toBeUndefined()
   })
 })
 
@@ -207,7 +170,7 @@ describe('probeAcpAgent — normalisation', () => {
       ],
       modelConfig: { configId: 'model', values: ['sonnet', 'haiku'] },
     })
-    const out = await probeAcpAgent({ agentId: 'claude' })
+    const out = await probeAcpAgent({ type: 'claude' })
     expect(out.models).toEqual([
       { id: 'sonnet', name: 'Sonnet', description: 'Everyday' },
       { id: 'haiku', name: 'Haiku', description: 'Fast' },
@@ -239,7 +202,7 @@ describe('probeAcpAgent — normalisation', () => {
         currentValue: 'gpt-5.5',
       },
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ type: 'codex' })
     expect(out.models.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.3-codex'])
   })
 
@@ -253,14 +216,12 @@ describe('probeAcpAgent — normalisation', () => {
         { id: 'b', name: 'B' },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'gemini' })
+    const out = await probeAcpAgent({ type: 'claude' })
     expect(out.models.map((m) => m.id)).toEqual(['a', 'b'])
     expect(out.reasoning).toBeNull()
   })
 
   it('splits compound `model[effort]` ids into bare models + effort list when no picker exists', async () => {
-    // Mirrors the actual codex-acp response when supportsConfigOption=false:
-    // no configOptions, reasoning=null, models carry effort in the id.
     nextResult = baseProbeResult({
       configOptions: [],
       modelConfig: null,
@@ -293,7 +254,7 @@ describe('probeAcpAgent — normalisation', () => {
         },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ type: 'codex' })
     expect(out.models).toEqual([
       {
         id: 'gpt-5.3-codex',
@@ -324,7 +285,7 @@ describe('probeAcpAgent — normalisation', () => {
         { id: 'gpt-5.5/medium', name: 'GPT-5.5 (medium)' },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ type: 'codex' })
     expect(out.models.map((m) => m.id)).toEqual(['gpt-5.5'])
     expect(out.reasoning?.values).toEqual(['low', 'medium'])
   })
@@ -340,7 +301,7 @@ describe('probeAcpAgent — normalisation', () => {
         { id: 'foo[high]', name: 'foo (high)' },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ type: 'codex' })
     expect(out.reasoning?.defaultValue).toBe('low')
   })
 
@@ -352,7 +313,7 @@ describe('probeAcpAgent — normalisation', () => {
         defaultValue: 'high',
       },
     })
-    const out = await probeAcpAgent({ agentId: 'claude' })
+    const out = await probeAcpAgent({ type: 'claude' })
     expect(out.reasoning?.values).toEqual([
       'low',
       'medium',
@@ -365,7 +326,7 @@ describe('probeAcpAgent — normalisation', () => {
 
   it('returns null reasoning when the agent has no thought_level config', async () => {
     nextResult = baseProbeResult({ reasoning: null })
-    const out = await probeAcpAgent({ agentId: 'gemini' })
+    const out = await probeAcpAgent({ type: 'claude' })
     expect(out.reasoning).toBeNull()
   })
 
@@ -375,7 +336,7 @@ describe('probeAcpAgent — normalisation', () => {
       supportsConfigOption: false,
       protocolVersion: 2,
     })
-    const out = await probeAcpAgent({ agentId: 'codex' })
+    const out = await probeAcpAgent({ type: 'codex' })
     expect(out.agentInfo).toEqual({
       name: 'codex',
       title: 'Codex CLI',
@@ -393,7 +354,7 @@ describe('probeAcpAgent — normalisation', () => {
         acpError: { code: -32603, message: 'auth required' },
       },
     })
-    const out = await probeAcpAgent({ agentId: 'claude' })
+    const out = await probeAcpAgent({ type: 'claude' })
     expect(out.error?.code).toBe('auth_required')
     expect(out.error?.acpErrorCode).toBe(-32603)
   })

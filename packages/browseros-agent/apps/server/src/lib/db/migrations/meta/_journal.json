@@ -29,6 +29,20 @@
       "when": 1781916712443,
       "tag": "0003_scrub_hermes_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785893663690,
+      "tag": "0004_sparkling_carnage",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785900211901,
+      "tag": "0005_yellow_riptide",
+      "breakpoints": true
     }
   ]
 }

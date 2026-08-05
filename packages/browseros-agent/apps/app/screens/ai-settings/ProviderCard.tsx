@@ -2,7 +2,6 @@ import { Check, Loader2, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { canTestProvider } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
@@ -29,7 +28,6 @@ export const ProviderCard: FC<ProviderCardProps> = ({
   isTesting = false,
 }) => {
   const inputId = `provider-${provider.id}`
-  const canTest = canTestProvider(provider)
 
   return (
     <label
@@ -102,17 +100,15 @@ export const ProviderCard: FC<ProviderCardProps> = ({
       </div>
       {!isBuiltIn && (
         <div className="flex shrink-0 items-center gap-2">
-          {canTest && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isTesting}
-              onClick={() => onTest?.()}
-            >
-              {isTesting && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-              {isTesting ? 'Testing...' : 'Test'}
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isTesting}
+            onClick={() => onTest?.()}
+          >
+            {isTesting && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+            {isTesting ? 'Testing...' : 'Test'}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => onEdit?.()}>
             Edit
           </Button>

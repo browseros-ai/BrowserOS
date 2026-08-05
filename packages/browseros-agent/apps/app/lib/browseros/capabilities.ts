@@ -12,45 +12,18 @@ type FeatureConfig = {
   requiresDevelopmentFlag?: boolean
 }
 
-/**
- * Features gated by BrowserOS version or explicit environment flags.
- * Add new features here with corresponding config in FEATURE_CONFIG.
- *
- * Note: In development mode, all features are enabled regardless of version
- * or alpha flag. Development-only gates resolve false outside development.
- * @public
- */
 export enum Feature {
-  // Unfinished UI surfaces behind an explicit alpha opt-in
   ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
   VOICE_INPUT_SUPPORT = 'VOICE_INPUT_SUPPORT',
-  // Inline chat in the new tab page
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
-  // Vertical tabs preference and customization
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
-  // ChatGPT Pro OAuth LLM provider
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
-  // GitHub Copilot OAuth LLM provider
   GITHUB_COPILOT_SUPPORT = 'GITHUB_COPILOT_SUPPORT',
-  // Qwen Code OAuth LLM provider
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
-  // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
-  // Claude Code / Codex agent-harness adapters in the unified picker + settings
   AGENT_HARNESS_SUPPORT = 'AGENT_HARNESS_SUPPORT',
 }
 
-/**
- * Version requirements for each feature.
- * - minBrowserOSVersion: feature enabled when BrowserOS >= this version
- * - maxBrowserOSVersion: feature enabled when BrowserOS < this version (for deprecation)
- * - minServerVersion: feature enabled when server >= this version
- * - maxServerVersion: feature enabled when server < this version (for deprecation)
- *
- * TypeScript enforces that every Feature has a config entry.
- * In development mode, all features are enabled regardless of version or
- * alpha flag.
- */
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.VOICE_INPUT_SUPPORT]: { requiresAlphaFlag: true },
@@ -110,7 +83,6 @@ function checkVersionConstraints(
   return true
 }
 
-/** Resolves static environment gates before version checks. */
 export function resolveStaticFeatureSupport({
   isDevelopment,
   alphaFeaturesEnabled,
@@ -134,7 +106,6 @@ export function resolveStaticFeatureSupport({
   return null
 }
 
-/** Applies static gates, falling through when version gates still need evaluation. */
 export function resolveFeatureStaticSupport({
   feature,
   isDevelopment,
@@ -184,18 +155,14 @@ async function doInitialize(): Promise<CapabilitiesState> {
     if (versionStr) {
       state.browserOSVersion = parseVersion(versionStr)
     }
-  } catch {
-    // BrowserOS version unknown - features requiring it will be disabled
-  }
+  } catch {}
 
   try {
     const pref = await adapter.getPref(SERVER_VERSION_PREF)
     if (pref?.value) {
       state.serverVersion = parseVersion(pref.value)
     }
-  } catch {
-    // Server version unknown - features requiring it will be disabled
-  }
+  } catch {}
 
   return state
 }
@@ -207,8 +174,6 @@ function ensureInitialized(): Promise<CapabilitiesState> {
   return initPromise
 }
 
-// Exported for unit tests: resolves a feature's version gate directly,
-// bypassing the dev-mode/static short-circuit in `supports`.
 export function checkFeatureSupport(
   state: CapabilitiesState,
   feature: Feature,
@@ -245,20 +210,11 @@ export function checkFeatureSupport(
   return true
 }
 
-/**
- * Version-gated feature capabilities.
- * All methods auto-initialize and are safe to call at any time.
- * @public
- */
 export const Capabilities = {
   getStaticSupport(feature: Feature): boolean | null {
     return getStaticFeatureSupport(feature)
   },
 
-  /**
-   * Check if a feature is supported.
-   * In development mode, all features are enabled.
-   */
   async supports(feature: Feature): Promise<boolean> {
     const staticSupport = getStaticFeatureSupport(feature)
     if (staticSupport !== null) return staticSupport
@@ -278,21 +234,13 @@ export const Capabilities = {
     return state.serverVersion.join('.')
   },
 
-  /**
-   * Pre-initialize capabilities. Optional - methods auto-initialize if needed.
-   * Useful for warming up before first use.
-   */
   async initialize(): Promise<void> {
     await ensureInitialized()
   },
 
-  /**
-   * Reset state for testing purposes.
-   */
   reset(): void {
     initPromise = null
   },
 }
 
-// Pre-initialize when module is imported
 ensureInitialized()
