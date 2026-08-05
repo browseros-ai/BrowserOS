@@ -79,6 +79,10 @@ describe('release-claw-server-rust workflow', () => {
 
   it('uploads only immutable version keys and attaches all draft assets', () => {
     const publish = section('  publish-versioned:', '  finalize:')
+    const attach = section(
+      '      - name: Attach zips to private draft',
+      '  finalize:',
+    )
     expect(publish).toContain('actions/setup-python@v6')
     expect(publish).toContain('python -m pip install "boto3>=1.35.1,<2"')
     expect(publish).not.toContain('pip install --user')
@@ -96,6 +100,7 @@ describe('release-claw-server-rust workflow', () => {
     expect(publish).toContain(
       `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
+    expect(attach).toContain(`GH_REPO: ${dollar}{{ github.repository }}`)
   })
 
   it('recovers completed targets before rebuilding missing targets', () => {

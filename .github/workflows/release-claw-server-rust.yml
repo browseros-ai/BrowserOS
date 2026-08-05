@@ -739,6 +739,7 @@ jobs:
 
       - name: Attach zips to private draft
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
