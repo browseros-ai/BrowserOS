@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish_alpha_feed:
+        description: "Publish and persist the alpha feed after finalization"
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       version:
@@ -469,7 +474,7 @@ jobs:
       should_publish: ${{ steps.render.outputs.should_publish }}
     env:
       NAMES: ${{ needs.prepare.outputs.names }}
-      PUBLISH_ALPHA_FEED: ${{ github.event_name == 'workflow_dispatch' || inputs.publish_alpha_feed }}
+      PUBLISH_ALPHA_FEED: ${{ inputs.publish_alpha_feed }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout default branch

@@ -33,6 +33,7 @@ describe('release-extensions workflow', () => {
     expect(dispatch).toMatch(/version:[\s\S]*required: false/)
     expect(dispatch).toMatch(/mode:[\s\S]*default: "build"/)
     expect(dispatch).toMatch(/defer_finalize:[\s\S]*default: false/)
+    expect(dispatch).toMatch(/publish_alpha_feed:[\s\S]*default: true/)
     expect(dispatch).toContain(
       'Explicit version; agent and BrowserOS neo allocate one when omitted',
     )
@@ -113,8 +114,9 @@ describe('release-extensions workflow', () => {
     expect(preflight).toContain("needs.prepare.outputs.mode == 'finalize'")
     expect(preflight).toContain('inputs.defer_finalize != true')
     expect(preflight).toContain(
-      `PUBLISH_ALPHA_FEED: ${'$'}{{ github.event_name == 'workflow_dispatch' || inputs.publish_alpha_feed }}`,
+      `PUBLISH_ALPHA_FEED: ${'$'}{{ inputs.publish_alpha_feed }}`,
     )
+    expect(preflight).not.toContain('github.event_name')
     expect(preflight).toContain('if [ "$PUBLISH_ALPHA_FEED" != "true" ]')
     expect(preflight).toContain('browseros release extensions')
     expect(preflight).toContain('args=(--channel alpha)')
