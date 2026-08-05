@@ -20,7 +20,7 @@ preflight
 ```
 
 BrowserOS prepares the BrowserOS server and agent extension. BrowserClaw
-prepares the Rust server, onboarding resources, and BrowserClaw extension.
+prepares the BrowserClaw server, onboarding resources, and BrowserClaw extension.
 Preparation uploads immutable versioned objects and leaves private GitHub
 drafts. Public component tags/releases and mutable server `latest` aliases are
 not created or moved until every selected browser build and the feed preview
@@ -288,7 +288,7 @@ move `latest` backward.
 | Workflow | Purpose |
 | --- | --- |
 | `release-server.yml` | BrowserOS server resources and live alpha OTA by default |
-| `release-claw-server-rust.yml` | BrowserClaw Rust server resources and live alpha OTA by default |
+| `release-claw-server.yml` | BrowserClaw server resources and live alpha OTA by default |
 | `release-claw-onboard.yml` | BrowserClaw onboarding resources |
 | `release-extensions.yml` | CRX preparation/finalization without feed publication |
 | `release-extension-feeds.yml` | Extension feed preview or explicit publication |

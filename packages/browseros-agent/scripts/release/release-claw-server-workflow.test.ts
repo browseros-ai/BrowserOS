@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 const repoRoot = resolve(import.meta.dir, '../../../..')
 const workflow = readFileSync(
-  resolve(repoRoot, '.github/workflows/release-claw-server-rust.yml'),
+  resolve(repoRoot, '.github/workflows/release-claw-server.yml'),
   'utf8',
 )
 const browserclawWorkflow = readFileSync(
@@ -28,7 +28,7 @@ function section(start: string, end?: string): string {
   return workflow.slice(startIndex, endIndex === -1 ? undefined : endIndex)
 }
 
-describe('release-claw-server-rust workflow', () => {
+describe('release-claw-server workflow', () => {
   it('exposes the reusable build/finalize interface and outputs', () => {
     const call = section('  workflow_call:', '\npermissions:')
     const publishOta = call.slice(
@@ -62,7 +62,7 @@ describe('release-claw-server-rust workflow', () => {
 
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  cargo-test:')
-    expect(workflow).toContain('group: release-claw-server-rust')
+    expect(workflow).toContain('group: release-claw-server')
     expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )

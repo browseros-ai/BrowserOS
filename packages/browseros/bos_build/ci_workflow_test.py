@@ -644,12 +644,12 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "extension": "browserclaw",
             "builds": {
                 "build_onboarding": "release-claw-onboard.yml",
-                "build_server": "release-claw-server-rust.yml",
+                "build_server": "release-claw-server.yml",
                 "build_extension": "release-extensions.yml",
             },
             "finalizers": {
                 "finalize_onboarding": "release-claw-onboard.yml",
-                "finalize_server": "release-claw-server-rust.yml",
+                "finalize_server": "release-claw-server.yml",
                 "finalize_extension": "release-extensions.yml",
             },
             "pins": {

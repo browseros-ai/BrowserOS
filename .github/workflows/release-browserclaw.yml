@@ -202,7 +202,7 @@ jobs:
     name: Prepare BrowserClaw server resources
     needs: preflight
     if: ${{ inputs.include_servers }}
-    uses: ./.github/workflows/release-claw-server-rust.yml
+    uses: ./.github/workflows/release-claw-server.yml
     permissions:
       contents: write
       pull-requests: write
@@ -638,7 +638,7 @@ jobs:
     name: Finalize BrowserClaw server resources
     needs: [release_plan, browser_gate, stage_updates]
     if: ${{ always() && inputs.include_servers && needs.release_plan.result == 'success' && needs.browser_gate.result == 'success' && needs.stage_updates.result == 'success' }}
-    uses: ./.github/workflows/release-claw-server-rust.yml
+    uses: ./.github/workflows/release-claw-server.yml
     permissions:
       contents: write
       pull-requests: write

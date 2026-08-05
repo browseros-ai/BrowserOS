@@ -173,7 +173,7 @@ CRX versions are independent of the browser version.
 
 ### What CI does, and where it stops
 
-A BrowserClaw run can produce onboarding resources, Rust claw-server resources,
+A BrowserClaw run can produce onboarding resources, BrowserClaw server resources,
 browser builds for three platforms, the BrowserClaw extension CRX, staged
 update feeds, and draft GitHub release assets.
 
@@ -286,12 +286,12 @@ file:
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
 | BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
-| BrowserClaw server (Rust) | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server-rust.yml` | `claw-server-rust/v*` |
+| BrowserClaw server | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server.yml` | `claw-server-rust/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
-BrowserClaw browser builds and server OTA both consume the Rust server bundles
-published under `claw-server-rust/prod-resources`. Packaging normalizes the Rust
-binary name to `browseros-claw-server` for compatibility with the browser.
+BrowserClaw browser builds and server OTA both consume the server bundles
+published under the historical `claw-server-rust/prod-resources` key. Packaging
+normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
 Two signed macOS nightlies run on the self-hosted Mac and publish rolling
 prereleases anyone can download: `nightly-browseros` (04:00 UTC) and

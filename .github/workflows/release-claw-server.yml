@@ -76,7 +76,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-claw-server-rust
+  group: release-claw-server
   cancel-in-progress: false
 
 jobs:
