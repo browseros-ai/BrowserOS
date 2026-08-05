@@ -54,6 +54,15 @@ function agent(
   }
 }
 
+function agentArgv(
+  policy: Awaited<ReturnType<typeof buildAcpAgentPolicy>>,
+  type: AcpAgentDefinition['type'],
+): string[] {
+  const override = policy.agentRegistryOverrides[type]
+  if (!Array.isArray(override)) throw new Error(`Expected ${type} argv`)
+  return override
+}
+
 describe('buildAcpAgentPolicy', () => {
   it('builds a Claude session with BrowserOS MCP and appended skill guidance', async () => {
     const resourcesDir = await createResourcesDir()
@@ -78,7 +87,7 @@ describe('buildAcpAgentPolicy', () => {
     expect(policy.adapter).toBe('claude')
     expect(policy.cwd).toBe('/work/project')
     expect(policy.sessionKey).toBe('acp:claude-agent-id:conversation-1')
-    expect(policy.agentRegistryOverrides.claude).toContain(
+    expect(agentArgv(policy, 'claude')).toContain(
       '@agentclientprotocol/claude-agent-acp@^0.31.0',
     )
     expect(policy.mcpServers.map((server) => server.name)).toEqual([
@@ -120,13 +129,15 @@ describe('buildAcpAgentPolicy', () => {
       },
     })
 
+    const codexArgv = agentArgv(policy, 'codex')
     const store = createFileSessionStore({ stateDir: resourcesDir })
     const timestamp = new Date(0).toISOString()
     const record: AcpSessionRecord = {
       schema: 'acpx.session.v1',
       acpxRecordId: 'codex-record',
       acpSessionId: 'codex-session',
-      agentCommand: policy.agentRegistryOverrides.codex,
+      agentCommand: codexArgv.join(' '),
+      agentArgv: codexArgv,
       cwd: policy.cwd,
       createdAt: timestamp,
       lastUsedAt: timestamp,
@@ -153,21 +164,16 @@ describe('buildAcpAgentPolicy', () => {
     await store.save(record)
     expect(await store.load(record.acpxRecordId)).toBeDefined()
     expect(policy.sessionOptions).toEqual({})
-    expect(policy.agentRegistryOverrides.codex).not.toContain('CODEX_HOME')
-    expect(policy.agentRegistryOverrides.codex).toContain('CODEX_CONFIG=')
-    expect(policy.agentRegistryOverrides.codex).toContain(
-      "INITIAL_AGENT_MODE='agent-full-access'",
-    )
-    expect(policy.agentRegistryOverrides.codex).toContain(
+    const renderedArgv = codexArgv.join('\n')
+    expect(renderedArgv).not.toContain('CODEX_HOME')
+    expect(renderedArgv).toContain('CODEX_CONFIG=')
+    expect(renderedArgv).toContain('INITIAL_AGENT_MODE=agent-full-access')
+    expect(renderedArgv).toContain(
       '"developer_instructions":"---\\nname: browseros',
     )
-    expect(policy.agentRegistryOverrides.codex).toContain('"model":"gpt-5.4"')
-    expect(policy.agentRegistryOverrides.codex).toContain(
-      '"model_reasoning_effort":"high"',
-    )
-    expect(policy.agentRegistryOverrides.codex).toContain(
-      '"browser@openai-bundled":{"enabled":false}',
-    )
+    expect(renderedArgv).toContain('"model":"gpt-5.4"')
+    expect(renderedArgv).toContain('"model_reasoning_effort":"high"')
+    expect(renderedArgv).toContain('"browser@openai-bundled":{"enabled":false}')
     expect(policy.mcpServers.map((server) => server.name)).toEqual([
       'browseros',
     ])

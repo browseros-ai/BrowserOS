@@ -82,7 +82,7 @@
     "@openrouter/ai-sdk-provider": "^2.10.0",
     "@sentry/bun": "^10.67.0",
     "acp-probe": "^0.0.2",
-    "acpx": "^0.12.1",
+    "acpx": "^0.13.0",
     "ai": "6.0.230",
     "commander": "^14.0.3",
     "core-js": "3.49.0",

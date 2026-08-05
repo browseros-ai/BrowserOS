@@ -42,13 +42,13 @@ spawn config.
 {
   "dependencies": {
     "@browseros/acpx-ai-provider": "workspace:*",
-    "acpx": "^0.12.0",
+    "acpx": "^0.13.0",
     "ai": "6.0.230"
   }
 }
 ```
 
-`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6, `acpx` ≥ 0.6.
+`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6, `acpx` ≥ 0.8.
 
 ## Quickstart
 

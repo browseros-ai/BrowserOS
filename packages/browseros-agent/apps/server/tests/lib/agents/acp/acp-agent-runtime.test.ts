@@ -242,8 +242,11 @@ describe('AcpAgentRuntime', () => {
       { key: 'reasoning_effort', value: 'xhigh' },
     ])
     expect(fixture.providerSettings[0]?.sessionOptions).toEqual({})
-    const codexCommand =
+    const codexOverride =
       fixture.providerSettings[0]?.agentRegistryOverrides?.codex ?? ''
+    const codexCommand = Array.isArray(codexOverride)
+      ? codexOverride.join('\n')
+      : codexOverride
     expect(codexCommand).toContain('CODEX_CONFIG=')
     expect(codexCommand).toContain('"model":"gpt-5.4"')
     expect(codexCommand).toContain('"model_reasoning_effort":"xhigh"')

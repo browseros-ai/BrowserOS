@@ -77,7 +77,7 @@ export async function probeAcpAgent(
   })
 
   const result = await runProbe({
-    command: launcher.command,
+    argv: launcher.argv,
     authPolicy: 'skip',
     timeoutMs,
   })

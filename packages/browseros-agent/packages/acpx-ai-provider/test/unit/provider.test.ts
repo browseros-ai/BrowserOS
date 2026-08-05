@@ -21,10 +21,14 @@ const createAcpRuntimeMock = mock(
       close: async () => {},
     }) as unknown as AcpRuntime,
 )
+const createAgentRegistryMock = mock(() => ({
+  resolve: () => ['codex'],
+  list: () => ['codex'],
+}))
 
 mock.module('acpx/runtime', () => ({
   createAcpRuntime: createAcpRuntimeMock,
-  createAgentRegistry: () => ({}),
+  createAgentRegistry: createAgentRegistryMock,
   createFileSessionStore: () => ({}),
 }))
 
@@ -33,13 +37,29 @@ const { createAcpxProvider } = await import('../../src/provider.ts')
 
 beforeEach(() => {
   createAcpRuntimeMock.mockClear()
+  createAgentRegistryMock.mockClear()
 })
 
 afterEach(() => {
   createAcpRuntimeMock.mockClear()
+  createAgentRegistryMock.mockClear()
 })
 
 describe('AcpxProvider — onPermissionRequest', () => {
+  test('forwards structured agent argv to the ACPX registry', () => {
+    const argv = ['env', 'INITIAL_AGENT_MODE=agent-full-access', 'codex-acp']
+    const provider = createAcpxProvider({
+      agent: 'codex',
+      agentRegistryOverrides: { codex: argv },
+    })
+
+    void provider.runtime
+
+    expect(createAgentRegistryMock).toHaveBeenCalledWith({
+      overrides: { codex: argv },
+    })
+  })
+
   test('forwards the callback into AcpRuntimeOptions', () => {
     const cb = async (
       _req: AcpPermissionRequest,

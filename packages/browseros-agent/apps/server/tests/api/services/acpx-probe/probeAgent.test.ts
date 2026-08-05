@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
 interface CapturedCall {
   agent?: string
-  command?: string
+  argv?: readonly string[]
   cwd?: string
   authPolicy?: string
   timeoutMs?: number
@@ -72,7 +72,9 @@ describe('probeAcpAgent — input shape', () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
-    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
+    expect(lastCall?.argv).toContain(
+      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+    )
     expect(lastCall?.authPolicy).toBe('skip')
   })
 
@@ -125,8 +127,10 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ type: 'claude', resourcesDir: tmpRoot })
     expect(lastCall?.agent).toBeUndefined()
-    expect(lastCall?.command).toContain(bunPath)
-    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
+    expect(lastCall?.argv).toContain(bunPath)
+    expect(lastCall?.argv).toContain(
+      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+    )
 
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
@@ -135,7 +139,9 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
-    expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
+    expect(lastCall?.argv).toContain(
+      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+    )
   })
 
   it('produces the tier-2 pinned npx command when the bundled bun binary is missing under resourcesDir', async () => {
@@ -145,7 +151,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
       resourcesDir: '/nonexistent/path/that/has/no/bundled/bun',
     })
     expect(lastCall?.agent).toBeUndefined()
-    expect(lastCall?.command).toContain('@agentclientprotocol/codex-acp')
+    expect(lastCall?.argv).toContain('@agentclientprotocol/codex-acp@^1.0.2')
   })
 })
 
