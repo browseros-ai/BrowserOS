@@ -765,6 +765,11 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertIn("unexpectedly ran", gate["run"])
                 self.assertIn("source mismatch", gate["run"])
 
+    def test_rust_server_calls_allow_version_reflection(self):
+        jobs = self.load_workflow("release-browserclaw.yml")["jobs"]
+        for job_name in ("build_server", "finalize_server"):
+            self.assertEqual(jobs[job_name]["permissions"]["pull-requests"], "write")
+
     def test_every_browser_call_receives_every_resource_plan_pin(self):
         all_pins = {
             "browseros_server_version",
