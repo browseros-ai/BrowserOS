@@ -693,6 +693,12 @@ fn adopt_config_only_legacy_for_disconnect(
     workspace_dir: &Path,
     agent: AgentId,
 ) -> Result<(), ManagerError> {
+    if managed_browseros_links(manager, workspace_dir)?
+        .iter()
+        .any(|link| link.agent == agent && link.server_name == BROWSEROS_LEGACY_MCP_SERVER_NAME)
+    {
+        return Ok(());
+    }
     let entry = match manager.inspect_entry(InspectEntryInput::new(
         BROWSEROS_LEGACY_MCP_SERVER_NAME,
         agent,
