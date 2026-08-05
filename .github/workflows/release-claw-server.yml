@@ -76,7 +76,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-claw-server
+  # The legacy key keeps in-flight revisions of the renamed workflow serialized.
+  group: release-claw-server-rust
   cancel-in-progress: false
 
 jobs:
@@ -238,7 +239,7 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Run Rust workspace tests
+      - name: Run server workspace tests
         working-directory: packages/browseros-agent
         run: cargo test --workspace --locked
 
@@ -446,7 +447,7 @@ jobs:
           lockfile.write_text(lock_text)
           PY
 
-      - name: Build Rust binary
+      - name: Build BrowserClaw server
         if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         working-directory: packages/browseros-agent
@@ -469,7 +470,7 @@ jobs:
           binary_path = Path("target") / os.environ["RUST_TARGET"] / "release" / binary_name
           project_key = os.environ["CLAW_POSTHOG_KEY"].encode()
           if project_key not in binary_path.read_bytes():
-              raise SystemExit("Compiled Rust server does not contain CLAW_POSTHOG_KEY")
+              raise SystemExit("Compiled BrowserClaw server does not contain CLAW_POSTHOG_KEY")
           PY
 
       - name: Verify stamped binary version
@@ -636,7 +637,7 @@ jobs:
       - name: Install R2 client
         run: python -m pip install "boto3>=1.35.1,<2"
 
-      - name: Upload immutable Rust server resources
+      - name: Upload immutable BrowserClaw server resources
         env:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
@@ -700,7 +701,7 @@ jobs:
           for target in targets:
               path = Path(f"dist/claw-server-rust/browseros-claw-server-rust-resources-{target}.zip")
               if not path.is_file():
-                  raise SystemExit(f"Missing Rust server resource zip: {path}")
+                  raise SystemExit(f"Missing BrowserClaw server resource zip: {path}")
               data = path.read_bytes()
               key = f"claw-server-rust/prod-resources/{version}/{path.name}"
               existing = canonical_bytes(key, target)
@@ -745,7 +746,7 @@ jobs:
           set -euo pipefail
           mapfile -t assets < <(find dist/claw-server-rust -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
           if [ "${#assets[@]}" -ne 5 ]; then
-            echo "::error::Expected 5 Rust server resource zips, found ${#assets[@]}"
+            echo "::error::Expected 5 BrowserClaw server resource zips, found ${#assets[@]}"
             exit 1
           fi
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

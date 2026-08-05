@@ -62,7 +62,7 @@ describe('release-claw-server workflow', () => {
 
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  cargo-test:')
-    expect(workflow).toContain('group: release-claw-server')
+    expect(workflow).toContain('group: release-claw-server-rust')
     expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )
@@ -96,7 +96,7 @@ describe('release-claw-server workflow', () => {
     expect(publish).toContain('actions/setup-python@v6')
     expect(publish).toContain('python -m pip install "boto3>=1.35.1,<2"')
     expect(publish).not.toContain('pip install --user')
-    expect(publish).toContain('Expected 5 Rust server resource zips')
+    expect(publish).toContain('Expected 5 BrowserClaw server resource zips')
     expect(publish).toContain('IfNoneMatch')
     expect(publish).toContain('status not in {409, 412}')
     expect(publish).toContain('Metadata={')

@@ -69,4 +69,32 @@ describe('publish-server-ota workflow', () => {
     expect(call).toContain('snapshot_path:')
     expect(workflow).not.toContain('--channel prod')
   })
+
+  it('scopes credentials to the platform and publication steps that use them', () => {
+    const build = section('  build-payloads:', '  publish:')
+    const buildEnvStart = build.indexOf('    env:')
+    const buildStepsStart = build.indexOf('    steps:')
+    const buildJobEnv = build.slice(buildEnvStart, buildStepsStart)
+    expect(buildJobEnv).not.toContain(`${dollar}{{ secrets.`)
+
+    const checkoutStart = build.indexOf('      - uses: actions/checkout@v7')
+    const commonPreflightStart = build.indexOf(
+      '      - name: Preflight storage and payload signing credentials',
+    )
+    expect(build.slice(checkoutStart, commonPreflightStart)).not.toContain(
+      `${dollar}{{ secrets.`,
+    )
+    expect(build).toContain("if: runner.os == 'macOS'")
+    expect(build).toContain("if: runner.os == 'Windows'")
+    expect(build).toContain("if: runner.os == 'Linux'")
+
+    const publish = section('  publish:')
+    const publishEnvStart = publish.indexOf('    env:')
+    const publishStepsStart = publish.indexOf('    steps:')
+    const publishJobEnv = publish.slice(publishEnvStart, publishStepsStart)
+    expect(publishJobEnv).not.toContain(`${dollar}{{ secrets.`)
+    expect(publish).toContain(
+      `R2_ACCOUNT_ID: ${dollar}{{ secrets.R2_ACCOUNT_ID }}`,
+    )
+  })
 })

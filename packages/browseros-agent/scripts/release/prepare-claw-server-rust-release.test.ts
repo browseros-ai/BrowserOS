@@ -134,7 +134,7 @@ async function prepare(
 }
 
 describe('prepare-claw-server-rust-release', () => {
-  it('continues the product sequence despite the historical Rust tag', async () => {
+  it('continues the product sequence despite the historical legacy tag', async () => {
     const { dir, bareDir } = await initFixture('0.0.12')
     try {
       await tag(dir, 'claw-server/v0.0.12')
@@ -241,7 +241,7 @@ describe('prepare-claw-server-rust-release', () => {
     }
   })
 
-  it('rejects finalizing a prepared Rust server older than a public release', async () => {
+  it('rejects finalizing a prepared BrowserClaw server older than a public release', async () => {
     const { dir, bareDir } = await initFixture('0.0.13')
     try {
       const releaseSha = await revParse(dir, 'HEAD')
