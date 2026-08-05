@@ -163,6 +163,51 @@ describe('resolveAcpSpawnCommand', () => {
     expect(payload.env.Path).toContain('C:\\Windows\\System32')
   })
 
+  it('uses cmd.exe for the Windows host npx fallback', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'codex',
+      env: {
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        Path: 'C:\\Windows\\System32',
+      },
+      platform: 'win32',
+      resourcesDir: 'C:\\missing',
+      spawnEnv: { INITIAL_AGENT_MODE: 'agent-full-access' },
+      resolveBundledBun: stubBunMissing,
+    })
+
+    expect(out.argv.slice(0, 2)).toEqual(['node', '--eval'])
+    const payload = decodeEnvironmentPayload(out.argv[3])
+    expect(payload.argv.slice(0, 4)).toEqual([
+      'C:\\Windows\\System32\\cmd.exe',
+      '/d',
+      '/s',
+      '/c',
+    ])
+    expect(payload.argv[4]).toContain('npx')
+    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.0.2')
+    expect(payload.env.INITIAL_AGENT_MODE).toBe('agent-full-access')
+  })
+
+  it('wraps Windows host npx even without extra environment', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'claude',
+      env: {
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        Path: 'C:\\Windows\\System32',
+      },
+      platform: 'win32',
+      resolveBundledBun: stubBunMissing,
+    })
+
+    expect(out.argv.slice(0, 2)).toEqual(['node', '--eval'])
+    const payload = decodeEnvironmentPayload(out.argv[3])
+    expect(payload.argv[0]).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(payload.argv[4]).toContain(
+      '@agentclientprotocol/claude-agent-acp@^^0.31.0',
+    )
+  })
+
   it('does not replace the user Codex home', () => {
     const out = resolveAcpSpawnCommand({
       agentType: 'codex',

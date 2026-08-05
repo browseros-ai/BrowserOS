@@ -80,9 +80,19 @@ export function resolveAcpSpawnCommand(
     ...(bundledNativePathAdded ? hostEnv : {}),
     ...input.spawnEnv,
   }
+  const hostArgv =
+    platform === 'win32'
+      ? windowsNpxArgv([...config.acpArgv], input.env ?? process.env)
+      : [...config.acpArgv]
 
   return {
-    argv: withSpawnEnvironment([...config.acpArgv], spawnEnv, platform, 'node'),
+    argv: withSpawnEnvironment(
+      hostArgv,
+      spawnEnv,
+      platform,
+      'node',
+      platform === 'win32',
+    ),
     source: 'host-npx-fallback',
   }
 }
@@ -113,7 +123,7 @@ function pathValue(
 const ENVIRONMENT_LAUNCHER_SOURCE = [
   "const { spawn } = require('node:child_process')",
   "const payload = JSON.parse(Buffer.from(process.argv[1], 'base64url').toString('utf8'))",
-  "const child = spawn(payload.argv[0], payload.argv.slice(1), { env: { ...process.env, ...payload.env }, stdio: 'inherit', windowsHide: true })",
+  "const child = spawn(payload.argv[0], payload.argv.slice(1), { env: { ...process.env, ...payload.env }, stdio: 'inherit', windowsHide: true, windowsVerbatimArguments: payload.windowsVerbatimArguments === true })",
   "child.once('error', error => { console.error(error); process.exit(1) })",
   "child.once('exit', code => process.exit(code ?? 1))",
   "for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))",
@@ -124,16 +134,47 @@ function withSpawnEnvironment(
   env: Record<string, string>,
   platform: NodeJS.Platform,
   environmentRunner: string,
+  windowsVerbatimArguments = false,
 ): string[] {
   const entries = Object.entries(env).sort(([left], [right]) =>
     left.localeCompare(right),
   )
-  if (entries.length === 0) return argv
+  if (entries.length === 0 && !windowsVerbatimArguments) return argv
   if (platform !== 'win32') {
     return ['env', ...entries.map(([key, value]) => `${key}=${value}`), ...argv]
   }
-  const payload = Buffer.from(JSON.stringify({ argv, env })).toString(
-    'base64url',
-  )
+  const payload = Buffer.from(
+    JSON.stringify({ argv, env, windowsVerbatimArguments }),
+  ).toString('base64url')
   return [environmentRunner, '--eval', ENVIRONMENT_LAUNCHER_SOURCE, payload]
+}
+
+const WINDOWS_CMD_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/gu
+const WINDOWS_CMD_BACKSLASH_QUOTE = /(?=(\\+?)?)\1"/gu
+const WINDOWS_CMD_TRAILING_BACKSLASH = /(?=(\\+?)?)\1$/gu
+
+function windowsNpxArgv(argv: string[], env: NodeJS.ProcessEnv): string[] {
+  const [command, ...args] = argv
+  if (!command) return argv
+  const shellCommand = [
+    command.replace(WINDOWS_CMD_META_CHARACTERS, '^$1'),
+    ...args.map((argument) =>
+      `"${argument
+        .replace(WINDOWS_CMD_BACKSLASH_QUOTE, '$1$1\\"')
+        .replace(WINDOWS_CMD_TRAILING_BACKSLASH, '$1$1')}"`.replace(
+        WINDOWS_CMD_META_CHARACTERS,
+        '^$1',
+      ),
+    ),
+  ].join(' ')
+  const comSpecKey = Object.keys(env).find(
+    (key) => key.toLowerCase() === 'comspec',
+  )
+  return [
+    (comSpecKey ? env[comSpecKey] : undefined) ?? 'cmd.exe',
+    '/d',
+    '/s',
+    '/c',
+    `"${shellCommand}"`,
+  ]
 }

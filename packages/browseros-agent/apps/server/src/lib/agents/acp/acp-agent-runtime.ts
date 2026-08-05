@@ -215,13 +215,6 @@ export class AcpAgentRuntime {
       return { session: existing, created: false }
     }
 
-    const hasHistory =
-      existing?.hasHistory ??
-      Boolean(
-        await createFileSessionStore({ stateDir: this.stateDir }).load(
-          policy.sessionKey,
-        ),
-      )
     if (existing) {
       this.sessions.delete(policy.sessionKey)
       clearIdleTimer(existing)
@@ -241,8 +234,15 @@ export class AcpAgentRuntime {
       sessionOptions: policy.sessionOptions,
     })
 
+    let hasHistory: boolean
     try {
       await provider.prepare()
+      const persistedRecord = await createFileSessionStore({
+        stateDir: this.stateDir,
+      }).load(policy.sessionKey)
+      hasHistory = persistedRecord
+        ? persistedRecord.messages.length > 0
+        : (existing?.hasHistory ?? false)
     } catch (error) {
       await provider.close('prepare-failed').catch(() => {})
       throw error
