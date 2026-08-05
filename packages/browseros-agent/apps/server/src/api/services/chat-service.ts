@@ -12,6 +12,7 @@ import {
   createAgentUIStreamResponse,
   createUIMessageStreamResponse,
   type UIMessage,
+  type UIMessageChunk,
 } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
@@ -23,6 +24,7 @@ import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import {
   AcpAgentRuntime,
+  AcpAgentSessionBusyError,
   type AcpAgentStreamInput,
 } from '../../lib/agents/acp/acp-agent-runtime'
 import type { AcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
@@ -51,12 +53,7 @@ export interface ChatServiceDeps {
   browserSession: BrowserSession
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
-  /** Port the BrowserOS server bound to. Forwarded into the ACP MCP
-   *  bridge so the spawned agent can dial back into /mcp. */
   serverPort: number
-  /** BrowserOS resources directory. Threaded into ACP-backed config
-   *  resolutions so the bundled-Bun launcher under
-   *  <resourcesDir>/bin/third_party/bun can be located. */
   resourcesDir?: string | null
   activity?: ServerActivity
   acpAgentStore?: Pick<AcpAgentStore, 'get'>
@@ -379,6 +376,10 @@ export class ChatService {
     }
   }
 
+  isAcpSession(conversationId: string): boolean {
+    return this.acpConversationAgents.has(conversationId)
+  }
+
   private async processAcpMessage(
     request: AcpChatRequest,
     abortSignal: AbortSignal,
@@ -411,6 +412,7 @@ export class ChatService {
         role: message.role,
         parts: [{ type: 'text' as const, text: message.content }],
       }))
+    const priorHistoryLength = history.length
     const messageId = crypto.randomUUID()
     const files = (request.attachments ?? []).map((attachment) => ({
       type: 'file' as const,
@@ -432,7 +434,6 @@ export class ChatService {
     history.push(visibleUserMessage)
     this.acpMessages.set(historyKey, history)
     this.acpConversationAgents.set(request.conversationId, agent.id)
-
     const promptMessages = history.map((message) =>
       message.id === messageId
         ? {
@@ -457,7 +458,19 @@ export class ChatService {
         )
       },
     }
-    const stream = await this.getAcpRuntime().stream(streamInput)
+    let stream: ReadableStream<UIMessageChunk>
+    try {
+      stream = await this.getAcpRuntime().stream(streamInput)
+    } catch (error) {
+      history.length = priorHistoryLength
+      if (error instanceof AcpAgentSessionBusyError) {
+        return Response.json(
+          { error: 'An agent turn is already running' },
+          { status: 409 },
+        )
+      }
+      throw error
+    }
     const response = createUIMessageStreamResponse({
       stream,
       consumeSseStream: consumeStream,

@@ -7,7 +7,10 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { UIMessageChunk } from 'ai'
 import { ChatService } from '../../../src/api/services/chat-service'
-import type { AcpAgentStreamInput } from '../../../src/lib/agents/acp/acp-agent-runtime'
+import {
+  AcpAgentSessionBusyError,
+  type AcpAgentStreamInput,
+} from '../../../src/lib/agents/acp/acp-agent-runtime'
 import type { AcpAgentDefinition } from '../../../src/lib/agents/agent-types'
 
 const AGENT_ID = '4a815af8-7555-4d65-b789-3be98f567a2d'
@@ -23,11 +26,14 @@ function acpAgent(type: AcpAgentDefinition['type'] = 'claude') {
   } satisfies AcpAgentDefinition
 }
 
-function deps(options: { agent?: AcpAgentDefinition | null } = {}) {
+function deps(
+  options: { agent?: AcpAgentDefinition | null; streamError?: Error } = {},
+) {
   const calls: AcpAgentStreamInput[] = []
   const close = mock(async () => true)
   const acpRuntime = {
     async stream(input: AcpAgentStreamInput) {
+      if (options.streamError) throw options.streamError
       calls.push(input)
       await input.onFinish?.({
         messages: [
@@ -140,12 +146,34 @@ describe('ChatService ACP dispatch', () => {
       new AbortController().signal,
     )
 
+    expect(fixture.service.isAcpSession(conversationId)).toBe(true)
     expect(await fixture.service.deleteSession(conversationId)).toEqual({
       deleted: true,
       sessionCount: 0,
     })
     expect(fixture.close).toHaveBeenCalledWith(AGENT_ID, conversationId, {
       discardPersistentState: true,
+    })
+    expect(fixture.service.isAcpSession(conversationId)).toBe(false)
+  })
+
+  it('returns conflict when the ACP conversation is already running', async () => {
+    const fixture = deps({ streamError: new AcpAgentSessionBusyError() })
+    const response = await fixture.service.processMessage(
+      {
+        target: { type: 'claude', agentId: AGENT_ID },
+        conversationId: crypto.randomUUID(),
+        message: 'hello',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+      },
+      new AbortController().signal,
+    )
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({
+      error: 'An agent turn is already running',
     })
   })
 })

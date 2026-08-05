@@ -19,6 +19,7 @@ export interface BuildSidepanelPreparedSendMessagesRequestInput
   target: SidepanelChatTarget | undefined
   fallbackProvider: LlmProviderConfig
   message?: string
+  attachments?: Array<{ mediaType: string; data: string }>
 }
 
 export interface PrepareSidepanelSendMessagesRequestInput
@@ -63,6 +64,9 @@ export function buildSidepanelPreparedSendMessagesRequest({
         declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,
+        attachments: common.attachments?.length
+          ? common.attachments
+          : undefined,
       },
     }
   }

@@ -12,6 +12,7 @@ import {
   type AcpAgentStore,
   DbAcpAgentStore,
 } from '../../lib/agents/storage/acp-agent-store'
+import { logger } from '../../lib/logger'
 import type { Env } from '../types'
 
 const AgentIdParamsSchema = z.object({ agentId: z.string().uuid() })
@@ -28,7 +29,12 @@ const CreateAcpAgentSchema = z
 
 type AgentRouteStore = Pick<AcpAgentStore, 'list' | 'get' | 'create' | 'delete'>
 
-export function createAgentRoutes(options: { store?: AgentRouteStore } = {}) {
+export function createAgentRoutes(
+  options: {
+    store?: AgentRouteStore
+    onDelete?: (agentId: string) => Promise<unknown>
+  } = {},
+) {
   const store = options.store ?? new DbAcpAgentStore()
 
   return new Hono<Env>()
@@ -45,8 +51,15 @@ export function createAgentRoutes(options: { store?: AgentRouteStore } = {}) {
       '/:agentId',
       zValidator('param', AgentIdParamsSchema),
       async (c) => {
-        const deleted = await store.delete(c.req.valid('param').agentId)
+        const { agentId } = c.req.valid('param')
+        const deleted = await store.delete(agentId)
         if (!deleted) return c.json({ error: 'Unknown agent' }, 404)
+        await options.onDelete?.(agentId).catch((error) => {
+          logger.warn('Failed to close deleted ACP agent sessions', {
+            agentId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
         return c.json({ success: true })
       },
     )

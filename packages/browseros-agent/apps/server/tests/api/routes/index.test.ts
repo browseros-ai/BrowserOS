@@ -47,6 +47,12 @@ function createTestApp(
   })
 }
 
+const localServer = {
+  server: {
+    requestIP: () => ({ address: '127.0.0.1' }),
+  },
+} as never
+
 describe('createApiRoutes', () => {
   it('mounts the canonical system health route', async () => {
     const response = await createTestApp().request('/system/health')
@@ -129,13 +135,63 @@ describe('createApiRoutes', () => {
     })
     expect(blocked.status).toBe(403)
 
-    const allowed = await app.request('/agents/guard-check', {
-      method: 'POST',
-      headers: {
-        Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+    const allowed = await app.request(
+      '/agents/guard-check',
+      {
+        method: 'POST',
+        headers: {
+          Host: 'localhost',
+          Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+        },
       },
-    })
+      localServer,
+    )
     expect(allowed.status).toBe(200)
     await expect(allowed.json()).resolves.toEqual({ ok: true })
+  })
+
+  it('requires a trusted local app request before ACP chat dispatch', async () => {
+    const body = JSON.stringify({
+      target: {
+        type: 'claude',
+        agentId: '00000000-0000-4000-8000-000000000001',
+      },
+      conversationId: '00000000-0000-4000-8000-000000000002',
+      message: 'run a command',
+    })
+    const app = createTestApp()
+
+    const originless = await app.request('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    expect(originless.status).toBe(403)
+
+    const remote = await app.request(
+      '/chat',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+        },
+        body,
+      },
+      {
+        server: { requestIP: () => ({ address: '192.168.1.20' }) },
+      } as never,
+    )
+    expect(remote.status).toBe(403)
+  })
+
+  it('requires a trusted local app request before probing host agents', async () => {
+    const response = await createTestApp().request('/acpx/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'claude' }),
+    })
+
+    expect(response.status).toBe(403)
   })
 })

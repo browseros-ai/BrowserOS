@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import { createAgentRoutes } from '../../../src/api/routes/agents'
 import type { AcpAgentDefinition } from '../../../src/lib/agents/agent-types'
 import type {
@@ -57,12 +57,14 @@ describe('ACP agent routes', () => {
 
   it('deletes the agent', async () => {
     const store = new MemoryAcpAgentStore()
+    const onDelete = mock(async () => {})
     await store.create({ name: 'Claude', type: 'claude' })
-    const routes = createAgentRoutes({ store })
+    const routes = createAgentRoutes({ store, onDelete })
     expect(
       (await routes.request(`/${AGENT_ID}`, { method: 'DELETE' })).status,
     ).toBe(200)
     expect((await routes.request(`/${AGENT_ID}`)).status).toBe(404)
+    expect(onDelete).toHaveBeenCalledWith(AGENT_ID)
   })
 })
 

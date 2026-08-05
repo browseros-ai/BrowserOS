@@ -32,6 +32,12 @@ describe('chat request preparation', () => {
       target: acpTarget,
       fallbackProvider,
       message: 'Inspect the current tab',
+      attachments: [
+        {
+          mediaType: 'image/png',
+          data: 'data:image/png;base64,Zm9v',
+        },
+      ],
       ...commonRequestInput(),
     })
 
@@ -49,6 +55,12 @@ describe('chat request preparation', () => {
       declinedApps: ['gmail'],
       selectedText: 'selected text',
       selectedTextSource: commonRequestInput().selectedTextSource,
+      attachments: [
+        {
+          mediaType: 'image/png',
+          data: 'data:image/png;base64,Zm9v',
+        },
+      ],
     })
     expect('provider' in request.body).toBe(false)
   })

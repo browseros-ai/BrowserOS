@@ -14,6 +14,7 @@ import {
   type ServerAcpxProbeInput,
   type ServerAcpxProbeResult,
 } from '../services/acpx-probe/probeAgent'
+import type { Env } from '../types'
 
 export type ProbeAcpAgentFn = (
   input: ServerAcpxProbeInput,
@@ -31,7 +32,7 @@ export function createAcpxProbeRoutes(
 ) {
   const probe = options.probe ?? probeAcpAgent
   const resourcesDir = options.resourcesDir
-  return new Hono().post(
+  return new Hono<Env>().post(
     '/',
     zValidator('json', probeRequestSchema),
     async (c) => {

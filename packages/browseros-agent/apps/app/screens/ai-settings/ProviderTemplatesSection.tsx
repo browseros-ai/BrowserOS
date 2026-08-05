@@ -26,6 +26,7 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
   onUseTemplate,
 }) => {
   const { supports } = useCapabilities()
+  const supportsCodingAgents = supports(Feature.AGENT_HARNESS_SUPPORT)
 
   const filteredTemplates = providerTemplates.filter((template) => {
     if (template.id === 'chatgpt-pro')
@@ -43,7 +44,8 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
           <div>
             <h3 className="font-semibold text-lg">Quick provider templates</h3>
             <p className="text-muted-foreground text-sm">
-              {filteredTemplates.length + 2} templates available
+              {filteredTemplates.length + (supportsCodingAgents ? 2 : 0)}{' '}
+              templates available
             </p>
           </div>
           <ChevronDown
@@ -64,7 +66,7 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
                     template={template}
                     onUseTemplate={onUseTemplate}
                   />
-                  {showCodingAdapters
+                  {showCodingAdapters && supportsCodingAgents
                     ? (['claude', 'codex'] as const).map((type) => (
                         <CodingAgentTemplateCard
                           key={`coding-${type}`}

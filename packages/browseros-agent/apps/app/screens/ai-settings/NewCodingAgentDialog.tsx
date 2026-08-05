@@ -75,8 +75,9 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
             Set up {type ? adapterLabel(type) : 'agent'}
           </DialogTitle>
           <DialogDescription>
-            BrowserOS uses your existing CLI login and always gives this agent
-            full access to its working directory.
+            BrowserOS uses your existing CLI login. This agent can run commands
+            and access files anywhere on your computer without approval. The
+            working directory is only its starting folder, not a sandbox.
           </DialogDescription>
         </DialogHeader>
 

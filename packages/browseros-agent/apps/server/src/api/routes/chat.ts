@@ -3,6 +3,7 @@ import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
+import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -13,7 +14,9 @@ import {
   type BrowserOsChatRequest,
   type ChatRequest,
   ChatRequestSchema,
+  type Env,
 } from '../types'
+import { isTrustedAppRequest } from '../utils/request-auth'
 import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
@@ -22,14 +25,10 @@ interface ChatRouteDeps {
   browserosId?: string
   klavis?: KlavisService
   aiSdkDevtoolsEnabled?: boolean
-  /** Port the BrowserOS server bound to. Threaded to ACP providers so
-   *  the spawned agent can dial back into the local /mcp route. */
   serverPort: number
-  /** BrowserOS resources directory. Threaded to ACP providers so the
-   *  bundled-Bun launcher under <resourcesDir>/bin/third_party/bun
-   *  can be located for built-in adapters (claude / codex). */
   resourcesDir?: string | null
   activity?: ServerActivity
+  acpRuntime?: AcpAgentRuntime
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -46,12 +45,16 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
     activity: deps.activity,
+    acpRuntime: deps.acpRuntime,
   })
 
-  return new Hono()
+  return new Hono<Env>()
     .post('/', zValidator('json', ChatRequestSchema), async (c) => {
       const request = c.req.valid('json')
       const browserRequest = isBrowserOsChatRequest(request) ? request : null
+      if (!browserRequest && !isTrustedAppRequest(c)) {
+        return c.json({ error: 'Forbidden' }, 403)
+      }
       const provider = browserRequest?.provider ?? request.target.type
       const model = browserRequest?.model
       const baseUrl = browserRequest?.baseUrl
@@ -92,6 +95,9 @@ export function createChatRoutes(deps: ChatRouteDeps) {
       zValidator('param', ConversationIdParamSchema),
       async (c) => {
         const { conversationId } = c.req.valid('param')
+        if (service.isAcpSession(conversationId) && !isTrustedAppRequest(c)) {
+          return c.json({ error: 'Forbidden' }, 403)
+        }
         const result = await service.deleteSession(conversationId)
 
         if (result.deleted) {

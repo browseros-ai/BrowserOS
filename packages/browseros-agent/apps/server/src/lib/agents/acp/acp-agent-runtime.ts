@@ -31,6 +31,7 @@ export interface AcpAgentRuntimeOptions {
   resourcesDir?: string | null
   browserosDir?: string
   stateDir?: string
+  idleTimeoutMs?: number
   createProvider?: (settings: AcpxProviderSettings) => AcpxProvider
 }
 
@@ -50,6 +51,16 @@ interface ActiveAcpSession {
   provider: AcpxProvider
   policyFingerprint: string
   hasHistory: boolean
+  idleTimer: ReturnType<typeof setTimeout> | null
+}
+
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000
+
+export class AcpAgentSessionBusyError extends Error {
+  constructor() {
+    super('An ACP turn is already running for this conversation')
+    this.name = 'AcpAgentSessionBusyError'
+  }
 }
 
 export class AcpAgentRuntime {
@@ -57,10 +68,12 @@ export class AcpAgentRuntime {
   private readonly resourcesDir: string | null
   private readonly browserosDir: string
   private readonly stateDir: string
+  private readonly idleTimeoutMs: number
   private readonly createProvider: (
     settings: AcpxProviderSettings,
   ) => AcpxProvider
   private readonly sessions = new Map<string, ActiveAcpSession>()
+  private readonly activeTurns = new Set<string>()
 
   constructor(options: AcpAgentRuntimeOptions) {
     this.serverPort = options.serverPort
@@ -68,13 +81,21 @@ export class AcpAgentRuntime {
     this.browserosDir = options.browserosDir ?? getBrowserosDir()
     this.stateDir =
       options.stateDir ?? join(this.browserosDir, 'agents', 'acp-sessions')
+    this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     this.createProvider = options.createProvider ?? createAcpxProvider
   }
 
   async stream(
     input: AcpAgentStreamInput,
   ): Promise<ReadableStream<UIMessageChunk>> {
+    const sessionKey = deriveAcpSessionKey(input.agent.id, input.conversationId)
+    if (this.activeTurns.has(sessionKey)) {
+      throw new AcpAgentSessionBusyError()
+    }
+    this.activeTurns.add(sessionKey)
+
     let createdSession = false
+    let streamStarted = false
 
     try {
       const policy = await buildAcpAgentPolicy({
@@ -88,6 +109,9 @@ export class AcpAgentRuntime {
       const acquired = await this.acquireSession(policy)
       const session = acquired.session
       createdSession = acquired.created
+      if (input.abortSignal?.aborted) {
+        throw input.abortSignal.reason ?? new Error('ACP turn was aborted')
+      }
 
       await applyFullAccess(session.provider, policy)
       await applyReasoningEffort(session.provider, input.agent)
@@ -109,18 +133,15 @@ export class AcpAgentRuntime {
           })
         },
       })
-      session.hasHistory = true
-
-      return result.toUIMessageStream({
+      const stream = result.toUIMessageStream({
         originalMessages: messages,
-        onFinish: input.onFinish
-          ? async ({ messages: finishedMessages, isAborted }) => {
-              await input.onFinish?.({
-                messages: finishedMessages,
-                isAborted,
-              })
-            }
-          : undefined,
+        onFinish: async ({ messages: finishedMessages, isAborted }) => {
+          session.hasHistory = true
+          await input.onFinish?.({
+            messages: finishedMessages,
+            isAborted,
+          })
+        },
         onError: (error) => {
           logger.error('ACP agent UI stream failed', {
             agentId: input.agent.id,
@@ -129,6 +150,11 @@ export class AcpAgentRuntime {
           })
           return 'The ACP agent failed to respond.'
         },
+      })
+      streamStarted = true
+      return releaseOnEnd(stream, () => {
+        this.activeTurns.delete(sessionKey)
+        this.scheduleIdleClose(sessionKey, session)
       })
     } catch (error) {
       if (createdSession) {
@@ -140,6 +166,8 @@ export class AcpAgentRuntime {
         error: error instanceof Error ? error.message : String(error),
       })
       return errorStream('Unable to start the ACP agent.')
+    } finally {
+      if (!streamStarted) this.activeTurns.delete(sessionKey)
     }
   }
 
@@ -152,8 +180,29 @@ export class AcpAgentRuntime {
     const session = this.sessions.get(sessionKey)
     if (!session) return false
     this.sessions.delete(sessionKey)
+    clearIdleTimer(session)
     await session.provider.close('close', options)
     return true
+  }
+
+  async closeAllForAgent(
+    agentId: string,
+    options: { discardPersistentState?: boolean } = {},
+  ): Promise<number> {
+    const prefix = `acp:${agentId}:`
+    const sessionKeys = [...this.sessions.keys()].filter((key) =>
+      key.startsWith(prefix),
+    )
+    await Promise.all(
+      sessionKeys.map(async (sessionKey) => {
+        const session = this.sessions.get(sessionKey)
+        if (!session) return
+        this.sessions.delete(sessionKey)
+        clearIdleTimer(session)
+        await session.provider.close('agent-delete', options)
+      }),
+    )
+    return sessionKeys.length
   }
 
   private async acquireSession(
@@ -162,6 +211,7 @@ export class AcpAgentRuntime {
     const fingerprint = JSON.stringify(policy)
     const existing = this.sessions.get(policy.sessionKey)
     if (existing?.policyFingerprint === fingerprint) {
+      clearIdleTimer(existing)
       return { session: existing, created: false }
     }
 
@@ -174,6 +224,7 @@ export class AcpAgentRuntime {
       )
     if (existing) {
       this.sessions.delete(policy.sessionKey)
+      clearIdleTimer(existing)
       await existing.provider.close('policy-change')
     }
 
@@ -201,10 +252,81 @@ export class AcpAgentRuntime {
       provider,
       policyFingerprint: fingerprint,
       hasHistory,
+      idleTimer: null,
     }
     this.sessions.set(policy.sessionKey, session)
     return { session, created: true }
   }
+
+  private scheduleIdleClose(
+    sessionKey: string,
+    session: ActiveAcpSession,
+  ): void {
+    clearIdleTimer(session)
+    if (this.idleTimeoutMs <= 0) return
+    session.idleTimer = setTimeout(() => {
+      if (
+        this.activeTurns.has(sessionKey) ||
+        this.sessions.get(sessionKey) !== session
+      ) {
+        return
+      }
+      this.sessions.delete(sessionKey)
+      session.idleTimer = null
+      void session.provider.close('idle').catch((error) => {
+        logger.warn('Failed to close idle ACP session', {
+          sessionKey,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }, this.idleTimeoutMs)
+    const idleTimer = session.idleTimer as ReturnType<typeof setTimeout> & {
+      unref?: () => void
+    }
+    idleTimer.unref?.()
+  }
+}
+
+function clearIdleTimer(session: ActiveAcpSession): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer)
+  session.idleTimer = null
+}
+
+function releaseOnEnd<T>(
+  stream: ReadableStream<T>,
+  release: () => void,
+): ReadableStream<T> {
+  const reader = stream.getReader()
+  let released = false
+  const releaseOnce = () => {
+    if (released) return
+    released = true
+    release()
+  }
+
+  return new ReadableStream<T>({
+    async pull(controller) {
+      try {
+        const result = await reader.read()
+        if (result.done) {
+          releaseOnce()
+          controller.close()
+          return
+        }
+        controller.enqueue(result.value)
+      } catch (error) {
+        releaseOnce()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason)
+      } finally {
+        releaseOnce()
+      }
+    },
+  })
 }
 
 async function applyFullAccess(

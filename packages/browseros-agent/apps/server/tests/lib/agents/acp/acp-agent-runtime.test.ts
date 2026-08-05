@@ -22,7 +22,10 @@ import type {
   AcpRuntimeTurnResult,
 } from 'acpx/runtime'
 import type { UIMessage, UIMessageChunk } from 'ai'
-import { AcpAgentRuntime } from '../../../../src/lib/agents/acp/acp-agent-runtime'
+import {
+  AcpAgentRuntime,
+  AcpAgentSessionBusyError,
+} from '../../../../src/lib/agents/acp/acp-agent-runtime'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
 
 const SKILL = [
@@ -48,6 +51,7 @@ async function runtimeFixture(options: {
   adapter?: AcpAgentDefinition['type']
   runtime?: RecordingAcpRuntime
   agent?: Partial<AcpAgentDefinition>
+  idleTimeoutMs?: number
 }) {
   const root = await mkdtemp(join(tmpdir(), 'acp-agent-runtime-'))
   temporaryDirectories.push(root)
@@ -72,6 +76,7 @@ async function runtimeFixture(options: {
     browserosDir: root,
     resourcesDir,
     stateDir: join(root, 'state'),
+    idleTimeoutMs: options.idleTimeoutMs,
     createProvider(settings) {
       providerSettings.push(settings)
       return createAcpxProvider({ ...settings, runtime: acpRuntime })
@@ -242,6 +247,37 @@ describe('AcpAgentRuntime', () => {
     expect(codexConfig.model_reasoning_effort).toBe('xhigh')
   })
 
+  it('inlines text files before the turn reaches ACP', async () => {
+    const fixture = await runtimeFixture({})
+
+    await collect(
+      await fixture.runtime.stream({
+        agent: fixture.agent,
+        conversationId: 'conversation-text-file',
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            parts: [
+              { type: 'text', text: 'inspect this' },
+              {
+                type: 'file',
+                filename: 'notes.txt',
+                mediaType: 'text/plain',
+                url: 'data:text/plain;base64,aGVsbG8=',
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toContain(
+      '[File: notes.txt]\nhello',
+    )
+    expect(fixture.acpRuntime.startTurnCalls[0]?.attachments).toBeUndefined()
+  })
+
   it('returns one standard error chunk and retains no session when preparation fails', async () => {
     const fixture = await runtimeFixture({
       runtime: new RecordingAcpRuntime({
@@ -285,6 +321,75 @@ describe('AcpAgentRuntime', () => {
     ])
     expect(
       await fixture.runtime.close(fixture.agent.id, 'conversation-5'),
+    ).toBe(false)
+  })
+
+  it('rejects overlapping turns until the active stream ends', async () => {
+    const fixture = await runtimeFixture({})
+    const input = {
+      agent: fixture.agent,
+      conversationId: 'conversation-6',
+      messages: [textMessage('user-1', 'user', 'hello')],
+    }
+    const firstStream = await fixture.runtime.stream(input)
+
+    await expect(fixture.runtime.stream(input)).rejects.toBeInstanceOf(
+      AcpAgentSessionBusyError,
+    )
+
+    await collect(firstStream)
+    await collect(
+      await fixture.runtime.stream({
+        ...input,
+        messages: [
+          ...input.messages,
+          textMessage('user-2', 'user', 'try again'),
+        ],
+      }),
+    )
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(2)
+  })
+
+  it('closes every loaded session for a deleted agent', async () => {
+    const fixture = await runtimeFixture({})
+    for (const conversationId of ['conversation-7', 'conversation-8']) {
+      await collect(
+        await fixture.runtime.stream({
+          agent: fixture.agent,
+          conversationId,
+          messages: [textMessage(`user-${conversationId}`, 'user', 'hello')],
+        }),
+      )
+    }
+
+    expect(
+      await fixture.runtime.closeAllForAgent(fixture.agent.id, {
+        discardPersistentState: true,
+      }),
+    ).toBe(2)
+    expect(fixture.acpRuntime.closeCalls).toEqual([
+      { reason: 'agent-delete', discardPersistentState: true },
+      { reason: 'agent-delete', discardPersistentState: true },
+    ])
+  })
+
+  it('closes idle providers without discarding resumable state', async () => {
+    const fixture = await runtimeFixture({ idleTimeoutMs: 5 })
+    await collect(
+      await fixture.runtime.stream({
+        agent: fixture.agent,
+        conversationId: 'conversation-9',
+        messages: [textMessage('user-1', 'user', 'hello')],
+      }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(fixture.acpRuntime.closeCalls).toEqual([
+      { reason: 'idle', discardPersistentState: false },
+    ])
+    expect(
+      await fixture.runtime.close(fixture.agent.id, 'conversation-9'),
     ).toBe(false)
   })
 })

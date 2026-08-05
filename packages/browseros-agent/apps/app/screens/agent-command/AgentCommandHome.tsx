@@ -8,6 +8,7 @@ import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanel
 import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { toProviderOption } from '@/modules/chat/chat-session-request'
+import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import {
   buildSidepanelChatTargets,
   persistSidepanelChatTargetSelection,
@@ -101,6 +102,15 @@ export const AgentCommandHome: FC = () => {
       return
     }
     const search = new URLSearchParams({ q: input.text, mode: 'agent' })
+    if (input.attachments.length > 0) {
+      search.set(
+        'handoff',
+        stagePendingHomeMessage({
+          text: input.text,
+          attachments: input.attachments,
+        }),
+      )
+    }
     const tabIds = input.selectedTabs
       .map((tab) => tab.id)
       .filter((id): id is number => id !== undefined)
@@ -135,7 +145,7 @@ export const AgentCommandHome: FC = () => {
               onSend={handleSend}
               streaming={false}
               disabled={!selectedProvider || waitingForLlmCapabilities}
-              attachmentsEnabled={false}
+              attachmentsEnabled={selectedProvider?.kind === 'acp'}
               placeholder={
                 selectedProvider
                   ? `Ask ${selectedProvider.name} to handle a task...`

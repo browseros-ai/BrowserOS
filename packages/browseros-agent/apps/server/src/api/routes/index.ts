@@ -6,6 +6,7 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
 import { requireTrustedOrigin } from '../middleware/require-trusted-origin'
 import type { KlavisService } from '../services/klavis'
@@ -48,6 +49,15 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
   const { browser, browserosId, browserSession, port, resourcesDir, version } =
     config
   const { activity } = config
+  const acpRuntime = new AcpAgentRuntime({ serverPort: port, resourcesDir })
+  const resolvedAgentRoutes =
+    agentRoutes ??
+    createAgentRoutes({
+      onDelete: (agentId) =>
+        acpRuntime.closeAllForAgent(agentId, {
+          discardPersistentState: true,
+        }),
+    })
 
   return (
     new Hono<Env>()
@@ -61,7 +71,10 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/shutdown', createShutdownRoute({ onShutdown }))
       .route('/status', createStatusRoute({ browser, activity }))
       .route('/test-provider', createProviderRoutes({ browserosId }))
-      .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
+      .route(
+        '/acpx/probe',
+        protectedAppRoutes(createAcpxProbeRoutes({ resourcesDir })),
+      )
       .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
@@ -98,16 +111,15 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           serverPort: port,
           resourcesDir,
           activity,
+          acpRuntime,
         }),
       )
-      .route('/agents', protectedAgentRoutes(agentRoutes))
+      .route('/agents', protectedAppRoutes(resolvedAgentRoutes))
   )
 }
 
-function protectedAgentRoutes(routes?: Hono<Env>) {
-  return new Hono<Env>()
-    .use('/*', requireTrustedAppOrigin())
-    .route('/', routes ?? createAgentRoutes())
+function protectedAppRoutes(routes: Hono<Env>) {
+  return new Hono<Env>().use('/*', requireTrustedAppOrigin()).route('/', routes)
 }
 
 function oauthRoutes(tokenManager: OAuthTokenManager | null) {
