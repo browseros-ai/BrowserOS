@@ -21,9 +21,9 @@ describe('release-claw-onboard workflow', () => {
   it('exposes the reusable build/finalize interface and outputs', () => {
     expect(workflow).toContain('name: "Release: BrowserOS neo Onboarding"')
     expect(workflow).toContain('"claw-onboard/v*"')
-    expect(workflow).toContain(
-      'packages/browseros-agent/scripts/release/prepare-claw-onboard-release.sh',
-    )
+    expect(workflow).toContain('browseros release component resolve')
+    expect(workflow).toContain('--component claw-onboard')
+    expect(workflow).not.toContain('prepare-claw-onboard-release.sh')
     const call = section('  workflow_call:', '\npermissions:')
     expect(call).toContain('mode:')
     expect(call).toContain('default: "build"')
@@ -38,7 +38,7 @@ describe('release-claw-onboard workflow', () => {
 
   it('reserves a private draft before building', () => {
     const prepare = section('  prepare:', '  build-publish:')
-    expect(prepare).toContain('gh api --paginate --slurp')
+    expect(prepare).toContain('browseros release component resolve')
     expect(prepare).toContain('--draft')
     expect(prepare).not.toContain('git tag -a')
     expect(prepare).not.toContain('--draft=false')
@@ -47,7 +47,7 @@ describe('release-claw-onboard workflow', () => {
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  build-publish:')
     expect(workflow).toContain('group: release-claw-onboard')
-    expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
+    expect(prepare.indexOf('Setup uv')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )
     expect(prepare.indexOf('Resolve release')).toBeLessThan(
@@ -65,6 +65,10 @@ describe('release-claw-onboard workflow', () => {
       'dist/prod/claw-onboard/browseros-claw-onboard-resources.zip',
     )
     expect(build).not.toContain('claw-onboard/prod-resources/latest/')
+    expect(build).toContain(
+      'browseros release component stamp --component claw-onboard',
+    )
+    expect(build).not.toContain('packageJson.version = version')
     expect(build).toContain(
       'gh release upload "$RELEASE_TAG" "$asset" --clobber',
     )

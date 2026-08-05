@@ -99,6 +99,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
       - name: Validate lifecycle inputs
         id: validate
         env:
@@ -117,35 +120,27 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Read allocated GitHub releases
-        id: releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_RECORDS: ${{ runner.temp }}/claw-server-release-records.json
-        run: |
-          set -euo pipefail
-          pages="${RUNNER_TEMP}/claw-server-release-pages.json"
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
-          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
-          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
-
       - name: Resolve release
         id: release
+        working-directory: packages/browseros
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
-          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
-          packages/browseros-agent/scripts/release/prepare-claw-server-rust-release.sh \
+          uv run browseros release component resolve \
+            --component claw-server-rust \
             --event-name "$EVENT_NAME" \
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
             --release-ref HEAD \
-            --release-records "$RELEASE_RECORDS"
+            --repo "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve effective lifecycle mode
         id: lifecycle
@@ -411,41 +406,8 @@ jobs:
       - name: Stamp release version
         if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
-        run: |
-          set -euo pipefail
-          python <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["VERSION"]
-          manifest = Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml")
-          lockfile = Path("packages/browseros-agent/Cargo.lock")
-
-          manifest_text = manifest.read_text()
-          manifest_text, count = re.subn(
-              r'(?m)^version = "[^"]+"$',
-              f'version = "{version}"',
-              manifest_text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit("Expected exactly one claw-server-rust Cargo.toml version")
-          manifest.write_text(manifest_text)
-
-          lock_text = lockfile.read_text()
-          pattern = re.compile(
-              r'(\[\[package\]\]\nname = "claw-server-rust"\nversion = ")[^"]+(")'
-          )
-          lock_text, count = pattern.subn(
-              lambda match: f"{match.group(1)}{version}{match.group(2)}",
-              lock_text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit("Expected exactly one claw-server-rust Cargo.lock entry")
-          lockfile.write_text(lock_text)
-          PY
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component claw-server-rust --version "$VERSION"
 
       - name: Build BrowserClaw server
         if: ${{ steps.recover.outputs.recovered != 'true' }}

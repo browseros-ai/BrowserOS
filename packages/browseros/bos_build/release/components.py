@@ -39,8 +39,10 @@ class AllocationRecord:
     kind: AllocationKind
     source_sha: str = ""
     candidate_id: str = ""
+    reference: str = ""
     reusable: bool = False
     blocks: bool = True
+    public: bool = False
 
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
@@ -234,6 +236,27 @@ def resolve_standalone_version(
 ) -> str:
     """Resolve a standalone component release version."""
     records = _component_allocations(component_id, allocations)
+    public_versions = tuple(
+        normalize_component_version(component_id, record.version)
+        for record in records
+        if record.public
+    )
+
+    def require_not_older(version: str) -> str:
+        if public_versions:
+            newest = max(
+                public_versions,
+                key=lambda value: _version_key(component_id, value),
+            )
+            if _version_key(component_id, version) < _version_key(
+                component_id, newest
+            ):
+                raise ValueError(
+                    f"{component_id} version {version} is older than newest "
+                    f"public version {newest}"
+                )
+        return version
+
     if requested_version:
         requested = normalize_component_version(component_id, requested_version)
         collisions = [
@@ -243,11 +266,14 @@ def resolve_standalone_version(
             and normalize_component_version(component_id, record.version) == requested
         ]
         if not collisions:
-            return requested
-        if source_sha and any(
-            record.reusable and record.source_sha == source_sha for record in collisions
-        ):
-            return requested
+            return require_not_older(requested)
+        canonical_reference = component_by_id(component_id).tag_prefix + requested
+        if source_sha and all(
+            record.reference == canonical_reference
+            and record.source_sha == source_sha
+            for record in collisions
+        ) and any(record.reusable for record in collisions):
+            return require_not_older(requested)
         raise ValueError(f"{component_id} version {requested} is already allocated")
 
     reusable = [
@@ -256,10 +282,10 @@ def resolve_standalone_version(
         if record.reusable and source_sha and record.source_sha == source_sha
     ]
     if reusable:
-        return max(
+        return require_not_older(max(
             (normalize_component_version(component_id, record.version) for record in reusable),
             key=lambda version: _version_key(component_id, version),
-        )
+        ))
 
     committed = normalize_component_version(component_id, committed_version)
     blocked = {
@@ -267,7 +293,9 @@ def resolve_standalone_version(
         for record in records
         if record.blocks
     }
-    if committed not in blocked:
+    if not blocked or _version_key(component_id, committed) > max(
+        (_version_key(component_id, version) for version in blocked)
+    ):
         return committed
     highest = max(
         (committed, *blocked),

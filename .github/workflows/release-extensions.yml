@@ -191,68 +191,47 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Read allocated extension releases and tags
-        id: records
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_RECORDS: ${{ runner.temp }}/extension-release-records.json
-        run: |
-          set -euo pipefail
-          git fetch origin --tags --prune
-          release_pages="${RUNNER_TEMP}/extension-release-pages.json"
-          raw_releases="${RUNNER_TEMP}/extension-raw-releases.json"
-          releases="${RUNNER_TEMP}/extension-releases.json"
-          tag_lines="${RUNNER_TEMP}/extension-tag-records.jsonl"
-          tags="${RUNNER_TEMP}/extension-tags.json"
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$release_pages"
-          jq '[.[][] | {tag_name, draft, target_commitish}]' "$release_pages" > "$raw_releases"
-          : > "$tag_lines"
-          while IFS= read -r tag; do
-            sha="$(git rev-list -n 1 "$tag")"
-            object="$(git cat-file -t "refs/tags/$tag")"
-            jq -nc --arg tag "$tag" --arg sha "$sha" --arg object "$object" \
-              '{tag_name: $tag, release_sha: $sha, tag_object: $object}' >> "$tag_lines"
-          done < <(git tag --list 'ext-*/v*')
-          jq -s '.' "$tag_lines" > "$tags"
-          jq --slurpfile tags "$tags" '
-            [.[] as $release
-              | ($tags[0] | map(select(.tag_name == $release.tag_name)) | first) as $tag
-              | $release + {
-                  tag_object: ($tag.tag_object // "missing"),
-                  tag_release_sha: ($tag.release_sha // null)
-                }
-            ]
-          ' "$raw_releases" > "$releases"
-          jq -s 'add' "$releases" "$tags" > "$RELEASE_RECORDS"
-          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
-
       - name: Resolve extension release
         id: release
         working-directory: packages/browseros
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
           EXTENSION: ${{ inputs.extension }}
-          RELEASE_RECORDS: ${{ steps.records.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
           release_sha="$(git rev-parse HEAD)"
-          args=(
-            --name "$EXTENSION"
-            --source-sha "$release_sha"
-            --release-records "$RELEASE_RECORDS"
-            --version "$REQUESTED_VERSION"
-            --github-output "$GITHUB_OUTPUT"
-          )
-          if [ -z "$REQUESTED_VERSION" ]; then
-            for name in bundled-manifest.xml update-manifest.alpha.xml update-manifest.xml; do
-              path="${RUNNER_TEMP}/${name}"
-              curl --fail --location --retry 3 \
-                "https://cdn.browseros.com/extensions/${name}" \
-                --output "$path"
-              args+=(--manifest "$path")
-            done
+          if [ "$EXTENSION" = "agent" ] || [ "$EXTENSION" = "browserclaw" ]; then
+            args=(
+              --component "$EXTENSION"
+              --event-name "$EVENT_NAME"
+              --default-branch "$DEFAULT_BRANCH"
+              --requested-version "$REQUESTED_VERSION"
+              --release-ref HEAD
+              --repo "$GITHUB_REPOSITORY"
+              --github-output "$GITHUB_OUTPUT"
+              --github-summary "$GITHUB_STEP_SUMMARY"
+            )
+            if [ -z "$REQUESTED_VERSION" ]; then
+              args+=(
+                --manifest https://cdn.browseros.com/extensions/bundled-manifest.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.alpha.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.xml
+              )
+            fi
+            uv run browseros release component resolve "${args[@]}"
+          else
+            records="${RUNNER_TEMP}/explicit-extension-records.json"
+            echo '[]' > "$records"
+            uv run browseros ext resolve-version \
+              --name "$EXTENSION" \
+              --source-sha "$release_sha" \
+              --release-records "$records" \
+              --version "$REQUESTED_VERSION" \
+              --github-output "$GITHUB_OUTPUT"
           fi
-          uv run browseros ext resolve-version "${args[@]}"
 
       - name: Reserve private drafts
         if: ${{ steps.validate.outputs.mode == 'build' }}
@@ -385,6 +364,11 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Stamp in-repository extension version
+        if: ${{ inputs.extension == 'agent' || inputs.extension == 'browserclaw' }}
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component "$EXTENSION" --version "$VERSION"
 
       - name: Verify Chrome is available
         run: google-chrome --version

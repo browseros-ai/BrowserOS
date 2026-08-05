@@ -257,7 +257,8 @@ def _candidate_body(record: CandidateRecord) -> str:
     )
 
 
-def _record_from_body(body: str) -> CandidateRecord | None:
+def candidate_record_from_body(body: str) -> CandidateRecord | None:
+    """Read candidate metadata embedded in a pull request body."""
     match = _MARKER_RE.search(body)
     if match is None:
         return None
@@ -305,7 +306,7 @@ class GitHubCandidateBackend:
             self.repo, state="all", head=branch
         ):
             body = pull_request.get("body")
-            record = _record_from_body(body) if isinstance(body, str) else None
+            record = candidate_record_from_body(body) if isinstance(body, str) else None
             if record is None:
                 continue
             if record.product != product or record.parent_sha != parent_sha:
@@ -359,7 +360,9 @@ class GitHubCandidateBackend:
                             version=version,
                             kind="tag",
                             source_sha=target,
+                            reference=tag,
                             reusable=tag_type == "tag" and prefix == spec.tag_prefix,
+                            public=tag_type == "tag",
                         )
                     )
                 except (ValueError, subprocess.CalledProcessError):
@@ -399,13 +402,15 @@ class GitHubCandidateBackend:
                         version=tag[len(spec.tag_prefix) :],
                         kind="release",
                         source_sha=str(release.get("targetCommitish", "")),
+                        reference=tag,
                         reusable=release.get("isDraft") is True,
+                        public=release.get("isDraft") is False,
                     )
                 )
 
         for pull_request in list_pull_requests(self.repo, state="open"):
             body = pull_request.get("body")
-            record = _record_from_body(body) if isinstance(body, str) else None
+            record = candidate_record_from_body(body) if isinstance(body, str) else None
             if record is None:
                 continue
             for component, version in record.component_versions.items():
@@ -416,6 +421,7 @@ class GitHubCandidateBackend:
                         kind="candidate",
                         source_sha=record.candidate_sha,
                         candidate_id=record.branch,
+                        reference=record.branch,
                     )
                 )
         return tuple(allocations)

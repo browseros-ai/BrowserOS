@@ -47,8 +47,9 @@ describe('release-server workflow', () => {
 
   it('reserves a private draft without creating a public tag', () => {
     const prepare = section('  prepare:', '  build-publish:')
-    expect(prepare).toContain('gh api --paginate --slurp')
-    expect(prepare).toContain('--release-records "$RELEASE_RECORDS"')
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare).toContain('--component server')
+    expect(prepare).not.toContain('prepare-server-release.sh')
     expect(prepare).toContain('gh release create "$RELEASE_TAG"')
     expect(prepare).toContain('--draft')
     expect(prepare).toContain('--target "$RELEASE_SHA"')
@@ -59,7 +60,8 @@ describe('release-server workflow', () => {
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  build-publish:')
     expect(workflow).toContain('group: release-server')
-    expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare.indexOf('Setup uv')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )
     expect(prepare.indexOf('Resolve release')).toBeLessThan(
@@ -81,6 +83,10 @@ describe('release-server workflow', () => {
       `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
     expect(build).not.toContain('artifacts/server/latest/')
+    expect(build).toContain(
+      'browseros release component stamp --component server',
+    )
+    expect(build).not.toContain('package["version"] = version')
   })
 
   it('finalizes only after verifying assets and versioned objects', () => {

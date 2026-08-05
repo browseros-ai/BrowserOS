@@ -117,6 +117,47 @@ class ComponentPlanningTest(unittest.TestCase):
             "0.0.128",
         )
 
+    def test_standalone_treats_open_candidates_as_temporary_reservations(self) -> None:
+        candidate = AllocationRecord(
+            component="server",
+            version="0.0.127",
+            kind="candidate",
+            candidate_id="bot/release-browseros",
+        )
+        self.assertEqual(
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=(candidate,),
+            ),
+            "0.0.128",
+        )
+        self.assertEqual(
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=(),
+            ),
+            "0.0.127",
+        )
+
+    def test_standalone_rejects_versions_older_than_public_history(self) -> None:
+        allocations = (
+            AllocationRecord(
+                component="server",
+                version="0.0.130",
+                kind="tag",
+                public=True,
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "older than newest public"):
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=allocations,
+                requested_version="0.0.129",
+            )
+
 
 class ComponentStampingTest(unittest.TestCase):
     def test_json_component_updates_only_its_manifest_and_workspace_entry(self) -> None:

@@ -11,13 +11,6 @@ const browserclawWorkflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
   'utf8',
 )
-const localStaging = readFileSync(
-  resolve(
-    repoRoot,
-    'packages/browseros-agent/scripts/build/claw-server-rust-local.sh',
-  ),
-  'utf8',
-)
 const dollar = '$'
 
 function section(start: string, end?: string): string {
@@ -50,8 +43,9 @@ describe('release-claw-server workflow', () => {
 
   it('reserves only a draft before tests and builds', () => {
     const prepare = section('  prepare:', '  cargo-test:')
-    expect(prepare).toContain('gh api --paginate --slurp')
-    expect(prepare).toContain('--release-records "$RELEASE_RECORDS"')
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare).toContain('--component claw-server-rust')
+    expect(prepare).not.toContain('prepare-claw-server-rust-release.sh')
     expect(prepare).toContain('--draft')
     expect(prepare).not.toContain('git tag -a')
     expect(prepare).not.toContain('--draft=false')
@@ -63,7 +57,7 @@ describe('release-claw-server workflow', () => {
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  cargo-test:')
     expect(workflow).toContain('group: release-claw-server-rust')
-    expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
+    expect(prepare.indexOf('Setup uv')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )
     expect(prepare.indexOf('Resolve release')).toBeLessThan(
@@ -85,6 +79,9 @@ describe('release-claw-server workflow', () => {
     }
     expect(workflow).toContain('CLAW_POSTHOG_KEY is required')
     expect(workflow).toContain('Verify stamped binary version')
+    expect(workflow).toContain(
+      'browseros release component stamp --component claw-server-rust',
+    )
   })
 
   it('uploads only immutable version keys and attaches all draft assets', () => {
@@ -159,10 +156,6 @@ describe('release-claw-server workflow', () => {
     )
     expect(build).toContain('shutil.copy2(source_skill, staged_skill)')
     expect(build).toContain('"resources/skills/browserclaw/SKILL.md"')
-    expect(localStaging).toContain(
-      'source_skill = agent_root / "resources/skills/browserclaw/SKILL.md"',
-    )
-    expect(localStaging).toContain('shutil.copy2(source_skill, staged_skill)')
   })
 
   it('gates OTA publication on successful finalization', () => {

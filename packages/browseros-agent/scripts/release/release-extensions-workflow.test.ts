@@ -66,9 +66,9 @@ describe('release-extensions workflow', () => {
 
   it('reserves only private drafts before the extension build', () => {
     const prepare = section('  prepare:', '  build:')
-    expect(prepare).toContain('resolve-version')
-    expect(prepare).toContain('tag_object: $object')
-    expect(prepare).toContain('tag_object: ($tag.tag_object // "missing")')
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare).toContain('--component "$EXTENSION"')
+    expect(prepare).not.toContain('extension-release-records')
     expect(prepare).toContain('--draft')
     expect(prepare).not.toContain('git tag -a')
     expect(prepare).not.toContain('--draft=false')
@@ -98,6 +98,7 @@ describe('release-extensions workflow', () => {
     expect(build).toContain('gh release upload')
     expect(build).toContain('needs.prepare.outputs.version')
     expect(build).toContain('needs.prepare.outputs.release_sha')
+    expect(build).toContain('browseros release component stamp')
     expect(build).toContain(
       `${'$'}{{ github.run_id }}-${'$'}{{ github.run_attempt }}`,
     )
