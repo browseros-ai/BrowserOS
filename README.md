@@ -20,12 +20,12 @@
 
 **The browser for AI agents**
 
-Claude Code, Codex, Cursor, or any MCP client drives it using the accounts you're already signed into, while you watch live and replay every step.
+A second browser your agents drive with your logged-in accounts. Connect Claude Code, Codex, or Cursor, run many tasks at once, watch live, replay every step.
 
 [![Download for macOS](https://img.shields.io/badge/Download-macOS-black?style=flat&logo=apple&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo.dmg)
 [![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=flat&logo=windows&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo_installer.exe)
 
-**[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/browserclaw)**
+**[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/neo)**
 
 </td>
 <td width="50%" align="center" valign="top">
@@ -57,13 +57,13 @@ An open-source Chromium fork with a built-in AI agent, the privacy-first alterna
 
 ## BrowserOS neo
 
-**What is BrowserOS neo?** BrowserOS neo is a free, open-source browser your AI agents drive using your logged-in accounts. You install it like any browser, sign into the sites you use, and give tasks to Claude Code, Codex, Cursor, or any MCP-compatible AI. Your agents work in their own tabs while you watch every step live and replay any session like a video.
+**What is BrowserOS neo?** BrowserOS neo is a free, open-source browser your AI agents drive using your logged-in accounts. Install it, import your logins from Chrome in one click, and connect Claude Code, Codex, Cursor, or any MCP-compatible AI. Then hand off your web tasks. Agents work in parallel in their own tabs, and you watch every step live or replay any session like a video.
 
 Your AI is smart, but it can't press the buttons. Ask it to book a flight, download an invoice, or reply to an email, and it stops at the login screen. BrowserOS neo fixes that.
 
 ### Get started
 
-1. **Install BrowserOS neo and sign in** to the sites you use every day. It works like any browser, and every account you sign into becomes something your AI can use.
+1. **Install BrowserOS neo and import from Chrome** in one click: logins, bookmarks, extensions. Every account you're signed into becomes something your AI can use.
 2. **Connect your AI in one click.** Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, and Antigravity install with a single click; anything else that speaks MCP connects with a URL.
 3. **Give it a real task.** In your AI chat: *"Find a good time next week for a 30-minute team meeting and send the invite."* Then watch it live from your new tab and replay the whole run like a video.
 
@@ -73,7 +73,7 @@ Your AI is smart, but it can't press the buttons. Ask it to book a flight, downl
 <tr>
 <td width="40%" valign="middle">
 <h4>Live dashboard</h4>
-Your new tab shows every agent working right now: which site it's on, what it's doing, how far along. <a href="https://docs.browseros.com/browserclaw/cockpit">Docs</a>
+Your new tab shows every agent working right now: which site it's on, what it's doing, how far along. <a href="https://docs.browseros.com/neo/cockpit">Docs</a>
 </td>
 <td width="60%">
 <img src="docs/images/browserclaw--dashboard-populated.png" alt="BrowserOS neo dashboard showing agent sessions and recent activity" width="100%" />
@@ -82,7 +82,7 @@ Your new tab shows every agent working right now: which site it's on, what it's 
 <tr>
 <td width="40%" valign="middle">
 <h4>One-click MCP connect</h4>
-One endpoint, every harness. Seven AI tools set up with a single click. <a href="https://docs.browseros.com/browserclaw/mcp">Docs</a>
+One endpoint, every harness. Seven AI tools set up with a single click. <a href="https://docs.browseros.com/neo/mcp">Docs</a>
 </td>
 <td width="60%">
 <img src="docs/images/browserclaw--mcp-install-board.png" alt="BrowserOS neo MCP connect board with one-click install for supported AI tools" width="100%" />
@@ -91,7 +91,7 @@ One endpoint, every harness. Seven AI tools set up with a single click. <a href=
 <tr>
 <td width="40%" valign="middle">
 <h4>Replay every session</h4>
-Every session is saved as a scrubbable video on your disk with a step-by-step action timeline. Rewind and see exactly what happened. <a href="https://docs.browseros.com/browserclaw/audit-and-replay">Docs</a>
+Every session is saved as a scrubbable video on your disk with a step-by-step action timeline. Rewind and see exactly what happened. <a href="https://docs.browseros.com/neo/audit-and-replay">Docs</a>
 </td>
 <td width="60%">
 <img src="docs/images/browserclaw--replay-scrubber.png" alt="BrowserOS neo replay view with video scrubber and action timeline" width="100%" />
@@ -99,13 +99,16 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 </tr>
 </table>
 
-- **Your logins.** Agents automate your real work using the sessions you already have, not a blank sandbox. [How it works](https://docs.browseros.com/browserclaw/how-it-works)
-- **Local-only.** Sessions, screenshots, and history live under `~/.browserclaw/` and never leave your machine. [Privacy](https://docs.browseros.com/browserclaw/privacy)
+- **Your logins.** Agents automate your real work using the sessions you already have, not a blank sandbox. [How it works](https://docs.browseros.com/neo/how-it-works)
+- **Parallel agents.** Fire off several tasks at once. Each agent works in its own tab while you keep browsing.
+- **Fewer tokens.** Agents get compact page snapshots instead of raw HTML and batch actions in one call. Same automation, smaller bills.
+- **Local-only.** Sessions, screenshots, and history live under `~/.browserclaw/` and never leave your machine. [Privacy](https://docs.browseros.com/neo/privacy)
 
 ### Why BrowserOS neo over the alternatives?
 
 - **Not a headless driver.** Playwright and browser-use spin up a fresh Chrome subprocess with no logins. Great for CI, useless for "book my flight" or "read my inbox." BrowserOS neo is the browser your logins already live in.
 - **Not a cloud browser.** Browserbase and Browser Use Cloud run your agent's session on someone else's infrastructure. Your prompts and session tokens pass through their servers. BrowserOS neo runs on your machine, on `127.0.0.1`.
+- **Not a locked-in AI browser.** Atlas, Comet, and Dia only work with their own AI. BrowserOS neo works with the agents you already use and pay for.
 
 ## BrowserOS
 
@@ -219,13 +222,13 @@ Both are free and open source under AGPL-3.0. Bring your own AI keys or run loca
 ### BrowserOS neo
 
 **Which AI tools work with BrowserOS neo?**
-Any AI that speaks MCP. Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, and Antigravity connect with one click; Claude Desktop connects via a [drop-in extension](https://docs.browseros.com/browserclaw/mcp/claude-desktop); anything else connects with a URL.
+Any AI that speaks MCP. Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, and Antigravity connect with one click; Claude Desktop connects via a [drop-in extension](https://docs.browseros.com/neo/mcp/claude-desktop); anything else connects with a URL.
 
 **Does my AI share my logins?**
 Yes, and that's the point. Agents drive BrowserOS neo using the sessions you already have, so they automate your real work instead of poking a blank sandbox. Every agent's tabs sit in their own colored Chrome tab group so you can always see whose is whose.
 
 **Does anything leave my machine?**
-Your sessions, screenshots, history, and settings live under `~/.browserclaw/` and never upload. BrowserOS neo sends anonymous product-usage events (agent connect/disconnect, version, OS) to help us improve the app; it never sends URLs, page content, prompts, tool results, or screenshots. Off with one toggle in Settings. [Full policy](https://docs.browseros.com/browserclaw/privacy).
+Your sessions, screenshots, history, and settings live under `~/.browserclaw/` and never upload. BrowserOS neo sends anonymous product-usage events (agent connect/disconnect, version, OS) to help us improve the app; it never sends URLs, page content, prompts, tool results, or screenshots. Off with one toggle in Settings. [Full policy](https://docs.browseros.com/neo/privacy).
 
 ### BrowserOS
 
@@ -242,7 +245,7 @@ BrowserOS neo runs on macOS and Windows. BrowserOS runs on macOS, Windows, and L
 
 - [Discord](https://discord.gg/YKwjt5vuKr) · [Slack](https://dub.sh/browserOS-slack)
 - [Report a bug](https://github.com/browseros-ai/BrowserOS/issues)
-- [BrowserOS neo docs](https://docs.browseros.com/browserclaw) · [BrowserOS docs](https://docs.browseros.com)
+- [BrowserOS neo docs](https://docs.browseros.com/neo) · [BrowserOS docs](https://docs.browseros.com)
 
 ## Architecture
 
