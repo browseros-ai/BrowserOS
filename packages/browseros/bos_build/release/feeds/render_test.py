@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Golden-output tests for the feed renderers."""
 
+import json
 import unittest
 from pathlib import Path
 
@@ -12,12 +13,14 @@ from .render import (
     extract_channel_metadata,
     extract_enclosure_urls,
     extract_manifest_versions,
+    is_canonical_extensions_json,
     parse_dotted_version,
     parse_server_appcast_content,
     render_browser_appcast,
     render_extensions_json,
     render_server_appcast,
     render_update_manifest,
+    strict_extension_manifest_versions,
 )
 from .spec import feed_by_key, server_feed
 
@@ -299,6 +302,103 @@ class ExtensionsRenderTest(unittest.TestCase):
     def test_update_manifest_unknown_name_raises(self):
         with self.assertRaises(ValueError):
             render_update_manifest({"nope": "1.0"})
+
+    def test_canonical_extensions_json_requires_exact_generated_value(self):
+        canonical = json.loads(render_extensions_json("alpha"))
+        self.assertTrue(
+            is_canonical_extensions_json(
+                json.dumps(canonical, separators=(",", ":")),
+                "alpha",
+            )
+        )
+
+        invalid = []
+        empty = {"extensions": {}}
+        invalid.append(empty)
+        missing = json.loads(render_extensions_json("alpha"))
+        missing["extensions"].pop(next(iter(missing["extensions"])))
+        invalid.append(missing)
+        extra = json.loads(render_extensions_json("alpha"))
+        extra["extensions"]["a" * 32] = {
+            "external_update_url": "https://cdn.browseros.com/extensions/update-manifest.alpha.xml"
+        }
+        invalid.append(extra)
+        alternate_install = json.loads(render_extensions_json("alpha"))
+        next(iter(alternate_install["extensions"].values()))["external_crx"] = (
+            "https://cdn.browseros.com/extensions/agent-0.0.118.0.crx"
+        )
+        invalid.append(alternate_install)
+
+        for document in invalid:
+            with self.subTest(document=document):
+                self.assertFalse(
+                    is_canonical_extensions_json(json.dumps(document), "alpha")
+                )
+
+    def test_strict_extension_manifest_binds_exact_ids_versions_and_crx_urls(self):
+        versions = {
+            "agent": "0.0.118.0",
+            "bugreporter": "54.0.0.0",
+            "browserclaw": "0.1.7.0",
+        }
+        canonical = render_update_manifest(versions)
+        self.assertEqual(
+            set(
+                strict_extension_manifest_versions(
+                    canonical,
+                    include_all_extensions=False,
+                )
+            ),
+            {
+                "adlpneommgkgeanpaekgoaolcpncohkf",
+                "bflpfmnmnokmjhmgnolecpppdbdophmk",
+                "pjimfkbpehlcllblajnpfamdfjhhlgkc",
+            },
+        )
+
+        missing = render_update_manifest(
+            {
+                name: version
+                for name, version in versions.items()
+                if name != "browserclaw"
+            }
+        )
+        unknown = canonical.replace(
+            "pjimfkbpehlcllblajnpfamdfjhhlgkc",
+            "a" * 32,
+        )
+        duplicate = canonical.replace(
+            "pjimfkbpehlcllblajnpfamdfjhhlgkc",
+            "bflpfmnmnokmjhmgnolecpppdbdophmk",
+        )
+        swapped = canonical.replace(
+            "agent-0.0.118.0.crx",
+            "browserclaw-0.1.7.0.crx",
+        )
+        mismatched = canonical.replace(
+            'version="0.0.118.0"',
+            'version="0.0.119.0"',
+        )
+        extra_attribute = canonical.replace(
+            'protocol="2.0"',
+            'protocol="2.0" extra="value"',
+        )
+
+        for content in (
+            missing,
+            unknown,
+            duplicate,
+            swapped,
+            mismatched,
+            extra_attribute,
+        ):
+            with self.subTest(content=content):
+                self.assertIsNone(
+                    strict_extension_manifest_versions(
+                        content,
+                        include_all_extensions=False,
+                    )
+                )
 
 
 class VersionHelpersTest(unittest.TestCase):

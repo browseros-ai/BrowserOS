@@ -39,7 +39,7 @@ use tracing::warn;
 use ulid::Ulid;
 
 const SERVER_NAME: &str = "browserclaw";
-const SERVER_TITLE: &str = "BrowserClaw";
+const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
@@ -70,7 +70,7 @@ struct StartedSession {
 }
 
 impl ClawMcpService {
-    /// Creates the BrowserClaw-owned rmcp server over the shared browser tool catalog.
+    /// Creates the BrowserOS neo-owned rmcp server over the shared browser tool catalog.
     #[must_use]
     pub fn new(state: AppState) -> Self {
         Self {
@@ -111,7 +111,7 @@ impl ClawMcpService {
             .await
         {
             return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
-                "BrowserClaw session is no longer live",
+                "BrowserOS neo session is no longer live",
             )]);
         }
         let started_at = StdInstant::now();
@@ -198,7 +198,7 @@ impl ClawMcpService {
                 .await
                 .ok_or_else(|| {
                     McpError::invalid_request(
-                        format!("BrowserClaw session {session_id} is no longer live"),
+                        format!("BrowserOS neo session {session_id} is no longer live"),
                         None,
                     )
                 })?
@@ -635,8 +635,8 @@ mod tests {
         let instructions = info
             .instructions
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("BrowserClaw instructions missing"))?;
-        assert!(instructions.contains("BrowserClaw — the browser for agents"));
+            .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
+        assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("run does real multi-step"));
         assert!(instructions.contains(
             "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."

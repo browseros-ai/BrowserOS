@@ -249,10 +249,8 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
     expect(firstRun).toContain('You watch. Your agent')
-    expect(firstRun).toContain('Set up MCP endpoint')
-    expect(firstRun).toContain(
-      'https://cdn.browseros.com/artifacts/claw/onboarding-video/v0.2.0/first-run-demo.mp4',
-    )
+    expect(firstRun).toContain('Hand off your first task')
+    expect(firstRun).toContain('onboarding-recording/video.mp4')
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
 
@@ -262,7 +260,7 @@ describe('Cockpit (v2)', () => {
       stats: 'measured',
     })
     expect(waiting).toContain('Waiting for your first run')
-    expect(waiting).toContain('View MCP endpoint')
+    expect(waiting).toContain('Manage agents')
     expect(waiting).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
   })

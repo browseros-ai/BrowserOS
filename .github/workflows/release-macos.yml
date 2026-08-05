@@ -65,6 +65,26 @@ on:
         description: Git ref to build; defaults to the repository default branch
         type: string
         default: ""
+      browseros_server_version:
+        description: "Exact BrowserOS server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_server_version:
+        description: "Exact BrowserClaw server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_onboard_version:
+        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      bundled_extensions_manifest_url:
+        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -373,6 +393,10 @@ jobs:
           PRODUCT_IDS: ${{ steps.build_inputs.outputs.product_ids }}
           ARCH: ${{ steps.build_inputs.outputs.arch }}
           UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
+          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.browseros_server_version }}
+          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.browserclaw_server_version }}
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.browserclaw_onboard_version }}
+          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.bundled_extensions_manifest_url }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"
@@ -390,16 +414,18 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: BrowserOS_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_*.dmg
+          path: |
+            ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_*.dmg
+            !${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Upload BrowserClaw DMG artifact
+      - name: Upload BrowserOS neo DMG artifact
         if: ${{ always() && steps.bump.outputs.version != '' && needs.resolve_inputs.outputs.build_browserclaw == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: BrowserClaw_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserClaw_*.dmg
+          name: BrowserOS_neo_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
+          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
 

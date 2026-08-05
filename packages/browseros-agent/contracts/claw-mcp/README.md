@@ -1,6 +1,6 @@
 # claw-mcp — Rust real-browser conformance suite
 
-Tier-3 integration coverage for the BrowserClaw stack: deterministic fixture
+Tier-3 integration coverage for the BrowserOS neo stack: deterministic fixture
 pages, a spawned BrowserOS, and the production Rust Claw server driven over its
 real `/mcp` endpoint. A live browser is required because lower-level tests cannot
 catch mismatches between CDP payloads and the accessibility/ref pipeline.
@@ -22,10 +22,10 @@ The browser suite is gated on `BROWSEROS_BINARY`; without it, the suite skips
 cleanly. From `packages/browseros-agent`:
 
 ```bash
-BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw \
+BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
   bun run test:claw-mcp-contract
 
-BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw \
+BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
   bun run test:claw-mcp-smoke
 ```
 
@@ -37,7 +37,7 @@ Useful environment variables:
 
 | Variable | Effect |
 | --- | --- |
-| `BROWSEROS_BINARY` | BrowserOS or BrowserClaw executable to test |
+| `BROWSEROS_BINARY` | BrowserOS or BrowserOS neo executable to test |
 | `CLAW_MCP_SMOKE=1` | Run only smoke cases; set by `--smoke` |
 | `BROWSEROS_TEST_HEADLESS=false` | Run headed for debugging |
 | `BROWSEROS_TEST_EXTRA_ARGS` | Add browser process arguments |
@@ -74,11 +74,11 @@ used by `browseros-core` serde fixtures:
 
 ```bash
 CLAW_MCP_CAPTURE_DIR="$PWD/crates/browseros-core/tests/data/captured" \
-  BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw \
+  BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
   bun contracts/claw-mcp/tests/run.ts --smoke
 
 cargo test -p browseros-core --test captured_cdp_fixture
 ```
 
-The full suite runs in the nightly BrowserClaw workflow against the browser built
+The full suite runs in the nightly BrowserOS neo workflow against the browser built
 by that workflow.

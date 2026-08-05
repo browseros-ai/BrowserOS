@@ -168,17 +168,17 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
         )
 
         expected_fields = {
-            "base_app_name": ('L"BrowserClaw"', 'L"BrowserOS"'),
+            "base_app_name": ('L"BrowserOS neo"', 'L"BrowserOS"'),
             "base_app_id": ('L"BrowserClaw"', 'L"BrowserOS"'),
             "browser_prog_id_prefix": ('L"BClawHTML"', 'L"BOSHTML"'),
             "browser_prog_id_description": (
-                'L"BrowserClaw HTML Document"',
+                'L"BrowserOS neo HTML Document"',
                 'L"BrowserOS HTML Document"',
             ),
             "direct_launch_url_scheme": ('"browserclaw"', '"browseros"'),
             "pdf_prog_id_prefix": ('L"BClawPDF"', 'L"BOSPDF"'),
             "pdf_prog_id_description": (
-                'L"BrowserClaw PDF Document"',
+                'L"BrowserOS neo PDF Document"',
                 'L"BrowserOS PDF Document"',
             ),
             "active_setup_guid": (

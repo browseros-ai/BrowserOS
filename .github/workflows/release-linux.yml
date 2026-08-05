@@ -27,6 +27,26 @@ on:
         required: false
         type: boolean
         default: true
+      browseros_server_version:
+        description: "Exact BrowserOS server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_server_version:
+        description: "Exact BrowserClaw server resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      browserclaw_onboard_version:
+        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
+        required: false
+        type: string
+        default: ""
+      bundled_extensions_manifest_url:
+        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -143,4 +163,8 @@ jobs:
       profile: release-ci
       sign: false
       upload: ${{ inputs.upload_to_r2 }}
+      browseros_server_version: ${{ inputs.browseros_server_version }}
+      browserclaw_server_version: ${{ inputs.browserclaw_server_version }}
+      browserclaw_onboard_version: ${{ inputs.browserclaw_onboard_version }}
+      bundled_extensions_manifest_url: ${{ inputs.bundled_extensions_manifest_url }}
     secrets: inherit

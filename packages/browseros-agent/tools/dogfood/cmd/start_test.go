@@ -62,7 +62,7 @@ func TestClawRuntimeEnvWiresBrowserAndAPISettings(t *testing.T) {
 	assertEnvContains(t, got, "NODE_ENV=development")
 	assertEnvContains(t, got, "BROWSERCLAW_DIR=/tmp/claw-state")
 	assertEnvMissingPrefix(t, got, "BROWSEROS_DIR=")
-	assertEnvContains(t, got, "BROWSEROS_BINARY=/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw")
+	assertEnvContains(t, got, "BROWSEROS_BINARY=/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo")
 	assertEnvContains(t, got, "BROWSEROS_USER_DATA_DIR=/tmp/claw-profile")
 	assertEnvContains(t, got, "BROWSEROS_CLAW_CDP_PORT=49337")
 	assertEnvContains(t, got, "BROWSEROS_SERVER_PORT=9200")

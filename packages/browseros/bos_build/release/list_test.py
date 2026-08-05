@@ -82,7 +82,7 @@ class PrintProductSectionTest(unittest.TestCase):
     def test_empty_section_still_renders(self):
         lines = self._render(ListModule(), "browserclaw", [])
 
-        self.assertTrue(any("BrowserClaw" in line for line in lines))
+        self.assertTrue(any("BrowserOS neo" in line for line in lines))
         self.assertTrue(any("no releases" in line for line in lines))
 
     def test_truncation_hint_names_all_flag(self):

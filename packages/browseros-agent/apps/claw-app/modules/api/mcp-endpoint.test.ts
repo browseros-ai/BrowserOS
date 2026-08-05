@@ -92,10 +92,8 @@ describe('buildCanonicalMcpEndpointUrl', () => {
 describe('buildCanonicalMcpCliCommand', () => {
   it('produces the standard `claude mcp add` shape with the canonical URL', () => {
     installWindow('')
-    const cli = buildCanonicalMcpCliCommand()
-    expect(cli).toContain('claude mcp add BrowserClaw')
-    expect(cli).toContain('http://127.0.0.1:9200/mcp')
-    expect(cli).toContain('--transport http')
-    expect(cli).toContain('--scope user')
+    expect(buildCanonicalMcpCliCommand()).toBe(
+      'claude mcp add "BrowserOS neo" http://127.0.0.1:9200/mcp --transport http --scope user',
+    )
   })
 })

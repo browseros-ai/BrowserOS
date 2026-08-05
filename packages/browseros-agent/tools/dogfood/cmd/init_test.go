@@ -18,7 +18,7 @@ func TestPrintInitNextStepsShowsInlineAndBackgroundStart(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Config written: /tmp/config.yaml",
-		"Start dogfood: BrowserClaw",
+		"Start dogfood: BrowserOS neo",
 		"Inline:     browseros-dogfood --claw start",
 		"Background: browseros-dogfood --claw start-background",
 	} {

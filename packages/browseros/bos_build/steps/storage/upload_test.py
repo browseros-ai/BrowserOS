@@ -141,9 +141,9 @@ class UploadMetadataTest(unittest.TestCase):
         cases = [
             (
                 "browserclaw",
-                "BrowserClaw",
-                "BrowserClaw",
-                "BrowserClaw_v1.2.3_arm64.dmg",
+                "BrowserOS neo",
+                "BrowserOS_neo",
+                "BrowserOS_neo_v1.2.3_arm64.dmg",
                 "BrowserOS_v1.2.3_arm64.dmg",
             ),
             (
@@ -151,7 +151,7 @@ class UploadMetadataTest(unittest.TestCase):
                 "BrowserOS",
                 "BrowserOS",
                 "BrowserOS_v1.2.3_arm64.dmg",
-                "BrowserClaw_v1.2.3_arm64.dmg",
+                "BrowserOS_neo_v1.2.3_arm64.dmg",
             ),
         ]
 
@@ -208,9 +208,9 @@ class UploadMetadataTest(unittest.TestCase):
         ):
             dist_dir = Path(tmp)
             product_names = [
-                "BrowserClaw_v1.2.3_arm64.dmg",
-                "BrowserClaw_v1.2.3_x64.dmg",
-                "BrowserClaw_v1.2.3_universal.dmg",
+                "BrowserOS_neo_v1.2.3_arm64.dmg",
+                "BrowserOS_neo_v1.2.3_x64.dmg",
+                "BrowserOS_neo_v1.2.3_universal.dmg",
             ]
             for name in product_names:
                 (dist_dir / name).write_bytes(name.encode())
@@ -218,8 +218,8 @@ class UploadMetadataTest(unittest.TestCase):
             ctx = _upload_ctx(
                 dist_dir,
                 product_id="browserclaw",
-                display_name="BrowserClaw",
-                artifact_prefix="BrowserClaw",
+                display_name="BrowserOS neo",
+                artifact_prefix="BrowserOS_neo",
             )
 
             success, release = upload_release_artifacts(ctx)

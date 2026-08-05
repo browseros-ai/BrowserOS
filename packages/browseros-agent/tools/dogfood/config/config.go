@@ -72,7 +72,7 @@ const (
 	DefaultBranch = "main"
 
 	DefaultBrowserOSAppPath   = "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS"
-	DefaultBrowserClawAppPath = "/Applications/BrowserClaw.app/Contents/MacOS/BrowserClaw"
+	DefaultBrowserClawAppPath = "/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
 )
 
 type BrowserAppResolution struct {
@@ -150,7 +150,7 @@ func ResolveBrowserAppPath(target Target, configuredPath string, exists func(str
 	}
 }
 
-// DefaultTargets returns isolated BrowserOS and BrowserClaw runtime settings.
+// DefaultTargets returns isolated BrowserOS and BrowserOS neo runtime settings.
 func DefaultTargets(home string) map[string]TargetConfig {
 	cfgDir := DefaultConfigDir(home)
 	return map[string]TargetConfig{

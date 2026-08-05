@@ -60,7 +60,6 @@ export async function writeArtifactMetadata(
       {
         version,
         target: targetId,
-        generatedAt: new Date().toISOString(),
         files,
       },
       null,

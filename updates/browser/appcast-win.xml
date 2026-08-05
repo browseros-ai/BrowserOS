@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+  xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BrowserOS Windows Updates</title>
+    <link>https://cdn.browseros.com/appcast-win.xml</link>
+    <description>Most recent changes with links to updates.</description>
+    <language>en</language>
+
+    <item>
+    </item>
+
+    <!-- Updates -->
+    <!-- <item> -->
+    <!--   <title>BrowserOS - 0.47.0.1</title> -->
+    <!--   <description sparkle:format="plain-text"> -->
+    <!--   </description> -->
+    <!--   <sparkle:version>7949.97</sparkle:version> -->
+    <!--   <sparkle:shortVersionString>0.47.0.1</sparkle:shortVersionString> -->
+    <!--   <pubDate>Sat, 20 Jun 2026 01:44:19 +0000</pubDate> -->
+    <!--   <link>https://browseros.com</link> -->
+    <!--   <enclosure -->
+    <!--     url="https://cdn.browseros.com/releases/0.47.0.1/win/BrowserOS_v0.47.0.1_x64_installer.exe" -->
+    <!--     sparkle:os="windows" -->
+    <!--     sparkle:edSignature="dNJFDNqDV3QdQoZc7Au4oa0MC4Wsp90Y+Mi9oxx/fbqCeVvg+cNOEMVXqhrd8ass8SKnRWCYKwoxoKMFcl1GDA==" -->
+    <!--     length="190943800" -->
+    <!--     type="application/octet-stream" /> -->
+    <!-- </item> -->
+
+  </channel>
+</rss>
