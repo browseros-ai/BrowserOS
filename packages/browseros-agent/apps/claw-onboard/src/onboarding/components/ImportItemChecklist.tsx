@@ -10,12 +10,6 @@ interface ImportItemChecklistProps {
   onToggle: (item: BrowserOSImportItem) => void
 }
 
-/**
- * Per-item selector for the active profile. Logins stay in the open because
- * they are the only items an agent can use; the rest of Chromium's data is
- * browsing setup, so it collapses behind a disclosure instead of presenting
- * itself as part of the default ask.
- */
 export function ImportItemChecklist({
   items,
   checkedItems,
@@ -23,7 +17,7 @@ export function ImportItemChecklist({
 }: ImportItemChecklistProps) {
   const checklistId = useId()
   const checkedItemSet = new Set(checkedItems)
-  const { loginItems, extraItems } = splitImportSelection(items)
+  const { defaultItems, optionalItems } = splitImportSelection(items)
 
   function renderRow(item: BrowserOSImportItem) {
     const controlId = `${checklistId}-${item}`
@@ -52,19 +46,19 @@ export function ImportItemChecklist({
         </div>
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-        {loginItems.map(renderRow)}
+        {defaultItems.map(renderRow)}
       </div>
-      {extraItems.length > 0 && (
+      {optionalItems.length > 0 && (
         <details className="group mt-3 border-border-2 border-t pt-3">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink-2">
             <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
             Also copy my browsing setup
             <span className="text-ink-4">
-              ({extraItems.map(importItemLabel).join(', ').toLowerCase()})
+              ({optionalItems.map(importItemLabel).join(', ').toLowerCase()})
             </span>
           </summary>
           <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
-            {extraItems.map(renderRow)}
+            {optionalItems.map(renderRow)}
           </div>
         </details>
       )}

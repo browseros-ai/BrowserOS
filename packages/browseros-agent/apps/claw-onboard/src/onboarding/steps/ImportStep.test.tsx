@@ -140,7 +140,7 @@ describe('ImportStep', () => {
         'aria-checked="true"',
       )
     }
-    expect(html).toContain('2 selected')
+    expect(html).toContain('5 selected')
     // JSX wraps "macOS will ask" in a semibold span, so the string
     // "macOS will ask to read" is split by a </span> boundary in the
     // rendered HTML. Assert on the positive plus a negative that
@@ -151,51 +151,66 @@ describe('ImportStep', () => {
     expect(html).not.toContain('macOS will ask permission')
     expect(html).toContain('Allow')
     expect(html).not.toContain('Always Allow')
-    expect(html).toContain('Copy logins from Work')
+    expect(html).toContain('Copy 5 items from Work')
     expect(html).not.toContain('Chrome is open')
     expect(html).not.toContain('Quit Chrome for me')
     expect(html).not.toContain('disabled=""')
   })
 
-  // No MCP tool exposes history, bookmarks, search engines, autofill or
-  // extensions to an agent, so they must never ride along by default.
-  it('checks logins only and leaves the browsing setup unchecked', () => {
+  it('checks every supported non-optional item by default', () => {
     const source = MOCK_BROWSEROS_IMPORT_SOURCES[1]
     const html = render('picker', readyState(), {
       selectedSourceId: source.id,
       selectedItems: defaultImportItemsForSource(source),
     })
 
-    expect(html).toContain('2 selected')
-    expect(html).toContain('Copy logins from Personal')
-    for (const item of ['Cookies', 'Passwords']) {
+    expect(html).toContain('5 selected')
+    expect(html).toContain('Copy 5 items from Personal')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Cookies',
+      'Passwords',
+      'Autofill',
+    ]) {
       const row = checklistRowFor(html, item)
       expect(row).toContain('data-checked=""')
       expect(row).toContain('aria-checked="true"')
     }
-    for (const item of ['History', 'Bookmarks', 'Autofill']) {
-      const row = checklistRowFor(html, item)
-      expect(row).toContain('data-unchecked=""')
-      expect(row).toContain('aria-checked="false"')
+    expect(html).not.toContain('<details')
+  })
+
+  it('collapses only search engines and extensions behind a disclosure', () => {
+    const html = render('picker')
+    const detailsStart = html.indexOf('<details')
+    const detailsEnd = html.indexOf('</details>', detailsStart)
+    const details = html.slice(detailsStart, detailsEnd)
+
+    expect(detailsStart).toBeGreaterThan(-1)
+    expect(html).toContain('Also copy my browsing setup')
+    expect(details).toContain('Search engines')
+    expect(details).toContain('Extensions')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Cookies',
+      'Passwords',
+      'Autofill',
+    ]) {
+      expect(details).not.toContain(item)
+    }
+    for (const item of ['Search engines', 'Extensions']) {
+      expect(checklistRowFor(html, item)).toContain('aria-checked="false"')
     }
   })
 
-  it('collapses the non-login items behind a disclosure', () => {
-    const html = render('picker')
-
-    expect(html).toContain('<details')
-    expect(html).toContain('Also copy my browsing setup')
-    // The extras stay reachable, just not part of the default ask.
-    expect(checklistRowFor(html, 'History')).toContain('aria-checked="false"')
-  })
-
-  it('counts opted-in extras separately from the logins', () => {
+  it('counts a custom mixed selection in the action label', () => {
     const html = render('picker', readyState(), {
       selectedItems: ['cookies', 'passwords', 'history'],
     })
 
     expect(html).toContain('3 selected')
-    expect(html).toContain('Copy logins + 1 more from Work')
+    expect(html).toContain('Copy 3 items from Work')
   })
 
   it('disables the copy action until at least one item is selected', () => {
