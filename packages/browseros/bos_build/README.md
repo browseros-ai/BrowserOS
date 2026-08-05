@@ -211,7 +211,9 @@ browseros release appcast --version <version> --product browseros --publish
 Swap in `--product browserclaw` for the other product. If you need to recreate
 the draft GitHub release by hand, that is
 `browseros release github create --version <version> --draft --product <id>`.
-Server OTA promotion is separate, and also manual.
+Server OTA publication stays separate from a full browser release. A bare
+standalone server workflow publishes its alpha appcast; production still
+requires an explicit `browseros ota server promote --product <id> --publish`.
 
 Lane-by-lane detail, required secrets, runner cost, and troubleshooting:
 [`docs/release-ci.md`](docs/release-ci.md).

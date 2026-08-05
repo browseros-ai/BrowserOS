@@ -7,6 +7,10 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-claw-server-rust.yml'),
   'utf8',
 )
+const browserclawWorkflow = readFileSync(
+  resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
+  'utf8',
+)
 const localStaging = readFileSync(
   resolve(
     repoRoot,
@@ -27,10 +31,16 @@ function section(start: string, end?: string): string {
 describe('release-claw-server-rust workflow', () => {
   it('exposes the reusable build/finalize interface and outputs', () => {
     const call = section('  workflow_call:', '\npermissions:')
+    const publishOta = call.slice(
+      call.indexOf('      publish_ota:'),
+      call.indexOf('    outputs:'),
+    )
     expect(call).toContain('mode:')
     expect(call).toContain('default: "build"')
     expect(call).toContain('defer_finalize:')
     expect(call).toContain('default: false')
+    expect(call).toContain('publish_ota:')
+    expect(publishOta).toContain('default: false')
     expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.version }}`)
     expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.tag }}`)
     expect(call).toContain(
@@ -158,10 +168,34 @@ describe('release-claw-server-rust workflow', () => {
   it('gates OTA publication on successful finalization', () => {
     const ota = section('  publish-ota:', '  reflect-version:')
     expect(ota).toContain('- finalize')
+    expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
     expect(ota).toContain(
       'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
     )
+  })
+
+  it('publishes and persists standalone alpha releases by default', () => {
+    const dispatch = section('  workflow_dispatch:', '  workflow_call:')
+    const ota = section('  publish-ota:', '  reflect-version:')
+    expect(dispatch).toContain('publish_ota:')
+    expect(dispatch).toContain('default: true')
+    expect(browserclawWorkflow.match(/publish_ota: false/g)).toHaveLength(2)
+    expect(ota).toContain(
+      'uv run browseros ota server release-appcast --channel alpha --product browserclaw --publish',
+    )
+    expect(ota).toContain(
+      'packages/browseros-agent/scripts/release/commit-update-snapshot.sh',
+    )
+    expect(ota).toContain('updates/server/appcast-claw-server.alpha.xml')
+    expect(ota).not.toContain('updates/server/appcast-server.alpha.xml')
+    expect(ota).not.toContain('--channel prod')
+
+    const generateIndex = ota.indexOf('ota server release --version')
+    const publishIndex = ota.indexOf('ota server release-appcast')
+    const snapshotIndex = ota.indexOf('commit-update-snapshot.sh')
+    expect(publishIndex).toBeGreaterThan(generateIndex)
+    expect(snapshotIndex).toBeGreaterThan(publishIndex)
   })
 
   it('reflects the version only after finalization', () => {
