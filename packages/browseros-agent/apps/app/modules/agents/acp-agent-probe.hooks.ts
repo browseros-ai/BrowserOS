@@ -16,7 +16,7 @@ export function useAcpAgentProbe(
       const response = await fetch(`${baseUrl}/acpx/probe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: type }),
+        body: JSON.stringify({ type }),
       })
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as {

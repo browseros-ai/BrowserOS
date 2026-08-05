@@ -90,7 +90,6 @@ describe('buildAcpAgentPolicy', () => {
       url: 'http://127.0.0.1:9001/mcp',
       headers: {
         'X-BrowserOS-Scope-Id': 'conversation-1',
-        'X-BrowserOS-Agent-Id': 'claude-agent-id',
         'X-BrowserOS-Default-Window-Id': '42',
         'X-BrowserOS-Managed-Mcp-Servers': 'Slack',
       },

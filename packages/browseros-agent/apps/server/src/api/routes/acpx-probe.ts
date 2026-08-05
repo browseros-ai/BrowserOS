@@ -21,7 +21,7 @@ export type ProbeAcpAgentFn = (
 
 const probeRequestSchema = z
   .object({
-    agentId: AcpAgentTypeSchema,
+    type: AcpAgentTypeSchema,
     timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
   })
   .strict()

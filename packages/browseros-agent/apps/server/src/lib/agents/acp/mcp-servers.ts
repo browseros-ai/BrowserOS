@@ -12,7 +12,6 @@ const BROWSEROS_MCP_NAME = 'browseros'
 export interface BuildAcpMcpServersInput {
   serverPort: number
   conversationId: string
-  agentId: string
   browserContext?: BrowserContext
 }
 
@@ -21,7 +20,6 @@ export function buildAcpMcpServers(
 ): AcpxMcpServerConfig[] {
   const headers: Record<string, string> = {
     'X-BrowserOS-Scope-Id': input.conversationId,
-    'X-BrowserOS-Agent-Id': input.agentId,
   }
   const browserContext = input.browserContext
 

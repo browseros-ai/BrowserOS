@@ -11,7 +11,7 @@ import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 
 export interface ServerAcpxProbeInput {
-  agentId: AcpAgentType
+  type: AcpAgentType
   timeoutMs?: number
   resourcesDir?: string | null
   browserosDir?: string | null
@@ -44,11 +44,7 @@ export interface ServerAcpxProbeResult {
   error?: ServerAcpxProbeError
 }
 
-// 120s gives the cold-cache tarball fetch + extract enough headroom on
-// slow networks (corp VPN, antivirus scanning extracted files) without
-// stranding the user behind a smaller deadline. Warm-cache spawns still
-// return in well under a second so the ceiling is invisible in steady
-// state. Env override is clamped to [1s, 120s] for the same reason.
+// Cold adapter downloads can take two minutes on slow networks.
 const DEFAULT_PROBE_TIMEOUT_MS = 120_000
 const MAX_PROBE_TIMEOUT_MS = 120_000
 
@@ -70,13 +66,13 @@ export async function probeAcpAgent(
   const timeoutMs = resolveTimeout(input.timeoutMs)
 
   const launcher = resolveAcpSpawnCommand({
-    agentType: input.agentId,
+    agentType: input.type,
     browserosDir: input.browserosDir ?? getBrowserosDir(),
     resourcesDir: input.resourcesDir,
     platform: input.platform,
   })
   logger.debug('ACP probe using launcher-resolved command', {
-    agentId: input.agentId,
+    type: input.type,
     launcherSource: launcher.source,
   })
 
@@ -88,10 +84,7 @@ export async function probeAcpAgent(
   return normalizeProbeResult(result)
 }
 
-// codex-acp encodes effort into the advertised model id when it does not
-// expose a settable configOptions[id=model] picker. Older builds use
-// `model[effort]`; newer builds use `model/effort`. Both forms appear in
-// the wild so we match either.
+// Codex ACP versions encode effort as either model[effort] or model/effort.
 const COMPOUND_MODEL_PATTERN =
   /^(.+?)(?:\[(low|medium|high|xhigh|max)\]|\/(low|medium|high|xhigh|max))$/i
 
@@ -161,14 +154,6 @@ function splitCompoundModels(raw: AgentProbeResult['models']): CompoundSplit {
 }
 
 function normalizeProbeResult(r: AgentProbeResult): ServerAcpxProbeResult {
-  // Priority for the model dropdown source:
-  //   1. configOptions[id=model].options (bare picker, names + descriptions)
-  //   2. r.models, split when compound `model[effort]` / `model/effort`
-  //      ids are present. Falls through to the raw list when ids are
-  //      already bare (e.g. claude).
-  // Effort dropdown source:
-  //   1. r.reasoning.values when the agent exposes configOptions[category=thought_level]
-  //   2. Efforts extracted from compound model ids
   const modelOption = r.configOptions.find((o) => o.id === 'model')
   const pickerOptions =
     modelOption?.type === 'select' ? modelOption.options : undefined

@@ -54,7 +54,6 @@ export async function buildAcpAgentPolicy(
     mcpServers: buildAcpMcpServers({
       serverPort: input.serverPort,
       conversationId: input.conversationId,
-      agentId: input.agent.id,
       browserContext: input.browserContext,
     }),
     sessionOptions: buildSessionOptions(input.agent, skill),
