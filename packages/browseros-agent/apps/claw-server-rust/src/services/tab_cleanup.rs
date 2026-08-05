@@ -2,7 +2,7 @@
 //!
 //! Releasing a session's tab ownership stamps the ledger but never closes the
 //! Chrome tab. This reconciliation sweep closes any tab that was agent-owned but
-//! now has no live owner, once a short grace has elapsed, sparing the tab the
+//! now has no live owner, once the retention window has elapsed, sparing the tab the
 //! user is currently viewing. It is idempotent and only acts on tabs the browser
 //! still reports open, so it survives crashes, disconnects, ungrouped tabs, and
 //! popup children.
@@ -11,10 +11,6 @@ use crate::{db::SessionTabLedger, error::AppResult, services::browser::BrowserSe
 use browseros_core::PageId;
 use std::{collections::HashMap, time::Duration};
 use tracing::warn;
-
-/// Grace after a session finishes before its still-open tabs are closed, so the
-/// user can glance at the result before the tabs disappear.
-const CLEANUP_GRACE: Duration = Duration::from_secs(3 * 60);
 
 /// One tab the browser currently reports open.
 struct LiveTab {
@@ -43,8 +39,9 @@ pub async fn sweep_orphaned_tabs(
     session_tabs: &SessionTabLedger,
     browser: &BrowserService,
     now: i64,
+    cleanup_grace: Duration,
 ) -> AppResult<usize> {
-    let cutoff = now.saturating_sub(i64::try_from(CLEANUP_GRACE.as_millis()).unwrap_or(i64::MAX));
+    let cutoff = now.saturating_sub(i64::try_from(cleanup_grace.as_millis()).unwrap_or(i64::MAX));
     let orphaned = session_tabs.list_orphaned_owned_tabs(cutoff).await?;
     if orphaned.is_empty() {
         return Ok(0);
@@ -115,8 +112,6 @@ mod tests {
     fn closes_orphaned_live_inactive_tabs_only() {
         let orphaned = [11, 12, 13, 99];
         let live = [live(11, false), live(12, true), live(13, false)];
-        // 11 and 13 are orphaned, live, and inactive -> close; 12 is the
-        // foreground tab -> spared; 99 is no longer listed -> already gone.
         assert_eq!(tabs_to_close(&orphaned, &live), vec![11, 13]);
     }
 

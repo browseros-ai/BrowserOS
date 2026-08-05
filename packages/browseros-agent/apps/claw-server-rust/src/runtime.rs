@@ -78,6 +78,7 @@ impl AppRuntime {
                                         &state.session_tabs,
                                         &state.browser,
                                         crate::clock::now_epoch_ms(),
+                                        state.config.session_retention,
                                     )
                                     .await
                                     {
