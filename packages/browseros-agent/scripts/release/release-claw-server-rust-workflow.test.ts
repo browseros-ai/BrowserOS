@@ -79,6 +79,9 @@ describe('release-claw-server-rust workflow', () => {
 
   it('uploads only immutable version keys and attaches all draft assets', () => {
     const publish = section('  publish-versioned:', '  finalize:')
+    expect(publish).toContain('actions/setup-python@v6')
+    expect(publish).toContain('python -m pip install "boto3>=1.35.1,<2"')
+    expect(publish).not.toContain('pip install --user')
     expect(publish).toContain('Expected 5 Rust server resource zips')
     expect(publish).toContain('IfNoneMatch')
     expect(publish).toContain('status not in {409, 412}')
@@ -111,6 +114,9 @@ describe('release-claw-server-rust workflow', () => {
 
   it('moves every latest alias before publishing during finalization', () => {
     const finalize = section('  finalize:', '  publish-ota:')
+    expect(finalize).toContain('actions/setup-python@v6')
+    expect(finalize).toContain('python -m pip install awscli')
+    expect(finalize).not.toContain('pip install --user')
     expect(finalize).toContain('Expected 5 draft assets')
     expect(finalize).toContain(
       '--arg component "claw-server-rust/prod-resources"',
