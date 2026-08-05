@@ -10,11 +10,11 @@ pub use catalog::{
 };
 pub use error::Error;
 pub use mcp::{
-    AgentInfo, AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, LinkInput,
-    LinkSummary, ListLinksFilter, ListedLink, ManifestLinkEntry, ManifestServerEntry, McpManager,
-    McpServer, McpServerSpec, RescanEntry, RescanReport, ServerManifest, UnlinkInput,
-    UnlinkSummary, detect_installed_agents, is_installed, resolve_agent_mcp_config_path,
-    resolve_agent_surface,
+    AgentInfo, AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, InspectEntryInput,
+    InspectedEntry, LinkInput, LinkSummary, ListLinksFilter, ListedLink, ManifestLinkEntry,
+    ManifestServerEntry, McpManager, McpServer, McpServerSpec, MigrateServerInput,
+    MigrateServerSummary, RescanEntry, RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
+    detect_installed_agents, is_installed, resolve_agent_mcp_config_path, resolve_agent_surface,
 };
 pub use skills::{
     SkillEnvironment, SkillReconcileOutcome, SkillReconciler, SkillSpec, SkillWarning,
