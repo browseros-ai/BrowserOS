@@ -4,6 +4,22 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { AcpAgentType, AgentTarget } from '@browseros/shared/schemas/agent'
+
+export type { AcpAgentType, AgentTarget }
+
+export interface AcpAgentDefinition {
+  id: string
+  name: string
+  type: AcpAgentType
+  modelId?: string
+  reasoningEffort?: string
+  workingDirectory?: string
+  pinned: boolean
+  createdAt: number
+  updatedAt: number
+}
+
 export type AgentAdapter = 'claude' | 'codex'
 
 export type AgentPermissionMode = 'approve-all'
@@ -21,7 +37,6 @@ export interface AgentDefinition {
   sessionKey: string
   createdAt: number
   updatedAt: number
-  /** Pinned agents float to the top of the rail. Defaulted on read for legacy records. */
   pinned?: boolean
 }
 

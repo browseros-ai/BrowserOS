@@ -196,10 +196,36 @@ const currentMigrationHistory = [
     hash: '34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52',
     createdAt: 1781916712443,
   },
+  {
+    tag: '0004_sparkling_carnage',
+    hash: '76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd',
+    createdAt: 1785893663690,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
 const currentSchemaStatements = [
+  `
+    CREATE TABLE IF NOT EXISTS acp_agents (
+      id text PRIMARY KEY NOT NULL,
+      name text NOT NULL,
+      type text NOT NULL,
+      model_id text,
+      reasoning_effort text,
+      working_directory text,
+      pinned integer DEFAULT false NOT NULL,
+      created_at integer NOT NULL,
+      updated_at integer NOT NULL
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS acp_agents_updated_at_idx
+    ON acp_agents (updated_at)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS acp_agents_type_updated_at_idx
+    ON acp_agents (type, updated_at)
+  `,
   `
     CREATE TABLE IF NOT EXISTS agent_definitions (
       id text PRIMARY KEY NOT NULL,

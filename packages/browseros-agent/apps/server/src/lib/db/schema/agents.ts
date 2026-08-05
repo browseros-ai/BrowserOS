@@ -13,6 +13,28 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core'
 
+export const acpAgents = sqliteTable(
+  'acp_agents',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    type: text('type', { enum: ['claude', 'codex'] }).notNull(),
+    modelId: text('model_id'),
+    reasoningEffort: text('reasoning_effort'),
+    workingDirectory: text('working_directory'),
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('acp_agents_updated_at_idx').on(table.updatedAt),
+    index('acp_agents_type_updated_at_idx').on(table.type, table.updatedAt),
+  ],
+)
+
+export type AcpAgentRow = InferSelectModel<typeof acpAgents>
+export type NewAcpAgentRow = InferInsertModel<typeof acpAgents>
+
 export const agentDefinitions = sqliteTable(
   'agent_definitions',
   {
