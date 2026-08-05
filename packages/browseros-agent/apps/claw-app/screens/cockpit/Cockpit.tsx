@@ -3,7 +3,6 @@ import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
-import { VideoRail } from '@/components/cockpit/VideoRail'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
@@ -90,7 +89,7 @@ export function Cockpit() {
       ) : (
         <RunningGrid sessions={sessions} />
       )}
-      <RecentActivity interlude={<VideoRail />} />
+      <RecentActivity />
     </div>
   )
 }

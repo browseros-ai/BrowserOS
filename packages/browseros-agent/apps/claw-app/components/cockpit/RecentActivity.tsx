@@ -1,5 +1,4 @@
 import { ArrowRight, History } from 'lucide-react'
-import type { ReactNode } from 'react'
 import { NavLink } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { type TaskSummary, useSessions } from '@/modules/api/audit.hooks'
@@ -28,12 +27,7 @@ const HOME_TASK_LIMIT = 12
  * both rows so it doubles that height (~300px) without ballooning.
  * At mobile: everything single-column.
  */
-interface RecentActivityProps {
-  /** Rendered between the bento and the tail list (the video rail). */
-  interlude?: ReactNode
-}
-
-export function RecentActivity({ interlude }: RecentActivityProps) {
+export function RecentActivity() {
   const query = useSessions({
     variables: { limit: HOME_TASK_LIMIT },
     // Homepage feed: poll so new sessions surface without a manual refresh.
@@ -62,7 +56,6 @@ export function RecentActivity({ interlude }: RecentActivityProps) {
       ) : (
         <>
           <BentoGrid lead={lead} supporting={supporting} now={now} />
-          {interlude}
           {tail.length > 0 && <Tail tail={tail} now={now} />}
         </>
       )}
