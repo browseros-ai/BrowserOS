@@ -162,7 +162,10 @@ def _validate_recovered(
     if record.default_branch != request.default_branch or record.branch != branch:
         raise ValueError("Recovered candidate branch metadata does not match")
     _validate_sha(record.candidate_sha, "candidate_sha")
-    expected = {spec.id for spec in components_for_candidate(request.product)}
+    expected = {
+        *(spec.id for spec in components_for_candidate(request.product)),
+        "claw-onboard",
+    }
     if set(record.component_versions) != expected:
         raise ValueError("Recovered candidate component set is incomplete")
 
@@ -187,12 +190,14 @@ def ensure_candidate(
         _validate_recovered(existing, request, branch)
         return existing
 
+    committed_versions = backend.read_committed_versions(request.product)
     versions = resolve_candidate_versions(
         product_id=request.product,
-        committed_versions=backend.read_committed_versions(request.product),
+        committed_versions=committed_versions,
         allocations=backend.discover_allocations(request.product),
         candidate_id=branch,
     )
+    versions["claw-onboard"] = committed_versions["claw-onboard"]
     created = backend.create_candidate(
         request,
         branch,
@@ -406,10 +411,14 @@ class GitHubCandidateBackend:
         return tuple(allocations)
 
     def read_committed_versions(self, product: str) -> Mapping[str, str]:
-        return {
+        versions = {
             spec.id: read_component_version(self.repo_root, spec.id)
             for spec in components_for_candidate(product)
         }
+        versions["claw-onboard"] = read_component_version(
+            self.repo_root, "claw-onboard"
+        )
+        return versions
 
     def read_browser_version(self) -> str:
         path = self.repo_root / "packages/browseros/resources/BROWSEROS_VERSION"
@@ -431,7 +440,12 @@ class GitHubCandidateBackend:
             try:
                 self._git("switch", "-c", branch, cwd=worktree)
                 changed: set[Path] = set()
+                versioned_components = {
+                    spec.id for spec in components_for_candidate(request.product)
+                }
                 for component, version in versions.items():
+                    if component not in versioned_components:
+                        continue
                     changed.update(stamp_component(worktree, component, version))
                 relative = sorted(str(path.relative_to(worktree)) for path in changed)
                 self._git("add", "--", *relative, cwd=worktree)

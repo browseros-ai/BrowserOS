@@ -25,7 +25,11 @@ def candidate_record(state: str = "open") -> CandidateRecord:
         default_branch="main",
         branch=f"bot/release-browseros-{PARENT_SHA[:12]}",
         browser_version="0.31.0",
-        component_versions={"server": "0.0.128", "agent": "0.0.101.0"},
+        component_versions={
+            "server": "0.0.128",
+            "agent": "0.0.101.0",
+            "claw-onboard": "0.0.12",
+        },
         pull_request_number=42,
         pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",
         state=state,
@@ -63,7 +67,11 @@ class FakeBackend:
         return self.allocations
 
     def read_committed_versions(self, product: str):
-        return {"server": "0.0.127", "agent": "0.0.100"}
+        return {
+            "server": "0.0.127",
+            "agent": "0.0.100",
+            "claw-onboard": "0.0.12",
+        }
 
     def read_browser_version(self) -> str:
         return "0.31.0"
@@ -121,7 +129,14 @@ class CandidateEnsureTest(unittest.TestCase):
         self.assertEqual(len(self.backend.created), 1)
         _, branch, versions, browser_version = self.backend.created[0]
         self.assertEqual(branch, f"bot/release-browseros-{PARENT_SHA[:12]}")
-        self.assertEqual(versions, {"server": "0.0.128", "agent": "0.0.101.0"})
+        self.assertEqual(
+            versions,
+            {
+                "server": "0.0.128",
+                "agent": "0.0.101.0",
+                "claw-onboard": "0.0.12",
+            },
+        )
         self.assertEqual(browser_version, "0.31.0")
 
     def test_recovers_existing_candidate_without_allocating_or_mutating(self) -> None:
@@ -152,7 +167,11 @@ class CandidateEnsureTest(unittest.TestCase):
 
         self.assertEqual(
             self.backend.created[0][2],
-            {"server": "0.0.129", "agent": "0.0.102.0"},
+            {
+                "server": "0.0.129",
+                "agent": "0.0.102.0",
+                "claw-onboard": "0.0.12",
+            },
         )
 
 

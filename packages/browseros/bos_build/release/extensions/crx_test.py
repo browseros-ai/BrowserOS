@@ -7,7 +7,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from .crx import find_chrome_binary, pack_crx, pack_extension_command
+from .crx import (
+    find_chrome_binary,
+    pack_crx,
+    pack_extension_command,
+    read_crx_extension_id,
+)
 
 
 class FindChromeBinaryTest(unittest.TestCase):
@@ -154,6 +159,39 @@ class PackCrxTest(unittest.TestCase):
             pack_crx(self.dist, "KEY", "chrome", self.out, run=run)
         self.assertEqual(calls, [])
 
+
+class CrxIdentityTest(unittest.TestCase):
+    def test_reads_crx3_signed_extension_id(self):
+        extension_id = "adlpneommgkgeanpaekgoaolcpncohkf"
+        translated = extension_id.translate(
+            str.maketrans("abcdefghijklmnop", "0123456789abcdef")
+        )
+        crx_id = bytes.fromhex(translated)
+
+        def field(number, payload):
+            key = (number << 3) | 2
+            key_bytes = []
+            while key > 0x7F:
+                key_bytes.append((key & 0x7F) | 0x80)
+                key >>= 7
+            key_bytes.append(key)
+            return bytes(key_bytes) + bytes([len(payload)]) + payload
+
+        signed_data = field(1, crx_id)
+        header = field(10000, signed_data)
+        data = (
+            b"Cr24"
+            + (3).to_bytes(4, "little")
+            + len(header).to_bytes(4, "little")
+            + header
+            + b"zip"
+        )
+
+        self.assertEqual(read_crx_extension_id(data), extension_id)
+
+    def test_rejects_invalid_crx(self):
+        with self.assertRaisesRegex(ValueError, "CRX"):
+            read_crx_extension_id(b"not-a-crx")
 
 if __name__ == "__main__":
     unittest.main()
