@@ -41,4 +41,7 @@ BROWSEROS_SERVER_BUNDLE = ServerBundle(
         "rg": SignSpec("rg", "runtime"),
     },
     windows_binaries=("browseros_server.exe",),
+    source_builder="bun",
+    source_component="server",
+    runtime_binary_name="browseros_server",
 )
