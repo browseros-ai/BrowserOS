@@ -301,6 +301,39 @@ describe('AcpAgentRuntime', () => {
     ).toBe(false)
   })
 
+  it('surfaces the ACP turn failure message', async () => {
+    const fixture = await runtimeFixture({
+      runtime: new RecordingAcpRuntime({
+        results: [
+          {
+            status: 'failed',
+            error: {
+              message:
+                'Internal error: Usage credits are required for long context requests.',
+              code: 'usage_credits_required',
+            },
+          },
+        ],
+      }),
+    })
+
+    const parts = await collect(
+      await fixture.runtime.stream({
+        agent: fixture.agent,
+        conversationId: 'conversation-turn-failure',
+        messages: [textMessage('user-1', 'user', 'hello')],
+      }),
+    )
+
+    expect(parts.filter((part) => part.type === 'error')).toEqual([
+      {
+        type: 'error',
+        errorText:
+          'Internal error: Usage credits are required for long context requests.',
+      },
+    ])
+  })
+
   it('closes only the selected persistent ACP session', async () => {
     const fixture = await runtimeFixture({})
     await collect(
@@ -396,6 +429,7 @@ describe('AcpAgentRuntime', () => {
 
 interface RecordingAcpRuntimeOptions {
   turns?: AcpRuntimeEvent[][]
+  results?: AcpRuntimeTurnResult[]
   ensureError?: Error
   rejectedModes?: string[]
 }
@@ -427,15 +461,18 @@ class RecordingAcpRuntime implements AcpRuntime {
 
   startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn {
     this.startTurnCalls.push(input)
-    const events = this.options.turns?.[this.turnIndex] ?? []
+    const turnIndex = this.turnIndex
+    const events = this.options.turns?.[turnIndex] ?? []
     this.turnIndex += 1
     return {
       requestId: `request-${this.turnIndex}`,
       events: iterate(events),
-      result: Promise.resolve<AcpRuntimeTurnResult>({
-        status: 'completed',
-        stopReason: 'end_turn',
-      }),
+      result: Promise.resolve<AcpRuntimeTurnResult>(
+        this.options.results?.[turnIndex] ?? {
+          status: 'completed',
+          stopReason: 'end_turn',
+        },
+      ),
       cancel: async () => {},
       closeStream: async () => {},
     }

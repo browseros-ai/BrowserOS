@@ -6,6 +6,7 @@
 
 import { join } from 'node:path'
 import {
+  AcpxError,
   type AcpxProvider,
   type AcpxProviderSettings,
   createAcpxProvider,
@@ -142,14 +143,7 @@ export class AcpAgentRuntime {
             isAborted,
           })
         },
-        onError: (error) => {
-          logger.error('ACP agent UI stream failed', {
-            agentId: input.agent.id,
-            conversationId: input.conversationId,
-            error: error instanceof Error ? error.message : String(error),
-          })
-          return 'The ACP agent failed to respond.'
-        },
+        onError: acpUiErrorMessage,
       })
       streamStarted = true
       return releaseOnEnd(stream, () => {
@@ -387,4 +381,10 @@ function errorStream(message: string): ReadableStream<UIMessageChunk> {
       writer.write({ type: 'error', errorText: message })
     },
   })
+}
+
+function acpUiErrorMessage(error: unknown): string {
+  return error instanceof AcpxError
+    ? error.message
+    : 'The ACP agent failed to respond.'
 }
