@@ -640,6 +640,7 @@ jobs:
     uses: ./.github/workflows/release-claw-server-rust.yml
     permissions:
       contents: write
+      pull-requests: write
     with:
       mode: finalize
       version: ${{ needs.release_plan.outputs.browserclaw_server_version }}

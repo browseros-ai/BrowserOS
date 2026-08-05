@@ -98,6 +98,9 @@ describe('release-claw-server-rust workflow', () => {
   it('recovers completed targets before rebuilding missing targets', () => {
     const build = section('  build:', '  publish-versioned:')
     expect(build).toContain('Recover existing immutable target')
+    expect(build).toContain('actions/setup-python@v6')
+    expect(build).toContain('python -m pip install boto3')
+    expect(build).not.toContain('pip install --user boto3')
     expect(build).toContain('Immutable R2 object binding mismatch')
     expect(build).toContain('path.write_bytes(data)')
     expect(build).toContain("steps.recover.outputs.recovered != 'true'")
@@ -106,7 +109,7 @@ describe('release-claw-server-rust workflow', () => {
     )
   })
 
-  it('publishes then moves every latest alias during finalization', () => {
+  it('moves every latest alias before publishing during finalization', () => {
     const finalize = section('  finalize:', '  publish-ota:')
     expect(finalize).toContain('Expected 5 draft assets')
     expect(finalize).toContain(
@@ -122,8 +125,8 @@ describe('release-claw-server-rust workflow', () => {
     const publishIndex = finalize.indexOf('--draft=false')
     const latestIndex = finalize.indexOf('Copy versioned objects to latest')
     expect(tagIndex).toBeGreaterThan(verifyIndex)
-    expect(publishIndex).toBeGreaterThan(tagIndex)
-    expect(latestIndex).toBeGreaterThan(publishIndex)
+    expect(latestIndex).toBeGreaterThan(tagIndex)
+    expect(publishIndex).toBeGreaterThan(latestIndex)
   })
 
   it('packages the canonical BrowserOS skill', () => {
@@ -140,11 +143,20 @@ describe('release-claw-server-rust workflow', () => {
   })
 
   it('gates OTA publication on successful finalization', () => {
-    const ota = section('  publish-ota:')
+    const ota = section('  publish-ota:', '  reflect-version:')
     expect(ota).toContain('- finalize')
     expect(ota).toContain('inputs.publish_ota == true')
     expect(ota).toContain(
       'uv run browseros ota server release --version "$VERSION" --channel alpha --product browserclaw',
     )
+  })
+
+  it('reflects the version only after finalization', () => {
+    const reflection = section('  reflect-version:')
+    expect(reflection).toContain('- finalize')
+    expect(reflection).toContain('apps/claw-server-rust/Cargo.toml')
+    expect(reflection).toContain('Cargo.lock')
+    expect(reflection).toContain('git config user.name "github-actions[bot]"')
+    expect(reflection).toContain('gh pr create')
   })
 })
