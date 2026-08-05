@@ -31,8 +31,8 @@ live.
 | See exactly what a build will run | `browseros build --preset release --show-plan` |
 | Release BrowserOS or BrowserClaw | `gh workflow run release-browseros.yml` |
 | Make a staged release live | `browseros release publish`, then `browseros release appcast --publish` |
-| Release an extension CRX | `gh workflow run release-extensions.yml` |
-| Update extension feeds | `gh workflow run release-extension-feeds.yml` |
+| Release an extension CRX to alpha | `gh workflow run release-extensions.yml` |
+| Preview or promote extension feeds | `gh workflow run release-extension-feeds.yml` |
 | Grab today's signed mac build | Download the `nightly-browseros` / `nightly-browserclaw` prerelease |
 | Check the patch stack | `browseros dev doctor` |
 
@@ -222,30 +222,43 @@ Four extensions ship as signed CRXs: `agent`, `controller`, `bugreporter`,
 `browserclaw`. `agent` and `browserclaw` build from this repo; the other two are
 cloned from external repos. All four version independently of the browser.
 
-CRX release and feed updates are separate workflows. Release the binary first:
+The standalone workflow owns the default alpha lifecycle: it allocates the next
+version when `version` is omitted, builds and verifies the immutable CRX,
+publishes the GitHub release, commits the coherent tracked alpha snapshots, and
+uploads those exact feed files to R2.
 
 ```bash
 gh workflow run release-extensions.yml \
-  -f version=0.0.118 \
-  -f extension=agent
+  -f extension=browserclaw
+
+gh workflow run release-extensions.yml \
+  -f version=0.1.9.0 \
+  -f extension=browserclaw
 ```
 
-Then inspect a feed dry run or publish it explicitly:
+The tracked commit updates `update-manifest.alpha.xml`,
+`extensions.alpha.json`, and `bundled-manifest.xml` together. `controller` still
+releases a CRX but has no alpha entry because it is not registered in the client
+update feed. Selecting `all` requires one explicit version shared by all four
+extensions. A deferred build leaves its draft private; its later `finalize`
+dispatch performs the alpha update.
+
+Use the feed workflow for previews, repairs, or explicit production promotion:
 
 ```bash
 gh workflow run release-extension-feeds.yml \
-  -f channel=alpha \
-  -f pins='agent=0.0.118,bugreporter=54.0.0.0'
+  -f channel=prod \
+  -f pins=browserclaw=0.1.9.0
 
 gh workflow run release-extension-feeds.yml \
-  -f channel=alpha \
-  -f pins=agent=0.0.118 \
+  -f channel=prod \
+  -f pins=browserclaw=0.1.9.0 \
   -f publish=true
 ```
 
 Pins are optional; extensions not set carry over from the live manifests. The
-per-product release orchestrators upload the selected CRX and separately stage
-feed previews, but never publish live extension manifests.
+per-product browser release orchestrators still only stage extension feed
+previews; the standalone extension workflow is the automatic alpha entrypoint.
 
 Locally there are two commands, and the difference matters:
 
