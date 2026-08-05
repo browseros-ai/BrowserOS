@@ -23,6 +23,7 @@ import type {
 } from 'acpx/runtime'
 import type { UIMessage, UIMessageChunk } from 'ai'
 import {
+  AcpAgentPreparationError,
   AcpAgentRuntime,
   AcpAgentSessionBusyError,
 } from '../../../../src/lib/agents/acp/acp-agent-runtime'
@@ -279,24 +280,20 @@ describe('AcpAgentRuntime', () => {
     expect(fixture.acpRuntime.startTurnCalls[0]?.attachments).toBeUndefined()
   })
 
-  it('returns one standard error chunk and retains no session when preparation fails', async () => {
+  it('rejects with a preparation error and retains no session when preparation fails', async () => {
     const fixture = await runtimeFixture({
       runtime: new RecordingAcpRuntime({
         ensureError: new Error('native adapter is unavailable'),
       }),
     })
 
-    const parts = await collect(
-      await fixture.runtime.stream({
+    await expect(
+      fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-4',
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
-    )
-
-    expect(parts.filter((part) => part.type === 'error')).toEqual([
-      { type: 'error', errorText: 'Unable to start the ACP agent.' },
-    ])
+    ).rejects.toBeInstanceOf(AcpAgentPreparationError)
     expect(
       await fixture.runtime.close(fixture.agent.id, 'conversation-4'),
     ).toBe(false)

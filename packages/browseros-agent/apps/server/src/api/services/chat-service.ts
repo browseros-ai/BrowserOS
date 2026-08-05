@@ -10,6 +10,7 @@ import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-fil
 import {
   consumeStream,
   createAgentUIStreamResponse,
+  createUIMessageStream,
   createUIMessageStreamResponse,
   type UIMessage,
   type UIMessageChunk,
@@ -23,6 +24,7 @@ import {
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import {
+  AcpAgentPreparationError,
   AcpAgentRuntime,
   AcpAgentSessionBusyError,
   type AcpAgentStreamInput,
@@ -469,7 +471,12 @@ export class ChatService {
           { status: 409 },
         )
       }
-      throw error
+      if (!(error instanceof AcpAgentPreparationError)) throw error
+      stream = createUIMessageStream({
+        execute({ writer }) {
+          writer.write({ type: 'error', errorText: error.message })
+        },
+      })
     }
     const response = createUIMessageStreamResponse({
       stream,

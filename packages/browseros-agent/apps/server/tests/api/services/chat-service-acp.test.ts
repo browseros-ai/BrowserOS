@@ -8,6 +8,7 @@ import { describe, expect, it, mock } from 'bun:test'
 import type { UIMessageChunk } from 'ai'
 import { ChatService } from '../../../src/api/services/chat-service'
 import {
+  AcpAgentPreparationError,
   AcpAgentSessionBusyError,
   type AcpAgentStreamInput,
 } from '../../../src/lib/agents/acp/acp-agent-runtime'
@@ -27,13 +28,23 @@ function acpAgent(type: AcpAgentDefinition['type'] = 'claude') {
 }
 
 function deps(
-  options: { agent?: AcpAgentDefinition | null; streamError?: Error } = {},
+  options: {
+    agent?: AcpAgentDefinition | null
+    streamError?: Error
+    firstStreamError?: Error
+  } = {},
 ) {
   const calls: AcpAgentStreamInput[] = []
   const close = mock(async () => true)
+  let streamAttempt = 0
   const acpRuntime = {
     async stream(input: AcpAgentStreamInput) {
-      if (options.streamError) throw options.streamError
+      const error =
+        streamAttempt === 0 && options.firstStreamError
+          ? options.firstStreamError
+          : options.streamError
+      streamAttempt += 1
+      if (error) throw error
       calls.push(input)
       await input.onFinish?.({
         messages: [
@@ -174,6 +185,48 @@ describe('ChatService ACP dispatch', () => {
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({
       error: 'An agent turn is already running',
+    })
+  })
+
+  it('rolls back a turn when ACP preparation fails', async () => {
+    const fixture = deps({
+      firstStreamError: new AcpAgentPreparationError(),
+    })
+    const conversationId = crypto.randomUUID()
+    const abortSignal = new AbortController().signal
+
+    const failedResponse = await fixture.service.processMessage(
+      {
+        target: { type: 'claude', agentId: AGENT_ID },
+        conversationId,
+        message: 'failed turn',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+      },
+      abortSignal,
+    )
+    expect(await failedResponse.text()).toContain(
+      'Unable to start the ACP agent.',
+    )
+
+    const retryResponse = await fixture.service.processMessage(
+      {
+        target: { type: 'claude', agentId: AGENT_ID },
+        conversationId,
+        message: 'retry turn',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+      },
+      abortSignal,
+    )
+    expect(await retryResponse.text()).toContain('"delta":"done"')
+    expect(fixture.calls).toHaveLength(1)
+    expect(fixture.calls[0]?.messages).toHaveLength(1)
+    expect(fixture.calls[0]?.messages[0]?.parts).toContainEqual({
+      type: 'text',
+      text: '<USER_QUERY>\nretry turn\n</USER_QUERY>',
     })
   })
 })

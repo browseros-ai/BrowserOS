@@ -15,7 +15,6 @@ import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { createFileSessionStore } from 'acpx/runtime'
 import {
   convertToModelMessages,
-  createUIMessageStream,
   stepCountIs,
   streamText,
   type UIMessage,
@@ -61,6 +60,13 @@ export class AcpAgentSessionBusyError extends Error {
   constructor() {
     super('An ACP turn is already running for this conversation')
     this.name = 'AcpAgentSessionBusyError'
+  }
+}
+
+export class AcpAgentPreparationError extends Error {
+  constructor() {
+    super('Unable to start the ACP agent.')
+    this.name = 'AcpAgentPreparationError'
   }
 }
 
@@ -159,7 +165,7 @@ export class AcpAgentRuntime {
         conversationId: input.conversationId,
         error: error instanceof Error ? error.message : String(error),
       })
-      return errorStream('Unable to start the ACP agent.')
+      throw new AcpAgentPreparationError()
     } finally {
       if (!streamStarted) this.activeTurns.delete(sessionKey)
     }
@@ -373,14 +379,6 @@ function latestUserTurn(messages: UIMessage[]): UIMessage[] {
     if (message?.role === 'user') return [message]
   }
   return []
-}
-
-function errorStream(message: string): ReadableStream<UIMessageChunk> {
-  return createUIMessageStream({
-    execute({ writer }) {
-      writer.write({ type: 'error', errorText: message })
-    },
-  })
 }
 
 function acpUiErrorMessage(error: unknown): string {
