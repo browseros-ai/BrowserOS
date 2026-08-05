@@ -38,7 +38,6 @@ const NUDGE_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
 
 function parseNudgeOutput(output: unknown): NudgeData | null {
   try {
-    // output is { content: [{ type: "text", text: "JSON..." }], isError: false }
     const result = output as {
       content?: Array<{ type: string; text?: string }>
       isError?: boolean
@@ -56,7 +55,7 @@ function parseNudgeOutput(output: unknown): NudgeData | null {
       return parsed as NudgeData
     }
   } catch {
-    // ignore parse errors
+    return null
   }
   return null
 }
@@ -112,15 +111,6 @@ export const getMessageSegments = (
         input: Record<string, unknown>
         output: unknown
         approval?: { id: string; approved?: boolean; reason?: string }
-      }
-      // Phantom acpx-ai-provider tool-input-* stream emitted under a fresh
-      // blockId ("acpx-N") that never reconciles with the real tool-call
-      // id. The translator emits a paired dynamic-tool part with the real
-      // id and full input + output, so dropping the phantom keeps the UI
-      // honest until upstream fixes the id mismatch.
-      // See: https://github.com/DaniAkash/acpx/issues/37
-      if (toolPart.toolCallId?.startsWith('acpx-')) {
-        continue
       }
       const toolName =
         part.type === 'dynamic-tool'
