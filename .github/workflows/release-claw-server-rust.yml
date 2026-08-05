@@ -1,6 +1,3 @@
-# Required secrets: CLAW_POSTHOG_KEY, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
-# R2_SECRET_ACCESS_KEY, R2_BUCKET. SPARKLE_PRIVATE_KEY is also required when
-# publish_ota is true.
 name: "Release: BrowserClaw Server"
 
 on:
@@ -10,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version; defaults to apps/claw-server-rust/Cargo.toml at ref"
+        description: "Release version; allocated automatically when omitted"
         required: false
         type: string
         default: ""
@@ -20,27 +17,47 @@ on:
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after finalization"
         required: false
         type: boolean
         default: false
   workflow_call:
     inputs:
+      mode:
+        description: "Build a prepared release or finalize an existing one"
+        required: false
+        type: string
+        default: "build"
+      defer_finalize:
+        description: "Leave a successful build private for a later finalize call"
+        required: false
+        type: boolean
+        default: false
       version:
-        description: "Release version; defaults to apps/claw-server-rust/Cargo.toml at ref"
+        description: "Explicit release version; required for finalize mode"
         required: false
         type: string
         default: ""
       ref:
-        description: "Git ref to release; defaults to the repository default branch"
+        description: "Git ref to release; required for finalize mode"
         required: false
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel BrowserClaw server OTA artifacts after R2 upload"
+        description: "Publish alpha-channel BrowserClaw server OTA artifacts after finalization"
         required: false
         type: boolean
         default: false
+    outputs:
+      version:
+        description: "Prepared BrowserClaw server version"
+        value: ${{ jobs.prepare.outputs.version }}
+      tag:
+        description: "Prepared BrowserClaw server tag"
+        value: ${{ jobs.prepare.outputs.tag }}
+      release_sha:
+        description: "Immutable source commit"
+        value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
       CLAW_POSTHOG_KEY:
         required: true
@@ -63,15 +80,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  prepare:
     if: github.event_name != 'push' || github.event.deleted != true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
+      mode: ${{ steps.lifecycle.outputs.mode }}
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       release_sha: ${{ steps.release.outputs.release_sha }}
       previous_tag: ${{ steps.release.outputs.previous_tag }}
+      reservation: ${{ steps.release.outputs.reservation }}
 
     steps:
       - uses: actions/checkout@v7
@@ -79,12 +98,43 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
 
+      - name: Validate lifecycle inputs
+        id: validate
+        env:
+          MODE: ${{ inputs.mode || 'build' }}
+          REF: ${{ inputs.ref || '' }}
+          VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
+            echo "::error::mode must be build or finalize"
+            exit 1
+          fi
+          if [ "$MODE" = "finalize" ] && { [ -z "$VERSION" ] || [ -z "$REF" ]; }; then
+            echo "::error::finalize mode requires explicit version and ref inputs"
+            exit 1
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Read allocated GitHub releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_RECORDS: ${{ runner.temp }}/claw-server-release-records.json
+        run: |
+          set -euo pipefail
+          pages="${RUNNER_TEMP}/claw-server-release-pages.json"
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
+          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
+          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
+
       - name: Resolve release
         id: release
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -93,7 +143,24 @@ jobs:
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
-            --release-ref HEAD
+            --release-ref HEAD \
+            --release-records "$RELEASE_RECORDS"
+
+      - name: Resolve effective lifecycle mode
+        id: lifecycle
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ steps.validate.outputs.mode }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RESERVATION: ${{ steps.release.outputs.reservation }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] && [ "$RESERVATION" = "tag" ] && \
+            [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = "false" ]; then
+            MODE="finalize"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -121,7 +188,8 @@ jobs:
             --previous-tag "$PREVIOUS_TAG" \
             --release-tag "$RELEASE_TAG"
 
-      - name: Create GitHub release
+      - name: Reserve private draft
+        if: ${{ steps.lifecycle.outputs.mode == 'build' && steps.release.outputs.reservation != 'tag' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -130,25 +198,29 @@ jobs:
           set -euo pipefail
 
           TITLE="BrowserClaw Server - v$VERSION"
+          RELEASE_SHA="${{ steps.release.outputs.release_sha }}"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not a reusable draft for $RELEASE_SHA"
+              exit 1
+            fi
             gh release edit "$RELEASE_TAG" \
               --title "$TITLE" \
               --notes-file /tmp/release-notes.md
           else
             gh release create "$RELEASE_TAG" \
-              --verify-tag \
+              --draft \
+              --target "$RELEASE_SHA" \
               --title "$TITLE" \
               --notes-file /tmp/release-notes.md
           fi
 
-          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$RELEASE_TAG" --draft=false
-          fi
-
   cargo-test:
-    needs: release
-    if: needs.release.outputs.version != ''
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -156,7 +228,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Setup Rust
         run: |
@@ -171,8 +243,8 @@ jobs:
         run: cargo test --workspace --locked
 
   harness-integrations-test:
-    needs: release
-    if: needs.release.outputs.version != ''
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
     name: Harness integrations / ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
@@ -187,7 +259,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Setup Rust
         shell: bash
@@ -205,10 +277,10 @@ jobs:
 
   build:
     needs:
-      - release
+      - prepare
       - cargo-test
       - harness-integrations-test
-    if: needs.release.outputs.version != ''
+    if: needs.prepare.outputs.mode == 'build'
     name: Build / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -237,16 +309,20 @@ jobs:
             runner: windows-latest
             binary_ext: ".exe"
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      VERSION: ${{ needs.prepare.outputs.version }}
       BROWSEROS_TARGET: ${{ matrix.target }}
       RUST_TARGET: ${{ matrix.rust_target }}
       BINARY_EXT: ${{ matrix.binary_ext }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
 
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
@@ -261,7 +337,73 @@ jobs:
             echo "PYTHON_BIN=python3" >> "$GITHUB_ENV"
           fi
 
+      - name: Recover existing immutable target
+        id: recover
+        shell: bash
+        env:
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          "$PYTHON_BIN" -m pip install --user boto3
+          "$PYTHON_BIN" <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          import boto3
+          from botocore.exceptions import ClientError
+
+          client = boto3.client(
+              "s3",
+              endpoint_url=os.environ["R2_ENDPOINT"],
+              region_name="auto",
+              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+          )
+          bucket = os.environ["R2_BUCKET"]
+          version = os.environ["VERSION"]
+          target = os.environ["BROWSEROS_TARGET"]
+          release_sha = os.environ["RELEASE_SHA"]
+          name = f"browseros-claw-server-rust-resources-{target}.zip"
+          key = f"claw-server-rust/prod-resources/{version}/{name}"
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          try:
+              response = client.get_object(Bucket=bucket, Key=key)
+          except ClientError as error:
+              code = error.response.get("Error", {}).get("Code")
+              status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+              if code in {"NoSuchKey", "404"} or status == 404:
+                  with output.open("a") as handle:
+                      print("recovered=false", file=handle)
+                  raise SystemExit(0)
+              raise
+
+          data = response["Body"].read()
+          metadata = {
+              name.lower(): value for name, value in response.get("Metadata", {}).items()
+          }
+          expected = {
+              "component": "claw-server-rust/prod-resources",
+              "release-sha": release_sha,
+              "version": version,
+              "target": target,
+              "sha256": hashlib.sha256(data).hexdigest(),
+          }
+          for field, value in expected.items():
+              if metadata.get(field) != value:
+                  raise SystemExit(f"Immutable R2 object binding mismatch for {key}: {field}")
+
+          path = Path("packages/browseros-agent/dist/prod/claw-server-rust") / name
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(data)
+          with output.open("a") as handle:
+              print("recovered=true", file=handle)
+              print(f"zip_path={path.resolve()}", file=handle)
+          print(f"Recovered {key}")
+          PY
+
       - name: Setup Rust
+        if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -272,6 +414,7 @@ jobs:
           cargo --version
 
       - name: Stamp release version
+        if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -310,6 +453,7 @@ jobs:
           PY
 
       - name: Build Rust binary
+        if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         working-directory: packages/browseros-agent
         env:
@@ -335,6 +479,7 @@ jobs:
           PY
 
       - name: Verify stamped binary version
+        if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         working-directory: packages/browseros-agent
         run: |
@@ -348,6 +493,7 @@ jobs:
 
       - name: Package artifact zip
         id: package
+        if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -358,7 +504,6 @@ jobs:
           import shutil
           import stat
           import zipfile
-          from datetime import datetime, timezone
           from pathlib import Path
 
           repo = Path(os.environ["GITHUB_WORKSPACE"])
@@ -393,11 +538,10 @@ jobs:
               if path.is_file() and path.name != "artifact-metadata.json"
           )
           metadata = {
+              "component": "claw-server-rust/prod-resources",
               "version": version,
               "target": target,
-              "generatedAt": datetime.now(timezone.utc)
-              .isoformat(timespec="milliseconds")
-              .replace("+00:00", "Z"),
+              "releaseSha": os.environ["RELEASE_SHA"],
               "files": [
                   {
                       "path": path.relative_to(stage_root).as_posix(),
@@ -457,36 +601,31 @@ jobs:
                   )
           PY
         env:
-          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path || steps.recover.outputs.zip_path }}
 
       - name: Upload target zip artifact
         uses: actions/upload-artifact@v7
         with:
           name: claw-server-rust-${{ matrix.target }}
-          path: ${{ steps.package.outputs.zip_path }}
+          path: ${{ steps.package.outputs.zip_path || steps.recover.outputs.zip_path }}
           if-no-files-found: error
 
-  publish:
+  publish-versioned:
     needs:
-      - release
+      - prepare
       - build
-    if: needs.release.outputs.version != ''
+    if: needs.prepare.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
     env:
-      VERSION: ${{ needs.release.outputs.version }}
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AWS_EC2_METADATA_DISABLED: "true"
-      AWS_PAGER: ""
-
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -494,115 +633,264 @@ jobs:
           path: dist/claw-server-rust
           merge-multiple: true
 
-      - name: Preflight required secrets
+      - name: Install R2 client
+        run: python3 -m pip install --user boto3
+
+      - name: Upload immutable Rust server resources
+        env:
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          required=(
-            R2_ACCOUNT_ID
-            R2_ACCESS_KEY_ID
-            R2_SECRET_ACCESS_KEY
-            R2_BUCKET
-          )
-          missing=()
-          for name in "${required[@]}"; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
+          python3 <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
 
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Missing required secret(s): ${missing[*]}"
+          import boto3
+          from botocore.exceptions import ClientError
+
+          client = boto3.client(
+              "s3",
+              endpoint_url=os.environ["R2_ENDPOINT"],
+              region_name="auto",
+              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+          )
+          bucket = os.environ["R2_BUCKET"]
+          version = os.environ["VERSION"]
+          release_sha = os.environ["RELEASE_SHA"]
+          targets = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+
+          def existing_object(key: str):
+              try:
+                  response = client.get_object(Bucket=bucket, Key=key)
+                  return (
+                      response["Body"].read(),
+                      {
+                          name.lower(): value
+                          for name, value in response.get("Metadata", {}).items()
+                      },
+                  )
+              except ClientError as error:
+                  code = error.response.get("Error", {}).get("Code")
+                  status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                  if code in {"NoSuchKey", "404"} or status == 404:
+                      return None
+                  raise
+
+          def canonical_bytes(key: str, target: str) -> bytes | None:
+              existing = existing_object(key)
+              if existing is None:
+                  return None
+              data, metadata = existing
+              expected = {
+                  "component": "claw-server-rust/prod-resources",
+                  "release-sha": release_sha,
+                  "version": version,
+                  "target": target,
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              }
+              for field, value in expected.items():
+                  if metadata.get(field) != value:
+                      raise SystemExit(
+                          f"Immutable R2 object binding mismatch for {key}: {field}"
+                      )
+              return data
+
+          for target in targets:
+              path = Path(f"dist/claw-server-rust/browseros-claw-server-rust-resources-{target}.zip")
+              if not path.is_file():
+                  raise SystemExit(f"Missing Rust server resource zip: {path}")
+              data = path.read_bytes()
+              key = f"claw-server-rust/prod-resources/{version}/{path.name}"
+              existing = canonical_bytes(key, target)
+              if existing is not None:
+                  path.write_bytes(existing)
+                  print(f"{'Reused' if existing == data else 'Recovered'} {key}")
+                  continue
+              digest = hashlib.sha256(data).hexdigest()
+              try:
+                  client.put_object(
+                      Bucket=bucket,
+                      Key=key,
+                      Body=data,
+                      ContentType="application/zip",
+                      IfNoneMatch="*",
+                      Metadata={
+                          "component": "claw-server-rust/prod-resources",
+                          "release-sha": release_sha,
+                          "version": version,
+                          "target": target,
+                          "sha256": digest,
+                      },
+                  )
+              except ClientError as error:
+                  status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                  if status not in {409, 412}:
+                      raise
+                  existing = canonical_bytes(key, target)
+                  if existing is None:
+                      raise
+                  path.write_bytes(existing)
+                  print(f"Recovered {key} after concurrent upload")
+                  continue
+              print(f"Uploaded {key}")
+          PY
+
+      - name: Attach zips to private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist/claw-server-rust -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
+          if [ "${#assets[@]}" -ne 5 ]; then
+            echo "::error::Expected 5 Rust server resource zips, found ${#assets[@]}"
             exit 1
           fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "BrowserClaw Server - v$VERSION"
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+  finalize:
+    needs:
+      - prepare
+      - publish-versioned
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.publish-versioned.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RESERVATION: ${{ needs.prepare.outputs.reservation }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Install AWS CLI
         run: |
           python3 -m pip install --user awscli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Upload Rust server resource zips to R2
+      - name: Verify prepared release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          release="$(gh release view "$RELEASE_TAG" --json assets,isDraft,targetCommitish)"
+          asset_count="$(jq '[.assets[] | select(.name | test("^browseros-claw-server-rust-resources-(darwin-arm64|darwin-x64|linux-arm64|linux-x64|windows-x64)\\.zip$"))] | length' <<< "$release")"
+          if [ "$asset_count" -ne 5 ]; then
+            echo "::error::Expected 5 draft assets, found $asset_count"
+            exit 1
+          fi
+          if [ "$RESERVATION" != "tag" ]; then
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not the prepared draft for $RELEASE_SHA"
+              exit 1
+            fi
+          fi
+          artifact_dir="$(mktemp -d)"
+          mkdir -p "$artifact_dir/draft"
+          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          for target in "${targets[@]}"; do
+            name="browseros-claw-server-rust-resources-${target}.zip"
+            key="claw-server-rust/prod-resources/${VERSION}/${name}"
+            metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" --query Metadata --output json)"
+            if ! jq -e \
+              --arg component "claw-server-rust/prod-resources" \
+              --arg release_sha "$RELEASE_SHA" \
+              --arg target "$target" \
+              --arg version "$VERSION" \
+              '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+              <<< "$metadata" >/dev/null; then
+              echo "::error::Invalid immutable R2 binding for $key"
+              exit 1
+            fi
+            canonical="$artifact_dir/r2-${name}"
+            aws s3api get-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" "$canonical" >/dev/null
+            canonical_sha="$(sha256sum "$canonical" | cut -d ' ' -f1)"
+            if [ "$canonical_sha" != "$(jq -r '.sha256' <<< "$metadata")" ]; then
+              echo "::error::Canonical R2 checksum does not match its binding for $key"
+              exit 1
+            fi
+            gh release download "$RELEASE_TAG" --pattern "$name" --dir "$artifact_dir/draft"
+            draft_sha="$(sha256sum "$artifact_dir/draft/$name" | cut -d ' ' -f1)"
+            if [ "$draft_sha" != "$canonical_sha" ]; then
+              echo "::error::Draft asset does not match canonical R2 object: $name"
+              exit 1
+            fi
+          done
+
+      - name: Create annotated release tag
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --prune
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ] || [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not the expected annotated source tag"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "BrowserClaw Server - v$VERSION" "$RELEASE_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+      - name: Publish private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
+      - name: Copy versioned objects to latest
         env:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
           targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
           for target in "${targets[@]}"; do
-            file="dist/claw-server-rust/browseros-claw-server-rust-resources-${target}.zip"
-            if [ ! -f "$file" ]; then
-              echo "::error::Missing Rust server resource zip: $file"
+            name="browseros-claw-server-rust-resources-${target}.zip"
+            source="claw-server-rust/prod-resources/${VERSION}/${name}"
+            destination="claw-server-rust/prod-resources/latest/${name}"
+            aws s3api copy-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --copy-source "$R2_BUCKET/$source" --metadata-directive COPY --key "$destination" >/dev/null
+            metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$destination" --query Metadata --output json)"
+            if ! jq -e \
+              --arg component "claw-server-rust/prod-resources" \
+              --arg release_sha "$RELEASE_SHA" \
+              --arg target "$target" \
+              --arg version "$VERSION" \
+              '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+              <<< "$metadata" >/dev/null; then
+              echo "::error::Latest R2 binding was not preserved for $destination"
               exit 1
             fi
-
-            for channel in "$VERSION" latest; do
-              key="claw-server-rust/prod-resources/${channel}/$(basename "$file")"
-              aws s3api put-object \
-                --endpoint-url "$R2_ENDPOINT" \
-                --region auto \
-                --bucket "$R2_BUCKET" \
-                --key "$key" \
-                --body "$file" \
-                --content-type application/zip >/dev/null
-              echo "Uploaded $key"
-            done
           done
-
-      - name: Attach zips to GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          mapfile -t assets < <(find dist/claw-server-rust -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
-          if [ "${#assets[@]}" -ne 5 ]; then
-            echo "::error::Expected 5 Rust server resource zips, found ${#assets[@]}"
-            printf 'Found asset: %s\n' "${assets[@]}"
-            exit 1
-          fi
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
-
-      - name: Verify CDN objects
-        run: |
-          set -euo pipefail
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
-          for channel in "$VERSION" latest; do
-            for target in "${targets[@]}"; do
-              url="https://cdn.browseros.com/claw-server-rust/prod-resources/${channel}/browseros-claw-server-rust-resources-${target}.zip"
-              curl --fail --silent --show-error --head --retry 5 --retry-delay 10 "$url" >/dev/null
-              echo "Verified $url"
-            done
-          done
-
-      - name: Summarize published resource keys
-        run: |
-          set -euo pipefail
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
-          {
-            echo "### BrowserClaw Server Rust resource publish"
-            echo
-            echo "- Version: \`$VERSION\`"
-            echo "- GitHub release: \`$RELEASE_TAG\`"
-            echo "- Upload behavior: wrote versioned keys and repointed latest keys"
-            echo
-            echo "Latest CDN URLs:"
-            for target in "${targets[@]}"; do
-              echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-${target}.zip"
-            done
-            echo
-            echo "Versioned CDN URLs:"
-            for target in "${targets[@]}"; do
-              echo "- https://cdn.browseros.com/claw-server-rust/prod-resources/${VERSION}/browseros-claw-server-rust-resources-${target}.zip"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
 
   publish-ota:
     needs:
-      - release
-      - publish
-    if: ${{ inputs.publish_ota == true && needs.release.outputs.version != '' }}
+      - prepare
+      - finalize
+    if: ${{ needs.finalize.result == 'success' && inputs.publish_ota == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.prepare.outputs.version }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -612,7 +900,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Preflight OTA signing key
         run: |

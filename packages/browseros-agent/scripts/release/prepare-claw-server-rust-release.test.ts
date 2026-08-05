@@ -104,8 +104,18 @@ async function prepare(
     eventName: 'push' | 'workflow_dispatch' | 'workflow_call'
     refName?: string
     requestedVersion?: string
+    releaseRecords?: Array<{
+      tag_name: string
+      draft: boolean
+      target_commitish: string
+    }>
   },
 ) {
+  const releaseRecordsPath = join(dir, '.release-records.json')
+  writeFileSync(
+    releaseRecordsPath,
+    `${JSON.stringify(options.releaseRecords ?? [])}\n`,
+  )
   return run(dir, [
     prepareClawServerRustRelease,
     '--event-name',
@@ -118,6 +128,8 @@ async function prepare(
     options.requestedVersion ?? '',
     '--release-ref',
     'HEAD',
+    '--release-records',
+    releaseRecordsPath,
   ])
 }
 
@@ -141,10 +153,18 @@ describe('prepare-claw-server-rust-release', () => {
         tag: 'claw-server/v0.0.13',
         release_sha: mainBefore,
         previous_tag: 'claw-server/v0.0.12',
+        reservation: 'create',
       })
-      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
-        mainBefore,
-      )
+      expect(
+        (
+          await run(bareDir, [
+            'git',
+            'show-ref',
+            '--verify',
+            'refs/tags/claw-server/v0.0.13',
+          ])
+        ).code,
+      ).not.toBe(0)
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(bareDir, { recursive: true, force: true })
@@ -165,10 +185,8 @@ describe('prepare-claw-server-rust-release', () => {
         version: '0.0.13',
         tag: 'claw-server/v0.0.13',
         release_sha: releaseSha,
+        reservation: 'create',
       })
-      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
-        releaseSha,
-      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(bareDir, { recursive: true, force: true })
@@ -189,10 +207,8 @@ describe('prepare-claw-server-rust-release', () => {
         version: '0.0.13',
         tag: 'claw-server/v0.0.13',
         release_sha: releaseSha,
+        reservation: 'create',
       })
-      expect(await revParse(bareDir, 'claw-server/v0.0.13^{commit}')).toBe(
-        releaseSha,
-      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(bareDir, { recursive: true, force: true })
@@ -219,6 +235,37 @@ describe('prepare-claw-server-rust-release', () => {
         tag: 'claw-server/v0.0.13',
         previous_tag: 'claw-server/v0.0.12',
       })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(bareDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects finalizing a prepared Rust server older than a public release', async () => {
+    const { dir, bareDir } = await initFixture('0.0.13')
+    try {
+      const releaseSha = await revParse(dir, 'HEAD')
+      const result = await prepare(dir, {
+        eventName: 'workflow_call',
+        requestedVersion: '0.0.14',
+        releaseRecords: [
+          {
+            tag_name: 'claw-server/v0.0.14',
+            draft: true,
+            target_commitish: releaseSha,
+          },
+          {
+            tag_name: 'claw-server/v0.0.15',
+            draft: false,
+            target_commitish: 'newer-source',
+          },
+        ],
+      })
+
+      expect(result.code).toBe(1)
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        'Release version 0.0.14 is older than newest public claw server version 0.0.15 (claw-server/v0.0.15)',
+      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(bareDir, { recursive: true, force: true })

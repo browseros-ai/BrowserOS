@@ -61,7 +61,14 @@ async function prepare(
   eventName: 'push' | 'workflow_dispatch' | 'workflow_call',
   version = '',
   refName = 'main',
+  releaseRecords: Array<{
+    tag_name: string
+    draft: boolean
+    target_commitish: string
+  }> = [],
 ) {
+  const releaseRecordsPath = join(dir, '.release-records.json')
+  writeFileSync(releaseRecordsPath, `${JSON.stringify(releaseRecords)}\n`)
   return await command(dir, [
     resolver,
     '--event-name',
@@ -72,11 +79,13 @@ async function prepare(
     refName,
     '--requested-version',
     version,
+    '--release-records',
+    releaseRecordsPath,
   ])
 }
 
 describe('prepare-claw-onboard-release', () => {
-  it('creates a manual onboarding tag', async () => {
+  it('resolves a manual onboarding version without creating a tag', async () => {
     const { dir, origin } = await fixture('0.0.2')
     try {
       const result = await prepare(dir, 'workflow_dispatch', '0.0.3')
@@ -84,16 +93,18 @@ describe('prepare-claw-onboard-release', () => {
       expect(outputs(result.stdout)).toMatchObject({
         version: '0.0.3',
         tag: 'claw-onboard/v0.0.3',
+        reservation: 'create',
       })
       expect(
         (
-          await mustRun(origin, [
+          await command(origin, [
             'git',
-            'rev-parse',
-            'claw-onboard/v0.0.3^{commit}',
+            'show-ref',
+            '--verify',
+            'refs/tags/claw-onboard/v0.0.3',
           ])
-        ).trim(),
-      ).toBe((await mustRun(dir, ['git', 'rev-parse', 'HEAD'])).trim())
+        ).code,
+      ).not.toBe(0)
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(origin, { recursive: true, force: true })
@@ -108,6 +119,7 @@ describe('prepare-claw-onboard-release', () => {
       expect(outputs(result.stdout)).toMatchObject({
         version: '0.0.4',
         tag: 'claw-onboard/v0.0.4',
+        reservation: 'create',
       })
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -133,6 +145,35 @@ describe('prepare-claw-onboard-release', () => {
         version: '0.0.4',
         tag: 'claw-onboard/v0.0.4',
       })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(origin, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects finalizing prepared onboarding older than a public release', async () => {
+    const { dir, origin } = await fixture('0.0.4')
+    try {
+      const releaseSha = (
+        await mustRun(dir, ['git', 'rev-parse', 'HEAD'])
+      ).trim()
+      const result = await prepare(dir, 'workflow_call', '0.0.5', 'main', [
+        {
+          tag_name: 'claw-onboard/v0.0.5',
+          draft: true,
+          target_commitish: releaseSha,
+        },
+        {
+          tag_name: 'claw-onboard/v0.0.6',
+          draft: false,
+          target_commitish: 'newer-source',
+        },
+      ])
+
+      expect(result.code).toBe(1)
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        'Release version 0.0.5 is older than newest public claw onboarding version 0.0.6 (claw-onboard/v0.0.6)',
+      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
       rmSync(origin, { recursive: true, force: true })

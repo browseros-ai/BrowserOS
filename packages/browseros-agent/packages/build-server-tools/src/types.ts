@@ -22,6 +22,7 @@ export interface BuildArgs {
   targets: BuildTarget[]
   manifestPath: string
   upload: boolean
+  versionedOnly: boolean
   ci: boolean
 }
 
@@ -75,6 +76,7 @@ export interface AssetBuildProductDescriptor extends ProductBuildSpec {
 
 export interface AssetBuildArgs {
   upload: boolean
+  versionedOnly: boolean
   ci: boolean
 }
 

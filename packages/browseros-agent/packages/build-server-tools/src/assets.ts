@@ -10,23 +10,26 @@ import { runCommand } from './command'
 import { loadBuildConfig } from './config'
 import { log } from './log'
 import { writeArtifactMetadata } from './metadata'
-import { createR2Client, joinObjectKey, uploadFileToObject } from './r2'
+import {
+  createR2Client,
+  joinObjectKey,
+  recoverImmutableFileFromObject,
+  uploadFileToObject,
+  uploadImmutableFileToObject,
+} from './r2'
 import type {
   AssetBuildProductDescriptor,
   R2Config,
   StagedAssetArtifact,
 } from './types'
 
-// Static asset bundles are platform-independent, so a single artifact stands
-// in for the per-target artifacts of the binary flow.
 export const ASSET_TARGET_ID = 'universal'
 
 export interface AssetUploadResult {
-  latestR2Key: string
+  latestR2Key?: string
   versionR2Key: string
 }
 
-/** Stages the built assets directory as a `resources/` artifact with metadata. */
 export async function stageAssetArtifact(
   product: AssetBuildProductDescriptor,
   version: string,
@@ -60,7 +63,6 @@ export async function stageAssetArtifact(
   return { rootDir, resourcesDir, metadataPath }
 }
 
-/** Zips the staged asset artifact without a target suffix. */
 export async function archiveAssetArtifact(
   artifact: StagedAssetArtifact,
   product: AssetBuildProductDescriptor,
@@ -73,22 +75,38 @@ export async function archiveAssetArtifact(
   return zipPath
 }
 
-/** Uploads the asset zip under the latest and versioned keys. */
 export async function uploadAssetArchive(
   zipPath: string,
   version: string,
   client: S3Client,
   r2: R2Config,
+  options: { releaseSha?: string; versionedOnly?: boolean } = {},
 ): Promise<AssetUploadResult> {
+  if (options.versionedOnly && !options.releaseSha) {
+    throw new Error('releaseSha is required for versioned-only uploads')
+  }
   const fileName = basename(zipPath)
   const latestR2Key = joinObjectKey(r2.uploadPrefix, 'latest', fileName)
   const versionR2Key = joinObjectKey(r2.uploadPrefix, version, fileName)
-  await uploadFileToObject(client, r2, latestR2Key, zipPath)
-  await uploadFileToObject(client, r2, versionR2Key, zipPath)
-  return { latestR2Key, versionR2Key }
+  await uploadImmutableFileToObject(client, r2, versionR2Key, zipPath, {
+    identity: options.releaseSha
+      ? {
+          component: r2.uploadPrefix,
+          releaseSha: options.releaseSha,
+          target: ASSET_TARGET_ID,
+          version,
+        }
+      : undefined,
+  })
+  if (!options.versionedOnly) {
+    await uploadFileToObject(client, r2, latestR2Key, zipPath)
+  }
+  return {
+    latestR2Key: options.versionedOnly ? undefined : latestR2Key,
+    versionR2Key,
+  }
 }
 
-/** Runs the descriptor-driven production asset build from a wrapper script. */
 export async function runProdAssetBuild(
   product: AssetBuildProductDescriptor,
   argv: string[],
@@ -103,55 +121,88 @@ export async function runProdAssetBuild(
     ci: args.ci,
     requireR2,
   })
+  const releaseSha = process.env.RELEASE_SHA?.trim()
+  if (args.versionedOnly && !releaseSha) {
+    throw new Error('RELEASE_SHA is required for versioned-only uploads')
+  }
+  const r2 = buildConfig.r2
+  if (args.upload && !r2) {
+    throw new Error(`R2 configuration is required for ${product.label} uploads`)
+  }
+  const client = args.upload && r2 ? createR2Client(r2) : null
 
   log.header(`Building ${product.label} artifacts v${buildConfig.version}`)
   log.info(`Mode: ${args.ci ? 'ci' : 'full'}`)
 
-  const [command, ...commandArgs] = product.buildCommand
-  if (!command) {
-    throw new Error(`Missing build command for ${product.label}`)
-  }
-  log.step(`Running ${product.buildCommand.join(' ')}`)
-  // Unlike the binary flow, inline env reaches the asset build as process
-  // env — it must win over ambient values (e.g. NODE_ENV=test under bun
-  // test) so the artifact is always a production build.
-  await runCommand(
-    command,
-    commandArgs,
-    { ...buildConfig.processEnv, ...buildConfig.envVars },
-    join(rootDir, product.packageDir),
-  )
-
-  log.step('Staging assets')
-  const artifact = await stageAssetArtifact(
-    product,
-    buildConfig.version,
-    rootDir,
-  )
-  const zipPath = await archiveAssetArtifact(artifact, product)
-
-  if (args.upload) {
-    if (!buildConfig.r2) {
-      throw new Error(
-        `R2 configuration is required for ${product.label} uploads`,
+  try {
+    const distRoot = isAbsolute(product.distRoot)
+      ? product.distRoot
+      : resolve(rootDir, product.distRoot)
+    const zipPath = join(distRoot, `${product.archiveBaseName}.zip`)
+    if (args.versionedOnly && client && r2 && releaseSha) {
+      const versionR2Key = joinObjectKey(
+        r2.uploadPrefix,
+        buildConfig.version,
+        basename(zipPath),
       )
+      const recovered = await recoverImmutableFileFromObject(
+        client,
+        r2,
+        versionR2Key,
+        zipPath,
+        {
+          component: r2.uploadPrefix,
+          releaseSha,
+          target: ASSET_TARGET_ID,
+          version: buildConfig.version,
+        },
+      )
+      if (recovered) {
+        log.done(`Recovered ${product.label} artifact from immutable R2`)
+        log.info(`${ASSET_TARGET_ID}: ${zipPath}`)
+        return
+      }
     }
-    const client = createR2Client(buildConfig.r2)
-    try {
+
+    const [command, ...commandArgs] = product.buildCommand
+    if (!command) {
+      throw new Error(`Missing build command for ${product.label}`)
+    }
+    log.step(`Running ${product.buildCommand.join(' ')}`)
+    // Inline descriptor values must override ambient test/development values.
+    await runCommand(
+      command,
+      commandArgs,
+      { ...buildConfig.processEnv, ...buildConfig.envVars },
+      join(rootDir, product.packageDir),
+    )
+
+    log.step('Staging assets')
+    const artifact = await stageAssetArtifact(
+      product,
+      buildConfig.version,
+      rootDir,
+    )
+    const builtZipPath = await archiveAssetArtifact(artifact, product)
+
+    if (client && r2) {
       log.step('Uploading artifact zip')
       const result = await uploadAssetArchive(
-        zipPath,
+        builtZipPath,
         buildConfig.version,
         client,
-        buildConfig.r2,
+        r2,
+        { releaseSha, versionedOnly: args.versionedOnly },
       )
-      log.info(`R2 latest key: ${result.latestR2Key}`)
+      if (result.latestR2Key) {
+        log.info(`R2 latest key: ${result.latestR2Key}`)
+      }
       log.info(`R2 version key: ${result.versionR2Key}`)
-    } finally {
-      client.destroy()
     }
-  }
 
-  log.done(`Production ${product.label} artifacts completed`)
-  log.info(`${ASSET_TARGET_ID}: ${zipPath}`)
+    log.done(`Production ${product.label} artifacts completed`)
+    log.info(`${ASSET_TARGET_ID}: ${builtZipPath}`)
+  } finally {
+    client?.destroy()
+  }
 }

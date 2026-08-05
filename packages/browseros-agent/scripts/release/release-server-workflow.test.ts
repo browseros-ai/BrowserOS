@@ -8,113 +8,100 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-server.yml'),
   'utf8',
 )
-const shellVersionPlaceholder = '$' + '{VERSION}'
-const shellTargetPlaceholder = '$' + '{target}'
-const shellAssetsPlaceholder = '$' + '{assets[@]}'
-const publishOtaIf = '$' + '{{ inputs.publish_ota == true }}'
-const releaseTagOutput = '$' + '{{ steps.release.outputs.tag }}'
-const expectedBumpBranch = `chore-bump-server-v${shellVersionPlaceholder}`
+const dollar = '$'
 
-function reflectVersionStep(): string {
-  const start = workflow.indexOf('- name: Reflect version on main via PR')
-  expect(start).toBeGreaterThanOrEqual(0)
-  return workflow.slice(start)
-}
-
-function generateReleaseNotesStep(): string {
-  const start = workflow.indexOf('- name: Generate release notes')
-  const end = workflow.indexOf('- name: Create GitHub release')
-  expect(start).toBeGreaterThanOrEqual(0)
-  expect(end).toBeGreaterThan(start)
-  return workflow.slice(start, end)
-}
-
-function createGithubReleaseStep(): string {
-  const start = workflow.indexOf('- name: Create GitHub release')
-  const end = workflow.indexOf('  build-publish:')
-  expect(start).toBeGreaterThanOrEqual(0)
-  expect(end).toBeGreaterThan(start)
-  return workflow.slice(start, end)
+function section(start: string, end?: string): string {
+  const startIndex = workflow.indexOf(start)
+  expect(startIndex).toBeGreaterThanOrEqual(0)
+  const endIndex = end ? workflow.indexOf(end, startIndex + start.length) : -1
+  if (end) expect(endIndex).toBeGreaterThan(startIndex)
+  return workflow.slice(startIndex, endIndex === -1 ? undefined : endIndex)
 }
 
 describe('release-server workflow', () => {
-  it('exposes workflow_call ref and publish_ota inputs', () => {
-    expect(workflow).toContain('workflow_call:')
-    expect(workflow).toContain('ref:')
-    expect(workflow).toContain('publish_ota:')
-    expect(workflow).toContain('default: false')
-  })
-
-  it('uses a flat branch for post-release version bump PRs', () => {
-    const step = reflectVersionStep()
-    const branch = step.match(/^\s*BRANCH="([^"]+)"$/m)?.[1]
-
-    expect(branch).toBe(expectedBumpBranch)
-    expect(branch?.startsWith('release/')).toBe(false)
-  })
-
-  it('fails visibly when post-release version reflection fails', () => {
-    const step = reflectVersionStep()
-
-    expect(step).not.toContain('continue-on-error: true')
-    expect(step).toContain('GITHUB_STEP_SUMMARY')
-    expect(step).toContain('::error::')
-  })
-
-  it('creates a missing PR when the remote bump branch already exists', () => {
-    const step = reflectVersionStep()
-
-    expect(step).toContain('gh pr list --state open --head "$BRANCH"')
-    expect(step).toContain(
-      'Branch $BRANCH already exists without an open bump PR; creating it.',
+  it('exposes the reusable build/finalize interface and outputs', () => {
+    const call = section('  workflow_call:', '\npermissions:')
+    expect(call).toContain('mode:')
+    expect(call).toContain('default: "build"')
+    expect(call).toContain('defer_finalize:')
+    expect(call).toContain('default: false')
+    expect(call).toContain('version:')
+    expect(call).toContain('ref:')
+    expect(call).toContain('outputs:')
+    expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.version }}`)
+    expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.tag }}`)
+    expect(call).toContain(
+      `value: ${dollar}{{ jobs.prepare.outputs.release_sha }}`,
     )
-    expect(step).toContain('create_reflection_pr')
   })
 
-  it('publishes all server resource zips to the consumer R2 prefix', () => {
+  it('reserves a private draft without creating a public tag', () => {
+    const prepare = section('  prepare:', '  build-publish:')
+    expect(prepare).toContain('gh api --paginate --slurp')
+    expect(prepare).toContain('--release-records "$RELEASE_RECORDS"')
+    expect(prepare).toContain('gh release create "$RELEASE_TAG"')
+    expect(prepare).toContain('--draft')
+    expect(prepare).toContain('--target "$RELEASE_SHA"')
+    expect(prepare).not.toContain('git tag -a')
+    expect(prepare).not.toContain('--draft=false')
+  })
+
+  it('checks public allocations under the component lock before mutations', () => {
+    const prepare = section('  prepare:', '  build-publish:')
+    expect(workflow).toContain('group: release-server')
+    expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
+      prepare.indexOf('Resolve release'),
+    )
+    expect(prepare.indexOf('Resolve release')).toBeLessThan(
+      prepare.indexOf('Reserve private draft'),
+    )
+  })
+
+  it('builds and attaches every immutable versioned artifact first', () => {
+    const build = section('  build-publish:', '  finalize:')
     expect(browserosServerBuildProduct.env.defaultR2UploadPrefix).toBe(
       'artifacts/server',
     )
-    expect(browserosServerBuildProduct.env.defaultR2DownloadPrefix).toBe(
-      'artifacts/vendor',
+    expect(build).toContain(
+      'bun scripts/build/server.ts --target=all --upload --versioned-only',
     )
-    expect(workflow).toContain(
-      'bun scripts/build/server.ts --target=all --upload',
+    expect(build).toContain('RELEASE_SHA:')
+    expect(build).toContain('Expected 5 server resource zips')
+    expect(build).toContain(
+      `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
-    expect(workflow).not.toContain('.env.production')
-    expect(workflow).toContain(
-      'targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)',
-    )
-    expect(workflow).toContain(
-      `artifacts/server/latest/browseros-server-resources-${shellTargetPlaceholder}.zip`,
-    )
+    expect(build).not.toContain('artifacts/server/latest/')
   })
 
-  it('attaches built zips to the GitHub release and keeps OTA opt-in', () => {
-    expect(workflow).toContain(
-      `gh release upload "$RELEASE_TAG" "${shellAssetsPlaceholder}" --clobber`,
+  it('finalizes only after verifying assets and versioned objects', () => {
+    const finalize = section('  finalize:', '  publish-ota:')
+    expect(finalize).toContain('Expected 5 draft assets')
+    expect(finalize).toContain(
+      `key="artifacts/server/${dollar}{VERSION}/${dollar}{name}"`,
     )
-    expect(workflow).toContain(`if: ${publishOtaIf}`)
-    expect(workflow).toContain(
-      'uv run browseros ota server release --version "$VERSION" --channel alpha --product browseros',
-    )
+    expect(finalize).toContain('--arg component "artifacts/server"')
+    expect(finalize).toContain('aws s3api get-object')
+    expect(finalize).toContain('gh release download "$RELEASE_TAG"')
+    expect(finalize).toContain('sha256sum')
+    expect(finalize).toContain('Draft asset does not match canonical R2 object')
+    expect(finalize).toContain('--metadata-directive COPY')
+    const verifyIndex = finalize.indexOf('Verify prepared release')
+    const tagIndex = finalize.indexOf('git tag -a "$RELEASE_TAG"')
+    const publishIndex = finalize.indexOf('--draft=false')
+    const latestIndex = finalize.indexOf('Copy versioned objects to latest')
+    expect(verifyIndex).toBeGreaterThanOrEqual(0)
+    expect(tagIndex).toBeGreaterThan(verifyIndex)
+    expect(publishIndex).toBeGreaterThan(tagIndex)
+    expect(latestIndex).toBeGreaterThan(publishIndex)
   })
 
-  it('caps generated changelogs before create and edit consume release notes', () => {
-    const step = generateReleaseNotesStep()
-    const createStep = createGithubReleaseStep()
-
-    expect(step).toContain(`RELEASE_TAG: ${releaseTagOutput}`)
-    expect(step).toContain('CHANGELOG_FILE="/tmp/release-changelog.md"')
-    expect(step).toContain('NOTES_FILE="/tmp/release-notes.md"')
-    expect(step).toContain(
-      'node packages/browseros-agent/scripts/release/cap-release-changelog.mjs',
+  it('defers finalization for full releases and gates side effects on it', () => {
+    const finalize = section('  finalize:', '  publish-ota:')
+    expect(finalize).toContain("needs.prepare.outputs.mode == 'finalize'")
+    expect(finalize).toContain('inputs.defer_finalize != true')
+    expect(section('  publish-ota:', '  reflect-version:')).toContain(
+      '- finalize',
     )
-    expect(step).toContain('--max-entries 15')
-    expect(step).toContain('--previous-tag "$PREVIOUS_TAG"')
-    expect(step).toContain('--release-tag "$RELEASE_TAG"')
-    expect(
-      createStep.match(/--notes-file \/tmp\/release-notes\.md/g),
-    ).toHaveLength(2)
+    expect(section('  reflect-version:')).toContain('- finalize')
   })
 })

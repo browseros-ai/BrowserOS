@@ -1,6 +1,3 @@
-# Required secrets for resource publishing: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
-# R2_SECRET_ACCESS_KEY, R2_BUCKET, BROWSEROS_CONFIG_URL, POSTHOG_API_KEY,
-# SENTRY_DSN. SPARKLE_PRIVATE_KEY is required only when publish_ota is true.
 name: "Release: BrowserOS Server"
 
 on:
@@ -10,36 +7,57 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, e.g. 0.0.124"
-        required: true
+        description: "Release version; allocated automatically when omitted"
+        required: false
         type: string
+        default: ""
       ref:
         description: "Git ref to release; defaults to the repository default branch"
         required: false
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel server OTA artifacts after R2 upload"
+        description: "Publish alpha-channel server OTA artifacts after finalization"
         required: false
         type: boolean
         default: false
   workflow_call:
     inputs:
+      mode:
+        description: "Build a prepared release or finalize an existing one"
+        required: false
+        type: string
+        default: "build"
+      defer_finalize:
+        description: "Leave a successful build private for a later finalize call"
+        required: false
+        type: boolean
+        default: false
       version:
-        description: "Release version; defaults to apps/server/package.json at ref"
+        description: "Explicit release version; required for finalize mode"
         required: false
         type: string
         default: ""
       ref:
-        description: "Git ref to release; defaults to the repository default branch"
+        description: "Git ref to release; required for finalize mode"
         required: false
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel server OTA artifacts after R2 upload"
+        description: "Publish alpha-channel server OTA artifacts after finalization"
         required: false
         type: boolean
         default: false
+    outputs:
+      version:
+        description: "Prepared server version"
+        value: ${{ jobs.prepare.outputs.version }}
+      tag:
+        description: "Prepared server tag"
+        value: ${{ jobs.prepare.outputs.tag }}
+      release_sha:
+        description: "Immutable source commit"
+        value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
       R2_ACCOUNT_ID:
         required: true
@@ -67,21 +85,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  prepare:
     if: github.event_name != 'push' || github.event.deleted != true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
+      mode: ${{ steps.lifecycle.outputs.mode }}
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       release_sha: ${{ steps.release.outputs.release_sha }}
       previous_tag: ${{ steps.release.outputs.previous_tag }}
-
+      reservation: ${{ steps.release.outputs.reservation }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Validate lifecycle inputs
+        id: validate
+        env:
+          MODE: ${{ inputs.mode || 'build' }}
+          REF: ${{ inputs.ref || '' }}
+          VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
+            echo "::error::mode must be build or finalize"
+            exit 1
+          fi
+          if [ "$MODE" = "finalize" ] && { [ -z "$VERSION" ] || [ -z "$REF" ]; }; then
+            echo "::error::finalize mode requires explicit version and ref inputs"
+            exit 1
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Read allocated GitHub releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_RECORDS: ${{ runner.temp }}/server-release-records.json
+        run: |
+          set -euo pipefail
+          pages="${RUNNER_TEMP}/server-release-pages.json"
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
+          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
+          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release
         id: release
@@ -89,6 +138,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -97,111 +147,109 @@ jobs:
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
-            --release-ref HEAD
+            --release-ref HEAD \
+            --release-records "$RELEASE_RECORDS"
+
+      - name: Resolve effective lifecycle mode
+        id: lifecycle
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ steps.validate.outputs.mode }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RESERVATION: ${{ steps.release.outputs.reservation }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] && [ "$RESERVATION" = "tag" ] && \
+            [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = "false" ]; then
+            MODE="finalize"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
           PREVIOUS_TAG: ${{ steps.release.outputs.previous_tag }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          CHANGELOG_FILE="/tmp/release-changelog.md"
-          NOTES_FILE="/tmp/release-notes.md"
-
+          changelog="${RUNNER_TEMP}/server-changelog.md"
+          notes="${RUNNER_TEMP}/server-release-notes.md"
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial BrowserOS Server release." > "$CHANGELOG_FILE"
+            echo "Initial BrowserOS Server release." > "$changelog"
           else
-            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$CHANGELOG_FILE"
-            if [ ! -s "$CHANGELOG_FILE" ]; then
-              echo "No commits since $PREVIOUS_TAG." > "$CHANGELOG_FILE"
+            git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$changelog"
+            if [ ! -s "$changelog" ]; then
+              echo "No commits since $PREVIOUS_TAG." > "$changelog"
             fi
           fi
-
           node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
-            --input "$CHANGELOG_FILE" \
-            --output "$NOTES_FILE" \
+            --input "$changelog" \
+            --output "$notes" \
             --max-entries 15 \
             --previous-tag "$PREVIOUS_TAG" \
             --release-tag "$RELEASE_TAG"
+          echo "notes=$notes" >> "$GITHUB_ENV"
 
-      - name: Create GitHub release
+      - name: Reserve private draft
+        if: ${{ steps.lifecycle.outputs.mode == 'build' && steps.release.outputs.reservation != 'tag' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-
-          TITLE="BrowserOS Server - v$VERSION"
-
+          title="BrowserOS Server - v$VERSION"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$TITLE" \
-              --notes-file /tmp/release-notes.md
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not a reusable draft for $RELEASE_SHA"
+              exit 1
+            fi
+            gh release edit "$RELEASE_TAG" --title "$title" --notes-file "$notes"
           else
             gh release create "$RELEASE_TAG" \
-              --verify-tag \
-              --title "$TITLE" \
-              --notes-file /tmp/release-notes.md
-          fi
-
-          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$RELEASE_TAG" --draft=false
+              --draft \
+              --target "$RELEASE_SHA" \
+              --title "$title" \
+              --notes-file "$notes"
           fi
 
   build-publish:
-    needs: release
-    if: needs.release.outputs.version != ''
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    permissions:
-      contents: write
     env:
-      VERSION: ${{ needs.release.outputs.version }}
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
-      PUBLISH_OTA: ${{ inputs.publish_ota || false }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
       BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
-      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-      NODE_ENV: production
       LOG_LEVEL: info
-
+      NODE_ENV: production
+      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           lfs: true
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Preflight required secrets
         run: |
           set -euo pipefail
-          required=(
-            R2_ACCOUNT_ID
-            R2_ACCESS_KEY_ID
-            R2_SECRET_ACCESS_KEY
-            R2_BUCKET
-            BROWSEROS_CONFIG_URL
-            POSTHOG_API_KEY
-            SENTRY_DSN
-          )
-          if [ "${PUBLISH_OTA:-false}" = "true" ]; then
-            required+=(SPARKLE_PRIVATE_KEY)
-          fi
-
+          required=(R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET BROWSEROS_CONFIG_URL POSTHOG_API_KEY SENTRY_DSN)
           missing=()
           for name in "${required[@]}"; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
           done
-
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing required secret(s): ${missing[*]}"
             exit 1
@@ -212,13 +260,10 @@ jobs:
         with:
           bun-version: "1.3.6"
 
-      - name: Install Wine for Windows metadata patching
+      - name: Install Wine
         run: |
           set -euo pipefail
           sudo apt-get update
-          # The `wine` package provides the /usr/bin/wine wrapper that
-          # patch-windows-exe.ts spawns; ubuntu-24.04's wine64 alone ships
-          # only the loader at /usr/lib/wine/wine64 (no /usr/bin entry).
           sudo apt-get install -y --no-install-recommends wine
           if ! command -v wine >/dev/null; then
             sudo ln -s /usr/lib/wine/wine64 /usr/local/bin/wine
@@ -240,26 +285,24 @@ jobs:
           from pathlib import Path
 
           version = sys.argv[1]
-          pkg_path = Path("apps/server/package.json")
+          package_path = Path("apps/server/package.json")
           lock_path = Path("bun.lock")
-
-          pkg = json.loads(pkg_path.read_text())
-          pkg["version"] = version
-          pkg_path.write_text(json.dumps(pkg, indent=2) + "\n")
-
+          package = json.loads(package_path.read_text())
+          package["version"] = version
+          package_path.write_text(json.dumps(package, indent=2) + "\n")
           lock = lock_path.read_text()
           pattern = re.compile(r'("apps/server":\s*\{\s*"name":\s*"@browseros/server",\s*"version":\s*")([^"]+)(")')
           updated, count = pattern.subn(rf"\g<1>{version}\3", lock)
           if count != 1:
-            raise SystemExit(f"Expected exactly one apps/server version entry in bun.lock, found {count}")
+              raise SystemExit(f"Expected exactly one apps/server version entry in bun.lock, found {count}")
           lock_path.write_text(updated)
           PY
 
-      - name: Publish server resource zips to R2
+      - name: Build and upload immutable server resources
         working-directory: packages/browseros-agent
-        run: bun scripts/build/server.ts --target=all --upload
+        run: bun scripts/build/server.ts --target=all --upload --versioned-only
 
-      - name: Attach zips to GitHub release
+      - name: Attach zips to private draft
         working-directory: packages/browseros-agent
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -268,144 +311,238 @@ jobs:
           mapfile -t assets < <(find dist/prod/server -maxdepth 1 -name 'browseros-server-resources-*.zip' | sort)
           if [ "${#assets[@]}" -ne 5 ]; then
             echo "::error::Expected 5 server resource zips, found ${#assets[@]}"
-            printf 'Found asset: %s\n' "${assets[@]}"
             exit 1
+          fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "BrowserOS Server - v$VERSION"
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
-      - name: Summarize published resource keys
+  finalize:
+    needs:
+      - prepare
+      - build-publish
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build-publish.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RESERVATION: ${{ needs.prepare.outputs.reservation }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Install AWS CLI
+        run: |
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify prepared release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          release="$(gh release view "$RELEASE_TAG" --json assets,isDraft,targetCommitish)"
+          asset_count="$(jq '[.assets[] | select(.name | test("^browseros-server-resources-(darwin-arm64|darwin-x64|linux-arm64|linux-x64|windows-x64)\\.zip$"))] | length' <<< "$release")"
+          if [ "$asset_count" -ne 5 ]; then
+            echo "::error::Expected 5 draft assets, found $asset_count"
+            exit 1
+          fi
+          if [ "$RESERVATION" != "tag" ]; then
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not the prepared draft for $RELEASE_SHA"
+              exit 1
+            fi
+          fi
+          artifact_dir="$(mktemp -d)"
+          mkdir -p "$artifact_dir/draft"
+          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          for target in "${targets[@]}"; do
+            name="browseros-server-resources-${target}.zip"
+            key="artifacts/server/${VERSION}/${name}"
+            metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" --query Metadata --output json)"
+            if ! jq -e \
+              --arg component "artifacts/server" \
+              --arg release_sha "$RELEASE_SHA" \
+              --arg target "$target" \
+              --arg version "$VERSION" \
+              '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+              <<< "$metadata" >/dev/null; then
+              echo "::error::Invalid immutable R2 binding for $key"
+              exit 1
+            fi
+            canonical="$artifact_dir/r2-${name}"
+            aws s3api get-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" "$canonical" >/dev/null
+            canonical_sha="$(sha256sum "$canonical" | cut -d ' ' -f1)"
+            if [ "$canonical_sha" != "$(jq -r '.sha256' <<< "$metadata")" ]; then
+              echo "::error::Canonical R2 checksum does not match its binding for $key"
+              exit 1
+            fi
+            gh release download "$RELEASE_TAG" --pattern "$name" --dir "$artifact_dir/draft"
+            draft_sha="$(sha256sum "$artifact_dir/draft/$name" | cut -d ' ' -f1)"
+            if [ "$draft_sha" != "$canonical_sha" ]; then
+              echo "::error::Draft asset does not match canonical R2 object: $name"
+              exit 1
+            fi
+          done
+
+      - name: Create annotated release tag
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --prune
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]; then
+              echo "::error::$RELEASE_TAG must be annotated"
+              exit 1
+            fi
+            if [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG points at a different source"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "BrowserOS Server - v$VERSION" "$RELEASE_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+      - name: Publish private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
+      - name: Copy versioned objects to latest
+        env:
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
           targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
-          {
-            echo "### BrowserOS Server resource publish"
-            echo
-            echo "- Version: \`$VERSION\`"
-            echo "- GitHub release: \`$RELEASE_TAG\`"
-            echo "- Upload behavior: wrote versioned keys and repointed latest keys"
-            echo
-            echo "Latest R2 keys:"
-            for target in "${targets[@]}"; do
-              echo "- \`artifacts/server/latest/browseros-server-resources-${target}.zip\`"
-            done
-            echo
-            echo "Versioned R2 keys:"
-            for target in "${targets[@]}"; do
-              echo "- \`artifacts/server/${VERSION}/browseros-server-resources-${target}.zip\`"
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
+          for target in "${targets[@]}"; do
+            name="browseros-server-resources-${target}.zip"
+            source="artifacts/server/${VERSION}/${name}"
+            destination="artifacts/server/latest/${name}"
+            aws s3api copy-object \
+              --endpoint-url "$R2_ENDPOINT" \
+              --region auto \
+              --bucket "$R2_BUCKET" \
+              --copy-source "$R2_BUCKET/$source" \
+              --metadata-directive COPY \
+              --key "$destination" >/dev/null
+            metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$destination" --query Metadata --output json)"
+            if ! jq -e \
+              --arg component "artifacts/server" \
+              --arg release_sha "$RELEASE_SHA" \
+              --arg target "$target" \
+              --arg version "$VERSION" \
+              '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+              <<< "$metadata" >/dev/null; then
+              echo "::error::Latest R2 binding was not preserved for $destination"
+              exit 1
+            fi
+          done
 
+  publish-ota:
+    needs:
+      - prepare
+      - finalize
+    if: ${{ needs.finalize.result == 'success' && inputs.publish_ota == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+      - name: Preflight OTA signing key
+        run: |
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is required when publish_ota is true"
+            exit 1
+          fi
       - name: Setup uv
-        if: ${{ inputs.publish_ota == true }}
         uses: astral-sh/setup-uv@v8.3.2
-
       - name: Publish alpha server OTA artifacts
-        if: ${{ inputs.publish_ota == true }}
         working-directory: packages/browseros
         run: uv run browseros ota server release --version "$VERSION" --channel alpha --product browseros
 
   reflect-version:
-    needs: release
-    if: needs.release.outputs.version != ''
+    needs:
+      - prepare
+      - finalize
+    if: ${{ needs.finalize.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
-
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch || 'main' }}
 
-      # Reflect the released version back into the repo through a PR. The release
-      # above is authoritative, but a failed reflection should leave a visible
-      # red run and summary instead of looking like a successful sync.
       - name: Reflect version on main via PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
-          VERSION: ${{ needs.release.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-
-          PACKAGE_JSON="packages/browseros-agent/apps/server/package.json"
-          LOCK="packages/browseros-agent/bun.lock"
-          BRANCH="chore-bump-server-v${VERSION}"
-
-          # Summarizes post-release sync failures without implying the release was rolled back.
-          write_reflection_failure_summary() {
-            local status="$1"
-            [ "$status" -ne 0 ] || return 0
-
-            echo "::error::Server version reflection failed after release publication; agent-server/v${VERSION} remains published."
-            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-              {
-                echo "### Server version reflection failed"
-                echo
-                echo "The BrowserOS Server release for \`agent-server/v${VERSION}\` was already published."
-                echo "The follow-up version bump PR failed while using branch \`${BRANCH}\`."
-                echo
-                echo "Rerun the workflow or create the bump PR manually to sync \`${PACKAGE_JSON}\` and \`${LOCK}\`."
-              } >> "$GITHUB_STEP_SUMMARY" || true
-            fi
-          }
-          trap 'status=$?; write_reflection_failure_summary "$status"; exit "$status"' EXIT
-
-          create_reflection_pr() {
-            gh pr create \
-              --title "chore: bump server version to ${VERSION}" \
-              --body "Automated version bump for BrowserOS Server v${VERSION}, released from tag agent-server/v${VERSION}. The release is already published; merge this to keep apps/server/package.json in sync with the released version." \
-              --base "$DEFAULT_BRANCH" \
-              --head "$BRANCH"
-
-            gh pr merge "$BRANCH" --squash --auto || true
-          }
-
+          package_json="packages/browseros-agent/apps/server/package.json"
+          lock="packages/browseros-agent/bun.lock"
+          branch="chore-bump-server-v${VERSION}"
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-
-          CURRENT="$(node -e 'const fs = require("fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version)' "$PACKAGE_JSON")"
-          if [ "$CURRENT" = "$VERSION" ]; then
-            echo "$PACKAGE_JSON already at $VERSION; nothing to bump."
-            exit 0
-          fi
-
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            EXISTING_PR="$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // ""')"
-            if [ -n "$EXISTING_PR" ]; then
-              echo "Branch $BRANCH already has open bump PR #$EXISTING_PR."
-              gh pr merge "$BRANCH" --squash --auto || true
-              exit 0
+          node - "$package_json" "$lock" "$VERSION" <<'JS'
+          const fs = require('fs')
+          const [packagePath, lockPath, version] = process.argv.slice(2)
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+          let lock = fs.readFileSync(lockPath, 'utf8')
+          const pattern = /("apps\/server":\s*\{\s*"name":\s*"@browseros\/server",\s*"version":\s*")([^"]+)(")/
+          const matches = lock.match(new RegExp(pattern.source, 'g'))
+          if (matches?.length !== 1) throw new Error(`Expected one server lock entry, found ${matches?.length ?? 0}`)
+          lock = lock.replace(pattern, `$1${version}$3`)
+          fs.writeFileSync(lockPath, lock)
+          JS
+          if git diff --quiet -- "$package_json" "$lock"; then exit 0; fi
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
+            if [ -z "$pr" ]; then
+              gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch"
             fi
-
-            echo "Branch $BRANCH already exists without an open bump PR; creating it."
-            create_reflection_pr
+            gh pr merge "$branch" --squash --auto
             exit 0
           fi
-
-          node -e '
-          const fs = require("fs");
-          const [pkgPath, lockPath, version] = process.argv.slice(1);
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-          pkg.version = version;
-          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-          let lock = fs.readFileSync(lockPath, "utf8");
-          const re = /("apps\/server":\s*\{\s*"name":\s*"@browseros\/server",\s*"version":\s*")(\d+\.\d+\.\d+)(")/g;
-          const matches = lock.match(re);
-          if (!matches || matches.length !== 1) {
-            console.error("Expected exactly one apps/server version entry in bun.lock, found " + (matches ? matches.length : 0));
-            process.exit(1);
-          }
-          fs.writeFileSync(lockPath, lock.replace(re, (match, prefix, _old, suffix) => prefix + version + suffix));
-          ' "$PACKAGE_JSON" "$LOCK" "$VERSION"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add "$PACKAGE_JSON" "$LOCK"
+          git checkout -b "$branch"
+          git add "$package_json" "$lock"
           git commit -m "chore: bump server version to ${VERSION}"
-          git push origin "$BRANCH"
-
-          create_reflection_pr
+          git push origin "$branch"
+          gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch"
+          gh pr merge "$branch" --squash --auto

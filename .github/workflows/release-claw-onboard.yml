@@ -1,4 +1,3 @@
-# Required secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
 name: "Release: BrowserClaw Onboarding"
 
 on:
@@ -8,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version; defaults to apps/claw-onboard/package.json at ref"
+        description: "Release version; allocated automatically when omitted"
         required: false
         type: string
         default: ""
@@ -19,16 +18,36 @@ on:
         default: ""
   workflow_call:
     inputs:
+      mode:
+        description: "Build a prepared release or finalize an existing one"
+        required: false
+        type: string
+        default: "build"
+      defer_finalize:
+        description: "Leave a successful build private for a later finalize call"
+        required: false
+        type: boolean
+        default: false
       version:
-        description: "Release version; defaults to apps/claw-onboard/package.json at ref"
+        description: "Explicit release version; required for finalize mode"
         required: false
         type: string
         default: ""
       ref:
-        description: "Git ref to release; defaults to the repository default branch"
+        description: "Git ref to release; required for finalize mode"
         required: false
         type: string
         default: ""
+    outputs:
+      version:
+        description: "Prepared onboarding version"
+        value: ${{ jobs.prepare.outputs.version }}
+      tag:
+        description: "Prepared onboarding tag"
+        value: ${{ jobs.prepare.outputs.tag }}
+      release_sha:
+        description: "Immutable source commit"
+        value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
       R2_ACCOUNT_ID:
         required: true
@@ -48,20 +67,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  prepare:
     if: github.event_name != 'push' || github.event.deleted != true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
+      mode: ${{ steps.lifecycle.outputs.mode }}
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       release_sha: ${{ steps.release.outputs.release_sha }}
       previous_tag: ${{ steps.release.outputs.previous_tag }}
+      reservation: ${{ steps.release.outputs.reservation }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Validate lifecycle inputs
+        id: validate
+        env:
+          MODE: ${{ inputs.mode || 'build' }}
+          REF: ${{ inputs.ref || '' }}
+          VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
+            echo "::error::mode must be build or finalize"
+            exit 1
+          fi
+          if [ "$MODE" = "finalize" ] && { [ -z "$VERSION" ] || [ -z "$REF" ]; }; then
+            echo "::error::finalize mode requires explicit version and ref inputs"
+            exit 1
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Read allocated GitHub releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_RECORDS: ${{ runner.temp }}/claw-onboard-release-records.json
+        run: |
+          set -euo pipefail
+          pages="${RUNNER_TEMP}/claw-onboard-release-pages.json"
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
+          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
+          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release
         id: release
@@ -69,6 +120,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -77,7 +129,24 @@ jobs:
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
-            --release-ref HEAD
+            --release-ref HEAD \
+            --release-records "$RELEASE_RECORDS"
+
+      - name: Resolve effective lifecycle mode
+        id: lifecycle
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ steps.validate.outputs.mode }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RESERVATION: ${{ steps.release.outputs.reservation }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] && [ "$RESERVATION" = "tag" ] && \
+            [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = "false" ]; then
+            MODE="finalize"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -103,7 +172,8 @@ jobs:
             --previous-tag "$PREVIOUS_TAG" \
             --release-tag "$RELEASE_TAG"
 
-      - name: Create GitHub release
+      - name: Reserve private draft
+        if: ${{ steps.lifecycle.outputs.mode == 'build' && steps.release.outputs.reservation != 'tag' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -111,33 +181,38 @@ jobs:
         run: |
           set -euo pipefail
           title="BrowserClaw Onboarding - v$VERSION"
+          release_sha="${{ steps.release.outputs.release_sha }}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$release_sha" ]; then
+              echo "::error::$RELEASE_TAG is not a reusable draft for $release_sha"
+              exit 1
+            fi
             gh release edit "$RELEASE_TAG" --title "$title" --notes-file /tmp/release-notes.md
           else
-            gh release create "$RELEASE_TAG" --verify-tag --title "$title" --notes-file /tmp/release-notes.md
-          fi
-          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$RELEASE_TAG" --draft=false
+            gh release create "$RELEASE_TAG" --draft --target "$release_sha" --title "$title" --notes-file /tmp/release-notes.md
           fi
 
   build-publish:
-    needs: release
-    if: needs.release.outputs.version != ''
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      VERSION: ${{ needs.release.outputs.version }}
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
       NODE_ENV: production
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.release.outputs.release_sha }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -170,7 +245,7 @@ jobs:
 
       - name: Publish onboarding resources to R2
         working-directory: packages/browseros-agent
-        run: bun scripts/build/claw-onboard.ts --upload
+        run: bun scripts/build/claw-onboard.ts --upload --versioned-only
 
       - name: Attach onboarding zip to GitHub release
         working-directory: packages/browseros-agent
@@ -180,24 +255,139 @@ jobs:
           set -euo pipefail
           asset="dist/prod/claw-onboard/browseros-claw-onboard-resources.zip"
           test -f "$asset"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "BrowserClaw Onboarding - v$VERSION"
+          fi
           gh release upload "$RELEASE_TAG" "$asset" --clobber
 
-      - name: Summarize onboarding resource keys
+  finalize:
+    needs:
+      - prepare
+      - build-publish
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build-publish.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RESERVATION: ${{ needs.prepare.outputs.reservation }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Install AWS CLI
         run: |
-          {
-            echo "### BrowserClaw Onboarding resource publish"
-            echo
-            echo "- Version: \`$VERSION\`"
-            echo "- GitHub release: \`$RELEASE_TAG\`"
-            echo "- Latest: \`claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip\`"
-            echo "- Versioned: \`claw-onboard/prod-resources/${VERSION}/browseros-claw-onboard-resources.zip\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify prepared release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          release="$(gh release view "$RELEASE_TAG" --json assets,isDraft,targetCommitish)"
+          asset_count="$(jq '[.assets[] | select(.name == "browseros-claw-onboard-resources.zip")] | length' <<< "$release")"
+          if [ "$asset_count" -ne 1 ]; then
+            echo "::error::Expected onboarding draft asset, found $asset_count"
+            exit 1
+          fi
+          if [ "$RESERVATION" != "tag" ]; then
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
+            if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not the prepared draft for $RELEASE_SHA"
+              exit 1
+            fi
+          fi
+          name="browseros-claw-onboard-resources.zip"
+          key="claw-onboard/prod-resources/${VERSION}/${name}"
+          metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" --query Metadata --output json)"
+          if ! jq -e \
+            --arg component "claw-onboard/prod-resources" \
+            --arg release_sha "$RELEASE_SHA" \
+            --arg target "universal" \
+            --arg version "$VERSION" \
+            '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+            <<< "$metadata" >/dev/null; then
+            echo "::error::Invalid immutable R2 binding for $key"
+            exit 1
+          fi
+          artifact_dir="$(mktemp -d)"
+          canonical="$artifact_dir/r2-${name}"
+          aws s3api get-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$key" "$canonical" >/dev/null
+          canonical_sha="$(sha256sum "$canonical" | cut -d ' ' -f1)"
+          if [ "$canonical_sha" != "$(jq -r '.sha256' <<< "$metadata")" ]; then
+            echo "::error::Canonical R2 checksum does not match its binding for $key"
+            exit 1
+          fi
+          gh release download "$RELEASE_TAG" --pattern "$name" --dir "$artifact_dir"
+          draft_sha="$(sha256sum "$artifact_dir/$name" | cut -d ' ' -f1)"
+          if [ "$draft_sha" != "$canonical_sha" ]; then
+            echo "::error::Draft asset does not match canonical R2 object: $name"
+            exit 1
+          fi
+
+      - name: Create annotated release tag
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --prune
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            if [ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ] || [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$RELEASE_SHA" ]; then
+              echo "::error::$RELEASE_TAG is not the expected annotated source tag"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "BrowserClaw Onboarding - v$VERSION" "$RELEASE_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+      - name: Publish private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
+      - name: Copy versioned object to latest
+        env:
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          set -euo pipefail
+          name="browseros-claw-onboard-resources.zip"
+          source="claw-onboard/prod-resources/${VERSION}/${name}"
+          destination="claw-onboard/prod-resources/latest/${name}"
+          aws s3api copy-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --copy-source "$R2_BUCKET/$source" --metadata-directive COPY --key "$destination" >/dev/null
+          metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$destination" --query Metadata --output json)"
+          if ! jq -e \
+            --arg component "claw-onboard/prod-resources" \
+            --arg release_sha "$RELEASE_SHA" \
+            --arg target "universal" \
+            --arg version "$VERSION" \
+            '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
+            <<< "$metadata" >/dev/null; then
+            echo "::error::Latest R2 binding was not preserved for $destination"
+            exit 1
+          fi
 
   reflect-version:
     needs:
-      - release
-      - build-publish
-    if: needs.release.outputs.version != ''
+      - prepare
+      - finalize
+    if: ${{ needs.finalize.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -213,7 +403,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           package_json="packages/browseros-agent/apps/claw-onboard/package.json"
