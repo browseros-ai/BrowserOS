@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Cloudflare R2 client utilities for BrowserOS build system
-
-This module provides shared R2 (S3-compatible) operations used by both
-upload and download modules.
-"""
+"""Cloudflare R2 client utilities for the BrowserOS build system."""
 
 import json
 from pathlib import Path
@@ -12,7 +8,6 @@ from typing import Dict, Optional
 from .env import EnvConfig
 from .utils import log_info, log_error, log_success, log_warning
 
-# Try to import boto3 for R2 (S3-compatible)
 try:
     import boto3
     from botocore.config import Config
@@ -23,14 +18,7 @@ except ImportError:
 
 
 def get_r2_client(env: Optional[EnvConfig] = None):
-    """Create boto3 S3 client configured for R2
-
-    Args:
-        env: Optional EnvConfig instance. If not provided, creates a new one.
-
-    Returns:
-        boto3 S3 client configured for R2, or None if not available
-    """
+    """Create a boto3 S3 client configured for R2."""
     if not BOTO3_AVAILABLE:
         log_error("boto3 not installed - run: pip install boto3")
         return None
@@ -60,17 +48,7 @@ def upload_file_to_r2(
     r2_key: str,
     bucket: str,
 ) -> bool:
-    """Upload a single file to R2
-
-    Args:
-        client: boto3 S3 client
-        local_path: Path to local file
-        r2_key: Key (path) in R2 bucket
-        bucket: R2 bucket name
-
-    Returns:
-        True if successful, False otherwise
-    """
+    """Upload one file to R2."""
     try:
         log_info(f"Uploading {local_path.name}...")
         client.upload_file(str(local_path), bucket, r2_key)
@@ -87,17 +65,7 @@ def download_file_from_r2(
     dest_path: Path,
     bucket: str,
 ) -> bool:
-    """Download a single file from R2
-
-    Args:
-        client: boto3 S3 client
-        r2_key: Key (path) in R2 bucket
-        dest_path: Local destination path
-        bucket: R2 bucket name
-
-    Returns:
-        True if successful, False otherwise
-    """
+    """Download one file from R2."""
     try:
         log_info(f"Downloading {r2_key}...")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,17 +83,7 @@ def download_from_r2(
     bucket: Optional[str] = None,
     env: Optional[EnvConfig] = None,
 ) -> bool:
-    """Download a file from R2 (convenience wrapper)
-
-    Args:
-        r2_key: Key (path) in R2 bucket
-        dest_path: Local destination path
-        bucket: Optional bucket name (uses default from env if not specified)
-        env: Optional EnvConfig instance. If not provided, creates a new one.
-
-    Returns:
-        True if successful, False otherwise
-    """
+    """Download one file from R2 using environment configuration."""
     if not BOTO3_AVAILABLE:
         log_error("boto3 not installed")
         return False
@@ -151,16 +109,7 @@ def get_release_json(
     env: Optional[EnvConfig] = None,
     product_id: str = "browseros",
 ) -> Optional[Dict]:
-    """Fetch release.json for a specific version and platform from R2
-
-    Args:
-        version: Semantic version (e.g., "0.31.0")
-        platform: Platform name (macos, win, linux)
-        env: Optional EnvConfig instance. If not provided, creates a new one.
-
-    Returns:
-        Parsed release.json dict, or None if not found
-    """
+    """Fetch one platform's release.json from R2."""
     if not BOTO3_AVAILABLE:
         log_error("boto3 not installed")
         return None
