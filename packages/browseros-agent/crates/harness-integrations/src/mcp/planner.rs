@@ -47,7 +47,10 @@ pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<P
     validate_spec(&input.server.spec)?;
     let surface =
         ensure_transport_supported(input.agent, input.scope, input.server.spec.transport())?;
-    let agent_file = require_agent_file(state, input.agent, input.scope)?;
+    let agent_file = match input.config_path.as_deref() {
+        Some(config_path) => require_agent_file_at(state, input.agent, input.scope, config_path)?,
+        None => require_agent_file(state, input.agent, input.scope)?,
+    };
     ensure_agent_installed(input.agent, agent_file)?;
     let emitter = Emitter::new(surface);
 
@@ -107,6 +110,8 @@ pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<P
 pub(crate) fn plan_migration_install(
     state: &State,
     input: &MigrateServerInput,
+    source_path: &Path,
+    destination_path: &Path,
     now: &str,
 ) -> Result<Option<PlannedMigrationInstall>, Error> {
     if input.source_name == input.destination.name {
@@ -114,14 +119,15 @@ pub(crate) fn plan_migration_install(
             reason: "migration source and destination names must differ".to_string(),
         });
     }
-    let agent_file = require_agent_file(state, input.agent, input.scope)?;
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, destination_path)?;
+    let source_file = require_agent_file_at(state, input.agent, input.scope, source_path)?;
     let surface = resolve_agent_surface(input.agent, input.scope)?;
     let emitter = Emitter::new(surface);
     let source_server = state.manifest.servers.get(&input.source_name);
     let source_link = source_server
         .and_then(|server| server.links.get(&input.agent))
-        .filter(|link| link.config_path == agent_file.config_path);
-    let observed_source = emitter.inspect(&agent_file.raw_content, &input.source_name)?;
+        .filter(|link| link.config_path == source_file.config_path);
+    let observed_source = emitter.inspect(&source_file.raw_content, &input.source_name)?;
     let unmanaged_source_matches = input
         .unmanaged_source_spec
         .as_ref()
@@ -169,8 +175,9 @@ pub(crate) fn plan_migration_install(
 pub(crate) fn verify_migration_destination(
     state: &State,
     input: &MigrateServerInput,
+    destination_path: &Path,
 ) -> Result<bool, Error> {
-    let agent_file = require_agent_file(state, input.agent, input.scope)?;
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, destination_path)?;
     let destination_name = input.destination.name.trim();
     let owned = state
         .manifest
@@ -189,8 +196,10 @@ pub(crate) fn verify_migration_destination(
 pub(crate) fn plan_migration_cleanup(
     state: &State,
     input: &MigrateServerInput,
+    source_path: &Path,
+    destination_path: &Path,
 ) -> Result<Plan, Error> {
-    if !verify_migration_destination(state, input)? {
+    if !verify_migration_destination(state, input, destination_path)? {
         return Err(Error::MigrationVerification {
             reason: format!(
                 "{} was not persisted for {} at the selected config path",
@@ -198,7 +207,7 @@ pub(crate) fn plan_migration_cleanup(
             ),
         });
     }
-    let agent_file = require_agent_file(state, input.agent, input.scope)?;
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, source_path)?;
     let emitter = Emitter::new(resolve_agent_surface(input.agent, input.scope)?);
     let source_link_owned = state
         .manifest
@@ -468,6 +477,20 @@ fn require_agent_file(
                 "agent {agent}@{scope} was not included in readState; add it to the agents list before planning"
             ),
         })
+}
+
+fn require_agent_file_at<'a>(
+    state: &'a State,
+    agent: AgentId,
+    scope: AgentScope,
+    config_path: &Path,
+) -> Result<&'a AgentFileState, Error> {
+    find_agent_file(state, agent, scope, config_path).ok_or_else(|| Error::InvalidServerSpec {
+        reason: format!(
+            "agent {agent}@{scope} at {} was not included in readState",
+            config_path.display()
+        ),
+    })
 }
 
 fn ensure_agent_installed(agent: AgentId, file: &AgentFileState) -> Result<(), Error> {

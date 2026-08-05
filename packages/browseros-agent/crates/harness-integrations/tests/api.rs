@@ -410,19 +410,16 @@ fn migration_converges_from_interrupted_install_and_cleanup_states()
 
     let installed_workspace = root.path().join("installed-workspace");
     let installed_manager = McpManager::new(&installed_workspace);
-    let installed_config = root.path().join("installed/cursor.json");
-    fs::create_dir_all(
-        installed_config
-            .parent()
-            .ok_or("missing installed parent")?,
-    )?;
+    let legacy_config = root.path().join("installed/legacy-cursor.json");
+    let canonical_config = root.path().join("installed/canonical-cursor.json");
+    fs::create_dir_all(legacy_config.parent().ok_or("missing installed parent")?)?;
     installed_manager.link(link_input(
         McpServer {
             name: "BrowserClaw".to_string(),
             spec: legacy_spec.clone(),
         },
         AgentId::Cursor,
-        &installed_config,
+        &legacy_config,
     ))?;
     installed_manager.link(link_input(
         McpServer {
@@ -430,7 +427,7 @@ fn migration_converges_from_interrupted_install_and_cleanup_states()
             spec: canonical_spec.clone(),
         },
         AgentId::Cursor,
-        &installed_config,
+        &canonical_config,
     ))?;
     let canonical_before = installed_manager
         .list()?
@@ -445,7 +442,7 @@ fn migration_converges_from_interrupted_install_and_cleanup_states()
         },
         AgentId::Cursor,
     );
-    installed_migration.config_path = Some(installed_config.clone());
+    installed_migration.config_path = Some(legacy_config.clone());
     assert!(
         installed_manager
             .migrate_server(installed_migration)?
@@ -459,9 +456,16 @@ fn migration_converges_from_interrupted_install_and_cleanup_states()
         installed_servers[0].links[&AgentId::Cursor].created_at,
         canonical_before.links[&AgentId::Cursor].created_at
     );
-    let installed_raw = fs::read_to_string(installed_config)?;
-    assert!(installed_raw.contains("BrowserOS neo"));
-    assert!(!installed_raw.contains("BrowserClaw"));
+    assert_eq!(
+        installed_servers[0].links[&AgentId::Cursor].config_path,
+        canonical_config
+    );
+    let legacy_raw = fs::read_to_string(legacy_config)?;
+    assert!(!legacy_raw.contains("BrowserClaw"));
+    assert!(!legacy_raw.contains("BrowserOS neo"));
+    let canonical_raw = fs::read_to_string(canonical_config)?;
+    assert!(canonical_raw.contains("BrowserOS neo"));
+    assert!(!canonical_raw.contains("BrowserClaw"));
 
     let cleaned_workspace = root.path().join("cleaned-workspace");
     let cleaned_manager = McpManager::new(&cleaned_workspace);

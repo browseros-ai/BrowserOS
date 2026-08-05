@@ -97,12 +97,19 @@ impl McpManager {
             .get(&input.source_name)
             .and_then(|server| server.links.get(&input.agent))
             .map(|link| link.config_path.clone());
-        let selected_path = recorded_path.or_else(|| input.config_path.clone());
-        let overrides = selected_path
+        let destination_path = manifest_state
+            .manifest
+            .servers
+            .get(input.destination.name.trim())
+            .and_then(|server| server.links.get(&input.agent))
+            .map(|link| link.config_path.clone());
+        let selected_source_path = recorded_path.or_else(|| input.config_path.clone());
+        let overrides = selected_source_path
             .map(|path| BTreeMap::from([(input.agent, path)]))
             .unwrap_or_default();
-        let state = read_state(&self.workspace_dir, &[input.agent], input.scope, &overrides)?;
-        let config_path = state
+        let source_state =
+            read_state(&self.workspace_dir, &[input.agent], input.scope, &overrides)?;
+        let source_path = source_state
             .agents
             .first()
             .ok_or_else(|| Error::InvalidServerSpec {
@@ -113,16 +120,23 @@ impl McpManager {
             })?
             .config_path
             .clone();
+        let destination_path = destination_path.unwrap_or_else(|| source_path.clone());
+        let mut paths = vec![(input.agent, destination_path.clone())];
+        if source_path != destination_path {
+            paths.push((input.agent, source_path.clone()));
+        }
+        let state = read_state_at_paths(&self.workspace_dir, &paths, input.scope)?;
         let now = current_timestamp()?;
-        let Some(install) = plan_migration_install(&state, &input, &now)? else {
+        let Some(install) =
+            plan_migration_install(&state, &input, &source_path, &destination_path, &now)?
+        else {
             return Ok(no_op());
         };
         let overwrote_foreign = install.overwrote_foreign;
         apply_plan(&install.plan)?;
 
-        let paths = [(input.agent, config_path)];
         let installed = read_state_at_paths(&self.workspace_dir, &paths, input.scope)?;
-        if !verify_migration_destination(&installed, &input)? {
+        if !verify_migration_destination(&installed, &input, &destination_path)? {
             return Err(Error::MigrationVerification {
                 reason: format!(
                     "{} was not readable after installation for {}",
@@ -130,7 +144,7 @@ impl McpManager {
                 ),
             });
         }
-        let cleanup = plan_migration_cleanup(&installed, &input)?;
+        let cleanup = plan_migration_cleanup(&installed, &input, &source_path, &destination_path)?;
         apply_plan(&cleanup)?;
         Ok(MigrateServerSummary {
             source_name: input.source_name,
