@@ -11,12 +11,13 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from typer.testing import CliRunner
 
 from bos_build.browseros import app
-from bos_build.cli.build import _resolve_preset
+from bos_build.cli.build import _PlanProjection, _parse_toolchain_ids, _resolve_preset
 from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
 from bos_build.lib.testing import MockChromium
@@ -237,6 +238,68 @@ class ModeGuardTest(unittest.TestCase):
             result = invoke("--modules", "clean", "--arch", "bogus", "--show-plan")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Invalid architecture", combined(result))
+
+    def test_lane_manifest_requires_preset_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--modules", "clean", "--lane-manifest", "/tmp/lane.json"
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("preset", combined(result).lower())
+
+    def test_toolchain_identity_requires_lane_manifest(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "debug",
+                "--toolchain-id",
+                "runner=warp",
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("lane-manifest", combined(result))
+
+
+class LaneManifestCliTest(unittest.TestCase):
+    def test_toolchain_identity_parser_rejects_duplicates_and_empty_values(self):
+        self.assertEqual(
+            _parse_toolchain_ids(["runner=warp", "image=macos-15"]),
+            {"runner": "warp", "image": "macos-15"},
+        )
+        for values in (["runner="], ["=warp"], ["runner=a", "runner=b"]):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                _parse_toolchain_ids(values)
+
+    def test_successful_source_build_writes_lane_manifest(self):
+        context = SimpleNamespace(resource_mode="source")
+        projection = _PlanProjection(
+            header=[],
+            arch_plans=[("x64", ["compile"])],
+            build_runs=lambda: [(context, ["compile"])],
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            scrubbed_env(),
+            mock.patch("bos_build.cli.build._resolve_preset", return_value=projection),
+            mock.patch("bos_build.cli.build._execute_runs_with_checkout_lock"),
+            mock.patch("bos_build.cli.build.write_lane_manifest") as write_lane,
+        ):
+            destination = Path(tmp) / "lane.json"
+            result = invoke(
+                "--preset",
+                "release",
+                "--resource-mode",
+                "source",
+                "--lane-manifest",
+                str(destination),
+                "--toolchain-id",
+                "runner=warp",
+            )
+
+        self.assertEqual(result.exit_code, 0, combined(result))
+        write_lane.assert_called_once_with(
+            [context], destination, {"runner": "warp"}
+        )
 
 
 class CheckoutLockCliTest(unittest.TestCase):

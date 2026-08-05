@@ -27,6 +27,7 @@ from ..core.planner import (
 )
 from ..core.resolver import resolve_config, resolve_pipeline
 from ..lib.notify import slack_subscriber
+from ..release.lane import write_lane_manifest
 from ..core.runner import StepExecutionError, run as run_pipeline
 from ..core.step import (
     all_steps,
@@ -138,6 +139,16 @@ def main(
         "--prepared-resources",
         help="Validated common-resource directory for source mode",
     ),
+    lane_manifest: Optional[Path] = typer.Option(
+        None,
+        "--lane-manifest",
+        help="Write release-lane evidence after a successful source build",
+    ),
+    toolchain_id: Optional[List[str]] = typer.Option(
+        None,
+        "--toolchain-id",
+        help="Add NAME=VALUE runner identity to the lane manifest (repeatable)",
+    ),
     skip: Optional[str] = typer.Option(
         None,
         "--skip",
@@ -228,6 +239,7 @@ def main(
 
     try:
         extra_gn_args = _parse_gn_args(gn_arg)
+        toolchain = _parse_toolchain_ids(toolchain_id)
     except ValueError as e:
         log_error(str(e))
         raise typer.Exit(1)
@@ -266,6 +278,12 @@ def main(
 
     if (resource_mode is not None or prepared_resources is not None) and not has_preset:
         log_error("--resource-mode/--prepared-resources require preset/profile mode")
+        raise typer.Exit(1)
+    if lane_manifest is not None and not has_preset:
+        log_error("--lane-manifest requires preset/profile mode")
+        raise typer.Exit(1)
+    if toolchain and lane_manifest is None:
+        log_error("--toolchain-id requires --lane-manifest")
         raise typer.Exit(1)
 
     # Plan projection happens before the banner and before anything touches
@@ -351,6 +369,12 @@ def main(
             raise typer.Exit(1)
         runs = [(ctx, pipeline) for ctx in arch_ctxs]
 
+    if lane_manifest is not None and any(
+        ctx.resource_mode != "source" for ctx, _ in runs
+    ):
+        log_error("--lane-manifest requires source resource mode")
+        raise typer.Exit(1)
+
     try:
         _execute_runs_with_checkout_lock(
             runs,
@@ -359,7 +383,11 @@ def main(
             prep=prep,
             root_dir=root_dir,
         )
-    except CheckoutLockError as e:
+        if lane_manifest is not None:
+            write_lane_manifest(
+                [ctx for ctx, _ in runs], lane_manifest, toolchain
+            )
+    except (CheckoutLockError, ValueError) as e:
         log_error(str(e))
         raise typer.Exit(1)
 
@@ -789,6 +817,21 @@ def _parse_gn_args(values: Optional[List[str]]) -> Tuple[str, ...]:
                 'symbol_level=2 or target_cpu="arm64"'
             )
     return args
+
+
+def _parse_toolchain_ids(values: Optional[List[str]]) -> dict[str, str]:
+    identity = {}
+    for value in values or ():
+        name, separator, item = value.partition("=")
+        if not separator or not name.strip() or not item.strip():
+            raise ValueError(
+                f"Invalid --toolchain-id '{value}': expected non-empty NAME=VALUE"
+            )
+        name = name.strip()
+        if name in identity:
+            raise ValueError(f"Duplicate --toolchain-id name: {name}")
+        identity[name] = item.strip()
+    return identity
 
 
 def _print_plan(projection: _PlanProjection) -> None:

@@ -22,7 +22,7 @@ from ..release import (
     DownloadModule,
 )
 from ..release.list import DEFAULT_LIST_LIMIT
-from . import release_candidate, release_feeds, release_resources
+from . import release_browser, release_candidate, release_feeds, release_resources
 
 app = typer.Typer(
     help="Release automation commands",
@@ -40,6 +40,7 @@ app.add_typer(github_app, name="github")
 
 release_feeds.register(app)
 app.add_typer(release_candidate.app, name="candidate")
+app.add_typer(release_browser.app, name="browser")
 app.add_typer(release_resources.app, name="resources")
 
 _PRODUCT_HELP = f"Product to operate on ({', '.join(PRODUCTS)})"

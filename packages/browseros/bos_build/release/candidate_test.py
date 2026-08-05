@@ -179,7 +179,31 @@ class CandidateMergeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = FakeBackend()
         self.record = candidate_record()
-        self.gate = {"passed": True, "candidate_sha": CANDIDATE_SHA}
+        self.gate = {
+            "schema": "browseros-release-gate-v1",
+            "passed": True,
+            "product": self.record.product,
+            "parent_sha": self.record.parent_sha,
+            "candidate_sha": self.record.candidate_sha,
+            "browser_version": self.record.browser_version,
+            "component_versions": dict(self.record.component_versions),
+            "common_manifest_digest": "4" * 64,
+            "lanes": ["linux-x64", "macos-universal", "windows-x64"],
+            "outcomes": [
+                "linux-x64",
+                "macos-arm64",
+                "macos-universal",
+                "macos-x64",
+                "windows-x64",
+            ],
+            "server_checksums": {
+                "darwin-arm64": "5" * 64,
+                "darwin-x64": "6" * 64,
+                "linux-x64": "7" * 64,
+                "windows-x64": "8" * 64,
+            },
+            "artifact_checksums": {"BrowserOS.dmg": "9" * 64},
+        }
 
     def test_rejects_missing_gate_and_changed_pull_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "gate"):
@@ -196,6 +220,20 @@ class CandidateMergeTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "head"):
             merge_candidate(self.record, self.gate, self.backend)
+
+    def test_rejects_gate_identity_skew(self) -> None:
+        for field, value in (
+            ("product", "browserclaw"),
+            ("parent_sha", "9" * 40),
+            ("browser_version", "0.32.0"),
+            ("component_versions", {"server": "0.0.999"}),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ValueError, field
+            ):
+                merge_candidate(
+                    self.record, {**self.gate, field: value}, self.backend
+                )
 
     def test_rejects_unmergeable_or_superseded_candidate(self) -> None:
         self.backend.pr = PullRequestState(

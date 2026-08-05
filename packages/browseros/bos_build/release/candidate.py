@@ -23,6 +23,7 @@ from .github import (
     list_pull_requests,
     merge_pull_request,
 )
+from .lane import LaneGate
 
 
 _SCHEMA = "browseros-release-candidate-v1"
@@ -214,8 +215,17 @@ def merge_candidate(
     backend: CandidateBackend,
 ) -> CandidateRecord:
     """Merge an unchanged candidate after its complete lane gate passes."""
-    if gate.get("passed") is not True or gate.get("candidate_sha") != record.candidate_sha:
-        raise ValueError("Candidate merge requires matching passed gate evidence")
+    evidence = LaneGate.from_dict(gate)
+    expected = {
+        "product": record.product,
+        "parent_sha": record.parent_sha,
+        "candidate_sha": record.candidate_sha,
+        "browser_version": record.browser_version,
+        "component_versions": dict(record.component_versions),
+    }
+    for field, value in expected.items():
+        if getattr(evidence, field) != value:
+            raise ValueError(f"Candidate merge gate {field} does not match")
     pull_request = backend.inspect_pull_request(record.pull_request_number)
     if pull_request.state == "merged":
         if not pull_request.merge_sha:
