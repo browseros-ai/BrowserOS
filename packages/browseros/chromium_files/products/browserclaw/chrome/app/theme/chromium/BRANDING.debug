@@ -1,9 +1,9 @@
 COMPANY_FULLNAME=BrowserOS Development
 COMPANY_SHORTNAME=BrowserOS Dev
-PRODUCT_FULLNAME=BrowserClaw Dev
-PRODUCT_SHORTNAME=BrowserClaw Dev
-PRODUCT_INSTALLER_FULLNAME=BrowserClaw Dev Installer
-PRODUCT_INSTALLER_SHORTNAME=BrowserClaw Dev Installer
+PRODUCT_FULLNAME=BrowserOS neo Dev
+PRODUCT_SHORTNAME=BrowserOS neo Dev
+PRODUCT_INSTALLER_FULLNAME=BrowserOS neo Dev Installer
+PRODUCT_INSTALLER_SHORTNAME=BrowserOS neo Dev Installer
 COPYRIGHT=Copyright @2025@ BrowserOS Development. All rights reserved.
 MAC_BUNDLE_ID=com.browseros.dev.BrowserClaw
 MAC_CREATOR_CODE=Cr24

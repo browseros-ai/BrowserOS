@@ -11,7 +11,7 @@ import { VideoRail } from './VideoRail'
 describe('VideoRail', () => {
   it('renders the fold header and, expanded by default, the video tiles as posters', () => {
     const html = renderToStaticMarkup(<VideoRail />)
-    expect(html).toContain('Learn BrowserClaw')
+    expect(html).toContain('Learn BrowserOS neo')
     expect(html).toContain('aria-expanded="true"')
     // Expanded by default (no stored preference), so tiles render with their
     // play affordance and no iframe until the lightbox opens.

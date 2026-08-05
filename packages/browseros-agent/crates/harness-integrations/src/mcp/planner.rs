@@ -11,8 +11,8 @@ use super::{
     paths::resolve_agent_surface,
     types::{
         AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, LinkInput, LinkSummary,
-        ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServerSpec, RescanEntry,
-        RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
+        ListedLink, ManifestLinkEntry, ManifestServerEntry, McpServerSpec, MigrateServerInput,
+        RescanEntry, RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
     },
 };
 
@@ -31,6 +31,11 @@ pub(crate) struct PlannedDisconnect {
     pub(crate) summary: DisconnectSummary,
 }
 
+pub(crate) struct PlannedMigrationInstall {
+    pub(crate) plan: Plan,
+    pub(crate) overwrote_foreign: bool,
+}
+
 /// Computes a link plan without touching the filesystem or mutating the state snapshot.
 pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<PlannedLink, Error> {
     let name = input.server.name.trim();
@@ -42,7 +47,10 @@ pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<P
     validate_spec(&input.server.spec)?;
     let surface =
         ensure_transport_supported(input.agent, input.scope, input.server.spec.transport())?;
-    let agent_file = require_agent_file(state, input.agent, input.scope)?;
+    let agent_file = match input.config_path.as_deref() {
+        Some(config_path) => require_agent_file_at(state, input.agent, input.scope, config_path)?,
+        None => require_agent_file(state, input.agent, input.scope)?,
+    };
     ensure_agent_installed(input.agent, agent_file)?;
     let emitter = Emitter::new(surface);
 
@@ -97,6 +105,152 @@ pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<P
             overwrote_foreign: is_foreign,
         },
     })
+}
+
+pub(crate) fn plan_migration_install(
+    state: &State,
+    input: &MigrateServerInput,
+    source_path: &Path,
+    destination_path: &Path,
+    now: &str,
+) -> Result<Option<PlannedMigrationInstall>, Error> {
+    if input.source_name == input.destination.name {
+        return Err(Error::InvalidServerSpec {
+            reason: "migration source and destination names must differ".to_string(),
+        });
+    }
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, destination_path)?;
+    let source_file = require_agent_file_at(state, input.agent, input.scope, source_path)?;
+    let surface = resolve_agent_surface(input.agent, input.scope)?;
+    let emitter = Emitter::new(surface);
+    let source_server = state.manifest.servers.get(&input.source_name);
+    let source_link = source_server
+        .and_then(|server| server.links.get(&input.agent))
+        .filter(|link| link.config_path == source_file.config_path);
+    let observed_source = emitter.inspect(&source_file.raw_content, &input.source_name)?;
+    let unmanaged_source_matches = input
+        .unmanaged_source_spec
+        .as_ref()
+        .is_some_and(|allowed| observed_source.as_ref() == Some(allowed));
+    if source_link.is_none() && !unmanaged_source_matches {
+        return Ok(None);
+    }
+
+    let mut link_input = LinkInput::new(input.destination.clone(), input.agent);
+    link_input.scope = input.scope;
+    link_input.config_path = Some(agent_file.config_path.clone());
+    link_input.allow_overwrite = true;
+    let mut planned = plan_link(state, &link_input, now)?;
+    let destination_name = planned.summary.server_name.clone();
+    let existing_destination = state.manifest.servers.get(&destination_name);
+    if let (Some(source_server), Some(destination)) = (
+        source_server,
+        planned
+            .plan
+            .next_manifest
+            .servers
+            .get_mut(&destination_name),
+    ) {
+        if existing_destination.is_none() {
+            destination.added_at.clone_from(&source_server.added_at);
+        }
+        if existing_destination
+            .and_then(|server| server.links.get(&input.agent))
+            .is_none()
+            && let Some(source_link) = source_link
+            && let Some(destination_link) = destination.links.get_mut(&input.agent)
+        {
+            destination_link
+                .created_at
+                .clone_from(&source_link.created_at);
+        }
+        replace_manifest_write(state, &mut planned.plan)?;
+    }
+    Ok(Some(PlannedMigrationInstall {
+        plan: planned.plan,
+        overwrote_foreign: planned.summary.overwrote_foreign,
+    }))
+}
+
+pub(crate) fn verify_migration_destination(
+    state: &State,
+    input: &MigrateServerInput,
+    destination_path: &Path,
+) -> Result<bool, Error> {
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, destination_path)?;
+    let destination_name = input.destination.name.trim();
+    let owned = state
+        .manifest
+        .servers
+        .get(destination_name)
+        .and_then(|server| server.links.get(&input.agent))
+        .is_some_and(|link| link.config_path == agent_file.config_path);
+    if !owned {
+        return Ok(false);
+    }
+    let emitter = Emitter::new(resolve_agent_surface(input.agent, input.scope)?);
+    Ok(emitter.inspect(&agent_file.raw_content, destination_name)?
+        == Some(input.destination.spec.clone()))
+}
+
+pub(crate) fn plan_migration_cleanup(
+    state: &State,
+    input: &MigrateServerInput,
+    source_path: &Path,
+    destination_path: &Path,
+) -> Result<Plan, Error> {
+    if !verify_migration_destination(state, input, destination_path)? {
+        return Err(Error::MigrationVerification {
+            reason: format!(
+                "{} was not persisted for {} at the selected config path",
+                input.destination.name, input.agent
+            ),
+        });
+    }
+    let agent_file = require_agent_file_at(state, input.agent, input.scope, source_path)?;
+    let emitter = Emitter::new(resolve_agent_surface(input.agent, input.scope)?);
+    let source_link_owned = state
+        .manifest
+        .servers
+        .get(&input.source_name)
+        .and_then(|server| server.links.get(&input.agent))
+        .is_some_and(|link| link.config_path == agent_file.config_path);
+    let observed_source = emitter.inspect(&agent_file.raw_content, &input.source_name)?;
+    let unmanaged_source_matches = input
+        .unmanaged_source_spec
+        .as_ref()
+        .is_some_and(|allowed| observed_source.as_ref() == Some(allowed));
+    let can_remove_source = source_link_owned || unmanaged_source_matches;
+    if !can_remove_source {
+        return Ok(Plan {
+            ops: Vec::new(),
+            next_manifest: state.manifest.clone(),
+        });
+    }
+
+    let mut ops = Vec::new();
+    let next_raw = emitter.remove(&agent_file.raw_content, &input.source_name)?;
+    if next_raw != agent_file.raw_content {
+        ops.push(FsOp::WriteFile {
+            path: agent_file.config_path.clone(),
+            content: next_raw,
+        });
+    }
+    let mut next_manifest = state.manifest.clone();
+    if source_link_owned {
+        let remove_source_server = next_manifest
+            .servers
+            .get_mut(&input.source_name)
+            .is_some_and(|server| {
+                server.links.remove(&input.agent);
+                server.links.is_empty()
+            });
+        if remove_source_server {
+            next_manifest.servers.remove(&input.source_name);
+        }
+        ops.push(manifest_write_op(state, &next_manifest)?);
+    }
+    Ok(Plan { ops, next_manifest })
 }
 
 /// Computes an unlink plan using the manifest-recorded config path.
@@ -325,6 +479,20 @@ fn require_agent_file(
         })
 }
 
+fn require_agent_file_at<'a>(
+    state: &'a State,
+    agent: AgentId,
+    scope: AgentScope,
+    config_path: &Path,
+) -> Result<&'a AgentFileState, Error> {
+    find_agent_file(state, agent, scope, config_path).ok_or_else(|| Error::InvalidServerSpec {
+        reason: format!(
+            "agent {agent}@{scope} at {} was not included in readState",
+            config_path.display()
+        ),
+    })
+}
+
 fn ensure_agent_installed(agent: AgentId, file: &AgentFileState) -> Result<(), Error> {
     if file.exists || file.parent_exists || file.install_check_hit {
         return Ok(());
@@ -363,6 +531,23 @@ fn manifest_write_op(state: &State, manifest: &ServerManifest) -> Result<FsOp, E
         path: state.manifest_path.clone(),
         content: serialize_manifest(manifest)?,
     })
+}
+
+fn replace_manifest_write(state: &State, plan: &mut Plan) -> Result<(), Error> {
+    let serialized = serialize_manifest(&plan.next_manifest)?;
+    for op in &mut plan.ops {
+        if let FsOp::WriteFile { path, content } = op
+            && path == &state.manifest_path
+        {
+            *content = serialized;
+            return Ok(());
+        }
+    }
+    plan.ops.push(FsOp::WriteFile {
+        path: state.manifest_path.clone(),
+        content: serialized,
+    });
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ const EXTENSION_INSTALL_URL =
   'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension'
 
 /**
- * Advertises the BrowserClaw extension for Claude Desktop. Unlike the
+ * Advertises the BrowserOS neo extension for Claude Desktop. Unlike the
  * harness rows, Claude Desktop connects by dragging a `.mcpb` into its
  * Settings, which this app cannot toggle or detect, so this is a link out
  * to the repo install steps rather than a connect action.
@@ -31,7 +31,7 @@ export function ClaudeDesktopCard() {
               Give Claude Desktop a real browser.
             </p>
             <p className="text-[13px] text-ink-2 leading-snug">
-              Drop in the extension and Claude reaches for BrowserClaw to open
+              Drop in the extension and Claude reaches for BrowserOS neo to open
               sites, log in, and click through flows.
             </p>
             <p className="text-[12px] text-ink-3 leading-snug">

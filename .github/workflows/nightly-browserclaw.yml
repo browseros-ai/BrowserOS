@@ -1,4 +1,4 @@
-name: "Nightly: BrowserClaw macOS (signed)"
+name: "Nightly: BrowserOS neo macOS (signed)"
 
 on:
   schedule:
@@ -135,7 +135,7 @@ jobs:
         with:
           bun-version: "1.3.6"
 
-      - name: Stage BrowserClaw nightly resources
+      - name: Stage BrowserOS neo nightly resources
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
@@ -183,7 +183,7 @@ jobs:
               print(f"Staged {len(extracted)} file(s) from {archive.name}")
           PY
 
-      - name: Build BrowserClaw (macOS arm64)
+      - name: Build BrowserOS neo (macOS arm64)
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
@@ -203,12 +203,12 @@ jobs:
         if: ${{ always() && steps.version.outputs.version != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: BrowserClaw_v${{ steps.version.outputs.version }}_arm64
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.version }}/BrowserClaw_*.dmg
+          name: BrowserOS_neo_v${{ steps.version.outputs.version }}_arm64
+          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.version }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Update rolling BrowserClaw nightly prerelease
+      - name: Update rolling BrowserOS neo nightly prerelease
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           TARGET_REF: ${{ steps.build_inputs.outputs.target_ref }}
@@ -218,9 +218,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=("$BROWSEROS_REPO"/packages/browseros/releases/"$VERSION"/BrowserClaw_*.dmg)
+          files=("$BROWSEROS_REPO"/packages/browseros/releases/"$VERSION"/BrowserOS_neo_*.dmg)
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "::error::No BrowserClaw DMG found to publish"
+            echo "::error::No BrowserOS neo DMG found to publish"
             exit 1
           fi
           printf 'Publishing:\n%s\n' "${files[@]}"
@@ -228,7 +228,7 @@ jobs:
           built_sha="$(git -C "$BROWSEROS_REPO" rev-parse HEAD)"
           notes_file="$(mktemp)"
           cat > "$notes_file" <<EOF
-          Automated signed BrowserClaw macOS arm64 nightly for v$VERSION.
+          Automated signed BrowserOS neo macOS arm64 nightly for v$VERSION.
 
           Source ref: \`$TARGET_REF\`
           Build commit: \`$built_sha\`
@@ -243,7 +243,7 @@ jobs:
             --prerelease \
             --latest=false \
             --target "$built_sha" \
-            --title "BrowserClaw Nightly (signed macOS arm64) $(date -u +%Y-%m-%d)" \
+            --title "BrowserOS neo Nightly (signed macOS arm64) $(date -u +%Y-%m-%d)" \
             --notes-file "$notes_file" \
             "${files[@]}"
 
@@ -280,7 +280,7 @@ jobs:
               json.dumps(
                   {
                       "text": (
-                          ":x: BrowserClaw nightly macOS build failed on "
+                          ":x: BrowserOS neo nightly macOS build failed on "
                           f"`{os.environ['TARGET_REF']}` - {os.environ['RUN_URL']}"
                       )
                   }

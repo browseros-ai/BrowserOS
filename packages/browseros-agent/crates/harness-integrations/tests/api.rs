@@ -6,9 +6,10 @@ use std::{
 };
 
 use harness_integrations::{
-    AgentId, AgentScope, DisconnectInput, Error, LinkInput, ListLinksFilter, McpManager, McpServer,
-    McpServerSpec, UnlinkInput, detect_installed_agents, is_agent_supported, is_installed,
-    list_supported_agents, resolve_agent_surface, resolve_harness_definition,
+    AgentId, AgentScope, DisconnectInput, Error, InspectEntryInput, LinkInput, ListLinksFilter,
+    McpManager, McpServer, McpServerSpec, MigrateServerInput, UnlinkInput, detect_installed_agents,
+    is_agent_supported, is_installed, list_supported_agents, resolve_agent_surface,
+    resolve_harness_definition,
 };
 use serde_json::Value;
 use tempfile::tempdir;
@@ -224,6 +225,277 @@ fn rescan_reads_each_manifest_recorded_config_path() -> Result<(), Box<dyn std::
     );
     assert!(report.drifted.is_empty());
     assert!(report.missing.is_empty());
+    Ok(())
+}
+
+#[test]
+fn inspect_and_migrate_generated_entries_across_every_harness_shape()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let manager = McpManager::new(root.path().join("workspace"));
+    let legacy_spec = McpServerSpec::Http {
+        url: "http://127.0.0.1:9100/mcp".to_string(),
+        headers: BTreeMap::new(),
+    };
+    let canonical_spec = McpServerSpec::Http {
+        url: "http://127.0.0.1:9200/mcp".to_string(),
+        headers: BTreeMap::new(),
+    };
+
+    for agent in AgentId::ALL {
+        let config = root.path().join(format!("configs/{agent}"));
+        fs::create_dir_all(config.parent().ok_or("missing config parent")?)?;
+        manager.link(link_input(
+            McpServer {
+                name: "BrowserClaw".to_string(),
+                spec: legacy_spec.clone(),
+            },
+            agent,
+            &config,
+        ))?;
+        let inspected = manager
+            .inspect_entry(InspectEntryInput::new("BrowserClaw", agent).at_path(&config))?
+            .ok_or("missing generated entry")?;
+        assert_eq!(inspected.spec, legacy_spec);
+
+        let mut input = MigrateServerInput::new(
+            "BrowserClaw",
+            McpServer {
+                name: "BrowserOS neo".to_string(),
+                spec: canonical_spec.clone(),
+            },
+            agent,
+        );
+        input.config_path = Some(config.clone());
+        let summary = manager.migrate_server(input)?;
+        assert!(summary.migrated, "{agent}");
+        assert!(
+            manager
+                .inspect_entry(InspectEntryInput::new("BrowserClaw", agent).at_path(&config))?
+                .is_none(),
+            "{agent}"
+        );
+        assert_eq!(
+            manager
+                .inspect_entry(InspectEntryInput::new("BrowserOS neo", agent).at_path(&config))?
+                .map(|entry| entry.spec),
+            Some(canonical_spec.clone()),
+            "{agent}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn migration_scopes_foreign_authority_and_preserves_timestamps_and_formatting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let workspace = root.path().join("workspace");
+    let manager = McpManager::new(&workspace);
+    let config = root.path().join("custom/cursor.json");
+    fs::create_dir_all(config.parent().ok_or("missing config parent")?)?;
+    fs::write(
+        &config,
+        "{\n  // keep this\n  \"theme\": \"dark\",\n  \"mcpServers\": {}\n}\n",
+    )?;
+    let legacy_spec = McpServerSpec::Http {
+        url: "http://127.0.0.1:9100/mcp".to_string(),
+        headers: BTreeMap::new(),
+    };
+    manager.link(link_input(
+        McpServer {
+            name: "BrowserClaw".to_string(),
+            spec: legacy_spec.clone(),
+        },
+        AgentId::Cursor,
+        &config,
+    ))?;
+    let legacy = manager.list()?.remove(0);
+    let legacy_added_at = legacy.added_at;
+    let legacy_created_at = legacy.links[&AgentId::Cursor].created_at.clone();
+    let with_collision = fs::read_to_string(&config)?.replace(
+        "\"BrowserClaw\":",
+        "\"BrowserOS neo\": { \"command\": \"foreign\" },\n    \"BrowserClaw\":",
+    );
+    fs::write(&config, with_collision)?;
+
+    let mut migration = MigrateServerInput::new(
+        "BrowserClaw",
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: McpServerSpec::Http {
+                url: "http://127.0.0.1:9200/mcp".to_string(),
+                headers: BTreeMap::new(),
+            },
+        },
+        AgentId::Cursor,
+    );
+    migration.config_path = Some(config.clone());
+    let summary = manager.migrate_server(migration.clone())?;
+    assert!(summary.migrated);
+    assert!(summary.overwrote_foreign);
+    let raw = fs::read_to_string(&config)?;
+    assert!(raw.contains("// keep this"));
+    assert!(raw.contains("\"theme\": \"dark\""));
+    assert!(!raw.contains("BrowserClaw"));
+    let canonical = manager.list()?.remove(0);
+    assert_eq!(canonical.name, "BrowserOS neo");
+    assert_eq!(canonical.added_at, legacy_added_at);
+    assert_eq!(
+        canonical.links[&AgentId::Cursor].created_at,
+        legacy_created_at
+    );
+    assert!(!manager.migrate_server(migration)?.migrated);
+
+    let foreign_workspace = root.path().join("foreign-workspace");
+    let foreign_manager = McpManager::new(&foreign_workspace);
+    let foreign_config = root.path().join("foreign/cursor.json");
+    fs::create_dir_all(foreign_config.parent().ok_or("missing foreign parent")?)?;
+    let foreign_raw = r#"{"mcpServers":{"BrowserClaw":{"command":"foreign"},"BrowserOS neo":{"command":"also-foreign"}},"keep":true}"#;
+    fs::write(&foreign_config, foreign_raw)?;
+    let mut unmatched = MigrateServerInput::new(
+        "BrowserClaw",
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: legacy_spec.clone(),
+        },
+        AgentId::Cursor,
+    );
+    unmatched.config_path = Some(foreign_config.clone());
+    assert!(!foreign_manager.migrate_server(unmatched)?.migrated);
+    assert_eq!(fs::read_to_string(&foreign_config)?, foreign_raw);
+    assert!(!foreign_workspace.join("manifest.json").exists());
+
+    let exact_workspace = root.path().join("exact-workspace");
+    let exact_manager = McpManager::new(&exact_workspace);
+    let exact_config = root.path().join("exact/cursor.json");
+    fs::create_dir_all(exact_config.parent().ok_or("missing exact parent")?)?;
+    fs::write(
+        &exact_config,
+        r#"{"mcpServers":{"BrowserClaw":{"url":"http://127.0.0.1:9100/mcp","type":"http"}}}"#,
+    )?;
+    let observed = exact_manager
+        .inspect_entry(
+            InspectEntryInput::new("BrowserClaw", AgentId::Cursor).at_path(&exact_config),
+        )?
+        .ok_or("missing exact source")?;
+    let mut exact = MigrateServerInput::new(
+        "BrowserClaw",
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: legacy_spec,
+        },
+        AgentId::Cursor,
+    );
+    exact.config_path = Some(exact_config.clone());
+    exact.unmanaged_source_spec = Some(observed.spec);
+    assert!(exact_manager.migrate_server(exact)?.migrated);
+    assert!(fs::read_to_string(exact_config)?.contains("BrowserOS neo"));
+    Ok(())
+}
+
+#[test]
+fn migration_converges_from_interrupted_install_and_cleanup_states()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let legacy_spec = McpServerSpec::Http {
+        url: "http://127.0.0.1:9100/mcp".to_string(),
+        headers: BTreeMap::new(),
+    };
+    let canonical_spec = McpServerSpec::Http {
+        url: "http://127.0.0.1:9200/mcp".to_string(),
+        headers: BTreeMap::new(),
+    };
+
+    let installed_workspace = root.path().join("installed-workspace");
+    let installed_manager = McpManager::new(&installed_workspace);
+    let legacy_config = root.path().join("installed/legacy-cursor.json");
+    let canonical_config = root.path().join("installed/canonical-cursor.json");
+    fs::create_dir_all(legacy_config.parent().ok_or("missing installed parent")?)?;
+    installed_manager.link(link_input(
+        McpServer {
+            name: "BrowserClaw".to_string(),
+            spec: legacy_spec.clone(),
+        },
+        AgentId::Cursor,
+        &legacy_config,
+    ))?;
+    installed_manager.link(link_input(
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: canonical_spec.clone(),
+        },
+        AgentId::Cursor,
+        &canonical_config,
+    ))?;
+    let canonical_before = installed_manager
+        .list()?
+        .into_iter()
+        .find(|server| server.name == "BrowserOS neo")
+        .ok_or("missing canonical manifest entry")?;
+    let mut installed_migration = MigrateServerInput::new(
+        "BrowserClaw",
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: canonical_spec.clone(),
+        },
+        AgentId::Cursor,
+    );
+    installed_migration.config_path = Some(legacy_config.clone());
+    assert!(
+        installed_manager
+            .migrate_server(installed_migration)?
+            .migrated
+    );
+    let installed_servers = installed_manager.list()?;
+    assert_eq!(installed_servers.len(), 1);
+    assert_eq!(installed_servers[0].name, "BrowserOS neo");
+    assert_eq!(installed_servers[0].added_at, canonical_before.added_at);
+    assert_eq!(
+        installed_servers[0].links[&AgentId::Cursor].created_at,
+        canonical_before.links[&AgentId::Cursor].created_at
+    );
+    assert_eq!(
+        installed_servers[0].links[&AgentId::Cursor].config_path,
+        canonical_config
+    );
+    let legacy_raw = fs::read_to_string(legacy_config)?;
+    assert!(!legacy_raw.contains("BrowserClaw"));
+    assert!(!legacy_raw.contains("BrowserOS neo"));
+    let canonical_raw = fs::read_to_string(canonical_config)?;
+    assert!(canonical_raw.contains("BrowserOS neo"));
+    assert!(!canonical_raw.contains("BrowserClaw"));
+
+    let cleaned_workspace = root.path().join("cleaned-workspace");
+    let cleaned_manager = McpManager::new(&cleaned_workspace);
+    let cleaned_config = root.path().join("cleaned/cursor.json");
+    fs::create_dir_all(cleaned_config.parent().ok_or("missing cleaned parent")?)?;
+    cleaned_manager.link(link_input(
+        McpServer {
+            name: "BrowserClaw".to_string(),
+            spec: legacy_spec,
+        },
+        AgentId::Cursor,
+        &cleaned_config,
+    ))?;
+    fs::write(&cleaned_config, r#"{"mcpServers":{}}"#)?;
+    let mut cleaned_migration = MigrateServerInput::new(
+        "BrowserClaw",
+        McpServer {
+            name: "BrowserOS neo".to_string(),
+            spec: canonical_spec,
+        },
+        AgentId::Cursor,
+    );
+    cleaned_migration.config_path = Some(cleaned_config.clone());
+    assert!(cleaned_manager.migrate_server(cleaned_migration)?.migrated);
+    let cleaned_servers = cleaned_manager.list()?;
+    assert_eq!(cleaned_servers.len(), 1);
+    assert_eq!(cleaned_servers[0].name, "BrowserOS neo");
+    let cleaned_raw = fs::read_to_string(cleaned_config)?;
+    assert!(cleaned_raw.contains("BrowserOS neo"));
+    assert!(!cleaned_raw.contains("BrowserClaw"));
     Ok(())
 }
 

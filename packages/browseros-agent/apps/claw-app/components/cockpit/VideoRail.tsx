@@ -3,7 +3,7 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Subtle "learn BrowserClaw" strip at the bottom of the ready-state
+ * Subtle "learn BrowserOS neo" strip at the bottom of the ready-state
  * cockpit. A single horizontally-scrolling row of poster tiles that
  * open the shared lightbox, foldable to a one-line handle so it never
  * disturbs the workflow above it. Fold state persists in localStorage.
@@ -54,7 +54,7 @@ export function VideoRail() {
   return (
     <section
       className="flex flex-col gap-3 border-border-2 border-t pt-6"
-      aria-label="learn browserclaw"
+      aria-label="Learn BrowserOS neo"
     >
       <button
         type="button"
@@ -69,7 +69,7 @@ export function VideoRail() {
           )}
         />
         <span className="font-mono text-[11px] uppercase tracking-[0.14em]">
-          Learn BrowserClaw
+          Learn BrowserOS neo
         </span>
         {collapsed && (
           <span className="font-mono text-[11px] text-ink-3 tracking-[0.08em]">

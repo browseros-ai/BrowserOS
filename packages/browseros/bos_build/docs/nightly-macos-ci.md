@@ -230,7 +230,7 @@ The builds write:
 
 ```text
 packages/browseros/releases/<version>/BrowserOS_v<version>_arm64.dmg
-packages/browseros/releases/<version>/BrowserClaw_v<version>_arm64.dmg
+packages/browseros/releases/<version>/BrowserOS_neo_v<version>_arm64.dmg
 ```
 
 The workflows upload matching DMGs with 14-day retention and refresh:

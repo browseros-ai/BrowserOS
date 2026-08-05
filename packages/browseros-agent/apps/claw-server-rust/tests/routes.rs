@@ -1512,10 +1512,10 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
         request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
     assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
     assert_eq!(body["result"]["serverInfo"]["name"], "browserclaw");
-    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserClaw");
+    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
     assert!(
         body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserClaw — the browser for agents")
+            |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
         )
     );
     let session_id = headers

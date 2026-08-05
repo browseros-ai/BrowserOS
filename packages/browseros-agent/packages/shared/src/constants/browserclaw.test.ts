@@ -23,7 +23,7 @@ describe('BrowserClaw runtime constants', () => {
 
   test('preserves the canonical MCP identity and loopback URL', () => {
     expect(MCP_PATH).toBe('/mcp')
-    expect(BROWSEROS_MCP_SERVER_NAME).toBe('BrowserClaw')
+    expect(BROWSEROS_MCP_SERVER_NAME).toBe('BrowserOS neo')
     expect(canonicalMcpUrlForPort()).toBe('http://127.0.0.1:9200/mcp')
     expect(canonicalMcpUrlForPort(9100)).toBe('http://127.0.0.1:9100/mcp')
   })

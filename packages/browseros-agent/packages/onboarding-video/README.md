@@ -1,6 +1,6 @@
 # @browseros/onboarding-video
 
-Remotion compositions for the BrowserClaw cockpit first-run motion demo.
+Remotion compositions for the BrowserOS neo cockpit first-run motion demo.
 
 ## Usage
 

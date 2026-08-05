@@ -151,7 +151,7 @@ class Context:
             return f"{self.product.app_base_name}{get_executable_extension()}"
         if IS_MACOS():
             return f"{self.product.app_base_name}.app"
-        return self.product.app_base_name.lower()
+        return self.product.linux.launcher_name
 
     @property
     def CHROMIUM_APP_NAME(self) -> str:

@@ -1,4 +1,4 @@
-name: "Release: BrowserClaw (full)"
+name: "Release: BrowserOS neo (full)"
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
           - windows
           - macos
       include_servers:
-        description: "Prepare and finalize BrowserClaw server resources"
+        description: "Prepare BrowserOS neo onboarding and BrowserClaw server resources"
         type: boolean
         default: true
       sign_windows:
@@ -32,7 +32,7 @@ on:
         type: boolean
         default: true
       extensions:
-        description: "Prepare the BrowserClaw CRX and preview this feed channel"
+        description: "Prepare the BrowserOS neo extension CRX and preview this feed channel"
         type: choice
         default: alpha
         options:
@@ -40,7 +40,7 @@ on:
           - alpha
           - prod
       github_release_draft:
-        description: "Create the browser draft after every selected lane finalizes"
+        description: "Create or refresh the browser draft release after every selected lane succeeds"
         type: boolean
         default: true
 
@@ -185,7 +185,7 @@ jobs:
           fi
 
   build_onboarding:
-    name: Prepare BrowserClaw onboarding
+    name: Prepare BrowserOS neo onboarding resources
     needs: preflight
     if: ${{ inputs.include_servers }}
     uses: ./.github/workflows/release-claw-onboard.yml
@@ -199,7 +199,7 @@ jobs:
     secrets: inherit
 
   build_server:
-    name: Prepare BrowserClaw server
+    name: Prepare BrowserClaw server resources
     needs: preflight
     if: ${{ inputs.include_servers }}
     uses: ./.github/workflows/release-claw-server-rust.yml
@@ -213,7 +213,7 @@ jobs:
     secrets: inherit
 
   build_extension:
-    name: Prepare BrowserClaw extension
+    name: Prepare BrowserOS neo extension CRX
     needs: preflight
     if: ${{ inputs.extensions != 'skip' }}
     uses: ./.github/workflows/release-extensions.yml
@@ -466,7 +466,7 @@ jobs:
       INPUT_PLATFORMS: ${{ inputs.platforms }}
       INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
       PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
+      PRODUCT_LABEL: BrowserOS neo
       SOURCE_SHA: ${{ needs.release_plan.outputs.source_sha }}
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
@@ -620,7 +620,7 @@ jobs:
           retention-days: 30
 
   finalize_onboarding:
-    name: Finalize BrowserClaw onboarding
+    name: Finalize BrowserOS neo onboarding resources
     needs: [release_plan, browser_gate, stage_updates]
     if: ${{ always() && inputs.include_servers && needs.release_plan.result == 'success' && needs.browser_gate.result == 'success' && needs.stage_updates.result == 'success' }}
     uses: ./.github/workflows/release-claw-onboard.yml
@@ -634,7 +634,7 @@ jobs:
     secrets: inherit
 
   finalize_server:
-    name: Finalize BrowserClaw server
+    name: Finalize BrowserClaw server resources
     needs: [release_plan, browser_gate, stage_updates]
     if: ${{ always() && inputs.include_servers && needs.release_plan.result == 'success' && needs.browser_gate.result == 'success' && needs.stage_updates.result == 'success' }}
     uses: ./.github/workflows/release-claw-server-rust.yml
@@ -648,7 +648,7 @@ jobs:
     secrets: inherit
 
   finalize_extension:
-    name: Finalize BrowserClaw extension
+    name: Finalize BrowserOS neo extension CRX
     needs: [release_plan, browser_gate, stage_updates]
     if: ${{ always() && inputs.extensions != 'skip' && needs.release_plan.result == 'success' && needs.browser_gate.result == 'success' && needs.stage_updates.result == 'success' }}
     uses: ./.github/workflows/release-extensions.yml
@@ -662,7 +662,7 @@ jobs:
     secrets: inherit
 
   finalize:
-    name: Final release summary
+    name: Final BrowserOS neo release summary
     needs:
       - preflight
       - build_onboarding
@@ -706,7 +706,7 @@ jobs:
       PLAN_URL: ${{ needs.release_plan.outputs.plan_url }}
       PREFLIGHT_RESULT: ${{ needs.preflight.result }}
       PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
+      PRODUCT_LABEL: BrowserOS neo
       SERVER_BUILD_RESULT: ${{ needs.build_server.result }}
       SERVER_FINALIZE_RESULT: ${{ needs.finalize_server.result }}
       SERVER_VERSION: ${{ needs.release_plan.outputs.browserclaw_server_version }}
@@ -751,7 +751,7 @@ jobs:
             linux|macos) publish_platform_args=(--platform "$INPUT_PLATFORMS") ;;
           esac
           {
-            echo "## BrowserClaw release summary"
+            echo "## BrowserOS neo release summary"
             echo
             echo "- Browser version: \`${VERSION:-unresolved}\`"
             echo "- Fixed source SHA: \`${SOURCE_SHA:-unresolved}\`"
@@ -764,16 +764,16 @@ jobs:
             echo "### Components"
             echo "| Component | Version | Build | Finalize |"
             echo "| --- | --- | --- | --- |"
-            echo "| BrowserClaw onboarding | \`${ONBOARD_VERSION:-skipped}\` | \`$ONBOARD_BUILD_RESULT\` | \`$ONBOARD_FINALIZE_RESULT\` |"
-            echo "| BrowserClaw server | \`${SERVER_VERSION:-skipped}\` | \`$SERVER_BUILD_RESULT\` | \`$SERVER_FINALIZE_RESULT\` |"
-            echo "| BrowserClaw extension | \`${EXTENSIONS_VERSION:-skipped}\` | \`$EXTENSION_BUILD_RESULT\` | \`$EXTENSION_FINALIZE_RESULT\` |"
+            echo "| BrowserOS neo onboarding resources | \`${ONBOARD_VERSION:-skipped}\` | \`$ONBOARD_BUILD_RESULT\` | \`$ONBOARD_FINALIZE_RESULT\` |"
+            echo "| BrowserClaw server resources | \`${SERVER_VERSION:-skipped}\` | \`$SERVER_BUILD_RESULT\` | \`$SERVER_FINALIZE_RESULT\` |"
+            echo "| BrowserOS neo extension CRX | \`${EXTENSIONS_VERSION:-skipped}\` | \`$EXTENSION_BUILD_RESULT\` | \`$EXTENSION_FINALIZE_RESULT\` |"
             echo
             echo "### Browser builds"
-            echo "| Platform | Result |"
-            echo "| --- | --- |"
-            echo "| Linux | \`$LINUX_RESULT\` |"
-            echo "| Windows | \`$WINDOWS_RESULT\` |"
-            echo "| macOS | \`$MACOS_RESULT\` |"
+            echo "| Platform | Result | Artifacts |"
+            echo "| --- | --- | --- |"
+            echo "| Linux | \`$LINUX_RESULT\` | \`browserclaw-release-ci-linux-x64\`<br>\`BrowserOS_neo_v${VERSION:-unresolved}_x64.AppImage\`<br>\`BrowserOS_neo_v${VERSION:-unresolved}_amd64.deb\` |"
+            echo "| Windows | \`$WINDOWS_RESULT\` | \`browserclaw-release-ci-windows-x64\`<br>\`BrowserOS_neo_v${VERSION:-unresolved}_x64_installer.exe\`<br>\`BrowserOS_neo_v${VERSION:-unresolved}_x64_installer.zip\` |"
+            echo "| macOS | \`$MACOS_RESULT\` | \`BrowserOS_neo_v${VERSION:-unresolved}_${INPUT_MACOS_ARCH}\`<br>\`BrowserOS_neo_v${VERSION:-unresolved}_${INPUT_MACOS_ARCH}.dmg\` |"
             echo
             echo "### Manual promotion"
             echo

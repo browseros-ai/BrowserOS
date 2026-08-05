@@ -19,6 +19,11 @@ function section(start: string, end?: string): string {
 
 describe('release-claw-onboard workflow', () => {
   it('exposes the reusable build/finalize interface and outputs', () => {
+    expect(workflow).toContain('name: "Release: BrowserOS neo Onboarding"')
+    expect(workflow).toContain('"claw-onboard/v*"')
+    expect(workflow).toContain(
+      'packages/browseros-agent/scripts/release/prepare-claw-onboard-release.sh',
+    )
     const call = section('  workflow_call:', '\npermissions:')
     expect(call).toContain('mode:')
     expect(call).toContain('default: "build"')

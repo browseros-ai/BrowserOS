@@ -5,11 +5,17 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::error::Error;
 
 use super::{
+    emitter::Emitter,
     io::{apply_plan, read_state, read_state_at_paths},
-    planner::{plan_disconnect, plan_link, plan_rescan, plan_unlink},
+    paths::resolve_agent_surface,
+    planner::{
+        plan_disconnect, plan_link, plan_migration_cleanup, plan_migration_install, plan_rescan,
+        plan_unlink, verify_migration_destination,
+    },
     types::{
-        AgentScope, DisconnectInput, DisconnectSummary, LinkInput, LinkSummary, ListLinksFilter,
-        ListedLink, ManifestServerEntry, RescanReport, UnlinkInput, UnlinkSummary,
+        AgentScope, DisconnectInput, DisconnectSummary, InspectEntryInput, InspectedEntry,
+        LinkInput, LinkSummary, ListLinksFilter, ListedLink, ManifestServerEntry,
+        MigrateServerInput, MigrateServerSummary, RescanReport, UnlinkInput, UnlinkSummary,
     },
 };
 
@@ -38,6 +44,116 @@ impl McpManager {
         let planned = plan_link(&state, &input, &now)?;
         apply_plan(&planned.plan)?;
         Ok(planned.summary)
+    }
+
+    /// Inspects one entry only when it exactly matches an emitted MCP shape.
+    pub fn inspect_entry(&self, input: InspectEntryInput) -> Result<Option<InspectedEntry>, Error> {
+        let overrides = input
+            .config_path
+            .clone()
+            .map(|path| BTreeMap::from([(input.agent, path)]))
+            .unwrap_or_default();
+        let state = read_state(&self.workspace_dir, &[input.agent], input.scope, &overrides)?;
+        let file = state
+            .agents
+            .first()
+            .ok_or_else(|| Error::InvalidServerSpec {
+                reason: format!(
+                    "agent {} was not included in the state snapshot",
+                    input.agent
+                ),
+            })?;
+        let emitter = Emitter::new(resolve_agent_surface(input.agent, input.scope)?);
+        Ok(emitter
+            .inspect(&file.raw_content, &input.server_name)?
+            .map(|spec| InspectedEntry {
+                server_name: input.server_name,
+                agent: input.agent,
+                scope: input.scope,
+                config_path: file.config_path.clone(),
+                spec,
+            }))
+    }
+
+    /// Installs and verifies a destination before removing one eligible source link.
+    pub fn migrate_server(&self, input: MigrateServerInput) -> Result<MigrateServerSummary, Error> {
+        let no_op = || MigrateServerSummary {
+            source_name: input.source_name.clone(),
+            destination_name: input.destination.name.trim().to_string(),
+            agent: input.agent,
+            scope: input.scope,
+            migrated: false,
+            overwrote_foreign: false,
+        };
+        let manifest_state = read_state(
+            &self.workspace_dir,
+            &[],
+            AgentScope::System,
+            &BTreeMap::new(),
+        )?;
+        let recorded_path = manifest_state
+            .manifest
+            .servers
+            .get(&input.source_name)
+            .and_then(|server| server.links.get(&input.agent))
+            .map(|link| link.config_path.clone());
+        let destination_path = manifest_state
+            .manifest
+            .servers
+            .get(input.destination.name.trim())
+            .and_then(|server| server.links.get(&input.agent))
+            .map(|link| link.config_path.clone());
+        let selected_source_path = recorded_path.or_else(|| input.config_path.clone());
+        let overrides = selected_source_path
+            .map(|path| BTreeMap::from([(input.agent, path)]))
+            .unwrap_or_default();
+        let source_state =
+            read_state(&self.workspace_dir, &[input.agent], input.scope, &overrides)?;
+        let source_path = source_state
+            .agents
+            .first()
+            .ok_or_else(|| Error::InvalidServerSpec {
+                reason: format!(
+                    "agent {} was not included in the state snapshot",
+                    input.agent
+                ),
+            })?
+            .config_path
+            .clone();
+        let destination_path = destination_path.unwrap_or_else(|| source_path.clone());
+        let mut paths = vec![(input.agent, destination_path.clone())];
+        if source_path != destination_path {
+            paths.push((input.agent, source_path.clone()));
+        }
+        let state = read_state_at_paths(&self.workspace_dir, &paths, input.scope)?;
+        let now = current_timestamp()?;
+        let Some(install) =
+            plan_migration_install(&state, &input, &source_path, &destination_path, &now)?
+        else {
+            return Ok(no_op());
+        };
+        let overwrote_foreign = install.overwrote_foreign;
+        apply_plan(&install.plan)?;
+
+        let installed = read_state_at_paths(&self.workspace_dir, &paths, input.scope)?;
+        if !verify_migration_destination(&installed, &input, &destination_path)? {
+            return Err(Error::MigrationVerification {
+                reason: format!(
+                    "{} was not readable after installation for {}",
+                    input.destination.name, input.agent
+                ),
+            });
+        }
+        let cleanup = plan_migration_cleanup(&installed, &input, &source_path, &destination_path)?;
+        apply_plan(&cleanup)?;
+        Ok(MigrateServerSummary {
+            source_name: input.source_name,
+            destination_name: input.destination.name.trim().to_string(),
+            agent: input.agent,
+            scope: input.scope,
+            migrated: true,
+            overwrote_foreign,
+        })
     }
 
     /// Unlinks one manifest-recorded agent entry without touching other agents.

@@ -1212,7 +1212,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "PREFLIGHT_RESULT": "success",
             "PRODUCT": product,
             "PRODUCT_LABEL": (
-                "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+                "BrowserOS neo" if product == "browserclaw" else "BrowserOS"
             ),
             "RUNNER_TEMP": str(runner_temp),
             "SERVER_FINALIZE_RESULT": "skipped",

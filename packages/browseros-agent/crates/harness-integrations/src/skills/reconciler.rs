@@ -116,7 +116,7 @@ impl SkillReconciler {
                 outcome.warnings.push(SkillWarning {
                     target: target.clone(),
                     message: format!(
-                        "Existing {} directory is not managed by BrowserClaw; left unchanged",
+                        "Existing {} directory is not managed by BrowserOS neo; left unchanged",
                         spec.name
                     ),
                 });

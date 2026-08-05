@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Explicit version; agent and BrowserClaw allocate one when omitted"
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
         required: false
         type: string
         default: ""
@@ -40,7 +40,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Explicit version; agent and BrowserClaw allocate one when omitted"
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
         required: false
         type: string
         default: ""
@@ -264,7 +264,7 @@ jobs:
                 SCOPE="packages/browseros-agent/apps/app"
                 ;;
               browserclaw)
-                TITLE="BrowserClaw Extension - v$VERSION"
+                TITLE="BrowserOS neo Extension - v$VERSION"
                 SCOPE="packages/browseros-agent/apps/claw-app"
                 ;;
               controller)
@@ -549,7 +549,7 @@ jobs:
             fi
             case "$NAME" in
               agent) TITLE="BrowserOS Agent Extension - v$VERSION" ;;
-              browserclaw) TITLE="BrowserClaw Extension - v$VERSION" ;;
+              browserclaw) TITLE="BrowserOS neo Extension - v$VERSION" ;;
               controller) TITLE="BrowserOS Controller Extension - v$VERSION" ;;
               bugreporter) TITLE="BrowserOS Bug Reporter Extension - v$VERSION" ;;
             esac

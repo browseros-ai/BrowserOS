@@ -1,4 +1,4 @@
-name: "Release: BrowserClaw Onboarding"
+name: "Release: BrowserOS neo Onboarding"
 
 on:
   push:
@@ -158,7 +158,7 @@ jobs:
           changelog="/tmp/release-changelog.md"
           notes="/tmp/release-notes.md"
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial BrowserClaw Onboarding release." > "$changelog"
+            echo "Initial BrowserOS neo Onboarding release." > "$changelog"
           else
             git log "$PREVIOUS_TAG..$RELEASE_SHA" --pretty=format:"- %s (%h)" > "$changelog"
             if [ ! -s "$changelog" ]; then
@@ -180,7 +180,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          title="BrowserClaw Onboarding - v$VERSION"
+          title="BrowserOS neo Onboarding - v$VERSION"
           release_sha="${{ steps.release.outputs.release_sha }}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
@@ -256,7 +256,7 @@ jobs:
           asset="dist/prod/claw-onboard/browseros-claw-onboard-resources.zip"
           test -f "$asset"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "BrowserClaw Onboarding - v$VERSION"
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "BrowserOS neo Onboarding - v$VERSION"
           fi
           gh release upload "$RELEASE_TAG" "$asset" --clobber
 
@@ -349,7 +349,7 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$RELEASE_TAG" -m "BrowserClaw Onboarding - v$VERSION" "$RELEASE_SHA"
+            git tag -a "$RELEASE_TAG" -m "BrowserOS neo Onboarding - v$VERSION" "$RELEASE_SHA"
             git push origin "refs/tags/$RELEASE_TAG"
           fi
 
@@ -382,6 +382,17 @@ jobs:
             echo "::error::Latest R2 binding was not preserved for $destination"
             exit 1
           fi
+
+      - name: Summarize onboarding resource keys
+        run: |
+          {
+            echo "### BrowserOS neo Onboarding resource publish"
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- GitHub release: \`$RELEASE_TAG\`"
+            echo "- Latest: \`claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip\`"
+            echo "- Versioned: \`claw-onboard/prod-resources/${VERSION}/browseros-claw-onboard-resources.zip\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   reflect-version:
     needs:

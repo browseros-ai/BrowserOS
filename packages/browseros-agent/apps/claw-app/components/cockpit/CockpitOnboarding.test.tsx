@@ -40,7 +40,7 @@ describe('CockpitOnboarding', () => {
     expect(html).toContain('Manage agents')
     expect(html).toContain('Paste this prompt into your agent.')
     expect(html).toContain(
-      'Using BrowserClaw, search for the current monthly prices',
+      'Using BrowserOS neo, search for the current monthly prices',
     )
   })
 
@@ -87,7 +87,7 @@ describe('CockpitOnboarding', () => {
   it('waiting: retains the starter prompt tile so the reader can still copy', () => {
     const html = render('waiting', ['Claude Code'])
     expect(html).toContain(
-      'Using BrowserClaw, search for the current monthly prices',
+      'Using BrowserOS neo, search for the current monthly prices',
     )
   })
 

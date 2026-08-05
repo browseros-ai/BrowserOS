@@ -87,12 +87,12 @@ class GetAppPathTest(unittest.TestCase):
                 product=get_product_descriptor("browserclaw"),
             )
 
-            self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
-            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
+            self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserOS neo")
+            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserOS neo.app")
             self.assertEqual(ctx.out_dir, "out/Default_browserclaw_arm64")
             self.assertEqual(
                 ctx.get_artifact_name("dmg"),
-                f"BrowserClaw_v{ctx.semantic_version}_arm64.dmg",
+                f"BrowserOS_neo_v{ctx.semantic_version}_arm64.dmg",
             )
             self.assertEqual(
                 ctx.get_release_path("macos"),
@@ -112,7 +112,7 @@ class GetAppPathTest(unittest.TestCase):
             )
 
             self.assertEqual(ctx.product.id, "browserclaw")
-            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserClaw.app")
+            self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserOS neo.app")
 
     def test_context_accepts_product_id_string(self):
         ctx = Context(
@@ -124,7 +124,7 @@ class GetAppPathTest(unittest.TestCase):
 
         self.assertEqual(ctx.build_type, "release")
         self.assertEqual(ctx.product.id, "browserclaw")
-        self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserClaw")
+        self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserOS neo")
 
     def test_debug_gn_args_allow_override_and_package_all(self):
         ctx = Context(
@@ -168,7 +168,7 @@ class GetAppPathTest(unittest.TestCase):
                 (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
             ),
             "browserclaw": (
-                (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+                (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
                 (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
             ),
         }
@@ -188,7 +188,7 @@ class GetAppPathTest(unittest.TestCase):
         expected = (
             (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
             (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-            (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+            (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
         )
 
         for product in ("browseros", "browserclaw"):

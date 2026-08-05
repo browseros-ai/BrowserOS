@@ -23,7 +23,7 @@ serde_json = "1"
 serde_repr = "0.1"
 serde-saphyr = { version = "0.0.29", default-features = false, features = ["deserialize"] }
 sha2 = "0.10"
-jsonc-parser = { version = "0.33", features = ["cst"] }
+jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
 toml_edit = "0.22"
 rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"

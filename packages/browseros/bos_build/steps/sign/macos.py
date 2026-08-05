@@ -343,8 +343,8 @@ def find_components_to_sign(
         framework_names = [
             "BrowserOS Framework.framework",
             "BrowserOS Dev Framework.framework",
-            "BrowserClaw Framework.framework",
-            "BrowserClaw Dev Framework.framework",
+            "BrowserOS neo Framework.framework",
+            "BrowserOS neo Dev Framework.framework",
         ]
     nxtscape_framework_paths = []
 

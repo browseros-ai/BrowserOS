@@ -59,7 +59,7 @@ class ResolveConfigDirectModeTest(unittest.TestCase):
             cli_args = {"chromium_src": str(m.src), "product": "browserclaw"}
             contexts = resolve_config(cli_args=cli_args)
             self.assertEqual(contexts[0].product.id, "browserclaw")
-            self.assertEqual(contexts[0].product.app_base_name, "BrowserClaw")
+            self.assertEqual(contexts[0].product.app_base_name, "BrowserOS neo")
 
     def test_unknown_product_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
