@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import quote
 
 from ..core.context import Context
@@ -23,6 +23,135 @@ from .common import (
     check_gh_cli,
     validate_release_metadata,
 )
+
+
+CommandRunner = Callable[..., subprocess.CompletedProcess]
+
+
+def _run_gh(command: List[str], runner: CommandRunner) -> str:
+    result = runner(command, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def list_pull_requests(
+    repo: str,
+    *,
+    state: str = "open",
+    head: str = "",
+    runner: CommandRunner = subprocess.run,
+) -> List[Mapping[str, object]]:
+    """List pull requests with candidate reconciliation fields."""
+    command = [
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--state",
+        state,
+        "--limit",
+        "100",
+        "--json",
+        "number,url,state,isDraft,headRefName,headRefOid,baseRefName,body,mergedAt,mergeCommit,mergeable",
+    ]
+    if head:
+        command.extend(["--head", head])
+    document = json.loads(_run_gh(command, runner) or "[]")
+    if not isinstance(document, list) or not all(
+        isinstance(item, dict) for item in document
+    ):
+        raise RuntimeError("GitHub pull request response must be an array")
+    return document
+
+
+def create_pull_request(
+    *,
+    repo: str,
+    head: str,
+    base: str,
+    title: str,
+    body: str,
+    runner: CommandRunner = subprocess.run,
+) -> str:
+    """Create a pull request and return its URL."""
+    return _run_gh(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            repo,
+            "--head",
+            head,
+            "--base",
+            base,
+            "--title",
+            title,
+            "--body",
+            body,
+        ],
+        runner,
+    )
+
+
+def edit_pull_request_body(
+    *,
+    repo: str,
+    number: int,
+    body: str,
+    runner: CommandRunner = subprocess.run,
+) -> None:
+    """Replace pull request metadata without changing its branch."""
+    _run_gh(
+        [
+            "gh",
+            "pr",
+            "edit",
+            str(number),
+            "--repo",
+            repo,
+            "--body",
+            body,
+        ],
+        runner,
+    )
+
+
+def merge_pull_request(
+    repo: str,
+    number: int,
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> str:
+    """Squash-merge a pull request and return the merge commit."""
+    _run_gh(
+        ["gh", "pr", "merge", str(number), "--repo", repo, "--squash"],
+        runner,
+    )
+    document = json.loads(
+        _run_gh(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(number),
+                "--repo",
+                repo,
+                "--json",
+                "mergeCommit",
+            ],
+            runner,
+        )
+        or "{}"
+    )
+    merge_commit = document.get("mergeCommit") if isinstance(document, dict) else None
+    if isinstance(merge_commit, dict):
+        sha = merge_commit.get("oid") or merge_commit.get("sha")
+    else:
+        sha = document.get("sha") if isinstance(document, dict) else None
+    if not isinstance(sha, str) or not sha:
+        raise RuntimeError(f"Pull request #{number} merged without a merge commit")
+    return sha
 
 
 def create_github_release(
