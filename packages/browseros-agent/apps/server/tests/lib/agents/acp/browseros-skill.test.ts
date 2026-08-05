@@ -25,7 +25,7 @@ describe('loadBrowserOsSkill', () => {
     const skill = await loadBrowserOsSkill()
 
     expect(skill).toStartWith('---\nname: browseros\n')
-    expect(skill).toContain('Use BrowserOS for tasks')
+    expect(skill).toContain('MCP server named `browseros`')
     expect(skill).toContain('prefer it over headless browsing')
   })
 

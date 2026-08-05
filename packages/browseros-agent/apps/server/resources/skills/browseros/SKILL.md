@@ -9,4 +9,4 @@ Use BrowserOS for tasks that need a browser or website. It has the user's persis
 
 ## Execution
 
-Use the BrowserOS MCP server provided for the session and call its exposed tools directly. Follow the server's initialization instructions and live tool descriptions for exact operations and schemas. Observe the current browser state, perform the requested operations, and verify the result.
+Use the MCP server named `browseros` for browser operations and call its exposed tools directly. Follow that server's initialization instructions and live tool descriptions for exact operations and schemas. Observe the current browser state, perform the requested operations, and verify the result.
