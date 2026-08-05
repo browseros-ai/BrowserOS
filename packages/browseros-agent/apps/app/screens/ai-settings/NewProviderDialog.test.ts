@@ -14,14 +14,13 @@ const baseValues = {
 }
 
 describe('provider setup boundary', () => {
-  it.each(['claude-code', 'codex', 'acp-custom'])(
-    'rejects removed ACP provider type %s',
-    (type) => {
+  for (const type of ['claude-code', 'codex', 'acp-custom']) {
+    it(`rejects removed ACP provider type ${type}`, () => {
       expect(
         providerFormSchema.safeParse({ ...baseValues, type }).success,
       ).toBe(false)
-    },
-  )
+    })
+  }
 
   it('keeps ordinary provider validation unchanged', () => {
     const values = {

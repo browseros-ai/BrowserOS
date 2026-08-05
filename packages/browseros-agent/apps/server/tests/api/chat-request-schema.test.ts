@@ -24,9 +24,8 @@ describe('ChatRequestSchema agent targets', () => {
     })
   })
 
-  it.each(['claude', 'codex'] as const)(
-    'accepts a %s target without LLM provider fields',
-    (type) => {
+  for (const type of ['claude', 'codex'] as const) {
+    it(`accepts a ${type} target without LLM provider fields`, () => {
       const parsed = ChatRequestSchema.parse({
         target: { type, agentId: crypto.randomUUID() },
         conversationId: crypto.randomUUID(),
@@ -35,8 +34,8 @@ describe('ChatRequestSchema agent targets', () => {
 
       expect(parsed.target.type).toBe(type)
       expect('provider' in parsed).toBe(false)
-    },
-  )
+    })
+  }
 
   it('rejects ACP fields disguised as an LLM provider request', () => {
     const parsed = ChatRequestSchema.safeParse({
