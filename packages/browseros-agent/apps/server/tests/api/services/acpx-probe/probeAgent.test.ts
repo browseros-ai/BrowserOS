@@ -68,12 +68,6 @@ function baseProbeResult(overrides: Record<string, unknown> = {}) {
 }
 
 describe('probeAcpAgent — input shape', () => {
-  it('rejects when neither agentId nor command is provided', async () => {
-    await expect(probeAcpAgent({})).rejects.toThrow(
-      'Either agentId or command is required',
-    )
-  })
-
   it('rewrites a built-in agentId to the tier-2 npx command when no resourcesDir is supplied', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ agentId: 'claude' })
@@ -83,13 +77,6 @@ describe('probeAcpAgent — input shape', () => {
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain('@agentclientprotocol/claude-agent-acp')
     expect(lastCall?.authPolicy).toBe('skip')
-  })
-
-  it('forwards command and cwd for acp-custom', async () => {
-    nextResult = baseProbeResult()
-    await probeAcpAgent({ command: 'my-bin acp', cwd: '/tmp/x' })
-    expect(lastCall?.command).toBe('my-bin acp')
-    expect(lastCall?.cwd).toBe('/tmp/x')
   })
 
   it('defaults the timeout to 120 seconds', async () => {
@@ -174,16 +161,6 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.command).toContain('@agentclientprotocol/codex-acp')
   })
-
-  it('passes through an explicit command unchanged regardless of resourcesDir', async () => {
-    nextResult = baseProbeResult()
-    await probeAcpAgent({
-      command: 'my-custom-binary acp',
-      resourcesDir: '/some/path',
-    })
-    expect(lastCall?.command).toBe('my-custom-binary acp')
-    expect(lastCall?.agent).toBeUndefined()
-  })
 })
 
 describe('probeAcpAgent — normalisation', () => {
@@ -253,7 +230,7 @@ describe('probeAcpAgent — normalisation', () => {
         { id: 'b', name: 'B' },
       ],
     })
-    const out = await probeAcpAgent({ agentId: 'gemini' })
+    const out = await probeAcpAgent({ agentId: 'claude' })
     expect(out.models.map((m) => m.id)).toEqual(['a', 'b'])
     expect(out.reasoning).toBeNull()
   })
@@ -365,7 +342,7 @@ describe('probeAcpAgent — normalisation', () => {
 
   it('returns null reasoning when the agent has no thought_level config', async () => {
     nextResult = baseProbeResult({ reasoning: null })
-    const out = await probeAcpAgent({ agentId: 'gemini' })
+    const out = await probeAcpAgent({ agentId: 'claude' })
     expect(out.reasoning).toBeNull()
   })
 

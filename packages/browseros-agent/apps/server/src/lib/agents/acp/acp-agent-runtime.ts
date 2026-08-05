@@ -143,19 +143,6 @@ export class AcpAgentRuntime {
     }
   }
 
-  async cancel(
-    agentId: string,
-    conversationId: string,
-    reason = 'cancel',
-  ): Promise<boolean> {
-    const session = this.sessions.get(
-      deriveAcpSessionKey(agentId, conversationId),
-    )
-    if (!session) return false
-    await session.provider.cancel(reason)
-    return true
-  }
-
   async close(
     agentId: string,
     conversationId: string,

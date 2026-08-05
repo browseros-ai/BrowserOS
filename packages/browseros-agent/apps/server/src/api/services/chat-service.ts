@@ -60,14 +60,12 @@ export interface ChatServiceDeps {
   resourcesDir?: string | null
   activity?: ServerActivity
   acpAgentStore?: Pick<AcpAgentStore, 'get'>
-  acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'cancel' | 'close'>
+  acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'close'>
 }
 
 export class ChatService {
   private acpAgentStore: Pick<AcpAgentStore, 'get'> | undefined
-  private acpRuntime:
-    | Pick<AcpAgentRuntime, 'stream' | 'cancel' | 'close'>
-    | undefined
+  private acpRuntime: Pick<AcpAgentRuntime, 'stream' | 'close'> | undefined
   private readonly acpMessages = new Map<string, UIMessage[]>()
   private readonly acpConversationAgents = new Map<string, string>()
 
@@ -80,7 +78,7 @@ export class ChatService {
     request: ChatRequest,
     abortSignal: AbortSignal,
   ): Promise<Response> {
-    if (request.target?.type === 'claude' || request.target?.type === 'codex') {
+    if (request.target.type === 'claude' || request.target.type === 'codex') {
       return this.processAcpMessage(request as AcpChatRequest, abortSignal)
     }
 
@@ -131,7 +129,6 @@ export class ChatService {
     let isNewSession = false
     const contextChanges: string[] = []
 
-    // Build stable keys for change detection
     const mcpServerKey = this.buildMcpServerKey(request.browserContext)
 
     // Snapshot the inputs the cached session was built with, before any
@@ -296,7 +293,6 @@ export class ChatService {
       request.selectedTextSource,
     )
 
-    // Prepend tool-change context when session was rebuilt mid-conversation
     const contextPrefix =
       contextChanges.length > 0
         ? `${contextChanges.map((c) => `[Context: ${c}]`).join('\n')}\n\n`
@@ -476,10 +472,7 @@ export class ChatService {
     return this.acpAgentStore
   }
 
-  private getAcpRuntime(): Pick<
-    AcpAgentRuntime,
-    'stream' | 'cancel' | 'close'
-  > {
+  private getAcpRuntime(): Pick<AcpAgentRuntime, 'stream' | 'close'> {
     this.acpRuntime ??= new AcpAgentRuntime({
       serverPort: this.deps.serverPort,
       resourcesDir: this.deps.resourcesDir,

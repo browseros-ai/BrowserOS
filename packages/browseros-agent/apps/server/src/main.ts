@@ -2,10 +2,6 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * BrowserOS Server Application
- *
- * Manages server lifecycle: initialization, startup, and shutdown.
  */
 
 import fs from 'node:fs'
@@ -16,10 +12,6 @@ import { EXIT_CODES } from '@browseros/shared/constants/exit-codes'
 import { createHttpServer } from './api/server'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
-import {
-  configureClaudeRuntime,
-  configureCodexRuntime,
-} from './lib/agents/runtime'
 import {
   cleanOldSessions,
   ensureBrowserosDir,
@@ -50,8 +42,6 @@ export class Application {
       resourcesDir: path.resolve(this.config.resourcesDir),
     })
 
-    configureClaudeRuntime()
-    configureCodexRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {

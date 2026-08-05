@@ -9,7 +9,6 @@ export interface AcpAgent {
   modelId?: string
   reasoningEffort?: string
   workingDirectory?: string
-  pinned: boolean
   createdAt: number
   updatedAt: number
 }

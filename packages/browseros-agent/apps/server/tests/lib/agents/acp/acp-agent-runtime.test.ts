@@ -61,7 +61,6 @@ async function runtimeFixture(options: {
     id: `${adapter}-agent-id`,
     name: adapter === 'claude' ? 'Claude Code' : 'Codex',
     type: adapter,
-    pinned: false,
     createdAt: 1,
     updatedAt: 1,
     ...options.agent,
@@ -263,15 +262,11 @@ describe('AcpAgentRuntime', () => {
       { type: 'error', errorText: 'Unable to start the ACP agent.' },
     ])
     expect(
-      await fixture.runtime.cancel(
-        fixture.agent.id,
-        'conversation-4',
-        'cancel',
-      ),
+      await fixture.runtime.close(fixture.agent.id, 'conversation-4'),
     ).toBe(false)
   })
 
-  it('cancels and closes only the selected persistent ACP session', async () => {
+  it('closes only the selected persistent ACP session', async () => {
     const fixture = await runtimeFixture({})
     await collect(
       await fixture.runtime.stream({
@@ -282,10 +277,6 @@ describe('AcpAgentRuntime', () => {
     )
 
     expect(
-      await fixture.runtime.cancel(fixture.agent.id, 'conversation-5', 'user'),
-    ).toBe(true)
-    expect(fixture.acpRuntime.cancelCalls).toEqual(['user'])
-    expect(
       await fixture.runtime.close(fixture.agent.id, 'conversation-5', {
         discardPersistentState: true,
       }),
@@ -294,7 +285,7 @@ describe('AcpAgentRuntime', () => {
       { reason: 'close', discardPersistentState: true },
     ])
     expect(
-      await fixture.runtime.cancel(fixture.agent.id, 'conversation-5'),
+      await fixture.runtime.close(fixture.agent.id, 'conversation-5'),
     ).toBe(false)
   })
 })

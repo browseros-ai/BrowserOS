@@ -9,7 +9,7 @@ interface AcpAgentsResponse {
   agents: AcpAgent[]
 }
 
-export interface CreateAcpAgentInput {
+interface CreateAcpAgentInput {
   name: string
   type: AcpAgentType
   modelId?: string
@@ -74,34 +74,6 @@ export function useCreateAcpAgent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       })
-      return result.agent
-    },
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),
-  })
-}
-
-export function useUpdateAcpAgent() {
-  const { baseUrl, isLoading } = useAgentServerUrl()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async (input: {
-      agentId: string
-      patch: { name?: string; pinned?: boolean }
-    }) => {
-      if (!baseUrl || isLoading) {
-        throw new Error('BrowserOS agent server URL is not ready')
-      }
-      const result = await agentsFetch<{ agent: AcpAgent }>(
-        baseUrl,
-        `/${encodeURIComponent(input.agentId)}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(input.patch),
-        },
-      )
       return result.agent
     },
     onSuccess: () =>

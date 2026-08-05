@@ -72,13 +72,13 @@ const ChatInputSchema = z.object({
     .optional(),
 })
 
-export const BrowserOsChatRequestSchema = AgentLLMConfigSchema.merge(
+const BrowserOsChatRequestSchema = AgentLLMConfigSchema.merge(
   ChatInputSchema,
 ).extend({
   target: BrowserOsAgentTargetSchema,
 })
 
-export const AcpChatRequestSchema = ChatInputSchema.extend({
+const AcpChatRequestSchema = ChatInputSchema.extend({
   target: AcpAgentTargetSchema,
 })
 

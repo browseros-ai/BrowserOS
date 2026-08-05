@@ -22,7 +22,7 @@ const REMOVED_PROVIDER_TYPES = new Set([
   'acp-custom',
 ])
 
-export function dropRemovedProviderConfigs(
+function dropRemovedProviderConfigs(
   providers: LlmProviderConfig[] | null,
 ): LlmProviderConfig[] | null {
   if (!providers) return providers

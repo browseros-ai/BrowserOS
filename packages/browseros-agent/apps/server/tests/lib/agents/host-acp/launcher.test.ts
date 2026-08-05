@@ -102,24 +102,6 @@ describe('resolveAcpSpawnCommand', () => {
     expect(out?.command).toBe(HOST_ACP_ADAPTER_CONFIG.claude.acpCommand)
   })
 
-  it('returns null for acp-custom so the caller uses the user-supplied command', () => {
-    const out = resolveAcpSpawnCommand({
-      agentType: 'acp-custom',
-      resourcesDir: '/fake/resources',
-      resolveBundledBun: stubBunPresent,
-    })
-    expect(out).toBeNull()
-  })
-
-  it('returns null for an unknown agent type', () => {
-    const out = resolveAcpSpawnCommand({
-      agentType: 'gemini',
-      resourcesDir: '/fake/resources',
-      resolveBundledBun: stubBunPresent,
-    })
-    expect(out).toBeNull()
-  })
-
   it('quotes the bundled bun path so paths with spaces survive', () => {
     const bunWithSpaces =
       '/Applications/BrowserOS App/Contents/bin/third party/bun'
@@ -155,41 +137,13 @@ describe('resolveAcpSpawnCommand', () => {
     const split = splitCommandLikeAcpx(out?.command ?? '')
     expect(split.args).toContain(WINDOWS_BUN_PATH)
   })
-})
 
-describe('resolveAcpSpawnCommand extraEnv', () => {
-  it('bakes extraEnv into the bundled-bun command env prefix', () => {
+  it('does not replace the user Codex home', () => {
     const out = resolveAcpSpawnCommand({
       agentType: 'codex',
       resourcesDir: '/fake/resources',
       resolveBundledBun: stubBunPresent,
-      extraEnv: { CODEX_HOME: '/overlay/codex-home' },
     })
-    expect(out?.source).toBe('bundled-bun')
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    expect(split.command).toBe('env')
-    expect(split.args).toContain('CODEX_HOME=/overlay/codex-home')
-  })
-
-  it('wraps the npx fallback command with extraEnv', () => {
-    const out = resolveAcpSpawnCommand({
-      agentType: 'codex',
-      resolveBundledBun: stubBunMissing,
-      extraEnv: { CODEX_HOME: '/overlay/codex-home' },
-    })
-    expect(out?.source).toBe('host-npx-fallback')
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    expect(split.command).toBe('env')
-    expect(split.args).toContain('CODEX_HOME=/overlay/codex-home')
-    expect(out?.command).toContain(HOST_ACP_ADAPTER_CONFIG.codex.acpCommand)
-  })
-
-  it('leaves the npx fallback command unchanged when extraEnv is absent', () => {
-    const out = resolveAcpSpawnCommand({
-      agentType: 'codex',
-      resolveBundledBun: stubBunMissing,
-    })
-    expect(out?.source).toBe('host-npx-fallback')
-    expect(out?.command).toBe(HOST_ACP_ADAPTER_CONFIG.codex.acpCommand)
+    expect(out?.command).not.toContain('CODEX_HOME')
   })
 })

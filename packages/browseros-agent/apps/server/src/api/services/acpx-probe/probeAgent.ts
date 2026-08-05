@@ -4,23 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { type AgentProbeResult, probeAgent as runProbe } from 'acp-probe'
 import { resolveAcpSpawnCommand } from '../../../lib/agents/host-acp/launcher'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 
 export interface ServerAcpxProbeInput {
-  agentId?: string
-  command?: string
-  cwd?: string
+  agentId: AcpAgentType
   timeoutMs?: number
-  /**
-   * BrowserOS resources directory. When set, the probe prefers the
-   * bundled Bun launcher at <resourcesDir>/bin/third_party/bun for
-   * built-in agents so end-user installs without Node still resolve
-   * the spawn correctly. Production callers thread this from the
-   * HttpServerConfig.
-   */
   resourcesDir?: string | null
   browserosDir?: string | null
   platform?: NodeJS.Platform
@@ -75,40 +67,21 @@ function resolveTimeout(requested?: number): number {
 export async function probeAcpAgent(
   input: ServerAcpxProbeInput,
 ): Promise<ServerAcpxProbeResult> {
-  if (!input.agentId && !input.command) {
-    throw new Error('Either agentId or command is required')
-  }
   const timeoutMs = resolveTimeout(input.timeoutMs)
 
-  // Built-in agent ids (claude, codex) get rewritten to an explicit
-  // command via the two-tier launcher chain: bundled-Bun preferred,
-  // host-npx-fallback second. Only `launcher === null` (agent id not
-  // in HOST_ACP_ADAPTER_CONFIG) leaves the agentId alone and lets
-  // acp-probe / acpx resolve it via their own registry. `launcherSource`
-  // in the log line distinguishes tier 1 vs tier 2 for runtime traces.
-  let agentId = input.agentId
-  let command = input.command
-  if (!command && agentId) {
-    const launcher = resolveAcpSpawnCommand({
-      agentType: agentId,
-      browserosDir: input.browserosDir ?? getBrowserosDir(),
-      resourcesDir: input.resourcesDir,
-      platform: input.platform,
-    })
-    if (launcher) {
-      command = launcher.command
-      agentId = undefined
-      logger.debug('ACP probe using launcher-resolved command', {
-        originalAgentId: input.agentId,
-        launcherSource: launcher.source,
-      })
-    }
-  }
+  const launcher = resolveAcpSpawnCommand({
+    agentType: input.agentId,
+    browserosDir: input.browserosDir ?? getBrowserosDir(),
+    resourcesDir: input.resourcesDir,
+    platform: input.platform,
+  })
+  logger.debug('ACP probe using launcher-resolved command', {
+    agentId: input.agentId,
+    launcherSource: launcher.source,
+  })
 
   const result = await runProbe({
-    agent: agentId,
-    command,
-    cwd: input.cwd,
+    command: launcher.command,
     authPolicy: 'skip',
     timeoutMs,
   })

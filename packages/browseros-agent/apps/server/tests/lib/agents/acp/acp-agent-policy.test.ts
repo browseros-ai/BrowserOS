@@ -47,7 +47,6 @@ function agent(
     id: `${type}-agent-id`,
     name: type === 'claude' ? 'Claude Code' : 'Codex',
     type,
-    pinned: false,
     createdAt: 1,
     updatedAt: 1,
     ...patch,

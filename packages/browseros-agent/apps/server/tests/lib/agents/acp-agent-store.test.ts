@@ -45,7 +45,6 @@ describe('DbAcpAgentStore', () => {
       modelId: 'gpt-5.5',
       reasoningEffort: 'high',
       workingDirectory: '/tmp/project',
-      pinned: false,
     })
     expect('permissionMode' in agent).toBe(false)
     expect('sessionKey' in agent).toBe(false)
@@ -62,16 +61,10 @@ describe('DbAcpAgentStore', () => {
     expect(agent.workingDirectory).toBeUndefined()
   })
 
-  test('updates display fields and deletes the record', async () => {
+  test('deletes the record', async () => {
     const store = createStore()
     const agent = await store.create({ name: 'Claude', type: 'claude' })
 
-    const updated = await store.update(agent.id, {
-      name: 'Research agent',
-      pinned: true,
-    })
-
-    expect(updated).toMatchObject({ name: 'Research agent', pinned: true })
     expect(await store.delete(agent.id)).toBe(true)
     expect(await store.delete(agent.id)).toBe(false)
     expect(await store.get(agent.id)).toBeNull()
@@ -138,7 +131,9 @@ describe('DbAcpAgentStore', () => {
     const handle = initializeDb({ dbPath, migrationsDir: sourceMigrations })
     expect(
       handle.sqlite
-        .query('SELECT COUNT(*) AS count FROM agent_definitions')
+        .query(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'agent_definitions'",
+        )
         .get(),
     ).toEqual({ count: 0 })
     expect(
@@ -151,6 +146,12 @@ describe('DbAcpAgentStore', () => {
     expect(
       handle.sqlite.query('SELECT COUNT(*) AS count FROM acp_agents').get(),
     ).toEqual({ count: 0 })
+    expect(
+      handle.sqlite
+        .query('PRAGMA table_info(acp_agents)')
+        .all()
+        .some((column) => (column as { name: string }).name === 'pinned'),
+    ).toBe(false)
     expect(
       handle.sqlite.query('SELECT COUNT(*) AS count FROM oauth_tokens').get(),
     ).toEqual({ count: 1 })

@@ -45,9 +45,6 @@ export async function buildAcpAgentPolicy(
     browserosDir: input.browserosDir,
     resourcesDir: input.resourcesDir,
   })
-  if (!launcher) {
-    throw new Error(`No ACP launcher is registered for ${input.agent.type}`)
-  }
 
   return {
     adapter: input.agent.type,
@@ -61,8 +58,7 @@ export async function buildAcpAgentPolicy(
       browserContext: input.browserContext,
     }),
     sessionOptions: buildSessionOptions(input.agent, skill),
-    fullAccessModeCandidates:
-      DANGEROUS_ALLOW_MODE_CANDIDATES[input.agent.type] ?? [],
+    fullAccessModeCandidates: DANGEROUS_ALLOW_MODE_CANDIDATES[input.agent.type],
   }
 }
 

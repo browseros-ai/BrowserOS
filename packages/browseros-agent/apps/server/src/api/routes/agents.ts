@@ -16,27 +16,17 @@ import type { Env } from '../types'
 
 const AgentIdParamsSchema = z.object({ agentId: z.string().uuid() })
 
-const CreateAcpAgentSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  type: AcpAgentTypeSchema,
-  modelId: z.string().trim().min(1).optional(),
-  reasoningEffort: z.string().trim().min(1).optional(),
-  workingDirectory: z.string().trim().min(1).optional(),
-})
-
-const UpdateAcpAgentSchema = z
+const CreateAcpAgentSchema = z
   .object({
-    name: z.string().trim().min(1).max(80).optional(),
-    pinned: z.boolean().optional(),
+    name: z.string().trim().min(1).max(80),
+    type: AcpAgentTypeSchema,
+    modelId: z.string().trim().min(1).optional(),
+    reasoningEffort: z.string().trim().min(1).optional(),
+    workingDirectory: z.string().trim().min(1).optional(),
   })
-  .refine((patch) => patch.name !== undefined || patch.pinned !== undefined, {
-    message: 'At least one field is required',
-  })
+  .strict()
 
-type AgentRouteStore = Pick<
-  AcpAgentStore,
-  'list' | 'get' | 'create' | 'update' | 'delete'
->
+type AgentRouteStore = Pick<AcpAgentStore, 'list' | 'get' | 'create' | 'delete'>
 
 export function createAgentRoutes(options: { store?: AgentRouteStore } = {}) {
   const store = options.store ?? new DbAcpAgentStore()
@@ -51,19 +41,6 @@ export function createAgentRoutes(options: { store?: AgentRouteStore } = {}) {
       if (!agent) return c.json({ error: 'Unknown agent' }, 404)
       return c.json({ agent })
     })
-    .patch(
-      '/:agentId',
-      zValidator('param', AgentIdParamsSchema),
-      zValidator('json', UpdateAcpAgentSchema),
-      async (c) => {
-        const agent = await store.update(
-          c.req.valid('param').agentId,
-          c.req.valid('json'),
-        )
-        if (!agent) return c.json({ error: 'Unknown agent' }, 404)
-        return c.json({ agent })
-      },
-    )
     .delete(
       '/:agentId',
       zValidator('param', AgentIdParamsSchema),

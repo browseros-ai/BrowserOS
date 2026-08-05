@@ -29,7 +29,6 @@ describe('ACP agent routes', () => {
         name: 'Review agent',
         type: 'codex',
         modelId: 'gpt-5.5',
-        pinned: false,
       },
     })
 
@@ -56,19 +55,10 @@ describe('ACP agent routes', () => {
     expect(response.status).toBe(400)
   })
 
-  it('updates display state and deletes the agent', async () => {
+  it('deletes the agent', async () => {
     const store = new MemoryAcpAgentStore()
     await store.create({ name: 'Claude', type: 'claude' })
     const routes = createAgentRoutes({ store })
-    const patchResponse = await routes.request(`/${AGENT_ID}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Research', pinned: true }),
-    })
-
-    expect(await patchResponse.json()).toMatchObject({
-      agent: { name: 'Research', pinned: true },
-    })
     expect(
       (await routes.request(`/${AGENT_ID}`, { method: 'DELETE' })).status,
     ).toBe(200)
@@ -95,19 +85,9 @@ class MemoryAcpAgentStore implements AcpAgentStore {
       modelId: input.modelId,
       reasoningEffort: input.reasoningEffort,
       workingDirectory: input.workingDirectory,
-      pinned: false,
       createdAt: 1,
       updatedAt: 1,
     }
-    return this.agent
-  }
-
-  async update(
-    id: string,
-    patch: Partial<Pick<AcpAgentDefinition, 'name' | 'pinned'>>,
-  ): Promise<AcpAgentDefinition | null> {
-    if (this.agent?.id !== id) return null
-    this.agent = { ...this.agent, ...patch, updatedAt: 2 }
     return this.agent
   }
 

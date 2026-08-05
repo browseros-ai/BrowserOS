@@ -5,13 +5,7 @@
  */
 
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm'
-import {
-  index,
-  integer,
-  sqliteTable,
-  text,
-  uniqueIndex,
-} from 'drizzle-orm/sqlite-core'
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 export const acpAgents = sqliteTable(
   'acp_agents',
@@ -22,7 +16,6 @@ export const acpAgents = sqliteTable(
     modelId: text('model_id'),
     reasoningEffort: text('reasoning_effort'),
     workingDirectory: text('working_directory'),
-    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -34,37 +27,3 @@ export const acpAgents = sqliteTable(
 
 export type AcpAgentRow = InferSelectModel<typeof acpAgents>
 export type NewAcpAgentRow = InferInsertModel<typeof acpAgents>
-
-export const agentDefinitions = sqliteTable(
-  'agent_definitions',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    adapter: text('adapter', {
-      enum: ['claude', 'codex'],
-    }).notNull(),
-    modelId: text('model_id').notNull(),
-    reasoningEffort: text('reasoning_effort').notNull(),
-    permissionMode: text('permission_mode', {
-      enum: ['approve-all'],
-    })
-      .notNull()
-      .default('approve-all'),
-    sessionKey: text('session_key').notNull(),
-    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
-    adapterConfigJson: text('adapter_config_json'),
-    createdAt: integer('created_at').notNull(),
-    updatedAt: integer('updated_at').notNull(),
-  },
-  (table) => [
-    uniqueIndex('agent_definitions_session_key_unique').on(table.sessionKey),
-    index('agent_definitions_updated_at_idx').on(table.updatedAt),
-    index('agent_definitions_adapter_updated_at_idx').on(
-      table.adapter,
-      table.updatedAt,
-    ),
-  ],
-)
-
-export type AgentDefinitionRow = InferSelectModel<typeof agentDefinitions>
-export type NewAgentDefinitionRow = InferInsertModel<typeof agentDefinitions>

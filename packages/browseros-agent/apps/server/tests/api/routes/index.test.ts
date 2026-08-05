@@ -7,7 +7,6 @@ import { describe, expect, it, mock } from 'bun:test'
 import { Hono } from 'hono'
 import { KlavisService } from '../../../src/api/services/klavis'
 import type { Env } from '../../../src/api/types'
-import { TurnRegistry } from '../../../src/lib/agents/turns/active-turn-registry'
 
 mock.module('../../../src/lib/mcp-manager', () => ({
   humaniseInstallError: (err: unknown) => ({
@@ -45,7 +44,6 @@ function createTestApp(
     klavis: new KlavisService({ browserosId: null }),
     onShutdown,
     tokenManager: null,
-    turnRegistry: new TurnRegistry(),
   })
 }
 

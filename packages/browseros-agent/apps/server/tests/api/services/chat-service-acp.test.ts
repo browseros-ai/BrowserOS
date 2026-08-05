@@ -18,7 +18,6 @@ function acpAgent(type: AcpAgentDefinition['type'] = 'claude') {
     name: type === 'claude' ? 'Claude Code' : 'Codex',
     type,
     workingDirectory: '/agent/default',
-    pinned: false,
     createdAt: 1,
     updatedAt: 1,
   } satisfies AcpAgentDefinition
@@ -48,7 +47,6 @@ function deps(options: { agent?: AcpAgentDefinition | null } = {}) {
         { type: 'finish', finishReason: 'stop' },
       ])
     },
-    cancel: mock(async () => true),
     close,
   }
   const service = new ChatService({

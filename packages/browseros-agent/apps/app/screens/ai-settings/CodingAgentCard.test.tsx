@@ -45,7 +45,6 @@ const agent: AcpAgent = {
   type: 'codex',
   modelId: 'gpt-5.5',
   reasoningEffort: 'medium',
-  pinned: false,
   createdAt: 1,
   updatedAt: 1,
 }

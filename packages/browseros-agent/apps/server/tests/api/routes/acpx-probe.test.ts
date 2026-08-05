@@ -84,22 +84,10 @@ describe('POST /acpx/probe', () => {
     expect(payload.error?.message).toContain('boom')
   })
 
-  it('rejects an empty body where neither agentId nor command is set', async () => {
+  it('requires a supported agent type', async () => {
     const res = await call({})
     expect(res.status).toBe(400)
-  })
-
-  it('accepts a command-only request for acp-custom', async () => {
-    nextProbeResult = {
-      models: [{ id: 'default' }],
-      reasoning: null,
-      supportsConfigOption: false,
-      agentInfo: null,
-      protocolVersion: 1,
-    }
-    const res = await call({ command: 'my-bin acp', cwd: '/tmp/x' })
-    expect(res.status).toBe(200)
-    expect(lastInput).toEqual({ command: 'my-bin acp', cwd: '/tmp/x' })
+    expect((await call({ agentId: 'acp-custom' })).status).toBe(400)
   })
 
   it('rejects an out-of-range timeout', async () => {

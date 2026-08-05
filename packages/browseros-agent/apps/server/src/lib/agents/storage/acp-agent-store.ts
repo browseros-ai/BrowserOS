@@ -17,10 +17,6 @@ export interface AcpAgentStore {
   list(): Promise<AcpAgentDefinition[]>
   get(id: string): Promise<AcpAgentDefinition | null>
   create(input: CreateAcpAgentInput): Promise<AcpAgentDefinition>
-  update(
-    id: string,
-    patch: Partial<Pick<AcpAgentDefinition, 'name' | 'pinned'>>,
-  ): Promise<AcpAgentDefinition | null>
   delete(id: string): Promise<boolean>
 }
 
@@ -57,7 +53,6 @@ export class DbAcpAgentStore implements AcpAgentStore {
         modelId: optionalText(input.modelId),
         reasoningEffort: optionalText(input.reasoningEffort),
         workingDirectory: optionalText(input.workingDirectory),
-        pinned: false,
         createdAt: now,
         updatedAt: now,
       }
@@ -68,25 +63,6 @@ export class DbAcpAgentStore implements AcpAgentStore {
         type: agent.type,
       })
       return agent
-    })
-  }
-
-  async update(
-    id: string,
-    patch: Partial<Pick<AcpAgentDefinition, 'name' | 'pinned'>>,
-  ): Promise<AcpAgentDefinition | null> {
-    return this.withWriteLock(async () => {
-      if (!(await this.get(id))) return null
-      this.db
-        .update(acpAgents)
-        .set({
-          ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
-          ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
-          updatedAt: Date.now(),
-        })
-        .where(eq(acpAgents.id, id))
-        .run()
-      return this.get(id)
     })
   }
 
@@ -124,7 +100,6 @@ function toAcpAgentDefinition(row: AcpAgentRow): AcpAgentDefinition {
     modelId: row.modelId ?? undefined,
     reasoningEffort: row.reasoningEffort ?? undefined,
     workingDirectory: row.workingDirectory ?? undefined,
-    pinned: row.pinned,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
