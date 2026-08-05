@@ -9,7 +9,11 @@ import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
 import type { KlavisService } from '../services/klavis'
 import type { ServerActivity } from '../services/server-activity'
-import { ChatRequestSchema } from '../types'
+import {
+  type BrowserOsChatRequest,
+  type ChatRequest,
+  ChatRequestSchema,
+} from '../types'
 import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
@@ -47,10 +51,10 @@ export function createChatRoutes(deps: ChatRouteDeps) {
   return new Hono()
     .post('/', zValidator('json', ChatRequestSchema), async (c) => {
       const request = c.req.valid('json')
-      const provider =
-        'provider' in request ? request.provider : request.target.type
-      const model = 'model' in request ? request.model : undefined
-      const baseUrl = 'baseUrl' in request ? request.baseUrl : undefined
+      const browserRequest = isBrowserOsChatRequest(request) ? request : null
+      const provider = browserRequest?.provider ?? request.target.type
+      const model = browserRequest?.model
+      const baseUrl = browserRequest?.baseUrl
 
       Sentry.getCurrentScope().setTag(
         'request-type',
@@ -104,4 +108,10 @@ export function createChatRoutes(deps: ChatRouteDeps) {
         )
       },
     )
+}
+
+function isBrowserOsChatRequest(
+  request: ChatRequest,
+): request is BrowserOsChatRequest {
+  return request.target.type === 'browseros'
 }

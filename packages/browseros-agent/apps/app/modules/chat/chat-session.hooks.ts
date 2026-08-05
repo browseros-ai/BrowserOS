@@ -102,12 +102,9 @@ const getResponseAndQueryFromMessageId = (
 }
 
 export type ChatOrigin = 'sidepanel' | 'newtab'
-export type AgentSessionStrategy = 'conversation' | 'main'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
-  /** ACP agent session id source. Defaults to the conversation id. */
-  agentSessionStrategy?: AgentSessionStrategy
   /** When false, messages are queued until integrations finish syncing. */
   isIntegrationsSynced?: boolean
 }
@@ -379,14 +376,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           optionsRef.current?.origin,
           personalizationRef.current,
         )
-        const agentSessionStrategy =
-          optionsRef.current?.agentSessionStrategy ?? 'conversation'
-        const agentSessionId =
-          agentSessionStrategy === 'main' ? 'main' : conversationIdRef.current
-
         const commonRequest = {
           conversationId: conversationIdRef.current,
-          agentSessionId,
           mode: currentMode,
           browserContext: requestBrowserContext,
           userSystemPrompt,
@@ -689,7 +680,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         selectedLlmProvider?.id,
       provider_type: agentTarget ? 'acp' : llmTargetProvider?.type,
       agent_id: agentTarget?.agentId,
-      adapter: agentTarget?.adapter,
+      adapter: agentTarget?.agentType,
       model:
         agentTarget?.modelId ??
         llmTargetProvider?.modelId ??
@@ -795,7 +786,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       model_id:
         target.kind === 'acp' ? target.modelId : target.provider.modelId,
       agent_id: target.kind === 'acp' ? target.agentId : undefined,
-      adapter: target.kind === 'acp' ? target.adapter : undefined,
+      adapter: target.kind === 'acp' ? target.agentType : undefined,
     })
 
     void selectChatTarget(target).catch((error) => {

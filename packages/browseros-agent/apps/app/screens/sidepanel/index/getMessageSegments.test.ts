@@ -17,7 +17,7 @@ describe('getMessageSegments', () => {
           output: { title: 'Example' },
         },
       ],
-    } as UIMessage
+    } as unknown as UIMessage
 
     expect(getMessageSegments(message, true, false)).toEqual([
       {

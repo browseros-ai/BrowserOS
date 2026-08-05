@@ -11,23 +11,17 @@ import {
   providerTemplates,
 } from '@/lib/llm-providers/providerTemplates'
 import { cn } from '@/lib/utils'
-import type {
-  HarnessAdapterDescriptor,
-  HarnessAgentAdapter,
-} from '@/modules/agents/agent-harness-types'
+import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { CodingAgentTemplateCard } from './CodingAgentTemplateCard'
 import { ProviderTemplateCard } from './ProviderTemplateCard'
 
 export interface ProviderTemplatesSectionProps {
-  /** Coding-agent runtimes (Claude Code / Codex) shown first in the grid. */
-  codingAdapters: HarnessAdapterDescriptor[]
-  onCreateAgent: (adapterId: HarnessAgentAdapter) => void
+  onCreateAgent: (type: AcpAgentType) => void
   onUseTemplate: (template: ProviderTemplate) => void
 }
 
 export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
-  codingAdapters,
   onCreateAgent,
   onUseTemplate,
 }) => {
@@ -49,8 +43,7 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
           <div>
             <h3 className="font-semibold text-lg">Quick provider templates</h3>
             <p className="text-muted-foreground text-sm">
-              {codingAdapters.length + filteredTemplates.length} templates
-              available
+              {filteredTemplates.length + 2} templates available
             </p>
           </div>
           <ChevronDown
@@ -71,14 +64,15 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
                     template={template}
                     onUseTemplate={onUseTemplate}
                   />
-                  {showCodingAdapters &&
-                    codingAdapters.map((adapter) => (
-                      <CodingAgentTemplateCard
-                        key={`coding-${adapter.id}`}
-                        adapter={adapter}
-                        onCreate={onCreateAgent}
-                      />
-                    ))}
+                  {showCodingAdapters
+                    ? (['claude', 'codex'] as const).map((type) => (
+                        <CodingAgentTemplateCard
+                          key={`coding-${type}`}
+                          type={type}
+                          onCreate={onCreateAgent}
+                        />
+                      ))
+                    : null}
                 </Fragment>
               )
             })}

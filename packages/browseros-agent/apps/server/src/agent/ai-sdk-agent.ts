@@ -25,7 +25,6 @@ import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
 import { createReadTool } from '../tools/filesystem/read'
-import { isAcpProvider } from './acp-providers'
 import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
 import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
@@ -110,9 +109,6 @@ export function buildAgentFilesystemToolSet(
   resolvedConfig: ResolvedAgentConfig,
   options: { outputFileAccess?: BrowserOutputFileAccess } = {},
 ): ToolSet {
-  if (isAcpProvider(resolvedConfig.provider)) {
-    return {}
-  }
   if (resolvedConfig.chatMode || !resolvedConfig.workingDir) {
     return {
       filesystem_read: createReadTool(undefined, {
@@ -130,12 +126,6 @@ export class AiSdkAgent {
     private _mcpClients: Array<{ close(): Promise<void> }>,
     private conversationId: string,
     private _toolNames: Set<string>,
-    /**
-     * ACP-provider teardown. Closes the spawned agent process and its
-     * persistent session record. Undefined for model-backed providers,
-     * where the LanguageModel owns no host-side state.
-     */
-    private _modelClose?: () => Promise<void>,
   ) {}
 
   /** Tool names registered on this agent — used to sanitize messages during session rebuilds. */
@@ -148,9 +138,7 @@ export class AiSdkAgent {
       config.resolvedConfig.contextWindowSize ??
       AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
 
-    const { model: rawModel, close: modelClose } = await createLanguageModel(
-      config.resolvedConfig,
-    )
+    const { model: rawModel } = await createLanguageModel(config.resolvedConfig)
     const isV3Model =
       typeof rawModel === 'object' &&
       rawModel !== null &&
@@ -170,23 +158,13 @@ export class AiSdkAgent {
       })
     }
 
-    // ACP-backed providers (Claude Code, Codex, custom ACP) reach tools
-    // exclusively through the MCP boundary acpx-ai-provider sets up; the
-    // ai-sdk `tools` argument never crosses the ACP wire. Skip every
-    // tool-set builder and every server-side MCP client connection on
-    // this branch. The spawned agent dials BrowserOS's own /mcp route
-    // (and any user-configured MCP servers) directly via the
-    // mcpServers config on ResolvedAgentConfig.
-    const useMcpBoundaryOnly = isAcpProvider(config.resolvedConfig.provider)
     const outputFileAccess =
       config.outputFileAccess ?? createBrowserOutputFileAccess()
 
-    const allBrowserTools = useMcpBoundaryOnly
-      ? {}
-      : buildBrowserToolSet(config.browserSession, {
-          readOnly: config.resolvedConfig.chatMode,
-          outputFileAccess,
-        })
+    const allBrowserTools = buildBrowserToolSet(config.browserSession, {
+      readOnly: config.resolvedConfig.chatMode,
+      outputFileAccess,
+    })
     const reservedBrowserToolNames = new Set(Object.keys(allBrowserTools))
     const chatModeAllowedTools = CHAT_MODE_ALLOWED_TOOLS
     const browserTools = config.resolvedConfig.chatMode
@@ -196,25 +174,21 @@ export class AiSdkAgent {
           ),
         )
       : allBrowserTools
-    if (config.resolvedConfig.chatMode && !useMcpBoundaryOnly) {
+    if (config.resolvedConfig.chatMode) {
       logger.info('Chat mode enabled, restricting to read-only browser tools', {
         allowedTools: Array.from(chatModeAllowedTools),
       })
     }
 
-    const klavisTools =
-      !useMcpBoundaryOnly && config.klavis
-        ? config.klavis.buildAiSdkToolSet({
-            selectedServerNames: config.browserContext?.enabledMcpServers,
-          })
-        : {}
-
-    // Connect custom (non-Klavis) MCP servers per-session
-    const specs = useMcpBoundaryOnly
-      ? []
-      : await buildMcpServerSpecs({
-          browserContext: config.browserContext,
+    const klavisTools = config.klavis
+      ? config.klavis.buildAiSdkToolSet({
+          selectedServerNames: config.browserContext?.enabledMcpServers,
         })
+      : {}
+
+    const specs = await buildMcpServerSpecs({
+      browserContext: config.browserContext,
+    })
     const { clients, tools: customMcpTools } = await createMcpClients(specs)
     const klavisCollidingToolNames = Object.keys(customMcpTools).filter(
       (name) => name in klavisTools,
@@ -296,8 +270,6 @@ export class AiSdkAgent {
       }
     }
 
-    // ACP providers skip AI SDK filesystem tools. Chat and no-workspace sessions
-    // get only output-file reads for browser-generated files.
     const filesystemTools = buildAgentFilesystemToolSet(config.resolvedConfig, {
       outputFileAccess,
     })
@@ -398,7 +370,6 @@ export class AiSdkAgent {
       clients,
       config.resolvedConfig.conversationId,
       new Set(Object.keys(tools)),
-      modelClose,
     )
   }
 
@@ -425,14 +396,6 @@ export class AiSdkAgent {
   async dispose(): Promise<void> {
     for (const client of this._mcpClients) {
       await client.close().catch(() => {})
-    }
-    if (this._modelClose) {
-      await this._modelClose().catch((error: unknown) => {
-        logger.warn('LanguageModel close hook failed', {
-          conversationId: this.conversationId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
     }
     logger.info('Agent disposed', { conversationId: this.conversationId })
   }

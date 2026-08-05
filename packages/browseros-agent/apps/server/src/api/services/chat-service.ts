@@ -13,7 +13,6 @@ import {
   createUIMessageStreamResponse,
   type UIMessage,
 } from 'ai'
-import { isAcpProvider } from '../../agent/acp-providers'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
 import {
@@ -26,7 +25,6 @@ import {
   AcpAgentRuntime,
   type AcpAgentStreamInput,
 } from '../../lib/agents/acp/acp-agent-runtime'
-import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
 import type { AcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { DbAcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
@@ -101,13 +99,7 @@ export class ChatService {
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
 
-    // Look up the session first so we can stamp isNewConversation onto
-    // agentConfig before it flows down into the ACP factory (which uses
-    // the flag to decide whether to refresh the workspace instruction
-    // file). The original isNewSession flag below stays as-is for the
-    // rest of the chat-service logic.
     let session = sessionStore.get(request.conversationId)
-    const isFirstTurn = !session
 
     const agentConfig: ResolvedAgentConfig = {
       conversationId: request.conversationId,
@@ -129,33 +121,11 @@ export class ChatService {
       userSystemPrompt: request.userSystemPrompt,
       workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
-      // ACP conversations are always agent mode: read-only chat mode is not
-      // enforced for those providers, so the mode toggle is ignored for them.
-      // Pinning chatMode to false keeps the on-disk instruction file and every
-      // (re)built in-band prompt in agent mode, so no request or rebuild can
-      // put an ACP agent into a chat-mode prompt that contradicts it.
-      chatMode: isAcpProvider(llmConfig.provider)
-        ? false
-        : request.mode === 'chat',
+      chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
-      acpAgentId: request.acpAgentId,
-      acpCommand: request.acpCommand,
-      acpFixedWorkspacePath: request.acpFixedWorkspacePath,
-      acpMcpServers: isAcpProvider(llmConfig.provider)
-        ? buildAcpMcpServers({
-            serverPort: this.deps.serverPort,
-            conversationId: request.conversationId,
-            providerId: llmConfig.provider,
-            defaultWindowId: request.browserContext?.windowId,
-            enabledMcpServers: request.browserContext?.enabledMcpServers,
-            customMcpServers: request.browserContext?.customMcpServers,
-          })
-        : undefined,
-      isNewConversation: isFirstTurn,
-      resourcesDir: this.deps.resourcesDir,
     }
 
     let isNewSession = false
@@ -178,15 +148,7 @@ export class ChatService {
     const mcpChanged = !!prior && prior.mcpServerKey !== mcpServerKey
     const workspaceChanged =
       !!prior && prior.workingDir !== request.userWorkingDir
-    // ACP is excluded: a rebuild cannot deliver a mode change to those agents,
-    // because their instructions live in the workspace instruction file and
-    // ensureWorkspaceInstructionFile() skips whenever isNewConversation is
-    // false - which it is on every rebuild. Rebuilding would leave a fresh
-    // in-band prompt contradicting the stale on-disk block.
-    const modeChanged =
-      !!prior &&
-      !isAcpProvider(llmConfig.provider) &&
-      prior.chatMode !== requestChatMode
+    const modeChanged = !!prior && prior.chatMode !== requestChatMode
 
     // One rebuild reflects every change, because rebuildSession reads the
     // current agentConfig, mcpServerKey, and request. Switching to chat mode
@@ -351,88 +313,31 @@ export class ChatService {
     const wrappedUserMessageId =
       session.agent.messages[session.agent.messages.length - 1]?.id
 
-    // ACP-backed providers run against a persistent acpx session that
-    // owns the agent's conversation memory natively on disk under
-    // <stateDir>/<sessionKey>/. Re-feeding the full UIMessage history
-    // doubles bookkeeping and, worse, trips the AI SDK validator when
-    // it walks phantom tool-<name> parts emitted by acpx-ai-provider
-    // under freshly-generated "acpx-N" ids (acpx#37). For ACP turns
-    // we send only the new user message — acpx's session/load reads
-    // prior turns from disk transparently. The UI continues to see
-    // the growing transcript via session.agent.messages.
-    //
-    // LLM-API providers are stateless and need the full history on
-    // each turn, so they keep the existing shape verbatim.
-    const isAcp = isAcpProvider(agentConfig.provider)
-    const promptUiMessages: UIMessage[] = isAcp
-      ? [
-          {
-            id: wrappedUserMessageId ?? crypto.randomUUID(),
-            role: 'user',
-            parts: [{ type: 'text', text: promptUserText }],
-          },
-        ]
-      : filterValidMessages(session.agent.messages).map((msg) =>
-          msg.id === wrappedUserMessageId && msg.role === 'user'
-            ? {
-                ...msg,
-                parts: [{ type: 'text' as const, text: promptUserText }],
-              }
-            : msg,
-        )
+    const promptUiMessages: UIMessage[] = filterValidMessages(
+      session.agent.messages,
+    ).map((message) =>
+      message.id === wrappedUserMessageId && message.role === 'user'
+        ? {
+            ...message,
+            parts: [{ type: 'text' as const, text: promptUserText }],
+          }
+        : message,
+    )
 
     const response = await createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
       abortSignal,
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        // The agent loop returns `messages` containing the prompt-
-        // wrapped user text. Restore the raw form before persisting
-        // so subsequent turns see the clean text and the client's
-        // local UIMessage matches what was originally typed.
-        //
-        // ACP path: `messages` is the single user msg we sent plus
-        // the assistant's new reply. The user msg already lives in
-        // session.agent.messages via appendUserMessage; we only need
-        // to restore its raw text and append the new assistant
-        // entries from this turn.
-        //
-        // LLM-API path: `messages` is the full conversation as the
-        // AI SDK reconstructed it. Restore the wrapped user message
-        // and replace the entire session history with the result.
-        if (isAcp) {
-          // Invariant: an id in both `messages` and session means the
-          // AI SDK handed us back something we already have. With the
-          // single-user-msg input shape that means our own user msg —
-          // the only collision we expect. Any new id is a fresh
-          // assistant entry from this turn. acpx never re-emits prior
-          // turns into the AI SDK stream, so this filter cannot drop a
-          // legitimately new message.
-          const existingIds = new Set(session.agent.messages.map((m) => m.id))
-          const newMessages = messages.filter((m) => !existingIds.has(m.id))
-          const updated = session.agent.messages.map((m) =>
-            m.id === wrappedUserMessageId && m.role === 'user'
-              ? {
-                  ...m,
-                  parts: [{ type: 'text' as const, text: request.message }],
-                }
-              : m,
-          )
-          session.agent.messages = filterValidMessages([
-            ...updated,
-            ...newMessages,
-          ])
-        } else {
-          const restored = messages.map((msg) =>
-            msg.id === wrappedUserMessageId && msg.role === 'user'
-              ? {
-                  ...msg,
-                  parts: [{ type: 'text' as const, text: request.message }],
-                }
-              : msg,
-          )
-          session.agent.messages = filterValidMessages(restored)
-        }
+        const restored = messages.map((message) =>
+          message.id === wrappedUserMessageId && message.role === 'user'
+            ? {
+                ...message,
+                parts: [{ type: 'text' as const, text: request.message }],
+              }
+            : message,
+        )
+        session.agent.messages = filterValidMessages(restored)
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
           totalMessages: session.agent.messages.length,

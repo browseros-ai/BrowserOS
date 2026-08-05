@@ -72,25 +72,11 @@ const ChatInputSchema = z.object({
     .optional(),
 })
 
-export const BrowserOsChatRequestSchema = AgentLLMConfigSchema.omit({
-  acpAgentId: true,
-  acpCommand: true,
-  acpFixedWorkspacePath: true,
+export const BrowserOsChatRequestSchema = AgentLLMConfigSchema.merge(
+  ChatInputSchema,
+).extend({
+  target: BrowserOsAgentTargetSchema,
 })
-  .merge(ChatInputSchema)
-  .extend({
-    target: BrowserOsAgentTargetSchema.optional(),
-    acpAgentId: z.never().optional(),
-    acpCommand: z.never().optional(),
-    acpFixedWorkspacePath: z.never().optional(),
-  })
-  .refine(
-    (request) =>
-      request.provider !== 'claude-code' &&
-      request.provider !== 'codex' &&
-      request.provider !== 'acp-custom',
-    { path: ['provider'], message: 'ACP agents are not LLM providers' },
-  )
 
 export const AcpChatRequestSchema = ChatInputSchema.extend({
   target: AcpAgentTargetSchema,

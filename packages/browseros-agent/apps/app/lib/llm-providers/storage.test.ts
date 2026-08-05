@@ -160,6 +160,20 @@ describe('loadProviders', () => {
     )
   })
 
+  it('removes legacy ACP providers from LLM storage', async () => {
+    const openAI = providerConfig({ id: 'openai-1' })
+    const legacyProviders = ['claude-code', 'codex', 'acp-custom'].map((type) =>
+      providerConfig({
+        id: `${type}-1`,
+        type: type as LlmProviderConfig['type'],
+        name: type,
+      }),
+    )
+    storageValues.set('local:llm-providers', [...legacyProviders, openAI])
+
+    expect(await providersStorage.getValue()).toEqual([openAI])
+  })
+
   it('drops an old Remote Hermes config and falls back from its default id', async () => {
     const openAI = providerConfig({ id: 'openai-1' })
     const remoteHermes = providerConfig({
