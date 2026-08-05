@@ -41,14 +41,12 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
   const [name, setName] = useState('')
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState('')
-  const [workingDirectory, setWorkingDirectory] = useState('')
 
   useEffect(() => {
     if (!open || !type) return
     setName(adapterLabel(type))
     setModelId('')
     setReasoningEffort('')
-    setWorkingDirectory('')
     createAgent.reset()
   }, [open, type, createAgent.reset])
 
@@ -62,7 +60,6 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
       type,
       modelId: modelId || undefined,
       reasoningEffort: reasoningEffort || undefined,
-      workingDirectory: workingDirectory.trim() || undefined,
     })
     onOpenChange(false)
   }
@@ -76,8 +73,7 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
           </DialogTitle>
           <DialogDescription>
             BrowserOS uses your existing CLI login. This agent can run commands
-            and access files anywhere on your computer without approval. The
-            working directory is only its starting folder, not a sandbox.
+            and access files anywhere on your computer without approval.
           </DialogDescription>
         </DialogHeader>
 
@@ -137,18 +133,6 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
               </Select>
             </div>
           ) : null}
-
-          <div className="space-y-2">
-            <Label htmlFor="coding-agent-directory">
-              Default working directory
-            </Label>
-            <Input
-              id="coding-agent-directory"
-              value={workingDirectory}
-              onChange={(event) => setWorkingDirectory(event.target.value)}
-              placeholder="Uses your home directory"
-            />
-          </div>
 
           {probe.isLoading ? (
             <p className="flex items-center gap-2 text-muted-foreground text-sm">

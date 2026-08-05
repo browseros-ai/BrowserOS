@@ -14,7 +14,6 @@ interface CreateAcpAgentInput {
   type: AcpAgentType
   modelId?: string
   reasoningEffort?: string
-  workingDirectory?: string
 }
 
 const AGENTS_QUERY_KEY = 'acp-agents'
