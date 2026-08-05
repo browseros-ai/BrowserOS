@@ -205,6 +205,7 @@ jobs:
     uses: ./.github/workflows/release-claw-server-rust.yml
     permissions:
       contents: write
+      pull-requests: write
     with:
       mode: build
       defer_finalize: true
