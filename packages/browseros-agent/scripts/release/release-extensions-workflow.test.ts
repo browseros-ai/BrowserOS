@@ -34,7 +34,7 @@ describe('release-extensions workflow', () => {
     expect(dispatch).toMatch(/mode:[\s\S]*default: "build"/)
     expect(dispatch).toMatch(/defer_finalize:[\s\S]*default: false/)
     expect(dispatch).toContain(
-      'Explicit version; single extensions allocate one when omitted',
+      'Explicit version; agent and BrowserOS neo allocate one when omitted',
     )
 
     const call = section('  workflow_call:', '\nconcurrency:')
@@ -43,7 +43,7 @@ describe('release-extensions workflow', () => {
     expect(call).toMatch(/defer_finalize:[\s\S]*default: false/)
     expect(call).toMatch(/publish_alpha_feed:[\s\S]*default: false/)
     expect(call).toContain(
-      'Explicit version; single extensions allocate one when omitted',
+      'Explicit version; agent and BrowserOS neo allocate one when omitted',
     )
     expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.version }}`)
     expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.tag }}`)
@@ -52,18 +52,15 @@ describe('release-extensions workflow', () => {
     )
   })
 
-  it('only requires an explicit shared version for the all selection', () => {
+  it('keeps external and all selections on explicit versions', () => {
     const validation = section(
       '- name: Validate lifecycle inputs',
       '- name: Read allocated extension releases and tags',
     )
     expect(validation).toContain(
-      'if [ -z "$VERSION" ] && [ "$EXTENSION" = "all" ]',
-    )
-    expect(validation).toContain('all requires an explicit version')
-    expect(validation).not.toContain(
       '[ "$EXTENSION" != "agent" ] && [ "$EXTENSION" != "browserclaw" ]',
     )
+    expect(validation).toContain('requires an explicit version')
   })
 
   it('reserves only private drafts before the extension build', () => {
@@ -126,6 +123,15 @@ describe('release-extensions workflow', () => {
       `VERSION: ${'$'}{{ needs.prepare.outputs.version }}`,
     )
     expect(preflight).not.toContain('--publish')
+    expect(preflight).toContain(
+      `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
+    )
+    expect(preflight).toContain('sha256sum "$' + '{paths[@]}" > SHA256SUMS')
+    expect(preflight).toContain('uses: actions/upload-artifact@v7')
+    expect(preflight).toContain(`base_sha: ${'$'}{{ steps.base.outputs.sha }}`)
+    expect(preflight).toContain(
+      `should_publish: ${'$'}{{ steps.render.outputs.should_publish }}`,
+    )
     expect(workflow.indexOf('  preflight_alpha:')).toBeLessThan(
       workflow.indexOf('  finalize:'),
     )
@@ -164,10 +170,15 @@ describe('release-extensions workflow', () => {
     ]) {
       expect(publish).toContain(file)
     }
-    expect(publish).toContain('browseros release extensions')
+    expect(publish).not.toContain('browseros release extensions')
     expect(publish).toContain('browseros release feeds publish-local')
     expect(publish).toContain(
-      "github.event_name == 'workflow_dispatch' || inputs.publish_alpha_feed == true",
+      `ref: ${'$'}{{ needs.preflight_alpha.outputs.base_sha }}`,
+    )
+    expect(publish).toContain('uses: actions/download-artifact@v7')
+    expect(publish).toContain('sha256sum --check SHA256SUMS')
+    expect(publish).toContain(
+      "needs.preflight_alpha.outputs.should_publish == 'true'",
     )
     expect(publish).toContain(
       'git fetch origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"',
@@ -179,10 +190,16 @@ describe('release-extensions workflow', () => {
     expect(publish).toContain('git push origin "HEAD:$DEFAULT_BRANCH"')
     expect(publish).not.toContain('git rebase')
     expect(publish).not.toContain('--force')
-    expect(publish).not.toContain('upload-artifact')
     expect(publish.indexOf('git push origin')).toBeLessThan(
       publish.indexOf('browseros release feeds publish-local'),
     )
+
+    const feedArtifact = section(
+      '- name: Upload exact alpha feed snapshot',
+      '  finalize:',
+    )
+    expect(feedArtifact).not.toContain('R2_SECRET_ACCESS_KEY')
+    expect(feedArtifact).not.toContain('BROWSERCLAW_KEY')
   })
 
   it('serializes releases and manual feed publication in one concurrency group', () => {

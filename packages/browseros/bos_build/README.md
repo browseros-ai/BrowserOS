@@ -222,17 +222,19 @@ Four extensions ship as signed CRXs: `agent`, `controller`, `bugreporter`,
 `browserclaw`. `agent` and `browserclaw` build from this repo; the other two are
 cloned from external repos. All four version independently of the browser.
 
-The standalone workflow owns the default alpha lifecycle: it allocates the next
-version when `version` is omitted, builds and verifies the immutable CRX,
-publishes the GitHub release, commits the coherent tracked alpha snapshots, and
-uploads those exact feed files to R2.
+The standalone workflow owns the default alpha lifecycle: for the in-repo
+`agent` and `browserclaw` extensions it allocates the next version when
+`version` is omitted, builds and verifies the immutable CRX, publishes the
+GitHub release, commits the coherent tracked alpha snapshots, and uploads those
+exact feed files to R2. External `controller` and `bugreporter` releases require
+an explicit version because their source commit is not the monorepo release SHA.
 
 ```bash
 gh workflow run release-extensions.yml \
   -f extension=browserclaw
 
 gh workflow run release-extensions.yml \
-  -f version=0.1.9.0 \
+  -f version=0.1.10.0 \
   -f extension=browserclaw
 ```
 
@@ -248,11 +250,11 @@ Use the feed workflow for previews, repairs, or explicit production promotion:
 ```bash
 gh workflow run release-extension-feeds.yml \
   -f channel=prod \
-  -f pins=browserclaw=0.1.9.0
+  -f pins=browserclaw=0.1.10.0
 
 gh workflow run release-extension-feeds.yml \
   -f channel=prod \
-  -f pins=browserclaw=0.1.9.0 \
+  -f pins=browserclaw=0.1.10.0 \
   -f publish=true
 ```
 

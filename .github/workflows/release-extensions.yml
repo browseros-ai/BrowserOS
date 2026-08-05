@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Explicit version; single extensions allocate one when omitted"
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
         required: false
         type: string
         default: ""
@@ -40,7 +40,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Explicit version; single extensions allocate one when omitted"
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
         required: false
         type: string
         default: ""
@@ -180,8 +180,8 @@ jobs:
               exit 1
             fi
           fi
-          if [ -z "$VERSION" ] && [ "$EXTENSION" = "all" ]; then
-            echo "::error::all requires an explicit version shared by every selected extension"
+          if [ -z "$VERSION" ] && [ "$EXTENSION" != "agent" ] && [ "$EXTENSION" != "browserclaw" ]; then
+            echo "::error::$EXTENSION requires an explicit version"
             exit 1
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
@@ -464,20 +464,29 @@ jobs:
     if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
+      should_publish: ${{ steps.render.outputs.should_publish }}
     env:
       NAMES: ${{ needs.prepare.outputs.names }}
       PUBLISH_ALPHA_FEED: ${{ github.event_name == 'workflow_dispatch' || inputs.publish_alpha_feed }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - name: Checkout prepared source
+      - name: Checkout default branch
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Record feed snapshot base
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
 
       - name: Preflight alpha feed update
+        id: render
         working-directory: packages/browseros
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -487,6 +496,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$PUBLISH_ALPHA_FEED" != "true" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "Alpha publication is owned by the calling workflow"
             exit 0
           fi
@@ -501,10 +511,40 @@ jobs:
             esac
           done
           if [ "$pin_count" -eq 0 ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "No selected extension is registered in the alpha update feed"
             exit 0
           fi
           uv run browseros release extensions "${args[@]}"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Stage exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          mkdir -p "$artifact_root/updates/extensions"
+          for path in "${paths[@]}"; do
+            cp "$path" "$artifact_root/$path"
+          done
+          (
+            cd "$artifact_root"
+            sha256sum "${paths[@]}" > SHA256SUMS
+          )
+
+      - name: Upload exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+          if-no-files-found: error
+          retention-days: 1
 
   finalize:
     needs:
@@ -632,53 +672,47 @@ jobs:
   publish_alpha:
     needs:
       - prepare
+      - preflight_alpha
       - finalize
-    if: ${{ always() && needs.prepare.result == 'success' && needs.finalize.result == 'success' && (github.event_name == 'workflow_dispatch' || inputs.publish_alpha_feed == true) }}
+    if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      NAMES: ${{ needs.prepare.outputs.names }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch || 'main' }}
+          ref: ${{ needs.preflight_alpha.outputs.base_sha }}
+
+      - name: Download exact alpha feed snapshot
+        uses: actions/download-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+
+      - name: Restore exact alpha feed snapshot
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          (
+            cd "$artifact_root"
+            sha256sum --check SHA256SUMS
+          )
+          for path in "${paths[@]}"; do
+            cp "$artifact_root/$path" "$GITHUB_WORKSPACE/$path"
+          done
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
 
-      - name: Render tracked alpha feed snapshots
-        id: render
-        working-directory: packages/browseros
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-        run: |
-          set -euo pipefail
-          args=(--channel alpha)
-          pin_count=0
-          for NAME in $NAMES; do
-            case "$NAME" in
-              agent|bugreporter|browserclaw)
-                args+=(--set "$NAME=$VERSION")
-                pin_count=$((pin_count + 1))
-                ;;
-            esac
-          done
-          if [ "$pin_count" -eq 0 ]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "No selected extension is registered in the alpha update feed"
-            exit 0
-          fi
-          uv run browseros release extensions "${args[@]}"
-          echo "should_publish=true" >> "$GITHUB_OUTPUT"
-
       - name: Commit tracked alpha feed snapshots
-        if: ${{ steps.render.outputs.should_publish == 'true' }}
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
         run: |
@@ -706,7 +740,6 @@ jobs:
           git push origin "HEAD:$DEFAULT_BRANCH"
 
       - name: Publish committed alpha feeds
-        if: ${{ steps.render.outputs.should_publish == 'true' }}
         working-directory: packages/browseros
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
