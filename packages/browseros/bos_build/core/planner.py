@@ -52,6 +52,8 @@ class Switches:
             )
         if self.resource_mode == "source" and self.download is True:
             raise ValueError("source mode cannot download published resources")
+        if self.resource_mode == "source" and self.preset != "release":
+            raise ValueError("source mode requires the release preset")
         resolved_download = (
             False
             if self.resource_mode == "source"

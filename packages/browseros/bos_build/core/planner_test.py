@@ -318,6 +318,10 @@ class SwitchesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source mode"):
             Switches(resource_mode="source", download=True).resolved()
 
+    def test_source_mode_rejects_debug_union_builds(self):
+        with self.assertRaisesRegex(ValueError, "release preset"):
+            Switches(preset="debug", resource_mode="source").resolved()
+
     def test_source_mode_plans_local_resources(self):
         steps = plan(
             Switches(preset="release", resource_mode="source"), "x64", "linux"
