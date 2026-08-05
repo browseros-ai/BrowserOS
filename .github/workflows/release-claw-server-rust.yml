@@ -517,9 +517,9 @@ jobs:
           binary_path = agent / "target" / rust_target / "release" / binary_name
           if not binary_path.is_file():
               raise SystemExit(f"Missing compiled binary: {binary_path}")
-          source_resources = agent / "apps/claw-server-rust/resources"
-          if not source_resources.is_dir():
-              raise SystemExit(f"Missing server resources: {source_resources}")
+          source_skill = agent / "resources/skills/browserclaw/SKILL.md"
+          if not source_skill.is_file():
+              raise SystemExit(f"Missing BrowserOS skill: {source_skill}")
 
           dist_root = agent / "dist/prod/claw-server-rust"
           stage_root = dist_root / target
@@ -530,7 +530,9 @@ jobs:
           shutil.copy2(binary_path, staged_binary)
           if binary_ext != ".exe":
               staged_binary.chmod(0o755)
-          shutil.copytree(source_resources, stage_root / "resources", dirs_exist_ok=True)
+          staged_skill = stage_root / "resources/skills/browserclaw/SKILL.md"
+          staged_skill.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(source_skill, staged_skill)
 
           files = sorted(
               path

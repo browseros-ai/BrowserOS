@@ -7,6 +7,13 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-claw-server-rust.yml'),
   'utf8',
 )
+const localStaging = readFileSync(
+  resolve(
+    repoRoot,
+    'packages/browseros-agent/scripts/build/claw-server-rust-local.sh',
+  ),
+  'utf8',
+)
 const dollar = '$'
 
 function section(start: string, end?: string): string {
@@ -117,6 +124,19 @@ describe('release-claw-server-rust workflow', () => {
     expect(tagIndex).toBeGreaterThan(verifyIndex)
     expect(publishIndex).toBeGreaterThan(tagIndex)
     expect(latestIndex).toBeGreaterThan(publishIndex)
+  })
+
+  it('packages the canonical BrowserOS skill', () => {
+    const build = section('  build:', '  publish-versioned:')
+    expect(build).toContain(
+      'source_skill = agent / "resources/skills/browserclaw/SKILL.md"',
+    )
+    expect(build).toContain('shutil.copy2(source_skill, staged_skill)')
+    expect(build).toContain('"resources/skills/browserclaw/SKILL.md"')
+    expect(localStaging).toContain(
+      'source_skill = agent_root / "resources/skills/browserclaw/SKILL.md"',
+    )
+    expect(localStaging).toContain('shutil.copy2(source_skill, staged_skill)')
   })
 
   it('gates OTA publication on successful finalization', () => {

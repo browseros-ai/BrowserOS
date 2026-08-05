@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::error::{AppError, AppResult};
 
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
-    include_str!("../../resources/skills/browserclaw/SKILL.md");
+    include_str!("../../../../resources/skills/browserclaw/SKILL.md");
 
 #[derive(Deserialize)]
 struct SkillFrontmatter {
@@ -83,9 +83,6 @@ mod tests {
         let content = embedded_browserclaw_skill();
         assert!(content.starts_with("---\nname: browserclaw\n"));
         assert!(content.contains("description:"));
-        // A pointer skill: it steers the agent to BrowserOS neo for browser work
-        // and defers the how-to to the MCP instructions and tool descriptions,
-        // which are the single source of truth for the SDK.
         assert!(content.contains("use BrowserOS neo's tools"));
         assert!(content.contains("prefer it over other browser surfaces"));
         assert!(content.contains("default to `run` for browser work"));
