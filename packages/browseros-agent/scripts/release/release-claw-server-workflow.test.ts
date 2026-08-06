@@ -7,10 +7,6 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-claw-server.yml'),
   'utf8',
 )
-const browserclawWorkflow = readFileSync(
-  resolve(repoRoot, '.github/workflows/release-browserclaw.yml'),
-  'utf8',
-)
 const dollar = '$'
 
 function section(start: string, end?: string): string {
@@ -179,7 +175,6 @@ describe('release-claw-server workflow', () => {
     const ota = section('  publish-ota:', '  reflect-version:')
     expect(dispatch).toContain('publish_ota:')
     expect(dispatch).toContain('default: true')
-    expect(browserclawWorkflow.match(/publish_ota: false/g)).toHaveLength(2)
     expect(ota).toContain('updates/server/appcast-claw-server.alpha.xml')
     expect(ota).not.toContain('updates/server/appcast-server.alpha.xml')
   })

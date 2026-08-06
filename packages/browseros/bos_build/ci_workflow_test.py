@@ -978,7 +978,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-server.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
             "release-claw-onboard.yml",
             "release-extensions.yml",
         )
@@ -994,7 +994,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
     def test_full_workflows_have_no_component_publication_choreography(self):
         removed = (
             "release-server.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
             "release-claw-onboard.yml",
             "release-extensions.yml",
             "defer_finalize",

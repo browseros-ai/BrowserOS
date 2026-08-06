@@ -8,10 +8,6 @@ const workflow = readFileSync(
   resolve(repoRoot, '.github/workflows/release-server.yml'),
   'utf8',
 )
-const browserosWorkflow = readFileSync(
-  resolve(repoRoot, '.github/workflows/release-browseros.yml'),
-  'utf8',
-)
 const dollar = '$'
 
 function section(start: string, end?: string): string {
@@ -111,7 +107,7 @@ describe('release-server workflow', () => {
     expect(publishIndex).toBeGreaterThan(latestIndex)
   })
 
-  it('defers finalization for full releases and gates side effects on it', () => {
+  it('defers finalization for reusable callers and gates side effects on it', () => {
     const finalize = section('  finalize:', '  publish-ota:')
     expect(finalize).toContain("needs.prepare.outputs.mode == 'finalize'")
     expect(finalize).toContain('inputs.defer_finalize != true')
@@ -119,7 +115,6 @@ describe('release-server workflow', () => {
       '- finalize',
     )
     expect(section('  reflect-version:')).toContain('- finalize')
-    expect(browserosWorkflow.match(/publish_ota: false/g)).toHaveLength(2)
   })
 
   it('publishes and persists standalone alpha releases by default', () => {
