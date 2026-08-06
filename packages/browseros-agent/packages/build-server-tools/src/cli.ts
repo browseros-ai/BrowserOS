@@ -5,12 +5,12 @@ import type {
   AssetBuildArgs,
   AssetBuildProductDescriptor,
   BuildArgs,
-  BuildProductDescriptor,
+  ResourceBuildProductDescriptor,
 } from './types'
 
 export function parseBuildArgs(
   argv: string[],
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
 ): BuildArgs {
   const program = new Command()
   program

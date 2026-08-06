@@ -17,7 +17,11 @@ export { compiledBinaryPath, compileProductBinaries } from './compile'
 export { loadBuildConfig } from './config'
 export { getTargetRules, loadManifest } from './manifest'
 export { writeArtifactMetadata } from './metadata'
-export { recoverVersionedTargets, runProdResourceBuild } from './orchestrator'
+export {
+  recoverVersionedTargets,
+  runCompiledResourceBuild,
+  runProdResourceBuild,
+} from './orchestrator'
 export type {
   ImmutableObjectIdentity,
   ImmutableUploadOptions,
@@ -37,6 +41,7 @@ export {
 } from './stage'
 export { resolveTargets } from './targets'
 export type {
+  ArtifactMetadataIdentity,
   AssetBuildArgs,
   AssetBuildProductDescriptor,
   BuildArgs,
@@ -46,7 +51,10 @@ export type {
   BuildTarget,
   CompiledServerBinary,
   ProductBuildSpec,
+  ProductCompiler,
+  ProductVersionSource,
   R2Config,
+  ResourceBuildProductDescriptor,
   ResourceManifest,
   ResourceRule,
   StagedArtifact,

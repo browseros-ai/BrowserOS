@@ -131,6 +131,35 @@ describe('resource manifest and artifact staging', () => {
     )
   })
 
+  it('writes opt-in release identity into artifact metadata', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
+    const binaryPath = join(tempDir, 'compiled')
+    const product = testProduct({ distRoot: join(tempDir, 'dist') })
+    const releaseSha = 'a'.repeat(40)
+    await writeFile(binaryPath, 'server')
+
+    const artifact = await stageCompiledArtifact(
+      product,
+      binaryPath,
+      testTarget(),
+      '1.2.3',
+      [],
+      tempDir,
+      {
+        component: 'claw-server-rust/prod-resources',
+        releaseSha,
+      },
+    )
+
+    const metadata = JSON.parse(await readFile(artifact.metadataPath, 'utf8'))
+    expect(metadata).toMatchObject({
+      component: 'claw-server-rust/prod-resources',
+      version: '1.2.3',
+      target: 'darwin-arm64',
+      releaseSha,
+    })
+  })
+
   it('copies recursive local resources without allowing destination escape', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
     const sourceRoot = join(tempDir, 'source')
