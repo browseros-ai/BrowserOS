@@ -51,7 +51,7 @@ export function InstallExtensionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(58rem,94vw)] max-w-[94vw] gap-0 overflow-hidden p-0 sm:max-w-[min(58rem,94vw)]">
+      <DialogContent className="max-h-[92vh] w-[min(58rem,94vw)] max-w-[94vw] gap-0 overflow-y-auto p-0 sm:max-w-[min(58rem,94vw)]">
         <div className="flex flex-col sm:flex-row">
           <nav className="shrink-0 border-border-2 border-b bg-bg-sunken px-5 py-5 sm:w-60 sm:border-r sm:border-b-0">
             <DialogTitle className="font-semibold text-[15px] text-ink leading-snug">
@@ -114,7 +114,14 @@ export function InstallExtensionDialog({
               {step.body}
             </p>
 
-            <div className="mt-4 aspect-[4/3] w-full overflow-hidden rounded-xl border border-border-2 bg-card-tint">
+            <div
+              className={cn(
+                // Fixed aspect keeps the modal from jumping between steps; the
+                // vh cap keeps it inside short viewports.
+                'mt-4 aspect-[4/3] max-h-[46vh] w-full overflow-hidden rounded-xl border border-border-2 bg-card-tint',
+                !step.image && 'border-dashed',
+              )}
+            >
               {step.image ? (
                 failedImages.has(step.image.src) ? (
                   <div className="flex h-full items-center justify-center px-6 text-center">
@@ -136,7 +143,13 @@ export function InstallExtensionDialog({
                   />
                 )
               ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                  <span className="inline-flex size-14 items-center justify-center rounded-2xl bg-accent-tint text-accent">
+                    <Download aria-hidden className="size-6" />
+                  </span>
+                  <p className="font-mono text-[12px] text-ink-2">
+                    {MCPB_FILENAME}
+                  </p>
                   <a
                     href={EXTENSION_DOWNLOAD_URL}
                     download={MCPB_FILENAME}
@@ -150,9 +163,6 @@ export function InstallExtensionDialog({
                     <Download aria-hidden />
                     Download the extension
                   </a>
-                  <p className="font-mono text-[11px] text-ink-3">
-                    {MCPB_FILENAME}
-                  </p>
                   <a
                     href={EXTENSION_RELEASES_URL}
                     target="_blank"

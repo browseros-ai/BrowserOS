@@ -32,10 +32,6 @@ export function ClaudeDesktopCard() {
               Give Claude Desktop a real browser.
             </p>
             <p className="text-[13px] text-ink-2 leading-snug">
-              Drop in the extension and Claude reaches for BrowserOS neo to open
-              sites, log in, and click through flows.
-            </p>
-            <p className="text-[12px] text-ink-3 leading-snug">
               {COWORK_REQUIREMENT_LINE}
             </p>
           </div>
