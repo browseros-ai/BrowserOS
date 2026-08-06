@@ -265,13 +265,18 @@ Copyright &copy; 2026 Felafax, Inc.
 
 Thank you to all our supporters.
 
-Team: Nikhil ([@nv_sonti](https://x.com/intent/user?screen_name=nv_sonti)), Nithin ([@ThatNithin](https://x.com/intent/user?screen_name=ThatNithin)) and Dani ([@dani_akash_](https://x.com/intent/user?screen_name=dani_akash_)):
-
-[![Twitter Follow](https://img.shields.io/twitter/follow/nv_sonti?style=social)](https://x.com/intent/user?screen_name=nv_sonti)
-&emsp;&emsp;&emsp;
-[![Twitter Follow](https://img.shields.io/twitter/follow/ThatNithin?style=social)](https://x.com/intent/user?screen_name=ThatNithin)
-&emsp;&emsp;&emsp;
-[![Twitter Follow](https://img.shields.io/twitter/follow/dani_akash_?style=social)](https://x.com/intent/user?screen_name=dani_akash_)
+<table>
+<tr>
+<td align="center">Nikhil</td>
+<td align="center">Nithin</td>
+<td align="center">Dani</td>
+</tr>
+<tr>
+<td align="center"><a href="https://x.com/intent/user?screen_name=nv_sonti"><img src="https://img.shields.io/twitter/follow/nv_sonti?style=social" alt="Follow Nikhil on X" /></a></td>
+<td align="center"><a href="https://x.com/intent/user?screen_name=ThatNithin"><img src="https://img.shields.io/twitter/follow/ThatNithin?style=social" alt="Follow Nithin on X" /></a></td>
+<td align="center"><a href="https://x.com/intent/user?screen_name=dani_akash_"><img src="https://img.shields.io/twitter/follow/dani_akash_?style=social" alt="Follow Dani on X" /></a></td>
+</tr>
+</table>
 
 <p align="center">
 Built with ❤️ from San Francisco
