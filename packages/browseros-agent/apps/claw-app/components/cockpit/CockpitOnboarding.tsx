@@ -2,25 +2,6 @@
  * @license
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * First-run guidance rendered by the Cockpit screen when the reader
- * has no session activity yet. Anchors on a short Remotion motion
- * demo that establishes the mental model (this cockpit watches;
- * your agent acts), then a single definitive CTA to set up the MCP
- * endpoint, then the copyable starter prompt tile, then a tight
- * three-step reminder strip, then a docs link.
- *
- * Two visual variants keyed off the `state` prop.
- *
- *   first-run  no connections + no activity. Primary CTA is the MCP
- *              install; step 01 pulses active.
- *   waiting    at least one MCP connection + no activity. Primary
- *              CTA becomes "View MCP endpoint"; step 01 renders
- *              done; step 02 pulses active; a waiting banner tells
- *              the reader we are listening.
- *
- * State transitions are handled by the parent (Cockpit) via query
- * refetches; the component is a stateless presenter.
  */
 
 import { useState } from 'react'

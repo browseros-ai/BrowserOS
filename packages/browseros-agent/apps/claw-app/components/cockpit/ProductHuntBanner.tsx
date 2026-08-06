@@ -74,7 +74,6 @@ export function ProductHuntBanner() {
   const [dismissed, setDismissed] = useState(readDismissed)
   const visible = !dismissed && withinLaunchWindow()
 
-  // Record the impression once the banner is actually shown.
   useEffect(() => {
     if (visible) track(AnalyticsEvent.ProductHuntBannerShown)
   }, [visible])
@@ -93,7 +92,7 @@ export function ProductHuntBanner() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-8 pt-6">
+    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center px-8 py-12">
       <ProductHuntBannerCard onOpen={handleOpen} onDismiss={handleDismiss} />
     </div>
   )
