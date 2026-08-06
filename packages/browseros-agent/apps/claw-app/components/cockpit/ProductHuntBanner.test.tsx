@@ -30,6 +30,20 @@ mock.module('@/components/ui/svgs/productHuntIcon', () => ({
   ProductHuntIcon: () => createElement('svg'),
 }))
 
+const memoryStore: Record<string, string> = {}
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => memoryStore[key] ?? null,
+    setItem: (key: string, value: string) => {
+      memoryStore[key] = value
+    },
+    removeItem: (key: string) => {
+      delete memoryStore[key]
+    },
+  },
+})
+
 let ProductHuntBanner: FC
 let ProductHuntBannerCard: FC<{
   onOpen: () => void
@@ -56,9 +70,13 @@ describe('ProductHuntBanner', () => {
     expect(html).toContain('Product Hunt')
   })
 
-  it('renders nothing outside the launch window', () => {
-    const html = renderToStaticMarkup(createElement(ProductHuntBanner))
-
-    expect(html).toBe('')
+  it('renders nothing once dismissed', () => {
+    memoryStore.productHuntBannerDismissed = 'true'
+    try {
+      const html = renderToStaticMarkup(createElement(ProductHuntBanner))
+      expect(html).toBe('')
+    } finally {
+      delete memoryStore.productHuntBannerDismissed
+    }
   })
 })
