@@ -28,7 +28,10 @@ export function TaskDetailPage() {
   const { sessionId = '' } = useParams()
   const { detail, screenshots, isPending, isError, error } =
     useTaskDetailScreenData(sessionId)
-  const [lightboxId, setLightboxId] = useState<number | null>(null)
+  const [lightbox, setLightbox] = useState<{
+    groupId: string
+    screenshotId: number
+  } | null>(null)
 
   const groups = useMemo(
     () => (detail ? groupDispatchesByTab(detail.dispatches, screenshots) : []),
@@ -59,6 +62,14 @@ export function TaskDetailPage() {
     )
   }
 
+  const lightboxId = lightbox?.screenshotId ?? null
+  const lightboxGroup =
+    lightbox !== null
+      ? (groups.find((group) => group.id === lightbox.groupId) ?? null)
+      : null
+  const lightboxScreenshotIds =
+    lightboxGroup?.screenshots.map((screenshot) => screenshot.screenshotId) ??
+    []
   const selectedDispatch =
     lightboxId !== null
       ? (detail.dispatches.find((d) => d.screenshotId === lightboxId) ?? null)
@@ -98,7 +109,9 @@ export function TaskDetailPage() {
         group={g}
         startedAt={session.startedAt}
         endEvent={endEvent}
-        onScreenshotClick={setLightboxId}
+        onScreenshotClick={(screenshotId) =>
+          setLightbox({ groupId: g.id, screenshotId })
+        }
       />
     ),
   }))
@@ -114,13 +127,19 @@ export function TaskDetailPage() {
       <ScreenshotLightbox
         sessionId={sessionId}
         screenshotId={lightboxId}
+        screenshotIds={lightboxScreenshotIds}
         sourceUrl={selectedDispatch?.url ?? null}
         offsetMs={
           selectedScreenshot
             ? Math.max(0, selectedScreenshot.capturedAt - session.startedAt)
             : null
         }
-        onClose={() => setLightboxId(null)}
+        onNavigate={(screenshotId) =>
+          setLightbox((current) =>
+            current === null ? null : { ...current, screenshotId },
+          )
+        }
+        onClose={() => setLightbox(null)}
       />
     </div>
   )
