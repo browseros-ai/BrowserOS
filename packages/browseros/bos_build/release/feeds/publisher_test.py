@@ -17,13 +17,20 @@ from .render import (
     ExistingAppcast,
     SignedArtifact,
     extract_appcast_version,
+    extract_channel_metadata,
     extract_manifest_versions,
     render_browser_appcast,
     render_extensions_json,
     render_server_appcast,
     render_update_manifest,
 )
-from .spec import all_feeds, feed_by_key, server_feed, update_manifest_feed
+from .spec import (
+    all_feeds,
+    browser_feeds_for_product,
+    feed_by_key,
+    server_feed,
+    update_manifest_feed,
+)
 
 FIXED_NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 EXTENSION_VERSIONS = {
@@ -84,6 +91,25 @@ def _mac_appcast(sparkle_version="10000.0.47.0.2"):
         "0.47.0.2",
         sparkle_version,
         "2026-06-19T06:41:33Z",
+    )
+
+
+def _browserclaw_appcast(sparkle_version="10000.0.47.0.2"):
+    return render_browser_appcast(
+        feed_by_key("appcast-claw.xml"),
+        _artifact(
+            "https://cdn.browseros.com/releases/browserclaw/0.47.0.2/"
+            "macos/BrowserOS_neo_v0.47.0.2_universal.dmg"
+        ),
+        "0.47.0.2",
+        sparkle_version,
+        "2026-06-19T06:41:33Z",
+    )
+
+
+def _legacy_browserclaw_appcast(sparkle_version="10000.0.47.0.2"):
+    return _browserclaw_appcast(sparkle_version).replace(
+        "BrowserOS neo", "BrowserClaw"
     )
 
 
@@ -424,6 +450,50 @@ class PublisherTestCase(unittest.TestCase):
             _mac_appcast(),
             publish=True,
         )
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_browserclaw_legacy_title_migrates_with_backup(self):
+        spec = feed_by_key("appcast-claw.xml")
+        publisher = self._publisher(
+            {spec.key: _legacy_browserclaw_appcast("10000.0.46.0.0").encode()}
+        )
+
+        ok = publisher.publish(spec, _browserclaw_appcast(), publish=True)
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            self.client.calls,
+            [
+                (
+                    "copy",
+                    spec.key,
+                    f"feeds-history/{spec.key}.20260701T120000Z",
+                ),
+                ("put", spec.key, "application/xml"),
+            ],
+        )
+
+    def test_browserclaw_legacy_title_migration_refuses_downgrade(self):
+        spec = feed_by_key("appcast-claw.xml")
+        publisher = self._publisher(
+            {spec.key: _legacy_browserclaw_appcast("10000.0.48.0.0").encode()}
+        )
+
+        ok = publisher.publish(spec, _browserclaw_appcast(), publish=True)
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
+    def test_browserclaw_legacy_title_requires_canonical_link(self):
+        spec = feed_by_key("appcast-claw.xml")
+        live = _legacy_browserclaw_appcast().replace(
+            spec.link, "https://cdn.browseros.com/appcast.xml"
+        )
+        publisher = self._publisher({spec.key: live.encode()})
+
+        ok = publisher.publish(spec, _browserclaw_appcast(), publish=True)
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
@@ -1070,6 +1140,18 @@ class PublisherTestCase(unittest.TestCase):
             hashlib.sha256(original.encode()).hexdigest(),
             "e5fa3c6cde0ae05f2e15d1c52139094c4e1c738a01b9b3d63106ac255ca8357d",
         )
+
+    def test_browserclaw_snapshots_use_current_product_title(self):
+        updates = Path(__file__).resolve().parents[5] / "updates" / "browser"
+
+        for spec in browser_feeds_for_product("browserclaw"):
+            with self.subTest(key=spec.key):
+                content = (updates / spec.key).read_text()
+                self.assertEqual(
+                    extract_channel_metadata(content),
+                    (spec.title, spec.link),
+                )
+                self.assertNotIn("<title>BrowserClaw", content)
 
     def test_extensions_json_skips_head_and_publishes(self):
         spec = feed_by_key("extensions/extensions.alpha.json")
