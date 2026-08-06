@@ -248,44 +248,45 @@ class CopyResourcesTest(unittest.TestCase):
                 f"{marker}-dpi"
             )
 
-        for product_id, marker in (
-            ("browseros", "browseros"),
-            ("browserclaw", "claw"),
+        with patch(
+            "bos_build.steps.resources.resources.get_platform",
+            return_value="macos",
         ):
-            with self.subTest(product=product_id):
-                self._seed_required_resources(product_id, "x64")
-                ctx = make_context(
-                    self.chromium,
-                    self.root,
-                    architecture="x64",
-                    build_type="release",
-                    product=product_id,
-                )
-                self.assertTrue(copy_resources_impl(ctx))
+            for product_id, marker in (
+                ("browseros", "browseros"),
+                ("browserclaw", "claw"),
+            ):
+                with self.subTest(product=product_id):
+                    self._seed_required_resources(product_id, "x64")
+                    ctx = make_context(
+                        self.chromium,
+                        self.root,
+                        architecture="x64",
+                        build_type="release",
+                        product=product_id,
+                    )
+                    self.assertTrue(copy_resources_impl(ctx))
 
-                theme = self.chromium.src / "chrome" / "app" / "theme"
-                self.assertEqual(
-                    (theme / "chromium" / "product_logo_16.png").read_text(),
-                    f"{marker}-root",
-                )
-                self.assertEqual(
-                    (
-                        theme
-                        / "chromium"
-                        / "linux"
-                        / "product_logo_24.png"
-                    ).read_text(),
-                    f"{marker}-linux",
-                )
-                self.assertEqual(
-                    (
-                        theme
-                        / "default_100_percent"
-                        / "chromium"
-                        / "product_logo_16.png"
-                    ).read_text(),
-                    f"{marker}-dpi",
-                )
+                    theme = self.chromium.src / "chrome" / "app" / "theme"
+                    self.assertEqual(
+                        (theme / "chromium" / "product_logo_16.png").read_text(),
+                        f"{marker}-root",
+                    )
+                    self.assertEqual(
+                        (
+                            theme / "chromium" / "linux" / "product_logo_24.png"
+                        ).read_text(),
+                        f"{marker}-linux",
+                    )
+                    self.assertEqual(
+                        (
+                            theme
+                            / "default_100_percent"
+                            / "chromium"
+                            / "product_logo_16.png"
+                        ).read_text(),
+                        f"{marker}-dpi",
+                    )
 
     def test_missing_source_is_tolerated(self):
         self.root.write_copy_config(
@@ -355,9 +356,7 @@ class CopyResourcesTest(unittest.TestCase):
             component_versions={"claw-onboard": "0.0.12"},
             files={"onboarding": prepared_file},
         )
-        destination = (
-            self.root.root / "resources/binaries/browseros_claw_onboard"
-        )
+        destination = self.root.root / "resources/binaries/browseros_claw_onboard"
         destination.mkdir(parents=True)
         (destination / "stale").write_text("stale")
         self.ctx.resource_mode = "source"
@@ -370,9 +369,7 @@ class CopyResourcesTest(unittest.TestCase):
         ):
             staged = stage_prepared_onboarding(self.ctx)
 
-        self.assertEqual(
-            (staged / "resources/index.html").read_bytes(), content
-        )
+        self.assertEqual((staged / "resources/index.html").read_bytes(), content)
         self.assertFalse((staged / "stale").exists())
 
     def test_real_config_copies_only_the_active_browseros_server(self):
@@ -408,8 +405,7 @@ class CopyResourcesTest(unittest.TestCase):
         self.root.write_copy_config(self._real_copy_config())
         self._seed_required_resources("browserclaw", "arm64")
         stale = (
-            self.chromium.src
-            / "chrome/browser/browseros/server/resources/bin/stale"
+            self.chromium.src / "chrome/browser/browseros/server/resources/bin/stale"
         )
         stale.parent.mkdir(parents=True)
         stale.write_text("stale")
@@ -469,14 +465,23 @@ class CopyResourcesTest(unittest.TestCase):
     def test_real_config_copies_claw_onboard_resources_for_both_products(self):
         self.root.write_copy_config(self._real_copy_config())
         onboard_source = (
-            self.root.root / "resources" / "binaries" / "browseros_claw_onboard" / "resources"
+            self.root.root
+            / "resources"
+            / "binaries"
+            / "browseros_claw_onboard"
+            / "resources"
         )
         (onboard_source / "icon").mkdir(parents=True)
         (onboard_source / "index.html").write_text("<html>onboard</html>")
         (onboard_source / "icon" / "32.png").write_text("icon-bytes")
 
         onboard_dest = (
-            self.chromium.src / "chrome" / "browser" / "browseros" / "onboarding" / "resources"
+            self.chromium.src
+            / "chrome"
+            / "browser"
+            / "browseros"
+            / "onboarding"
+            / "resources"
         )
 
         for product in ("browseros", "browserclaw"):
@@ -529,8 +534,7 @@ class CopyResourcesTest(unittest.TestCase):
         server.mkdir(parents=True, exist_ok=True)
         (server / binary).write_text(product)
         onboarding = (
-            self.root.root
-            / "resources/binaries/browseros_claw_onboard/resources"
+            self.root.root / "resources/binaries/browseros_claw_onboard/resources"
         )
         onboarding.mkdir(parents=True, exist_ok=True)
         index = onboarding / "index.html"
