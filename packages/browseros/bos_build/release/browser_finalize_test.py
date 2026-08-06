@@ -14,7 +14,7 @@ from bos_build.release.browser_finalize import (
     finalize_browser_release,
 )
 from bos_build.release.candidate import CandidateRecord
-from bos_build.release.lane import LaneGate
+from bos_build.release.lane import ArtifactAttestation, LaneGate
 
 
 PARENT_SHA = "1" * 40
@@ -84,10 +84,16 @@ def _gate() -> LaneGate:
             "linux-x64": "7" * 64,
             "windows-x64": "8" * 64,
         },
-        artifact_checksums={
-            filename: _checksum(filename)
-            for platform in ARTIFACTS.values()
-            for filename in platform.values()
+        artifacts={
+            filename: ArtifactAttestation(
+                filename=filename,
+                size=len(filename),
+                sha256=_checksum(filename),
+                url=f"https://cdn.browseros.com/{filename}",
+                sparkle_signature="signature" if platform in {"macos", "win"} else "",
+            )
+            for platform, platform_artifacts in ARTIFACTS.items()
+            for filename in platform_artifacts.values()
         },
     )
 
@@ -112,7 +118,9 @@ def _metadata() -> dict[str, dict]:
                     "url": f"https://cdn.browseros.com/{filename}",
                     "size": len(filename),
                     "sha256": _checksum(filename),
-                    "sparkle_signature": "signature",
+                    "sparkle_signature": (
+                        "signature" if platform in {"macos", "win"} else ""
+                    ),
                     "sparkle_length": len(filename),
                 }
                 for key, filename in artifacts.items()
@@ -177,13 +185,14 @@ class BrowserFinalizationTest(unittest.TestCase):
 
     def test_rejects_release_metadata_checksum_or_candidate_skew(self) -> None:
         mutations = (
-            ("sha256", "9" * 64, "checksum"),
+            ("sha256", "9" * 64, "evidence"),
+            ("sparkle_signature", "substituted", "evidence"),
             ("source_sha", "9" * 40, "source_sha"),
         )
         for field, value, message in mutations:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 metadata = _metadata()
-                if field == "sha256":
+                if field in {"sha256", "sparkle_signature"}:
                     metadata["linux"]["artifacts"]["x64_deb"][field] = value
                 else:
                     metadata["linux"][field] = value
@@ -207,6 +216,13 @@ class GitHubDraftBackendTest(unittest.TestCase):
         release = {
             "isDraft": True,
             "assets": expected,
+            "asset_metadata": {
+                filename: {
+                    "sha256": _checksum(filename),
+                    "size": len(filename),
+                }
+                for filename in expected
+            },
             "targetCommitish": CANDIDATE_SHA,
         }
         with (
@@ -237,6 +253,69 @@ class GitHubDraftBackendTest(unittest.TestCase):
         self.assertEqual(list(state.assets), expected)
         download.assert_not_called()
         upload.assert_not_called()
+
+    def test_same_named_assets_with_wrong_digest_are_replaced(self) -> None:
+        expected = sorted(
+            filename
+            for platform in ARTIFACTS.values()
+            for filename in platform.values()
+        )
+        stale = {
+            "isDraft": True,
+            "assets": expected,
+            "asset_metadata": {
+                filename: {"sha256": "0" * 64, "size": len(filename)}
+                for filename in expected
+            },
+            "targetCommitish": CANDIDATE_SHA,
+        }
+        refreshed = {
+            **stale,
+            "asset_metadata": {
+                filename: {
+                    "sha256": _checksum(filename),
+                    "size": len(filename),
+                }
+                for filename in expected
+            },
+        }
+
+        def download(url, path):
+            path.write_bytes(path.name.encode())
+            return True
+
+        with (
+            mock.patch(
+                "bos_build.release.browser_finalize.create_github_release",
+                return_value=(False, "Release v0.31.0 already exists"),
+            ),
+            mock.patch(
+                "bos_build.release.browser_finalize.inspect_github_release",
+                side_effect=[stale, refreshed],
+            ),
+            mock.patch(
+                "bos_build.release.browser_finalize.verify_github_release_target"
+            ),
+            mock.patch("bos_build.release.browser_finalize.edit_github_release"),
+            mock.patch(
+                "bos_build.release.browser_finalize.download_file",
+                side_effect=download,
+            ),
+            mock.patch(
+                "bos_build.release.browser_finalize.delete_github_release_asset"
+            ) as delete,
+            mock.patch(
+                "bos_build.release.browser_finalize.upload_to_github_release",
+                return_value=True,
+            ) as upload,
+        ):
+            state = GitHubDraftBackend(
+                "browseros-ai/BrowserOS"
+            ).ensure_draft(_candidate(), _metadata())
+
+        self.assertEqual(state.action, "refreshed")
+        self.assertEqual(delete.call_count, len(expected))
+        self.assertEqual(upload.call_count, len(expected))
 
     def test_download_failure_does_not_delete_existing_draft_assets(self) -> None:
         release = {

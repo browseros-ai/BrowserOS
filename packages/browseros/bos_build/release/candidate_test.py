@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Immutable browser candidate lifecycle tests."""
 
+import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from bos_build.release.candidate import (
@@ -10,6 +12,7 @@ from bos_build.release.candidate import (
     CandidateRequest,
     GitHubCandidateBackend,
     PullRequestState,
+    candidate_record_from_pull_request,
     ensure_candidate,
     merge_candidate,
 )
@@ -56,6 +59,7 @@ class FakeBackend:
             mergeable=True,
         )
         self.merged = []
+        self.merge_commit_matches = True
 
     def current_sha(self) -> str:
         return self.head
@@ -86,12 +90,17 @@ class FakeBackend:
     def inspect_pull_request(self, number: int) -> PullRequestState:
         return self.pr
 
-    def merge_pull_request(self, number: int) -> str:
-        self.merged.append(number)
+    def merge_pull_request(self, number: int, expected_head_sha: str) -> str:
+        self.merged.append((number, expected_head_sha))
         return "3" * 40
 
     def default_branch_contains_versions(self, record: CandidateRecord) -> bool:
         return False
+
+    def merge_commit_matches_candidate(
+        self, record: CandidateRecord, merge_sha: str
+    ) -> bool:
+        return self.merge_commit_matches
 
 
 class CandidateEnsureTest(unittest.TestCase):
@@ -192,6 +201,113 @@ class CandidateEnsureTest(unittest.TestCase):
 
             self.assertEqual(backend.read_browser_version(), "0.49.2")
 
+    def test_accepts_only_same_repository_canonical_candidate_pull_requests(self) -> None:
+        record = candidate_record()
+        body = (
+            "<!-- browseros-release-candidate-v1\n"
+            f"{record.to_json().strip()}\n"
+            "-->"
+        )
+        pull_request = {
+            "body": body,
+            "baseRefName": "main",
+            "headRefName": record.branch,
+            "headRefOid": record.candidate_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+        }
+
+        self.assertEqual(
+            candidate_record_from_pull_request(
+                pull_request, "browseros-ai/BrowserOS"
+            ),
+            record,
+        )
+        self.assertIsNone(
+            candidate_record_from_pull_request(
+                {
+                    **pull_request,
+                    "headRepository": {"nameWithOwner": "attacker/BrowserOS"},
+                    "isCrossRepository": True,
+                },
+                "browseros-ai/BrowserOS",
+            )
+        )
+        self.assertIsNone(
+            candidate_record_from_pull_request(
+                {**pull_request, "headRefName": "attacker-branch"},
+                "browseros-ai/BrowserOS",
+            )
+        )
+
+
+class CandidateBranchRecoveryTest(unittest.TestCase):
+    def _git(self, root: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def _repo(self, root: Path) -> tuple[Path, str]:
+        remote = root / "remote.git"
+        repo = root / "repo"
+        self._git(root, "init", "--bare", str(remote))
+        self._git(root, "init", str(repo))
+        self._git(repo, "config", "user.name", "BrowserOS CI")
+        self._git(repo, "config", "user.email", "ci@browseros.com")
+        self._git(repo, "remote", "add", "origin", str(remote))
+        (repo / "version.txt").write_text("parent\n", encoding="utf-8")
+        self._git(repo, "add", "version.txt")
+        self._git(repo, "commit", "-m", "parent")
+        return repo, self._git(repo, "rev-parse", "HEAD")
+
+    def _commit(self, repo: Path, parent: str, value: str, message: str) -> str:
+        self._git(repo, "reset", "--hard", parent)
+        (repo / "version.txt").write_text(value, encoding="utf-8")
+        self._git(repo, "add", "version.txt")
+        self._git(repo, "commit", "-m", message)
+        return self._git(repo, "rev-parse", "HEAD")
+
+    def test_recovers_matching_remote_branch_after_interrupted_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, parent = self._repo(Path(temp_dir))
+            remote_candidate = self._commit(repo, parent, "candidate\n", "remote")
+            branch = "bot/release-browseros-retry"
+            self._git(repo, "push", "origin", f"HEAD:refs/heads/{branch}")
+            local_candidate = self._commit(repo, parent, "candidate\n", "local")
+            backend = GitHubCandidateBackend(repo, "owner/repo", "main")
+
+            recovered = backend._publish_candidate_commit(
+                branch,
+                local_candidate,
+                parent,
+                cwd=repo,
+            )
+
+            self.assertNotEqual(local_candidate, remote_candidate)
+            self.assertEqual(recovered, remote_candidate)
+
+    def test_rejects_remote_branch_with_different_candidate_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, parent = self._repo(Path(temp_dir))
+            self._commit(repo, parent, "unexpected\n", "remote")
+            branch = "bot/release-browseros-conflict"
+            self._git(repo, "push", "origin", f"HEAD:refs/heads/{branch}")
+            local_candidate = self._commit(repo, parent, "candidate\n", "local")
+            backend = GitHubCandidateBackend(repo, "owner/repo", "main")
+
+            with self.assertRaisesRegex(ValueError, "unexpected candidate content"):
+                backend._publish_candidate_commit(
+                    branch,
+                    local_candidate,
+                    parent,
+                    cwd=repo,
+                )
+
 
 class CandidateMergeTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -220,7 +336,15 @@ class CandidateMergeTest(unittest.TestCase):
                 "linux-x64": "7" * 64,
                 "windows-x64": "8" * 64,
             },
-            "artifact_checksums": {"BrowserOS.dmg": "9" * 64},
+            "artifacts": {
+                "BrowserOS.dmg": {
+                    "filename": "BrowserOS.dmg",
+                    "size": 1,
+                    "sha256": "9" * 64,
+                    "url": "https://cdn.browseros.com/BrowserOS.dmg",
+                    "sparkle_signature": "signature",
+                }
+            },
         }
 
     def test_rejects_missing_gate_and_changed_pull_request(self) -> None:
@@ -277,7 +401,31 @@ class CandidateMergeTest(unittest.TestCase):
         self.assertEqual(merged.state, "merged")
         self.assertEqual(merged.candidate_sha, CANDIDATE_SHA)
         self.assertEqual(merged.merge_sha, "3" * 40)
-        self.assertEqual(self.backend.merged, [42])
+        self.assertEqual(self.backend.merged, [(42, CANDIDATE_SHA)])
+
+    def test_recovers_only_an_exact_already_merged_candidate(self) -> None:
+        self.backend.pr = PullRequestState(
+            number=42,
+            url=self.record.pull_request_url,
+            state="merged",
+            head_sha=CANDIDATE_SHA,
+            head_branch=self.record.branch,
+            base_branch="main",
+            mergeable=False,
+            merge_sha="3" * 40,
+        )
+
+        merged = merge_candidate(self.record, self.gate, self.backend)
+
+        self.assertEqual(merged.state, "merged")
+        self.assertEqual(merged.merge_sha, "3" * 40)
+        self.backend.pr = replace(self.backend.pr, head_sha="9" * 40)
+        with self.assertRaisesRegex(ValueError, "head"):
+            merge_candidate(self.record, self.gate, self.backend)
+        self.backend.pr = replace(self.backend.pr, head_sha=CANDIDATE_SHA)
+        self.backend.merge_commit_matches = False
+        with self.assertRaisesRegex(ValueError, "commit"):
+            merge_candidate(self.record, self.gate, self.backend)
 
 
 if __name__ == "__main__":

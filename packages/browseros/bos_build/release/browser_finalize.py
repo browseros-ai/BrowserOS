@@ -24,7 +24,7 @@ from .github import (
     upload_to_github_release,
     verify_github_release_target,
 )
-from .lane import LaneGate
+from .lane import ArtifactAttestation, LaneGate
 
 
 FINALIZATION_SCHEMA = "browseros-release-finalization-v1"
@@ -36,6 +36,34 @@ def _sha256(path: Path) -> str:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _expected_asset_metadata(
+    metadata: Mapping[str, Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    result = {}
+    for release in metadata.values():
+        artifacts = release.get("artifacts")
+        if not isinstance(artifacts, dict):
+            raise ValueError("Release metadata artifacts must be an object")
+        for artifact in artifacts.values():
+            if not isinstance(artifact, dict):
+                raise ValueError("Release metadata artifact must be an object")
+            result[str(artifact["filename"])] = {
+                "sha256": str(artifact["sha256"]).lower(),
+                "size": artifact["size"],
+            }
+    return result
+
+
+def _asset_metadata_matches(
+    release: Mapping[str, object],
+    expected: Mapping[str, Mapping[str, object]],
+) -> bool:
+    current = release.get("asset_metadata")
+    if not isinstance(current, dict) or set(current) != set(expected):
+        return False
+    return all(current[name] == identity for name, identity in expected.items())
 
 
 @dataclass(frozen=True)
@@ -155,7 +183,7 @@ def _validate_metadata(
         macos_arch="universal",
         source_sha=candidate.candidate_sha,
     )
-    checksums = {}
+    attestations = {}
     for platform, release in selected.items():
         identity = {
             "parent_sha": candidate.parent_sha,
@@ -181,11 +209,18 @@ def _validate_metadata(
                 )
             if not isinstance(artifact.get("size"), int) or artifact["size"] <= 0:
                 raise RuntimeError(f"Release artifact size is invalid: {filename}")
-            if filename in checksums:
+            if filename in attestations:
                 raise RuntimeError(f"Duplicate release artifact filename: {filename}")
-            checksums[filename] = checksum
-    if checksums != dict(gate.artifact_checksums):
-        raise RuntimeError("Release artifact checksum evidence does not match the gate")
+            attestation = ArtifactAttestation.from_dict(artifact)
+            if attestation.sparkle_signature and artifact.get(
+                "sparkle_length", attestation.size
+            ) != attestation.size:
+                raise RuntimeError(
+                    f"Release artifact signature length mismatch: {filename}"
+                )
+            attestations[filename] = attestation
+    if attestations != dict(gate.artifacts):
+        raise RuntimeError("Release artifact evidence does not match the gate")
     return selected
 
 
@@ -267,11 +302,7 @@ class GitHubDraftBackend:
         tag = github_release_tag(candidate.browser_version, candidate.product)
         title = f"{product.display_name} v{candidate.browser_version}"
         notes = generate_release_notes(candidate.browser_version, metadata, product)
-        expected = {
-            artifact["filename"]
-            for release in metadata.values()
-            for artifact in release["artifacts"].values()
-        }
+        expected_metadata = _expected_asset_metadata(metadata)
         created, result = create_github_release(
             tag,
             self.repo,
@@ -295,9 +326,13 @@ class GitHubDraftBackend:
             )
             current_assets = set(release.get("assets", []))
             edit_github_release(tag, self.repo, title, notes)
-            action = "reused" if current_assets == expected else "refreshed"
+            action = (
+                "reused"
+                if _asset_metadata_matches(release, expected_metadata)
+                else "refreshed"
+            )
 
-        if current_assets != expected:
+        if action != "reused":
             with tempfile.TemporaryDirectory(prefix="browser-release-") as temp:
                 root = Path(temp)
                 prepared = []
@@ -327,8 +362,10 @@ class GitHubDraftBackend:
                 tag, self.repo, candidate.candidate_sha, release=final
             )
             current_assets = set(final.get("assets", []))
-            if current_assets != expected:
-                raise RuntimeError(f"Draft release {tag} has an incomplete asset set")
+            if not _asset_metadata_matches(final, expected_metadata):
+                raise RuntimeError(
+                    f"Draft release {tag} asset identity does not match the gate"
+                )
 
         url = f"https://github.com/{self.repo}/releases/tag/{tag}"
         return DraftState(

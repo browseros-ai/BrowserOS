@@ -190,7 +190,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
             parent_sha="2" * 40,
             candidate_sha="3" * 40,
             default_branch="main",
-            branch="bot/release-browseros",
+            branch=f"bot/release-browseros-{'2' * 12}",
             browser_version="0.31.0",
             component_versions={
                 "server": "0.0.128",
@@ -219,8 +219,22 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                 ),
                 mock.patch(
                     "bos_build.release.component_release.list_pull_requests",
-                    return_value=[{"body": body}],
+                    return_value=[
+                        {
+                            "body": body,
+                            "baseRefName": "main",
+                            "headRefName": candidate.branch,
+                            "headRefOid": candidate.candidate_sha,
+                            "headRepository": {
+                                "nameWithOwner": "browseros-ai/BrowserOS"
+                            },
+                            "isCrossRepository": False,
+                        }
+                    ],
                 ),
+                mock.patch(
+                    "bos_build.release.component_release.GitHubCandidateBackend.validate_candidate"
+                ) as validate_candidate,
             ):
                 allocations = operations.allocations("server")
 
@@ -228,6 +242,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         self.assertEqual(allocations[0].kind, "candidate")
         self.assertEqual(allocations[0].version, "0.0.128")
         self.assertFalse(allocations[0].public)
+        validate_candidate.assert_called_once_with(candidate)
 
 
 if __name__ == "__main__":

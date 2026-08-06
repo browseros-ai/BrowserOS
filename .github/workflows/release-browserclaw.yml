@@ -3,10 +3,7 @@ name: "Release: BrowserOS neo (full)"
 on:
   workflow_dispatch:
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: release-browserclaw
@@ -15,6 +12,12 @@ concurrency:
 jobs:
   candidate:
     name: Prepare immutable candidate
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -62,6 +65,9 @@ jobs:
   common:
     name: Prepare common resources
     needs: candidate
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -155,7 +161,12 @@ jobs:
       resource_mode: source
       candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
       prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
-    secrets: inherit
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
 
   windows:
     name: Windows x64
@@ -171,14 +182,24 @@ jobs:
       resource_mode: source
       candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
       prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
-    secrets: inherit
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+      ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+      ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
   macos:
     name: macOS universal
     needs: [candidate, common]
     uses: ./.github/workflows/release-macos.yml
     permissions:
-      actions: write
+      actions: read
       contents: read
     with:
       products: browserclaw
@@ -187,11 +208,26 @@ jobs:
       resource_mode: source
       candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
       prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
-    secrets: inherit
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+      PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+      PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   gate:
     name: Gate native lanes
     needs: [candidate, linux, windows, macos]
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -243,6 +279,10 @@ jobs:
   merge:
     name: Merge candidate
     needs: [candidate, gate]
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -294,6 +334,9 @@ jobs:
   finalize:
     name: Finalize browser draft
     needs: [candidate, gate, merge]
+    permissions:
+      actions: read
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

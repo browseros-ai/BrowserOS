@@ -232,13 +232,11 @@ acceleration on WarpCache for Linux and the R2 tarball for Windows; do not add
 # BrowserOS Linux build from intentionally published component resources.
 gh workflow run release-linux.yml \
   -f products=browseros \
-  -f resource_mode=published \
   -f upload_to_r2=false
 
 # BrowserClaw unsigned Windows verification without R2 upload.
 gh workflow run release-windows.yml \
   -f products=browserclaw \
-  -f resource_mode=published \
   -f sign=false \
   -f upload_to_r2=false
 
@@ -247,10 +245,11 @@ gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
-Do not manually dispatch a wrapper in source mode: its prepared-resource
-artifact belongs to the parent full-release run. Retry a failed full-release
-lane with `gh run rerun <run-id> --failed` so it keeps the same candidate and
-artifact namespace.
+Manual wrapper dispatches are published-mode only. Source mode is available
+through `workflow_call` because its prepared-resource artifact belongs to the
+parent full-release run. Retry a failed full-release lane with
+`gh run rerun <run-id> --failed` so it keeps the same candidate and artifact
+namespace.
 
 The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next run is cold again for that version. To force a fresh

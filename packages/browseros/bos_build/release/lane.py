@@ -29,6 +29,15 @@ REQUIRED_OUTCOMES = frozenset(
 SIGNED_OUTCOMES = frozenset(
     {"windows-x64", "macos-arm64", "macos-x64", "macos-universal"}
 )
+LANE_REQUIREMENTS = {
+    "linux-x64": (frozenset({"linux-x64"}), frozenset({"linux-x64"})),
+    "windows-x64": (frozenset({"windows-x64"}), frozenset({"windows-x64"})),
+    "macos-universal": (
+        frozenset({"macos-arm64", "macos-x64", "macos-universal"}),
+        frozenset({"darwin-arm64", "darwin-x64"}),
+    ),
+}
+REQUIRED_LANES = frozenset(LANE_REQUIREMENTS)
 
 
 def _sha256(path: Path) -> str:
@@ -70,7 +79,7 @@ class ArtifactAttestation:
         _require_digest(sha256, f"Lane artifact checksum for {filename}")
         if not isinstance(url, str) or not isinstance(signature, str):
             raise ValueError(f"Lane artifact metadata is invalid: {filename}")
-        return cls(filename, size, sha256, url, signature)
+        return cls(filename, size, sha256.lower(), url, signature)
 
 
 @dataclass(frozen=True)
@@ -212,7 +221,7 @@ class LaneGate:
     lanes: tuple[str, ...]
     outcomes: tuple[str, ...]
     server_checksums: Mapping[str, str]
-    artifact_checksums: Mapping[str, str]
+    artifacts: Mapping[str, ArtifactAttestation]
     passed: bool = True
     schema: str = GATE_SCHEMA
 
@@ -221,6 +230,12 @@ class LaneGate:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
+
+    @property
+    def artifact_checksums(self) -> dict[str, str]:
+        return {
+            name: artifact.sha256 for name, artifact in self.artifacts.items()
+        }
 
     def summary(self) -> str:
         versions = ", ".join(
@@ -256,11 +271,7 @@ class LaneGate:
                 raise ValueError(f"Release gate {field} is invalid")
             strings[field] = value
         maps = {}
-        for field in (
-            "component_versions",
-            "server_checksums",
-            "artifact_checksums",
-        ):
+        for field in ("component_versions", "server_checksums"):
             value = document.get(field)
             if not isinstance(value, dict) or not all(
                 isinstance(key, str) and key and isinstance(item, str) and item
@@ -268,6 +279,18 @@ class LaneGate:
             ):
                 raise ValueError(f"Release gate {field} is invalid")
             maps[field] = value
+        raw_artifacts = document.get("artifacts")
+        if not isinstance(raw_artifacts, dict):
+            raise ValueError("Release gate artifacts are invalid")
+        artifacts = {
+            str(name): ArtifactAttestation.from_dict(value)
+            for name, value in raw_artifacts.items()
+            if isinstance(value, dict)
+        }
+        if len(artifacts) != len(raw_artifacts) or any(
+            name != artifact.filename for name, artifact in artifacts.items()
+        ):
+            raise ValueError("Release gate artifact entries are invalid")
         sequences = {}
         for field in ("lanes", "outcomes"):
             value = document.get(field)
@@ -281,11 +304,10 @@ class LaneGate:
         _require_digest(
             strings["common_manifest_digest"], "release gate common manifest"
         )
-        for name, digest in (
-            *maps["server_checksums"].items(),
-            *maps["artifact_checksums"].items(),
-        ):
+        for name, digest in maps["server_checksums"].items():
             _require_digest(digest, f"release gate checksum for {name}")
+        if set(sequences["lanes"]) != REQUIRED_LANES:
+            raise ValueError("Release gate lane set is incomplete")
         if set(sequences["outcomes"]) != REQUIRED_OUTCOMES:
             raise ValueError("Release gate outcome set is incomplete")
         return cls(
@@ -294,7 +316,7 @@ class LaneGate:
             lanes=sequences["lanes"],
             outcomes=sequences["outcomes"],
             server_checksums=maps["server_checksums"],
-            artifact_checksums=maps["artifact_checksums"],
+            artifacts=artifacts,
         )
 
     @classmethod
@@ -324,9 +346,38 @@ def gate_lane_manifests(manifests: Sequence[LaneManifest]) -> LaneGate:
     lane_ids = [manifest.lane_id for manifest in manifests]
     if len(set(lane_ids)) != len(lane_ids):
         raise ValueError("Release gate contains a duplicate lane")
+    if set(lane_ids) != REQUIRED_LANES:
+        missing = ", ".join(sorted(REQUIRED_LANES - set(lane_ids)))
+        extra = ", ".join(sorted(set(lane_ids) - REQUIRED_LANES))
+        raise ValueError(
+            f"Release gate lane set mismatch: missing {missing or '-'}; "
+            f"extra {extra or '-'}"
+        )
     for manifest in manifests:
         if manifest.result != "success":
             raise ValueError(f"Release lane {manifest.lane_id} failed")
+        required_outcomes, required_servers = LANE_REQUIREMENTS[manifest.lane_id]
+        if set(manifest.outcomes) != required_outcomes:
+            raise ValueError(
+                f"Release lane {manifest.lane_id} has invalid outcomes"
+            )
+        if set(manifest.server_checksums) != required_servers:
+            actual_servers = set(manifest.server_checksums)
+            missing = ", ".join(sorted(required_servers - actual_servers))
+            extra = ", ".join(sorted(actual_servers - required_servers))
+            raise ValueError(
+                f"Release lane {manifest.lane_id} has invalid server targets: "
+                f"missing {missing or '-'}; extra {extra or '-'}"
+            )
+        referenced_artifacts = {
+            filename
+            for outcome in manifest.outcomes.values()
+            for filename in outcome.artifacts
+        }
+        if set(manifest.artifacts) != referenced_artifacts:
+            raise ValueError(
+                f"Release lane {manifest.lane_id} has unbound artifacts"
+            )
 
     first = manifests[0]
     identity_fields = (
@@ -420,9 +471,7 @@ def gate_lane_manifests(manifests: Sequence[LaneManifest]) -> LaneGate:
         lanes=tuple(sorted(lane_ids)),
         outcomes=tuple(sorted(outcomes)),
         server_checksums=dict(sorted(servers.items())),
-        artifact_checksums={
-            name: artifact.sha256 for name, artifact in sorted(artifacts.items())
-        },
+        artifacts=dict(sorted(artifacts.items())),
     )
 
 

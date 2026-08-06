@@ -96,6 +96,14 @@ class ServerResourceBuilderTest(unittest.TestCase):
         self.browseros = self.repo / "packages/browseros"
         self.agent.mkdir(parents=True)
         self.browseros.mkdir(parents=True)
+        server_manifest = self.agent / "apps/server/package.json"
+        server_manifest.parent.mkdir(parents=True)
+        server_manifest.write_text('{"version":"0.0.128"}\n')
+        claw_manifest = self.agent / "apps/claw-server-rust/Cargo.toml"
+        claw_manifest.parent.mkdir(parents=True)
+        claw_manifest.write_text(
+            '[package]\nname = "claw-server-rust"\nversion = "0.0.18"\n'
+        )
         skill = self.agent / "resources/skills/browserclaw/SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text("browserclaw skill")
@@ -120,6 +128,7 @@ class ServerResourceBuilderTest(unittest.TestCase):
             host_platform="macos",
             run=run,
             which=lambda name: f"/usr/bin/{name}",
+            rust_targets=lambda: {"aarch64-apple-darwin"},
             cargo_target_dir=target_root,
         )
 
@@ -198,6 +207,37 @@ class ServerResourceBuilderTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "install Bun"):
             builder.preflight(product="browseros", target="linux-x64")
+
+    def test_source_manifest_must_match_requested_version(self) -> None:
+        builder = ServerResourceBuilder(
+            self.repo,
+            host_platform="macos",
+            run=lambda *args: None,
+            which=lambda name: f"/usr/bin/{name}",
+            rust_targets=lambda: {"aarch64-apple-darwin"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "source version"):
+            builder.prepare(
+                product="browserclaw",
+                target="darwin-arm64",
+                version="0.0.19",
+                source_sha=SOURCE_SHA,
+            )
+
+    def test_missing_rust_target_fails_preflight_with_install_command(self) -> None:
+        builder = ServerResourceBuilder(
+            self.repo,
+            host_platform="linux",
+            run=lambda *args: None,
+            which=lambda name: f"/usr/bin/{name}",
+            rust_targets=lambda: set(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, "rustup target add x86_64-unknown-linux-gnu"
+        ):
+            builder.preflight(product="browserclaw", target="linux-x64")
 
     def test_validation_rejects_version_source_and_checksum_drift(self) -> None:
         destination = self.browseros / "resources/binaries/browseros_server/linux-x64"

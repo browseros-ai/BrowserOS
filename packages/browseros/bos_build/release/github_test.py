@@ -67,12 +67,18 @@ class PullRequestAdapterTest(unittest.TestCase):
     def test_merges_pull_request_and_returns_merge_commit(self) -> None:
         runner = RecordingRunner(stdout=json.dumps({"mergeCommit": {"oid": "3" * 40}}))
 
-        sha = merge_pull_request("browseros-ai/BrowserOS", 42, runner=runner)
+        sha = merge_pull_request(
+            "browseros-ai/BrowserOS",
+            42,
+            expected_head_sha="2" * 40,
+            runner=runner,
+        )
 
         self.assertEqual(sha, "3" * 40)
         command = runner.calls[0][0]
         self.assertEqual(command[:3], ["gh", "pr", "merge"])
         self.assertIn("--squash", command)
+        self.assertEqual(command[-2:], ["--match-head-commit", "2" * 40])
         self.assertNotIn("--delete-branch", command)
 
 

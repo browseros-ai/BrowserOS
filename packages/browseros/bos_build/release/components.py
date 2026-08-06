@@ -185,7 +185,12 @@ def _next_unallocated(
         for record in _component_allocations(component_id, allocations)
         if record.blocks
     }
-    candidate = increment_component_version(component_id, version)
+    current = normalize_component_version(component_id, version)
+    highest = max(
+        (current, *blocked),
+        key=lambda value: _version_key(component_id, value),
+    )
+    candidate = increment_component_version(component_id, highest)
     while candidate in blocked:
         candidate = increment_component_version(component_id, candidate)
     return candidate

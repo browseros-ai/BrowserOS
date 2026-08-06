@@ -52,7 +52,7 @@ def list_pull_requests(
         "--limit",
         "100",
         "--json",
-        "number,url,state,isDraft,headRefName,headRefOid,baseRefName,body,mergedAt,mergeCommit,mergeable",
+        "number,url,state,isDraft,headRefName,headRefOid,baseRefName,body,mergedAt,mergeCommit,mergeable,isCrossRepository,headRepository",
     ]
     if head:
         command.extend(["--head", head])
@@ -121,11 +121,22 @@ def merge_pull_request(
     repo: str,
     number: int,
     *,
+    expected_head_sha: str,
     runner: CommandRunner = subprocess.run,
 ) -> str:
     """Squash-merge a pull request and return the merge commit."""
     _run_gh(
-        ["gh", "pr", "merge", str(number), "--repo", repo, "--squash"],
+        [
+            "gh",
+            "pr",
+            "merge",
+            str(number),
+            "--repo",
+            repo,
+            "--squash",
+            "--match-head-commit",
+            expected_head_sha,
+        ],
         runner,
     )
     document = json.loads(
@@ -251,11 +262,20 @@ def inspect_github_release(tag: str, repo: str) -> Dict:
         check=True,
     )
     document = json.loads(result.stdout)
-    document["assets"] = [
-        asset["name"]
-        for asset in document.get("assets", [])
-        if isinstance(asset, dict) and asset.get("name")
-    ]
+    assets = {}
+    for asset in document.get("assets", []):
+        if not isinstance(asset, dict) or not asset.get("name"):
+            continue
+        digest = asset.get("digest")
+        sha256 = ""
+        if isinstance(digest, str) and digest.startswith("sha256:"):
+            sha256 = digest.removeprefix("sha256:").lower()
+        assets[str(asset["name"])] = {
+            "sha256": sha256,
+            "size": asset.get("size"),
+        }
+    document["assets"] = list(assets)
+    document["asset_metadata"] = assets
     return document
 
 

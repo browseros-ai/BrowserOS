@@ -22,19 +22,6 @@ on:
         description: "Upload release metadata/artifacts to R2"
         type: boolean
         default: true
-      resource_mode:
-        description: "Resource provider"
-        type: choice
-        options: [published, source]
-        default: published
-      candidate_sha:
-        description: "Exact source candidate SHA"
-        type: string
-        default: ""
-      prepared_resources_artifact:
-        description: "Prepared common-resource artifact"
-        type: string
-        default: ""
       ref:
         description: "Published-mode checkout ref"
         type: string
@@ -76,6 +63,37 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
+      MACOS_CERTIFICATE_NAME:
+        required: false
+      MACOS_KEYCHAIN_PASSWORD:
+        required: false
+      PROD_MACOS_NOTARIZATION_APPLE_ID:
+        required: false
+      PROD_MACOS_NOTARIZATION_TEAM_ID:
+        required: false
+      PROD_MACOS_NOTARIZATION_PWD:
+        required: false
+      SPARKLE_PRIVATE_KEY:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions:
   contents: read
@@ -288,6 +306,7 @@ jobs:
           name: ${{ steps.inputs.outputs.lane_artifact }}
           path: ${{ steps.inputs.outputs.lane_manifest }}
           if-no-files-found: error
+          overwrite: true
           retention-days: 30
 
       - name: Upload BrowserOS DMG artifact
@@ -300,6 +319,7 @@ jobs:
             !${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
       - name: Upload BrowserOS neo DMG artifact
         if: always() && (steps.inputs.outputs.products == 'browserclaw' || steps.inputs.outputs.products == 'all')
@@ -309,6 +329,7 @@ jobs:
           path: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
       - name: Slack failure ping
         if: failure()

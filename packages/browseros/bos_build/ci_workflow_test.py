@@ -141,19 +141,27 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 workflow = self.load_workflow(workflow_name)
                 triggers = workflow.get("on", workflow.get(True))
                 inputs = triggers["workflow_call"]["inputs"]
+                dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
                 build_with = workflow["jobs"]["build"]["with"]
 
                 self.assertEqual(inputs["resource_mode"]["default"], "published")
+                self.assertTrue(
+                    {"resource_mode", "candidate_sha", "prepared_resources_artifact"}.isdisjoint(
+                        dispatch_inputs
+                    )
+                )
                 self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
                 self.assertEqual(
-                    build_with["resource-mode"], "${{ inputs.resource_mode }}"
+                    build_with["resource-mode"],
+                    "${{ inputs.resource_mode || 'published' }}",
                 )
                 self.assertEqual(
-                    build_with["candidate-sha"], "${{ inputs.candidate_sha }}"
+                    build_with["candidate-sha"],
+                    "${{ inputs.candidate_sha || '' }}",
                 )
                 self.assertEqual(
                     build_with["prepared-resources-artifact"],
-                    "${{ inputs.prepared_resources_artifact }}",
+                    "${{ inputs.prepared_resources_artifact || '' }}",
                 )
                 self.assertEqual(build_with["arch"], "x64")
 
@@ -161,6 +169,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         workflow = self.load_workflow("release-macos.yml")
         triggers = workflow.get("on", workflow.get(True))
         inputs = triggers["workflow_call"]["inputs"]
+        dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
         steps = workflow["jobs"]["build"]["steps"]
         build_step = next(
             step
@@ -181,6 +190,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertEqual(inputs["arch"]["default"], "universal")
         self.assertEqual(inputs["resource_mode"]["default"], "published")
+        self.assertTrue(
+            {"resource_mode", "candidate_sha", "prepared_resources_artifact"}.isdisjoint(
+                dispatch_inputs
+            )
+        )
         self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
         self.assertIn('git checkout --detach "$CANDIDATE_SHA"', sync["run"])
         self.assertIn('git rev-parse HEAD)', sync["run"])
@@ -747,9 +761,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 triggers = workflow.get("on", workflow.get(True))
                 self.assertIsNone(triggers["workflow_dispatch"])
                 self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
-                self.assertEqual(workflow["permissions"]["actions"], "write")
-                self.assertEqual(workflow["permissions"]["contents"], "write")
-                self.assertEqual(workflow["permissions"]["pull-requests"], "write")
+                self.assertEqual(workflow["permissions"], {})
 
     def test_candidate_freezes_default_branch_and_uses_python_lifecycle(self):
         for workflow_name, config in self.RELEASES.items():
@@ -768,6 +780,14 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     workflow, "candidate", "Upload candidate record"
                 )
 
+                self.assertEqual(
+                    candidate["concurrency"]["group"],
+                    "release-component-allocation",
+                )
+                self.assertEqual(
+                    candidate["permissions"],
+                    {"contents": "write", "pull-requests": "write"},
+                )
                 self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
                 self.assertEqual(checkout["with"]["fetch-depth"], 0)
                 for token in (
@@ -818,6 +838,10 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 )
 
                 self.assertEqual(common["needs"], "candidate")
+                self.assertEqual(
+                    common["permissions"],
+                    {"actions": "read", "contents": "read"},
+                )
                 self.assertEqual(
                     checkout["with"]["ref"],
                     "${{ needs.candidate.outputs.candidate_sha }}",
@@ -871,11 +895,40 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     if arch is not None:
                         self.assertEqual(job["with"]["arch"], arch)
 
+                    serialized_secrets = yaml.safe_dump(job["secrets"])
+                    self.assertNotEqual(job["secrets"], "inherit")
+                    if job_name == "linux":
+                        self.assertNotIn("ESIGNER_", serialized_secrets)
+                        self.assertNotIn("MACOS_", serialized_secrets)
+                        self.assertNotIn("SPARKLE_PRIVATE_KEY", serialized_secrets)
+                    elif job_name == "windows":
+                        self.assertIn("ESIGNER_USERNAME", serialized_secrets)
+                        self.assertNotIn("MACOS_", serialized_secrets)
+                    else:
+                        self.assertIn("MACOS_CERTIFICATE_NAME", serialized_secrets)
+                        self.assertNotIn("ESIGNER_", serialized_secrets)
+
     def test_gate_merge_and_finalization_are_strictly_ordered(self):
         for workflow_name, config in self.RELEASES.items():
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 jobs = workflow["jobs"]
+                self.assertEqual(
+                    jobs["gate"]["permissions"],
+                    {"actions": "read", "contents": "read"},
+                )
+                self.assertEqual(
+                    jobs["merge"]["permissions"],
+                    {
+                        "actions": "read",
+                        "contents": "write",
+                        "pull-requests": "write",
+                    },
+                )
+                self.assertEqual(
+                    jobs["finalize"]["permissions"],
+                    {"actions": "read", "contents": "write"},
+                )
                 self.assertEqual(
                     set(jobs["gate"]["needs"]),
                     {"candidate", "linux", "windows", "macos"},
@@ -918,6 +971,24 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertIn(
                     f"release-finalization-{config['product']}-",
                     preview["with"]["name"],
+                )
+
+    def test_all_component_allocators_share_one_preparation_lock(self):
+        workflows = (
+            "release-browseros.yml",
+            "release-browserclaw.yml",
+            "release-server.yml",
+            "release-claw-server-rust.yml",
+            "release-claw-onboard.yml",
+            "release-extensions.yml",
+        )
+        for workflow_name in workflows:
+            workflow = self.load_workflow(workflow_name)
+            job_name = "candidate" if "candidate" in workflow["jobs"] else "prepare"
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(
+                    workflow["jobs"][job_name]["concurrency"]["group"],
+                    "release-component-allocation",
                 )
 
     def test_full_workflows_have_no_component_publication_choreography(self):

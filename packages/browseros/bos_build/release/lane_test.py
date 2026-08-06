@@ -178,7 +178,7 @@ class LaneManifestTest(unittest.TestCase):
         self.assertEqual(type(gate).from_dict(gate.to_dict()), gate)
 
     def test_gate_rejects_missing_duplicate_and_failed_lanes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "missing outcomes"):
+        with self.assertRaisesRegex(ValueError, "lane set"):
             gate_lane_manifests(_complete_lanes()[:-1])
         with self.assertRaisesRegex(ValueError, "duplicate lane"):
             gate_lane_manifests([*_complete_lanes(), _complete_lanes()[0]])
@@ -186,6 +186,15 @@ class LaneManifestTest(unittest.TestCase):
         failed[0] = replace(failed[0], result="failed")
         with self.assertRaisesRegex(ValueError, "failed"):
             gate_lane_manifests(failed)
+
+    def test_gate_rejects_swapped_lane_evidence(self) -> None:
+        lanes = _complete_lanes()
+        linux, windows = lanes[:2]
+        lanes[0] = replace(windows, lane_id="linux-x64")
+        lanes[1] = replace(linux, lane_id="windows-x64")
+
+        with self.assertRaisesRegex(ValueError, "invalid outcomes"):
+            gate_lane_manifests(lanes)
 
     def test_gate_rejects_unsigned_required_outcome(self) -> None:
         lanes = _complete_lanes()

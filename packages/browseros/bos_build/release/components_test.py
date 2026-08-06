@@ -77,6 +77,29 @@ class ComponentPlanningTest(unittest.TestCase):
 
         self.assertEqual(planned, {"server": "0.0.128", "agent": "0.0.101.0"})
 
+    def test_candidate_advances_beyond_newer_release_history(self) -> None:
+        planned = resolve_candidate_versions(
+            product_id="browseros",
+            committed_versions={"server": "0.0.127", "agent": "0.0.100"},
+            allocations=(
+                AllocationRecord(
+                    component="server",
+                    version="0.0.200",
+                    kind="release",
+                    public=True,
+                ),
+                AllocationRecord(
+                    component="agent",
+                    version="0.0.150.0",
+                    kind="release",
+                    public=True,
+                ),
+            ),
+            candidate_id="candidate-1",
+        )
+
+        self.assertEqual(planned, {"server": "0.0.201", "agent": "0.0.151.0"})
+
     def test_incomplete_candidate_reservation_fails_closed(self) -> None:
         allocations = (
             AllocationRecord(

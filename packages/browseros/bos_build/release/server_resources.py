@@ -10,11 +10,11 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Callable, Mapping, Optional
+from typing import AbstractSet, Callable, Mapping, Optional
 
 from ..products.resource_sources import source_resources_for_product
 from ..products.server_binaries import ServerBundle, server_bundles_for_product
-from .components import normalize_component_version
+from .components import normalize_component_version, read_component_version
 
 
 @dataclass(frozen=True)
@@ -69,12 +69,23 @@ TARGETS: Mapping[str, ServerTarget] = {
 
 RunCommand = Callable[[tuple[str, ...], Path, Mapping[str, str]], None]
 Which = Callable[[str], Optional[str]]
+RustTargets = Callable[[], AbstractSet[str]]
 
 
 def _default_run(
     command: tuple[str, ...], cwd: Path, environment: Mapping[str, str]
 ) -> None:
     subprocess.run(list(command), cwd=cwd, env=dict(environment), check=True)
+
+
+def _default_rust_targets() -> AbstractSet[str]:
+    result = subprocess.run(
+        ["rustup", "target", "list", "--installed"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return frozenset(result.stdout.splitlines())
 
 
 def _host_platform() -> str:
@@ -260,6 +271,7 @@ class ServerResourceBuilder:
         host_platform: str = "",
         run: RunCommand = _default_run,
         which: Which = shutil.which,
+        rust_targets: RustTargets = _default_rust_targets,
         cargo_target_dir: Optional[Path] = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
@@ -268,6 +280,7 @@ class ServerResourceBuilder:
         self.host_platform = host_platform or _host_platform()
         self.run = run
         self.which = which
+        self.rust_targets = rust_targets
         self.cargo_target_dir = (
             cargo_target_dir or self.agent_root / "target"
         ).resolve()
@@ -283,6 +296,18 @@ class ServerResourceBuilder:
         if self.which(tool) is None:
             action = "install Bun" if tool == "bun" else "install Rust and Cargo"
             raise RuntimeError(f"Cannot build {target.id}: {action}")
+        if bundle.source_builder == "cargo":
+            if self.which("rustup") is None:
+                raise RuntimeError(f"Cannot build {target.id}: install Rust with rustup")
+            try:
+                installed_targets = self.rust_targets()
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError("Could not query installed Rust targets") from exc
+            if target.cargo_triple not in installed_targets:
+                raise RuntimeError(
+                    f"Cannot build {target.id}: run rustup target add "
+                    f"{target.cargo_triple}"
+                )
         return bundle
 
     def preflight(self, *, product: str, target: str) -> None:
@@ -313,6 +338,15 @@ class ServerResourceBuilder:
         normalized_version = normalize_component_version(
             source.server_component, version
         )
+        source_version = read_component_version(
+            self.agent_root.parent.parent,
+            source.server_component,
+        )
+        if source_version != normalized_version:
+            raise ValueError(
+                f"Server source version {source_version} does not match "
+                f"requested version {normalized_version}"
+            )
         destination = self.browseros_root / bundle.local_resources_root / target
         if destination.exists():
             shutil.rmtree(destination)

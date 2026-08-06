@@ -87,6 +87,9 @@ concurrency:
 jobs:
   prepare:
     if: github.event_name != 'push' || github.event.deleted != true
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:

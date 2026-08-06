@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from .candidate import candidate_record_from_body
+from .candidate import GitHubCandidateBackend, candidate_record_from_pull_request
 from .components import (
     AllocationRecord,
     component_by_id,
@@ -345,12 +345,15 @@ class GitComponentReleaseOperations:
             )
 
         for pull_request in list_pull_requests(self.repo, state="open"):
-            body = pull_request.get("body")
-            record = (
-                candidate_record_from_body(body) if isinstance(body, str) else None
-            )
+            record = candidate_record_from_pull_request(pull_request, self.repo)
             if record is None or component not in record.component_versions:
                 continue
+            GitHubCandidateBackend(
+                self.repo_root,
+                self.repo,
+                record.default_branch,
+                self.remote,
+            ).validate_candidate(record)
             allocations.append(
                 AllocationRecord(
                     component=component,

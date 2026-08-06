@@ -263,7 +263,6 @@ browser release path and does not create a candidate:
 gh workflow run release-linux.yml \
   --ref main \
   -f products=browseros \
-  -f resource_mode=published \
   -f upload_to_r2=false
 ```
 
