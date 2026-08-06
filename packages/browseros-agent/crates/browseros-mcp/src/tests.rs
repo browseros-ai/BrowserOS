@@ -538,7 +538,6 @@ fn history_schema_stays_narrow_and_defaults_to_100() {
 fn instructions_do_not_request_manual_tab_grouping() {
     assert!(!BROWSER_MCP_INSTRUCTIONS.contains("tab_groups"));
     assert!(!BROWSER_MCP_INSTRUCTIONS.contains("hidden window"));
-    assert!(BROWSER_MCP_INSTRUCTIONS.contains("Close your tabs when done."));
 }
 
 #[test]

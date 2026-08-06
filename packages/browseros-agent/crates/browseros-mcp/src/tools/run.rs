@@ -32,12 +32,12 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"Do multi-step flows - pagination, bulk extraction, repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able.
 
-The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps, and close a page with browser.pages.close(pageId) when you are done with it.
+The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps.
 
 Pages (pageId is a NUMBER):
   browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Opens in the background so it does not steal the user's focus; pass { background: false } only when the user asks to bring the tab to the front.
-  browser.pages.close(pageId)  -> undefined. Call this when finished with a page. Close ONLY tabs you own (ownership "mine"); never close the user's or another agent's tabs.
-  browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act on and clean up only your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one. When you loop to close tabs, filter to ownership === "mine" first.
+  browser.pages.close(pageId)  -> undefined. Closes a page you own.
+  browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one.
   browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
 Observe / act (refs eN come from a snapshot's text/refs):
   browser.observe(pageId).snapshot() -> { text, refs, url }
@@ -58,7 +58,6 @@ Do the whole task in as few run calls as possible: loop over all the items in on
   const ids = await Promise.all(urls.map(u => browser.pages.newPage(u)));
   await Promise.all(ids.map(id => browser.wait(id, { value: 2500 })));
   const docs = await Promise.all(ids.map(id => browser.read(id)));
-  await Promise.all(ids.map(id => browser.pages.close(id)));
   return docs;"#;
 
 const BOOTSTRAP_JS: &str = r#"
