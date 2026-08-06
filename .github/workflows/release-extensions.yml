@@ -134,7 +134,7 @@ jobs:
     concurrency:
       group: release-component-allocation
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 20
     outputs:
       mode: ${{ steps.validate.outputs.mode }}
@@ -344,7 +344,7 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.mode == 'build'
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 45
     env:
       EXTENSION: ${{ inputs.extension }}
@@ -454,7 +454,7 @@ jobs:
       - prepare
       - build
     if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 10
     outputs:
       base_sha: ${{ steps.base.outputs.sha }}
@@ -544,7 +544,7 @@ jobs:
       - build
       - preflight_alpha
     if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 20
     env:
       EXTENSION: ${{ inputs.extension }}
@@ -667,7 +667,7 @@ jobs:
       - preflight_alpha
       - finalize
     if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
