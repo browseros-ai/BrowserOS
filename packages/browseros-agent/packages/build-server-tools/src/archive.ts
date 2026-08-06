@@ -1,5 +1,13 @@
 import { readdir, rm, utimes } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path'
 
 import type { S3Client } from '@aws-sdk/client-s3'
 
@@ -26,18 +34,41 @@ function zipPathForArtifact(
 export async function zipDirectory(
   artifactRoot: string,
   outputZipPath: string,
+  options: { filesOnly?: boolean } = {},
 ): Promise<void> {
   const absoluteOutputZipPath = isAbsolute(outputZipPath)
     ? outputZipPath
     : resolve(outputZipPath)
   await rm(absoluteOutputZipPath, { force: true })
   await normalizeArchiveTimestamps(artifactRoot)
-  await runCommand(
-    'zip',
-    ['-X', '-r', '-q', absoluteOutputZipPath, '.'],
-    process.env,
-    artifactRoot,
-  )
+  const args = options.filesOnly
+    ? [
+        '-X',
+        '-q',
+        absoluteOutputZipPath,
+        ...(await collectArchiveFiles(artifactRoot)),
+      ]
+    : ['-X', '-r', '-q', absoluteOutputZipPath, '.']
+  await runCommand('zip', args, process.env, artifactRoot)
+}
+
+async function collectArchiveFiles(
+  root: string,
+  current = root,
+): Promise<string[]> {
+  const files: string[] = []
+  const entries = await readdir(current, { withFileTypes: true })
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    const entryPath = join(current, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...(await collectArchiveFiles(root, entryPath)))
+    } else {
+      files.push(relative(root, entryPath).split(sep).join('/'))
+    }
+  }
+  return files
 }
 
 async function normalizeArchiveTimestamps(path: string): Promise<void> {
@@ -62,12 +93,18 @@ export async function archiveAndUploadArtifacts(
   r2: R2Config,
   upload: boolean,
   archiveBaseName: string,
-  options: { releaseSha?: string; versionedOnly?: boolean } = {},
+  options: {
+    releaseSha?: string
+    versionedOnly?: boolean
+    filesOnly?: boolean
+  } = {},
 ): Promise<UploadResult[]> {
   if (options.versionedOnly && !options.releaseSha) {
     throw new Error('releaseSha is required for versioned-only uploads')
   }
-  const results = await archiveArtifacts(artifacts, archiveBaseName)
+  const results = await archiveArtifacts(artifacts, archiveBaseName, {
+    filesOnly: options.filesOnly,
+  })
   if (!upload) {
     return results
   }
@@ -110,12 +147,13 @@ export async function archiveAndUploadArtifacts(
 export async function archiveArtifacts(
   artifacts: StagedArtifact[],
   archiveBaseName: string,
+  options: { filesOnly?: boolean } = {},
 ): Promise<UploadResult[]> {
   const results: UploadResult[] = []
 
   for (const artifact of artifacts) {
     const zipPath = zipPathForArtifact(artifact, archiveBaseName)
-    await zipDirectory(artifact.rootDir, zipPath)
+    await zipDirectory(artifact.rootDir, zipPath, options)
     results.push({ targetId: artifact.target.id, zipPath })
   }
 

@@ -15,6 +15,7 @@ export const clawServerRustBuildProduct: ResourceBuildProductDescriptor = {
   defaultManifestPath:
     'scripts/build/config/claw-server-rust-prod-resources.json',
   includeArtifactIdentity: true,
+  archiveFilesOnly: true,
   env: {
     requiredInlineEnvKeys: ['CLAW_POSTHOG_KEY'],
     inlineEnvKeys: INLINE_ENV_KEYS,

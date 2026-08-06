@@ -26,6 +26,7 @@ describe('BrowserClaw Rust build descriptor', () => {
       stagedBinaryBaseName: 'browseros-claw-server',
       archiveBaseName: 'browseros-claw-server-rust-resources',
       includeArtifactIdentity: true,
+      archiveFilesOnly: true,
       env: {
         requiredInlineEnvKeys: ['CLAW_POSTHOG_KEY'],
         defaultR2UploadPrefix: 'claw-server-rust/prod-resources',

@@ -174,6 +174,7 @@ floor, and Windows uses the MSVC ABI through `cargo-xwin`.
 Install the one-time host toolchain:
 
 ```bash
+xcrun --find clang || xcode-select --install
 brew install rustup zig llvm cmake nasm
 rustup-init
 export PATH="$(brew --prefix llvm)/bin:$PATH"

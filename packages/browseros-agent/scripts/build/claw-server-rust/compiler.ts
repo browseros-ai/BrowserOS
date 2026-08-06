@@ -13,6 +13,7 @@ const BINARY_BASE_NAME = 'browseros-claw-server-rs'
 const PACKAGE_NAME = 'claw-server-rust'
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
+const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
 
 interface RustBuildSpec {
   rustTarget: string
@@ -29,6 +30,7 @@ interface ToolRequirement {
 export interface RustToolchainProbe {
   platform: NodeJS.Platform
   findCommand: (command: string) => string | undefined
+  hasUsableXcode: () => boolean
   installedRustTargets: () => Promise<ReadonlySet<string>>
 }
 
@@ -74,6 +76,14 @@ const RUST_BUILD_SPECS: Record<TargetId, RustBuildSpec> = {
 const defaultProbe: RustToolchainProbe = {
   platform: process.platform,
   findCommand: (command) => Bun.which(command) ?? undefined,
+  hasUsableXcode: () => {
+    try {
+      execFileSync('xcrun', ['--find', 'clang'], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  },
   installedRustTargets: async () => {
     const output = execFileSync('rustup', ['target', 'list', '--installed'], {
       encoding: 'utf8',
@@ -115,13 +125,8 @@ function toolRequirements(targets: BuildTarget[]): ToolRequirement[] {
     },
     { commands: ['cmake'], install: 'brew install cmake' },
     { commands: ['zip'], install: 'brew install zip' },
+    { commands: ['xcrun'], install: 'xcode-select --install' },
   ]
-  if (targets.some((target) => target.os === 'macos')) {
-    requirements.push({
-      commands: ['xcrun'],
-      install: 'xcode-select --install',
-    })
-  }
   if (targets.some((target) => target.os === 'linux')) {
     requirements.push(
       { commands: ['zig'], install: 'brew install zig' },
@@ -161,6 +166,8 @@ export async function preflightRustBuild(
     )
     return commands.length > 0 ? [{ ...requirement, commands }] : []
   })
+  const missingXcode =
+    probe.findCommand('xcrun') !== undefined && !probe.hasUsableXcode()
   const hasRustup = probe.findCommand('rustup') !== undefined
   let installedTargets: ReadonlySet<string> = new Set()
   if (hasRustup) {
@@ -181,11 +188,20 @@ export async function preflightRustBuild(
         .sort()
     : []
 
-  if (missingTools.length === 0 && missingTargets.length === 0) return
+  if (
+    missingTools.length === 0 &&
+    missingTargets.length === 0 &&
+    !missingXcode
+  ) {
+    return
+  }
 
   const lines = ['Missing BrowserClaw Rust build prerequisites:']
   for (const requirement of missingTools) {
     lines.push(`- ${requirement.commands.join(', ')}: ${requirement.install}`)
+  }
+  if (missingXcode) {
+    lines.push('- Xcode Command Line Tools: xcode-select --install')
   }
   if (missingTargets.length > 0) {
     lines.push(`- Rust targets: rustup target add ${missingTargets.join(' ')}`)
@@ -207,7 +223,8 @@ export async function validateCompiledBinary(
       `Compiled BrowserClaw server does not contain CLAW_POSTHOG_KEY: ${binaryPath}`,
     )
   }
-  if (!binary.includes(Buffer.from(version))) {
+  const versionMarker = Buffer.from(`${VERSION_MARKER_PREFIX}${version}`)
+  if (!binary.includes(versionMarker)) {
     throw new Error(
       `Compiled BrowserClaw server does not contain version ${version}: ${binaryPath}`,
     )

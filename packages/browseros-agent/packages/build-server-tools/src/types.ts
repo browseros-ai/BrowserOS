@@ -68,6 +68,7 @@ export interface ResourceBuildProductDescriptor extends ProductBuildSpec {
   defaultManifestPath: string
   defaultUpload?: boolean
   includeArtifactIdentity?: boolean
+  archiveFilesOnly?: boolean
 }
 
 export interface BuildProductDescriptor extends ResourceBuildProductDescriptor {

@@ -150,17 +150,32 @@ describe('BrowserClaw Rust compiler', () => {
     )
   })
 
+  it('requires a usable Xcode clang even for cross-only targets', async () => {
+    const target = resolveTargets('linux-x64')
+    const probe = fakeProbe({
+      hasUsableXcode: () => false,
+      targets: new Set(['x86_64-unknown-linux-gnu']),
+    })
+
+    await expect(preflightRustBuild(target, probe)).rejects.toThrow(
+      'Xcode Command Line Tools: xcode-select --install',
+    )
+  })
+
   it('validates embedded version and telemetry key without exposing the key', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'claw-rust-compiler-'))
     const binaryPath = join(tempDir, 'server')
     const posthogKey = 'phc_private_test_key'
-    await writeFile(binaryPath, `binary:${posthogKey}:version=1.2.3`)
+    await writeFile(
+      binaryPath,
+      `binary:${posthogKey}:browseros-claw-server-version=1.2.3`,
+    )
 
     await expect(
       validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
     ).resolves.toBeUndefined()
 
-    await writeFile(binaryPath, 'binary:version=1.2.3')
+    await writeFile(binaryPath, 'binary:browseros-claw-server-version=1.2.3')
     const error = await validateCompiledBinary(
       binaryPath,
       '1.2.3',
@@ -169,7 +184,7 @@ describe('BrowserClaw Rust compiler', () => {
     expect(error.message).toContain('CLAW_POSTHOG_KEY')
     expect(error.message).not.toContain(posthogKey)
 
-    await writeFile(binaryPath, `binary:${posthogKey}`)
+    await writeFile(binaryPath, `binary:${posthogKey}:dependency=1.2.3`)
     await expect(
       validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
     ).rejects.toThrow('version 1.2.3')
@@ -184,6 +199,7 @@ function fakeProbe(
   return {
     platform: overrides.platform ?? 'darwin',
     findCommand: overrides.findCommand ?? ((command) => `/bin/${command}`),
+    hasUsableXcode: overrides.hasUsableXcode ?? (() => true),
     installedRustTargets:
       overrides.installedRustTargets ??
       (async () => overrides.targets ?? new Set()),

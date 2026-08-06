@@ -20,8 +20,11 @@ use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+const VERSION_MARKER: &str = concat!("browseros-claw-server-version=", env!("CARGO_PKG_VERSION"));
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    std::hint::black_box(VERSION_MARKER);
     let (config_path, stdio_mode) = match Cli::parse_action() {
         CliAction::Version => {
             writeln!(io::stdout().lock(), "{VERSION}")?;
