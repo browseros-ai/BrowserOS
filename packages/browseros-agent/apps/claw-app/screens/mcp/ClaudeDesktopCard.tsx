@@ -1,15 +1,17 @@
-import { ArrowUpRight } from 'lucide-react'
-
-const EXTENSION_INSTALL_URL =
-  'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension'
+import { ArrowRight } from 'lucide-react'
+import { useState } from 'react'
+import { InstallExtensionDialog } from './InstallExtensionDialog'
+import { COWORK_REQUIREMENT_LINE } from './install-guide.data'
 
 /**
  * Advertises the BrowserOS neo extension for Claude Desktop. Unlike the
- * harness rows, Claude Desktop connects by dragging a `.mcpb` into its
- * Settings, which this app cannot toggle or detect, so this is a link out
- * to the repo install steps rather than a connect action.
+ * harness rows, Claude Desktop installs a `.mcpb` through its own Settings,
+ * which this app cannot toggle or detect, so the card opens a guided
+ * walkthrough instead of offering a connect action.
  */
 export function ClaudeDesktopCard() {
+  const [guideOpen, setGuideOpen] = useState(false)
+
   return (
     <section className="space-y-2">
       <header className="flex items-baseline justify-between gap-3">
@@ -18,11 +20,10 @@ export function ClaudeDesktopCard() {
           extension
         </span>
       </header>
-      <a
-        href={EXTENSION_INSTALL_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="group block rounded-xl border border-border-2 bg-card-tint px-4 py-4 transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      <button
+        type="button"
+        onClick={() => setGuideOpen(true)}
+        className="group block w-full rounded-xl border border-border-2 bg-card-tint px-4 py-4 text-left transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <div className="flex items-start gap-3">
           <ClaudeMark className="size-7 shrink-0" />
@@ -31,24 +32,21 @@ export function ClaudeDesktopCard() {
               Give Claude Desktop a real browser.
             </p>
             <p className="text-[13px] text-ink-2 leading-snug">
-              Drop in the extension and Claude reaches for BrowserOS neo to open
-              sites, log in, and click through flows.
-            </p>
-            <p className="text-[12px] text-ink-3 leading-snug">
-              Also works with Cowork.
+              {COWORK_REQUIREMENT_LINE}
             </p>
           </div>
         </div>
         <div className="mt-3 flex justify-end">
           <span className="inline-flex items-center gap-1 font-mono text-[11px] text-accent uppercase tracking-[0.08em] transition-colors group-hover:text-accent-2">
-            install the extension
-            <ArrowUpRight
+            show me how
+            <ArrowRight
               aria-hidden
-              className="size-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+              className="size-3.5 transition-transform group-hover:translate-x-0.5"
             />
           </span>
         </div>
-      </a>
+      </button>
+      <InstallExtensionDialog open={guideOpen} onOpenChange={setGuideOpen} />
     </section>
   )
 }
