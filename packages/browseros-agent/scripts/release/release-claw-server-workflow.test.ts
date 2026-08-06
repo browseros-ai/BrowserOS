@@ -64,14 +64,16 @@ describe('release-claw-server workflow', () => {
   it('tests and builds all five shipped targets', () => {
     expect(workflow).toContain('cargo test --workspace --locked')
     expect(workflow).toContain('cargo test --locked -p harness-integrations')
-    for (const target of [
-      'darwin-arm64',
-      'darwin-x64',
-      'linux-arm64',
-      'linux-x64',
-      'windows-x64',
-    ]) {
+    const targets = {
+      'darwin-arm64': 'aarch64-apple-darwin',
+      'darwin-x64': 'x86_64-apple-darwin',
+      'linux-arm64': 'aarch64-unknown-linux-gnu',
+      'linux-x64': 'x86_64-unknown-linux-gnu',
+      'windows-x64': 'x86_64-pc-windows-msvc',
+    }
+    for (const [target, rustTarget] of Object.entries(targets)) {
       expect(workflow).toContain(`target: ${target}`)
+      expect(workflow).toContain(`rust_target: ${rustTarget}`)
     }
     expect(workflow).toContain('CLAW_POSTHOG_KEY is required')
     expect(workflow).toContain('Verify stamped binary version')

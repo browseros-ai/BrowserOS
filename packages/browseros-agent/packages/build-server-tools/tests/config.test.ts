@@ -170,6 +170,22 @@ describe('build config', () => {
     expect(config.envVars.LOG_LEVEL).toBe('info')
   })
 
+  it('lets CI-specific overrides replace available production values', async () => {
+    const rootDir = await writeProdRoot(REQUIRED_INLINE_ENV)
+    const product = testProduct({
+      env: {
+        ...testProduct().env,
+        ciInlineEnvOverrides: {
+          TEST_CONFIG_URL: 'https://ci.invalid/config',
+        },
+      },
+    })
+
+    const config = loadBuildConfig(rootDir, product, { ci: true })
+
+    expect(config.envVars.TEST_CONFIG_URL).toBe('https://ci.invalid/config')
+  })
+
   it('does not require a production env file in CI mode', async () => {
     const rootDir = await writeProdRoot({}, { envFile: false })
 

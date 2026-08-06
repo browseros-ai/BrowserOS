@@ -122,6 +122,9 @@ export function loadBuildConfig(
     }
   }
   Object.assign(envVars, product.env.inlineEnvOverrides ?? {})
+  if (options.ci) {
+    Object.assign(envVars, product.env.ciInlineEnvOverrides ?? {})
+  }
   if (!options.ci) {
     requireProductEnv(product, resolved, product.env.requiredInlineEnvKeys, {
       ...resolved.values,

@@ -39,6 +39,7 @@ export interface BuildEnvSpec {
   requiredInlineEnvKeys: readonly string[]
   inlineEnvKeys: readonly string[]
   ciInlineEnvDefaults?: Record<string, string>
+  ciInlineEnvOverrides?: Record<string, string>
   inlineEnvOverrides?: Record<string, string>
   defaultR2UploadPrefix: string
   defaultR2DownloadPrefix?: string
