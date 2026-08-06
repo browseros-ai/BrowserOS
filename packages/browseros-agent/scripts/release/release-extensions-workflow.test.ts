@@ -226,31 +226,31 @@ describe('release-extensions workflow', () => {
     )
   })
 
-  it('forwards BrowserClaw PostHog values to local bundled builds', () => {
-    expect(browserBuildWorkflow).toContain(
-      `VITE_CLAW_POSTHOG_KEY: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_KEY }}`,
-    )
-    expect(browserBuildWorkflow).toContain(
-      `VITE_CLAW_POSTHOG_HOST: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_HOST }}`,
-    )
-    expect(browserBuildWorkflow).toContain('write_env VITE_CLAW_POSTHOG_KEY')
-    expect(browserBuildWorkflow).toContain('write_env VITE_CLAW_POSTHOG_HOST')
-  })
-
-  it('preflights selected BrowserClaw keys in the full release caller', () => {
-    const start = browserClawWorkflow.indexOf(
-      '- name: Validate selected lane configuration',
-    )
-    const end = browserClawWorkflow.indexOf('  build_onboarding:', start)
+  it('forwards BrowserClaw PostHog values to the common producer', () => {
+    const start = browserClawWorkflow.indexOf('  common:')
+    const end = browserClawWorkflow.indexOf('  linux:', start)
     expect(start).toBeGreaterThanOrEqual(0)
     expect(end).toBeGreaterThan(start)
-    const preflight = browserClawWorkflow.slice(start, end)
+    const common = browserClawWorkflow.slice(start, end)
 
-    expect(preflight).toContain(
+    expect(common).toContain(
       `VITE_CLAW_POSTHOG_KEY: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_KEY }}`,
     )
-    expect(preflight).toMatch(
-      /INPUT_EXTENSIONS[\s\S]*require_value VITE_CLAW_POSTHOG_KEY/,
+    expect(common).toContain(
+      `VITE_CLAW_POSTHOG_HOST: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_HOST }}`,
+    )
+    expect(common).toContain('browseros release resources prepare')
+  })
+
+  it('keeps extension build secrets out of native browser lanes', () => {
+    expect(browserBuildWorkflow).not.toContain(
+      `VITE_CLAW_POSTHOG_KEY: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_KEY }}`,
+    )
+    expect(browserBuildWorkflow).not.toContain(
+      `VITE_CLAW_POSTHOG_HOST: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_HOST }}`,
+    )
+    expect(browserBuildWorkflow).not.toContain(
+      `BROWSERCLAW_KEY: ${'$'}{{ secrets.BROWSERCLAW_KEY }}`,
     )
   })
 })

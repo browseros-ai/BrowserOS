@@ -1074,6 +1074,56 @@ class NightlyWorkflowTest(unittest.TestCase):
                 self.assertNotIn("download_resources", steps)
 
 
+class ReleaseDocumentationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        docs = REPO_ROOT / "packages/browseros/bos_build"
+        cls.readme = (docs / "README.md").read_text(encoding="utf-8")
+        cls.release = (docs / "docs/release-ci.md").read_text(encoding="utf-8")
+        cls.nightly = (docs / "docs/nightly-macos-ci.md").read_text(
+            encoding="utf-8"
+        )
+        cls.warp = (docs / "docs/warpbuild-ci.md").read_text(encoding="utf-8")
+
+    def test_release_runbook_covers_source_and_recovery_commands(self):
+        for token in (
+            "browseros release candidate ensure",
+            "browseros release resources prepare",
+            "--prepared-resources",
+            "--resource-mode source",
+            'gh run rerun "$RUN_ID" --failed',
+            "browseros release browser finalize",
+            "--resource-mode published",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
+
+    def test_runbooks_state_native_host_and_publication_boundaries(self):
+        for token in (
+            "One machine cannot produce the complete signed release matrix",
+            "Linux x64",
+            "Windows x64",
+            "macOS arm64, universal plan",
+            "Component OTA remains a separate operation",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
+        self.assertIn("resource_mode: source", self.nightly)
+        self.assertIn("resource-mode=source", self.warp)
+
+    def test_primary_docs_do_not_describe_retired_resource_staging(self):
+        text = "\n".join((self.readme, self.release, self.nightly, self.warp))
+        for token in (
+            "bundle_local_extensions",
+            "extensions_version",
+            "include_servers",
+            "Stage BrowserOS nightly resources",
+            "claw-server-rust-local.sh",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+
+
 class ChromiumGitRunbookTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

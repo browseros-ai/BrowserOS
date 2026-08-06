@@ -50,21 +50,20 @@ preset + product + platform + arch + switches  ->  ordered list of steps
 - **platform** — taken from the host: macOS, Windows, Linux.
 - **arch** — `arm64`, `x64`, or `universal` (macOS only; expands into three
   sequential runs).
-- **switches** — flat toggles: `clean`, `provision`, `download`, `sign`,
-  `upload`. Resolved CLI > profile > preset default.
-  (`bundle_local_extensions` is a switch too, but profile-only — there is no
-  CLI flag for it.)
+- **switches** — flat choices such as `clean`, `provision`, `resource_mode`,
+  `sign`, and `upload`. Resolved CLI > profile > preset default.
 
 Composition lives in one pure function, `plan()` in `core/planner.py`. Nothing
 else decides step order. Steps self-register with `@step(...)` and declare the
 env vars they need, so a missing secret fails in preflight — not three hours
 into a compile.
 
-Two switches people mix up:
+Two choices people mix up:
 
 - `--provision` controls the **Chromium checkout** (`none`, `full`, `shallow`).
-- `--download` controls whether **server and onboarding resource bundles** are
-  pulled from R2. It has nothing to do with Chromium.
+- `--resource-mode published` downloads released component resources from
+  R2/CDN. `--resource-mode source` builds the selected extension, onboarding,
+  and native server from the checkout. Neither controls Chromium provisioning.
 
 ### Layout
 
@@ -110,6 +109,11 @@ browseros build --preset debug --chromium-src ~/chromium/src
 # Signed local release build, macOS arm64.
 browseros build --preset release --product browserclaw --arch arm64
 
+# Source-built integration lane without signing or upload.
+browseros build --preset release --product browseros --arch arm64 \
+  --resource-mode source --source-sha "$(git rev-parse HEAD)" \
+  --no-sign --no-upload --chromium-src ~/chromium/src
+
 # Release-shaped Windows build against a checkout you already have (one line —
 # a Windows path and a shell line-continuation both want the backslash).
 browseros build --preset release --provision none --clean --product browserclaw --arch x64 --sign --upload --chromium-src C:\src\chromium-3\src
@@ -125,65 +129,44 @@ Profiles are saved switch sets in `profiles/`:
 
 | Profile | Used by | What it sets |
 | --- | --- | --- |
-| `release-ci` | `build-browseros.yml`, the reusable Linux/Windows release lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
+| `release-ci` | `build-browseros.yml`, the reusable Linux/Windows lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
 | `nightly-ci` | unsigned cloud nightlies | the same, plus `sign: false`, `upload: false` |
-| `nightly-macos` | the two signed mac nightlies | `preset: release`, `download: false`, `bundle_local_extensions: true` — build servers and extensions from the working tree |
+| `nightly-macos` | the two signed mac nightlies | `preset: release`, `resource_mode: source` |
 
-`release-macos.yml` uses no profile. It runs `--preset release` straight against
-the persistent checkout on the self-hosted Mac.
+`release-macos.yml` runs `--preset release` against the persistent checkout on
+the self-hosted Mac and receives source or published mode from its caller.
 
 Deeper flag semantics — `--skip`, `--from`, `--gn-arg`, `modules:` profiles,
 ephemeral runners — live in [`docs/build-cli.md`](docs/build-cli.md).
 
 ## Release a browser
 
-Dispatch-only, one product per run. No tag trigger, no schedule: a release can
-never accidentally take WarpBuild or the Mac builder out from under a nightly.
-
-The browser version comes from
-`packages/browseros/resources/BROWSEROS_VERSION`. You do not pass it.
+Full releases are dispatch-only and fixed-shape: Linux x64, signed Windows x64,
+and signed macOS arm64, x64, and universal. Dispatch from the default branch:
 
 ```bash
-gh workflow run release-browseros.yml \
-  -f platforms=all \
-  -f include_servers=true \
-  -f sign_windows=true \
-  -f macos_arch=arm64 \
-  -f upload_to_r2=true \
-  -f extensions=alpha \
-  -f extensions_version=<agent-extension-version> \
-  -f github_release_draft=true
+gh workflow run release-browseros.yml --ref main
+gh workflow run release-browserclaw.yml --ref main
 ```
 
-`release-browserclaw.yml` takes the same inputs; its `extensions_version` is the
-BrowserClaw extension version. Dispatch by filename, never by the grouped
-`Release:` display name.
-
-Every input has a default, so a bare `gh workflow run release-browseros.yml`
-builds all platforms with servers, signed Windows, arm64 mac, alpha extensions,
-and a draft release. Narrow it when you don't want all of that:
-
-```bash
-gh workflow run release-browseros.yml -f platforms=linux -f extensions=skip
-gh workflow run release-browserclaw.yml -f platforms=macos -f macos_arch=universal -f extensions=skip
-```
-
-`extensions_version` is required whenever `extensions` is `alpha` or `prod` —
-CRX versions are independent of the browser version.
+There are no platform, component, extension-channel, or signing inputs. The
+workflow freezes the dispatch SHA, creates or recovers an immutable version PR,
+builds all in-repository resources from that candidate, and merges the PR only
+after every native lane passes. BrowserOS bumps its Bun server and `agent`;
+BrowserOS neo bumps its Rust server and `browserclaw`. Both rebuild onboarding
+without changing its version.
 
 ### What CI does, and where it stops
 
-A BrowserClaw run can produce onboarding resources, BrowserClaw server resources,
-browser builds for three platforms, the BrowserClaw extension CRX, staged
-update feeds, and draft GitHub release assets.
+A BrowserOS neo run builds onboarding, the Rust server, the BrowserClaw
+extension CRX, and browser artifacts for the complete native matrix.
 
 It **stages**. It does not promote:
 
-- Versioned artifacts land in R2 under the version, not under `download/`.
-- Update feeds are rendered as a dry run and uploaded as one Actions artifact,
-  `staged-update-feeds-<product>-<version>`.
+- Browser deliverables and metadata land in R2.
+- The browser appcast is rendered as a retained preview artifact.
 - The GitHub release is a draft.
-- The Actions summary prints the exact promote commands to run.
+- Component releases, aliases, appcasts, and extension feeds are untouched.
 
 Going live is a human decision. That is on purpose.
 
@@ -295,10 +278,11 @@ normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
 Two signed macOS nightlies run on the self-hosted Mac and publish rolling
 prereleases anyone can download: `nightly-browseros` (04:00 UTC) and
-`nightly-browserclaw` (06:30 UTC). Nightlies build servers and extensions from
-the checked-out tree; releases consume published R2 bundles. That contrast is
-the point — a nightly tests today's integration, a release ships what R2 already
-holds. See [`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md).
+`nightly-browserclaw` (06:30 UTC). Nightlies and full releases both use source
+mode: extensions, onboarding, and native servers come from the selected
+checkout. Published mode exists only for callers that intentionally want
+already released component resources. See
+[`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md).
 
 ## Patches and products
 
@@ -333,7 +317,8 @@ non-interactive Python surface the build steps depend on.
 | Steps and their required env | `bos_build/steps/`, printed by `--show-plan` |
 | Product identity | `bos_build/products/<id>/product.py` |
 | Patch stack map | `packages/browseros/chromium_patches/.features.yaml` |
-| Which server bundle ships | `config/download_resources.yaml`, `config/copy_resources.yaml` |
+| Which source resources ship | `products/resource_sources.py`, `release/server_resources.py`, `config/copy_resources.yaml` |
+| Published-resource compatibility | `config/download_resources.yaml` |
 | Local secrets | `packages/browseros/.env` (copy `.env.example`) |
 | Repo secrets | synced by `tools/release_secrets/sync.py` |
 

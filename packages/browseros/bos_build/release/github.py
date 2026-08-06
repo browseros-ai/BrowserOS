@@ -441,7 +441,7 @@ class GithubModule(Step):
         self.draft = draft
         self.skip_upload = skip_upload
         self.title = title
-        self.platforms = platforms
+        self.release_platforms = platforms
         self.macos_arch = macos_arch
         self.source_sha = source_sha
         self.workflow_run_id = workflow_run_id
@@ -465,7 +465,6 @@ class GithubModule(Step):
                 "gh CLI not found. Install from: https://cli.github.com"
             )
 
-        # Determine repo
         if not ctx.github_repo:
             repo = get_repo_from_git()
             if not repo:
@@ -484,12 +483,12 @@ class GithubModule(Step):
         if not metadata:
             raise RuntimeError(f"No release metadata found for version {version}")
         expected_assets: Optional[set[str]] = None
-        if self.platforms is not None:
+        if self.release_platforms is not None:
             metadata = validate_release_metadata(
                 metadata,
                 version=version,
                 product_id=ctx.product.id,
-                platforms=self.platforms,
+                platforms=self.release_platforms,
                 macos_arch=self.macos_arch,
                 source_sha=self.source_sha,
                 workflow_run_id=self.workflow_run_id,
@@ -512,7 +511,6 @@ class GithubModule(Step):
         log_info(f"  Repo: {repo}")
         log_info(f"  Draft: {self.draft}")
 
-        # Create release
         release_title = self.title or f"{ctx.product.display_name} v{tag_version}"
         notes = generate_release_notes(tag_version, metadata, ctx.product)
 
@@ -562,10 +560,10 @@ class GithubModule(Step):
                 if expected_assets is not None and not self.skip_upload:
                     existing_assets = set(existing.get("assets", []))
                     unexpected_assets = existing_assets - expected_assets
-                    if self.platforms != "all" and unexpected_assets:
+                    if self.release_platforms != "all" and unexpected_assets:
                         raise RuntimeError(
                             f"Draft release {tag} contains assets outside the "
-                            f"selected {self.platforms} contract: "
+                            f"selected {self.release_platforms} contract: "
                             f"{sorted(unexpected_assets)}. Refusing a partial "
                             "refresh that would delete other platforms; rerun "
                             "with --platforms all or use a new version."
@@ -586,7 +584,6 @@ class GithubModule(Step):
             else:
                 raise RuntimeError(f"Failed to create release: {result}")
 
-        # Upload artifacts
         if not self.skip_upload:
             log_info("\nUploading artifacts to GitHub release...")
             results = download_and_upload_artifacts(
@@ -631,7 +628,6 @@ class GithubModule(Step):
                         f"{sorted(expected_assets)}, got {sorted(actual_assets)}"
                     )
 
-        # Print appcast snippet
         if "macos" in metadata:
             log_info("\n" + "=" * 60)
             log_info("APPCAST SNIPPET")
