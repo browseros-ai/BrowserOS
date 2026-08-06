@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from bos_build.release.candidate import (
     CandidateRecord,
@@ -307,6 +308,65 @@ class CandidateBranchRecoveryTest(unittest.TestCase):
                     parent,
                     cwd=repo,
                 )
+
+
+class CandidateBackendVersionGuardTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.backend = GitHubCandidateBackend(Path("/repo"), "owner/repo", "main")
+        self.record = candidate_record()
+
+    def test_independent_onboarding_release_does_not_supersede_candidate(self) -> None:
+        observed = []
+
+        def version_at_ref(component: str, ref: str) -> str:
+            observed.append(component)
+            if component == "claw-onboard" and ref == "origin/main":
+                return "0.0.13"
+            return self.record.component_versions[component]
+
+        with (
+            patch.object(self.backend, "_git"),
+            patch.object(
+                self.backend,
+                "_version_at_ref",
+                side_effect=version_at_ref,
+            ),
+        ):
+            self.assertFalse(self.backend.default_branch_contains_versions(self.record))
+
+        self.assertNotIn("claw-onboard", observed)
+
+    def test_merged_candidate_retry_ignores_independent_onboarding_release(
+        self,
+    ) -> None:
+        observed = []
+
+        def version_at_ref(component: str, ref: str) -> str:
+            observed.append(component)
+            if component == "claw-onboard":
+                return "0.0.13"
+            return self.record.component_versions[component]
+
+        with (
+            patch.object(self.backend, "_git"),
+            patch.object(
+                self.backend,
+                "_version_at_ref",
+                side_effect=version_at_ref,
+            ),
+            patch(
+                "bos_build.release.candidate.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ),
+        ):
+            self.assertTrue(
+                self.backend.merge_commit_matches_candidate(
+                    self.record,
+                    "3" * 40,
+                )
+            )
+
+        self.assertNotIn("claw-onboard", observed)
 
 
 class CandidateMergeTest(unittest.TestCase):

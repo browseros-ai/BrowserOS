@@ -773,9 +773,9 @@ class GitHubCandidateBackend:
             f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
         )
         default_ref = f"{self.remote}/{record.default_branch}"
-        for component in record.component_versions:
-            if self._version_at_ref(component, default_ref) != self._version_at_ref(
-                component, record.parent_sha
+        for spec in components_for_candidate(record.product):
+            if self._version_at_ref(spec.id, default_ref) != self._version_at_ref(
+                spec.id, record.parent_sha
             ):
                 return True
         return False
@@ -803,6 +803,7 @@ class GitHubCandidateBackend:
         if ancestor.returncode != 0:
             return False
         return all(
-            self._version_at_ref(component, merge_sha) == version
-            for component, version in record.component_versions.items()
+            self._version_at_ref(spec.id, merge_sha)
+            == record.component_versions.get(spec.id)
+            for spec in components_for_candidate(record.product)
         )
