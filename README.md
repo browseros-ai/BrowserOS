@@ -17,9 +17,7 @@ Free · Open source (AGPL-3.0) · Everything runs on your machine
 <details open>
 <summary><h1><img src="packages/browseros/resources/browserclaw/icons/product_logo_192.png" alt="" width="28" /> BrowserOS neo: the browser for your agents</h1></summary>
 
-**What is BrowserOS neo?** A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, Cursor, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
-
-Your AI is smart, but it can't press the buttons. Ask it to book a flight or reply to an email, and it stops at the login screen. BrowserOS neo fixes that.
+**What is BrowserOS neo?** A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
 
 [![Download for macOS](https://img.shields.io/badge/Download-macOS-black?style=flat&logo=apple&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo.dmg)
 [![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=flat&logo=windows&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo_installer.exe)
