@@ -734,12 +734,30 @@ class PublishCliIntegrityTest(unittest.TestCase):
         ):
             yield
 
-    def test_missing_requested_platform_makes_actual_cli_exit_nonzero(self):
+    def test_missing_default_platform_warns_and_cli_succeeds(self):
+        with (
+            self.patches(_github_metadata()),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module,
+                "copy_to_download_path",
+                return_value=True,
+            ),
+        ):
+            result = self.invoke_publish()
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        self.assertIn(
+            "Skipping platforms with no release metadata: macos, linux",
+            plain_output(result),
+        )
+
+    def test_missing_explicit_platform_makes_actual_cli_exit_nonzero(self):
         with (
             self.patches(_github_metadata()),
             mock.patch.object(publish_module, "get_r2_client", return_value=object()),
         ):
-            result = self.invoke_publish()
+            result = self.invoke_publish("--platform", "linux")
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("missing release metadata", plain_output(result).lower())

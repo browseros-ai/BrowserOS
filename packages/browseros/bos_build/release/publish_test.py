@@ -56,6 +56,133 @@ class ReleaseSourceKeyTest(unittest.TestCase):
 
 
 class PublishModuleIntegrityTest(unittest.TestCase):
+    def test_default_selection_skips_every_missing_platform(self):
+        module = PublishModule()
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_cdn_base_url="https://cdn.browseros.com",
+                r2_bucket="bucket",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value={
+                    "win": {
+                        "artifacts": {
+                            "x64_installer": {
+                                "filename": "BrowserOS_neo_installer.exe",
+                                "url": "https://cdn.browseros.com/installer.exe",
+                            }
+                        }
+                    }
+                },
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=object(),
+            ),
+            mock.patch(
+                "bos_build.release.publish.copy_to_download_path",
+                return_value=True,
+            ) as copy,
+            mock.patch("bos_build.release.publish.log_warning") as warning,
+        ):
+            module.execute(ctx)
+
+        warning.assert_called_once_with(
+            "Skipping platforms with no release metadata: macos, linux"
+        )
+        copy.assert_called_once_with(
+            mock.ANY,
+            "bucket",
+            "installer.exe",
+            "download/BrowserOS_neo_installer.exe",
+        )
+
+    def test_default_selection_validates_only_loaded_platforms(self):
+        module = PublishModule(
+            source_sha="a" * 40,
+            workflow_run_id="123",
+            workflow_run_attempt="1",
+        )
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_cdn_base_url="https://cdn.browseros.com",
+                r2_bucket="bucket",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+        metadata = {
+            "win": {
+                "product": "browserclaw",
+                "version": "0.49.0",
+                "platform": "win",
+                "source_sha": "a" * 40,
+                "workflow_run_id": "123",
+                "workflow_run_attempt": "1",
+                "artifacts": {
+                    "x64_installer": {
+                        "filename": "BrowserOS_neo_installer.exe",
+                        "url": "https://cdn.browseros.com/installer.exe",
+                    },
+                    "x64_zip": {
+                        "filename": "BrowserOS_neo_installer.zip",
+                        "url": "https://cdn.browseros.com/installer.zip",
+                    },
+                },
+            }
+        }
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value=metadata,
+            ),
+            mock.patch(
+                "bos_build.release.publish.get_r2_client",
+                return_value=object(),
+            ),
+            mock.patch(
+                "bos_build.release.publish.copy_to_download_path",
+                return_value=True,
+            ) as copy,
+            mock.patch("bos_build.release.publish.log_warning"),
+        ):
+            module.execute(ctx)
+
+        copy.assert_called_once()
+
+    def test_explicit_missing_platform_raises_before_copy(self):
+        module = PublishModule(platforms=["linux"])
+        ctx = SimpleNamespace(
+            release_version="0.49.0",
+            env=SimpleNamespace(
+                r2_cdn_base_url="https://cdn.browseros.com",
+                r2_bucket="bucket",
+            ),
+            product=get_product_descriptor("browserclaw"),
+        )
+
+        with (
+            mock.patch(
+                "bos_build.release.publish.fetch_all_release_metadata",
+                return_value={"win": {"artifacts": {}}},
+            ),
+            mock.patch(
+                "bos_build.release.publish.copy_to_download_path",
+                return_value=True,
+            ) as copy,
+            self.assertRaisesRegex(RuntimeError, "requested platform.*linux"),
+        ):
+            module.execute(ctx)
+
+        copy.assert_not_called()
+
     def test_missing_r2_client_raises(self):
         module = PublishModule(platforms=["win"])
         ctx = SimpleNamespace(
