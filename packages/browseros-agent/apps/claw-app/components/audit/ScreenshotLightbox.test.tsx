@@ -214,9 +214,15 @@ describe('ScreenshotLightbox', () => {
     expect(dialog.getAttribute('class') ?? '').toContain('sm:max-w-[94vw]')
     expect(dialog.textContent).toContain('private.example')
     expect(dialog.textContent).toContain('1 / 1')
-    expect(dialog.querySelector('img')?.getAttribute('src')).toContain(
+    const image = dialog.querySelector('img')
+    expect(image?.getAttribute('src')).toContain(
       '/sessions/session-private/screenshots/42',
     )
+    const imageClass = image?.getAttribute('class') ?? ''
+    expect(imageClass).toContain('max-h-[calc(92vh-3.5rem)]')
+    expect(imageClass).toContain('w-auto')
+    expect(imageClass).toContain('max-w-[94vw]')
+    expect(imageClass).toContain('object-contain')
     const previous = getButton('Previous screenshot')
     expect(previous.getAttribute('type')).toBe('button')
     expect(previous.getAttribute('class') ?? '').toContain('focus-visible')
@@ -225,6 +231,8 @@ describe('ScreenshotLightbox', () => {
     )
     expect(position?.getAttribute('class') ?? '').toContain('tabular-nums')
     expect(position?.getAttribute('class') ?? '').toContain('min-w-[7ch]')
+    const toolbar = previous.parentElement?.parentElement
+    expect(toolbar?.nextElementSibling).toBe(image)
     expect(previous.disabled).toBe(true)
     expect(getButton('Next screenshot').disabled).toBe(true)
   })
@@ -288,15 +296,23 @@ describe('ScreenshotLightbox', () => {
     expect(left.defaultPrevented).toBe(true)
     expect(onNavigate.mock.calls[1]?.[0]).toBe(22)
 
-    const modified = await pressKey(getDialog(), 'ArrowRight', {
-      metaKey: true,
-    })
+    const modifiedEvents: Event[] = []
+    for (const options of [
+      { altKey: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { shiftKey: true },
+    ]) {
+      modifiedEvents.push(await pressKey(getDialog(), 'ArrowRight', options))
+    }
     const composing = await pressKey(getDialog(), 'ArrowRight', {
       isComposing: true,
     })
     const escapeEvent = await pressKey(getDialog(), 'Escape')
     expect(onNavigate).toHaveBeenCalledTimes(2)
-    expect(modified.defaultPrevented).toBe(false)
+    for (const event of modifiedEvents) {
+      expect(event.defaultPrevented).toBe(false)
+    }
     expect(composing.defaultPrevented).toBe(false)
     expect(escapeEvent.defaultPrevented).toBe(false)
   })
@@ -307,13 +323,29 @@ describe('ScreenshotLightbox', () => {
     const dialog = getDialog()
 
     const input = document.createElement('input')
+    const textarea = document.createElement('textarea')
+    const select = document.createElement('select')
     const editable = document.createElement('div')
     editable.setAttribute('contenteditable', 'true')
-    const slider = document.createElement('div')
-    slider.setAttribute('role', 'slider')
-    dialog.append(input, editable, slider)
+    const editableChild = document.createElement('span')
+    editable.append(editableChild)
+    const roleTargets = ['textbox', 'combobox', 'slider', 'spinbutton'].map(
+      (role) => {
+        const target = document.createElement('div')
+        target.setAttribute('role', role)
+        return target
+      },
+    )
+    const protectedTargets = [
+      input,
+      textarea,
+      select,
+      editableChild,
+      ...roleTargets,
+    ]
+    dialog.append(input, textarea, select, editable, ...roleTargets)
 
-    for (const target of [input, editable, slider]) {
+    for (const target of protectedTargets) {
       const event = await pressKey(target, 'ArrowRight')
       expect(event.defaultPrevented).toBe(false)
     }
