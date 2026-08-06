@@ -8,7 +8,7 @@ import * as _dialog from '@/components/ui/dialog'
 mock.module('@/components/ui/dialog', () => ({
   ..._dialog,
   Dialog: ({ children, open }: { children?: ReactNode; open?: boolean }) =>
-    open ? <>{children}</> : null,
+    open ? children : null,
   DialogContent: ({
     children,
     showCloseButton: _showCloseButton,
@@ -172,14 +172,12 @@ describe('InstallExtensionDialog', () => {
   })
 
   it('ends on a Done control that closes the dialog', async () => {
-    let closedWith: boolean | null = null
+    const openChanges: boolean[] = []
     await act(async () => {
       root.render(
         <InstallExtensionDialog
           open
-          onOpenChange={(next) => {
-            closedWith = next
-          }}
+          onOpenChange={(next) => openChanges.push(next)}
         />,
       )
     })
@@ -188,7 +186,7 @@ describe('InstallExtensionDialog', () => {
     expect(() => buttonWithText('Next')).toThrow()
 
     await click(buttonWithText('Done'))
-    expect(closedWith).toBe(false)
+    expect(openChanges).toEqual([false])
   })
 
   it('restarts the walkthrough when reopened', async () => {

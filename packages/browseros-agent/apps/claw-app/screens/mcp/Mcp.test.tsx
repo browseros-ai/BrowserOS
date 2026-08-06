@@ -113,6 +113,9 @@ afterEach(() => {
 
 const { Mcp } = await import('./Mcp')
 const { HeroCard } = await import('./HeroCard')
+const { COWORK_REQUIREMENT_LINE, EXTENSION_DOWNLOAD_URL } = await import(
+  './install-guide.data'
+)
 
 function renderApp(): string {
   const client = new QueryClient({
@@ -178,14 +181,23 @@ describe('Mcp (editorial)', () => {
     expect(html).not.toContain('OpenClaw')
   })
 
-  it('renders the Claude Desktop extension callout linking to the repo install steps', () => {
+  it('renders the Claude Desktop callout as an in-app guide trigger, not a repo link', () => {
     const html = renderApp()
     expect(html).toContain('Claude Desktop')
     expect(html).toContain('Give Claude Desktop a real browser.')
-    expect(html).toContain('Also works with Cowork.')
-    expect(html).toContain(
+    expect(html).toContain('show me how')
+    expect(html).toContain(COWORK_REQUIREMENT_LINE)
+    // The walkthrough replaced the link-out; nothing here should leave the app.
+    expect(html).not.toContain(
       'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension',
     )
+    expect(html).not.toContain('Also works with Cowork.')
+  })
+
+  it('keeps the install walkthrough closed until the callout is activated', () => {
+    const html = renderApp()
+    expect(html).not.toContain('Install BrowserOS neo')
+    expect(html).not.toContain(EXTENSION_DOWNLOAD_URL)
   })
 
   it('renders editorial state voices (silent success, mono uppercase action text)', () => {
