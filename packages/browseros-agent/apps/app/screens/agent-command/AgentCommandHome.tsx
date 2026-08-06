@@ -122,7 +122,6 @@ export const AgentCommandHome: FC = () => {
   return (
     <div className="min-h-full px-4 py-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
-        <ProductHuntBanner />
         <div className="flex flex-col items-center gap-5 pt-[max(10vh,24px)] text-center">
           <div className="space-y-3">
             <h1 className="font-semibold text-[clamp(2.25rem,4.5vw,3.5rem)] leading-[1.08] tracking-[-0.025em] [text-wrap:balance]">
@@ -162,7 +161,7 @@ export const AgentCommandHome: FC = () => {
 
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 pb-12">
           <RecentSites />
-          <BrowserClawPromoBanner />
+          <ProductHuntBanner fallback={<BrowserClawPromoBanner />} />
           <ScheduleResults />
         </div>
       </div>

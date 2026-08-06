@@ -2,22 +2,6 @@
  * @license
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * First-run welcome rendered by the Cockpit screen when the reader has no
- * session activity yet. A two-column layout: a focused demo video on one
- * side and a "start here" panel on the other (connected-agent chips, the
- * first-task prompt, and a tie-back to the cockpit). Agents auto-connect at
- * launch, so onboarding is about learning and running the first task, not
- * installing.
- *
- * Two variants keyed off `state`:
- *   first-run  no connections + no activity.
- *   waiting    at least one connection + no activity.
- * Both share one layout; only the panel's fixed-height status line changes
- * text (tie-back, waiting, or copied-confirmation) so copying never reflows.
- *
- * State transitions are handled by the parent (Cockpit) via query refetches;
- * the component is a stateless presenter.
  */
 
 import { Check } from 'lucide-react'
@@ -40,7 +24,6 @@ import { VideoFeature } from './VideoFeature'
 
 interface CockpitOnboardingProps {
   state: Exclude<OnboardingState, 'ready'>
-  /** User-facing harnesses BrowserClaw is registered in (from the live list). */
   connectedHarnesses?: readonly string[]
 }
 
@@ -63,7 +46,7 @@ export function CockpitOnboarding({
   }
   return (
     <section
-      className="flex min-h-[calc(100dvh-6rem)] flex-col justify-center gap-8"
+      className="flex flex-col gap-8"
       aria-label={HERO_COPY.eyebrow.toLowerCase()}
     >
       <OnboardingHero />
@@ -104,7 +87,6 @@ function OnboardingHero() {
 interface StartPanelProps {
   className?: string
   harnesses: readonly string[]
-  /** True once the reader is connected or has copied the prompt: shows the live dot. */
   listening: boolean
   statusText: string
   onPromptCopied: () => void

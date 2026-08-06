@@ -1,5 +1,5 @@
 import { ArrowRight, X } from 'lucide-react'
-import { type FC, useEffect, useState } from 'react'
+import { type FC, type ReactNode, useEffect, useState } from 'react'
 import ProductHuntLogo from '@/assets/producthunt.svg'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,7 +58,9 @@ export const ProductHuntBannerCard: FC<{
   </div>
 )
 
-export const ProductHuntBanner: FC = () => {
+export const ProductHuntBanner: FC<{ fallback?: ReactNode }> = ({
+  fallback = null,
+}) => {
   const [dismissed, setDismissed] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -69,6 +71,7 @@ export const ProductHuntBanner: FC = () => {
         sentry.captureException(error, {
           extra: { message: 'Failed to read Product Hunt banner dismissal' },
         })
+        setDismissed(true)
       })
 
     const unwatch = productHuntBannerDismissedStorage.watch(setDismissed)
@@ -77,12 +80,12 @@ export const ProductHuntBanner: FC = () => {
 
   const visible = dismissed === false && withinLaunchWindow()
 
-  // Record the impression once the banner is actually shown.
   useEffect(() => {
     if (visible) track(PRODUCT_HUNT_BANNER_SHOWN_EVENT)
   }, [visible])
 
-  if (!visible) return null
+  if (dismissed === null) return null
+  if (!visible) return fallback
 
   const handleOpen = () => {
     track(PRODUCT_HUNT_BANNER_CLICKED_EVENT)

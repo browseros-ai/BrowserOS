@@ -1,5 +1,6 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
@@ -70,26 +71,30 @@ export function Cockpit() {
     enabled: shouldLoadStats,
   })
 
-  if (state !== 'ready') {
-    return (
-      <div className="mx-auto flex max-w-7xl flex-col px-8 pt-8 pb-16">
+  const content =
+    state !== 'ready' ? (
+      <div className="mx-auto flex w-full max-w-7xl flex-col px-8 pt-8 pb-16">
         <CockpitOnboarding
           state={state}
           connectedHarnesses={connectedHarnesses}
         />
       </div>
+    ) : (
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
+        <CockpitHero />
+        {shouldLoadStats && stats.data?.hasMeasuredStats ? (
+          <SavedStatsBand stats={stats.data} />
+        ) : (
+          <RunningGrid sessions={sessions} />
+        )}
+        <RecentActivity />
+      </div>
     )
-  }
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
-      <CockpitHero />
-      {shouldLoadStats && stats.data?.hasMeasuredStats ? (
-        <SavedStatsBand stats={stats.data} />
-      ) : (
-        <RunningGrid sessions={sessions} />
-      )}
-      <RecentActivity />
+    <div className="flex min-h-screen flex-col">
+      {content}
+      <ProductHuntBanner />
     </div>
   )
 }
