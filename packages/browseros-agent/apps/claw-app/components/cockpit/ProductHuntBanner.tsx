@@ -4,8 +4,7 @@ import { Button } from '@/components/ui/button'
 import { ProductHuntIcon } from '@/components/ui/svgs/productHuntIcon'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 
-const PRODUCT_HUNT_URL =
-  'https://www.producthunt.com/products/browseros_ai?launch=browseros-neo&utm_source=browseros-neo-newtab&utm_medium=extension&utm_campaign=ph-launch'
+const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
 
 // The banner is available immediately and auto-hides after the end of Aug 14
 // 2026 (PDT), so it never lingers past the launch window.
