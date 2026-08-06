@@ -13,15 +13,11 @@ import { productHuntBannerDismissedStorage } from './product-hunt-banner.storage
 const PRODUCT_HUNT_URL =
   'https://www.producthunt.com/products/browseros_ai?launch=browseros-neo&utm_source=browseros-newtab&utm_medium=extension&utm_campaign=ph-launch'
 
-// Launch moment: Aug 7 2026 12:01 AM PDT. The banner is hidden until then and
-// auto-hides seven days later, so it only shows during the launch window.
-const LAUNCH_AT = Date.parse('2026-08-07T07:01:00Z')
-const HIDE_AFTER = Date.parse('2026-08-14T07:01:00Z')
+// The banner is available immediately and auto-hides after the end of Aug 14
+// 2026 (PDT), so it never lingers past the launch window.
+const HIDE_AFTER = Date.parse('2026-08-15T07:00:00Z')
 
-const withinLaunchWindow = (): boolean => {
-  const now = Date.now()
-  return now >= LAUNCH_AT && now < HIDE_AFTER
-}
+const withinLaunchWindow = (): boolean => Date.now() < HIDE_AFTER
 
 /** The official Product Hunt mark, unaltered; `currentColor` lets it sit in the
  *  brand orange on the card and white on the CTA button. */
