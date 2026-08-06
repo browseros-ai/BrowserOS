@@ -26,17 +26,13 @@ Free · Open source (AGPL-3.0) · Everything runs on your machine
 ### Get started
 
 1. **Install BrowserOS neo and import from Chrome** in one click: logins, bookmarks, extensions.
-2. **It finds your agents.** Claude Code, Codex, Cursor, VS Code, Zed, OpenCode, and Antigravity connect with one click. Anything that speaks MCP connects with a URL.
+2. **It finds your agents.** Claude Code, Codex, Cursor, VS Code, OpenClaw, Hermes; connect with one click. 
 3. **Give it a task from your agent.** *"Book me the cheapest flight to London."* Watch it live from your new tab, replay it later.
 
 ### What can your agents do?
-
 Anything that needs a logged-in browser:
-
-- Book flights and restaurants
-- Unsubscribe from junk email
-- Find apartments and message landlords
-- Reply on X, queue posts, pull engagement numbers
+- Post content to your social media (LinkedIn, Twitter/X), queue posts, pull engagement numbers
+- Clear your inbox, unsubscribe from junk email
 - Update your CRM, file expenses, pull reports from internal tools
 
 ### Key features
