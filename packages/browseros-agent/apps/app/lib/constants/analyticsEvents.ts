@@ -77,6 +77,17 @@ export const BROWSERCLAW_PROMO_BANNER_DISMISSED_EVENT =
   'ui.browserclaw_promo_banner.dismissed'
 
 /** @public */
+export const PRODUCT_HUNT_BANNER_SHOWN_EVENT = 'ui.product_hunt_banner.shown'
+
+/** @public */
+export const PRODUCT_HUNT_BANNER_CLICKED_EVENT =
+  'ui.product_hunt_banner.clicked'
+
+/** @public */
+export const PRODUCT_HUNT_BANNER_DISMISSED_EVENT =
+  'ui.product_hunt_banner.dismissed'
+
+/** @public */
 export const MCP_EXTERNAL_ACCESS_ENABLED_EVENT =
   'settings.mcp_external_access.enabled'
 

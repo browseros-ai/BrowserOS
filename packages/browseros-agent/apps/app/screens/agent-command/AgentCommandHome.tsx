@@ -2,6 +2,7 @@ import { type FC, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
+import { ProductHuntBanner } from '@/components/promo/ProductHuntBanner'
 import { Feature } from '@/lib/browseros/capabilities'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
@@ -121,6 +122,7 @@ export const AgentCommandHome: FC = () => {
   return (
     <div className="min-h-full px-4 py-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+        <ProductHuntBanner />
         <div className="flex flex-col items-center gap-5 pt-[max(10vh,24px)] text-center">
           <div className="space-y-3">
             <h1 className="font-semibold text-[clamp(2.25rem,4.5vw,3.5rem)] leading-[1.08] tracking-[-0.025em] [text-wrap:balance]">
