@@ -22,6 +22,9 @@ export const AnalyticsEvent = {
   OnboardingVideoCompleted: 'onboarding_video_completed',
   OnboardingTaskCopied: 'onboarding_task_copied',
   OnboardingLinkClicked: 'onboarding_link_clicked',
+  ProductHuntBannerShown: 'product_hunt_banner_shown',
+  ProductHuntBannerClicked: 'product_hunt_banner_clicked',
+  ProductHuntBannerDismissed: 'product_hunt_banner_dismissed',
 } as const
 
 export type AnalyticsEventName =
