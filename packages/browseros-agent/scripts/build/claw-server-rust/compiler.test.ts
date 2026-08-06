@@ -166,16 +166,17 @@ describe('BrowserClaw Rust compiler', () => {
     tempDir = await mkdtemp(join(tmpdir(), 'claw-rust-compiler-'))
     const binaryPath = join(tempDir, 'server')
     const posthogKey = 'phc_private_test_key'
+    const encodedKey = Buffer.from(posthogKey).toString('hex')
     await writeFile(
       binaryPath,
-      `binary:${posthogKey}:browseros-claw-server-version=1.2.3`,
+      `binary:browseros-claw-posthog-key=${encodedKey};browseros-claw-server-version=1.2.3;`,
     )
 
     await expect(
       validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
     ).resolves.toBeUndefined()
 
-    await writeFile(binaryPath, 'binary:browseros-claw-server-version=1.2.3')
+    await writeFile(binaryPath, 'binary:browseros-claw-server-version=1.2.3;')
     const error = await validateCompiledBinary(
       binaryPath,
       '1.2.3',
@@ -184,7 +185,19 @@ describe('BrowserClaw Rust compiler', () => {
     expect(error.message).toContain('CLAW_POSTHOG_KEY')
     expect(error.message).not.toContain(posthogKey)
 
-    await writeFile(binaryPath, `binary:${posthogKey}:dependency=1.2.3`)
+    const longerKey = `${posthogKey}_extra`
+    await writeFile(
+      binaryPath,
+      `binary:browseros-claw-posthog-key=${Buffer.from(longerKey).toString('hex')};browseros-claw-server-version=1.2.3;`,
+    )
+    await expect(
+      validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
+    ).rejects.toThrow('CLAW_POSTHOG_KEY')
+
+    await writeFile(
+      binaryPath,
+      `binary:browseros-claw-posthog-key=${encodedKey};browseros-claw-server-version=1.2.30;`,
+    )
     await expect(
       validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
     ).rejects.toThrow('version 1.2.3')

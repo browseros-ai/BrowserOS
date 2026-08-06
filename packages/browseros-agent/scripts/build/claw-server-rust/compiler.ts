@@ -14,6 +14,8 @@ const PACKAGE_NAME = 'claw-server-rust'
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
+const POSTHOG_KEY_MARKER_PREFIX = 'browseros-claw-posthog-key='
+const MARKER_SUFFIX = ';'
 
 interface RustBuildSpec {
   rustTarget: string
@@ -218,12 +220,18 @@ export async function validateCompiledBinary(
     throw new Error('CLAW_POSTHOG_KEY is required')
   }
   const binary = await readFile(binaryPath)
-  if (!binary.includes(Buffer.from(posthogKey))) {
+  const encodedPosthogKey = Buffer.from(posthogKey).toString('hex')
+  const posthogKeyMarker = Buffer.from(
+    `${POSTHOG_KEY_MARKER_PREFIX}${encodedPosthogKey}${MARKER_SUFFIX}`,
+  )
+  if (!binary.includes(posthogKeyMarker)) {
     throw new Error(
       `Compiled BrowserClaw server does not contain CLAW_POSTHOG_KEY: ${binaryPath}`,
     )
   }
-  const versionMarker = Buffer.from(`${VERSION_MARKER_PREFIX}${version}`)
+  const versionMarker = Buffer.from(
+    `${VERSION_MARKER_PREFIX}${version}${MARKER_SUFFIX}`,
+  )
   if (!binary.includes(versionMarker)) {
     throw new Error(
       `Compiled BrowserClaw server does not contain version ${version}: ${binaryPath}`,
