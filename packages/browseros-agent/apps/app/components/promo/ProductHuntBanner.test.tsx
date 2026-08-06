@@ -7,6 +7,10 @@ type MockButtonProps = ComponentProps<'button'> & {
   size?: string
 }
 
+mock.module('@/assets/producthunt.svg', () => ({
+  default: 'producthunt.svg',
+}))
+
 mock.module('@/lib/metrics/track', () => ({
   track: () => {},
 }))

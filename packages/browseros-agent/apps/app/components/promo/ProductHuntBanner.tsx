@@ -1,5 +1,6 @@
 import { ArrowRight, X } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
+import ProductHuntLogo from '@/assets/producthunt.svg'
 import { Button } from '@/components/ui/button'
 import {
   PRODUCT_HUNT_BANNER_CLICKED_EVENT,
@@ -19,28 +20,16 @@ const HIDE_AFTER = Date.parse('2026-08-15T07:00:00Z')
 
 const withinLaunchWindow = (): boolean => Date.now() < HIDE_AFTER
 
-/** The official Product Hunt mark, unaltered; `currentColor` lets it sit in the
- *  brand orange on the card and white on the CTA button. */
-const ProductHuntMark: FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="currentColor"
-    aria-hidden="true"
-    className={className}
-  >
-    <title>Product Hunt</title>
-    <path d="M13.604 8.4h-3.405V12h3.405c.995 0 1.801-.806 1.801-1.801 0-.993-.805-1.799-1.801-1.799zM12 0C5.372 0 0 5.372 0 12s5.372 12 12 12 12-5.372 12-12S18.628 0 12 0zm1.604 14.4h-3.405V18H7.801V6h5.804c2.319 0 4.2 1.88 4.2 4.199 0 2.321-1.881 4.201-4.201 4.201z" />
-  </svg>
-)
-
 export const ProductHuntBannerCard: FC<{
   onOpen: () => void
   onDismiss: () => void
 }> = ({ onOpen, onDismiss }) => (
   <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md">
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#da552f]/10">
-      <ProductHuntMark className="h-6 w-6 text-[#da552f]" />
-    </span>
+    <img
+      src={ProductHuntLogo}
+      alt="Product Hunt"
+      className="h-9 w-9 shrink-0"
+    />
     <div className="min-w-0 flex-1">
       <p className="font-semibold text-sm">
         We&apos;re live on Product Hunt 🎉
@@ -53,9 +42,8 @@ export const ProductHuntBannerCard: FC<{
       size="sm"
       onClick={onOpen}
       aria-label="Check out our Product Hunt launch"
-      className="shrink-0 gap-1.5 bg-[#da552f] text-white hover:bg-[#c74a28]"
+      className="shrink-0 gap-1.5 bg-[#ff6154] text-white hover:bg-[#e5563f]"
     >
-      <ProductHuntMark className="h-3.5 w-3.5" />
       Check out our launch
       <ArrowRight className="h-3 w-3" />
     </Button>
