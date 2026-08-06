@@ -41,9 +41,7 @@ export function ProductHuntBannerCard({
 }) {
   return (
     <div className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#da552f]/10">
-        <ProductHuntIcon className="size-6 text-[#da552f]" />
-      </span>
+      <ProductHuntIcon className="size-9 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-foreground text-sm">
           We&apos;re live on Product Hunt 🎉
@@ -56,9 +54,8 @@ export function ProductHuntBannerCard({
         size="sm"
         onClick={onOpen}
         aria-label="Check out our Product Hunt launch"
-        className="shrink-0 gap-1.5 bg-[#da552f] text-white hover:bg-[#c74a28]"
+        className="shrink-0 bg-[#ff6154] text-white hover:bg-[#e5563f]"
       >
-        <ProductHuntIcon className="size-3.5" />
         Check out our launch
       </Button>
       <button
