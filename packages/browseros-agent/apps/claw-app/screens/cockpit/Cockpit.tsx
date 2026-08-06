@@ -13,7 +13,6 @@ import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
 
-/** Renders the Claw cockpit homepage. */
 export function Cockpit() {
   const { sessions } = useCockpitData()
 
@@ -73,7 +72,8 @@ export function Cockpit() {
 
   const content =
     state !== 'ready' ? (
-      <div className="mx-auto flex w-full max-w-7xl flex-col px-8 pt-8 pb-16">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
+        <ProductHuntBanner />
         <CockpitOnboarding
           state={state}
           connectedHarnesses={connectedHarnesses}
@@ -87,14 +87,10 @@ export function Cockpit() {
         ) : (
           <RunningGrid sessions={sessions} />
         )}
+        <ProductHuntBanner />
         <RecentActivity />
       </div>
     )
 
-  return (
-    <div className="flex min-h-screen flex-col">
-      {content}
-      <ProductHuntBanner />
-    </div>
-  )
+  return <div className="flex min-h-screen flex-col">{content}</div>
 }

@@ -53,7 +53,7 @@ export function ProductHuntBannerCard({
         size="sm"
         onClick={onOpen}
         aria-label="Check out our Product Hunt launch"
-        className="shrink-0 bg-[#ff6154] text-white hover:bg-[#e5563f]"
+        className="shrink-0 bg-[#ff6154] text-[#18181b] hover:bg-[#e5563f]"
       >
         Check out our launch
       </Button>
@@ -91,8 +91,11 @@ export function ProductHuntBanner() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center px-8 py-12">
+    <section className="space-y-4" aria-labelledby="announcements-heading">
+      <h2 id="announcements-heading" className="font-semibold text-ink text-lg">
+        Announcements
+      </h2>
       <ProductHuntBannerCard onOpen={handleOpen} onDismiss={handleDismiss} />
-    </div>
+    </section>
   )
 }
