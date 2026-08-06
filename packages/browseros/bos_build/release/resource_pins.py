@@ -190,22 +190,44 @@ def _verify_prepared(
     bucket: str,
     family: ResourceFamily,
     version: str,
-    release_sha: str,
+    release_sha: str = "",
 ) -> ResourcePin:
     _validate_version(version, family)
-    if not _SHA_RE.fullmatch(release_sha):
+    if release_sha and not _SHA_RE.fullmatch(release_sha):
         raise RuntimeError(f"{family.name} prepared source SHA is invalid")
-    objects = []
-    for target in family.targets:
-        snapshot = _head(client, bucket, family.version_key(version, target))
-        _binding(
-            snapshot,
-            family,
-            target,
-            version=version,
-            release_sha=release_sha,
-        )
-        objects.append(_object_pin(family, target, version, snapshot))
+    snapshots = {
+        target: _head(client, bucket, family.version_key(version, target))
+        for target in family.targets
+    }
+    if release_sha:
+        for target, snapshot in snapshots.items():
+            _binding(
+                snapshot,
+                family,
+                target,
+                version=version,
+                release_sha=release_sha,
+            )
+    else:
+        metadata_states = {bool(snapshot.metadata) for snapshot in snapshots.values()}
+        if metadata_states == {True}:
+            bindings = {
+                target: _binding(snapshot, family, target, version=version)
+                for target, snapshot in snapshots.items()
+            }
+            release_shas = {binding["release-sha"] for binding in bindings.values()}
+            if len(release_shas) != 1:
+                raise _IncoherentSnapshot(
+                    f"{family.name} prepared objects are source-skewed"
+                )
+        elif metadata_states != {False}:
+            raise _IncoherentSnapshot(
+                f"{family.name} prepared objects have mixed bindings"
+            )
+    objects = [
+        _object_pin(family, target, version, snapshots[target])
+        for target in family.targets
+    ]
     return ResourcePin(family.name, version, tuple(objects))
 
 
@@ -214,9 +236,9 @@ def verify_prepared_resource_pin(
     bucket: str,
     family_name: str,
     version: str,
-    release_sha: str,
+    release_sha: str = "",
 ) -> ResourcePin:
-    """Verify one prepared resource family against its immutable bindings."""
+    """Verify one exact prepared resource family."""
     family = next(
         (item for item in RESOURCE_FAMILIES if item.name == family_name),
         None,

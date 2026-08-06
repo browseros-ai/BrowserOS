@@ -80,12 +80,14 @@ class ServerOTAModule(Step):
         platform_filter: Optional[str] = None,
         product_id: str = "browseros",
         release_sha: str = "",
+        allow_unbound: bool = False,
     ):
         self.version = version
         self.channel = channel
         self.platform_filter = platform_filter
         self.product_id = product_id
         self.release_sha = release_sha
+        self.allow_unbound = allow_unbound
         self._download_dir: Optional[Path] = None
 
     @property
@@ -114,8 +116,13 @@ class ServerOTAModule(Step):
         if not server_ota_bundles_for_product(self.product_id):
             raise ValidationError(f"Product '{self.product_id}' has no server bundle")
 
-        if _SOURCE_SHA_RE.fullmatch(self.release_sha) is None:
-            raise ValidationError("A full lowercase release SHA is required")
+        if not self.release_sha and not self.allow_unbound:
+            raise ValidationError(
+                "A full lowercase release SHA is required unless "
+                "--allow-unbound is supplied"
+            )
+        if self.release_sha and _SOURCE_SHA_RE.fullmatch(self.release_sha) is None:
+            raise ValidationError("Release SHA must be a full lowercase commit SHA")
 
         if IS_MACOS():
             if not context.env.macos_certificate_name:
@@ -144,7 +151,7 @@ class ServerOTAModule(Step):
         r2_client,
         source_pin: ResourcePin,
     ) -> None:
-        """Download checksum-verified immutable server resources."""
+        """Download snapshot-pinned immutable server resources."""
         bucket = ctx.env.r2_bucket
         platforms = self._get_platforms()
         pinned = {item.target: item for item in source_pin.objects}
@@ -161,7 +168,17 @@ class ServerOTAModule(Step):
             extract_dir = download_dir / target
 
             log_info(f"  Downloading {target}...")
-            if not download_file_from_r2(r2_client, r2_key, zip_path, bucket):
+            if resource.sha256:
+                downloaded = download_file_from_r2(r2_client, r2_key, zip_path, bucket)
+            else:
+                downloaded = download_file_from_r2(
+                    r2_client,
+                    r2_key,
+                    zip_path,
+                    bucket,
+                    expected_etag=resource.etag,
+                )
+            if not downloaded:
                 raise RuntimeError(f"Failed to download artifact: {r2_key}")
 
             digest = hashlib.sha256()
@@ -170,7 +187,7 @@ class ServerOTAModule(Step):
                     digest.update(chunk)
             if zip_path.stat().st_size != resource.size:
                 raise RuntimeError(f"Immutable source size mismatch: {r2_key}")
-            if digest.hexdigest() != resource.sha256:
+            if resource.sha256 and digest.hexdigest() != resource.sha256:
                 raise RuntimeError(f"Immutable source checksum mismatch: {r2_key}")
 
             extract_artifact_zip(zip_path, extract_dir)
@@ -194,6 +211,17 @@ class ServerOTAModule(Step):
             self.version,
             self.release_sha,
         )
+        if not self.release_sha:
+            release_shas = {
+                item.release_sha for item in source_pin.objects if item.release_sha
+            }
+            if release_shas:
+                self.release_sha = release_shas.pop()
+            else:
+                log_warning(
+                    f"{family_name} {self.version} has no source binding; "
+                    "continuing with ETag-pinned objects"
+                )
         if self._reuse_live_release(ctx):
             return
 
@@ -352,7 +380,6 @@ class ServerOTAModule(Step):
             "binding-schema": _PAYLOAD_BINDING_SCHEMA,
             "bundle-id": self.bundle.id,
             "version": self.version,
-            "release-sha": self.release_sha,
             "platform": artifact.platform,
             "os": artifact.os,
             "arch": artifact.arch,
@@ -360,6 +387,8 @@ class ServerOTAModule(Step):
             "sparkle-signature": artifact.signature,
             "length": str(len(data)),
         }
+        if self.release_sha:
+            metadata["release-sha"] = self.release_sha
         try:
             r2_client.put_object(
                 Bucket=ctx.env.r2_bucket,
@@ -420,13 +449,14 @@ class ServerOTAModule(Step):
             "binding-schema": _PAYLOAD_BINDING_SCHEMA,
             "bundle-id": self.bundle.id,
             "version": self.version,
-            "release-sha": self.release_sha,
             "platform": platform,
             "os": os_type,
             "arch": arch,
             "sha256": actual_sha256,
             "length": str(len(data)),
         }
+        if self.release_sha:
+            expected["release-sha"] = self.release_sha
         mismatches = {
             name: {"expected": value, "actual": metadata.get(name)}
             for name, value in expected.items()

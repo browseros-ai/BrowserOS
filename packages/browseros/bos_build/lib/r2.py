@@ -64,12 +64,27 @@ def download_file_from_r2(
     r2_key: str,
     dest_path: Path,
     bucket: str,
+    expected_etag: Optional[str] = None,
 ) -> bool:
     """Download one file from R2."""
     try:
         log_info(f"Downloading {r2_key}...")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        client.download_file(bucket, r2_key, str(dest_path))
+        if expected_etag:
+            response = client.get_object(
+                Bucket=bucket,
+                Key=r2_key,
+                IfMatch=expected_etag,
+            )
+            body = response["Body"]
+            try:
+                with dest_path.open("wb") as output:
+                    for chunk in iter(lambda: body.read(1024 * 1024), b""):
+                        output.write(chunk)
+            finally:
+                body.close()
+        else:
+            client.download_file(bucket, r2_key, str(dest_path))
         log_success(f"Downloaded: {dest_path.name}")
         return True
     except Exception as e:

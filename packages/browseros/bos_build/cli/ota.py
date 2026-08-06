@@ -192,12 +192,17 @@ def server_release(
         "browseros", "--product", help="Product whose server bundle to release"
     ),
     release_sha: str = typer.Option(
-        ...,
+        "",
         "--release-sha",
-        help="Immutable source commit bound to the versioned resources",
+        help="Source commit to enforce; omit with --allow-unbound",
+    ),
+    allow_unbound: bool = typer.Option(
+        False,
+        "--allow-unbound",
+        help="Allow versioned resources without source-binding metadata",
     ),
 ):
-    """Publish source-bound server OTA payloads."""
+    """Publish server OTA payloads from versioned resources."""
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
 
@@ -209,6 +214,7 @@ def server_release(
         platform_filter=platform,
         product_id=product,
         release_sha=release_sha,
+        allow_unbound=allow_unbound,
     )
 
     execute_module(ctx, module)
