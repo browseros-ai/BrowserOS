@@ -16,6 +16,9 @@ export const AnalyticsEvent = {
   ReplayViewed: 'replay_viewed',
   TaskDetailViewed: 'task_detail_viewed',
   OptOutToggled: 'analytics_opt_out_toggled',
+  ProductHuntBannerShown: 'product_hunt_banner_shown',
+  ProductHuntBannerClicked: 'product_hunt_banner_clicked',
+  ProductHuntBannerDismissed: 'product_hunt_banner_dismissed',
 } as const
 
 export type AnalyticsEventName =
@@ -28,11 +31,6 @@ export function track(
   capture(event, properties)
 }
 
-/**
- * Maps a cockpit route to its view event. The audit table, a task
- * detail, and a replay are the surfaces we care about; the home and
- * mcp routes are covered by `app_opened`.
- */
 export function screenEventForPath(path: string): AnalyticsEventName | null {
   if (path === '/audit') return AnalyticsEvent.AuditViewed
   if (/^\/audit\/[^/]+\/replay$/.test(path)) return AnalyticsEvent.ReplayViewed

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Outlet } from 'react-router'
+import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { AppSidebar } from '@/components/sidebar/AppSidebar'
 
 const COLLAPSE_DELAY = 150
@@ -52,6 +53,7 @@ export function CockpitShell() {
         <AppSidebar expanded={expanded} />
       </div>
       <main className="min-h-screen overflow-y-auto">
+        <ProductHuntBanner />
         <Outlet />
       </main>
     </div>
