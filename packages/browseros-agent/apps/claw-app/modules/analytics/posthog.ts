@@ -77,9 +77,10 @@ export function createPostHogConfig(
     // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,
-    // Session replay needs PostHog's remote config, but BrowserClaw does not use
-    // feature flags. Fetch config once, without evaluating or polling flags.
-    advanced_disable_feature_flags_on_first_load: true,
+    // Session replay config and the cockpit's video lineup both come from
+    // PostHog remote config, so load it once on init. The only flag read is a
+    // single global remote-config payload (100% rollout, no person targeting);
+    // we never evaluate user-targeted flags. No polling.
     remote_config_refresh_interval_ms: 0,
     // Do not persist browser location metadata outside the event sanitizer.
     save_campaign_params: false,
@@ -169,4 +170,30 @@ export function capture(
 ): void {
   if (!isCapturing()) return
   posthog.capture(event, properties)
+}
+
+/**
+ * Reads a PostHog remote-config JSON payload (a 100%-rollout flag used purely as
+ * config, not for user targeting). Returns null before init / without a matched
+ * payload, and never throws. Callers validate the shape before using it.
+ */
+export function getRemoteConfigPayload(key: string): unknown {
+  try {
+    return posthog.getFeatureFlagPayload(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Subscribes to remote-config load so a reader can re-read a payload once it
+ * arrives. Returns an unsubscribe function (a no-op if posthog is not ready).
+ */
+export function onRemoteConfig(callback: () => void): () => void {
+  try {
+    const unsubscribe = posthog.onFeatureFlags(() => callback())
+    return typeof unsubscribe === 'function' ? unsubscribe : () => {}
+  } catch {
+    return () => {}
+  }
 }

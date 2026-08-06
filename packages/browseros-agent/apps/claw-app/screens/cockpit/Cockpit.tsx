@@ -1,5 +1,6 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { CockpitVideoRail } from '@/components/cockpit/CockpitVideoRail'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
@@ -90,6 +91,7 @@ export function Cockpit() {
         <RunningGrid sessions={sessions} />
       )}
       <RecentActivity />
+      <CockpitVideoRail />
     </div>
   )
 }

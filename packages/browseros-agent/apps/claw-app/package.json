@@ -36,6 +36,7 @@
     "@tabler/icons-react": "^3.45.0",
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-table": "^8.21.3",
+    "@wxt-dev/storage": "^1.2.8",
     "@xyflow/react": "^12.11.2",
     "ai": "6.0.230",
     "ansi-to-react": "^6.2.6",
