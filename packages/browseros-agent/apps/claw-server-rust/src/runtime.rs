@@ -63,40 +63,6 @@ impl AppRuntime {
                     .spawn_idle_sweeper(shutdown.child_token()),
             },
             BackgroundTask {
-                name: "agent tab cleanup sweeper",
-                handle: tokio::spawn({
-                    let state = state.clone();
-                    let cancel = shutdown.child_token();
-                    async move {
-                        let mut ticker = tokio::time::interval(state.config.session_sweep_interval);
-                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                        loop {
-                            tokio::select! {
-                                () = cancel.cancelled() => return,
-                                _ = ticker.tick() => {
-                                    match crate::services::tab_cleanup::sweep_orphaned_tabs(
-                                        &state.session_tabs,
-                                        &state.browser,
-                                        crate::clock::now_epoch_ms(),
-                                        state.config.session_retention,
-                                    )
-                                    .await
-                                    {
-                                        Ok(count) if count > 0 => {
-                                            info!(count, "closed finished-agent tabs");
-                                        }
-                                        Ok(_) => {}
-                                        Err(error) => {
-                                            warn!(error = %error, "agent tab cleanup sweep failed");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }),
-            },
-            BackgroundTask {
                 name: "audit retention sweeper",
                 handle: tokio::spawn({
                     let state = state.clone();
