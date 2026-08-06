@@ -16,6 +16,10 @@ export const clawServerRustBuildProduct: ResourceBuildProductDescriptor = {
     'scripts/build/config/claw-server-rust-prod-resources.json',
   includeArtifactIdentity: true,
   archiveFilesOnly: true,
+  expectedArtifactFiles: (target) => [
+    `resources/bin/browseros-claw-server${target.os === 'windows' ? '.exe' : ''}`,
+    'resources/skills/browserclaw/SKILL.md',
+  ],
   env: {
     requiredInlineEnvKeys: ['CLAW_POSTHOG_KEY'],
     inlineEnvKeys: INLINE_ENV_KEYS,

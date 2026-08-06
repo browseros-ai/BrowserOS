@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readdir, rm, utimes } from 'node:fs/promises'
 import {
   basename,
@@ -20,6 +22,20 @@ import {
 import type { R2Config, StagedArtifact, UploadResult } from './types'
 
 const ARCHIVE_TIMESTAMP = new Date('1980-01-01T00:00:00.000Z')
+const MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
+
+interface ArtifactArchiveIdentity {
+  component: string
+  releaseSha: string
+  target: string
+  version: string
+}
+
+interface ArtifactFileMetadata {
+  path: string
+  sha256: string
+  size: number
+}
 
 function zipPathForArtifact(
   artifact: StagedArtifact,
@@ -29,6 +45,96 @@ function zipPathForArtifact(
     dirname(artifact.rootDir),
     `${archiveBaseName}-${artifact.target.id}.zip`,
   )
+}
+
+function sameValues(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  )
+}
+
+function readArchiveMember(zipPath: string, member: string): Buffer {
+  return execFileSync('unzip', ['-p', zipPath, member], {
+    maxBuffer: MAX_ARCHIVE_MEMBER_BYTES,
+  })
+}
+
+export function validateArtifactArchive(
+  zipPath: string,
+  identity: ArtifactArchiveIdentity,
+  expectedFiles: readonly string[],
+): void {
+  const members = execFileSync('unzip', ['-Z1', zipPath], {
+    encoding: 'utf8',
+  })
+    .split(/\r?\n/)
+    .filter(Boolean)
+  const expectedMembers = ['artifact-metadata.json', ...expectedFiles]
+  if (!sameValues(members, expectedMembers)) {
+    throw new Error(
+      `Recovered artifact ${zipPath} has unexpected archive members`,
+    )
+  }
+
+  const document: unknown = JSON.parse(
+    readArchiveMember(zipPath, 'artifact-metadata.json').toString('utf8'),
+  )
+  if (
+    typeof document !== 'object' ||
+    document === null ||
+    Array.isArray(document)
+  ) {
+    throw new Error(`Recovered artifact ${zipPath} has invalid metadata`)
+  }
+  const metadata = document as Record<string, unknown>
+  for (const [field, expected] of Object.entries(identity)) {
+    if (metadata[field] !== expected) {
+      throw new Error(
+        `Recovered artifact ${zipPath} has invalid metadata field ${field}`,
+      )
+    }
+  }
+  if (!Array.isArray(metadata.files)) {
+    throw new Error(`Recovered artifact ${zipPath} has invalid file metadata`)
+  }
+
+  const files: ArtifactFileMetadata[] = []
+  for (const value of metadata.files) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`Recovered artifact ${zipPath} has invalid file metadata`)
+    }
+    files.push(value as ArtifactFileMetadata)
+  }
+  const declaredPaths = files.map((file) => file.path)
+  if (!sameValues(declaredPaths, expectedFiles)) {
+    throw new Error(
+      `Recovered artifact ${zipPath} has unexpected declared files`,
+    )
+  }
+  for (const file of files) {
+    if (
+      typeof file.size !== 'number' ||
+      !Number.isSafeInteger(file.size) ||
+      file.size < 0 ||
+      typeof file.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(file.sha256)
+    ) {
+      throw new Error(
+        `Recovered artifact ${zipPath} has invalid metadata for ${file.path}`,
+      )
+    }
+    const bytes = readArchiveMember(zipPath, file.path)
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    if (bytes.length !== file.size || sha256 !== file.sha256.toLowerCase()) {
+      throw new Error(
+        `Recovered artifact ${zipPath} failed integrity validation for ${file.path}`,
+      )
+    }
+  }
 }
 
 export async function zipDirectory(

@@ -4,7 +4,11 @@ import { basename, join, resolve } from 'node:path'
 
 import type { S3Client } from '@aws-sdk/client-s3'
 
-import { archiveAndUploadArtifacts, archiveArtifacts } from './archive'
+import {
+  archiveAndUploadArtifacts,
+  archiveArtifacts,
+  validateArtifactArchive,
+} from './archive'
 import { parseBuildArgs } from './cli'
 import { compileProductBinaries } from './compile'
 import { loadBuildConfig } from './config'
@@ -72,6 +76,19 @@ export async function recoverVersionedTargets(
       },
     )
     if (recovered) {
+      const expectedFiles = product.expectedArtifactFiles?.(target)
+      if (expectedFiles) {
+        validateArtifactArchive(
+          zipPath,
+          {
+            component: r2.uploadPrefix,
+            releaseSha,
+            target: target.id,
+            version,
+          },
+          expectedFiles,
+        )
+      }
       recoveredResults.push({
         targetId: target.id,
         versionR2Key,

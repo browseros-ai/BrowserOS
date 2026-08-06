@@ -69,6 +69,7 @@ export interface ResourceBuildProductDescriptor extends ProductBuildSpec {
   defaultUpload?: boolean
   includeArtifactIdentity?: boolean
   archiveFilesOnly?: boolean
+  expectedArtifactFiles?: (target: BuildTarget) => readonly string[]
 }
 
 export interface BuildProductDescriptor extends ResourceBuildProductDescriptor {

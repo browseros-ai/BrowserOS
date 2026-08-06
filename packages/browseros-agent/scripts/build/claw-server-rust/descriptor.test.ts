@@ -60,6 +60,12 @@ describe('BrowserClaw Rust build descriptor', () => {
       resolveTargets('all').map((target) => target.id),
     )
     for (const target of args.targets) {
+      expect(
+        clawServerRustBuildProduct.expectedArtifactFiles?.(target),
+      ).toEqual([
+        `resources/bin/browseros-claw-server${target.os === 'windows' ? '.exe' : ''}`,
+        'resources/skills/browserclaw/SKILL.md',
+      ])
       expect(getTargetRules(manifest, target)).toEqual([
         {
           name: 'BrowserOS neo skill',
