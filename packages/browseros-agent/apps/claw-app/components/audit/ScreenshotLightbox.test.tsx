@@ -1,13 +1,92 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { parseHTML } from 'linkedom'
-import { act, type ComponentProps, type ReactNode, useState } from 'react'
+import { act, type ComponentProps, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
 import * as _dialog from '@/components/ui/dialog'
 import * as _auditHooks from '@/modules/api/audit.hooks'
+import type { ScreenshotLightboxItem } from './ScreenshotLightbox'
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
   useTaskScreenshotBaseUrl: () => 'http://127.0.0.1:9200',
+}))
+
+// embla measures the DOM, which linkedom has no layout for. Mock it at the
+// boundary with an index-based fake so the toolbar/counter wiring is exercised
+// the way a real swipe would drive it (select events, clamped scrolls).
+type Listener = () => void
+interface EmblaFake {
+  index: number
+  count: number
+  initialized: boolean
+  listeners: Map<string, Listener[]>
+  api: Record<string, unknown>
+  ref: (node: Element | null) => void
+}
+
+function makeEmbla(): EmblaFake {
+  const listeners = new Map<string, Listener[]>()
+  const emit = (name: string) => {
+    for (const cb of listeners.get(name) ?? []) cb()
+  }
+  const state: EmblaFake = {
+    index: 0,
+    count: 0,
+    initialized: false,
+    listeners,
+    api: {},
+    ref: () => undefined,
+  }
+  state.api = {
+    scrollNext: () => {
+      if (state.index < state.count - 1) {
+        state.index += 1
+        emit('select')
+      }
+    },
+    scrollPrev: () => {
+      if (state.index > 0) {
+        state.index -= 1
+        emit('select')
+      }
+    },
+    scrollTo: (i: number) => {
+      state.index = Math.max(0, Math.min(i, Math.max(0, state.count - 1)))
+      emit('select')
+    },
+    canScrollNext: () => state.index < state.count - 1,
+    canScrollPrev: () => state.index > 0,
+    selectedScrollSnap: () => state.index,
+    on: (name: string, cb: Listener) => {
+      const arr = listeners.get(name) ?? []
+      arr.push(cb)
+      listeners.set(name, arr)
+    },
+    off: (name: string, cb: Listener) => {
+      listeners.set(
+        name,
+        (listeners.get(name) ?? []).filter((entry) => entry !== cb),
+      )
+    },
+  }
+  state.ref = (node) => {
+    if (node) {
+      state.count = node.querySelectorAll('[data-slot="carousel-item"]').length
+    }
+  }
+  return state
+}
+
+let embla = makeEmbla()
+
+mock.module('embla-carousel-react', () => ({
+  default: (options?: { startIndex?: number }) => {
+    if (!embla.initialized) {
+      embla.initialized = true
+      if (options?.startIndex != null) embla.index = options.startIndex
+    }
+    return [embla.ref, embla.api]
+  },
 }))
 
 let dialogOnOpenChange: ((open: boolean) => void) | undefined
@@ -59,6 +138,7 @@ let root: Root
 let container: HTMLElement
 
 beforeEach(async () => {
+  embla = makeEmbla()
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -98,46 +178,15 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
 })
 
-const ORDERED_IDS = [11, 22, 33] as const
-const META = {
-  11: { sourceUrl: 'https://first.example/start', offsetMs: 400 },
-  22: { sourceUrl: 'https://second.example/middle', offsetMs: 4300 },
-  33: { sourceUrl: 'https://third.example/end', offsetMs: 11700 },
-} as const
-
-interface ControlledLightboxProps {
-  initialId?: number
-  screenshotIds?: readonly number[]
-  onNavigate?: (screenshotId: number) => void
-  onClose?: () => void
-}
-
-function ControlledLightbox({
-  initialId = 22,
-  screenshotIds = ORDERED_IDS,
-  onNavigate = () => undefined,
-  onClose = () => undefined,
-}: ControlledLightboxProps) {
-  const [screenshotId, setScreenshotId] = useState(initialId)
-  const meta = META[screenshotId as keyof typeof META] ?? {
-    sourceUrl: 'https://unlisted.example/current',
-    offsetMs: 9900,
-  }
-  return (
-    <ScreenshotLightbox
-      sessionId="session-navigation"
-      screenshotId={screenshotId}
-      screenshotIds={screenshotIds}
-      sourceUrl={meta.sourceUrl}
-      offsetMs={meta.offsetMs}
-      onNavigate={(nextId) => {
-        onNavigate(nextId)
-        setScreenshotId(nextId)
-      }}
-      onClose={onClose}
-    />
-  )
-}
+const ITEMS: ScreenshotLightboxItem[] = [
+  { screenshotId: 11, sourceUrl: 'https://first.example/start', offsetMs: 400 },
+  {
+    screenshotId: 22,
+    sourceUrl: 'https://second.example/middle',
+    offsetMs: 4300,
+  },
+  { screenshotId: 33, sourceUrl: 'https://third.example/end', offsetMs: 11700 },
+]
 
 async function render(node: ReactNode) {
   await act(async () => root.render(node))
@@ -152,12 +201,25 @@ function getDialog(): HTMLElement {
   return dialog
 }
 
+function counter(): string {
+  const span = Array.from(getDialog().querySelectorAll('span')).find((node) =>
+    /^\d+ \/ \d+$/.test(node.textContent?.trim() ?? ''),
+  )
+  return span?.textContent?.trim() ?? ''
+}
+
 function getButton(label: string): HTMLButtonElement {
   const button = container.querySelector<HTMLButtonElement>(
     `button[aria-label="${label}"]`,
   )
   if (!button) throw new Error(`button missing: ${label}`)
   return button
+}
+
+function imgSrcs(): string[] {
+  return Array.from(getDialog().querySelectorAll('img')).map(
+    (img) => img.getAttribute('src') ?? '',
+  )
 }
 
 async function click(element: Element) {
@@ -200,11 +262,14 @@ describe('ScreenshotLightbox', () => {
     await render(
       <ScreenshotLightbox
         sessionId="session-private"
-        screenshotId={42}
-        screenshotIds={[42]}
-        sourceUrl="https://private.example/secret"
-        offsetMs={1200}
-        onNavigate={() => undefined}
+        items={[
+          {
+            screenshotId: 42,
+            sourceUrl: 'https://private.example/secret',
+            offsetMs: 1200,
+          },
+        ]}
+        startId={42}
         onClose={() => undefined}
       />,
     )
@@ -213,16 +278,16 @@ describe('ScreenshotLightbox', () => {
     expect(dialog.getAttribute('class') ?? '').toContain('ph-no-capture')
     expect(dialog.getAttribute('class') ?? '').toContain('sm:max-w-[94vw]')
     expect(dialog.textContent).toContain('private.example')
-    expect(dialog.textContent).toContain('1 / 1')
+    expect(counter()).toBe('1 / 1')
+
     const image = dialog.querySelector('img')
     expect(image?.getAttribute('src')).toContain(
       '/sessions/session-private/screenshots/42',
     )
     const imageClass = image?.getAttribute('class') ?? ''
     expect(imageClass).toContain('max-h-[calc(92vh-3.5rem)]')
-    expect(imageClass).toContain('w-auto')
-    expect(imageClass).toContain('max-w-[94vw]')
     expect(imageClass).toContain('object-contain')
+
     const previous = getButton('Previous screenshot')
     expect(previous.getAttribute('type')).toBe('button')
     expect(previous.getAttribute('class') ?? '').toContain('focus-visible')
@@ -231,70 +296,96 @@ describe('ScreenshotLightbox', () => {
     )
     expect(position?.getAttribute('class') ?? '').toContain('tabular-nums')
     expect(position?.getAttribute('class') ?? '').toContain('min-w-[7ch]')
+
+    // The carousel region follows the toolbar (never overlays the image).
     const toolbar = previous.parentElement?.parentElement
-    expect(toolbar?.nextElementSibling).toBe(image)
+    expect(toolbar?.nextElementSibling?.getAttribute('data-slot')).toBe(
+      'carousel',
+    )
     expect(previous.disabled).toBe(true)
     expect(getButton('Next screenshot').disabled).toBe(true)
   })
 
-  it('moves to adjacent ids and updates the image, caption, alt, and position together', async () => {
-    const onNavigate = mock((_screenshotId: number) => undefined)
-    await render(<ControlledLightbox onNavigate={onNavigate} />)
+  it('renders every screenshot as a slide and opens on the clicked one', async () => {
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={22}
+        onClose={() => undefined}
+      />,
+    )
+
+    const srcs = imgSrcs()
+    expect(srcs).toHaveLength(3)
+    expect(srcs.some((src) => src.includes('screenshots/11'))).toBe(true)
+    expect(srcs.some((src) => src.includes('screenshots/22'))).toBe(true)
+    expect(srcs.some((src) => src.includes('screenshots/33'))).toBe(true)
 
     expect(getDialog().textContent).toContain('second.example · T+4.3s')
-    expect(getDialog().textContent).toContain('2 / 3')
-    expect(getDialog().querySelector('img')?.getAttribute('alt')).toBe(
-      'Screenshot of second.example',
+    expect(counter()).toBe('2 / 3')
+  })
+
+  it('moves forward and back through the carousel, keeping caption and position in sync', async () => {
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={22}
+        onClose={() => undefined}
+      />,
     )
 
     await click(getButton('Next screenshot'))
-    expect(onNavigate.mock.calls[0]?.[0]).toBe(33)
+    expect(counter()).toBe('3 / 3')
     expect(getDialog().textContent).toContain('third.example · T+11.7s')
-    expect(getDialog().textContent).toContain('3 / 3')
-    expect(getDialog().querySelector('img')?.getAttribute('src')).toContain(
-      '/sessions/session-navigation/screenshots/33',
-    )
-    expect(getDialog().querySelector('img')?.getAttribute('alt')).toBe(
-      'Screenshot of third.example',
-    )
 
     await click(getButton('Previous screenshot'))
     await click(getButton('Previous screenshot'))
-    expect(onNavigate.mock.calls.map((call) => call[0])).toEqual([33, 22, 11])
+    expect(counter()).toBe('1 / 3')
     expect(getDialog().textContent).toContain('first.example · T+400ms')
-    expect(getDialog().textContent).toContain('1 / 3')
   })
 
-  it('disables both boundaries without wrapping or firing navigation', async () => {
-    const onNavigate = mock((_screenshotId: number) => undefined)
-    await render(<ControlledLightbox initialId={11} onNavigate={onNavigate} />)
+  it('disables both boundaries without wrapping', async () => {
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={11}
+        onClose={() => undefined}
+      />,
+    )
 
     const previous = getButton('Previous screenshot')
     expect(previous.disabled).toBe(true)
     await click(previous)
-    expect(onNavigate).toHaveBeenCalledTimes(0)
+    expect(counter()).toBe('1 / 3')
 
     await click(getButton('Next screenshot'))
     await click(getButton('Next screenshot'))
     const next = getButton('Next screenshot')
     expect(next.disabled).toBe(true)
-    expect(onNavigate).toHaveBeenCalledTimes(2)
     await click(next)
-    expect(onNavigate).toHaveBeenCalledTimes(2)
-    expect(getDialog().textContent).toContain('3 / 3')
+    expect(counter()).toBe('3 / 3')
   })
 
   it('navigates on bare arrow keys and leaves modified, composing, and Escape keys alone', async () => {
-    const onNavigate = mock((_screenshotId: number) => undefined)
-    await render(<ControlledLightbox onNavigate={onNavigate} />)
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={22}
+        onClose={() => undefined}
+      />,
+    )
 
     const right = await pressKey(getDialog(), 'ArrowRight')
     expect(right.defaultPrevented).toBe(true)
-    expect(onNavigate.mock.calls[0]?.[0]).toBe(33)
+    expect(counter()).toBe('3 / 3')
 
     const left = await pressKey(getDialog(), 'ArrowLeft')
     expect(left.defaultPrevented).toBe(true)
-    expect(onNavigate.mock.calls[1]?.[0]).toBe(22)
+    expect(counter()).toBe('2 / 3')
 
     const modifiedEvents: Event[] = []
     for (const options of [
@@ -309,17 +400,23 @@ describe('ScreenshotLightbox', () => {
       isComposing: true,
     })
     const escapeEvent = await pressKey(getDialog(), 'Escape')
-    expect(onNavigate).toHaveBeenCalledTimes(2)
     for (const event of modifiedEvents) {
       expect(event.defaultPrevented).toBe(false)
     }
     expect(composing.defaultPrevented).toBe(false)
     expect(escapeEvent.defaultPrevented).toBe(false)
+    expect(counter()).toBe('2 / 3')
   })
 
   it('does not hijack arrow keys from editable or arrow-driven controls', async () => {
-    const onNavigate = mock((_screenshotId: number) => undefined)
-    await render(<ControlledLightbox onNavigate={onNavigate} />)
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={22}
+        onClose={() => undefined}
+      />,
+    )
     const dialog = getDialog()
 
     const input = document.createElement('input')
@@ -349,32 +446,56 @@ describe('ScreenshotLightbox', () => {
       const event = await pressKey(target, 'ArrowRight')
       expect(event.defaultPrevented).toBe(false)
     }
-    expect(onNavigate).toHaveBeenCalledTimes(0)
+    expect(counter()).toBe('2 / 3')
   })
 
-  it('keeps an active id missing from the polled list previewable as 1 / 1', async () => {
-    const onNavigate = mock((_screenshotId: number) => undefined)
+  it('opens on the first slide when the clicked id is absent from the list', async () => {
     await render(
-      <ControlledLightbox
-        initialId={99}
-        screenshotIds={[11, 22]}
-        onNavigate={onNavigate}
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS.slice(0, 2)}
+        startId={99}
+        onClose={() => undefined}
       />,
     )
 
-    expect(getDialog().textContent).toContain('unlisted.example · T+9.9s')
-    expect(getDialog().textContent).toContain('1 / 1')
-    expect(getDialog().querySelector('img')?.getAttribute('src')).toContain(
-      '/sessions/session-navigation/screenshots/99',
-    )
+    expect(counter()).toBe('1 / 2')
+    expect(getDialog().textContent).toContain('first.example · T+400ms')
     expect(getButton('Previous screenshot').disabled).toBe(true)
-    expect(getButton('Next screenshot').disabled).toBe(true)
-    expect(onNavigate).toHaveBeenCalledTimes(0)
+    expect(getButton('Next screenshot').disabled).toBe(false)
+  })
+
+  it('eager-loads the active slide and its neighbors, lazy-loads the rest', async () => {
+    const many: ScreenshotLightboxItem[] = [1, 2, 3, 4, 5].map((id) => ({
+      screenshotId: id,
+      sourceUrl: `https://site-${id}.example/page`,
+      offsetMs: id * 1000,
+    }))
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-lazy"
+        items={many}
+        startId={3}
+        onClose={() => undefined}
+      />,
+    )
+
+    const loading = Array.from(getDialog().querySelectorAll('img')).map((img) =>
+      img.getAttribute('loading'),
+    )
+    expect(loading).toEqual(['lazy', 'eager', 'eager', 'eager', 'lazy'])
   })
 
   it('preserves the close callback contract through dialog open changes', async () => {
     const onClose = mock(() => undefined)
-    await render(<ControlledLightbox onClose={onClose} />)
+    await render(
+      <ScreenshotLightbox
+        sessionId="session-navigation"
+        items={ITEMS}
+        startId={22}
+        onClose={onClose}
+      />,
+    )
 
     await act(async () => dialogOnOpenChange?.(true))
     expect(onClose).toHaveBeenCalledTimes(0)

@@ -12,6 +12,84 @@ mock.module('@/modules/api/audit.hooks', () => ({
   useTaskScreenshotBaseUrl: () => 'http://127.0.0.1:9200',
 }))
 
+// embla measures the DOM, which linkedom has no layout for. Mock it at the
+// boundary with an index-based fake so button/keyboard navigation drives the
+// carousel the way a real swipe would.
+type Listener = () => void
+interface EmblaFake {
+  index: number
+  count: number
+  initialized: boolean
+  listeners: Map<string, Listener[]>
+  api: Record<string, unknown>
+  ref: (node: Element | null) => void
+}
+
+function makeEmbla(): EmblaFake {
+  const listeners = new Map<string, Listener[]>()
+  const emit = (name: string) => {
+    for (const cb of listeners.get(name) ?? []) cb()
+  }
+  const state: EmblaFake = {
+    index: 0,
+    count: 0,
+    initialized: false,
+    listeners,
+    api: {},
+    ref: () => undefined,
+  }
+  state.api = {
+    scrollNext: () => {
+      if (state.index < state.count - 1) {
+        state.index += 1
+        emit('select')
+      }
+    },
+    scrollPrev: () => {
+      if (state.index > 0) {
+        state.index -= 1
+        emit('select')
+      }
+    },
+    scrollTo: (i: number) => {
+      state.index = Math.max(0, Math.min(i, Math.max(0, state.count - 1)))
+      emit('select')
+    },
+    canScrollNext: () => state.index < state.count - 1,
+    canScrollPrev: () => state.index > 0,
+    selectedScrollSnap: () => state.index,
+    on: (name: string, cb: Listener) => {
+      const arr = listeners.get(name) ?? []
+      arr.push(cb)
+      listeners.set(name, arr)
+    },
+    off: (name: string, cb: Listener) => {
+      listeners.set(
+        name,
+        (listeners.get(name) ?? []).filter((entry) => entry !== cb),
+      )
+    },
+  }
+  state.ref = (node) => {
+    if (node) {
+      state.count = node.querySelectorAll('[data-slot="carousel-item"]').length
+    }
+  }
+  return state
+}
+
+let embla = makeEmbla()
+
+mock.module('embla-carousel-react', () => ({
+  default: (options?: { startIndex?: number }) => {
+    if (!embla.initialized) {
+      embla.initialized = true
+      if (options?.startIndex != null) embla.index = options.startIndex
+    }
+    return [embla.ref, embla.api]
+  },
+}))
+
 mock.module('@/components/ui/dialog', () => ({
   ..._dialog,
   Dialog: ({ children }: { children?: ReactNode }) => <>{children}</>,
@@ -154,6 +232,7 @@ let root: Root
 let container: HTMLElement
 
 beforeEach(async () => {
+  embla = makeEmbla()
   dataOverride = screenData()
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -229,6 +308,13 @@ function getDialog(): HTMLElement {
   return dialog
 }
 
+function counter(): string {
+  const span = Array.from(getDialog().querySelectorAll('span')).find((node) =>
+    /^\d+ \/ \d+$/.test(node.textContent?.trim() ?? ''),
+  )
+  return span?.textContent?.trim() ?? ''
+}
+
 function getNavigationButton(label: string): HTMLButtonElement {
   const button = getDialog().querySelector<HTMLButtonElement>(
     `button[aria-label="${label}"]`,
@@ -238,37 +324,39 @@ function getNavigationButton(label: string): HTMLButtonElement {
 }
 
 describe('TaskDetailPage screenshot navigation', () => {
-  it('keeps navigation scoped to the clicked group across navigation and polling', async () => {
+  it('opens on the clicked screenshot and lets the user swipe the whole session across groups', async () => {
+    await renderPage()
+
+    // Open a screenshot that lives in the "page-1" group.
+    await click(getByTestId('open-page-1-30'))
+    expect(getDialog().textContent).toContain('30.example · T+300ms')
+    expect(counter()).toBe('3 / 5')
+    expect(getDialog().querySelectorAll('img')).toHaveLength(5)
+
+    // Next crosses into a screenshot owned by the other group (40 is page-2).
+    await click(getNavigationButton('Next screenshot'))
+    expect(getDialog().textContent).toContain('40.example · T+400ms')
+    expect(counter()).toBe('4 / 5')
+
+    await click(getNavigationButton('Next screenshot'))
+    expect(counter()).toBe('5 / 5')
+    expect(getNavigationButton('Next screenshot').disabled).toBe(true)
+  })
+
+  it('keeps the carousel position through a background poll re-render', async () => {
     await renderPage()
 
     await click(getByTestId('open-page-1-30'))
-
-    expect(getDialog().textContent).toContain('30.example · T+300ms')
-    expect(getDialog().textContent).toContain('2 / 3')
-    expect(getDialog().querySelector('img')?.getAttribute('src')).toContain(
-      '/sessions/session-navigation/screenshots/30',
-    )
-
     await click(getNavigationButton('Next screenshot'))
+    expect(counter()).toBe('4 / 5')
 
-    expect(getDialog().textContent).toContain('50.example · T+500ms')
-    expect(getDialog().textContent).toContain('3 / 3')
-    expect(getDialog().querySelector('img')?.getAttribute('src')).toContain(
-      '/sessions/session-navigation/screenshots/50',
-    )
-    expect(getDialog().querySelector('img')?.getAttribute('alt')).toBe(
-      'Screenshot of 50.example',
-    )
-
+    // A poll moves the last screenshot to another tab group; the flat session
+    // carousel is unaffected and the current position is preserved.
     dataOverride = screenData(true)
     await renderPage()
 
-    expect(getDialog().textContent).toContain('50.example · T+500ms')
-    expect(getDialog().textContent).toContain('1 / 1')
-    expect(getDialog().querySelector('img')?.getAttribute('src')).toContain(
-      '/sessions/session-navigation/screenshots/50',
-    )
-    expect(getNavigationButton('Previous screenshot').disabled).toBe(true)
-    expect(getNavigationButton('Next screenshot').disabled).toBe(true)
+    expect(counter()).toBe('4 / 5')
+    expect(getDialog().textContent).toContain('40.example · T+400ms')
+    expect(getDialog().querySelectorAll('img')).toHaveLength(5)
   })
 })
