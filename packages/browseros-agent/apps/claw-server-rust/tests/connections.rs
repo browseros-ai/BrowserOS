@@ -655,9 +655,38 @@ async fn assert_identity_migration(
         fs::remove_dir_all(home.join(".gemini"))?;
     }
 
+    let canonical_workspace = home.join("claw/identity-canonical-manager");
+    let canonical_manager = McpManager::new(&canonical_workspace);
+    let canonical_service = HarnessService::new(canonical_workspace.clone(), home.to_path_buf());
+    let cursor_path = path_for(paths, AgentId::Cursor)?;
+    let canonical_raw = format!(
+        r#"{{"mcpServers":{{"{BROWSEROS_MCP_SERVER_NAME}":{{"type":"http","url":"{STALE_URL}"}}}},"keep":true}}"#
+    );
+    fs::write(cursor_path, canonical_raw)?;
+    let canonical = canonical_service
+        .migrate_browseros_identity(MCP_URL)
+        .await?;
+    assert_eq!(canonical.migrated, 1);
+    assert_eq!(canonical.failed, 0);
+    assert_eq!(canonical.skipped, 6);
+    let canonical_entry = canonical_manager
+        .inspect_entry(
+            InspectEntryInput::new(BROWSEROS_MCP_SERVER_NAME, AgentId::Cursor).at_path(cursor_path),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("missing adopted canonical entry"))?;
+    assert_eq!(
+        canonical_entry.spec,
+        McpServerSpec::Http {
+            url: MCP_URL.to_string(),
+            headers: Default::default(),
+        }
+    );
+    assert!(fs::read_to_string(cursor_path)?.contains(r#""keep":true"#));
+    assert_eq!(canonical_manager.list()?.remove(0).links.len(), 1);
+    fs::remove_file(cursor_path)?;
+
     let foreign_workspace = home.join("claw/identity-foreign-manager");
     let foreign_service = HarnessService::new(foreign_workspace.clone(), home.to_path_buf());
-    let cursor_path = path_for(paths, AgentId::Cursor)?;
     let foreign_raw = r#"{"mcpServers":{"BrowserClaw":{"command":"foreign"},"BrowserOS neo":{"command":"standalone"}},"keep":true}"#;
     fs::write(cursor_path, foreign_raw)?;
     let foreign = foreign_service.migrate_browseros_identity(MCP_URL).await?;

@@ -774,22 +774,56 @@ fn migrate_browseros_agent(
     target_mcp_url: &str,
     managed_links: &[ListedLink],
 ) -> Result<bool, ManagerError> {
-    let mut migrated = false;
+    let mut destination_managed = managed_links
+        .iter()
+        .any(|link| link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME);
+    let mut migrated = if destination_managed {
+        false
+    } else {
+        adopt_config_only_canonical(manager, workspace_dir, agent, target_mcp_url)?
+    };
+    destination_managed |= migrated;
     for source_name in BROWSEROS_LEGACY_MCP_SERVER_NAMES {
         let legacy_link = managed_links
             .iter()
             .find(|link| link.agent == agent && link.server_name == source_name);
-        migrated |= migrate_browseros_alias(
+        let alias_migrated = migrate_browseros_alias(
             manager,
             workspace_dir,
             agent,
             target_mcp_url,
             source_name,
             legacy_link,
-            managed_links,
+            destination_managed,
         )?;
+        migrated |= alias_migrated;
+        destination_managed |= alias_migrated;
     }
     Ok(migrated)
+}
+
+fn adopt_config_only_canonical(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    agent: AgentId,
+    target_mcp_url: &str,
+) -> Result<bool, ManagerError> {
+    let entry =
+        match manager.inspect_entry(InspectEntryInput::new(BROWSEROS_MCP_SERVER_NAME, agent))? {
+            Some(entry) if is_historical_browseros_spec(&entry.spec) => entry,
+            _ => return Ok(false),
+        };
+    let mut input = LinkInput::new(
+        McpServer {
+            name: BROWSEROS_MCP_SERVER_NAME.to_string(),
+            spec: spec_for(agent, target_mcp_url)?,
+        },
+        agent,
+    );
+    input.config_path = Some(entry.config_path);
+    input.allow_overwrite = true;
+    with_legacy_manifest_migration(workspace_dir, || manager.link(input.clone()))
+        .map(|summary| summary.created)
 }
 
 fn migrate_browseros_alias(
@@ -799,7 +833,7 @@ fn migrate_browseros_alias(
     target_mcp_url: &str,
     source_name: &str,
     legacy_link: Option<&ListedLink>,
-    managed_links: &[ListedLink],
+    destination_managed: bool,
 ) -> Result<bool, ManagerError> {
     let unmanaged_source = if legacy_link.is_none() {
         match manager.inspect_entry(InspectEntryInput::new(source_name, agent))? {
@@ -820,9 +854,7 @@ fn migrate_browseros_alias(
         manager,
         agent,
         config_path.as_deref(),
-        managed_links
-            .iter()
-            .any(|link| link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME),
+        destination_managed,
     )?;
     let mut input = MigrateServerInput::new(
         source_name,
