@@ -43,7 +43,7 @@ export function ProductHuntBannerCard({
       <ProductHuntIcon className="size-9 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-foreground text-sm">
-          We&apos;re live on Product Hunt 🎉
+          We&apos;re live on Product Hunt today 🎉
         </p>
         <p className="text-muted-foreground text-xs">
           An upvote or comment would mean a lot &mdash; it helps us keep
