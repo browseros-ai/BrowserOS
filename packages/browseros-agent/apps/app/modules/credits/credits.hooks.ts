@@ -5,6 +5,8 @@ interface CreditsInfo {
   credits: number
   dailyLimit: number
   lastResetAt?: string
+  // Absent on older gateways, so every consumer must handle it being missing.
+  browserosId?: string
 }
 
 const CREDITS_QUERY_KEY = ['credits']

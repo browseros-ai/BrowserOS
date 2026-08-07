@@ -11,7 +11,10 @@ import { track } from '@/lib/metrics/track'
 import { sentry } from '@/lib/sentry/sentry'
 import { productHuntBannerDismissedStorage } from './product-hunt-banner.storage'
 
-const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
+/**
+ * @public
+ */
+export const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
 
 // The banner is available immediately and auto-hides after the end of Aug 14
 // 2026 (PDT), so it never lingers past the launch window.

@@ -1,4 +1,4 @@
-import { AlertCircle, Clock, Coins, CreditCard, Zap } from 'lucide-react'
+import { AlertCircle, Clock, Coins, Zap } from 'lucide-react'
 import type { FC } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -8,6 +8,7 @@ import {
 import { BrowserOSIcon } from '@/lib/llm-providers/providerIcons'
 import { cn } from '@/lib/utils'
 import { useCredits } from '@/modules/credits/credits.hooks'
+import { CreditRequestCard } from './CreditRequestCard'
 
 export const UsagePage: FC = () => {
   const { data, isLoading, error } = useCredits()
@@ -104,22 +105,7 @@ export const UsagePage: FC = () => {
         </div>
       </div>
 
-      <div className="rounded-xl border p-5">
-        <div className="flex items-center gap-3">
-          <CreditCard className="h-5 w-5 text-muted-foreground" />
-          <div>
-            <p className="flex items-center gap-2 font-semibold text-sm">
-              Need more credits?
-              <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
-                Coming soon
-              </span>
-            </p>
-            <p className="text-muted-foreground text-xs">
-              Additional credit packages will be available soon
-            </p>
-          </div>
-        </div>
-      </div>
+      <CreditRequestCard browserosId={data?.browserosId} />
 
       <div className="rounded-xl border border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/5 p-5">
         <div className="flex items-center justify-between">
