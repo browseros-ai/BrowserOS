@@ -52,12 +52,18 @@ export function ScreenshotLightbox({
 }: ScreenshotLightboxProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const open = startId !== null
+  // If the clicked screenshot has dropped out of the polled list (e.g. pruned
+  // mid-view), keep showing it solo rather than silently jumping to another one.
+  const slides =
+    startId !== null && !items.some((item) => item.screenshotId === startId)
+      ? [{ screenshotId: startId, sourceUrl: null, offsetMs: null }]
+      : items
   const startIndex =
     startId === null
       ? 0
       : Math.max(
           0,
-          items.findIndex((item) => item.screenshotId === startId),
+          slides.findIndex((item) => item.screenshotId === startId),
         )
 
   const [api, setApi] = useState<CarouselApi>()
@@ -86,8 +92,8 @@ export function ScreenshotLightbox({
   }, [api])
 
   const canPrev = current > 0
-  const canNext = current < items.length - 1
-  const active = items[current] ?? null
+  const canNext = current < slides.length - 1
+  const active = slides[current] ?? null
   const host = hostOf(active?.sourceUrl ?? null)
   const caption =
     [
@@ -156,7 +162,7 @@ export function ScreenshotLightbox({
                   <IconChevronLeft aria-hidden />
                 </Button>
                 <span className="min-w-[7ch] text-center font-mono text-[11.5px] text-ink-3 tabular-nums">
-                  {items.length ? current + 1 : 0} / {items.length}
+                  {slides.length ? current + 1 : 0} / {slides.length}
                 </span>
                 <Button
                   type="button"
@@ -188,7 +194,7 @@ export function ScreenshotLightbox({
                 className="w-full"
               >
                 <CarouselContent className="ml-0">
-                  {items.map((item, index) => {
+                  {slides.map((item, index) => {
                     const itemHost = hostOf(item.sourceUrl)
                     return (
                       <CarouselItem

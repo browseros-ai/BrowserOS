@@ -449,7 +449,7 @@ describe('ScreenshotLightbox', () => {
     expect(counter()).toBe('2 / 3')
   })
 
-  it('opens on the first slide when the clicked id is absent from the list', async () => {
+  it('keeps the clicked screenshot visible solo when it is absent from the list', async () => {
     await render(
       <ScreenshotLightbox
         sessionId="session-navigation"
@@ -459,10 +459,14 @@ describe('ScreenshotLightbox', () => {
       />,
     )
 
-    expect(counter()).toBe('1 / 2')
-    expect(getDialog().textContent).toContain('first.example · T+400ms')
+    // The selection dropped out of the polled list (e.g. pruned mid-view): show
+    // it alone rather than jumping to an unrelated screenshot.
+    expect(counter()).toBe('1 / 1')
+    expect(imgSrcs()).toEqual([
+      expect.stringContaining('/sessions/session-navigation/screenshots/99'),
+    ])
     expect(getButton('Previous screenshot').disabled).toBe(true)
-    expect(getButton('Next screenshot').disabled).toBe(false)
+    expect(getButton('Next screenshot').disabled).toBe(true)
   })
 
   it('eager-loads the active slide and its neighbors, lazy-loads the rest', async () => {
