@@ -93,9 +93,10 @@ export const ProductHuntBanner: FC<{ fallback?: ReactNode }> = ({
 
   const handleOpen = () => {
     track(PRODUCT_HUNT_BANNER_CLICKED_EVENT)
-    chrome.tabs.create({ url: PRODUCT_HUNT_URL })
-    // Product Hunt takes the foreground; this tab moves to the credits page so
-    // the Discord handle form is waiting when they come back.
+    // Product Hunt loads in the background so it does not steal focus; this tab
+    // stays in front and moves to the credits page, where the Discord handle
+    // form is waiting.
+    chrome.tabs.create({ url: PRODUCT_HUNT_URL, active: false })
     navigate('/settings/usage')
   }
 
