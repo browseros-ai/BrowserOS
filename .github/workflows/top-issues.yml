@@ -26,6 +26,7 @@ jobs:
           echo "Fetching all open issues..."
 
           # Fetch all open issues with reaction data
+          # shellcheck disable=SC2016
           issues=$(gh api graphql -f query='
             query($owner: String!, $repo: String!) {
               repository(owner: $owner, name: $repo) {

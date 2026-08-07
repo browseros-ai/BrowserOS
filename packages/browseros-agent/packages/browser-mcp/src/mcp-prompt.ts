@@ -1,7 +1,7 @@
 export const BROWSER_MCP_INSTRUCTIONS = `BrowserOS browser automation.
 
 Observe -> Act -> Verify:
-- Start with tabs action="list" to find page ids when needed.
+- Start with tabs action="list" to find page ids when needed. The list is grouped by ownership (your tabs / user's tabs / other agents' tabs); you may only modify your own tabs.
 - Use snapshot before interacting; it returns refs like [ref=e12].
 - Use refs with act for click, fill, hover, select, press, scroll, and coordinate actions.
 - Use navigate for url/back/forward/reload; it returns a fresh snapshot because refs are invalidated.

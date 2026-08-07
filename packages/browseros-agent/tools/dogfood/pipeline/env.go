@@ -12,12 +12,23 @@ import (
 	"browseros-dogfood/config"
 )
 
-func WriteProductionEnvFiles(agentRoot string, cfg config.Config) error {
+// WriteProductionEnvFile writes the merged production env file at the agent root.
+func WriteProductionEnvFile(agentRoot string, cfg config.Config) error {
 	cfg.FillProductionEnvDefaults()
-	if err := writeEnvFile(filepath.Join(agentRoot, "apps/server/.env.production"), cfg.ProductionEnv.Server); err != nil {
-		return err
+	values := make(map[string]string, len(cfg.ProductionEnv.CLI)+len(cfg.ProductionEnv.Server))
+	for key, value := range cfg.ProductionEnv.CLI {
+		values[key] = value
 	}
-	return writeEnvFile(filepath.Join(agentRoot, "apps/cli/.env.production"), cfg.ProductionEnv.CLI)
+	for key, value := range cfg.ProductionEnv.Server {
+		if value != "" {
+			values[key] = value
+			continue
+		}
+		if _, ok := values[key]; !ok {
+			values[key] = value
+		}
+	}
+	return writeEnvFile(filepath.Join(agentRoot, ".env.production"), values)
 }
 
 func writeEnvFile(path string, values map[string]string) error {

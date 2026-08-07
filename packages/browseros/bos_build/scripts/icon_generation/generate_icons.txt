@@ -16,7 +16,7 @@
 #
 # Paths are relative to:
 #   - source: icon_generation/ directory
-#   - dest: resources/icons/ directory
+#   - dest: selected icon output directory
 
 # ==============================================================================
 # STATIC FILES (manually maintained, just copied)

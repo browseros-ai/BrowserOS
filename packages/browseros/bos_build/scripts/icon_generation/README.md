@@ -1,7 +1,7 @@
 # BrowserOS Icon Generation
 
-This directory contains the unified icon generation system for BrowserOS. All browser icons
-for Windows, macOS, Linux, and ChromeOS are generated from a single source image.
+This directory contains the unified icon generation system for BrowserOS products. Browser
+icons for Windows, macOS, Linux, and ChromeOS are generated from one source image per product.
 
 ## Quick Start
 
@@ -12,10 +12,11 @@ cp your_icon.png source/app_icon.png
 # 2. Place any static files (SVG, AI) in static/
 cp your_logo.svg static/product_logo.svg
 
-# 3. Run generation
+# 3. Run generation for BrowserOS
 python generate_icons.py
 
-# 4. Icons are output to packages/browseros/resources/icons/
+# 4. Or run generation for BrowserClaw
+python generate_icons.py --product browserclaw
 ```
 
 ## Directory Structure
@@ -23,11 +24,14 @@ python generate_icons.py
 ```
 icon_generation/
 ├── source/                    # Source images (high-res PNGs)
-│   └── app_icon.png          # Main app icon (≥1024x1024, required)
+│   ├── app_icon.png          # Main app icon (≥1024x1024, required)
+│   └── browserclaw/
+│       └── app_icon.png      # BrowserClaw app icon
 ├── static/                    # Static files (copied as-is)
 │   ├── product_logo.svg      # Vector logo
 │   ├── product_logo.ai       # Adobe Illustrator source
-│   └── product_logo_animation.svg
+│   ├── product_logo_animation.svg
+│   └── browserclaw/          # BrowserClaw static files
 ├── generate_icons.py         # Main generation script
 ├── generate_icons.txt        # Generation configuration
 └── README.md                 # This file
@@ -63,6 +67,7 @@ COPY   source dest          # Copy static file as-is
 | File | Type | Description |
 |------|------|-------------|
 | `source/app_icon.png` | PNG | Master source icon (≥1024x1024) |
+| `source/browserclaw/app_icon.png` | PNG | BrowserClaw source icon (≥1024x1024) |
 | `static/product_logo.svg` | SVG | Vector logo (manually maintained) |
 | `static/product_logo.ai` | AI | Adobe Illustrator source (manually maintained) |
 | `static/product_logo_animation.svg` | SVG | Animated logo (manually maintained) |
@@ -147,8 +152,8 @@ COPY   source dest          # Copy static file as-is
 
 ## Workflow
 
-1. **Update source icon**: Replace `source/app_icon.png` with your new icon (≥1024x1024)
-2. **Run generation**: `python generate_icons.py`
+1. **Update source icon**: Replace `source/app_icon.png` or `source/<product>/app_icon.png` with your new icon (≥1024x1024)
+2. **Run generation**: `python generate_icons.py` or `python generate_icons.py --product browserclaw`
 3. **Build BrowserOS**: The `copy_resources.yaml` copies generated icons to chromium source tree
 
 ## Troubleshooting

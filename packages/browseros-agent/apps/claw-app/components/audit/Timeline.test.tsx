@@ -10,17 +10,13 @@ import { Timeline } from './Timeline'
 
 function dispatch(overrides: Partial<ToolDispatchRow> = {}): ToolDispatchRow {
   return {
-    id: 1,
+    dispatchId: 1,
     createdAt: 1_000_000,
-    agentId: 'a',
     slug: 'a',
-    agentLabel: 'A',
+    label: 'A',
     sessionId: 'sess',
     toolName: 'snapshot',
     pageId: 1,
-    targetId: null,
-    url: null,
-    title: null,
     argsJson: '{"page":1}',
     resultMeta: '{"isError":false}',
     durationMs: 5,
@@ -32,13 +28,11 @@ const startedAt = 1_000_000
 
 function render(
   dispatches: ToolDispatchRow[],
-  screenshotDispatchIds: readonly number[] = [],
   extra: { showSessionEnd?: boolean; endEvent?: TimelineEndEvent } = {},
 ): string {
   return renderToStaticMarkup(
     <Timeline
       dispatches={dispatches}
-      screenshotDispatchIds={screenshotDispatchIds}
       startedAt={startedAt}
       endEvent={extra.endEvent ?? null}
       showSessionEnd={extra.showSessionEnd}
@@ -49,7 +43,7 @@ function render(
 
 type TimelineEndEvent = {
   createdAt: number
-  kind: 'closed' | 'errored'
+  kind: 'closed' | 'errored' | 'cancelled'
   reason: string | null
 } | null
 
@@ -59,15 +53,24 @@ const CLOSED_END: TimelineEndEvent = {
   reason: null,
 }
 
+const CANCELLED_END: TimelineEndEvent = {
+  createdAt: startedAt + 30_000,
+  kind: 'cancelled',
+  reason: 'operator requested stop',
+}
+
 describe('Timeline', () => {
   it('renders Expand all + Collapse all buttons', () => {
-    const html = render([dispatch({ id: 1 }), dispatch({ id: 2 })])
+    const html = render([
+      dispatch({ dispatchId: 1 }),
+      dispatch({ dispatchId: 2 }),
+    ])
     expect(html).toContain('Expand all')
     expect(html).toContain('Collapse all')
   })
 
   it('disables Collapse all on first render when nothing is auto-expanded', () => {
-    const html = render([dispatch({ id: 1, toolName: 'snapshot' })])
+    const html = render([dispatch({ dispatchId: 1, toolName: 'snapshot' })])
     // Collapse all should be disabled (no HIGH RISK rows auto-expanded).
     expect(html).toMatch(
       /<button[^>]*data-disabled=""[^>]*timeline-collapse-all/,
@@ -76,8 +79,8 @@ describe('Timeline', () => {
 
   it('leaves Collapse all enabled when a HIGH RISK row auto-expands', () => {
     const html = render([
-      dispatch({ id: 1, toolName: 'snapshot' }),
-      dispatch({ id: 2, toolName: 'act' }),
+      dispatch({ dispatchId: 1, toolName: 'snapshot' }),
+      dispatch({ dispatchId: 2, toolName: 'act' }),
     ])
     expect(html).not.toMatch(
       /<button[^>]*data-disabled=""[^>]*timeline-collapse-all/,
@@ -87,7 +90,7 @@ describe('Timeline', () => {
   it('auto-expands HIGH RISK rows so args + result blocks appear on initial render', () => {
     const html = render([
       dispatch({
-        id: 7,
+        dispatchId: 7,
         toolName: 'act',
         argsJson: '{"kind":"click","ref":"btn-submit"}',
         resultMeta: '{"isError":false,"structuredKeys":["clicked"]}',
@@ -111,7 +114,7 @@ describe('Timeline', () => {
   it('renders a copy button per block (args, result, page) on an expanded row', () => {
     const html = render([
       dispatch({
-        id: 1,
+        dispatchId: 1,
         toolName: 'act',
         argsJson: '{"kind":"click"}',
         resultMeta: '{"isError":false}',
@@ -126,8 +129,9 @@ describe('Timeline', () => {
   it('does not render a copy button on the screenshot block (image, not text)', () => {
     const html = render([
       dispatch({
-        id: 2,
+        dispatchId: 2,
         toolName: 'screenshot',
+        screenshotId: 9,
         argsJson: '{"page":1}',
         resultMeta: '{"isError":false}',
       }),
@@ -135,16 +139,35 @@ describe('Timeline', () => {
     expect(html).not.toContain('data-testid="timeline-block-copy-screenshot"')
   })
 
-  it('renders the SessionEndRow by default (backward compat)', () => {
-    const html = render([dispatch({ id: 1 })], [], { endEvent: CLOSED_END })
+  it('renders a captured screenshot for an errored dispatch', () => {
+    const html = render([
+      dispatch({
+        dispatchId: 3,
+        toolName: 'act',
+        screenshotId: 10,
+        resultMeta: '{"isError":true}',
+      }),
+    ])
+    expect(html).toContain('>screenshot<')
+  })
+
+  it('renders the SessionEndRow by default', () => {
+    const html = render([dispatch({ dispatchId: 1 })], {
+      endEvent: CLOSED_END,
+    })
     // SessionEndRow markup includes the literal "session closed" (or
     // "session errored") tail; either is enough to pin the presence
     // of the row.
     expect(html).toContain('session closed')
   })
 
+  it('renders an operator-stopped terminal row', () => {
+    const html = render([dispatch()], { endEvent: CANCELLED_END })
+    expect(html).toContain('session stopped')
+  })
+
   it('hides the SessionEndRow when showSessionEnd is false (per-tab view)', () => {
-    const html = render([dispatch({ id: 1 })], [], {
+    const html = render([dispatch({ dispatchId: 1 })], {
       endEvent: CLOSED_END,
       showSessionEnd: false,
     })

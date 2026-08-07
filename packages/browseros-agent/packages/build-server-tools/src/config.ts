@@ -1,61 +1,51 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
-import { parse } from 'dotenv'
+import {
+  type ResolvedEnv,
+  requireEnv,
+  resolveEnv,
+} from '@browseros/shared/env/load'
 
-import type { BuildConfig, BuildProductDescriptor } from './types'
+import type { BuildConfig, ProductBuildSpec } from './types'
 
-function readPackageVersion(
-  rootDir: string,
-  product: BuildProductDescriptor,
-): string {
-  const pkgPath = join(rootDir, product.packageDir, 'package.json')
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-  return pkg.version
-}
-
-function pickEnv(
-  name: string,
-  fileEnv: Record<string, string>,
-  product: BuildProductDescriptor,
-): string {
-  const value = process.env[name] ?? fileEnv[name]
-  if (!value || value.trim().length === 0) {
-    throw new Error(
-      `Missing required environment variable for ${product.label}: ${name}`,
-    )
+function requireVersion(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Product version is missing or invalid: ${path}`)
   }
   return value
 }
 
-function loadProdEnv(
+function readProductVersion(
   rootDir: string,
-  product: BuildProductDescriptor,
-  options: { required?: boolean } = {},
-): Record<string, string> {
-  const prodEnvPath = join(rootDir, product.env.prodEnvPath)
-  if (!existsSync(prodEnvPath)) {
-    if (options.required === false) return {}
-
-    const templatePath = product.env.prodEnvTemplatePath
-    const absTemplatePath = templatePath ? join(rootDir, templatePath) : ''
-    if (templatePath && existsSync(absTemplatePath)) {
-      throw new Error(
-        `Missing ${product.env.prodEnvPath}. Create it from ${templatePath} before running this build.`,
-      )
-    }
-    throw new Error(`Missing ${product.env.prodEnvPath}.`)
+  product: ProductBuildSpec,
+): string {
+  const source = product.versionSource ?? {
+    type: 'package-json',
+    path: join(product.packageDir, 'package.json'),
   }
-  return parse(readFileSync(prodEnvPath, 'utf-8'))
+  const sourcePath = resolve(rootDir, source.path)
+  const content = readFileSync(sourcePath, 'utf-8')
+  if (source.type === 'package-json') {
+    const document = JSON.parse(content) as Record<string, unknown>
+    return requireVersion(document.version, source.path)
+  }
+  const document = Bun.TOML.parse(content) as Record<string, unknown>
+  const packageSection = document.package
+  const version =
+    typeof packageSection === 'object' && packageSection !== null
+      ? (packageSection as Record<string, unknown>).version
+      : undefined
+  return requireVersion(version, source.path)
 }
 
 function buildInlineEnv(
-  product: BuildProductDescriptor,
-  fileEnv: Record<string, string>,
+  product: ProductBuildSpec,
+  resolved: ResolvedEnv,
 ): Record<string, string> {
   const inlineEnv: Record<string, string> = {}
   for (const key of product.env.inlineEnvKeys) {
-    const value = process.env[key] ?? fileEnv[key]
+    const value = resolved.values[key]
     if (value !== undefined && value.trim().length > 0) {
       inlineEnv[key] = value
     }
@@ -63,21 +53,48 @@ function buildInlineEnv(
   return inlineEnv
 }
 
-function validateProductionEnv(
-  product: BuildProductDescriptor,
-  envVars: Record<string, string>,
+function requireProductEnv(
+  product: ProductBuildSpec,
+  resolved: ResolvedEnv,
+  keys: readonly string[],
+  values: Record<string, string> = resolved.values,
 ): void {
-  const missing = product.env.requiredInlineEnvKeys.filter((name) => {
-    const value = envVars[name]
-    return !value || value.trim().length === 0
-  })
-  if (missing.length > 0) {
-    throw new Error(
-      `Production ${product.label} build requires variables: ${missing.join(
-        ', ',
-      )} (set them in ${product.env.prodEnvPath} or process env).`,
-    )
+  try {
+    requireEnv({ ...resolved, values }, [...keys])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${product.label}: ${message}`)
   }
+}
+
+function rootFileEnv(resolved: ResolvedEnv): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const [key, source] of Object.entries(resolved.sources)) {
+    if (source === 'root-file') {
+      values[key] = resolved.values[key]
+    }
+  }
+  return values
+}
+
+function ambientEnvWithoutDemotions(resolved: ResolvedEnv): NodeJS.ProcessEnv {
+  const ambient: NodeJS.ProcessEnv = { ...process.env }
+  for (const key of resolved.demotedKeys) {
+    delete ambient[key]
+  }
+  return ambient
+}
+
+function warnDemotedEnv(resolved: ResolvedEnv): void {
+  if (resolved.demotedKeys.length === 0) {
+    return
+  }
+
+  console.warn(
+    `env: ignoring ${resolved.demotedKeys.length} process values that match root .env.development (Bun auto-load): ${resolved.demotedKeys
+      .toSorted()
+      .join(', ')}`,
+  )
 }
 
 export interface LoadBuildConfigOptions {
@@ -85,15 +102,18 @@ export interface LoadBuildConfigOptions {
   requireR2?: boolean
 }
 
-/** Loads version, inline env, subprocess env, and optional R2 config for one product build. */
 export function loadBuildConfig(
   rootDir: string,
-  product: BuildProductDescriptor,
+  product: ProductBuildSpec,
   options: LoadBuildConfigOptions = {},
 ): BuildConfig {
-  const requireProdEnv = !options.ci && product.env.requireProdEnvFile !== false
-  const fileEnv = loadProdEnv(rootDir, product, { required: requireProdEnv })
-  const envVars = buildInlineEnv(product, fileEnv)
+  const resolved = resolveEnv({ rootDir, mode: 'production' })
+  const fileEnv = rootFileEnv(resolved)
+  const ambientEnv = ambientEnvWithoutDemotions(resolved)
+  const envVars = buildInlineEnv(product, resolved)
+  if (!options.ci) {
+    warnDemotedEnv(resolved)
+  }
   if (options.ci) {
     for (const [key, value] of Object.entries(
       product.env.ciInlineEnvDefaults ?? {},
@@ -101,36 +121,70 @@ export function loadBuildConfig(
       envVars[key] ??= value
     }
   }
+  Object.assign(envVars, product.env.inlineEnvOverrides ?? {})
+  if (options.ci) {
+    Object.assign(envVars, product.env.ciInlineEnvOverrides ?? {})
+  }
   if (!options.ci) {
-    validateProductionEnv(product, envVars)
+    requireProductEnv(product, resolved, product.env.requiredInlineEnvKeys, {
+      ...resolved.values,
+      ...envVars,
+    })
   }
 
   const processEnv: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? '',
     ...fileEnv,
-    ...process.env,
+    ...ambientEnv,
   }
 
   const config: BuildConfig = {
-    version: readPackageVersion(rootDir, product),
+    version: readProductVersion(rootDir, product),
     envVars,
     processEnv,
   }
 
   if (options.requireR2 && !options.ci) {
+    const r2 = requireProductR2Env(product, resolved)
     config.r2 = {
-      accountId: pickEnv('R2_ACCOUNT_ID', fileEnv, product),
-      accessKeyId: pickEnv('R2_ACCESS_KEY_ID', fileEnv, product),
-      secretAccessKey: pickEnv('R2_SECRET_ACCESS_KEY', fileEnv, product),
-      bucket: pickEnv('R2_BUCKET', fileEnv, product),
+      accountId: r2.R2_ACCOUNT_ID,
+      accessKeyId: r2.R2_ACCESS_KEY_ID,
+      secretAccessKey: r2.R2_SECRET_ACCESS_KEY,
+      bucket: r2.R2_BUCKET,
       downloadPrefix:
-        process.env.R2_DOWNLOAD_PREFIX ?? fileEnv.R2_DOWNLOAD_PREFIX ?? '',
+        process.env.R2_DOWNLOAD_PREFIX ??
+        product.env.defaultR2DownloadPrefix ??
+        '',
       uploadPrefix:
-        process.env.R2_UPLOAD_PREFIX ??
-        fileEnv.R2_UPLOAD_PREFIX ??
-        product.env.defaultR2UploadPrefix,
+        process.env.R2_UPLOAD_PREFIX ?? product.env.defaultR2UploadPrefix,
     }
   }
 
   return config
+}
+
+function requireProductR2Env(
+  product: ProductBuildSpec,
+  resolved: ResolvedEnv,
+): Record<
+  'R2_ACCOUNT_ID' | 'R2_ACCESS_KEY_ID' | 'R2_SECRET_ACCESS_KEY' | 'R2_BUCKET',
+  string
+> {
+  try {
+    return requireEnv(resolved, [
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET',
+    ]) as Record<
+      | 'R2_ACCOUNT_ID'
+      | 'R2_ACCESS_KEY_ID'
+      | 'R2_SECRET_ACCESS_KEY'
+      | 'R2_BUCKET',
+      string
+    >
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${product.label}: ${message}`)
+  }
 }

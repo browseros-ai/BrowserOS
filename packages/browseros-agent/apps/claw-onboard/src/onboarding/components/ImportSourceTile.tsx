@@ -2,8 +2,8 @@ import { CheckCircle2, Circle, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BrowserOSImportSource } from '../browseros-onboarding-api'
 import {
+  defaultImportItemsForSource,
   importItemListLabel,
-  selectableItemsForSource,
 } from '../onboarding-v2.helpers'
 
 interface ImportSourceTileProps {
@@ -18,7 +18,11 @@ export function ImportSourceTile({
   selected,
   onSelect,
 }: ImportSourceTileProps) {
-  const itemCount = selectableItemsForSource(source).length
+  // Describe the profile by what will actually be copied, not by everything
+  // Chromium could hand over: listing all seven items reads as a browser
+  // migration, which is the opposite of what this step does.
+  const defaultItems = defaultImportItemsForSource(source)
+  const itemCount = defaultItems.length
   return (
     <label
       className={cn(
@@ -48,11 +52,11 @@ export function ImportSourceTile({
           {source.displayName}
         </div>
         <div className="truncate text-[11.5px] text-ink-3">
-          {importItemListLabel(selectableItemsForSource(source))}
+          {importItemListLabel(defaultItems)}
         </div>
       </div>
       <div className="shrink-0 text-right font-mono text-[11.5px] text-ink-2">
-        {itemCount} items
+        {itemCount} {itemCount === 1 ? 'item' : 'items'}
       </div>
     </label>
   )

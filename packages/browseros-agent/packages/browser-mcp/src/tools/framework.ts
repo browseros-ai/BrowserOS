@@ -20,8 +20,21 @@ export type ContentBlock = ContentItem
 export type ToolResult = ResponseToolResult
 
 export interface ToolAnnotations {
+  /**
+   * Human-readable display name shown in MCP clients (e.g. Claude Desktop's
+   * tool call UI). Required for Claude Directory listings.
+   */
+  title?: string
   readOnlyHint?: boolean
+  /**
+   * True when the tool may modify or delete state, files, or data.
+   * Meaningful only when readOnlyHint is not true. Destructive tools
+   * always prompt the user before running in MCP clients that respect the
+   * hint.
+   */
   destructiveHint?: boolean
+  /** True when repeated calls with the same args produce the same effect. */
+  idempotentHint?: boolean
   openWorldHint?: boolean
 }
 

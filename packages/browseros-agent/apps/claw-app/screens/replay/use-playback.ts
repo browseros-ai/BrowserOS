@@ -1,57 +1,146 @@
-import { useEffect, useState } from 'react'
-import { PLAYBACK_SPEEDS } from './replay.helpers'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from './replay.helpers'
 
 export interface Playback {
-  /** Seconds elapsed in the session. */
+  /** Seconds elapsed in the session's global activity window. */
   time: number
-  /** True while the wallclock timer is advancing. */
   isPlaying: boolean
-  /** Multiplier applied to the 100ms tick. Always one of `PLAYBACK_SPEEDS`. */
   speed: number
   setSpeed: (next: number) => void
-  /** Toggles play/pause. Restarts from 0 if the session already finished. */
+  /** Starts playback, restarting from zero once activity has completed. */
+  play: () => void
+  /** Pauses playback without moving the playhead. */
+  pause: () => void
   togglePlay: () => void
-  /** Jumps the playhead to `seconds` (clamped to [0, totalSeconds]). */
-  seek: (seconds: number) => void
+  /**
+   * Jumps the playhead to `seconds`, preserving the play state — only the
+   * pause button stops playback. Returns the applied value.
+   */
+  seek: (seconds: number) => number
 }
 
-const TICK_MS = 100
+interface Anchor {
+  /** Animation-frame timestamp this run of the clock started from. */
+  wallMs: number
+  /** Activity time at that timestamp. */
+  time: number
+}
 
+/**
+ * Authoritative clock for session activity time.
+ *
+ * The app owns this timer rather than rrweb, because the visible tab's
+ * recording routinely ends long before the session's last tool call — a
+ * player-owned clock simply stops there and strands every later action. Time
+ * advances from animation-frame timestamps so pauses, speed changes, and seeks
+ * re-anchor exactly instead of accumulating rounding drift.
+ */
 export function usePlayback(totalSeconds: number): Playback {
   const [time, setTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(true)
-  const [speed, setSpeed] = useState<number>(PLAYBACK_SPEEDS[0])
+  const [speed, setSpeed] = useState<number>(DEFAULT_PLAYBACK_SPEED)
+  const timeRef = useRef(0)
+  const anchorRef = useRef<Anchor | null>(null)
+  // Distinguishes "stopped because activity ended" from an operator pause, so
+  // only the former resumes when a live recording extends the window.
+  const completedRef = useRef(false)
 
-  // External wall-clock timer: starting/cancelling setInterval is one of
-  // the cases the project conventions still allow useEffect for.
+  const applyTime = useCallback((next: number) => {
+    timeRef.current = next
+    setTime(next)
+  }, [])
+
   useEffect(() => {
-    if (!isPlaying || totalSeconds === 0) return
-    const id = window.setInterval(() => {
-      setTime((prev) => {
-        const next = prev + (TICK_MS / 1000) * speed
+    if (!isPlaying || totalSeconds <= 0) return
+    let active = true
+    let frameId = 0
+    const tick = (wallMs: number) => {
+      if (!active) return
+      const anchor = anchorRef.current
+      if (anchor === null) {
+        // First frame of this run: adopt whatever time the controls left
+        // behind, so a speed change never replays or skips elapsed activity.
+        anchorRef.current = { wallMs, time: timeRef.current }
+      } else {
+        const next = anchor.time + ((wallMs - anchor.wallMs) / 1000) * speed
         if (next >= totalSeconds) {
+          anchorRef.current = null
+          completedRef.current = true
+          applyTime(totalSeconds)
           setIsPlaying(false)
-          return totalSeconds
+          return
         }
-        return next
-      })
-    }, TICK_MS)
-    return () => window.clearInterval(id)
-  }, [isPlaying, speed, totalSeconds])
+        applyTime(next)
+      }
+      frameId = window.requestAnimationFrame(tick)
+    }
+    frameId = window.requestAnimationFrame(tick)
+    return () => {
+      active = false
+      window.cancelAnimationFrame(frameId)
+      anchorRef.current = null
+    }
+  }, [applyTime, isPlaying, speed, totalSeconds])
 
-  const togglePlay = () => {
-    if (time >= totalSeconds) {
-      setTime(0)
-      setIsPlaying(true)
+  useEffect(() => {
+    if (timeRef.current > totalSeconds) {
+      anchorRef.current = null
+      applyTime(totalSeconds)
       return
     }
-    setIsPlaying((p) => !p)
-  }
+    if (completedRef.current && timeRef.current < totalSeconds) {
+      // A live recording grew past where playback stopped; carry on from the
+      // accepted time instead of stranding the operator at the old end.
+      completedRef.current = false
+      anchorRef.current = null
+      setIsPlaying(true)
+    }
+  }, [applyTime, totalSeconds])
 
-  const seek = (seconds: number) => {
-    const clamped = Math.max(0, Math.min(totalSeconds, seconds))
-    setTime(clamped)
-  }
+  const setPlaybackSpeed = useCallback((next: number) => {
+    if (PLAYBACK_SPEEDS.includes(next)) setSpeed(next)
+  }, [])
 
-  return { time, isPlaying, speed, setSpeed, togglePlay, seek }
+  const play = useCallback(() => {
+    anchorRef.current = null
+    completedRef.current = false
+    if (totalSeconds > 0 && timeRef.current >= totalSeconds) applyTime(0)
+    setIsPlaying(true)
+  }, [applyTime, totalSeconds])
+
+  const pause = useCallback(() => {
+    anchorRef.current = null
+    completedRef.current = false
+    setIsPlaying(false)
+  }, [])
+
+  const togglePlay = useCallback(() => {
+    if (isPlaying) pause()
+    else play()
+  }, [isPlaying, pause, play])
+
+  // Seeks never touch isPlaying: a playing scrub re-anchors on the next frame
+  // and keeps running, while a deliberately paused operator can frame-step
+  // without playback restarting under them.
+  const seek = useCallback(
+    (seconds: number) => {
+      const clamped = Math.max(0, Math.min(totalSeconds, seconds))
+      anchorRef.current = null
+      completedRef.current = false
+      applyTime(clamped)
+      return clamped
+    },
+    [applyTime, totalSeconds],
+  )
+
+  return {
+    time,
+    isPlaying,
+    speed,
+    setSpeed: setPlaybackSpeed,
+    play,
+    pause,
+    togglePlay,
+    seek,
+  }
 }

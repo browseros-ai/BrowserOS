@@ -6,11 +6,10 @@
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import type { TurnRegistry } from '../../lib/agents/turns/active-turn-registry'
+import { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
 import { requireTrustedOrigin } from '../middleware/require-trusted-origin'
 import type { KlavisService } from '../services/klavis'
-import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
 import type { Env, HttpServerConfig } from '../types'
 import { defaultCorsConfig } from '../utils/cors'
 import { requireTrustedAppOrigin } from '../utils/request-auth'
@@ -22,12 +21,10 @@ import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
 import { createMcpRoutes } from './mcp'
 import { createMcpManagerRoutes } from './mcp-manager'
-import { createNudgeMcpRoute } from './nudge-mcp'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
-import { createRemoteHermesRoutes } from './remote-hermes'
-import { createScreencastRoute } from './screencast'
+import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
 
 interface CreateApiRoutesDeps {
@@ -35,9 +32,8 @@ interface CreateApiRoutesDeps {
   config: HttpServerConfig
   gatewayBaseUrl?: string
   klavis: KlavisService
-  remoteHermes: RemoteHermesService | null
+  onShutdown: () => void
   tokenManager: OAuthTokenManager | null
-  turnRegistry: TurnRegistry
 }
 
 /** Composes the BrowserOS HTTP API from the existing route factories. */
@@ -47,31 +43,38 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     config,
     gatewayBaseUrl,
     klavis,
-    remoteHermes,
+    onShutdown,
     tokenManager,
-    turnRegistry,
   } = deps
-  const {
-    browser,
-    browserosId,
-    browserSession,
-    executionDir,
-    port,
-    resourcesDir,
-    version,
-  } = config
+  const { browser, browserosId, browserSession, port, resourcesDir, version } =
+    config
+  const { activity } = config
+  const acpRuntime = new AcpAgentRuntime({ serverPort: port, resourcesDir })
+  const resolvedAgentRoutes =
+    agentRoutes ??
+    createAgentRoutes({
+      onDelete: (agentId) =>
+        acpRuntime.closeAllForAgent(agentId, {
+          discardPersistentState: true,
+        }),
+    })
 
   return (
     new Hono<Env>()
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
+      .route('/system/health', createHealthRoute({ browser }))
+      .route('/system/shutdown', createShutdownRoute({ onShutdown }))
+      // Compatibility aliases for shipped browsers that still probe root paths
+      // while the server binary can update independently during OTA.
       .route('/health', createHealthRoute({ browser }))
-      .route('/status', createStatusRoute({ browser }))
+      .route('/shutdown', createShutdownRoute({ onShutdown }))
+      .route('/status', createStatusRoute({ browser, activity }))
+      .route('/test-provider', createProviderRoutes({ browserosId }))
       .route(
-        '/test-provider',
-        createProviderRoutes({ browserosId, resourcesDir }),
+        '/acpx/probe',
+        protectedAppRoutes(createAcpxProbeRoutes({ resourcesDir })),
       )
-      .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
@@ -88,14 +91,9 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           version,
           browserSession,
           klavis,
-          executionDir,
+          activity,
         }),
       )
-      // Dedicated in-process MCP server for the suggest_app_connection
-      // tool. Reachable only by the ACPX-spawned host agent process; not
-      // published to external agents installed via the Integrations
-      // panel (those receive the /mcp URL only).
-      .route('/mcp/nudge', createNudgeMcpRoute({ turnRegistry }))
       .route(
         '/mcp-manager',
         createMcpManagerRoutes({
@@ -112,33 +110,16 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
           serverPort: port,
           resourcesDir,
-          remoteHermes,
+          activity,
+          acpRuntime,
         }),
       )
-      .route('/screencast', createScreencastRoute({ browser }))
-      .route('/agents', protectedAgentRoutes(config, turnRegistry, agentRoutes))
-      .route(
-        '/remote-hermes',
-        createRemoteHermesRoutes({ service: remoteHermes }),
-      )
+      .route('/agents', protectedAppRoutes(resolvedAgentRoutes))
   )
 }
 
-function protectedAgentRoutes(
-  config: HttpServerConfig,
-  turnRegistry: TurnRegistry,
-  routes?: Hono<Env>,
-) {
-  return new Hono<Env>().use('/*', requireTrustedAppOrigin()).route(
-    '/',
-    routes ??
-      createAgentRoutes({
-        browserosServerPort: config.port,
-        resourcesDir: config.resourcesDir,
-        browser: config.browser,
-        turnRegistry,
-      }),
-  )
+function protectedAppRoutes(routes: Hono<Env>) {
+  return new Hono<Env>().use('/*', requireTrustedAppOrigin()).route('/', routes)
 }
 
 function oauthRoutes(tokenManager: OAuthTokenManager | null) {

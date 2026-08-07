@@ -95,12 +95,25 @@ func probeRunningServer() string {
 }
 
 func checkServerHealth(client *http.Client, baseURL string) bool {
-	resp, err := client.Get(baseURL + "/health")
-	if err != nil {
+	status, ok := getHealthStatus(client, baseURL+"/system/health")
+	if ok && status == http.StatusOK {
+		return true
+	}
+	if ok && status != http.StatusNotFound {
 		return false
 	}
+
+	status, ok = getHealthStatus(client, baseURL+"/health")
+	return ok && status == http.StatusOK
+}
+
+func getHealthStatus(client *http.Client, url string) (int, bool) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, false
+	}
 	resp.Body.Close()
-	return resp.StatusCode == 200
+	return resp.StatusCode, true
 }
 
 func probeCommonServerPorts(client *http.Client) string {

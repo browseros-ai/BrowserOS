@@ -313,7 +313,7 @@ class ExtractRangeModule(Step):
             include_binary: Include binary files
             squash: Squash all commits into single patches
             base: Base commit to diff from. Defaults to BASE_COMMIT.
-            feature: Prompt to add extracted files to a feature in features.yaml
+            feature: Prompt to add extracted files to a feature in .features.yaml
         """
         try:
             if squash:

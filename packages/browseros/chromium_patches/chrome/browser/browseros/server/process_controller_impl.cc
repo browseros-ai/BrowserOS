@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/process_controller_impl.cc b/chrome/browser/browseros/server/process_controller_impl.cc
 new file mode 100644
-index 0000000000000..4ea850197327e
+index 0000000000000000000000000000000000000000..5e5fcdc251bfc3e352287150f9e43fc7c618b093
 --- /dev/null
 +++ b/chrome/browser/browseros/server/process_controller_impl.cc
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,167 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -15,9 +15,9 @@ index 0000000000000..4ea850197327e
 +#include "base/files/file_util.h"
 +#include "base/json/json_writer.h"
 +#include "base/logging.h"
-+#include "base/process/launch.h"
 +#include "build/build_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_utils.h"
++#include "chrome/browser/browseros/server/server_process_launcher.h"
 +
 +#if BUILDFLAG(IS_POSIX)
 +#include <signal.h>
@@ -99,12 +99,7 @@ index 0000000000000..4ea850197327e
 +  base::CommandLine cmd(actual_exe_path);
 +  cmd.AppendSwitchPath("config", config_path);
 +
-+  base::LaunchOptions options;
-+#if BUILDFLAG(IS_WIN)
-+  options.start_hidden = true;
-+#endif
-+
-+  result.process = base::LaunchProcess(cmd, options);
++  result.process = LaunchServerProcess(cmd);
 +  return result;
 +}
 +

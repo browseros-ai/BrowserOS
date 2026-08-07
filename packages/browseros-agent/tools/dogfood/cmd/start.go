@@ -186,6 +186,9 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 	if err := prepareBrowserOSEnvironment(&cfg, agentRoot, opts); err != nil {
 		return nil, err
 	}
+	if err := resolveStartBrowserApp(&cfg); err != nil {
+		return nil, err
+	}
 	reportProgress(opts, "building agent")
 	if err := pipeline.Build(ctx, agentRoot, opts.Runner); err != nil {
 		return nil, err
@@ -196,6 +199,9 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 func buildAndStartClawEnvironment(ctx context.Context, cfg config.Config, agentRoot string, opts environmentOptions) (*environment, error) {
 	reportProgress(opts, "preparing profile")
 	if err := prepareClawEnvironment(&cfg, opts); err != nil {
+		return nil, err
+	}
+	if err := resolveStartBrowserApp(&cfg); err != nil {
 		return nil, err
 	}
 	reportProgress(opts, "preparing Claw apps")
@@ -244,7 +250,7 @@ func prepareBrowserOSEnvironment(cfg *config.Config, agentRoot string, opts envi
 	if err := prepareProfile(cfg, opts); err != nil {
 		return err
 	}
-	if err := pipeline.WriteProductionEnvFiles(agentRoot, *cfg); err != nil {
+	if err := pipeline.WriteProductionEnvFile(agentRoot, *cfg); err != nil {
 		return err
 	}
 	return resolveEnvironmentPorts(cfg, true)
@@ -315,7 +321,7 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 	runtimeEnv := serverRuntimeEnv(os.Environ(), cfg)
 	serverDir := filepath.Join(agentRoot, "apps/server")
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, agentRoot); err != nil {
+	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "resources")); err != nil {
 		e.Stop()
 		e.Wait()
 		return nil, fmt.Errorf("write server config: %w", err)
@@ -361,7 +367,7 @@ func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot s
 	}
 
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, agentRoot); err != nil {
+	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "apps/claw-server-rust/resources")); err != nil {
 		e.Stop()
 		e.Wait()
 		return nil, fmt.Errorf("write Claw server config: %w", err)
@@ -369,7 +375,7 @@ func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot s
 	reportProgress(opts, "starting Claw server")
 	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
 		Tag:         proc.TagServer,
-		Dir:         filepath.Join(agentRoot, "apps/claw-server"),
+		Dir:         agentRoot,
 		Env:         runtimeEnv,
 		Restart:     true,
 		LogPath:     cfg.LogPath(clawServerLogName),
@@ -407,15 +413,15 @@ func (e *environment) ForceKill() {
 }
 
 func serverCommand(configPath string) []string {
-	return []string{"bun", "--env-file=.env.development", "src/index.ts", "--config", configPath}
+	return []string{"bun", "--env-file=../../.env.development", "src/index.ts", "--config", configPath}
 }
 
 func clawAppCommand() []string {
-	return []string{"bun", "--env-file=.env.development", "wxt"}
+	return []string{"bun", "--env-file=../../.env.development", "wxt"}
 }
 
 func clawServerCommand(configPath string) []string {
-	return []string{"bun", "--watch", "--env-file=.env.development", "src/main.ts", "--config", configPath}
+	return []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", configPath}
 }
 
 func serverRuntimeEnv(base []string, cfg config.Config) []string {
@@ -432,11 +438,12 @@ func serverRuntimeEnv(base []string, cfg config.Config) []string {
 	)
 }
 
-// clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserOS session.
+// clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserClaw state.
 func clawRuntimeEnv(base []string, cfg config.Config) []string {
 	env := make([]string, 0, len(base)+7)
 	for _, entry := range base {
 		if strings.HasPrefix(entry, "BROWSEROS_DIR=") ||
+			strings.HasPrefix(entry, "BROWSERCLAW_DIR=") ||
 			strings.HasPrefix(entry, "BROWSEROS_BINARY=") ||
 			strings.HasPrefix(entry, "BROWSEROS_USER_DATA_DIR=") ||
 			strings.HasPrefix(entry, "BROWSEROS_CLAW_CDP_PORT=") ||
@@ -449,7 +456,7 @@ func clawRuntimeEnv(base []string, cfg config.Config) []string {
 	apiURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.Ports.Server)
 	return append(env,
 		"NODE_ENV=development",
-		fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir),
+		fmt.Sprintf("BROWSERCLAW_DIR=%s", cfg.BrowserOSDir),
 		fmt.Sprintf("BROWSEROS_BINARY=%s", cfg.BrowserOSAppPath),
 		fmt.Sprintf("BROWSEROS_USER_DATA_DIR=%s", cfg.DevUserDataDir),
 		fmt.Sprintf("BROWSEROS_CLAW_CDP_PORT=%d", cfg.Ports.CDP),
@@ -461,6 +468,39 @@ func clawRuntimeEnv(base []string, cfg config.Config) []string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func resolveStartBrowserApp(cfg *config.Config) error {
+	resolution := resolveConfiguredBrowserApp(cfg, browserAppExecutableExists)
+	if err := validateBrowserAppExecutable(resolution.Path); err != nil {
+		return err
+	}
+	if resolution.Fallback {
+		proc.LogMsg(proc.TagInfo, proc.WarnColor.Sprintf("Browser app unavailable at %s; using %s", resolution.MissingPath, resolution.Path))
+	}
+	return nil
+}
+
+func resolveConfiguredBrowserApp(cfg *config.Config, exists func(string) bool) config.BrowserAppResolution {
+	resolution := config.ResolveBrowserAppPath(cfg.Target, cfg.BrowserOSAppPath, exists)
+	cfg.BrowserOSAppPath = resolution.Path
+	return resolution
+}
+
+func browserAppExecutableExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
+}
+
+func validateBrowserAppExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("browseros_app_path: %w", err)
+	}
+	if info.IsDir() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("browseros_app_path is not an executable file: %s", path)
+	}
+	return nil
 }
 
 func printSummary(cfg config.Config, agentRoot string) {
@@ -479,7 +519,7 @@ func printSummary(cfg config.Config, agentRoot string) {
 func targetLabel(target config.Target) string {
 	switch target {
 	case config.TargetClaw:
-		return "BrowserClaw"
+		return "BrowserOS neo"
 	default:
 		return "BrowserOS"
 	}

@@ -130,5 +130,29 @@ describe('createBrowserOSOnboardingBridge', () => {
     expect(states.at(-1)?.progress?.completedItems).toEqual(
       MOCK_BROWSEROS_IMPORT_SOURCES[0].recommendedItems,
     )
+    expect(states[2]?.progress).toMatchObject({
+      currentSourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
+      currentSourceName: MOCK_BROWSEROS_IMPORT_SOURCES[0].displayName,
+      completedSources: 0,
+      totalSources: 1,
+    })
+    expect(states[2]?.results).toEqual([
+      {
+        sourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
+        displayName: MOCK_BROWSEROS_IMPORT_SOURCES[0].displayName,
+        status: 'importing',
+      },
+    ])
+    expect(states.at(-1)?.progress).toMatchObject({
+      completedSources: 1,
+      totalSources: 1,
+    })
+    expect(states.at(-1)?.results).toEqual([
+      {
+        sourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
+        displayName: MOCK_BROWSEROS_IMPORT_SOURCES[0].displayName,
+        status: 'succeeded',
+      },
+    ])
   })
 })

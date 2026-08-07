@@ -20,6 +20,7 @@ from ..lib.utils import get_platform, get_platform_arch
 PRESETS = ("release", "debug")
 PROVISION_MODES = ("none", "full", "shallow")
 VALID_ARCHITECTURES = ("x64", "arm64", "universal")
+RESOURCE_MODES = ("published", "source")
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class Switches:
     download: Optional[bool] = None
     sign: Optional[bool] = None
     upload: Optional[bool] = None
+    resource_mode: str = "published"
     skip: Tuple[str, ...] = ()
 
     def resolved(self) -> "Switches":
@@ -43,12 +45,26 @@ class Switches:
                 f"Unknown preset '{self.preset}'. Valid: {', '.join(PRESETS)}"
             )
         defaults = _PRESET_DEFAULTS[self.preset]
+        if self.resource_mode not in RESOURCE_MODES:
+            raise ValueError(
+                f"Invalid resource mode '{self.resource_mode}'. "
+                f"Valid: {', '.join(RESOURCE_MODES)}"
+            )
+        if self.resource_mode == "source" and self.download is True:
+            raise ValueError("source mode cannot download published resources")
+        if self.resource_mode == "source" and self.preset != "release":
+            raise ValueError("source mode requires the release preset")
+        resolved_download = (
+            False
+            if self.resource_mode == "source"
+            else self.download if self.download is not None else True
+        )
         resolved = replace(
             self,
             architectures=self.architectures or (get_platform_arch(),),
             clean=self.clean if self.clean is not None else defaults["clean"],
             provision=self.provision or defaults["provision"],
-            download=self.download if self.download is not None else True,
+            download=resolved_download,
             sign=self.sign if self.sign is not None else defaults["sign"],
             upload=self.upload if self.upload is not None else defaults["upload"],
         )
@@ -90,10 +106,10 @@ def plan(switches: Switches, arch: str, platform: Optional[str] = None) -> List[
 
     Encodes what the release.*.yaml matrix used to spell out per file:
     sparkle_setup is a macOS build dependency even unsigned; WinSparkle
-    setup and the post-package sparkle_sign only exist on signed Windows
-    builds; unsigned Windows builds get mini_installer instead of
-    sign_windows. Universal is not a flat pipeline — plan_runs() expands
-    it into three sequential runs.
+    setup is a Windows build dependency; post-package sparkle_sign exists
+    on signed Windows and macOS builds; unsigned Windows builds get
+    mini_installer instead of sign_windows. Universal is not a flat
+    pipeline — plan_runs() expands it into three sequential runs.
     """
     if arch == "universal":
         raise ValueError("universal is planned as multiple runs; use plan_runs()")
@@ -151,11 +167,23 @@ def _plan_universal_runs(
     prep: List[str] = []
     prep.extend(_provision_steps(switches))
     prep.append("sparkle_setup")
-    if switches.download:
-        prep.append("download_resources")
+    if switches.resource_mode == "source":
+        prep.extend(
+            [
+                "prepare_common_resources",
+                "prepare_server_resources",
+                "resources",
+                "bundled_extensions",
+            ]
+        )
+        second_arch_prefix = ["prepare_server_resources", "resources"]
+    else:
+        if switches.download:
+            prep.append("download_resources")
+        prep.append("bundled_extensions")
+        second_arch_prefix = ["resources"]
     prep.extend(
         [
-            "bundled_extensions",
             "chromium_replace",
             "string_replaces",
             "series_patches",
@@ -163,15 +191,28 @@ def _plan_universal_runs(
         ]
     )
 
-    arch_tail = ["resources", "configure", "compile", "sign_macos", "package_macos"]
-    merge_run = ["merge_universal", "sign_macos", "package_macos"]
+    build_tail = [
+        "configure",
+        "compile",
+        "sign_macos",
+        "package_macos",
+        "sparkle_sign",
+    ]
+    if switches.resource_mode == "published":
+        first_arch_tail = ["resources", *build_tail]
+        second_arch_tail = ["resources", *build_tail]
+    else:
+        first_arch_tail = build_tail
+        second_arch_tail = [*second_arch_prefix, *build_tail]
+    merge_run = ["merge_universal", "sign_macos", "package_macos", "sparkle_sign"]
     if switches.upload:
-        arch_tail.append("upload")
+        first_arch_tail.append("upload")
+        second_arch_tail.append("upload")
         merge_run.append("upload")
 
     return [
-        ("arm64", prep + arch_tail),
-        ("x64", list(arch_tail)),
+        ("arm64", prep + first_arch_tail),
+        ("x64", second_arch_tail),
         ("universal", merge_run),
     ]
 
@@ -181,10 +222,16 @@ def _plan_release(switches: Switches, platform: str) -> List[str]:
     steps.extend(_provision_steps(switches))
     if platform == "macos":
         steps.append("sparkle_setup")
-    if platform == "windows" and switches.sign:
+    if platform == "windows":
+        # The release GN config always links WinSparkle.dll — the compile
+        # needs the vendored library whether or not the build is signed
+        # (ninja: 'third_party/winsparkle/x64/Release/WinSparkle.dll'
+        # missing and no known rule to make it).
         steps.append("winsparkle_setup")
 
-    if switches.download:
+    if switches.resource_mode == "source":
+        steps.extend(["prepare_common_resources", "prepare_server_resources"])
+    elif switches.download:
         steps.append("download_resources")
     steps.extend(
         [
@@ -206,7 +253,7 @@ def _plan_release(switches: Switches, platform: str) -> List[str]:
 
     steps.append(f"package_{platform}")
 
-    if platform == "windows" and switches.sign:
+    if platform in ("macos", "windows") and switches.sign:
         steps.append("sparkle_sign")
     if switches.upload:
         steps.append("upload")
@@ -216,11 +263,16 @@ def _plan_release(switches: Switches, platform: str) -> List[str]:
 def _plan_debug(switches: Switches, platform: str) -> List[str]:
     steps: List[str] = []
     steps.extend(_provision_steps(switches))
-    if switches.download:
+    if platform == "windows":
+        steps.append("winsparkle_setup")
+    if switches.resource_mode == "source":
+        steps.extend(["prepare_common_resources", "prepare_server_resources"])
+    elif switches.download:
         steps.append("download_resources")
     steps.extend(
         [
             "resources",
+            "bundled_extensions",
             "chromium_replace",
             "string_replaces",
             "patches",
@@ -230,6 +282,8 @@ def _plan_debug(switches: Switches, platform: str) -> List[str]:
     )
     if platform == "macos" and switches.sign:
         steps.append("sign_macos")
+    if platform == "windows":
+        steps.append("mini_installer")
     steps.append(f"package_{platform}")
     if switches.upload:
         steps.append("upload")
@@ -332,7 +386,16 @@ class Profile:
 
 
 # Planner-owned keys: meaningless once modules: enumerates the pipeline.
-_PLANNER_KEYS = ("preset", "clean", "provision", "download", "sign", "upload", "skip")
+_PLANNER_KEYS = (
+    "preset",
+    "clean",
+    "provision",
+    "download",
+    "sign",
+    "upload",
+    "resource_mode",
+    "skip",
+)
 
 
 def load_profile(path: Path) -> Profile:
@@ -377,6 +440,7 @@ def load_profile(path: Path) -> Profile:
             download=data.get("download"),
             sign=data.get("sign"),
             upload=data.get("upload"),
+            resource_mode=data.get("resource_mode", "published"),
             skip=_as_tuple(data.get("skip")),
         )
     )

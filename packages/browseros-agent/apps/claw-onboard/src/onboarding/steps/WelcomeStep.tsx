@@ -13,19 +13,19 @@ export function WelcomeStep({ onPrimary, onSkip }: WelcomeStepProps) {
   return (
     <StepWrap>
       <DisplayHeading>
-        The browser your agents <Em>drive</Em>.
+        Your second browser. For your <Em>agents.</Em>
       </DisplayHeading>
       <StepCopy>
-        Logged in as you, fast, and under your control. Set-up takes about two
-        minutes. Import your logins, connect to Claude, and run your first task.
+        Not a Chrome replacement. This browser is for your agents, where Claude,
+        Codex, and Cursor work.
       </StepCopy>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" size="lg" onClick={onPrimary}>
           <Zap className="size-4" />
-          Set up . about 2 min
+          Set it up
         </Button>
         <Button type="button" size="lg" variant="ghost" onClick={onSkip}>
-          I&rsquo;ve done this before . reconnect
+          Already set up? Reconnect.
         </Button>
       </div>
     </StepWrap>

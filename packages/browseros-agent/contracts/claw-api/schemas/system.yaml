@@ -1,0 +1,44 @@
+HealthResponse:
+  type: object
+  additionalProperties: false
+  required: [status]
+  properties:
+    status:
+      type: string
+      enum: [ok]
+ShutdownResponse:
+  type: object
+  additionalProperties: false
+  required: [status]
+  properties:
+    status:
+      type: string
+      enum: [ok]
+SystemInfo:
+  type: object
+  additionalProperties: false
+  required: [product, version, url]
+  properties:
+    product:
+      type: string
+    version:
+      type: string
+    url:
+      type: string
+      format: uri
+    capabilities:
+      $ref: '#/SystemCapabilities'
+SystemCapabilities:
+  type: object
+  additionalProperties: false
+  properties:
+    recordingIngestVersion:
+      type: integer
+      format: int32
+      enum: [2]
+      description: Version 2 is session-neutral and keys each stream by Chrome document identity.
+    recordingIngestMaxBytes:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.

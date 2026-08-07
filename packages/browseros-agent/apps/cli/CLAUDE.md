@@ -62,7 +62,7 @@ Stateless per command: `CallTool` opens a fresh StreamableHTTP session (handshak
 `make` builds with `-ldflags -X` injecting two private vars (`Makefile`):
 
 - `main.version` — defaults to `"dev"` under a plain `go build`. Self-update refuses to run on non-release (`dev`) versions (`update.IsReleaseVersion`).
-- `browseros-cli/analytics.posthogAPIKey` — empty in local/dev builds, so `analytics.Init` returns early and tracking is a **no-op**. It's injected only for production via `POSTHOG_API_KEY` (`.env.production.example`).
+- `browseros-cli/analytics.posthogAPIKey` — empty in local/dev builds, so `analytics.Init` returns early and tracking is a **no-op**. It's injected only for production via `POSTHOG_API_KEY` from the root `.env.production.example`.
 
 Never hard-code the version or the key — they are build-time ldflags only. Analytics (`analytics/`) is fire-and-forget: `Init`/`Track`/`Close` run once in `cmd.Execute()`; commands never call it directly. The distinct id is the BrowserOS id (`~/.browseros/server.json`) or a generated per-install UUID under the config dir; no PII is sent.
 

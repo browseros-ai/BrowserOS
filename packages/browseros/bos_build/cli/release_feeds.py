@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Feed-publisher release commands.
-
-Kept in their own module (cli/release.py only calls register()) so the
-parallel per-product release-CLI rework doesn't collide with these
-additions. Context/execute helpers are intentionally local for the same
-reason — importing them from cli/release.py would be a circular import.
-"""
+"""Feed-publisher release commands."""
 
 from typing import List
 
@@ -47,7 +41,7 @@ def _create_context(version: str = "", product: str = "browseros") -> Context:
 
 def _execute(ctx: Context, module) -> None:
     try:
-        run_steps(ctx, [module], name="release", subscribers=(slack_subscriber,))
+        run_steps(ctx, [module], name="release", subscribers=(slack_subscriber(ctx),))
     except StepExecutionError as e:
         log_error(str(e))
         raise typer.Exit(1)
@@ -70,22 +64,45 @@ def appcast_command(
     allow_downgrade: bool = typer.Option(
         False, "--allow-downgrade", help="Override the version-downgrade guard"
     ),
+    platforms: str | None = typer.Option(
+        None,
+        "--platforms",
+        help="Release platform selection: all, linux, windows, or macos",
+    ),
+    macos_arch: str = typer.Option(
+        "universal",
+        "--macos-arch",
+        help="Expected macOS artifact set: arm64, x64, or universal",
+    ),
+    source_sha: str = typer.Option(
+        "",
+        "--source-sha",
+        help="Require release metadata from this source commit",
+    ),
+    workflow_run_id: str = typer.Option(
+        "",
+        "--workflow-run-id",
+        help="Require release metadata from this Actions run",
+    ),
+    workflow_run_attempt: str = typer.Option(
+        "",
+        "--workflow-run-attempt",
+        help="Require release metadata from this Actions run attempt",
+    ),
 ):
-    """Generate complete browser appcast feeds from R2 release metadata.
-
-    \b
-    Dry run (prints full XML + diff vs live):
-      browseros release appcast --version 0.47.0.2
-
-    \b
-    Publish (backs up live feeds to feeds-history/ first):
-      browseros release appcast --version 0.47.0.2 --publish
-    """
+    """Generate browser appcasts from R2 release metadata."""
     ctx = _create_context(version, product)
     _execute(
         ctx,
         AppcastModule(
-            product_id=product, publish=publish, allow_downgrade=allow_downgrade
+            product_id=product,
+            publish=publish,
+            allow_downgrade=allow_downgrade,
+            platforms=platforms,
+            macos_arch=macos_arch,
+            source_sha=source_sha,
+            workflow_run_id=workflow_run_id,
+            workflow_run_attempt=workflow_run_attempt,
         ),
     )
 
@@ -109,17 +126,7 @@ def extensions_command(
         False, "--allow-downgrade", help="Override the version-downgrade guard"
     ),
 ):
-    """Regenerate update-manifest, extensions.json and bundled-manifest coherently.
-
-    \b
-    Bump the agent on alpha (dry run):
-      browseros release extensions --channel alpha --set agent=0.0.118
-
-    \b
-    Publish, pinning two extensions:
-      browseros release extensions --channel alpha --set agent=0.0.118 \\
-        --set bugreporter=54.0.0.0 --publish
-    """
+    """Regenerate extension manifests coherently."""
     try:
         versions = parse_set_options(set_versions)
     except ValueError as e:
@@ -140,11 +147,7 @@ def extensions_command(
 
 @feeds_app.command("status")
 def feeds_status():
-    """Show every feed key with its live version and last-published backup.
-
-    \b
-      browseros release feeds status
-    """
+    """Show every feed key with its live version and newest backup."""
     env = EnvConfig()
     if not env.has_r2_config():
         log_error(
@@ -156,8 +159,7 @@ def feeds_status():
     statuses = FeedPublisher(env=env).collect_status()
 
     header = (
-        f"{'KEY':<42} {'KIND':<10} {'CHANNEL':<7} "
-        f"{'LIVE VERSION':<58} LAST PUBLISHED"
+        f"{'KEY':<42} {'KIND':<10} {'CHANNEL':<7} {'LIVE VERSION':<58} LAST PUBLISHED"
     )
     print(header)
     print("-" * len(header))
@@ -168,6 +170,45 @@ def feeds_status():
         live = status.live_version if status.live_version is not None else "absent"
         published = status.last_published or "-"
         print(f"{key:<42} {spec.kind:<10} {channel:<7} {live:<58} {published}")
+
+
+@feeds_app.command("publish-local")
+def feeds_publish_local(
+    keys: List[str] = typer.Argument(
+        ..., help="FeedSpec keys whose tracked local files should be published"
+    ),
+    publish: bool = typer.Option(
+        False,
+        "--publish",
+        help="Write to R2 after every selected file passes preflight",
+    ),
+    allow_downgrade: bool = typer.Option(
+        False,
+        "--allow-downgrade",
+        help="Override the version-downgrade guard",
+    ),
+    repair_invalid_live: bool = typer.Option(
+        False,
+        "--repair-invalid-live",
+        help="Repair an invalid live object after monotonic safety checks",
+    ),
+):
+    """Validate or publish selected files from the tracked updates directory."""
+    env = EnvConfig()
+    if not env.has_r2_config():
+        log_error(
+            "R2 configuration not set. Required env vars: R2_ACCOUNT_ID, "
+            "R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+        )
+        raise typer.Exit(1)
+
+    if not FeedPublisher(env=env).publish_staged(
+        keys,
+        publish=publish,
+        allow_downgrade=allow_downgrade,
+        repair_invalid_live=repair_invalid_live,
+    ):
+        raise typer.Exit(1)
 
 
 def register(app: typer.Typer) -> None:

@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/startup/BUILD.gn b/chrome/browser/ui/startup/BUILD.gn
+index 7d63fa20547b14cf5ee6110060b72ed91c5e880e..df48dfd98e0e019a331f2cdfdc625d43c728a9ee 100644
+--- a/chrome/browser/ui/startup/BUILD.gn
++++ b/chrome/browser/ui/startup/BUILD.gn
+@@ -131,6 +131,7 @@ source_set("impl") {
+     "//chrome/browser:browser_features",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/actor",
++    "//chrome/browser/browseros/core:product",
+     "//chrome/browser/devtools",
+     "//chrome/browser/infobars",
+     "//chrome/browser/profiles",

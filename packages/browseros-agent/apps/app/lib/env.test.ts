@@ -3,8 +3,8 @@ import { parseBrowserOSApiUrl } from './browseros-api-url'
 import { parseAlphaFeaturesFlag } from './env'
 
 describe('parseAlphaFeaturesFlag', () => {
-  it('defaults alpha features on when unset', () => {
-    expect(parseAlphaFeaturesFlag(undefined)).toBe(true)
+  it('defaults alpha features off when unset', () => {
+    expect(parseAlphaFeaturesFlag(undefined)).toBe(false)
   })
 
   it('keeps explicit true enabled', () => {

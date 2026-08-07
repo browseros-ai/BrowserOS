@@ -38,7 +38,7 @@ All standard Chrome DevTools Protocol domains are supported:
 | **Security** | Security, WebAuthn, FedCm |
 | **Storage** | IndexedDB, Storage, FileSystem |
 | **Other** | Accessibility, Animation, Audits, Autofill, BackgroundService, BluetoothEmulation, EventBreakpoints, HeadlessExperimental, LayerTree, Log, Preload, Schema, SystemInfo, Tethering |
-| **BrowserOS Custom** | Bookmarks, History |
+| **BrowserOS Custom** | Bookmarks, CrashReportContext, History, WebMCP |
 
 ## Structure
 
@@ -74,7 +74,7 @@ Types are auto-generated from the CDP protocol specification. The generated outp
    CDP_PROTOCOL_JSON=/path/to/chromium/src/out/Default_arm64/gen/third_party/blink/public/devtools_protocol/protocol.json bun run gen:cdp
    ```
 
-   You can also copy `.env.example` to `.env` and set `CDP_PROTOCOL_JSON` there; Bun loads `.env` automatically when running the codegen script.
+   You can also set `CDP_PROTOCOL_JSON` in the monorepo root `.env.development`; `bun run gen:cdp` loads it with `--env-file`.
 
 3. Review and commit all regenerated files:
 

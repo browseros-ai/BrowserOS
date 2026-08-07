@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from .paths import get_feature_registry_path
 from .testing import MockBrowserOSRoot, MockChromium, make_context
 
 
@@ -49,7 +50,7 @@ class MockChromiumTest(unittest.TestCase):
     def test_with_out_dir_creates_arch_dir_and_args_gn(self):
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
-            out = m.with_out_dir("arm64", args_gn='is_debug = false\n')
+            out = m.with_out_dir("arm64", args_gn="is_debug = false\n")
             self.assertEqual(out, m.src / "out" / "Default_browseros_arm64")
             self.assertTrue(out.is_dir())
             self.assertEqual((out / "args.gn").read_text(), "is_debug = false\n")
@@ -130,9 +131,7 @@ class MockBrowserOSRootTest(unittest.TestCase):
                 .strip(),
                 "80",
             )
-            browseros_version = (
-                r.root / "resources" / "BROWSEROS_VERSION"
-            ).read_text()
+            browseros_version = (r.root / "resources" / "BROWSEROS_VERSION").read_text()
             self.assertIn("BROWSEROS_MAJOR=0", browseros_version)
             self.assertIn("BROWSEROS_MINOR=31", browseros_version)
 
@@ -166,7 +165,7 @@ class MockBrowserOSRootTest(unittest.TestCase):
                 }
             }
             path = r.write_features_yaml(features)
-            self.assertEqual(path, r.root / "bos_build" / "features.yaml")
+            self.assertEqual(path, get_feature_registry_path(r.root))
             loaded = yaml.safe_load(path.read_text())
             self.assertEqual(loaded["features"], features)
 
@@ -174,7 +173,9 @@ class MockBrowserOSRootTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = MockBrowserOSRoot(Path(tmp))
             path = r.write_copy_config({"copy_operations": []})
-            self.assertEqual(path, r.root / "bos_build" / "config" / "copy_resources.yaml")
+            self.assertEqual(
+                path, r.root / "bos_build" / "config" / "copy_resources.yaml"
+            )
             self.assertEqual(yaml.safe_load(path.read_text()), {"copy_operations": []})
 
     def test_write_gn_flags_path(self):
@@ -208,11 +209,9 @@ class MakeContextTest(unittest.TestCase):
             self.assertEqual(ctx.semantic_version, "0.31.0")
             self.assertEqual(ctx.get_sparkle_version(), "10000.0.31.0.0")
             self.assertEqual(
-                ctx.get_features_yaml_path(), r.root / "bos_build" / "features.yaml"
+                ctx.get_features_yaml_path(), get_feature_registry_path(r.root)
             )
-            self.assertEqual(
-                ctx.get_patches_dir(), r.root / "chromium_patches"
-            )
+            self.assertEqual(ctx.get_patches_dir(), r.root / "chromium_patches")
 
 
 if __name__ == "__main__":

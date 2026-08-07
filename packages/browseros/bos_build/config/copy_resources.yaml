@@ -1,98 +1,125 @@
-# Copy resources configuration for Nxtscape build
-# This file defines all copy operations for resources during the build process
-#
-# Conditional Operations:
-# - Use 'build_type' field to specify when an operation should run
-#   - Supported build types: debug, release, dev, prod
-#   - Operations without build_type run for all builds
-# - Use 'os' field to specify target operating systems
-#   - Supported values: windows, macos, linux (case-sensitive)
-#   - Operations without os run for all platforms
-# - Use 'arch' field to specify target architectures
-#   - Supported values: x64, arm64
-#   - Operations without arch run for all architectures
-#
-# Example:
-#   - name: "macOS-only Binary"
-#     source: "resources/binaries/macos_only"
-#     destination: "chrome/browser/resources/macos/"
-#     type: "directory"
-#     os: ["macos"]
-#
-#   - name: "ARM64-only Library"
-#     source: "resources/libs/arm64_optimized"
-#     destination: "chrome/browser/lib/"
-#     type: "directory"
-#     arch: ["arm64"]
-#
-#   - name: "Windows x64 DLL"
-#     source: "resources/dlls/x64/special.dll"
-#     destination: "chrome/browser/resources/"
-#     type: "file"
-#     os: ["windows"]
-#     arch: ["x64"]
-
 copy_operations:
-  # Version file
   - name: "BrowserOS Version File"
     source: "resources/BROWSEROS_VERSION"
     destination: "chrome/BROWSEROS_VERSION"
     type: "file"
 
-  # Icons - General
-  - name: "Product Logo Icons"
-    source: "resources/icons/*.png"
+  - name: "BrowserOS Product Logo Icons"
+    source: "resources/browseros/icons/*.png"
     destination: "chrome/app/theme/chromium/"
     type: "files"
+    product: "browseros"
 
-  - name: "Product Logo AI Files"
-    source: "resources/icons/*.ai"
+  - name: "BrowserOS Product Logo AI Files"
+    source: "resources/browseros/icons/*.ai"
     destination: "chrome/app/theme/chromium/"
     type: "files"
+    product: "browseros"
 
-  - name: "Product Logo SVG Files"
-    source: "resources/icons/*.svg"
+  - name: "BrowserOS Product Logo SVG Files"
+    source: "resources/browseros/icons/*.svg"
     destination: "chrome/app/theme/chromium/"
     type: "files"
+    product: "browseros"
 
-  # Icons - Platform specific
-  - name: "ChromeOS Icons"
-    source: "resources/icons/chromeos"
+  - name: "BrowserOS ChromeOS Icons"
+    source: "resources/browseros/icons/chromeos"
     destination: "chrome/app/theme/chromium/chromeos"
     type: "directory"
+    product: "browseros"
 
-  - name: "Linux Icons"
-    source: "resources/icons/linux"
+  - name: "BrowserOS Linux Icons"
+    source: "resources/browseros/icons/linux"
     destination: "chrome/app/theme/chromium/linux"
     type: "directory"
+    product: "browseros"
 
-  - name: "Mac Icons"
-    source: "resources/icons/mac"
+  - name: "BrowserOS Mac Icons"
+    source: "resources/browseros/icons/mac"
     destination: "chrome/app/theme/chromium/mac"
     type: "directory"
+    product: "browseros"
 
-  - name: "Windows Icons"
-    source: "resources/icons/win"
+  - name: "BrowserOS Windows Icons"
+    source: "resources/browseros/icons/win"
     destination: "chrome/app/theme/chromium/win"
     type: "directory"
+    product: "browseros"
 
-  # Icons - DPI specific (100%)
-  - name: "DPI 100% Icons"
-    source: "resources/icons/default_100_percent"
+  - name: "BrowserOS DPI 100% Icons"
+    source: "resources/browseros/icons/default_100_percent"
     destination: "chrome/app/theme/default_100_percent/chromium"
     type: "directory"
+    product: "browseros"
 
-  # Icons - DPI specific (200%)
-  - name: "DPI 200% Icons"
-    source: "resources/icons/default_200_percent"
+  - name: "BrowserOS DPI 200% Icons"
+    source: "resources/browseros/icons/default_200_percent"
     destination: "chrome/app/theme/default_200_percent/chromium"
     type: "directory"
+    product: "browseros"
 
-  # BrowserOS Server resources - Platform & Architecture specific
+  - name: "BrowserClaw Product Logo Icons"
+    source: "resources/browserclaw/icons/*.png"
+    destination: "chrome/app/theme/chromium/"
+    type: "files"
+    product: "browserclaw"
+
+  - name: "BrowserClaw Product Logo AI Files"
+    source: "resources/browserclaw/icons/*.ai"
+    destination: "chrome/app/theme/chromium/"
+    type: "files"
+    product: "browserclaw"
+
+  - name: "BrowserClaw Product Logo SVG Files"
+    source: "resources/browserclaw/icons/*.svg"
+    destination: "chrome/app/theme/chromium/"
+    type: "files"
+    product: "browserclaw"
+
+  - name: "BrowserClaw ChromeOS Icons"
+    source: "resources/browserclaw/icons/chromeos"
+    destination: "chrome/app/theme/chromium/chromeos"
+    type: "directory"
+    product: "browserclaw"
+
+  - name: "BrowserClaw Linux Icons"
+    source: "resources/browserclaw/icons/linux"
+    destination: "chrome/app/theme/chromium/linux"
+    type: "directory"
+    product: "browserclaw"
+
+  - name: "BrowserClaw Mac Icons"
+    source: "resources/browserclaw/icons/mac"
+    destination: "chrome/app/theme/chromium/mac"
+    type: "directory"
+    product: "browserclaw"
+
+  - name: "BrowserClaw Windows Icons"
+    source: "resources/browserclaw/icons/win"
+    destination: "chrome/app/theme/chromium/win"
+    type: "directory"
+    product: "browserclaw"
+
+  - name: "BrowserClaw DPI 100% Icons"
+    source: "resources/browserclaw/icons/default_100_percent"
+    destination: "chrome/app/theme/default_100_percent/chromium"
+    type: "directory"
+    product: "browserclaw"
+
+  - name: "BrowserClaw DPI 200% Icons"
+    source: "resources/browserclaw/icons/default_200_percent"
+    destination: "chrome/app/theme/default_200_percent/chromium"
+    type: "directory"
+    product: "browserclaw"
+
   - name: "BrowserOS Server Resources - macOS ARM64"
     source: "resources/binaries/browseros_server/darwin-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["macos"]
     arch: ["arm64"]
 
@@ -100,6 +127,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/darwin-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["macos"]
     arch: ["x64"]
 
@@ -107,6 +138,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["linux"]
     arch: ["arm64"]
 
@@ -114,6 +149,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["linux"]
     arch: ["x64"]
 
@@ -121,41 +160,95 @@ copy_operations:
     source: "resources/binaries/browseros_server/windows-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["windows"]
     arch: ["x64"]
 
-  # BrowserOS Claw Server resources - Platform & Architecture specific
-  - name: "BrowserOS Claw Server Resources - macOS ARM64"
-    source: "resources/binaries/browseros_claw_server/darwin-arm64/resources"
+  # BrowserOS Claw Server resources - Rust ships by default. The optional
+  # rename keeps current CDN artifacts that still use the old -rs filename
+  # compatible until the next Rust server resource publish lands.
+  - name: "BrowserOS Claw Rust Server Resources - macOS ARM64"
+    source: "resources/binaries/browseros_claw_server_rust/darwin-arm64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
+      - from: "bin/browseros-claw-server-rs"
+        to: "bin/browseros-claw-server"
+        optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["macos"]
     arch: ["arm64"]
 
-  - name: "BrowserOS Claw Server Resources - macOS x64"
-    source: "resources/binaries/browseros_claw_server/darwin-x64/resources"
+  - name: "BrowserOS Claw Rust Server Resources - macOS x64"
+    source: "resources/binaries/browseros_claw_server_rust/darwin-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
+      - from: "bin/browseros-claw-server-rs"
+        to: "bin/browseros-claw-server"
+        optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["macos"]
     arch: ["x64"]
 
-  - name: "BrowserOS Claw Server Resources - Linux ARM64"
-    source: "resources/binaries/browseros_claw_server/linux-arm64/resources"
+  - name: "BrowserOS Claw Rust Server Resources - Linux ARM64"
+    source: "resources/binaries/browseros_claw_server_rust/linux-arm64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
+      - from: "bin/browseros-claw-server-rs"
+        to: "bin/browseros-claw-server"
+        optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["linux"]
     arch: ["arm64"]
 
-  - name: "BrowserOS Claw Server Resources - Linux x64"
-    source: "resources/binaries/browseros_claw_server/linux-x64/resources"
+  - name: "BrowserOS Claw Rust Server Resources - Linux x64"
+    source: "resources/binaries/browseros_claw_server_rust/linux-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
+      - from: "bin/browseros-claw-server-rs"
+        to: "bin/browseros-claw-server"
+        optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["linux"]
     arch: ["x64"]
 
-  - name: "BrowserOS Claw Server Resources - Windows x64"
-    source: "resources/binaries/browseros_claw_server/windows-x64/resources"
+  - name: "BrowserOS Claw Rust Server Resources - Windows x64"
+    source: "resources/binaries/browseros_claw_server_rust/windows-x64/resources"
     destination: "chrome/browser/browseros/claw_server/resources"
+    clear_destination: true
+    renames:
+      - from: "bin/browseros-claw-server-rs.exe"
+        to: "bin/browseros-claw-server.exe"
+        optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["windows"]
     arch: ["x64"]
+
+  - name: "BrowserOS Claw Onboarding Resources"
+    source: "resources/binaries/browseros_claw_onboard/resources"
+    destination: "chrome/browser/browseros/onboarding/resources"
+    type: "directory"
+    managed: true
+    required: true
+    clear_destination: true

@@ -9,7 +9,7 @@ import (
 
 func WaitForHealth(ctx context.Context, port int, maxAttempts int) bool {
 	client := &http.Client{Timeout: time.Second}
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
+	url := fmt.Sprintf("http://127.0.0.1:%d/system/health", port)
 
 	for range maxAttempts {
 		if ctx.Err() != nil {

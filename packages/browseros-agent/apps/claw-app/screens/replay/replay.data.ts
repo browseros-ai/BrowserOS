@@ -2,45 +2,50 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Bridges the audit task + rrweb replay data into the shape the
- * existing `Replay.tsx` scaffold consumes. Two concurrent queries:
- *
- *   - `useTaskDetail({sessionId})` for the dispatch trail
- *     (one ToolDispatchRow per agent action) plus session start /
- *     end events. This populates `ReplayFrame[]`, the right-side
- *     EventTimeline, and the page metadata strip (agent, status,
- *     duration).
- *   - `useReplayEvents({sessionId})` for the rrweb event stream
- *     (mounted by `ReplayViewport` into rrweb-player). The events
- *     are passed through this hook's return value so the page can
- *     pick a tabPageId and the viewport can subscribe to filtered
- *     events.
- *
- * `frames` is derived from `dispatches` here. Mapping is
- * deterministic; see `mapDispatchToFrame` for the toolName ->
- * verb/kind translation. The `t` (seconds-into-session) is
- * computed against `sessionStartMs` from the task's startEvent.
- *
- * `replay` is null while either query is loading or there is no
- * task at all (404).
  */
 
-import { useMemo } from 'react'
+import type { RecordingMetadata } from '@browseros/claw-api'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
 import {
   type TaskDetail,
   type ToolDispatchRow,
-  useTaskDetail,
+  useSessionDetail,
 } from '@/modules/api/audit.hooks'
 import {
   type ReplayEvent,
   type ReplayFrame,
   type ReplayKind,
   type ReplayVerb,
+  replayEventsRevision,
   useReplayEvents,
+  useReplayMetadata,
 } from '@/modules/api/replay.hooks'
+import {
+  buildReplayDocumentIds,
+  buildReplayEventCatalog,
+  buildReplayTabIds,
+  EMPTY_REPLAY_EVENTS,
+  type ReplayEventCatalog,
+} from './replay-events'
+
+const EVENT_SNAPSHOT_RETRY_MS = 10_000
+
+export interface ReplaySegmentData {
+  documentId: string
+  targetId?: string | null
+  firstEventAt: number
+  lastEventAt: number
+  hasGap: boolean
+  legacy: boolean
+}
+
+export interface ReplayTabData {
+  tabId: number
+  complete: boolean | null
+  segments: ReplaySegmentData[]
+}
 
 export interface ReplayData {
   sessionId: string
@@ -51,35 +56,25 @@ export interface ReplayData {
   site: string
   startedAt: string
   /**
-   * Raw session start in ms since epoch. Used by `buildTabView` to
-   * translate a frame's session-relative `t` into tab-relative time.
-   * `startedAt` above is the formatted date string; this is the
-   * machine-readable original.
+   * Raw session start in ms since epoch. `session-replay.ts` adds it to a
+   * frame's session-relative `t` to recover the absolute timestamp it needs to
+   * place actions against rrweb's absolute event stream. `startedAt` above is
+   * the formatted date string; this is the machine-readable original.
    */
   startedAtMs: number
   duration: string
   /** Stat strip displayed in the header. Strings are presentation. */
   tokens: string
   steps: string
-  approvals: string
   /** Total seconds the session covers, from start to last dispatch. */
   totalSeconds: number
   frames: ReplayFrame[]
-  /** Distinct tabPageIds with rrweb events. */
-  tabPageIds: number[]
-  /** Filter helper: events scoped to one tabPageId. */
-  eventsForTab: (tabPageId: number) => ReplayEvent[]
+  complete: boolean | null
+  tabs: ReplayTabData[]
+  /** True once events for the current metadata revision resolve, including 404-empty. */
+  eventsLoaded: boolean
+  eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
-
-// `buildTabView` and the `TabView` shape live in `./tab-view.ts` so
-// tests can import them without dragging the react-query-kit hook
-// graph. Re-exported here for backward-compat with existing
-// callers that reach it through this module.
-export {
-  buildTabView,
-  EMPTY_TAB_VIEW,
-  type TabView,
-} from './tab-view'
 
 export interface UseReplayDataResult {
   replay: ReplayData | null
@@ -88,67 +83,153 @@ export interface UseReplayDataResult {
   navigate: ReturnType<typeof useNavigate>
 }
 
+/** Loads task metadata and stable rrweb event buckets for the replay page. */
 export function useReplayData(): UseReplayDataResult {
   const { sessionId = '' } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
-  const taskQuery = useTaskDetail({
+  const taskQuery = useSessionDetail({
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
+  const metadataQuery = useReplayMetadata({
+    variables: { sessionId },
+    enabled: sessionId.length > 0,
+  })
+  const metadataRevision = replayEventsRevision(metadataQuery.data)
+  const sessionRevision =
+    metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
   const eventsQuery = useReplayEvents({
-    variables: { sessionId },
-    enabled: sessionId.length > 0,
+    variables: { sessionId, revision: sessionRevision ?? '' },
+    enabled: false,
   })
-
+  const requestedRevision = useRef<string | null>(null)
+  const requestGenerationRef = useRef(0)
+  const retryTimerRef = useRef<number | null>(null)
+  const mountedRef = useRef(false)
+  const [refreshAttempt, setRefreshAttempt] = useState(0)
+  const [resolvedEventSnapshot, setResolvedEventSnapshot] = useState<{
+    sessionId: string
+    revision: string
+    events: readonly ReplayEvent[]
+  } | null>(null)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshAttempt re-arms the same revision after query retries are exhausted.
+  useEffect(() => {
+    if (
+      sessionRevision === null ||
+      requestedRevision.current === sessionRevision
+    ) {
+      return
+    }
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
+    requestedRevision.current = sessionRevision
+    const requestGeneration = ++requestGenerationRef.current
+    // Metadata owns event downloads so each accepted payload can be attributed
+    // to the exact revision that requested it, even when revisions race.
+    void (async () => {
+      try {
+        const result = await eventsQuery.refetch()
+        if (
+          result.isSuccess &&
+          result.data &&
+          mountedRef.current &&
+          requestGenerationRef.current === requestGeneration &&
+          requestedRevision.current === sessionRevision
+        ) {
+          setResolvedEventSnapshot({
+            sessionId,
+            revision: sessionRevision,
+            events: result.data.events,
+          })
+          return
+        }
+      } catch {}
+      if (
+        mountedRef.current &&
+        requestGenerationRef.current === requestGeneration &&
+        requestedRevision.current === sessionRevision
+      ) {
+        requestedRevision.current = null
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null
+          setRefreshAttempt((attempt) => attempt + 1)
+        }, EVENT_SNAPSHOT_RETRY_MS)
+      }
+    })()
+  }, [eventsQuery.refetch, refreshAttempt, sessionId, sessionRevision])
+  const hasCurrentSessionSnapshot =
+    resolvedEventSnapshot?.sessionId === sessionId
+  const eventsLoaded =
+    sessionRevision !== null &&
+    hasCurrentSessionSnapshot &&
+    resolvedEventSnapshot?.revision === sessionRevision
+  const events = hasCurrentSessionSnapshot
+    ? resolvedEventSnapshot.events
+    : EMPTY_REPLAY_EVENTS
+  const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
-    return buildReplayData(taskQuery.data, eventsQuery.data?.events ?? [])
-  }, [taskQuery.data, eventsQuery.data])
+    return buildReplayData(
+      taskQuery.data,
+      eventCatalog,
+      metadataQuery.data,
+      eventsLoaded,
+    )
+  }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
 
   return {
     replay,
     sessionId,
-    isLoading: taskQuery.isLoading || eventsQuery.isLoading,
+    isLoading: taskQuery.isLoading,
     navigate,
   }
 }
 
-function buildReplayData(task: TaskDetail, events: ReplayEvent[]): ReplayData {
+/** Converts task rows into replay metadata while reusing event buckets. */
+function buildReplayData(
+  detail: TaskDetail,
+  eventCatalog: ReplayEventCatalog,
+  metadata: RecordingMetadata | undefined,
+  eventsLoaded: boolean,
+): ReplayData {
+  const { session: task, dispatches } = detail
   const sessionStartMs = task.startedAt
-  const lastDispatchAt = task.dispatches.length
-    ? task.dispatches[task.dispatches.length - 1].createdAt
+  const lastDispatchAt = dispatches.length
+    ? dispatches[dispatches.length - 1].createdAt
     : sessionStartMs
   const totalMs = Math.max(
     1_000,
     (task.endedAt ?? lastDispatchAt) - sessionStartMs,
   )
 
-  const frames: ReplayFrame[] = task.dispatches.map((row) =>
-    mapDispatchToFrame(row, sessionStartMs),
-  )
-
-  // Preserve first-appearance order for the tab list so per-tab
-  // labels (Tab 1, Tab 2, ...) match the operator's mental
-  // narrative and align with the audit view's sequential
-  // numbering. The raw BrowserOS pageId is non-contiguous and not
-  // useful to surface as a label.
-  const tabsInOrder: number[] = []
-  const eventsByTab = new Map<number, ReplayEvent[]>()
-  for (const ev of events) {
-    const list = eventsByTab.get(ev.tabPageId)
-    if (list) {
-      list.push(ev)
-    } else {
-      eventsByTab.set(ev.tabPageId, [ev])
-      tabsInOrder.push(ev.tabPageId)
+  const tabs = buildReplayTabs(metadata, eventCatalog)
+  const targetTabs = new Map<string, number>()
+  for (const tab of tabs) {
+    for (const segment of tab.segments) {
+      if (segment.targetId) targetTabs.set(segment.targetId, tab.tabId)
     }
   }
+  const frames: ReplayFrame[] = dispatches.map((row) =>
+    mapDispatchToFrame(row, sessionStartMs, targetTabs),
+  )
 
   return {
     sessionId: task.sessionId,
-    agentLabel: task.agentLabel || task.slug,
-    taskTitle: task.title,
-    harness: task.startEvent?.clientName ?? 'unknown',
+    agentLabel: task.label || task.slug,
+    taskTitle: task.name,
+    harness: task.profileId ?? 'unknown',
     status: mapTaskStatus(task.status),
     site: task.site ?? 'about:blank',
     startedAt: formatStartedAt(task.startedAt),
@@ -156,12 +237,57 @@ function buildReplayData(task: TaskDetail, events: ReplayEvent[]): ReplayData {
     duration: formatDuration(totalMs),
     tokens: '-',
     steps: String(task.dispatchCount),
-    approvals: String(countApprovals(task.dispatches)),
     totalSeconds: totalMs / 1000,
     frames,
-    tabPageIds: tabsInOrder,
-    eventsForTab: (id) => eventsByTab.get(id) ?? [],
+    complete: metadata?.complete ?? null,
+    tabs,
+    eventsLoaded,
+    eventsForTab: eventCatalog.eventsForTab,
   }
+}
+
+function buildReplayTabs(
+  metadata: RecordingMetadata | undefined,
+  eventCatalog: ReplayEventCatalog,
+): ReplayTabData[] {
+  const metadataByTab = new Map(metadata?.tabs.map((tab) => [tab.tabId, tab]))
+  return buildReplayTabIds(metadata?.tabs, eventCatalog.tabIds).map((tabId) => {
+    const tabMetadata = metadataByTab.get(tabId)
+    const discoveredDocuments = eventCatalog.documentIdsForTab(tabId)
+    const segmentMetadata = new Map(
+      tabMetadata?.segments.map((segment) => [segment.documentId, segment]),
+    )
+    const segments = buildReplayDocumentIds(
+      tabMetadata?.segments,
+      discoveredDocuments,
+    ).map((documentId): ReplaySegmentData => {
+      const known = segmentMetadata.get(documentId)
+      if (known) {
+        return {
+          documentId,
+          targetId: known.targetId,
+          firstEventAt: known.firstEventAt,
+          lastEventAt: known.lastEventAt,
+          hasGap: known.hasGap,
+          legacy: known.legacy === true,
+        }
+      }
+      const events = eventCatalog.eventsForDocument(documentId)
+      return {
+        documentId,
+        targetId: events.find((event) => event.targetId)?.targetId ?? undefined,
+        firstEventAt: events[0]?.ts ?? 0,
+        lastEventAt: events.at(-1)?.ts ?? 0,
+        hasGap: false,
+        legacy: false,
+      }
+    })
+    return {
+      tabId,
+      complete: tabMetadata?.complete ?? null,
+      segments,
+    }
+  })
 }
 
 const TOOL_TO_VERB: Record<string, ReplayVerb> = {
@@ -183,9 +309,15 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   evaluate: 'type',
 }
 
-function mapDispatchToFrame(
+/**
+ * One audit row as a replay frame. `t` is completion; `durationMs` rides along
+ * untouched so `session-replay.ts` can approximate when the tool began without
+ * a second source of truth for timing.
+ */
+export function mapDispatchToFrame(
   row: ToolDispatchRow,
   sessionStartMs: number,
+  targetTabs: ReadonlyMap<string, number>,
 ): ReplayFrame {
   const t = Math.max(0, (row.createdAt - sessionStartMs) / 1000)
   const meta = row.resultMeta ? safeParse(row.resultMeta) : null
@@ -199,14 +331,18 @@ function mapDispatchToFrame(
   const caption = buildCaption(row, verb, isError, cancelled)
   return {
     t,
+    durationMs: row.durationMs,
     kind,
     verb,
     node,
     caption,
     url: row.url,
     pageId: row.pageId,
+    tabId:
+      row.tabId ?? (row.targetId ? targetTabs.get(row.targetId) : undefined),
+    targetId: row.targetId,
     note,
-    dispatchId: row.id,
+    dispatchId: row.dispatchId,
   }
 }
 
@@ -223,19 +359,6 @@ function buildCaption(
   return row.toolName
 }
 
-function countApprovals(rows: ToolDispatchRow[]): number {
-  // The PR #1392 audit row metadata can carry a cancellationKind;
-  // we treat the absence of error metadata as auto-approved and
-  // report 0 here until the approval gate (Phase 6) lands a real
-  // count. Stat is presentational; not load-bearing.
-  let n = 0
-  for (const r of rows) {
-    const meta = r.resultMeta ? safeParse(r.resultMeta) : null
-    if (meta?.approvalRequired === true) n++
-  }
-  return n
-}
-
 function safeParse(json: string): Record<string, unknown> | null {
   try {
     return JSON.parse(json) as Record<string, unknown>
@@ -244,9 +367,12 @@ function safeParse(json: string): Record<string, unknown> | null {
   }
 }
 
-function mapTaskStatus(status: TaskDetail['status']): RunStatus {
+export function mapTaskStatus(
+  status: TaskDetail['session']['status'],
+): RunStatus {
   if (status === 'live') return 'running'
   if (status === 'failed') return 'blocked'
+  if (status === 'cancelled') return 'stopped'
   return 'done'
 }
 

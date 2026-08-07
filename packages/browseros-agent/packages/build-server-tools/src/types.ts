@@ -22,6 +22,7 @@ export interface BuildArgs {
   targets: BuildTarget[]
   manifestPath: string
   upload: boolean
+  versionedOnly: boolean
   ci: boolean
 }
 
@@ -35,13 +36,13 @@ export interface R2Config {
 }
 
 export interface BuildEnvSpec {
-  prodEnvPath: string
-  prodEnvTemplatePath?: string
-  requireProdEnvFile?: boolean
   requiredInlineEnvKeys: readonly string[]
   inlineEnvKeys: readonly string[]
   ciInlineEnvDefaults?: Record<string, string>
+  ciInlineEnvOverrides?: Record<string, string>
+  inlineEnvOverrides?: Record<string, string>
   defaultR2UploadPrefix: string
+  defaultR2DownloadPrefix?: string
 }
 
 export interface BundleOptions {
@@ -49,18 +50,52 @@ export interface BundleOptions {
   plugins?: BunPlugin[]
 }
 
-export interface BuildProductDescriptor {
+export interface ProductBuildSpec {
   label: string
   packageDir: string
-  entrypoint: string
+  env: BuildEnvSpec
+  versionSource?: ProductVersionSource
+}
+
+export type ProductVersionSource =
+  | { type: 'package-json'; path: string }
+  | { type: 'cargo-toml'; path: string }
+
+export interface ResourceBuildProductDescriptor extends ProductBuildSpec {
   distRoot: string
-  rawBinaryBaseName: string
   stagedBinaryBaseName: string
   archiveBaseName: string
   defaultManifestPath: string
   defaultUpload?: boolean
-  env: BuildEnvSpec
+  includeArtifactIdentity?: boolean
+  archiveFilesOnly?: boolean
+  expectedArtifactFiles?: (target: BuildTarget) => readonly string[]
+}
+
+export interface BuildProductDescriptor extends ResourceBuildProductDescriptor {
+  entrypoint: string
+  rawBinaryBaseName: string
   bundle?: BundleOptions
+}
+
+export interface AssetBuildProductDescriptor extends ProductBuildSpec {
+  buildCommand: readonly string[]
+  assetsDir: string
+  distRoot: string
+  archiveBaseName: string
+  defaultUpload?: boolean
+}
+
+export interface AssetBuildArgs {
+  upload: boolean
+  versionedOnly: boolean
+  ci: boolean
+}
+
+export interface StagedAssetArtifact {
+  rootDir: string
+  resourcesDir: string
+  metadataPath: string
 }
 
 export interface BuildConfig {
@@ -99,6 +134,23 @@ export interface ResourceManifest {
 export interface CompiledServerBinary {
   target: BuildTarget
   binaryPath: string
+}
+
+export type ProductCompiler<
+  TProduct extends
+    ResourceBuildProductDescriptor = ResourceBuildProductDescriptor,
+> = (
+  product: TProduct,
+  targets: BuildTarget[],
+  envVars: Record<string, string>,
+  processEnv: NodeJS.ProcessEnv,
+  version: string,
+  options?: { ci?: boolean },
+) => Promise<CompiledServerBinary[]>
+
+export interface ArtifactMetadataIdentity {
+  component: string
+  releaseSha: string
 }
 
 export interface StagedArtifact {

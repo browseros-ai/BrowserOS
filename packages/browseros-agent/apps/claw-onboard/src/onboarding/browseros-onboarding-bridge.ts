@@ -7,6 +7,8 @@
 import {
   BROWSEROS_ONBOARDING_API_VERSION,
   type BrowserOSImportProgress,
+  type BrowserOSImportSource,
+  type BrowserOSImportSourceResult,
   type BrowserOSOnboardingChrome,
   BrowserOSOnboardingMessage,
   type BrowserOSOnboardingState,
@@ -54,12 +56,14 @@ function getChromeBridge(
 function createState(
   status: BrowserOSOnboardingState['status'],
   progress?: BrowserOSImportProgress,
+  results?: BrowserOSImportSourceResult[],
 ): BrowserOSOnboardingState {
   return {
     apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
     status,
     sources: [...MOCK_BROWSEROS_IMPORT_SOURCES],
     ...(progress ? { progress } : {}),
+    ...(results ? { results } : {}),
   }
 }
 
@@ -82,22 +86,77 @@ function recommendedItemsFor(request: BrowserOSStartImportRequest) {
   )
 }
 
+function mockSourceFor(request: BrowserOSStartImportRequest) {
+  return MOCK_BROWSEROS_IMPORT_SOURCES.find(
+    (source) => source.id === request.sourceId,
+  )
+}
+
+function sourceDisplayNameFor(
+  request: BrowserOSStartImportRequest,
+  source: BrowserOSImportSource | undefined,
+) {
+  return source?.displayName ?? request.sourceId
+}
+
 function emitMockImport(request: BrowserOSStartImportRequest, sync: boolean) {
   const items = recommendedItemsFor(request)
-  const started = createState('importing', {
-    currentItem: items[0],
-    completedItems: [],
-    totalItems: items.length,
-  })
-  const halfway = createState('importing', {
-    currentItem: items[1],
-    completedItems: items.slice(0, 1),
-    totalItems: items.length,
-  })
-  const succeeded = createState('succeeded', {
-    completedItems: items,
-    totalItems: items.length,
-  })
+  const source = mockSourceFor(request)
+  const sourceName = sourceDisplayNameFor(request, source)
+  const started = createState(
+    'importing',
+    {
+      currentItem: items[0],
+      currentSourceId: request.sourceId,
+      currentSourceName: sourceName,
+      completedItems: [],
+      totalItems: items.length,
+      completedSources: 0,
+      totalSources: 1,
+    },
+    [
+      {
+        sourceId: request.sourceId,
+        displayName: sourceName,
+        status: 'importing',
+      },
+    ],
+  )
+  const halfway = createState(
+    'importing',
+    {
+      currentItem: items[1],
+      currentSourceId: request.sourceId,
+      currentSourceName: sourceName,
+      completedItems: items.slice(0, 1),
+      totalItems: items.length,
+      completedSources: 0,
+      totalSources: 1,
+    },
+    [
+      {
+        sourceId: request.sourceId,
+        displayName: sourceName,
+        status: 'importing',
+      },
+    ],
+  )
+  const succeeded = createState(
+    'succeeded',
+    {
+      completedItems: items,
+      totalItems: items.length,
+      completedSources: 1,
+      totalSources: 1,
+    },
+    [
+      {
+        sourceId: request.sourceId,
+        displayName: sourceName,
+        status: 'succeeded',
+      },
+    ],
+  )
 
   emitMockState(started)
   if (sync) {

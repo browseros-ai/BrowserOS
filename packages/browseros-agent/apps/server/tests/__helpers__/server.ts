@@ -75,7 +75,7 @@ function formatStartupFailure(
 
 export async function isServerRunning(port: number): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+    const response = await fetch(`http://127.0.0.1:${port}/system/health`, {
       signal: AbortSignal.timeout(1000),
     })
     return response.ok
@@ -101,7 +101,7 @@ async function waitForHealth(
         port,
         stdoutBuffer,
         stderrBuffer,
-        'Server process exited before /health became ready.',
+        'Server process exited before /system/health became ready.',
       )
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -111,7 +111,7 @@ async function waitForHealth(
     port,
     stdoutBuffer,
     stderrBuffer,
-    'Timed out waiting for /health to become ready.',
+    'Timed out waiting for /system/health to become ready.',
   )
 }
 

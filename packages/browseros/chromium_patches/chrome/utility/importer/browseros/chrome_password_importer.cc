@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_password_importer.cc b/chrome/utility/importer/browseros/chrome_password_importer.cc
 new file mode 100644
-index 0000000000000..896f66db32980
+index 0000000000000..3aaeb073d7554
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_password_importer.cc
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,143 @@
 +// Copyright 2024 AKW Technology Inc
 +// Chrome password importer implementation
 +
@@ -30,16 +30,12 @@ index 0000000000000..896f66db32980
 +}  // namespace
 +
 +std::vector<user_data_importer::ImportedPasswordForm> ImportChromePasswords(
-+    const base::FilePath& profile_path) {
++    const base::FilePath& profile_path,
++    const std::string& encryption_key) {
 +  std::vector<user_data_importer::ImportedPasswordForm> passwords;
-+
-+  // Extract encryption key
-+  KeyExtractionResult key_result;
-+  std::string encryption_key = ExtractChromeKey(profile_path, &key_result);
-+
 +  if (encryption_key.empty()) {
-+    LOG(WARNING) << "browseros: Failed to extract encryption key, "
-+                 << "result: " << static_cast<int>(key_result);
++    LOG(WARNING) << "browseros: Chrome encryption key unavailable; "
++                 << "skipping password import";
 +    return passwords;
 +  }
 +
@@ -68,8 +64,8 @@ index 0000000000000..896f66db32980
 +  // Count of passwords skipped because they use App-Bound Encryption.
 +  int skipped_app_bound = 0;
 +
-+  // Query logins table - use scope block to ensure statement is destroyed before
-+  // db.Close() to avoid DCHECK failure
++  // Query logins table - use scope block to ensure statement is destroyed
++  // before db.Close() to avoid DCHECK failure
 +  {
 +    const char kQuery[] =
 +        "SELECT origin_url, action_url, username_element, username_value, "

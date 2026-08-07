@@ -1,17 +1,30 @@
-"""
-Feature selection utilities for interactive feature assignment.
-
-Provides functions to prompt users to select or create features
-and add files to them.
-"""
+"""Feature selection utilities for interactive feature assignment."""
 
 import yaml
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..core.context import Context
+from ..lib.paths import get_feature_registry_path
 from ..lib.utils import log_info, log_success, log_warning
 from .validation import validate_feature_name, validate_description, VALID_PREFIXES
+
+
+def canonical_features_path(root_dir: Path) -> Path:
+    """Return the canonical feature registry path for a BrowserOS package root."""
+    return get_feature_registry_path(root_dir)
+
+
+def is_patch_backed_feature(spec: object) -> bool:
+    """Return whether a feature should resolve to patches under chromium_patches."""
+    return not isinstance(spec, dict) or spec.get("store", True) is not False
+
+
+def patch_backed_features(features: Dict) -> Dict:
+    """Return only feature entries backed by patches on disk."""
+    return {
+        name: spec for name, spec in features.items() if is_patch_backed_feature(spec)
+    }
 
 
 def load_features_yaml(features_file: Path) -> Dict:
@@ -19,7 +32,7 @@ def load_features_yaml(features_file: Path) -> Dict:
     if not features_file.exists():
         return {"version": "1.0", "features": {}}
 
-    with open(features_file, "r") as f:
+    with open(features_file, "r", encoding="utf-8") as f:
         content = yaml.safe_load(f)
         if not content:
             return {"version": "1.0", "features": {}}
@@ -28,7 +41,8 @@ def load_features_yaml(features_file: Path) -> Dict:
 
 def save_features_yaml(features_file: Path, data: Dict) -> None:
     """Save features to YAML file."""
-    with open(features_file, "w") as f:
+    features_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(features_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
 
 
@@ -49,7 +63,7 @@ def prompt_feature_selection(
     """
     features_file = ctx.get_features_yaml_path()
     data = load_features_yaml(features_file)
-    features = data.get("features", {})
+    features = patch_backed_features(data.get("features", {}))
 
     # Display commit info if available
     if commit_hash or commit_message:
@@ -109,7 +123,9 @@ def prompt_feature_selection(
         return (feature_name, description)
 
 
-def prompt_new_feature(default_description: Optional[str] = None) -> Optional[Tuple[str, str]]:
+def prompt_new_feature(
+    default_description: Optional[str] = None,
+) -> Optional[Tuple[str, str]]:
     """Prompt user to create a new feature.
 
     Args:
@@ -160,11 +176,15 @@ def prompt_new_feature(default_description: Optional[str] = None) -> Optional[Tu
                 if valid:
                     description = default_description
                 else:
-                    log_warning(f"Default description needs prefix. Valid: {', '.join(VALID_PREFIXES)}")
+                    log_warning(
+                        f"Default description needs prefix. Valid: {', '.join(VALID_PREFIXES)}"
+                    )
                     continue
 
             if not description:
-                log_warning(f"Description required. Must start with: {', '.join(VALID_PREFIXES)}")
+                log_warning(
+                    f"Description required. Must start with: {', '.join(VALID_PREFIXES)}"
+                )
                 continue
 
             # Validate
@@ -186,7 +206,7 @@ def add_files_to_feature(
     description: str,
     files: List[str],
 ) -> int:
-    """Add files to a feature in features.yaml, avoiding duplicates.
+    """Add files to a feature in the canonical registry, avoiding duplicates.
 
     Args:
         ctx: Build context

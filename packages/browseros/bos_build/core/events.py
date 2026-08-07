@@ -22,14 +22,14 @@ class RunStarted:
 class StepStarted:
     run: str
     step: str
-    notify: bool
+    phase: str
 
 
 @dataclass(frozen=True)
 class StepFinished:
     run: str
     step: str
-    notify: bool
+    phase: str
     status: RunStatus
     duration: float
     error: Optional[str] = None

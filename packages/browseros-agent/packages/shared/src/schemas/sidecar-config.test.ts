@@ -87,6 +87,27 @@ describe('parseSidecarConfigFile', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
+  test('parses replay retention configuration', async () => {
+    const { dir, path } = await writeConfig({
+      replay: { retentionDays: 14 },
+    })
+
+    const result = parseSidecarConfigFile(path)
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        ports: {},
+        directories: {},
+        flags: {},
+        instance: {},
+        replay: { retentionDays: 14 },
+      },
+    })
+
+    await rm(dir, { recursive: true, force: true })
+  })
+
   test.each([
     ['ports.server', { ports: { server: 'not-a-number' } }],
     ['ports.cdp', { ports: { cdp: 1.5 } }],

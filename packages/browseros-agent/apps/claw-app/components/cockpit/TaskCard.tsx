@@ -22,6 +22,7 @@ interface TaskCardProps {
 
 export function TaskCard({ task, now }: TaskCardProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
+  const screenshotId = task.latestScreenshotId ?? null
   return (
     <NavLink
       to={`/audit/${encodeURIComponent(task.sessionId)}`}
@@ -39,7 +40,7 @@ export function TaskCard({ task, now }: TaskCardProps) {
     >
       <header className="flex items-center gap-2">
         <AgentDot slug={task.slug} />
-        <span className="font-semibold text-ink-1">{task.agentLabel}</span>
+        <span className="font-semibold text-ink">{task.label}</span>
         <StatusBadge status={task.status} />
         <div className="flex-1" />
         <span className="text-[12px] text-ink-3">
@@ -51,16 +52,17 @@ export function TaskCard({ task, now }: TaskCardProps) {
       </header>
 
       <div className="mt-3 flex items-center gap-4">
-        {task.lastScreenshotDispatchId !== null ? (
+        {screenshotId !== null ? (
           <div className="w-32 shrink-0 transform-gpu overflow-hidden rounded-md border border-border-2 bg-bg-sunken">
             <AspectRatio ratio={16 / 10}>
               {screenshotBaseUrl !== null ? (
                 <img
                   src={taskScreenshotUrl(
-                    task.lastScreenshotDispatchId,
+                    task.sessionId,
+                    screenshotId,
                     screenshotBaseUrl,
                   )}
-                  alt={`Hero from ${task.agentLabel}`}
+                  alt={`Hero from ${task.label}`}
                   className="h-full w-full object-cover"
                   loading="lazy"
                   decoding="async"
@@ -76,7 +78,7 @@ export function TaskCard({ task, now }: TaskCardProps) {
           </div>
         )}
         <div className="min-w-0 flex-1 space-y-1.5">
-          <h3 className="truncate font-semibold text-ink-1">{task.title}</h3>
+          <h3 className="truncate font-semibold text-ink">{task.name}</h3>
           <div className="flex items-center gap-3 text-[12.5px] text-ink-3">
             <span className="font-mono">{formatDuration(task.durationMs)}</span>
             <span className="text-ink-3">•</span>

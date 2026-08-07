@@ -24,10 +24,10 @@ wt config shell install
 
 1. Creates new worktree at `../browseros-server.feat-name/`
 2. Runs `bun install`
-3. Copies `.env.development` files from main worktree
+3. Copies root `.env.development` and `.env.production` files from main worktree when present
 
 ## Hooks
 
 Hooks are configured in `.config/wt.toml`:
 
-- **post-create**: Runs `bun install` and copies env files from the main worktree
+- **post-create**: Runs `bun install` and copies root env files from the main worktree

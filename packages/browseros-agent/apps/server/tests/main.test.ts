@@ -92,7 +92,6 @@ async function setupApplicationTest() {
   const apiServer = await import('../src/api/server')
   const browserModule = await import('@browseros/browser-core/browser')
   const cdpModule = await import('@browseros/browser-core/backends/cdp')
-  const runtimeModule = await import('../src/lib/agents/runtime')
   const browserosDir = await import('../src/lib/browseros-dir')
   const dbModule = await import('../src/lib/db')
   const identityModule = await import('../src/lib/identity')
@@ -146,13 +145,6 @@ async function setupApplicationTest() {
   spyOn(sentryModule.Sentry, 'setContext').mockImplementation(() => {})
   spyOn(sentryModule.Sentry, 'setUser').mockImplementation(() => {})
   spyOn(sentryModule.Sentry, 'captureException').mockImplementation(() => {})
-
-  spyOn(runtimeModule, 'configureClaudeRuntime').mockImplementation(
-    () => ({}) as never,
-  )
-  spyOn(runtimeModule, 'configureCodexRuntime').mockImplementation(
-    () => ({}) as never,
-  )
 
   const { Application } = await import('../src/main')
   return {

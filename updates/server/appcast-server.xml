@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>BrowserOS Server</title>
+    <link>https://cdn.browseros.com/appcast-server.xml</link>
+    <description>BrowserOS Server binary updates</description>
+    <language>en</language>
+
+    <item>
+      <sparkle:version>0.0.127</sparkle:version>
+      <pubDate>Tue, 14 Jul 2026 00:40:55 +0000</pubDate>
+
+      <!-- macOS arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.127_darwin_arm64.zip"
+        sparkle:os="macos"
+        sparkle:arch="arm64"
+        sparkle:edSignature="N5f/aKK2QVR5UjexeE9KsmmJcKEWj5w4BZX2f1Km+XQD9Y+zZ0o7OHPC0yLesdidXtERpxoDnu2Ylx0hUZNjCg=="
+        length="43762317"
+        type="application/zip"/>
+
+      <!-- macOS x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.127_darwin_x64.zip"
+        sparkle:os="macos"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="SoA3dhO1Gzs5PbNkoyXuTvf65pg91F/bz+PGmxpBqkK+UYESM2Lf86Bjq6KA8j1reLZcv+Ebtz8EUiCFibUkCg=="
+        length="48663471"
+        type="application/zip"/>
+
+      <!-- Linux arm64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.127_linux_arm64.zip"
+        sparkle:os="linux"
+        sparkle:arch="arm64"
+        sparkle:edSignature="OFoR1/d/eJ7EqoHUCHepwiGoEvwUI5WthONtSbSQbhlNS+Z34pyK09jkh1hKoo3PXU0fHmaIsueW+mhUrntQBQ=="
+        length="74906055"
+        type="application/zip"/>
+
+      <!-- Linux x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.127_linux_x64.zip"
+        sparkle:os="linux"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="Vmg5D/LnKStRlUVFzvuFMs73wxmDrYmLOMmgnWPsMitBV92NpKHPT6O7iFNd+28Ya0ydlo5Fdr+HBDzHWrLwBQ=="
+        length="77484033"
+        type="application/zip"/>
+
+      <!-- Windows x86_64 -->
+      <enclosure
+        url="https://cdn.browseros.com/server/browseros_server_0.0.127_windows_x64.zip"
+        sparkle:os="windows"
+        sparkle:arch="x86_64"
+        sparkle:edSignature="9bhaOIts+Bd/L1/soV2ij/PJk4qKNT8UV2p1oELLjGFaaVgcN+G08E/KPQiPZlihLmDYcfc1is1TcRcX/CwhAw=="
+        length="81382472"
+        type="application/zip"/>
+    </item>
+
+  </channel>
+</rss>

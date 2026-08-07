@@ -15,17 +15,19 @@ import { Timeline } from '@/components/audit/Timeline'
 import type { TabGroup } from './task-detail.helpers'
 
 export interface TabViewProps {
+  sessionId: string
   group: TabGroup
   startedAt: number
   endEvent: {
     createdAt: number
-    kind: 'closed' | 'errored'
+    kind: 'closed' | 'errored' | 'cancelled'
     reason: string | null
   } | null
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 export function TabView({
+  sessionId,
   group,
   startedAt,
   endEvent,
@@ -36,7 +38,7 @@ export function TabView({
     <div className="space-y-4">
       {(group.displayUrl || group.displayTitle) && (
         <div className="rounded-2xl border border-border-2 bg-card px-4 py-3 text-[12.5px] text-ink-3">
-          <div className="font-semibold text-ink-1">{group.label}</div>
+          <div className="font-semibold text-ink">{group.label}</div>
           {group.displayUrl && (
             <div className="truncate font-mono text-[11.5px]">
               {group.displayUrl}
@@ -48,14 +50,14 @@ export function TabView({
         </div>
       )}
       <ScreenshotStrip
+        sessionId={sessionId}
         dispatches={group.dispatches}
-        screenshotDispatchIds={group.screenshotDispatchIds}
+        screenshots={group.screenshots}
         startedAt={startedAt}
         onSelect={onScreenshotClick}
       />
       <Timeline
         dispatches={group.dispatches}
-        screenshotDispatchIds={group.screenshotDispatchIds}
         startedAt={startedAt}
         endEvent={isSession ? endEvent : null}
         showSessionEnd={isSession}

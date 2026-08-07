@@ -6,53 +6,36 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Feature } from '@/lib/browseros/capabilities'
-import { visibleProviderTemplates } from '@/lib/llm-providers/provider-visibility'
 import {
   type ProviderTemplate,
   providerTemplates,
 } from '@/lib/llm-providers/providerTemplates'
-import { REMOTE_HERMES_PROVIDER_TYPE } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
-import type {
-  HarnessAdapterDescriptor,
-  HarnessAgentAdapter,
-} from '@/modules/agents/agent-harness-types'
+import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { CodingAgentTemplateCard } from './CodingAgentTemplateCard'
 import { ProviderTemplateCard } from './ProviderTemplateCard'
 
 export interface ProviderTemplatesSectionProps {
-  /** Coding-agent runtimes (Claude Code / Codex) shown first in the grid. */
-  codingAdapters: HarnessAdapterDescriptor[]
-  onCreateAgent: (adapterId: HarnessAgentAdapter) => void
+  onCreateAgent: (type: AcpAgentType) => void
   onUseTemplate: (template: ProviderTemplate) => void
 }
 
 export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
-  codingAdapters,
   onCreateAgent,
   onUseTemplate,
 }) => {
   const { supports } = useCapabilities()
+  const supportsCodingAgents = supports(Feature.AGENT_HARNESS_SUPPORT)
 
-  const filteredTemplates = visibleProviderTemplates(
-    providerTemplates,
-    supports,
-  )
-    .filter((template) => {
-      if (template.id === 'chatgpt-pro')
-        return supports(Feature.CHATGPT_PRO_SUPPORT)
-      if (template.id === 'github-copilot')
-        return supports(Feature.GITHUB_COPILOT_SUPPORT)
-      if (template.id === 'qwen-code')
-        return supports(Feature.QWEN_CODE_SUPPORT)
-      return true
-    })
-    .sort((a, b) => {
-      if (a.id === REMOTE_HERMES_PROVIDER_TYPE) return -1
-      if (b.id === REMOTE_HERMES_PROVIDER_TYPE) return 1
-      return 0
-    })
+  const filteredTemplates = providerTemplates.filter((template) => {
+    if (template.id === 'chatgpt-pro')
+      return supports(Feature.CHATGPT_PRO_SUPPORT)
+    if (template.id === 'github-copilot')
+      return supports(Feature.GITHUB_COPILOT_SUPPORT)
+    if (template.id === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
+    return true
+  })
 
   return (
     <Collapsible defaultOpen className="group/collapsible">
@@ -61,8 +44,8 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
           <div>
             <h3 className="font-semibold text-lg">Quick provider templates</h3>
             <p className="text-muted-foreground text-sm">
-              {codingAdapters.length + filteredTemplates.length} templates
-              available
+              {filteredTemplates.length + (supportsCodingAgents ? 2 : 0)}{' '}
+              templates available
             </p>
           </div>
           <ChevronDown
@@ -76,23 +59,22 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
         <CollapsibleContent>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {filteredTemplates.map((template, idx) => {
-              const isHermes = template.id === REMOTE_HERMES_PROVIDER_TYPE
               const showCodingAdapters = idx === 0
               return (
                 <Fragment key={template.id}>
                   <ProviderTemplateCard
                     template={template}
-                    highlighted={isHermes}
                     onUseTemplate={onUseTemplate}
                   />
-                  {showCodingAdapters &&
-                    codingAdapters.map((adapter) => (
-                      <CodingAgentTemplateCard
-                        key={`coding-${adapter.id}`}
-                        adapter={adapter}
-                        onCreate={onCreateAgent}
-                      />
-                    ))}
+                  {showCodingAdapters && supportsCodingAgents
+                    ? (['claude', 'codex'] as const).map((type) => (
+                        <CodingAgentTemplateCard
+                          key={`coding-${type}`}
+                          type={type}
+                          onCreate={onCreateAgent}
+                        />
+                      ))
+                    : null}
                 </Fragment>
               )
             })}

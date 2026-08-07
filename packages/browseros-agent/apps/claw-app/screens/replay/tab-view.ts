@@ -2,79 +2,162 @@
  * @license
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Pure `buildTabView` helper. Kept in its own file (not
- * `replay.data.ts`) so tests can import it without dragging the
- * whole react-query-kit hook graph, which some sibling tests
- * `mock.module`-poison in ways that break transitively.
- *
- * See the replay tab-driven architecture plan for the rationale
- * and the surrounding refactor.
  */
 
-import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
+import type { ReplayEvent } from '@/modules/api/replay.hooks'
+import type { ReplayTabData } from './replay.data'
 
-/**
- * A single tab's replay view. All fields are scoped to one
- * `tabPageId`:
- *   - `frames`: filtered AND time-shifted so `t=0` is the tab's
- *     first activity, not session start.
- *   - `events`: pass-through. rrweb's Replayer treats the first
- *     event's `ts` as its playback origin, so a tab-relative
- *     `playback.time` maps 1:1 to `goto(time*1000)`.
- *   - `totalSeconds`: duration of this tab's activity window (from
- *     first event to last event). 0 for empty tabs.
- */
 export interface TabView {
-  frames: ReplayFrame[]
-  events: ReplayEvent[]
+  /** Every playable document lifecycle from one Chrome tab. */
+  events: readonly ReplayEvent[]
+  /**
+   * Absolute epoch ms of the first and last playable event. Null when the
+   * tab recorded nothing renderable. `session-replay.ts` anchors the global
+   * activity window on these, so they stay absolute rather than rebased.
+   */
+  originMs: number | null
+  endMs: number | null
+  /** Length of this tab's own rrweb stream. */
   totalSeconds: number
+  hasFullSnapshot: boolean
+  knownIncomplete: boolean
+  /** Captured time omitted before the first playable checkpoint. */
+  incompleteUntilMs: number | null
 }
 
 export const EMPTY_TAB_VIEW: TabView = {
-  frames: [],
   events: [],
+  originMs: null,
+  endMs: null,
   totalSeconds: 0,
+  hasFullSnapshot: false,
+  knownIncomplete: false,
+  incompleteUntilMs: null,
+}
+
+const NO_VISUAL_EVENTS: readonly ReplayEvent[] = []
+
+interface PlayableTabStream {
+  events: readonly ReplayEvent[]
+  hasOmittedEvents: boolean
+  hasOmittedEventsAfterPlaybackStart: boolean
+  incompleteUntilMs: number | null
+}
+
+const playableTabStreams = new WeakMap<
+  readonly ReplayEvent[],
+  PlayableTabStream
+>()
+
+const EMPTY_PLAYABLE_TAB_STREAM: PlayableTabStream = {
+  events: NO_VISUAL_EVENTS,
+  hasOmittedEvents: false,
+  hasOmittedEventsAfterPlaybackStart: false,
+  incompleteUntilMs: null,
+}
+
+interface DocumentState {
+  firstSnapshotIndex: number
+  mutationBeforeSnapshot: boolean
 }
 
 export interface BuildTabViewInput {
-  /** Session-scoped frames (any pageId). */
-  frames: ReplayFrame[]
-  /**
-   * The events lookup for the selected tab. Called once at most;
-   * returning an empty array means the tab has no rrweb data.
-   */
-  eventsForTab: (tabPageId: number) => ReplayEvent[]
-  /** Session start in ms since epoch. Anchor for frame `t` values. */
-  startedAtMs: number
+  tabs: readonly ReplayTabData[]
+  eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
-/**
- * Pure. O(N) over frames. Callers should memoise per
- * (input, tabPageId) pair.
- */
+/** Projects one continuous rrweb track for a persisted Chrome tab. */
 export function buildTabView(
   input: BuildTabViewInput,
-  tabPageId: number | null,
+  tabId: number | null,
 ): TabView {
-  if (tabPageId === null) return EMPTY_TAB_VIEW
-  const rawFrames = input.frames.filter((f) => f.pageId === tabPageId)
-  const events = input.eventsForTab(tabPageId)
-  if (rawFrames.length === 0 && events.length === 0) return EMPTY_TAB_VIEW
-  const startedMs = input.startedAtMs
-  const originMs =
-    events.length > 0
-      ? events[0]?.ts
-      : startedMs + (rawFrames[0]?.t ?? 0) * 1000
-  const endMs =
-    events.length > 0
-      ? events[events.length - 1]?.ts
-      : startedMs + (rawFrames[rawFrames.length - 1]?.t ?? 0) * 1000
-  const totalSeconds = Math.max(0, (endMs - originMs) / 1000)
-  const originT = (originMs - startedMs) / 1000
-  const frames = rawFrames.map((f) => ({
-    ...f,
-    t: Math.max(0, f.t - originT),
-  }))
-  return { frames, events, totalSeconds }
+  if (tabId === null) return EMPTY_TAB_VIEW
+  const tab = input.tabs.find((candidate) => candidate.tabId === tabId)
+  if (!tab) return EMPTY_TAB_VIEW
+
+  const rawEvents = input.eventsForTab(tabId)
+  const stream = playableTabStream(rawEvents)
+  const hasFullSnapshot = stream.events.some((event) => event.type === 2)
+  // Without a snapshot nothing is renderable, so the raw stream still
+  // describes when the tab was alive for the incomplete-recording notice.
+  const timingEvents = hasFullSnapshot ? stream.events : rawEvents
+  const originMs = timingEvents[0]?.ts ?? null
+  const endMs = timingEvents.at(-1)?.ts ?? null
+  const hasCatalogedGap =
+    tab.complete === false ||
+    tab.segments.some((segment) => segment.hasGap || segment.legacy)
+  return {
+    events: stream.events,
+    originMs,
+    endMs,
+    totalSeconds:
+      originMs === null || endMs === null
+        ? 0
+        : Math.max(0, (endMs - originMs) / 1000),
+    hasFullSnapshot,
+    knownIncomplete: hasCatalogedGap || stream.hasOmittedEvents,
+    incompleteUntilMs:
+      hasCatalogedGap || stream.hasOmittedEventsAfterPlaybackStart
+        ? null
+        : stream.incompleteUntilMs,
+  }
+}
+
+/** True when rrweb can reconstruct this tab: a snapshot plus something after it. */
+export function isPlayableTabView(view: TabView): boolean {
+  return view.hasFullSnapshot && view.events.length >= 2
+}
+
+function playableTabStream(
+  rawEvents: readonly ReplayEvent[],
+): PlayableTabStream {
+  if (rawEvents.length === 0) return EMPTY_PLAYABLE_TAB_STREAM
+  const cached = playableTabStreams.get(rawEvents)
+  if (cached) return cached
+
+  const documents = new Map<string, DocumentState>()
+  rawEvents.forEach((event, index) => {
+    const state = documents.get(event.documentId) ?? {
+      firstSnapshotIndex: -1,
+      mutationBeforeSnapshot: false,
+    }
+    if (state.firstSnapshotIndex === -1) {
+      if (event.type === 3) state.mutationBeforeSnapshot = true
+      if (event.type === 2) state.firstSnapshotIndex = index
+    }
+    documents.set(event.documentId, state)
+  })
+
+  const hasOmittedEvents = [...documents.values()].some(
+    (state) => state.firstSnapshotIndex === -1 || state.mutationBeforeSnapshot,
+  )
+  let playbackStarted = false
+  let hasOmittedEventsAfterPlaybackStart = false
+  const events = hasOmittedEvents
+    ? rawEvents.filter((event, index) => {
+        const state = documents.get(event.documentId)
+        const playable =
+          state !== undefined &&
+          state.firstSnapshotIndex !== -1 &&
+          (!state.mutationBeforeSnapshot || index >= state.firstSnapshotIndex)
+        if (playable) playbackStarted = true
+        else if (playbackStarted) hasOmittedEventsAfterPlaybackStart = true
+        return playable
+      })
+    : rawEvents
+  const firstRawAt = rawEvents[0]?.ts
+  const firstPlayableAt = events[0]?.ts
+  const result = {
+    events,
+    hasOmittedEvents,
+    hasOmittedEventsAfterPlaybackStart,
+    incompleteUntilMs:
+      firstRawAt !== undefined &&
+      firstPlayableAt !== undefined &&
+      firstPlayableAt > firstRawAt
+        ? firstPlayableAt - firstRawAt
+        : null,
+  }
+  playableTabStreams.set(rawEvents, result)
+  return result
 }

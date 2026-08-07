@@ -96,6 +96,10 @@ function createStepRecord(
   existingStep?: ExecutionStepRecord,
 ): ExecutionStepRecord {
   const state = part.state as ExecutionStepState
+  // Deliberately omit `input`/`output`: nothing renders them, and tool
+  // results carry inline base64 screenshots that otherwise pile up in the
+  // history store and get re-serialized on every write (#1972). previewText
+  // and the counts are enough for the step summary.
   return {
     id: part.toolCallId,
     toolName: getToolName(part),
@@ -103,8 +107,6 @@ function createStepRecord(
     state,
     startedAt: existingStep?.startedAt ?? nowIso,
     completedAt: getCompletedAt(existingStep, state, nowIso),
-    input: part.input,
-    output: 'output' in part ? part.output : undefined,
     errorText: 'errorText' in part ? part.errorText : undefined,
     previewText: getPreviewText(part),
     approval: getApproval(part),

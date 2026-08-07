@@ -1,0 +1,33 @@
+{
+  "name": "@browseros/onboarding-video",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Remotion compositions for BrowserClaw cockpit first-run motion demo. Shared by claw-app (runtime via @remotion/player) and a future offline render pipeline (webm output).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "render": "remotion render src/index-render.ts FirstRunDemo out/first-run-demo.mp4",
+    "render:poster": "remotion still src/index-render.ts FirstRunDemo out/first-run-demo-poster.png --frame 0",
+    "studio": "remotion studio src/index-render.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@remotion/google-fonts": "^4.0.498",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "remotion": "^4.0.400"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@remotion/cli": "^4.0.498",
+    "@remotion/bundler": "^4.0.400",
+    "@remotion/renderer": "^4.0.400"
+  }
+}

@@ -6,6 +6,8 @@ import {
   abbreviateSequence,
   formatDuration,
   formatRelative,
+  formatTokensCompact,
+  formatTokensFull,
 } from './audit.helpers'
 
 /**
@@ -15,7 +17,7 @@ import {
  * outside the component is the canonical stable-reference recipe.
  *
  * Editorial cockpit language: mono tabular numerics for grid data,
- * agent dot + mono-uppercase label for identity, LIVE / FAILED
+ * agent dot + mono-uppercase label for identity, LIVE / FAILED / STOPPED
  * folded inline into the agent cell so the row's identity carries
  * its state (DONE stays silent, no Status column).
  */
@@ -28,10 +30,11 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
       <div className="inline-flex items-center gap-2">
         <AgentDot slug={row.original.slug} />
         <span className="font-mono text-[11px] text-ink-2 uppercase tracking-[0.06em]">
-          {row.original.agentLabel}
+          {row.original.label}
         </span>
         {row.original.status === 'live' && <LiveInlineChip />}
         {row.original.status === 'failed' && <FailedInlineChip />}
+        {row.original.status === 'cancelled' && <StoppedInlineChip />}
       </div>
     ),
     enableSorting: true,
@@ -41,8 +44,8 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     header: 'Title',
     accessorKey: 'title',
     cell: ({ row }) => (
-      <span className="block truncate text-[13px] text-ink-1">
-        {row.original.title}
+      <span className="block truncate text-[13px] text-ink">
+        {row.original.name}
       </span>
     ),
     enableSorting: false,
@@ -67,6 +70,18 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
         {getValue<number>()}
       </span>
     ),
+    enableSorting: true,
+  },
+  {
+    id: 'tokens',
+    header: 'Tokens',
+    // Unmeasured sessions have no total; returning undefined + `sortUndefined: 'last'`
+    // sinks them to the bottom in BOTH sort directions instead of masquerading as 0
+    // (which would surface them first on an ascending sort).
+    accessorFn: (t) => t.tokenUsage?.totalTokenEstimate,
+    cell: ({ row }) => <TokensCell task={row.original} />,
+    sortUndefined: 'last',
+    sortingFn: 'basic',
     enableSorting: true,
   },
   {
@@ -113,17 +128,45 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
  */
 export const NUMERIC_COLUMN_IDS = new Set([
   'tools',
+  'tokens',
   'duration',
   'when',
   'chevron',
 ])
+
+/**
+ * Session token consumption. Shows a compact total ("12.3k") with the exact
+ * count on hover; renders an em dash for legacy/unmeasured sessions whose wire
+ * payload omits `tokenUsage`.
+ */
+function TokensCell({ task }: { task: TaskSummary }) {
+  const usage = task.tokenUsage
+  if (!usage) {
+    return (
+      <span
+        className="font-mono text-[11.5px] text-ink-4 tabular-nums"
+        title="Token usage not measured for this session"
+      >
+        —
+      </span>
+    )
+  }
+  return (
+    <span
+      className="font-mono text-[11.5px] text-ink-2 tabular-nums"
+      title={`${formatTokensFull(usage.totalTokenEstimate)} tokens`}
+    >
+      {formatTokensCompact(usage.totalTokenEstimate)}
+    </span>
+  )
+}
 
 function LiveInlineChip() {
   return (
     <span className="inline-flex items-center gap-1 font-mono text-[10px] text-accent uppercase tracking-[0.08em]">
       <span
         aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_6px_hsl(130_46%_33%/0.6)]"
+        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_6px_hsl(221_90%_55%/0.5)]"
       />
       LIVE
     </span>
@@ -138,6 +181,18 @@ function FailedInlineChip() {
         className="inline-block size-1.5 rounded-full bg-red-500"
       />
       FAILED
+    </span>
+  )
+}
+
+function StoppedInlineChip() {
+  return (
+    <span className="inline-flex items-center gap-1 font-mono text-[10px] text-ink-3 uppercase tracking-[0.08em]">
+      <span
+        aria-hidden
+        className="inline-block size-1.5 rounded-full bg-ink-3"
+      />
+      STOPPED
     </span>
   )
 }

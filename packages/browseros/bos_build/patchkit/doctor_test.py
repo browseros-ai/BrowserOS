@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from unittest import mock
 
 from bos_build.lib.paths import get_package_root
+from bos_build.patchkit.features_io import canonical_features_path
 from bos_build.patchkit.doctor import (
     ApplyFailure,
     ApplyReport,
@@ -140,7 +141,9 @@ class ClassificationTest(unittest.TestCase):
         findings = check_repo(features, patches)
         self.assertEqual(len(findings), 1)
         f = findings[0]
-        self.assertEqual((f.check, f.severity, f.path), ("multi-claim", "warning", "chrome/a.cc"))
+        self.assertEqual(
+            (f.check, f.severity, f.path), ("multi-claim", "warning", "chrome/a.cc")
+        )
         self.assertIn("one", f.message)
         self.assertIn("two", f.message)
 
@@ -188,7 +191,9 @@ class FeatureMetadataTest(unittest.TestCase):
             "two": _feature([], description="no prefix here"),
         }
         findings = check_repo(features, patches)
-        checks = [(f.check, f.feature) for f in findings if f.check == "invalid-feature"]
+        checks = [
+            (f.check, f.feature) for f in findings if f.check == "invalid-feature"
+        ]
         self.assertIn(("invalid-feature", "Bad Name"), checks)
         self.assertIn(("invalid-feature", "two"), checks)
 
@@ -197,6 +202,18 @@ class FeatureMetadataTest(unittest.TestCase):
         features = {"BAD": _feature([], description="series: x")}
         findings = check_repo(features, patches)
         self.assertEqual([f.check for f in findings], ["invalid-feature"])
+
+    def test_store_false_features_are_skipped(self):
+        patches = _patches_dir(self, ["chrome/a.cc"])
+        features = {
+            "patches": _feature(["chrome/a.cc"]),
+            "build-resources": {
+                "store": False,
+                "description": "resource: generated output",
+                "files": ["chrome/generated.txt"],
+            },
+        }
+        self.assertEqual(check_repo(features, patches), [])
 
 
 class FeatureFilterTest(unittest.TestCase):
@@ -292,7 +309,9 @@ class CheckApplyTest(unittest.TestCase):
         self.assertIn("chrome/a.cc", calls[0][0][-1])
 
     def test_feature_filter_limits_apply_set_to_claimed_patches(self):
-        patches = _patches_dir(self, ["chrome/a.cc", "sub/dir/b.cc", "chrome/orphan.cc"])
+        patches = _patches_dir(
+            self, ["chrome/a.cc", "sub/dir/b.cc", "chrome/orphan.cc"]
+        )
         features = {
             "one": _feature(["chrome/a.cc", "sub/dir/"]),
             "two": _feature(["chrome/orphan.cc"]),
@@ -332,9 +351,7 @@ class BuildReportTest(unittest.TestCase):
 
         report = build_report(patches.parent, features, findings)
 
-        self.assertEqual(
-            set(report), {"root", "feature", "repo", "apply", "healthy"}
-        )
+        self.assertEqual(set(report), {"root", "feature", "repo", "apply", "healthy"})
         self.assertIsNone(report["apply"])
         self.assertIsNone(report["feature"])
         self.assertTrue(report["healthy"])
@@ -431,8 +448,9 @@ class LoadFeaturesTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        (root / "bos_build").mkdir()
-        (root / "bos_build" / "features.yaml").write_text(features_yaml)
+        features_file = canonical_features_path(root)
+        features_file.parent.mkdir(parents=True)
+        features_file.write_text(features_yaml)
         return root
 
     def test_well_formed_file_loads(self):
@@ -466,12 +484,19 @@ class LoadFeaturesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be a string"):
             load_features(root)
 
+    def test_store_false_features_are_filtered_after_shape_validation(self):
+        root = self._root(
+            'features:\n  one:\n    description: "feat: x"\n'
+            "    files:\n      - chrome/a.cc\n"
+            "  build-resources:\n    store: false\n"
+            '    description: "resource: generated output"\n'
+            "    files:\n      - chrome/generated.txt\n"
+        )
+        self.assertEqual(list(load_features(root)), ["one"])
+
 
 class RepoTruthTest(unittest.TestCase):
     def test_repo_features_consistent_with_patches(self):
-        # features.yaml must stay in sync with chromium_patches/ — extract
-        # flows update both, chromium bumps must clean both. Warnings are
-        # advisory and deliberately excluded.
         errors = [
             finding
             for finding in diagnose_repo(get_package_root())

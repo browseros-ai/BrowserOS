@@ -123,12 +123,16 @@ class ExtensionsFeedModule(Step):
                 publish=False,
                 allow_downgrade=self.allow_downgrade,
                 verbose=not self.publish,
+                stage=False,
             ):
                 raise RuntimeError(
                     f"Feed refused in preflight: {spec.key} — nothing written"
                 )
 
         if not self.publish:
+            for spec, content in outputs:
+                staging = publisher.stage(spec, content)
+                log_info(f"DRY RUN — {spec.key} staged: {staging}")
             return
 
         for spec, content in outputs:

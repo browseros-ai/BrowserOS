@@ -17,6 +17,10 @@ export const download = defineTool({
       .string()
       .describe('Ref of the element that triggers the download, e.g. "e12".'),
   }),
+  annotations: {
+    title: 'Download from page',
+    destructiveHint: true,
+  },
   handler: async (args, ctx) => {
     const { session } = await ctx.session.pages.getSession(args.page)
     // A fresh subdir avoids Chromium filename uniquifying on repeated downloads.

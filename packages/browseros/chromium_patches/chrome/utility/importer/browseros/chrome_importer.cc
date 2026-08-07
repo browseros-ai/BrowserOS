@@ -1,9 +1,9 @@
 diff --git a/chrome/utility/importer/browseros/chrome_importer.cc b/chrome/utility/importer/browseros/chrome_importer.cc
 new file mode 100644
-index 0000000000000..41dce65dacf4f
+index 0000000000000..3674707cab113
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_importer.cc
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,225 @@
 +// Copyright 2023 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -16,6 +16,7 @@ index 0000000000000..41dce65dacf4f
 +#include "chrome/utility/importer/browseros/chrome_autofill_importer.h"
 +#include "chrome/utility/importer/browseros/chrome_bookmarks_importer.h"
 +#include "chrome/utility/importer/browseros/chrome_cookie_importer.h"
++#include "chrome/utility/importer/browseros/chrome_decryptor.h"
 +#include "chrome/utility/importer/browseros/chrome_extensions_importer.h"
 +#include "chrome/utility/importer/browseros/chrome_history_importer.h"
 +#include "chrome/utility/importer/browseros/chrome_password_importer.h"
@@ -32,8 +33,21 @@ index 0000000000000..41dce65dacf4f
 +    ImporterBridge* bridge) {
 +  bridge_ = bridge;
 +  source_path_ = source_profile.source_path;
++  source_profile_name_ = source_profile.profile;
++  chrome_encryption_key_.clear();
 +
 +  bridge_->NotifyStarted();
++
++  if ((items & (user_data_importer::PASSWORDS | user_data_importer::COOKIES)) &&
++      !cancelled()) {
++    browseros_importer::KeyExtractionResult key_result;
++    chrome_encryption_key_ =
++        browseros_importer::ExtractChromeKey(source_path_, &key_result);
++    if (chrome_encryption_key_.empty()) {
++      LOG(WARNING) << "browseros: Failed to extract Chrome encryption key, "
++                   << "result: " << static_cast<int>(key_result);
++    }
++  }
 +
 +  if ((items & user_data_importer::HISTORY) && !cancelled()) {
 +    bridge_->NotifyItemStarted(user_data_importer::HISTORY);
@@ -72,6 +86,7 @@ index 0000000000000..41dce65dacf4f
 +  }
 +
 +  bridge_->NotifyEnded();
++  chrome_encryption_key_.clear();
 +}
 +
 +void ChromeImporter::ImportHistory() {
@@ -104,8 +119,14 @@ index 0000000000000..41dce65dacf4f
 +  if (!result.bookmarks.empty() && !cancelled()) {
 +    LOG(INFO) << "browseros: Importing " << result.bookmarks.size()
 +              << " bookmarks";
-+    bridge_->AddBookmarks(result.bookmarks,
-+                          l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME));
++    std::u16string folder_name =
++        l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME);
++    if (!source_profile_name_.empty()) {
++      folder_name += u" (";
++      folder_name += source_profile_name_;
++      folder_name += u")";
++    }
++    bridge_->AddBookmarks(result.bookmarks, folder_name);
 +  } else {
 +    LOG(INFO) << "browseros: No bookmarks to import";
 +  }
@@ -123,7 +144,8 @@ index 0000000000000..41dce65dacf4f
 +  LOG(INFO) << "browseros: Starting password import";
 +
 +  std::vector<user_data_importer::ImportedPasswordForm> passwords =
-+      browseros_importer::ImportChromePasswords(source_path_);
++      browseros_importer::ImportChromePasswords(source_path_,
++                                                chrome_encryption_key_);
 +
 +  if (passwords.empty()) {
 +    LOG(INFO) << "browseros: No passwords to import";
@@ -146,7 +168,8 @@ index 0000000000000..41dce65dacf4f
 +  LOG(INFO) << "browseros: Starting cookie import";
 +
 +  std::vector<browseros_importer::ImportedCookieEntry> cookies =
-+      browseros_importer::ImportChromeCookies(source_path_);
++      browseros_importer::ImportChromeCookies(source_path_,
++                                              chrome_encryption_key_);
 +
 +  if (cookies.empty()) {
 +    LOG(INFO) << "browseros: No cookies to import";

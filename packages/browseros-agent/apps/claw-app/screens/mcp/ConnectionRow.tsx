@@ -53,7 +53,7 @@ export function ConnectionRow({
       <div className="flex items-center gap-3 px-2 py-3">
         <HarnessIcon harness={state.harness} className="size-5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="font-semibold text-[14px] text-ink-1">
+          <div className="font-semibold text-[14px] text-ink">
             {state.harness}
           </div>
           {state.installed && state.configPath && (
@@ -96,7 +96,7 @@ function RowAction({
         <span aria-hidden className="text-ink-4">
           ·
         </span>
-        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em] transition-colors group-hover:text-ink-1">
+        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em] transition-colors group-hover:text-ink">
           disconnect
           <span
             aria-hidden

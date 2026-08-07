@@ -42,7 +42,6 @@ const config: CodegenConfig = {
         scalars: {
           Cursor: 'string',
           Datetime: 'string',
-          // biome-ignore lint/suspicious/noExplicitAny: matches previous behaviour
           JSON: 'any',
         },
       },

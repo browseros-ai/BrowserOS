@@ -16,12 +16,20 @@ from ..lib.utils import log_info, log_error, log_success
 from ..release.ota import ServerOTAModule
 from ..release.ota.common import (
     get_appcast_path,
+    merge_base_appcast,
     promote_appcast_content,
     SERVER_PLATFORMS,
 )
 from ..release.feeds.publisher import FeedPublisher
+from ..release.feeds.render import (
+    extract_appcast_item_count,
+    extract_appcast_version,
+    parse_server_appcast_content,
+    render_server_appcast,
+)
 from ..release.feeds.spec import server_feed
-from ..products.server_binaries import server_bundles_for_product
+from ..products import SERVER_BUNDLES
+from ..products.server_binaries import server_ota_bundles_for_product
 
 app = typer.Typer(
     help="OTA (Over-The-Air) update automation",
@@ -49,7 +57,7 @@ def create_ota_context() -> Context:
 def execute_module(ctx: Context, module) -> None:
     """Run a single OTA step through the shared runner"""
     try:
-        run_steps(ctx, [module], name="ota", subscribers=(slack_subscriber,))
+        run_steps(ctx, [module], name="ota", subscribers=(slack_subscriber(ctx),))
     except StepExecutionError as e:
         log_error(str(e))
         raise typer.Exit(1)
@@ -58,7 +66,7 @@ def execute_module(ctx: Context, module) -> None:
 
 
 def _server_bundle_id(product: str) -> str:
-    bundles = server_bundles_for_product(product)
+    bundles = server_ota_bundles_for_product(product)
     if not bundles:
         log_error(f"Product '{product}' has no server bundle")
         raise typer.Exit(1)
@@ -76,6 +84,98 @@ def _feed_publisher() -> FeedPublisher:
     return FeedPublisher(env=env)
 
 
+def _log_alternate_product_appcasts(
+    selected_product: str, selected_bundle_id: str, channel: str
+) -> None:
+    """Suggest versioned staging appcasts owned by a different product."""
+    for bundle in SERVER_BUNDLES:
+        if bundle.id == selected_bundle_id:
+            continue
+        alternate_products = tuple(
+            product_id
+            for product_id in bundle.product_ids
+            if product_id != selected_product
+        )
+        if not alternate_products:
+            continue
+
+        candidate_path = get_appcast_path(channel, bundle.id).resolve()
+        try:
+            version = extract_appcast_version(candidate_path.read_text())
+        except (OSError, UnicodeError):
+            continue
+        if version is None:
+            continue
+
+        candidate_key = server_feed(bundle.id, channel).key
+        for product_id in alternate_products:
+            log_error(
+                f"Did you mean --product {product_id}? "
+                f"{candidate_key} carries {version}"
+            )
+
+
+def _assemble_server_appcast(
+    *,
+    version: str,
+    bundle_id: str,
+    channel: str,
+    fragments: list[str],
+    publisher: FeedPublisher,
+    output_path: Path,
+) -> Path:
+    platforms = {platform["name"]: platform for platform in SERVER_PLATFORMS}
+    artifacts = {}
+
+    for value in fragments:
+        platform_name, separator, raw_path = value.partition("=")
+        if not separator or not platform_name or not raw_path:
+            raise ValueError(f"Invalid fragment assignment: {value!r}")
+        platform = platforms.get(platform_name)
+        if platform is None:
+            raise ValueError(f"Unknown server platform: {platform_name}")
+        if platform_name in artifacts:
+            raise ValueError(f"Duplicate appcast fragment: {platform_name}")
+
+        fragment_path = Path(raw_path).resolve()
+        try:
+            content = fragment_path.read_text()
+        except (OSError, UnicodeError) as error:
+            raise ValueError(f"Cannot read {platform_name} fragment: {error}") from error
+        parsed = parse_server_appcast_content(content)
+        if parsed is None:
+            raise ValueError(f"Invalid appcast fragment: {fragment_path}")
+        if parsed.version != version:
+            raise ValueError(
+                f"{platform_name} fragment carries version {parsed.version}, "
+                f"expected {version}"
+            )
+        artifact = parsed.artifacts.get(platform_name)
+        if artifact is None:
+            raise ValueError(
+                f"{platform_name} fragment does not contain {platform_name}"
+            )
+        if artifact.os != platform["os"] or artifact.arch != platform["arch"]:
+            raise ValueError(f"{platform_name} fragment has mismatched OS or architecture")
+        artifacts[platform_name] = artifact
+
+    missing = sorted(set(platforms) - set(artifacts))
+    if missing:
+        raise ValueError(f"Missing appcast fragments: {', '.join(missing)}")
+
+    spec = server_feed(bundle_id, channel)
+    existing = merge_base_appcast(publisher, spec, output_path)
+    content = render_server_appcast(
+        spec,
+        version,
+        list(artifacts.values()),
+        existing=existing,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content)
+    return output_path
+
+
 @server_app.command("release")
 def server_release(
     version: str = typer.Option(
@@ -91,24 +191,18 @@ def server_release(
     product: str = typer.Option(
         "browseros", "--product", help="Product whose server bundle to release"
     ),
+    release_sha: str = typer.Option(
+        "",
+        "--release-sha",
+        help="Source commit to enforce; omit with --allow-unbound",
+    ),
+    allow_unbound: bool = typer.Option(
+        False,
+        "--allow-unbound",
+        help="Allow versioned resources without source-binding metadata",
+    ),
 ):
-    """Release BrowserOS Server OTA update
-
-    Downloads server binaries from R2 (artifacts/server/latest/),
-    signs them, creates Sparkle update packages, and uploads to R2.
-
-    \b
-    Full Release (all platforms):
-      browseros ota server release --version 0.0.69 --channel alpha
-
-    \b
-    Single Platform:
-      browseros ota server release --version 0.0.69 --platform darwin_arm64
-
-    \b
-    Multiple Platforms:
-      browseros ota server release --version 0.0.69 --platform darwin_arm64,darwin_x64
-    """
+    """Publish server OTA payloads from versioned resources."""
     log_info(f"🚀 BrowserOS Server OTA v{version}")
     log_info("=" * 70)
 
@@ -119,9 +213,37 @@ def server_release(
         channel=channel,
         platform_filter=platform,
         product_id=product,
+        release_sha=release_sha,
+        allow_unbound=allow_unbound,
     )
 
     execute_module(ctx, module)
+
+
+@server_app.command("assemble-appcast")
+def server_assemble_appcast(
+    version: str = typer.Option(..., "--version", "-v"),
+    fragment: list[str] = typer.Option(..., "--fragment"),
+    channel: str = typer.Option("alpha", "--channel", "-c"),
+    product: str = typer.Option("browseros", "--product"),
+    output: Optional[Path] = typer.Option(None, "--output"),
+):
+    """Assemble a complete appcast from native platform fragments."""
+    bundle_id = _server_bundle_id(product)
+    output_path = (output or get_appcast_path(channel, bundle_id)).resolve()
+    try:
+        _assemble_server_appcast(
+            version=version,
+            bundle_id=bundle_id,
+            channel=channel,
+            fragments=fragment,
+            publisher=_feed_publisher(),
+            output_path=output_path,
+        )
+    except ValueError as error:
+        log_error(str(error))
+        raise typer.Exit(1)
+    log_success(f"Assembled appcast: {output_path}")
 
 
 @server_app.command("release-appcast")
@@ -166,7 +288,11 @@ def server_release_appcast(
         log_error(str(e))
         raise typer.Exit(1)
 
-    source_path = appcast_file or get_appcast_path(channel, bundle_id)
+    source_path = (appcast_file or get_appcast_path(channel, bundle_id)).resolve()
+    log_info(
+        f"Resolved appcast: product={product} bundle={bundle_id} "
+        f"channel={channel} spec={spec.key} source={source_path}"
+    )
     if not source_path.exists():
         log_error(f"Appcast file not found: {source_path}")
         if not appcast_file:
@@ -175,10 +301,17 @@ def server_release_appcast(
             )
         raise typer.Exit(1)
 
+    content = source_path.read_text()
+    if extract_appcast_item_count(content) == 0:
+        log_error(f"{spec.key} has no <item> entries: {source_path}")
+        if appcast_file is None:
+            _log_alternate_product_appcasts(product, bundle_id, channel)
+        raise typer.Exit(1)
+
     publisher = _feed_publisher()
     if not publisher.publish(
         spec,
-        source_path.read_text(),
+        content,
         publish=publish,
         allow_downgrade=allow_downgrade,
     ):
@@ -283,36 +416,19 @@ def test_signing(
 
 @server_app.callback(invoke_without_command=True)
 def server_main(ctx: typer.Context):
-    """BrowserOS Server OTA commands
-
-    \b
-    Release (upload artifacts):
-      browseros ota server release --version 0.0.36
-
-    \b
-    Release Appcast (make live):
-      browseros ota server release-appcast --channel alpha
-
-    \b
-    List Platforms:
-      browseros ota server list-platforms
-    """
+    """Expose BrowserOS server OTA commands."""
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
-        typer.echo("Available commands: release, release-appcast, list-platforms")
+        typer.echo(
+            "Available commands: release, assemble-appcast, release-appcast, "
+            "list-platforms"
+        )
         raise typer.Exit(0)
 
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
-    """OTA update automation for BrowserOS
-
-    \b
-    Server OTA:
-      browseros ota server release --version 0.0.36
-      browseros ota server release-appcast --channel alpha
-      browseros ota server list-platforms
-    """
+    """Expose BrowserOS OTA automation."""
     if ctx.invoked_subcommand is None:
         typer.echo("Use --help for usage information")
         typer.echo("Available subcommands: server")

@@ -6,7 +6,7 @@ func Build(ctx context.Context, agentRoot string, r Runner) error {
 	if err := Setup(ctx, agentRoot, r); err != nil {
 		return err
 	}
-	return r.Run(ctx, agentRoot, "bun", "--cwd", "apps/app", "--env-file=.env.development", "wxt", "build", "--mode", "development")
+	return r.Run(ctx, agentRoot, "bun", "--cwd", "apps/app", "--env-file=../../.env.development", "wxt", "build", "--mode", "development")
 }
 
 func Setup(ctx context.Context, agentRoot string, r Runner) error {

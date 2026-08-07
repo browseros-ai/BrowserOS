@@ -3,9 +3,7 @@ import { API_URL_STORAGE_KEY } from './client.helpers'
 import {
   buildCanonicalMcpCliCommand,
   buildCanonicalMcpEndpointUrl,
-  buildMcpEndpointUrl,
   resolveCanonicalMcpEndpointUrl,
-  resolveMcpEndpointUrl,
 } from './mcp-endpoint'
 
 const originalWindow = globalThis.window
@@ -61,11 +59,11 @@ afterEach(() => {
   })
 })
 
-describe('buildMcpEndpointUrl', () => {
+describe('buildCanonicalMcpEndpointUrl', () => {
   it('persists a valid query api URL for later same-session calls', () => {
     const storage = installWindow('?apiUrl=http%3A%2F%2F127.0.0.1%3A9234')
 
-    expect(buildMcpEndpointUrl('demo')).toBe('http://127.0.0.1:9234/mcp/demo')
+    expect(buildCanonicalMcpEndpointUrl()).toBe('http://127.0.0.1:9234/mcp')
     expect(storage.get(API_URL_STORAGE_KEY)).toBe('http://127.0.0.1:9234')
   })
 
@@ -73,28 +71,7 @@ describe('buildMcpEndpointUrl', () => {
     const storage = new Map([[API_URL_STORAGE_KEY, 'http://127.0.0.1:9345']])
     installWindow('', storage)
 
-    expect(buildMcpEndpointUrl('demo')).toBe('http://127.0.0.1:9345/mcp/demo')
-  })
-
-  it('uses the BrowserOS proxy port pref when available', async () => {
-    installWindow('')
-    installBrowserOSPrefs({ 'browseros.server.proxy_port': 9512 })
-
-    await expect(resolveMcpEndpointUrl('demo')).resolves.toBe(
-      'http://127.0.0.1:9512/mcp/demo',
-    )
-  })
-})
-
-describe('buildCanonicalMcpEndpointUrl', () => {
-  it('emits the v2 slugless URL using the query-supplied base', () => {
-    installWindow('?apiUrl=http%3A%2F%2F127.0.0.1%3A9234')
-    expect(buildCanonicalMcpEndpointUrl()).toBe('http://127.0.0.1:9234/mcp')
-  })
-
-  it('falls back to the prod port root when no overrides exist', () => {
-    installWindow('')
-    expect(buildCanonicalMcpEndpointUrl()).toBe('http://127.0.0.1:9200/mcp')
+    expect(buildCanonicalMcpEndpointUrl()).toBe('http://127.0.0.1:9345/mcp')
   })
 
   it('uses the BrowserOS proxy port pref when available', async () => {
@@ -105,15 +82,18 @@ describe('buildCanonicalMcpEndpointUrl', () => {
       'http://127.0.0.1:9512/mcp',
     )
   })
+
+  it('falls back to the prod port root when no overrides exist', () => {
+    installWindow('')
+    expect(buildCanonicalMcpEndpointUrl()).toBe('http://127.0.0.1:9200/mcp')
+  })
 })
 
 describe('buildCanonicalMcpCliCommand', () => {
   it('produces the standard `claude mcp add` shape with the canonical URL', () => {
     installWindow('')
-    const cli = buildCanonicalMcpCliCommand()
-    expect(cli).toContain('claude mcp add BrowserClaw')
-    expect(cli).toContain('http://127.0.0.1:9200/mcp')
-    expect(cli).toContain('--transport http')
-    expect(cli).toContain('--scope user')
+    expect(buildCanonicalMcpCliCommand()).toBe(
+      'claude mcp add browseros-neo http://127.0.0.1:9200/mcp --transport http --scope user',
+    )
   })
 })

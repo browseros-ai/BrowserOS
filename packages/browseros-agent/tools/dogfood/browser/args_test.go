@@ -9,7 +9,7 @@ import (
 
 func TestBuildArgs(t *testing.T) {
 	args := BuildArgs(ArgsConfig{
-		Binary:      "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS",
+		Binary:      config.DefaultBrowserOSAppPath,
 		AgentRoot:   "/repo/packages/browseros-agent",
 		UserDataDir: "/tmp/browseros-dogfood",
 		ProfileDir:  "Default",

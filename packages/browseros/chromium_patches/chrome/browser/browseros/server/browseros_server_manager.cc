@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..c39cdbe4f8f1c
+index 0000000000000..c5b8bd543d33a
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1048 @@
+@@ -0,0 +1,1112 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -41,7 +41,6 @@ index 0000000000000..c39cdbe4f8f1c
 +#include "chrome/browser/browseros/server/server_state_store.h"
 +#include "chrome/browser/browseros/server/server_state_store_impl.h"
 +#include "chrome/browser/browseros/server/server_updater.h"
-+#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/common/chrome_paths.h"
@@ -60,7 +59,6 @@ index 0000000000000..c39cdbe4f8f1c
 +#include "net/log/net_log_source.h"
 +#include "net/socket/tcp_server_socket.h"
 +#include "net/socket/tcp_socket.h"
-+#include "services/network/public/cpp/shared_url_loader_factory.h"
 +
 +namespace {
 +
@@ -71,8 +69,10 @@ index 0000000000000..c39cdbe4f8f1c
 +
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
 +constexpr int kMaxStartupFailures = 3;
++constexpr int kMaxConsecutiveHealthCheckFailures = 2;
 +
 +constexpr int kExitCodeSuccess = 0;
++constexpr int kExitCodePortConflict = 2;
 +
 +int GetPortOverrideFromCommandLine(base::CommandLine* command_line,
 +                                   const char* switch_name,
@@ -262,6 +262,7 @@ index 0000000000000..c39cdbe4f8f1c
 +    ports_.cdp = browseros_server::kDefaultCDPPort;
 +    ports_.proxy = browseros_server::kDefaultProxyPort;
 +    ports_.server = browseros_server::kDefaultServerPort;
++    proxy_https_port_ = browseros_server::kDefaultProxyHttpsPort;
 +    allow_remote_in_mcp_ = false;
 +    return;
 +  }
@@ -284,6 +285,12 @@ index 0000000000000..c39cdbe4f8f1c
 +    }
 +  }
 +  ports_.proxy = proxy_port;
++
++  proxy_https_port_ =
++      local_state_->GetInteger(browseros_server::kProxyHttpsPort);
++  if (proxy_https_port_ <= 0) {
++    proxy_https_port_ = browseros_server::kDefaultProxyHttpsPort;
++  }
 +
 +  ports_.server = local_state_->GetInteger(browseros_server::kServerPort);
 +  if (ports_.server <= 0) {
@@ -350,6 +357,10 @@ index 0000000000000..c39cdbe4f8f1c
 +    assigned_ports.insert(ports_.server);
 +  }
 +
++  proxy_https_port_ = FindAvailableServerPort(proxy_https_port_, assigned_ports,
++                                              /*allow_reuse=*/true);
++  assigned_ports.insert(proxy_https_port_);
++
 +  LOG(INFO) << "browseros: Resolved ports for startup - "
 +            << ports_.DebugString();
 +}
@@ -388,12 +399,25 @@ index 0000000000000..c39cdbe4f8f1c
 +
 +  local_state_->SetInteger(browseros_server::kCDPServerPort, ports_.cdp);
 +  local_state_->SetInteger(browseros_server::kProxyPort, ports_.proxy);
++  local_state_->SetInteger(browseros_server::kProxyHttpsPort,
++                           proxy_https_port_);
 +  local_state_->SetInteger(browseros_server::kServerPort, ports_.server);
 +
 +  // DEPRECATED: keep mcp_port in sync with server port for backward compat
 +  local_state_->SetInteger(browseros_server::kMCPServerPort, ports_.server);
 +
 +  LOG(INFO) << "browseros: Saving to prefs - " << ports_.DebugString();
++}
++
++int BrowserOSServerManager::FindAvailableServerPort(
++    int starting_port,
++    const std::set<int>& excluded,
++    bool allow_reuse) {
++  if (port_finder_for_testing_) {
++    return port_finder_for_testing_.Run(starting_port, excluded, allow_reuse);
++  }
++
++  return server_utils::FindAvailablePort(starting_port, excluded, allow_reuse);
 +}
 +
 +void BrowserOSServerManager::Start() {
@@ -511,26 +535,20 @@ index 0000000000000..c39cdbe4f8f1c
 +void BrowserOSServerManager::StartProxy() {
 +  server_proxy_ = std::make_unique<BrowserOSServerProxy>();
 +
-+  // Clone the factory on the UI thread so it can be bound on the IO thread.
-+  auto pending_factory = g_browser_process->system_network_context_manager()
-+                             ->GetSharedURLLoaderFactory()
-+                             ->Clone();
-+
 +  content::GetIOThreadTaskRunner({})->PostTask(
-+      FROM_HERE,
-+      base::BindOnce(
-+          [](BrowserOSServerProxy* proxy, int port,
-+             std::unique_ptr<network::PendingSharedURLLoaderFactory> pending,
-+             bool allow_remote) {
-+            if (!proxy->Start(port, std::move(pending))) {
-+              LOG(ERROR) << "browseros: Failed to start MCP proxy on port "
-+                         << port;
-+              return;
-+            }
-+            proxy->SetAllowRemote(allow_remote);
-+          },
-+          server_proxy_.get(), ports_.proxy, std::move(pending_factory),
-+          allow_remote_in_mcp_));
++      FROM_HERE, base::BindOnce(
++                     [](BrowserOSServerProxy* proxy, int http_port,
++                        int https_port, bool allow_remote) {
++                       if (!proxy->Start(http_port, https_port)) {
++                         LOG(ERROR)
++                             << "browseros: Failed to start MCP proxy on port "
++                             << http_port;
++                         return;
++                       }
++                       proxy->SetAllowRemote(allow_remote);
++                     },
++                     server_proxy_.get(), ports_.proxy, proxy_https_port_,
++                     allow_remote_in_mcp_));
 +}
 +
 +void BrowserOSServerManager::StopProxy() {
@@ -635,6 +653,7 @@ index 0000000000000..c39cdbe4f8f1c
 +
 +  process_ = std::move(result.process);
 +  is_running_ = true;
++  consecutive_health_failures_ = 0;
 +  last_launch_time_ = base::TimeTicks::Now();
 +
 +  LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
@@ -750,6 +769,13 @@ index 0000000000000..c39cdbe4f8f1c
 +    return;
 +  }
 +
++  if (exit_code == kExitCodePortConflict) {
++    advance_port_on_restart_ = true;
++    LOG(WARNING) << "browseros: Server reported port conflict (code "
++                 << kExitCodePortConflict
++                 << "), next restart will advance server port";
++  }
++
 +  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
 +  if (uptime < kStartupGracePeriod) {
 +    consecutive_startup_failures_++;
@@ -777,7 +803,7 @@ index 0000000000000..c39cdbe4f8f1c
 +  }
 +
 +  LOG(WARNING) << "browseros: Server exited (code " << exit_code
-+               << "), restarting with new ephemeral ports";
++               << "), restarting managed server";
 +  RestartBrowserOSProcess();
 +}
 +
@@ -814,11 +840,21 @@ index 0000000000000..c39cdbe4f8f1c
 +  }
 +
 +  if (success) {
++    consecutive_health_failures_ = 0;
 +    LOG(INFO) << "browseros: Health check passed";
 +    return;
 +  }
 +
-+  LOG(WARNING) << "browseros: Health check failed, restarting";
++  consecutive_health_failures_++;
++  LOG(WARNING) << "browseros: Health check failed (strike "
++               << consecutive_health_failures_ << "/"
++               << kMaxConsecutiveHealthCheckFailures << ")";
++  if (consecutive_health_failures_ < kMaxConsecutiveHealthCheckFailures) {
++    return;
++  }
++
++  LOG(WARNING) << "browseros: Health check failed twice, restarting";
++  consecutive_health_failures_ = 0;
 +  RestartBrowserOSProcess();
 +}
 +
@@ -845,14 +881,27 @@ index 0000000000000..c39cdbe4f8f1c
 +  std::set<int> assigned;
 +  assigned.insert(ports_.cdp);
 +  assigned.insert(ports_.proxy);
++  assigned.insert(proxy_https_port_);
 +
++  const int previous_server_port = ports_.server;
 +  if (!cl->HasSwitch(browseros::kServerPort)) {
-+    ports_.server = server_utils::FindAvailablePort(
-+        browseros_server::kDefaultServerPort, assigned);
++    const bool advance_port = advance_port_on_restart_;
++    const int starting_port =
++        advance_port ? previous_server_port + 1 : previous_server_port;
++    ports_.server = FindAvailableServerPort(starting_port, assigned,
++                                            /*allow_reuse=*/!advance_port);
 +  }
++  advance_port_on_restart_ = false;
 +  assigned.insert(ports_.server);
 +
-+  LOG(INFO) << "browseros: New ephemeral ports - " << ports_.DebugString();
++  if (ports_.server == previous_server_port) {
++    LOG(INFO) << "browseros: Restart keeping server port - "
++              << ports_.DebugString();
++  } else {
++    LOG(INFO) << "browseros: Restart moved server port from "
++              << previous_server_port << " to " << ports_.server << " - "
++              << ports_.DebugString();
++  }
 +
 +  SavePortsToPrefs();
 +  LaunchBrowserOSProcess();
@@ -885,12 +934,27 @@ index 0000000000000..c39cdbe4f8f1c
 +  std::set<int> assigned;
 +  assigned.insert(ports_.cdp);
 +  assigned.insert(ports_.proxy);
++  assigned.insert(proxy_https_port_);
 +
++  const int previous_server_port = ports_.server;
 +  if (!cl->HasSwitch(browseros::kServerPort)) {
-+    ports_.server = server_utils::FindAvailablePort(
-+        browseros_server::kDefaultServerPort, assigned);
++    const bool advance_port = advance_port_on_restart_;
++    const int starting_port =
++        advance_port ? previous_server_port + 1 : previous_server_port;
++    ports_.server = FindAvailableServerPort(starting_port, assigned,
++                                            /*allow_reuse=*/!advance_port);
 +  }
++  advance_port_on_restart_ = false;
 +  assigned.insert(ports_.server);
++
++  if (ports_.server == previous_server_port) {
++    LOG(INFO) << "browseros: Update restart keeping server port - "
++              << ports_.DebugString();
++  } else {
++    LOG(INFO) << "browseros: Update restart moved server port from "
++              << previous_server_port << " to " << ports_.server << " - "
++              << ports_.DebugString();
++  }
 +
 +  SavePortsToPrefs();
 +  LaunchBrowserOSProcess();

@@ -1,0 +1,18 @@
+TelemetryState:
+  type: object
+  additionalProperties: false
+  required: [distinctId, enabled, consent]
+  properties:
+    distinctId:
+      type: string
+    enabled:
+      type: boolean
+    consent:
+      type: boolean
+UpdateTelemetryRequest:
+  type: object
+  additionalProperties: false
+  required: [consent]
+  properties:
+    consent:
+      type: boolean

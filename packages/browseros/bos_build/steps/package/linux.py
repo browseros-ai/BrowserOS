@@ -21,7 +21,6 @@ from ...lib.utils import (
     get_platform_arch,
     IS_LINUX,
 )
-from ...lib.notify import get_notifier, COLOR_GREEN
 
 # Target-arch packaging metadata. These describe the artifact we're
 # producing, not the build machine. `appimage_arch` is passed to
@@ -77,7 +76,22 @@ def get_host_appimagetool() -> tuple[str, str]:
     return tool
 
 
-@step("package_linux", phase="package", platforms=("linux",), notify=True)
+def product_icons_dir(ctx: Context) -> Path:
+    """Return the committed icon resource root for the active product."""
+    return Path(ctx.root_dir) / "resources" / ctx.product.id / "icons"
+
+
+def appimage_icon_source(ctx: Context) -> Optional[Path]:
+    """Return the best AppImage root icon for the active product."""
+    icons_base = product_icons_dir(ctx)
+    for filename in ("product_logo_256.png", "product_logo.png"):
+        icon = icons_base / filename
+        if icon.exists():
+            return icon
+    return None
+
+
+@step("package_linux", phase="package", platforms=("linux",))
 class LinuxPackageModule(Step):
     produces = ["appimage", "deb"]
     requires = []
@@ -124,23 +138,6 @@ class LinuxPackageModule(Step):
         elif deb_path:
             log_warning("   Only .deb created (AppImage failed)")
 
-        # Send Slack notification
-        notifier = get_notifier()
-        artifacts = []
-        if appimage_path:
-            artifacts.append(appimage_path.name)
-        if deb_path:
-            artifacts.append(deb_path.name)
-        notifier.notify(
-            "📦 Package Created",
-            "Linux packages created successfully",
-            {
-                "Artifacts": ", ".join(artifacts),
-                "Version": ctx.semantic_version,
-            },
-            color=COLOR_GREEN,
-        )
-
     def _package_appimage(self, ctx: Context, package_dir: Path) -> Optional[Path]:
         return package_appimage(ctx, package_dir)
 
@@ -166,8 +163,16 @@ def copy_browser_files(
     Returns:
         True if successful, False otherwise
     """
-    target_dir.mkdir(parents=True, exist_ok=True)
     out_dir = join_paths(ctx.chromium_src, ctx.out_dir)
+    extensions_dir_name = "browseros_extensions"
+    extensions_src = join_paths(out_dir, extensions_dir_name)
+    if not extensions_src.is_dir():
+        raise FileNotFoundError(
+            f"Required bundled extensions directory not found at {extensions_src}; "
+            f"expected {extensions_dir_name} in Chromium output directory {out_dir}"
+        )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     files_to_copy = [
         ctx.BROWSEROS_APP_NAME,
@@ -196,6 +201,13 @@ def copy_browser_files(
             log_info(f"  ✓ Copied {file}")
         else:
             log_warning(f"  ⚠ File not found: {file}")
+
+    shutil.copytree(
+        extensions_src,
+        join_paths(target_dir, extensions_dir_name),
+        dirs_exist_ok=True,
+    )
+    log_info(f"  ✓ Copied {extensions_dir_name}/")
 
     dirs_to_copy = [
         "locales",
@@ -229,7 +241,11 @@ def copy_browser_files(
 def _server_output_roots(ctx: Context) -> list[str]:
     """Return final server bundle roots for the active product."""
     product = getattr(ctx, "product", None)
-    bundles = server_bundles_for_product(product.id) if product else all_server_bundles()
+    bundles = (
+        server_bundles_for_product(product.id)
+        if product
+        else all_server_bundles()
+    )
     return [bundle.chromium_output_root for bundle in bundles]
 
 
@@ -258,20 +274,12 @@ StartupWMClass=chromium-browser
 
 
 def copy_icon(ctx: Context, icons_dir: Path) -> bool:
-    """Copy product icons at multiple sizes to hicolor icon directory.
-
-    Args:
-        ctx: Build context
-        icons_dir: Base icons directory (usr/share/icons/hicolor)
-
-    Returns:
-        True if at least one icon was copied, False if none found
-    """
-    icons_base = Path(join_paths(ctx.root_dir, "resources", "icons"))
+    """Copy active-product icons to the hicolor icon directory."""
+    icons_base = product_icons_dir(ctx)
     copied = False
 
     for size in [16, 22, 24, 32, 48, 64, 128, 256]:
-        icon_src = Path(join_paths(icons_base, f"product_logo_{size}.png"))
+        icon_src = icons_base / f"product_logo_{size}.png"
         if icon_src.exists():
             icon_dest = Path(
                 join_paths(
@@ -288,7 +296,7 @@ def copy_icon(ctx: Context, icons_dir: Path) -> bool:
     if copied:
         log_info("  ✓ Copied icons (multiple sizes)")
     else:
-        log_warning("  ⚠ No icon files found in resources/icons/")
+        log_warning(f"  ⚠ No icon files found in {icons_base}")
 
     return copied
 
@@ -329,11 +337,8 @@ def prepare_appdir(ctx: Context, appdir: Path) -> bool:
     )
     appdir_desktop.write_text(desktop_content)
 
-    # AppImage-specific: Copy icon to root (256px for best quality)
-    icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo_256.png"))
-    if not icon_src.exists():
-        icon_src = Path(join_paths(ctx.root_dir, "resources", "icons", "product_logo.png"))
-    if icon_src.exists():
+    icon_src = appimage_icon_source(ctx)
+    if icon_src:
         appdir_icon = Path(join_paths(appdir, f"{ctx.product.linux.icon_name}.png"))
         shutil.copy2(icon_src, appdir_icon)
 
@@ -363,7 +368,9 @@ def download_appimagetool(ctx: Context) -> Optional[Path]:
     arch is communicated via the ARCH env var in create_appimage().
     """
     tool_dir = Path(join_paths(ctx.root_dir, "build", "tools"))
-    tool_dir.mkdir(exist_ok=True)
+    # build/ left the repo in the bos_build refactor (#1499) — on a fresh CI
+    # checkout the parent doesn't exist, so create the whole chain.
+    tool_dir.mkdir(parents=True, exist_ok=True)
 
     tool_filename, url = get_host_appimagetool()
     tool_path = Path(join_paths(tool_dir, tool_filename))

@@ -1,0 +1,51 @@
+SessionId:
+  name: sessionId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1
+ScreenshotId:
+  name: screenshotId
+  in: path
+  required: true
+  schema:
+    type: integer
+    format: int64
+    minimum: 1
+Harness:
+  name: harness
+  in: path
+  required: true
+  schema:
+    $ref: ./schemas/connections.yaml#/Harness
+RecordingTabId:
+  name: X-Recording-Tab-Id
+  in: header
+  required: true
+  schema:
+    type: integer
+    format: int64
+    minimum: 1
+RecordingDocumentId:
+  name: X-Recording-Document-Id
+  in: header
+  required: true
+  description: Opaque 32-character hexadecimal document token supplied by Chrome.
+  schema:
+    type: string
+    pattern: '^[0-9A-Fa-f]{32}$'
+RecordingBatchId:
+  name: X-Recording-Batch-Id
+  in: header
+  required: true
+  schema:
+    type: string
+    minLength: 1
+RecordingGap:
+  name: X-Recording-Has-Gap
+  in: header
+  required: false
+  description: Permanently marks this document stream partial after recorder-side loss.
+  schema:
+    type: boolean

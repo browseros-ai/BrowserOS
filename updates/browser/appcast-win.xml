@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>BrowserOS Windows Updates</title>
+    <link>https://cdn.browseros.com/appcast-win.xml</link>
+    <description>Most recent changes with links to updates.</description>
+    <language>en</language>
+
+    <item>
+      <title>BrowserOS - 0.47.18</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>10000.0.47.18.0</sparkle:version>
+      <sparkle:shortVersionString>0.47.18</sparkle:shortVersionString>
+      <pubDate>Sat, 18 Jul 2026 02:44:03 +0000</pubDate>
+      <link>https://www.browseros.com/</link>
+      <enclosure
+        url="http://cdn.browseros.com/releases/browseros/0.47.18/win/BrowserOS_v0.47.18_x64_installer.exe"
+        sparkle:os="windows"
+        sparkle:edSignature="QOqAIHdrdORvZzuox6lz6c635Da8mTOWPENkvdJGS/E2fYCKi938dPdn9B6+T3Gnp9V4GoIwvsbdatc7ThaTBw=="
+        length="159671864"
+        type="application/octet-stream" />
+    </item>
+
+  </channel>
+</rss>

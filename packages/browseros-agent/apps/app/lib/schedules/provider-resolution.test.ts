@@ -18,6 +18,12 @@ const createBrowserOSProvider = () => ({
   updatedAt: 0,
 })
 
+// Total replacements are intentional here: these storage/helper
+// modules pull in wxt/storage + generated graphql code that requires
+// build-time output not present in this test context. No other test
+// imports from these modules, so cross-file pollution isn't a risk.
+// Per-file worker isolation (Level 3 in the 2026-07-17 test
+// reliability audit) covers the general class regardless.
 mock.module('@/lib/llm-providers/storage', () => ({
   DEFAULT_PROVIDER_ID: 'browseros',
   createDefaultBrowserOSProvider: createBrowserOSProvider,
@@ -43,7 +49,7 @@ mock.module('@/lib/llm-providers/storage', () => ({
 mock.module('@/lib/browseros/helpers', () => ({
   getAgentServerUrl: async () => 'http://127.0.0.1:9105',
   getMcpServerUrl: async () => 'http://127.0.0.1:9106/mcp',
-  getHealthCheckUrl: async () => 'http://127.0.0.1:9106/health',
+  getHealthCheckUrl: async () => 'http://127.0.0.1:9106/system/health',
   getProxyPort: async () => 9106,
 }))
 
@@ -91,12 +97,12 @@ afterEach(() => {
 })
 
 describe('scheduled provider resolution', () => {
-  it('falls back through the configured default when an explicit scheduled provider is local runtime only', async () => {
+  it('uses an explicit scheduled provider', async () => {
     const { getChatServerResponse } = await import('./getChatServerResponse')
 
     await getChatServerResponse({
       message: 'Run my schedule',
-      providerId: 'codex-provider',
+      providerId: 'anthropic-sonnet',
     })
 
     expect(fetchBodies[0]).toMatchObject({
@@ -106,7 +112,7 @@ describe('scheduled provider resolution', () => {
     })
   })
 
-  it('falls back through the configured default when an explicit refine provider is local runtime only', async () => {
+  it('uses an explicit refine provider', async () => {
     globalThis.fetch = mock(async (_url, init) => {
       fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
       return Response.json({ success: true, refined: 'Refined prompt' })
@@ -117,7 +123,7 @@ describe('scheduled provider resolution', () => {
     await refinePrompt({
       prompt: 'Check mail',
       name: 'Morning brief',
-      providerId: 'codex-provider',
+      providerId: 'anthropic-sonnet',
     })
 
     expect(fetchBodies[0]).toMatchObject({
@@ -149,17 +155,6 @@ const providers: LlmProviderConfig[] = [
     apiKey: 'sk-ant',
     supportsImages: true,
     contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'codex-provider',
-    type: 'codex',
-    name: 'Codex',
-    modelId: 'gpt-5.3-codex',
-    supportsImages: false,
-    contextWindow: 400000,
     temperature: 0.2,
     createdAt: timestamp,
     updatedAt: timestamp,

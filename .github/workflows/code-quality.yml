@@ -4,9 +4,9 @@ on:
   pull_request:
     branches:
       - main
-      - dev
       - feat/claw-server-bootstrap
     paths:
+      - ".github/workflows/code-quality.yml"
       - "packages/browseros-agent/**"
 
 jobs:
@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: bun ci
 
+      - name: Check env examples
+        run: bun run env:examples:check
+
       - name: Prepare wxt
         run: VITE_PUBLIC_BROWSEROS_API=http://localhost:3000 bun run --cwd apps/app wxt prepare
 
@@ -60,6 +63,78 @@ jobs:
 
       - name: Run Typecheck
         run: bun run typecheck
+
+  claw-api-codegen:
+    name: runner / Claw API generated code
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: 2.5.4
+
+      - name: Setup Rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+
+      - name: Check Claw API generated code
+        run: bun run codegen:claw-api:check
+
+  claw-api-contract:
+    name: runner / Claw API conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/browseros-agent/target
+          key: ${{ runner.os }}-claw-api-cargo-${{ hashFiles('packages/browseros-agent/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-claw-api-cargo-
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Run Claw API contract tests
+        run: bun run test:claw-api-contract
 
   fallow:
     name: runner / Fallow

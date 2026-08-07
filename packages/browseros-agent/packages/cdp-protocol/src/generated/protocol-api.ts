@@ -11,6 +11,7 @@ import type { BrowserApi } from './domain-apis/browser'
 import type { CacheStorageApi } from './domain-apis/cache-storage'
 import type { CastApi } from './domain-apis/cast'
 import type { ConsoleApi } from './domain-apis/console'
+import type { CrashReportContextApi } from './domain-apis/crash-report-context'
 import type { CSSApi } from './domain-apis/css'
 import type { DebuggerApi } from './domain-apis/debugger'
 import type { DeviceAccessApi } from './domain-apis/device-access'
@@ -56,6 +57,7 @@ import type { TetheringApi } from './domain-apis/tethering'
 import type { TracingApi } from './domain-apis/tracing'
 import type { WebAudioApi } from './domain-apis/web-audio'
 import type { WebAuthnApi } from './domain-apis/web-authn'
+import type { WebMCPApi } from './domain-apis/web-mcp'
 
 export interface ProtocolApi {
   readonly Accessibility: AccessibilityApi
@@ -69,6 +71,7 @@ export interface ProtocolApi {
   readonly CSS: CSSApi
   readonly CacheStorage: CacheStorageApi
   readonly Cast: CastApi
+  readonly CrashReportContext: CrashReportContextApi
   readonly DOM: DOMApi
   readonly DOMDebugger: DOMDebuggerApi
   readonly DOMSnapshot: DOMSnapshotApi
@@ -108,6 +111,7 @@ export interface ProtocolApi {
   readonly Tracing: TracingApi
   readonly WebAudio: WebAudioApi
   readonly WebAuthn: WebAuthnApi
+  readonly WebMCP: WebMCPApi
   readonly Console: ConsoleApi
   readonly Debugger: DebuggerApi
   readonly HeapProfiler: HeapProfilerApi

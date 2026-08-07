@@ -1,8 +1,6 @@
 [post-create]
 install = "bun install"
-# env-server = "cp {{ repo_root }}/apps/server/.env.development apps/server/.env.development"
-# env-agent = "cp {{ repo_root }}/apps/app/.env.development apps/app/.env.development"
-env = "for f in {{ repo_root }}/apps/*/.env.*; do [ -f \"$f\" ] && cp \"$f\" \"${f#{{ repo_root }}/}\"; done 2>/dev/null || true"
+env = "for f in {{ repo_root }}/.env.development {{ repo_root }}/.env.production; do [ -f \"$f\" ] && cp \"$f\" .; done 2>/dev/null || true"
 # Trust the worktree (skip the agent first-run trust prompt) and link ./.llm into
 # the shared home archive — in a worktree dotllm init mirrors the main checkout's .llm.
 trust = "dotllm trust -q || true"

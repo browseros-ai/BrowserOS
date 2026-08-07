@@ -1,8 +1,16 @@
 diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
-index 1a692fe440945..a82aaabd142a4 100644
+index 1a692fe440945200128c90fc968d5682ae62470f..9506fdc252db035e647facdc0a48f789047cf6f0 100644
 --- a/chrome/common/BUILD.gn
 +++ b/chrome/common/BUILD.gn
-@@ -596,7 +596,10 @@ static_library("constants") {
+@@ -457,6 +457,7 @@ static_library("non_code_constants") {
+     ":buildflags",
+     ":version_header",
+     "//base",
++    "//chrome/browser/browseros:buildflags",
+     "//content/public/common:buildflags",
+   ]
+ 
+@@ -596,7 +597,10 @@ static_library("constants") {
    }
    if (is_linux || is_chromeos) {
      sources += [ "chrome_paths_linux.cc" ]

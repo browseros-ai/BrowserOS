@@ -12,7 +12,6 @@ const REQUIRED_PROD_VARS = [
 ]
 const INLINED_ENV_VARS = [
   ...REQUIRED_PROD_VARS,
-  'AGENT_RUNNER_JWT_SECRET',
   'NODE_ENV',
   'LOG_LEVEL',
 ] as const
@@ -34,12 +33,11 @@ export const browserosServerBuildProduct: BuildProductDescriptor = {
   archiveBaseName: 'browseros-server-resources',
   defaultManifestPath: 'scripts/build/config/server-prod-resources.json',
   env: {
-    prodEnvPath: 'apps/server/.env.production',
-    prodEnvTemplatePath: 'apps/server/.env.production.example',
     requiredInlineEnvKeys: REQUIRED_PROD_VARS,
     inlineEnvKeys: INLINED_ENV_VARS,
     ciInlineEnvDefaults: CI_INLINE_ENV_DEFAULTS,
-    defaultR2UploadPrefix: 'server/prod-resources',
+    defaultR2UploadPrefix: 'artifacts/server',
+    defaultR2DownloadPrefix: 'artifacts/vendor',
   },
   bundle: {
     external: ['node-pty'],

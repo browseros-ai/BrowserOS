@@ -1,3 +1,4 @@
+import type { SessionScreenshot } from '@browseros/claw-api'
 import { useMemo } from 'react'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
@@ -6,12 +7,14 @@ import {
   taskScreenshotUrl,
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
+import { formatOffset, hostOf } from './screenshot.helpers'
 
 interface ScreenshotStripProps {
+  sessionId: string
   dispatches: ToolDispatchRow[]
-  screenshotDispatchIds: number[]
+  screenshots: SessionScreenshot[]
   startedAt: number
-  onSelect: (dispatchId: number) => void
+  onSelect: (screenshotId: number) => void
 }
 
 /**
@@ -21,20 +24,30 @@ interface ScreenshotStripProps {
  * zero screenshots.
  */
 export function ScreenshotStrip({
+  sessionId,
   dispatches,
-  screenshotDispatchIds,
+  screenshots,
   startedAt,
   onSelect,
 }: ScreenshotStripProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const meta = useMemo(() => {
-    const byId = new Map(dispatches.map((d) => [d.id, d]))
-    return screenshotDispatchIds.map((id) => {
-      const d = byId.get(id)
-      const offset = d ? Math.max(0, d.createdAt - startedAt) : 0
-      return { id, offset, url: d?.url ?? null }
+    const byScreenshotId = new Map(
+      dispatches.flatMap((dispatch) =>
+        dispatch.screenshotId === undefined
+          ? []
+          : [[dispatch.screenshotId, dispatch] as const],
+      ),
+    )
+    return screenshots.map((screenshot) => {
+      const dispatch = byScreenshotId.get(screenshot.screenshotId)
+      return {
+        id: screenshot.screenshotId,
+        offset: Math.max(0, screenshot.capturedAt - startedAt),
+        url: dispatch?.url ?? null,
+      }
     })
-  }, [dispatches, screenshotDispatchIds, startedAt])
+  }, [dispatches, screenshots, startedAt])
 
   if (meta.length === 0) {
     return (
@@ -69,7 +82,7 @@ export function ScreenshotStrip({
               >
                 {screenshotBaseUrl !== null ? (
                   <img
-                    src={taskScreenshotUrl(s.id, screenshotBaseUrl)}
+                    src={taskScreenshotUrl(sessionId, s.id, screenshotBaseUrl)}
                     alt={`Screenshot ${idx + 1}`}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -91,23 +104,4 @@ export function ScreenshotStrip({
       </ScrollArea>
     </section>
   )
-}
-
-function formatOffset(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const totalSec = Math.floor(seconds)
-  const mins = Math.floor(totalSec / 60)
-  const rem = totalSec % 60
-  return `${mins}m${rem.toString().padStart(2, '0')}s`
-}
-
-function hostOf(url: string | null): string {
-  if (!url) return ''
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return ''
-  }
 }

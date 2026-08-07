@@ -15,7 +15,6 @@ from ...lib.utils import (
     join_paths,
     IS_WINDOWS,
 )
-from ...lib.notify import get_notifier, COLOR_GREEN
 from ..compile.standard import autoninja_command
 
 
@@ -48,7 +47,7 @@ class MiniInstallerModule(Step):
             raise RuntimeError("Failed to build mini_installer")
 
 
-@step("package_windows", phase="package", platforms=("windows",), notify=True)
+@step("package_windows", phase="package", platforms=("windows",))
 class WindowsPackageModule(Step):
     produces = ["installer", "installer_zip"]
     requires = []
@@ -60,31 +59,45 @@ class WindowsPackageModule(Step):
 
         build_output_dir = join_paths(context.chromium_src, context.out_dir)
         mini_installer_path = build_output_dir / "mini_installer.exe"
+        winsparkle_path = build_output_dir / "WinSparkle.dll"
 
         if not mini_installer_path.exists():
             raise ValidationError(f"mini_installer.exe not found: {mini_installer_path}")
+        if not winsparkle_path.exists():
+            raise ValidationError(
+                f"WinSparkle.dll not found: {winsparkle_path}. "
+                "WinSparkle auto-update won't ship without it."
+            )
 
     def execute(self, context: Context) -> None:
         log_info("\n📦 Creating Windows packages...")
 
         installer_path = self._create_installer(context)
         zip_path = self._create_portable_zip(context)
+        product_executable_path = self._copy_product_executable(context)
 
         context.artifact_registry.add("installer", installer_path)
         context.artifact_registry.add("installer_zip", zip_path)
+        context.artifact_registry.add("built_app", product_executable_path)
 
         log_success("Windows packages created successfully")
 
-        notifier = get_notifier()
-        notifier.notify(
-            "📦 Package Created",
-            "Windows packages created successfully",
-            {
-                "Artifacts": f"{installer_path.name}, {zip_path.name}",
-                "Version": context.semantic_version,
-            },
-            color=COLOR_GREEN,
-        )
+    def _copy_product_executable(self, ctx: Context) -> Path:
+        """Create the product-named executable after installer packaging."""
+        chrome_path = ctx.get_chromium_app_path()
+        product_path = ctx.get_app_path()
+        if not chrome_path.exists():
+            raise RuntimeError(
+                f"Primary browser executable not found after packaging: {chrome_path}"
+            )
+
+        try:
+            shutil.copy2(chrome_path, product_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create product executable: {e}") from e
+
+        log_success(f"Product executable created: {product_path.name}")
+        return product_path
 
     def _create_installer(self, ctx: Context) -> Path:
         build_output_dir = join_paths(ctx.chromium_src, ctx.out_dir)
@@ -125,6 +138,8 @@ class WindowsPackageModule(Step):
             return zip_path
         except Exception as e:
             raise RuntimeError(f"Failed to create installer ZIP: {e}")
+
+
 def build_mini_installer(ctx: Context) -> bool:
     """Build the mini_installer target if it doesn't exist"""
     log_info("\n🔨 Checking mini_installer build...")

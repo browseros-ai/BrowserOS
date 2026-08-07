@@ -2,7 +2,7 @@
 
 The build pipeline's patch step runs this on pristine pinned trees;
 patches either apply cleanly or the build fails loudly. Interactive
-conflict workflows belong to the Go bpatch tool — runners must never
+conflict workflows belong to the Rust bpatch tool — runners must never
 need it, so this stays in Python.
 """
 
@@ -38,6 +38,13 @@ def reset_file_to_commit(file_path: str, commit: str, chromium_src: Path) -> boo
 # are never applied; the doctor maps them back onto their base path.
 MARKER_SUFFIXES = (".deleted", ".binary", ".rename")
 
+METADATA_ROOT_FILES = (
+    ".features.yaml",
+    ".store.yaml",
+    "features.yaml",
+    "store.yaml",
+)
+
 
 def find_patch_files(patches_dir: Path) -> List[Path]:
     """Find all valid patch files in a directory.
@@ -58,6 +65,7 @@ def find_patch_files(patches_dir: Path) -> List[Path]:
             if p.is_file()
             and not p.name.endswith(MARKER_SUFFIXES)
             and not p.name.startswith(".")
+            and str(p.relative_to(patches_dir)) not in METADATA_ROOT_FILES
         ]
     )
 

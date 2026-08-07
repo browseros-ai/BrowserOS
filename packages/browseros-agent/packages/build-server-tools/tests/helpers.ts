@@ -18,8 +18,6 @@ export function testProduct(
     archiveBaseName: 'test-server-resources',
     defaultManifestPath: 'scripts/build/config/test-server-resources.json',
     env: {
-      prodEnvPath: 'apps/test-server/.env.production',
-      prodEnvTemplatePath: 'apps/test-server/.env.production.example',
       requiredInlineEnvKeys: ['TEST_CONFIG_URL'],
       inlineEnvKeys: ['TEST_CONFIG_URL', 'LOG_LEVEL'],
       ciInlineEnvDefaults: {
@@ -27,6 +25,7 @@ export function testProduct(
         TEST_CONFIG_URL: 'https://test.invalid/config',
       },
       defaultR2UploadPrefix: 'test-server/prod-resources',
+      defaultR2DownloadPrefix: 'artifacts/vendor',
     },
     ...overrides,
   }

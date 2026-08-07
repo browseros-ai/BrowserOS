@@ -19,11 +19,11 @@ interface FilterBarProps {
   agentOptions: AgentChip[]
   statusOptions: { status: TaskStatus; count: number }[]
   siteOptions: { site: string; count: number }[]
-  selectedAgentId: string | null
+  selectedAgentSlug: string | null
   selectedStatus: TaskStatus | null
   selectedSite: string | null
   search: string
-  onAgentChange: (agentId: string | null) => void
+  onAgentChange: (slug: string | null) => void
   onStatusChange: (status: TaskStatus | null) => void
   onSiteChange: (site: string | null) => void
   onSearchChange: (q: string) => void
@@ -33,7 +33,7 @@ export function FilterBar({
   agentOptions,
   statusOptions,
   siteOptions,
-  selectedAgentId,
+  selectedAgentSlug,
   selectedStatus,
   selectedSite,
   search,
@@ -42,7 +42,7 @@ export function FilterBar({
   onSiteChange,
   onSearchChange,
 }: FilterBarProps) {
-  const selectedAgent = agentOptions.find((a) => a.agentId === selectedAgentId)
+  const selectedAgent = agentOptions.find((a) => a.slug === selectedAgentSlug)
   // Local search state so each keystroke updates the input
   // immediately, but the URL + refetch only fires after the operator
   // has paused typing. Without this every character triggered a
@@ -84,20 +84,20 @@ export function FilterBar({
           )}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-52">
+        <DropdownMenuContent align="start" className="ph-no-capture min-w-52">
           <DropdownMenuItem onClick={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
-            {selectedAgentId === null && <Check className="size-3.5" />}
+            {selectedAgentSlug === null && <Check className="size-3.5" />}
           </DropdownMenuItem>
           {agentOptions.map((opt) => (
             <DropdownMenuItem
-              key={opt.agentId}
-              onClick={() => onAgentChange(opt.agentId)}
+              key={opt.slug}
+              onClick={() => onAgentChange(opt.slug)}
             >
               <AgentDot slug={opt.slug} className="mr-1.5" />
               <span className="flex-1">{opt.agentLabel}</span>
               <span className="ml-2 text-[11.5px] text-ink-3">{opt.count}</span>
-              {selectedAgentId === opt.agentId && (
+              {selectedAgentSlug === opt.slug && (
                 <Check className="ml-2 size-3.5" />
               )}
             </DropdownMenuItem>
@@ -118,7 +118,7 @@ export function FilterBar({
           {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-44">
+        <DropdownMenuContent align="start" className="ph-no-capture min-w-44">
           <DropdownMenuItem onClick={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
@@ -154,7 +154,7 @@ export function FilterBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="max-h-64 min-w-52 overflow-y-auto"
+            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto"
           >
             <DropdownMenuItem onClick={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
@@ -186,7 +186,7 @@ export function FilterBar({
           placeholder="search sessions..."
           // pr-7 reserves space for the inline clear button so the
           // text never sits under the icon.
-          className="h-8 w-64 border-none bg-transparent pr-7 pl-8 font-mono text-[11.5px] text-ink-1 placeholder:text-ink-3 focus-visible:bg-card-tint focus-visible:ring-0"
+          className="h-8 w-64 border-none bg-transparent pr-7 pl-8 font-mono text-[11.5px] text-ink placeholder:text-ink-3 focus-visible:bg-card-tint focus-visible:ring-0"
         />
         {localSearch.length > 0 && (
           <button
@@ -194,7 +194,7 @@ export function FilterBar({
             onClick={clearSearch}
             aria-label="Clear search"
             data-testid="filter-search-clear"
-            className="absolute right-1.5 inline-flex size-5 items-center justify-center rounded text-ink-3 transition-colors hover:bg-card-tint hover:text-ink-1"
+            className="absolute right-1.5 inline-flex size-5 items-center justify-center rounded text-ink-3 transition-colors hover:bg-card-tint hover:text-ink"
           >
             <X className="size-3.5" />
           </button>
@@ -227,5 +227,6 @@ function StatusPill({ status }: { status: TaskStatus }) {
       </span>
     )
   }
+  if (status === 'cancelled') return <span>Stopped</span>
   return <span>Done</span>
 }

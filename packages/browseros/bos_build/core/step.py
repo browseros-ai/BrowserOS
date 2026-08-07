@@ -3,8 +3,8 @@
 
 A step is one discrete pipeline unit (clean, compile, sign_macos, ...).
 Classes register with the @step decorator, which attaches metadata the
-CLI and planner derive everything from: available steps, per-platform
-phase ordering, and notification hooks. Within a phase, order is
+CLI and planner derive everything from: available steps and per-platform
+phase ordering. Within a phase, order is
 registration order — bos_build/steps/__init__.py imports step modules
 in canonical pipeline order, so that file is the single place ordering
 lives.
@@ -50,7 +50,6 @@ class Step:
         name: Registry name (e.g. "sign_macos")
         phase: One of PHASES
         platforms: Platforms the step applies to; None = all
-        notify: Whether lifecycle notifications fire for this step
         env: Environment variable names the step needs (preflighted)
         optional: Excluded from phase-flag/preset expansion unless
             explicitly requested (e.g. series_patches, merge_universal)
@@ -69,7 +68,6 @@ class Step:
     name: str = ""
     phase: str = ""
     platforms: Optional[Tuple[str, ...]] = None
-    notify: bool = False
     env: Tuple[str, ...] = ()
     optional: bool = False
 
@@ -130,7 +128,6 @@ def step(
     *,
     phase: str,
     platforms: Optional[Tuple[str, ...]] = None,
-    notify: bool = False,
     env: Tuple[str, ...] = (),
     optional: bool = False,
 ):
@@ -149,7 +146,6 @@ def step(
         cls.name = name
         cls.phase = phase
         cls.platforms = platforms
-        cls.notify = notify
         cls.env = env
         cls.optional = optional
         _REGISTRY[name] = cls
@@ -185,12 +181,6 @@ def phase_steps(
         and (include_optional or not cls.optional)
         and (cls.platforms is None or platform in cls.platforms)
     ]
-
-
-def notify_step_names() -> List[str]:
-    """Names of steps that trigger lifecycle notifications."""
-    _ensure_loaded()
-    return [name for name, cls in _REGISTRY.items() if cls.notify]
 
 
 def _ensure_loaded() -> None:

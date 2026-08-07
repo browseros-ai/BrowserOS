@@ -11,6 +11,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
 import { FilterBar } from '@/components/audit/FilterBar'
+import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
 import {
   Table,
   TableBody,
@@ -28,6 +29,9 @@ import {
   isSameLocalDay,
   orderByLiveThenRecency,
 } from './audit.helpers'
+
+/** Keeps the implemented token column dormant without discarding its sorting and cell behavior. */
+const SHOW_TOKEN_USAGE_COLUMN = false
 
 /**
  * Editorial audit screen. Preserves the tanstack-table + shadcn
@@ -62,7 +66,7 @@ export function Audit() {
   const location = useLocation()
 
   const hasActiveFilters =
-    filters.agentId !== null ||
+    filters.agentSlug !== null ||
     filters.status !== null ||
     filters.site !== null ||
     filters.search.length > 0
@@ -81,7 +85,13 @@ export function Audit() {
         : [],
     [sortId, sortDesc],
   )
-  const state = useMemo(() => ({ sorting }), [sorting])
+  const state = useMemo(
+    () => ({
+      sorting,
+      columnVisibility: { tokens: SHOW_TOKEN_USAGE_COLUMN },
+    }),
+    [sorting],
+  )
 
   const table = useReactTable<TaskSummary>({
     data: orderedTasks,
@@ -107,10 +117,11 @@ export function Audit() {
 
   return (
     <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
-      <header>
+      <header className="flex items-start justify-between gap-4">
         <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
           Audit
         </h1>
+        <ManageAuditFilesDialog />
       </header>
 
       {!isError && (tasks.length > 0 || hasActiveFilters) && (
@@ -118,7 +129,7 @@ export function Audit() {
           agentOptions={agentOptions}
           statusOptions={statusOptions}
           siteOptions={siteOptions}
-          selectedAgentId={filters.agentId}
+          selectedAgentSlug={filters.agentSlug}
           selectedStatus={filters.status}
           selectedSite={filters.site}
           search={filters.search}
@@ -250,7 +261,7 @@ export function Audit() {
                 type="button"
                 onClick={fetchNextPage}
                 disabled={isFetchingNextPage}
-                className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-60"
+                className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isFetchingNextPage ? 'Loading...' : 'Load older tasks'}
                 <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />

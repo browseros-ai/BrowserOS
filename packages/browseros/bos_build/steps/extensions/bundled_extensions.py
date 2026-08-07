@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Bundled Extensions Module - Download and bundle extensions from CDN manifest"""
+"""Stage bundled extension CRXs from published or prepared resources."""
 
 import json
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -12,10 +13,12 @@ import requests
 from ...core.context import Context
 from ...core.step import Step, ValidationError, step
 from ...lib.utils import log_info, log_success
+from ...release.prepared_resources import PreparedResourcesManifest
+from ..resources.source import validated_common_resources
 
 
 class ExtensionInfo(NamedTuple):
-    """Extension metadata parsed from update manifest"""
+    """One extension selected for browser staging."""
 
     id: str
     version: str
@@ -24,11 +27,11 @@ class ExtensionInfo(NamedTuple):
 
 @step("bundled_extensions", phase="prep")
 class BundledExtensionsModule(Step):
-    """Download extensions from CDN manifest and create bundled_extensions.json"""
+    """Stage product-required CRXs and their Chromium manifest."""
 
     produces = ["bundled_extensions"]
     requires = []
-    description = "Download and bundle extensions from CDN update manifest"
+    description = "Stage bundled extension CRXs"
 
     def validate(self, ctx: Context) -> None:
         if not ctx.chromium_src or not ctx.chromium_src.exists():
@@ -37,158 +40,171 @@ class BundledExtensionsModule(Step):
             )
 
     def execute(self, ctx: Context) -> None:
-        log_info("\n📦 Bundling extensions from CDN manifest...")
+        self.validate(ctx)
+        if ctx.resource_mode == "source":
+            manifest = validated_common_resources(ctx)
+            staged = self._prepared_extensions(ctx, manifest)
+            ctx.artifact_registry.add("common_manifest_digest", manifest.digest())
+            source_label = "prepared common resources"
+        else:
+            extensions = self._fetch_and_parse_manifest(
+                ctx.get_extensions_manifest_url()
+            )
+            if not extensions:
+                raise RuntimeError("No extensions found in manifest")
+            staged = self._select_product_extensions(extensions, ctx)
+            source_label = "CDN manifest"
 
-        manifest_url = ctx.get_extensions_manifest_url()
         output_dir = self._get_output_dir(ctx)
-
         output_dir.mkdir(parents=True, exist_ok=True)
+        self._clear_generated_outputs(ctx, output_dir)
+        log_info(f"\n📦 Bundling extensions from {source_label}...")
         log_info(f"  Output: {output_dir}")
+        if ctx.resource_mode == "source":
+            self._copy_prepared_extensions(staged, ctx, output_dir, manifest)
+        else:
+            for extension in staged:
+                self._download_extension(extension, output_dir)
+        self._generate_json(staged, output_dir)
+        log_success(f"Bundled {len(staged)} extensions successfully")
 
-        extensions = self._fetch_and_parse_manifest(manifest_url)
-        if not extensions:
-            raise RuntimeError("No extensions found in manifest")
-        extensions = self._select_product_extensions(extensions, ctx)
+    def _prepared_extensions(
+        self, ctx: Context, manifest: PreparedResourcesManifest
+    ) -> List[ExtensionInfo]:
+        files = [manifest.files[role] for role in ("product_crx", "bug_reporter_crx")]
+        required_ids = {extension_id for extension_id, _ in ctx.required_extension_ids}
+        actual_ids = {prepared.extension_id for prepared in files}
+        if actual_ids != required_ids:
+            raise ValueError("Prepared-resource extensions do not match the product")
+        return [
+            ExtensionInfo(
+                id=prepared.extension_id,
+                version=prepared.version,
+                codebase=f"prepared://{prepared.path}",
+            )
+            for prepared in files
+        ]
 
-        log_info(f"  Selected {len(extensions)} extension(s) for {ctx.product.display_name}")
-
-        for ext in extensions:
-            self._download_extension(ext, output_dir)
-
-        self._generate_json(extensions, output_dir)
-
-        log_success(f"Bundled {len(extensions)} extensions successfully")
+    def _copy_prepared_extensions(
+        self,
+        extensions: List[ExtensionInfo],
+        ctx: Context,
+        output_dir: Path,
+        manifest: PreparedResourcesManifest,
+    ) -> None:
+        root = ctx.prepared_resources
+        if root is None:
+            raise RuntimeError("Prepared resources were not registered")
+        by_id = {
+            prepared.extension_id: prepared
+            for role, prepared in manifest.files.items()
+            if role.endswith("crx")
+        }
+        for extension in extensions:
+            prepared = by_id[extension.id]
+            shutil.copy2(
+                root / prepared.path,
+                output_dir / f"{extension.id}.crx",
+            )
 
     def _get_output_dir(self, ctx: Context) -> Path:
-        """Get the bundled extensions output directory in Chromium source"""
         return (
-            ctx.chromium_src / "chrome" / "browser" / "browseros" / "bundled_extensions"
+            ctx.chromium_src / "chrome/browser/browseros/bundled_extensions"
         )
 
-    def _fetch_and_parse_manifest(self, url: str) -> List[ExtensionInfo]:
-        """Fetch XML manifest and parse extension information"""
-        log_info(f"  Fetching manifest: {url}")
+    def _clear_generated_outputs(self, ctx: Context, output_dir: Path) -> None:
+        for crx_path in output_dir.glob("*.crx"):
+            crx_path.unlink()
+        (output_dir / "bundled_extensions.json").unlink(missing_ok=True)
+        generated = ctx.chromium_src / ctx.out_dir / "browseros_extensions"
+        if generated.is_symlink() or generated.is_file():
+            generated.unlink()
+        elif generated.exists():
+            shutil.rmtree(generated)
 
+    def _fetch_and_parse_manifest(self, url: str) -> List[ExtensionInfo]:
+        log_info(f"  Fetching manifest: {url}")
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
-        except requests.RequestException as e:
-            raise RuntimeError(f"Failed to fetch manifest: {e}")
-
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Failed to fetch manifest: {exc}") from exc
         return self._parse_manifest_xml(response.text)
 
     def _parse_manifest_xml(self, xml_content: str) -> List[ExtensionInfo]:
-        """Parse Google Update protocol XML manifest."""
-        extensions = []
-
         try:
             root = ET.fromstring(xml_content)
-        except ET.ParseError as e:
-            raise RuntimeError(f"Failed to parse manifest XML: {e}")
-
-        ns = {"gupdate": "http://www.google.com/update2/response"}
-
-        # Try with namespace first, then without (for flexibility)
-        apps = root.findall(".//gupdate:app", ns)
-        if not apps:
-            apps = root.findall(".//app")
-
+        except ET.ParseError as exc:
+            raise RuntimeError(f"Failed to parse manifest XML: {exc}") from exc
+        namespace = {"gupdate": "http://www.google.com/update2/response"}
+        apps = root.findall(".//gupdate:app", namespace) or root.findall(".//app")
+        extensions = []
         for app in apps:
             app_id = app.get("appid")
             if not app_id:
                 continue
-
-            updatecheck = app.find("gupdate:updatecheck", ns)
-            if updatecheck is None:
-                updatecheck = app.find("updatecheck")
-            if updatecheck is None:
+            update = app.find("gupdate:updatecheck", namespace)
+            if update is None:
+                update = app.find("updatecheck")
+            if update is None:
                 continue
-
-            version = updatecheck.get("version")
-            codebase = updatecheck.get("codebase")
-
+            version = update.get("version")
+            codebase = update.get("codebase")
             if version and codebase:
-                extensions.append(
-                    ExtensionInfo(
-                        id=app_id,
-                        version=version,
-                        codebase=codebase,
-                    )
-                )
-
+                extensions.append(ExtensionInfo(app_id, version, codebase))
         return extensions
 
     def _select_product_extensions(
         self, extensions: List[ExtensionInfo], ctx: Context
     ) -> List[ExtensionInfo]:
-        """Return manifest entries required by the active product."""
-        self._validate_required_extensions(extensions, ctx)
-        required_ids = {extension_id for extension_id, _ in ctx.product.required_extension_ids}
-        return [ext for ext in extensions if ext.id in required_ids]
-
-    def _validate_required_extensions(
-        self, extensions: List[ExtensionInfo], ctx: Context
-    ) -> None:
-        """Fail if the release manifest omits a required bundled extension."""
-        extension_ids = {ext.id for ext in extensions}
+        by_id = {extension.id: extension for extension in extensions}
         missing = [
             f"{name} ({extension_id})"
-            for extension_id, name in ctx.product.required_extension_ids
-            if extension_id not in extension_ids
+            for extension_id, name in ctx.required_extension_ids
+            if extension_id not in by_id
         ]
         if missing:
             raise RuntimeError(
-                "Bundled extension manifest missing required entries: "
-                + ", ".join(missing)
+                f"Bundled extension manifest for {ctx.product.display_name} "
+                "missing required entries: " + ", ".join(missing)
             )
+        required = {extension_id for extension_id, _ in ctx.required_extension_ids}
+        return [extension for extension in extensions if extension.id in required]
 
-    def _download_extension(self, ext: ExtensionInfo, output_dir: Path) -> None:
-        """Download a single extension .crx file"""
-        dest_filename = f"{ext.id}.crx"
-        dest_path = output_dir / dest_filename
-
-        log_info(f"  Downloading {ext.id} v{ext.version}...")
-
+    def _download_extension(self, extension: ExtensionInfo, output_dir: Path) -> None:
+        destination = output_dir / f"{extension.id}.crx"
+        log_info(f"  Downloading {extension.id} v{extension.version}...")
         try:
-            response = requests.get(ext.codebase, stream=True, timeout=60)
+            response = requests.get(extension.codebase, stream=True, timeout=60)
             response.raise_for_status()
-
-            total_size = int(response.headers.get("content-length", 0))
+            total = int(response.headers.get("content-length", 0))
             downloaded = 0
-
-            with open(dest_path, "wb") as f:
+            with open(destination, "wb") as stream:
                 for chunk in response.iter_content(chunk_size=65536):
-                    f.write(chunk)
+                    stream.write(chunk)
                     downloaded += len(chunk)
-                    if total_size:
-                        percent = downloaded / total_size * 100
-                        sys.stdout.write(f"\r    {dest_filename}: {percent:.0f}%  ")
+                    if total:
+                        sys.stdout.write(
+                            f"\r    {destination.name}: {downloaded / total * 100:.0f}%  "
+                        )
                         sys.stdout.flush()
-
-            if total_size:
-                sys.stdout.write(
-                    f"\r    {dest_filename}: done ({total_size / 1024:.0f} KB)\n"
-                )
-            else:
-                sys.stdout.write(f"\r    {dest_filename}: done\n")
+            sys.stdout.write(f"\r    {destination.name}: done\n")
             sys.stdout.flush()
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"Failed to download {extension.id}: {exc}"
+            ) from exc
 
-        except requests.RequestException as e:
-            raise RuntimeError(f"Failed to download {ext.id}: {e}")
-
-    def _generate_json(self, extensions: List[ExtensionInfo], output_dir: Path) -> None:
-        """Generate bundled_extensions.json"""
-        json_path = output_dir / "bundled_extensions.json"
-
-        data: Dict[str, Dict[str, str]] = {}
-        for ext in extensions:
-            data[ext.id] = {
-                "external_crx": f"{ext.id}.crx",
-                "external_version": ext.version,
+    def _generate_json(
+        self, extensions: List[ExtensionInfo], output_dir: Path
+    ) -> None:
+        data: Dict[str, Dict[str, str]] = {
+            extension.id: {
+                "external_crx": f"{extension.id}.crx",
+                "external_version": extension.version,
             }
-
-        with open(json_path, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-
-        log_info(f"  Generated {json_path.name}")
+            for extension in extensions
+        }
+        path = output_dir / "bundled_extensions.json"
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        log_info(f"  Generated {path.name}")

@@ -9,6 +9,7 @@ from .source.provision import SourceCheckoutModule, SourceSyncModule
 from .setup.clean import CleanModule
 from .setup.git import GitSetupModule, SparkleSetupModule, WinSparkleSetupModule
 from .storage.download import DownloadResourcesModule
+from .resources.source import PrepareCommonResourcesModule, PrepareServerResourcesModule
 from .resources.resources import ResourcesModule
 from .extensions.bundled_extensions import BundledExtensionsModule
 from .resources.chromium_replace import ChromiumReplaceModule
@@ -35,6 +36,8 @@ __all__ = [
     "SparkleSetupModule",
     "WinSparkleSetupModule",
     "DownloadResourcesModule",
+    "PrepareCommonResourcesModule",
+    "PrepareServerResourcesModule",
     "ResourcesModule",
     "BundledExtensionsModule",
     "ChromiumReplaceModule",

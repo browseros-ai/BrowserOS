@@ -1,17 +1,22 @@
 import type { Browser } from '@browseros/browser-core/browser'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { REMOTE_HERMES_PROVIDER_TYPE } from '@browseros/shared/constants/hermes'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
+import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
 import type { KlavisService } from '../services/klavis'
-import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
-import { ChatRequestSchema } from '../types'
-import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
+import type { ServerActivity } from '../services/server-activity'
+import {
+  type BrowserOsChatRequest,
+  type ChatRequest,
+  ChatRequestSchema,
+  type Env,
+} from '../types'
+import { isTrustedAppRequest } from '../utils/request-auth'
 import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
@@ -20,16 +25,10 @@ interface ChatRouteDeps {
   browserosId?: string
   klavis?: KlavisService
   aiSdkDevtoolsEnabled?: boolean
-  /** Port the BrowserOS server bound to. Threaded to ACP providers so
-   *  the spawned agent can dial back into the local /mcp route. */
   serverPort: number
-  /** BrowserOS resources directory. Threaded to ACP providers so the
-   *  bundled-Bun launcher under <resourcesDir>/bin/third_party/bun
-   *  can be located for built-in adapters (claude / codex). */
   resourcesDir?: string | null
-  /** Configured at server startup when AGENT_RUNNER_JWT_SECRET is set.
-   *  Null otherwise; `remote-hermes` chat requests get a soft 500. */
-  remoteHermes?: RemoteHermesService | null
+  activity?: ServerActivity
+  acpRuntime?: AcpAgentRuntime
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -45,24 +44,32 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
+    activity: deps.activity,
+    acpRuntime: deps.acpRuntime,
   })
 
-  return new Hono()
+  return new Hono<Env>()
     .post('/', zValidator('json', ChatRequestSchema), async (c) => {
       const request = c.req.valid('json')
+      const browserRequest = isBrowserOsChatRequest(request) ? request : null
+      if (!browserRequest && !isTrustedAppRequest(c)) {
+        return c.json({ error: 'Forbidden' }, 403)
+      }
+      const provider = browserRequest?.provider ?? request.target.type
+      const model = browserRequest?.model
+      const baseUrl = browserRequest?.baseUrl
 
-      // Sentry + metrics (HTTP concerns only)
       Sentry.getCurrentScope().setTag(
         'request-type',
         request.isScheduledTask ? 'schedule' : 'chat',
       )
       Sentry.setContext('request', {
-        provider: request.provider,
-        model: request.model,
-        baseUrl: request.baseUrl
+        provider,
+        model,
+        baseUrl: baseUrl
           ? (() => {
               try {
-                return new URL(request.baseUrl).origin
+                return new URL(baseUrl).origin
               } catch {
                 return undefined
               }
@@ -71,50 +78,15 @@ export function createChatRoutes(deps: ChatRouteDeps) {
       })
 
       metrics.log('chat.request', {
-        provider: request.provider,
-        model: request.model,
+        provider,
+        model,
       })
 
       logger.info('Chat request received', {
         conversationId: request.conversationId,
-        provider: request.provider,
-        model: request.model,
+        provider,
+        model,
       })
-
-      if (request.provider === REMOTE_HERMES_PROVIDER_TYPE) {
-        if (!deps.remoteHermes) {
-          logger.warn(
-            'Remote Hermes chat received but service not configured',
-            {
-              conversationId: request.conversationId,
-            },
-          )
-          return c.json({ error: 'remote_hermes_not_configured' }, 500)
-        }
-        logger.info('Routing chat to Remote Hermes', {
-          conversationId: request.conversationId,
-          model: request.model,
-        })
-        // Resolve Chrome tab IDs to CDP pageIds on the laptop before
-        // forwarding — the remote worker has no CDP target visibility
-        // and the LLM needs pageIds in the prompt to dispatch browser
-        // tools through the WS RPC bridge.
-        const remoteBrowserContext = await resolveBrowserContextPageIds(
-          deps.browser,
-          request.browserContext,
-        )
-        return deps.remoteHermes.streamTurn(
-          {
-            conversationId: request.conversationId,
-            message: request.message,
-            modelId: request.model,
-            browserContext: remoteBrowserContext,
-            selectedText: request.selectedText,
-            selectedTextSource: request.selectedTextSource,
-          },
-          c.req.raw.signal,
-        )
-      }
 
       return service.processMessage(request, c.req.raw.signal)
     })
@@ -123,6 +95,9 @@ export function createChatRoutes(deps: ChatRouteDeps) {
       zValidator('param', ConversationIdParamSchema),
       async (c) => {
         const { conversationId } = c.req.valid('param')
+        if (service.isAcpSession(conversationId) && !isTrustedAppRequest(c)) {
+          return c.json({ error: 'Forbidden' }, 403)
+        }
         const result = await service.deleteSession(conversationId)
 
         if (result.deleted) {
@@ -139,4 +114,10 @@ export function createChatRoutes(deps: ChatRouteDeps) {
         )
       },
     )
+}
+
+function isBrowserOsChatRequest(
+  request: ChatRequest,
+): request is BrowserOsChatRequest {
+  return request.target.type === 'browseros'
 }

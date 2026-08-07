@@ -23,14 +23,16 @@
     "useUnknownInCatchVariables": false,
     "composite": true,
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "types": ["node", "bun"]
   },
   "references": [
+    { "path": "./packages/acpx-ai-provider" },
+    { "path": "./packages/agent-mcp-manager" },
     { "path": "./packages/browser-core" },
     { "path": "./packages/browser-mcp" },
     { "path": "./packages/build-server-tools" },
-    { "path": "./apps/server" },
-    { "path": "./apps/claw-server" }
+    { "path": "./apps/server" }
   ],
   "include": [],
   "exclude": ["node_modules", "dist", "build", "*.config.js"]

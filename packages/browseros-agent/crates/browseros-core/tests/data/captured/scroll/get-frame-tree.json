@@ -1,0 +1,21 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "2EAB10A25025864555F9AC6092B23807",
+      "loaderId": "4DE2C3924D059BC5DF5B356E375F7E56",
+      "url": "http://127.0.0.1:17243/scroll.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    }
+  }
+}

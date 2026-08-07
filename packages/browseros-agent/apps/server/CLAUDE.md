@@ -27,7 +27,7 @@ Tool, browser, and integration tests may require a running BrowserOS/CDP target.
 
 - `src/index.ts` loads polyfills/config, creates `Application`, starts it, and maps startup failures to exit codes.
 - `src/main.ts` owns lifecycle: runtime setup, DB/identity/metrics init, CDP connection, browser wrapper, tool registry, HTTP startup, and shutdown.
-- `src/api/server.ts` composes Hono routes for `/health`, `/status`, `/chat`, `/mcp`, `/klavis`, `/agents`, `/screencast`, provider testing, prompt refinement, and shutdown.
+- `src/api/server.ts` composes Hono routes for `/health`, `/status`, `/chat`, `/mcp`, `/klavis`, `/agents`, provider testing, prompt refinement, and shutdown.
 
 ## Project shape
 

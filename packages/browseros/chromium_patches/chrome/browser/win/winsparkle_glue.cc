@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/win/winsparkle_glue.cc b/chrome/browser/win/winsparkle_glue.cc
 new file mode 100644
-index 0000000000000..93e1ec7170840
+index 0000000000000000000000000000000000000000..08612fa1795d97550c56f02254ea89168fc5b9e6
 --- /dev/null
 +++ b/chrome/browser/win/winsparkle_glue.cc
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,377 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -33,6 +33,7 @@ index 0000000000000..93e1ec7170840
 +#include "base/version_info/version_info.h"
 +#include "build/build_config.h"
 +#include "chrome/browser/browseros/core/browseros_product.h"
++#include "chrome/installer/util/util_constants.h"
 +#include "content/public/browser/browser_thread.h"
 +#include "third_party/winsparkle/include/winsparkle.h"
 +
@@ -129,8 +130,9 @@ index 0000000000000..93e1ec7170840
 +  bool LaunchInstaller(const base::FilePath& installer_path) {
 +    base::LaunchOptions options;
 +    options.start_hidden = true;
-+    base::Process process =
-+        base::LaunchProcess(base::CommandLine(installer_path), options);
++    base::CommandLine command_line(installer_path);
++    command_line.AppendSwitch(installer::switches::kSilent);
++    base::Process process = base::LaunchProcess(command_line, options);
 +    if (!process.IsValid()) {
 +      LOG(ERROR) << "WinSparkle: failed to launch installer "
 +                 << installer_path.value();
@@ -308,7 +310,7 @@ index 0000000000000..93e1ec7170840
 +  const std::wstring display_version =
 +      base::UTF8ToWide(version_info::GetBrowserOSVersionNumber());
 +  win_sparkle_set_app_details(L"BrowserOS",
-+                              is_claw ? L"BrowserClaw" : L"BrowserOS",
++                              is_claw ? L"BrowserOS neo" : L"BrowserOS",
 +                              display_version.c_str());
 +
 +  const std::wstring build_version = base::UTF8ToWide(GetUpdateFeedVersion());

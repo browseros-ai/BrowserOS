@@ -1,0 +1,7 @@
+# Release CI build on WarpBuild runners: the workflow provisions chromium
+# (checkout/clean/sync) itself, so clean and git_setup are off. Signing and
+# upload are controlled by explicit CLI flags from the release workflows.
+# Arch and product come from workflow inputs.
+preset: release
+clean: false
+provision: none

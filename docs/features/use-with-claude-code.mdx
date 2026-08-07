@@ -129,6 +129,62 @@ Wondering how BrowserOS MCP compares to Chrome DevTools MCP or other browser aut
   </Tab>
 </Tabs>
 
+## Connect from a Remote Machine
+
+The BrowserOS MCP server only listens on `127.0.0.1`, so by default only programs on the same computer can reach it. If your agent runs somewhere else — for example a [Hermes](https://github.com/NousResearch) or OpenClaw agent on a VPS controlling BrowserOS on your laptop — you need a reverse tunnel that forwards requests from the remote machine to the MCP server on your laptop.
+
+<Warning>
+Anyone who can reach this URL has full control of your browser, including every account you are signed into. Prefer a private tunnel like Tailscale over a public URL, and treat public tunnel URLs like passwords.
+</Warning>
+
+All commands below use port `9239` — replace it with the port shown on your `chrome://browseros/mcp` settings page.
+
+<Tabs>
+  <Tab title="Tailscale (recommended)">
+    Tailscale puts your laptop and VPS on a private network, so the MCP server is never exposed to the public internet and the URL never changes.
+
+    1. Install [Tailscale](https://tailscale.com/download) on both your laptop and the VPS, and sign in to the same tailnet on both.
+    2. On the laptop, share the MCP port with your tailnet:
+    ```bash
+    tailscale serve --bg 9239
+    ```
+    3. Tailscale prints an HTTPS URL like `https://your-laptop.tailnet-name.ts.net`. On the VPS, point your agent at that URL with the `/mcp` path:
+    ```bash
+    claude mcp add --transport http browseros https://your-laptop.tailnet-name.ts.net/mcp --scope user
+    ```
+
+    Run `tailscale serve reset` on the laptop to stop sharing.
+  </Tab>
+  <Tab title="Cloudflare Tunnel">
+    On the laptop, start a quick tunnel:
+    ```bash
+    cloudflared tunnel --url http://127.0.0.1:9239
+    ```
+
+    Cloudflare prints a URL like `https://random-words.trycloudflare.com`. On the VPS, connect your agent to `https://random-words.trycloudflare.com/mcp`.
+
+    <Warning>
+    Quick tunnels are public and unauthenticated — anyone who discovers the URL can control your browser. The URL also changes every time `cloudflared` restarts, so you must update your agent config after each restart. For anything long-running, use a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) with Cloudflare Access in front, or use Tailscale instead.
+    </Warning>
+  </Tab>
+  <Tab title="ngrok">
+    On the laptop, start a tunnel:
+    ```bash
+    ngrok http 9239
+    ```
+
+    ngrok prints a URL like `https://abc123.ngrok-free.app`. On the VPS, connect your agent to `https://abc123.ngrok-free.app/mcp`.
+
+    <Warning>
+    The URL is public — anyone who discovers it can control your browser — and it changes every time ngrok restarts unless you use a reserved domain. Use Tailscale instead for anything long-running.
+    </Warning>
+  </Tab>
+</Tabs>
+
+<Note>
+The connection only works while your laptop is awake, BrowserOS is running, and the tunnel process is alive. If a remote agent that was working suddenly stops connecting, check those three first — and if you use ngrok or a Cloudflare quick tunnel, remember the URL rotates on every restart, so your agent may be pointing at a dead URL. Tailscale avoids this because its hostnames are stable.
+</Note>
+
 ## Example Prompts
 
 <Accordion title="Try these prompts once connected" icon="message">

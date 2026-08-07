@@ -89,6 +89,34 @@ describe('normalizeExecutionSteps', () => {
     expect(completed.steps[0]?.completedAt).toBe(completedTimestamp)
   })
 
+  it('does not retain tool input or output payloads in step records', () => {
+    const normalized = normalizeExecutionSteps({
+      assistantMessage: createAssistantMessage([
+        asMessagePart({
+          type: 'tool-screenshot',
+          toolCallId: 'tool-1',
+          state: 'output-available',
+          input: { fullPage: true },
+          output: {
+            content: [
+              {
+                type: 'image',
+                data: 'BASE64_SCREENSHOT',
+                mimeType: 'image/png',
+              },
+            ],
+          },
+        }),
+      ]),
+      nowIso: '2026-03-26T10:00:00.000Z',
+    })
+
+    const step = normalized.steps[0]
+    expect(step?.input).toBeUndefined()
+    expect(step?.output).toBeUndefined()
+    expect(JSON.stringify(normalized)).not.toContain('BASE64_SCREENSHOT')
+  })
+
   it('uses a compact preview for completed tool output', () => {
     const normalized = normalizeExecutionSteps({
       assistantMessage: createAssistantMessage([

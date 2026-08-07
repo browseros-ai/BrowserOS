@@ -6,7 +6,7 @@ from ...core.context import Context
 from ...lib.utils import log_info
 
 
-@step("sign_linux", phase="sign", platforms=("linux",), notify=True)
+@step("sign_linux", phase="sign", platforms=("linux",))
 class LinuxSignModule(Step):
     produces = []
     requires = []

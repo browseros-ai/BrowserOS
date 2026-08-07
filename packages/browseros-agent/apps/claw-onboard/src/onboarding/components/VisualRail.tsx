@@ -1,13 +1,13 @@
 import { Lock, ShieldCheck, Zap } from 'lucide-react'
 
-/** Renders the persistent BrowserOS visual rail beside the onboarding steps. */
+/** Renders the persistent BrowserOS neo visual rail beside the onboarding steps. */
 export function VisualRail() {
   return (
     <div
       className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9"
       style={{
         background:
-          'linear-gradient(165deg, #F8DCC2 0%, #FBF0E4 55%, #FAF8F5 100%)',
+          'linear-gradient(165deg, var(--color-secondary) 0%, var(--color-bg-sunken) 55%, var(--color-bg-canvas) 100%)',
       }}
     >
       <div
@@ -15,28 +15,33 @@ export function VisualRail() {
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            'radial-gradient(420px 300px at 30% 12%, rgba(242,107,42,.16), transparent 70%)',
+            'radial-gradient(420px 300px at 30% 12%, var(--color-accent-tint-2), transparent 70%)',
         }}
       />
       <div className="relative flex items-center gap-2.5">
-        <div className="flex size-[38px] items-center justify-center rounded-[11px] bg-accent font-extrabold text-card text-lg">
-          B
-        </div>
+        {/* Must stay a literal public path: importing the asset or inlining it
+            breaks scripts/verify-chromium-build.ts (allowlist, no data: URLs). */}
+        <img
+          alt=""
+          aria-hidden
+          className="size-[38px] rounded-[11px]"
+          src="/icon/128.png"
+        />
         <div className="font-extrabold text-[17px] tracking-tight">
-          BrowserOS
+          BrowserOS neo
         </div>
       </div>
       <div className="relative">
         <div className="mb-[18px] font-serif text-[23px] text-ink italic leading-snug">
-          &ldquo;Let the agent you already run drive the browser you&rsquo;re
-          already logged into.&rdquo;
+          &ldquo;Your agents&rsquo; browser.{' '}
+          <span className="text-accent">Not yours.</span>&rdquo;
         </div>
         <div className="flex flex-col gap-3">
           {FEATURES.map((f) => {
             const Icon = f.icon
             return (
               <div key={f.title} className="flex items-start gap-[11px]">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/70 text-accent-ink">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card/70 text-accent-ink">
                   <Icon className="size-[15px]" />
                 </span>
                 <div>
@@ -49,7 +54,7 @@ export function VisualRail() {
         </div>
       </div>
       <div className="relative text-[11.5px] text-ink-3">
-        Mac . v1.0 . signed build
+        Signed build for Mac. v1.0.
       </div>
     </div>
   )
@@ -57,18 +62,19 @@ export function VisualRail() {
 
 const FEATURES = [
   {
-    icon: Zap,
-    title: 'Fast & token-cheap',
-    description: 'DOM-first, not a screenshot loop',
+    icon: Lock,
+    title: 'Signed in as you.',
+    description: 'Uses the sessions you already have.',
   },
   {
-    icon: Lock,
-    title: 'Logged in as you',
-    description: 'Imports your Chrome sessions',
+    icon: Zap,
+    title: 'Watch every step.',
+    description: 'See every agent in real time.',
   },
   {
     icon: ShieldCheck,
-    title: 'Under your control',
-    description: 'Scoped approvals, hard blocks',
+    title: 'Everything stays local.',
+    description:
+      'All data is stored on this machine. Open source and privacy-first.',
   },
 ] as const

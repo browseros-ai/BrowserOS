@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Form fixture</title>
+    <style>
+      .styled-select {
+        position: relative;
+        display: inline-block;
+      }
+      .styled-select select {
+        width: 12rem;
+        height: 2rem;
+      }
+      .styled-select-prompt {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        padding: 0 0.5rem;
+        background: white;
+        border: 1px solid #777;
+        pointer-events: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Form fixture</h1>
+    <form id="main-form">
+      <label>Name <input id="name" name="name" type="text" /></label>
+      <label>Nickname <input id="nickname" name="nickname" type="text" value="prefilled-nick" /></label>
+      <label>Bio <textarea id="bio" name="bio"></textarea></label>
+      <label>
+        Color
+        <span class="styled-select">
+          <select id="color" name="color">
+            <option value="">Pick a color</option>
+            <option value="red">Red</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+          </select>
+          <span class="styled-select-prompt" aria-hidden="true">Pick a color</span>
+        </span>
+      </label>
+      <label><input id="subscribe" name="subscribe" type="checkbox" /> Subscribe</label>
+      <fieldset>
+        <legend>Size</legend>
+        <label><input name="size" type="radio" value="small" checked /> Small</label>
+        <label><input name="size" type="radio" value="large" /> Large</label>
+      </fieldset>
+      <button type="submit">Submit</button>
+      <button type="button" disabled>Disabled action</button>
+    </form>
+    <button id="apply" type="button">Apply</button>
+    <div id="result">no submission</div>
+    <script>
+      const result = document.getElementById('result')
+      document.getElementById('main-form').addEventListener('submit', (event) => {
+        event.preventDefault()
+        const data = new FormData(event.target)
+        const parts = []
+        for (const [key, value] of data.entries()) {
+          if (typeof value === 'string' && value !== '') parts.push(`${key}=${value}`)
+        }
+        result.textContent = `submitted ${parts.join(' ')}`
+      })
+      document.getElementById('apply').addEventListener('click', () => {
+        result.textContent = 'applied'
+      })
+      const color = document.getElementById('color')
+      const colorPrompt = document.querySelector('.styled-select-prompt')
+      let colorChanges = 0
+      color.addEventListener('change', () => {
+        colorChanges += 1
+        color.dataset.changeCount = String(colorChanges)
+        colorPrompt.textContent = color.selectedOptions[0].textContent.trim()
+      })
+    </script>
+  </body>
+</html>

@@ -553,8 +553,5 @@ func waitForServerHealth(ctx context.Context, cfg config.Config, maxAttempts int
 }
 
 func healthURL(cfg config.Config) string {
-	if cfg.Target == config.TargetClaw {
-		return fmt.Sprintf("http://127.0.0.1:%d/system/health", cfg.Ports.Server)
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d/health", cfg.Ports.Server)
+	return fmt.Sprintf("http://127.0.0.1:%d/system/health", cfg.Ports.Server)
 }

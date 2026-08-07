@@ -9,11 +9,10 @@ from .server_binaries import (
     expected_windows_bundle_binary_paths,
     expected_windows_binary_paths,
     macos_sign_spec_for,
+    server_ota_bundles_for_product,
     server_bundles_for_product,
 )
-from .browserclaw.product import (
-    BROWSERCLAW_SERVER_BUNDLE as BROWSEROS_CLAW_SERVER_BUNDLE,
-)
+from .browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
 from .browseros.product import BROWSEROS_SERVER_BUNDLE
 
 SERVER_BUNDLES = all_server_bundles()
@@ -28,23 +27,27 @@ ENTITLEMENTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "entitlem
 
 
 class MacosServerBinariesTest(unittest.TestCase):
+    def test_server_bundles_use_rust_claw_for_browser_builds(self):
+        self.assertEqual(
+            all_server_bundles(),
+            (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_SERVER_BUNDLE),
+        )
+
     def test_server_bundles_have_separate_resource_roots(self):
-        self.assertEqual(SERVER_BUNDLES[0], BROWSEROS_SERVER_BUNDLE)
-        self.assertEqual(SERVER_BUNDLES[1], BROWSEROS_CLAW_SERVER_BUNDLE)
         self.assertEqual(
             BROWSEROS_SERVER_BUNDLE.local_resources_root,
             Path("resources/binaries/browseros_server"),
         )
         self.assertEqual(
-            BROWSEROS_CLAW_SERVER_BUNDLE.local_resources_root,
-            Path("resources/binaries/browseros_claw_server"),
+            BROWSERCLAW_SERVER_BUNDLE.local_resources_root,
+            Path("resources/binaries/browseros_claw_server_rust"),
         )
         self.assertEqual(
             BROWSEROS_SERVER_BUNDLE.chromium_resources_root,
             Path("chrome/browser/browseros/server/resources"),
         )
         self.assertEqual(
-            BROWSEROS_CLAW_SERVER_BUNDLE.chromium_resources_root,
+            BROWSERCLAW_SERVER_BUNDLE.chromium_resources_root,
             Path("chrome/browser/browseros/claw_server/resources"),
         )
         self.assertEqual(
@@ -52,19 +55,51 @@ class MacosServerBinariesTest(unittest.TestCase):
             Path("Contents/Resources/BrowserOSServer/default/resources"),
         )
         self.assertEqual(
-            BROWSEROS_CLAW_SERVER_BUNDLE.macos_bundle_resources_root,
+            BROWSERCLAW_SERVER_BUNDLE.macos_bundle_resources_root,
             Path("Contents/Resources/BrowserClawServer/default/resources"),
         )
         self.assertTrue(BROWSEROS_SERVER_BUNDLE.required_in_chromium_output)
-        self.assertFalse(BROWSEROS_CLAW_SERVER_BUNDLE.required_in_chromium_output)
+        self.assertFalse(BROWSERCLAW_SERVER_BUNDLE.required_in_chromium_output)
+        self.assertEqual(BROWSEROS_SERVER_BUNDLE.source_builder, "bun")
+        self.assertEqual(BROWSEROS_SERVER_BUNDLE.source_component, "server")
+        self.assertEqual(BROWSEROS_SERVER_BUNDLE.runtime_binary_name, "browseros_server")
+        self.assertEqual(BROWSERCLAW_SERVER_BUNDLE.source_builder, "cargo")
+        self.assertEqual(
+            BROWSERCLAW_SERVER_BUNDLE.source_component, "claw-server-rust"
+        )
+        self.assertEqual(
+            BROWSERCLAW_SERVER_BUNDLE.runtime_binary_name,
+            "browseros-claw-server",
+        )
+        self.assertEqual(
+            BROWSEROS_SERVER_BUNDLE.unsigned_artifact_key("darwin-arm64"),
+            "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
+        )
+        self.assertEqual(
+            BROWSEROS_SERVER_BUNDLE.unsigned_artifact_key(
+                "darwin-arm64", version="0.0.9"
+            ),
+            "artifacts/server/0.0.9/browseros-server-resources-darwin-arm64.zip",
+        )
+        self.assertEqual(
+            BROWSERCLAW_SERVER_BUNDLE.unsigned_artifact_key("darwin-arm64"),
+            "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
+        )
 
     def test_server_bundles_filter_by_product(self):
         self.assertEqual(
-            server_bundles_for_product("browseros"), (BROWSEROS_SERVER_BUNDLE,)
+            server_bundles_for_product("browseros"),
+            (BROWSEROS_SERVER_BUNDLE,),
         )
         self.assertEqual(
             server_bundles_for_product("browserclaw"),
-            (BROWSEROS_CLAW_SERVER_BUNDLE,),
+            (BROWSERCLAW_SERVER_BUNDLE,),
+        )
+
+    def test_server_ota_bundles_use_the_active_rust_claw_bundle(self):
+        self.assertEqual(
+            server_ota_bundles_for_product("browserclaw"),
+            (BROWSERCLAW_SERVER_BUNDLE,),
         )
 
     def test_every_entry_has_identifier_and_options(self):
@@ -132,12 +167,19 @@ class WindowsServerBinariesTest(unittest.TestCase):
                 f"{rel} outside expected layout",
             )
 
-    def test_expected_windows_binary_paths_joins_root(self):
+    def test_expected_windows_binary_paths_resolves_browseros_descriptor(self):
         root = Path("/tmp/fake/resources/bin")
-        resolved = expected_windows_binary_paths(root)
-        self.assertEqual(len(resolved), len(WINDOWS_SERVER_BINARIES))
-        for rel, abs_path in zip(WINDOWS_SERVER_BINARIES, resolved):
-            self.assertEqual(abs_path, root / rel)
+        self.assertEqual(
+            expected_windows_binary_paths(root, BROWSEROS_SERVER_BUNDLE),
+            [root / "browseros_server.exe"],
+        )
+
+    def test_expected_windows_binary_paths_resolves_browserclaw_descriptor(self):
+        root = Path("/tmp/fake/resources/bin")
+        self.assertEqual(
+            expected_windows_binary_paths(root, BROWSERCLAW_SERVER_BUNDLE),
+            [root / "browseros-claw-server.exe"],
+        )
 
     def test_expected_windows_bundle_binary_paths_includes_claw(self):
         build_output_dir = Path("/tmp/out/Default")

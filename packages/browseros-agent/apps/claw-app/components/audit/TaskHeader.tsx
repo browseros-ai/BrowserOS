@@ -10,17 +10,18 @@ import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
 import { useReplayMetadata } from '@/modules/api/replay.hooks'
-import { formatDuration } from '@/screens/audit/audit.helpers'
+import { formatDuration, formatTokensFull } from '@/screens/audit/audit.helpers'
 import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
 
 interface TaskHeaderProps {
-  task: TaskDetail
+  detail: TaskDetail
 }
 
-export function TaskHeader({ task }: TaskHeaderProps) {
+export function TaskHeader({ detail }: TaskHeaderProps) {
+  const { session: task, dispatches } = detail
   const [copied, setCopied] = useState(false)
-  const finalUrl = lastUrl(task) ?? task.dispatches[0]?.url ?? null
+  const finalUrl = lastUrl(dispatches) ?? dispatches[0]?.url ?? null
   const navigate = useNavigate()
   const location = useLocation()
   // Semantic back: prefer the referring path passed via router state
@@ -47,7 +48,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
       <button
         type="button"
         onClick={() => navigate(backTo)}
-        className="inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink-1"
+        className="inline-flex items-center gap-1 text-[12.5px] text-ink-3 hover:text-ink"
       >
         <ChevronLeft className="size-3.5" />
         Back
@@ -58,9 +59,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <AgentDot slug={task.slug} />
-              <span className="font-semibold text-ink-1">
-                {task.agentLabel}
-              </span>
+              <span className="font-semibold text-ink">{task.label}</span>
               <StatusBadge status={task.status} />
               {task.errorCount > 0 && (
                 <span className="text-[12.5px] text-red-600 dark:text-red-400">
@@ -69,7 +68,7 @@ export function TaskHeader({ task }: TaskHeaderProps) {
               )}
             </div>
             <h1 className="font-extrabold text-2xl tracking-tight">
-              {task.title}
+              {task.name}
             </h1>
           </div>
         </div>
@@ -100,6 +99,21 @@ export function TaskHeader({ task }: TaskHeaderProps) {
           <div>
             <dt className="text-ink-3">Tools</dt>
             <dd className="font-mono text-ink-2">{task.dispatchCount}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-3">Tokens</dt>
+            <dd
+              className="font-mono text-ink-2"
+              title={
+                task.tokenUsage
+                  ? `${task.tokenUsage.inputTokenEstimate.toLocaleString()} in · ${task.tokenUsage.outputTokenEstimate.toLocaleString()} out`
+                  : undefined
+              }
+            >
+              {task.tokenUsage
+                ? formatTokensFull(task.tokenUsage.totalTokenEstimate)
+                : '—'}
+            </dd>
           </div>
           <div className="col-span-2">
             <dt className="text-ink-3">Site</dt>
@@ -172,9 +186,9 @@ export function TaskHeader({ task }: TaskHeaderProps) {
   )
 }
 
-function lastUrl(task: TaskDetail): string | null {
-  for (let i = task.dispatches.length - 1; i >= 0; i--) {
-    const url = task.dispatches[i]?.url
+function lastUrl(dispatches: TaskDetail['dispatches']): string | null {
+  for (let i = dispatches.length - 1; i >= 0; i--) {
+    const url = dispatches[i]?.url
     if (url) return url
   }
   return null

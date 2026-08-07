@@ -10,12 +10,14 @@ const STYLES: Record<TaskStatus, string> = {
   live: 'bg-accent-tint text-accent',
   done: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
   failed: 'bg-red-500/15 text-red-700 dark:text-red-300',
+  cancelled: 'bg-bg-sunken text-ink-3',
 }
 
 const LABELS: Record<TaskStatus, string> = {
   live: 'Live',
   done: 'Done',
   failed: 'Failed',
+  cancelled: 'Stopped',
 }
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {

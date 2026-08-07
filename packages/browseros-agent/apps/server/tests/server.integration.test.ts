@@ -58,7 +58,7 @@ describe('HTTP Server Integration Tests', () => {
 
   describe('Health endpoint', () => {
     it('responds with 200 OK', async () => {
-      const response = await fetch(`${getBaseUrl()}/health`)
+      const response = await fetch(`${getBaseUrl()}/system/health`)
       assert.strictEqual(response.status, 200)
 
       const json = await response.json()
@@ -177,6 +177,7 @@ describe('HTTP Server Integration Tests', () => {
           body: JSON.stringify({
             conversationId,
             message: 'Open amazon.com in a new tab',
+            target: { type: 'browseros', providerId: 'browseros' },
             provider: 'browseros',
             model: 'claude-sonnet-4-20250514',
           }),

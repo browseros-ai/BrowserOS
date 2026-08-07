@@ -31,6 +31,25 @@ class FindSignableArtifactsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(find_signable_artifacts(Path(tmp)), [])
 
+    def test_filters_by_product_filename_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp)
+            (dist / "BrowserOS_neo_v0.31.0_arm64.dmg").write_bytes(b"claw")
+            (dist / "BrowserOS_v0.31.0_arm64.dmg").write_bytes(b"os")
+            (dist / "BrowserOS_neo_v0.31.0_x64_installer.exe").write_bytes(b"exe")
+
+            names = [
+                p.name for p in find_signable_artifacts(dist, "BrowserOS_neo_v0.31.0_")
+            ]
+
+            self.assertEqual(
+                names,
+                [
+                    "BrowserOS_neo_v0.31.0_arm64.dmg",
+                    "BrowserOS_neo_v0.31.0_x64_installer.exe",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

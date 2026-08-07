@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import {
   assertIncrementingRelease,
@@ -12,6 +12,30 @@ import {
   parseCliReleaseTag,
   selectPreviousCliReleaseTag,
 } from './release-policy'
+
+const repoRoot = resolve(import.meta.dir, '../../../../..')
+const cliReleaseWorkflow = readFileSync(
+  resolve(repoRoot, '.github/workflows/release-cli.yml'),
+  'utf8',
+)
+
+function cliGenerateReleaseNotesStep(): string {
+  const start = cliReleaseWorkflow.indexOf('- name: Generate release notes')
+  const end = cliReleaseWorkflow.indexOf('- name: Create GitHub release')
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return cliReleaseWorkflow.slice(start, end)
+}
+
+function cliCreateGithubReleaseStep(): string {
+  const start = cliReleaseWorkflow.indexOf('- name: Create GitHub release')
+  const end = cliReleaseWorkflow.indexOf(
+    '- name: Verify GitHub release assets are public',
+  )
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return cliReleaseWorkflow.slice(start, end)
+}
 
 describe('parseCliReleaseTag', () => {
   test('parses cli release tags', () => {
@@ -160,6 +184,32 @@ describe('ensureTagReachableFromDefaultBranch', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
+  })
+})
+
+describe('release-cli workflow changelog cap', () => {
+  test('caps only the isolated changelog before appending install instructions', () => {
+    const step = cliGenerateReleaseNotesStep()
+
+    expect(step).toContain('CHANGELOG_FILE="/tmp/release-changelog.md"')
+    expect(step).toContain('NOTES_FILE="/tmp/release-notes.md"')
+    expect(step).toContain(
+      'node packages/browseros-agent/scripts/release/cap-release-changelog.mjs',
+    )
+    expect(step).toContain('--max-entries 15')
+    expect(step).toContain('--previous-tag "$PREV_TAG"')
+    expect(step).toContain('--release-tag "$TAG"')
+    expect(step.indexOf('cap-release-changelog.mjs')).toBeLessThan(
+      step.indexOf('## Install `browseros-cli`'),
+    )
+  })
+
+  test('uses the capped notes file for both create and edit reruns', () => {
+    const createStep = cliCreateGithubReleaseStep()
+
+    expect(
+      createStep.match(/--notes-file \/tmp\/release-notes\.md/g),
+    ).toHaveLength(2)
   })
 })
 

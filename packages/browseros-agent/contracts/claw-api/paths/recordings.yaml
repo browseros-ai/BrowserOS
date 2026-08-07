@@ -1,0 +1,62 @@
+ingest:
+  post:
+    operationId: appendRecordingEvents
+    parameters:
+      - $ref: ../parameters.yaml#/RecordingTabId
+      - $ref: ../parameters.yaml#/RecordingDocumentId
+      - $ref: ../parameters.yaml#/RecordingBatchId
+      - $ref: ../parameters.yaml#/RecordingGap
+    requestBody:
+      required: true
+      description: Atomic newline-delimited rrweb events for one Chrome document. The UTF-8 encoded request body must not exceed the server's advertised recordingIngestMaxBytes capability.
+      content:
+        application/x-ndjson:
+          schema:
+            type: string
+    responses:
+      '200':
+        description: Number of newly accepted event lines. A durable duplicate returns zero.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/recordings.yaml#/AppendRecordingEventsResponse
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '403':
+        $ref: ../responses.yaml#/Forbidden
+      '413':
+        $ref: ../responses.yaml#/PayloadTooLarge
+      '500':
+        $ref: ../responses.yaml#/InternalError
+metadata:
+  get:
+    operationId: getRecording
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: Recording metadata, including an empty known recording.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/recordings.yaml#/RecordingMetadata
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+events:
+  get:
+    operationId: downloadRecordingEvents
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: Opaque newline-delimited rrweb events.
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError

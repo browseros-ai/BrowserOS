@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/importer_list.cc b/chrome/browser/importer/importer_list.cc
-index 62546b572bab8..6ebad489e44bb 100644
+index 62546b572bab8..df99dae8f9719 100644
 --- a/chrome/browser/importer/importer_list.cc
 +++ b/chrome/browser/importer/importer_list.cc
 @@ -6,10 +6,15 @@
@@ -26,12 +26,35 @@ index 62546b572bab8..6ebad489e44bb 100644
  
  #if BUILDFLAG(IS_MAC)
  #include "base/apple/foundation_util.h"
-@@ -29,6 +35,203 @@
+@@ -29,6 +35,235 @@
  
  namespace {
  
 +// Forward declaration for platform-specific Chrome user data folder getter
 +base::FilePath GetChromeUserDataFolder();
++
++constexpr char kChromeNoHostedDomainFound[] = "NO_HOSTED_DOMAIN";
++
++std::string GetChromeAccountName(const base::DictValue& profile) {
++  const std::string* user_name = profile.FindString("user_name");
++  if (user_name && !user_name->empty()) {
++    return *user_name;
++  }
++
++  const std::string* gaia_name = profile.FindString("gaia_name");
++  return gaia_name ? *gaia_name : std::string();
++}
++
++bool IsManagedChromeProfile(const base::DictValue& profile) {
++  const std::string* hosted_domain = profile.FindString("hosted_domain");
++  if (hosted_domain && !hosted_domain->empty() &&
++      *hosted_domain != kChromeNoHostedDomainFound) {
++    return true;
++  }
++
++  const std::string* managed_user_id = profile.FindString("managed_user_id");
++  return managed_user_id && !managed_user_id->empty();
++}
 +
 +// Chrome importer helper functions (cross-platform)
 +bool HasExtensionsToImport(const base::FilePath& preferences_path) {
@@ -161,6 +184,8 @@ index 62546b572bab8..6ebad489e44bb 100644
 +            base::DictValue entry;
 +            entry.Set("id", value.first);
 +            entry.Set("name", *name);
++            entry.Set("account_name", GetChromeAccountName(*profile));
++            entry.Set("is_managed", IsManagedChromeProfile(*profile));
 +            profiles.Append(std::move(entry));
 +          }
 +        }
@@ -173,6 +198,8 @@ index 62546b572bab8..6ebad489e44bb 100644
 +    base::DictValue entry;
 +    entry.Set("id", "Default");
 +    entry.Set("name", "Default");
++    entry.Set("account_name", "");
++    entry.Set("is_managed", false);
 +    profiles.Append(std::move(entry));
 +  }
 +
@@ -199,6 +226,7 @@ index 62546b572bab8..6ebad489e44bb 100644
 +
 +    const std::string* profile_id = dict->FindString("id");
 +    const std::string* name = dict->FindString("name");
++    const std::string* account_name = dict->FindString("account_name");
 +
 +    if (!profile_id || !name)
 +      continue;
@@ -217,12 +245,16 @@ index 62546b572bab8..6ebad489e44bb 100644
 +    if (*profile_id == "Default") {
 +      chrome.importer_name = l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME);
 +    } else {
-+      chrome.importer_name = l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME) +
-+                            u" - " + base::UTF8ToUTF16(*name);
++      chrome.importer_name = l10n_util::GetStringUTF16(IDS_IMPORT_FROM_CHROME);
++      chrome.profile = base::UTF8ToUTF16(*name);
 +    }
 +    chrome.importer_type = user_data_importer::TYPE_CHROME;
 +    chrome.services_supported = services;
 +    chrome.source_path = profile_folder;
++    if (account_name) {
++      chrome.account_name = base::UTF8ToUTF16(*account_name);
++    }
++    chrome.is_managed = dict->FindBool("is_managed").value_or(false);
 +    profiles->push_back(chrome);
 +  }
 +}
@@ -230,7 +262,7 @@ index 62546b572bab8..6ebad489e44bb 100644
  #if BUILDFLAG(IS_WIN)
  void DetectIEProfiles(
      std::vector<user_data_importer::SourceProfile>* profiles) {
-@@ -71,6 +274,21 @@ void DetectBuiltinWindowsProfiles(
+@@ -71,6 +306,21 @@ void DetectBuiltinWindowsProfiles(
  
  #endif  // BUILDFLAG(IS_WIN)
  
@@ -252,7 +284,7 @@ index 62546b572bab8..6ebad489e44bb 100644
  #if BUILDFLAG(IS_MAC)
  void DetectSafariProfiles(
      std::vector<user_data_importer::SourceProfile>* profiles) {
-@@ -88,8 +306,30 @@ void DetectSafariProfiles(
+@@ -88,8 +338,30 @@ void DetectSafariProfiles(
    safari.services_supported = items;
    profiles->push_back(safari);
  }
@@ -283,7 +315,7 @@ index 62546b572bab8..6ebad489e44bb 100644
  // |locale|: The application locale used for lookups in Firefox's
  // locale-specific search engines feature (see firefox_importer.cc for
  // details).
-@@ -170,8 +410,10 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
+@@ -170,8 +442,10 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
  #if BUILDFLAG(IS_WIN)
    if (shell_integration::IsFirefoxDefaultBrowser()) {
      DetectFirefoxProfiles(locale, &profiles);
@@ -294,7 +326,7 @@ index 62546b572bab8..6ebad489e44bb 100644
      DetectBuiltinWindowsProfiles(&profiles);
      DetectFirefoxProfiles(locale, &profiles);
    }
-@@ -179,11 +421,15 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
+@@ -179,11 +453,15 @@ std::vector<user_data_importer::SourceProfile> DetectSourceProfilesWorker(
    if (shell_integration::IsFirefoxDefaultBrowser()) {
      DetectFirefoxProfiles(locale, &profiles);
      DetectSafariProfiles(&profiles);

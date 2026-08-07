@@ -1,0 +1,29 @@
+{
+  "name": "@browseros/agent-mcp-manager",
+  "version": "0.0.4-rc.4",
+  "description": "Programmatic add/link/unlink for MCP servers across AI coding agents. Inlined snapshot of agent-mcp-manager from DaniAkash/agent-toolkit.",
+  "license": "MIT",
+  "author": "Dani Akash",
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "jsonc-parser": "^3.3.1",
+    "yaml": "^2.9.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./lowlevel": {
+      "types": "./src/lowlevel.ts",
+      "default": "./src/lowlevel.ts"
+    },
+    "./package.json": "./package.json"
+  }
+}

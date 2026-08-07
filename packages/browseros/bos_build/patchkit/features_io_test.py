@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for features.yaml IO helpers."""
+"""Tests for feature registry IO helpers."""
 
 import tempfile
 import unittest
@@ -10,7 +10,9 @@ from typing import cast
 from bos_build.core.context import Context
 from bos_build.patchkit.features_io import (
     add_files_to_feature,
+    canonical_features_path,
     load_features_yaml,
+    patch_backed_features,
     save_features_yaml,
 )
 
@@ -19,7 +21,8 @@ class FeaturesIOTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.features_file = Path(tmp.name) / "features.yaml"
+        self.root = Path(tmp.name)
+        self.features_file = canonical_features_path(self.root)
 
     def _ctx(self) -> Context:
         return cast(
@@ -59,6 +62,22 @@ class FeaturesIOTest(unittest.TestCase):
         self.assertEqual(added, 1)
         data = load_features_yaml(self.features_file)
         self.assertEqual(sorted(data["features"]["foo"]["files"]), ["a.cc", "b.cc"])
+
+    def test_patch_backed_features_skips_store_false(self):
+        features = {
+            "resources": {
+                "store": False,
+                "description": "resource: generated output",
+                "files": ["chrome/generated.txt"],
+            },
+            "patches": {"description": "feat: patch", "files": ["chrome/a.cc"]},
+            "default-store": {"description": "fix: default", "files": ["chrome/b.cc"]},
+        }
+
+        self.assertEqual(
+            list(patch_backed_features(features)),
+            ["patches", "default-store"],
+        )
 
 
 if __name__ == "__main__":

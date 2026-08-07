@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/BUILD.gn b/chrome/browser/browseros/core/BUILD.gn
 new file mode 100644
-index 0000000000000..b939da059b981
+index 0000000000000..fe42a921e2eef
 --- /dev/null
 +++ b/chrome/browser/browseros/core/BUILD.gn
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,81 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -41,12 +41,32 @@ index 0000000000000..b939da059b981
 +  ]
 +
 +  deps = [
++    ":core",
++    ":product",
 +    "//base",
 +    "//chrome/browser/ui/actions:actions_headers",
 +    "//chrome/common:constants",
++    "//components/bookmarks/common",
 +    "//components/pref_registry",
 +    "//components/prefs",
 +    "//ui/actions:actions_headers",
++  ]
++}
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "browseros_prefs_unittest.cc" ]
++
++  deps = [
++    ":prefs",
++    ":product",
++    "//base/test:test_support",
++    "//chrome/browser/browseros:buildflags",
++    "//components/bookmarks/browser",
++    "//components/bookmarks/common",
++    "//components/pref_registry",
++    "//components/sync_preferences:test_support",
++    "//testing/gtest",
 +  ]
 +}
 +

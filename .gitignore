@@ -24,6 +24,7 @@
 nxtscape-cli-access.json
 gclient.json
 .env
+.env.production
 .grove/
 AGENTS.md
 **/resources/binaries/

@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-Unified icon generation script for BrowserOS.
-
-Generates all platform-specific icons (Windows, macOS, Linux, ChromeOS) from
-a single high-resolution source PNG.
-
-Requirements:
-- Python 3.12+
-- Pillow (pip install Pillow)
-- ImageMagick (brew install imagemagick) - for XPM generation
-- macOS tools (iconutil, actool) - for .icns and Assets.car generation
-
-Usage:
-    python generate_icons.py [--config generate_icons.txt]
-"""
+"""Generate BrowserOS product icons from high-resolution source artwork."""
 
 import shutil
 import subprocess
@@ -30,9 +16,35 @@ SCRIPT_DIR = Path(__file__).parent
 DEFAULT_CONFIG = SCRIPT_DIR / "generate_icons.txt"
 SOURCE_DIR = SCRIPT_DIR / "source"
 STATIC_DIR = SCRIPT_DIR / "static"
-OUTPUT_DIR = SCRIPT_DIR.parent.parent.parent / "resources" / "icons"
+RESOURCE_DIR = SCRIPT_DIR.parent.parent.parent / "resources"
+DEFAULT_PRODUCT = "browseros"
+PRODUCTS = (DEFAULT_PRODUCT, "browserclaw")
 
 MIN_SOURCE_SIZE = 1024
+
+
+def product_output_dir(product: str) -> Path:
+    """Return the committed icon output directory for a product."""
+    if product not in PRODUCTS:
+        raise ValueError(f"Unknown product: {product}")
+    return RESOURCE_DIR / product / "icons"
+
+
+def product_roots(product: str) -> dict[str, Path]:
+    """Return source roots for config paths like source/app_icon.png."""
+    if product == DEFAULT_PRODUCT:
+        return {"source": SOURCE_DIR, "static": STATIC_DIR}
+    if product in PRODUCTS:
+        return {"source": SOURCE_DIR / product, "static": STATIC_DIR / product}
+    raise ValueError(f"Unknown product: {product}")
+
+
+def resolve_input_path(config_path: str, product: str) -> Path:
+    """Resolve a config source path against the selected product roots."""
+    path = Path(config_path)
+    if len(path.parts) > 1 and path.parts[0] in {"source", "static"}:
+        return product_roots(product)[path.parts[0]].joinpath(*path.parts[1:])
+    return SCRIPT_DIR / path
 
 
 def validate_source(source_path: Path) -> Image.Image:
@@ -73,11 +85,9 @@ def generate_mono_png(img: Image.Image, size: int, output_path: Path) -> bool:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         resized = img.resize((size, size), Image.Resampling.LANCZOS)
 
-        # Extract alpha channel and create white silhouette
         if resized.mode != "RGBA":
             resized = resized.convert("RGBA")
 
-        # Create new image: white where alpha > 0, transparent elsewhere
         r, g, b, a = resized.split()
         white = Image.new("L", resized.size, 255)
         mono = Image.merge("RGBA", (white, white, white, a))
@@ -117,19 +127,17 @@ def generate_xpm(img: Image.Image, size: int, output_path: Path) -> bool:
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # First create a temporary PNG
         temp_png = output_path.with_suffix(".tmp.png")
         resized = img.resize((size, size), Image.Resampling.LANCZOS)
         resized.save(temp_png, "PNG")
 
-        # Convert to XPM using ImageMagick
         result = subprocess.run(
             ["convert", str(temp_png), str(output_path)],
             capture_output=True,
             text=True,
         )
 
-        temp_png.unlink()  # Clean up temp file
+        temp_png.unlink()
 
         if result.returncode != 0:
             print(f"  ✗ ImageMagick error: {result.stderr}")
@@ -149,11 +157,9 @@ def generate_icns(img: Image.Image, output_path: Path) -> bool:
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create temporary iconset directory
         iconset_dir = output_path.with_suffix(".iconset")
         iconset_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate all required sizes for iconset
         iconset_sizes = [
             (16, "icon_16x16.png"),
             (32, "icon_16x16@2x.png"),
@@ -171,14 +177,12 @@ def generate_icns(img: Image.Image, output_path: Path) -> bool:
             resized = img.resize((size, size), Image.Resampling.LANCZOS)
             resized.save(iconset_dir / filename, "PNG")
 
-        # Run iconutil
         result = subprocess.run(
             ["iconutil", "-c", "icns", str(iconset_dir), "-o", str(output_path)],
             capture_output=True,
             text=True,
         )
 
-        # Clean up iconset directory
         shutil.rmtree(iconset_dir)
 
         if result.returncode != 0:
@@ -197,7 +201,6 @@ def generate_icns(img: Image.Image, output_path: Path) -> bool:
 def generate_xcassets(img: Image.Image, output_dir: Path) -> bool:
     """Generate Assets.xcassets structure for macOS."""
     try:
-        # AppIcon.appiconset
         appiconset_dir = output_dir / "Assets.xcassets" / "AppIcon.appiconset"
         appiconset_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,7 +209,6 @@ def generate_xcassets(img: Image.Image, output_dir: Path) -> bool:
             resized = img.resize((size, size), Image.Resampling.LANCZOS)
             resized.save(appiconset_dir / f"appicon_{size}.png", "PNG", optimize=True)
 
-        # Contents.json for AppIcon.appiconset
         contents_json = """{
   "images" : [
     { "filename" : "appicon_16.png", "idiom" : "mac", "scale" : "1x", "size" : "16x16" },
@@ -224,7 +226,6 @@ def generate_xcassets(img: Image.Image, output_dir: Path) -> bool:
 }"""
         (appiconset_dir / "Contents.json").write_text(contents_json)
 
-        # Icon.iconset for document icons
         iconset_dir = output_dir / "Assets.xcassets" / "Icon.iconset"
         iconset_dir.mkdir(parents=True, exist_ok=True)
 
@@ -234,7 +235,6 @@ def generate_xcassets(img: Image.Image, output_dir: Path) -> bool:
         resized_512 = img.resize((512, 512), Image.Resampling.LANCZOS)
         resized_512.save(iconset_dir / "icon_256x256@2x.png", "PNG", optimize=True)
 
-        # Root Contents.json
         xcassets_dir = output_dir / "Assets.xcassets"
         root_contents = '{ "info" : { "author" : "xcode", "version" : 1 } }'
         (xcassets_dir / "Contents.json").write_text(root_contents)
@@ -309,7 +309,6 @@ def parse_config(config_path: Path) -> list[dict]:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
 
-            # Skip empty lines and comments
             if not line or line.startswith("#"):
                 continue
 
@@ -321,54 +320,44 @@ def parse_config(config_path: Path) -> list[dict]:
 
             op = {"line": line_num, "raw": line}
 
-            # Determine operation type and parse
             if parts[0] == "COPY":
-                # COPY source dest
                 op["type"] = "copy"
                 op["source"] = parts[1]
                 op["dest"] = parts[2]
 
             elif parts[0] == "ICO":
-                # ICO source sizes dest
-                # e.g., ICO source/app_icon.png 16,20,24,32,40,48,64,128,256 win/chromium.ico
                 op["type"] = "ico"
                 op["source"] = parts[1]
                 op["sizes"] = [int(s) for s in parts[2].split(",")]
                 op["dest"] = parts[3]
 
             elif parts[0] == "ICNS":
-                # ICNS source dest
                 op["type"] = "icns"
                 op["source"] = parts[1]
                 op["dest"] = parts[2]
 
             elif parts[0] == "XCASSETS":
-                # XCASSETS source dest_dir
                 op["type"] = "xcassets"
                 op["source"] = parts[1]
                 op["dest"] = parts[2]
 
             elif parts[0] == "ASSETS_CAR":
-                # ASSETS_CAR mac_dir
                 op["type"] = "assets_car"
                 op["dest"] = parts[1]
 
             elif parts[0] == "XPM":
-                # XPM source size dest
                 op["type"] = "xpm"
                 op["source"] = parts[1]
                 op["size"] = int(parts[2])
                 op["dest"] = parts[3]
 
             elif parts[0] == "PNG":
-                # PNG source size dest
                 op["type"] = "png"
                 op["source"] = parts[1]
                 op["size"] = int(parts[2])
                 op["dest"] = parts[3]
 
             elif parts[0] == "MONO":
-                # MONO source size dest
                 op["type"] = "mono"
                 op["source"] = parts[1]
                 op["size"] = int(parts[2])
@@ -387,7 +376,7 @@ def main():
     """Main entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate BrowserOS icons")
+    parser = argparse.ArgumentParser(description="Generate BrowserOS product icons")
     parser.add_argument(
         "--config",
         type=Path,
@@ -395,44 +384,51 @@ def main():
         help="Path to generation config file",
     )
     parser.add_argument(
+        "--product",
+        choices=PRODUCTS,
+        default=DEFAULT_PRODUCT,
+        help="Product icon tree to generate",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
-        default=OUTPUT_DIR,
-        help="Output directory for generated icons",
+        help="Output directory for generated icons; defaults to the product resource tree",
     )
     args = parser.parse_args()
+    output_dir = args.output or product_output_dir(args.product)
+    roots = product_roots(args.product)
 
     print("=" * 60)
     print("BrowserOS Icon Generation")
     print("=" * 60)
+    print(f"Product: {args.product}")
     print(f"Config: {args.config}")
-    print(f"Output: {args.output}")
+    print(f"Source: {roots['source']}")
+    print(f"Static: {roots['static']}")
+    print(f"Output: {output_dir}")
     print()
 
-    # Parse config
     operations = parse_config(args.config)
     print(f"Loaded {len(operations)} operations from config\n")
 
-    # Cache for loaded source images
     source_cache: dict[str, Image.Image] = {}
 
     def get_source(source_path: str) -> Image.Image:
         """Get source image, loading and validating if needed."""
         if source_path not in source_cache:
-            full_path = SCRIPT_DIR / source_path
+            full_path = resolve_input_path(source_path, args.product)
             source_cache[source_path] = validate_source(full_path)
         return source_cache[source_path]
 
-    # Process operations
     success_count = 0
     fail_count = 0
 
     for op in operations:
         op_type = op["type"]
-        dest_path = args.output / op.get("dest", "")
+        dest_path = output_dir / op.get("dest", "")
 
         if op_type == "copy":
-            source_path = SCRIPT_DIR / op["source"]
+            source_path = resolve_input_path(op["source"], args.product)
             print(f"COPY {op['source']} -> {op['dest']}")
             if copy_static(source_path, dest_path):
                 print("  ✓ Copied")
@@ -502,7 +498,6 @@ def main():
             else:
                 fail_count += 1
 
-    # Summary
     print()
     print("=" * 60)
     print(f"Complete: {success_count} succeeded, {fail_count} failed")

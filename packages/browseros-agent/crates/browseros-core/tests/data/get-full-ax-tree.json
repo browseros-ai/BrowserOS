@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "nodeId": "1",
+      "ignored": false,
+      "role": { "type": "internalRole", "value": "RootWebArea" },
+      "name": { "type": "computedString", "value": "Checkout" },
+      "childIds": ["2"],
+      "backendDOMNodeId": 1
+    },
+    {
+      "nodeId": "2",
+      "ignored": false,
+      "role": { "type": "role", "value": "main" },
+      "name": { "type": "computedString", "value": "Checkout" },
+      "childIds": ["3", "4", "5"],
+      "backendDOMNodeId": 2
+    },
+    {
+      "nodeId": "3",
+      "ignored": false,
+      "role": { "type": "role", "value": "paragraph" },
+      "name": { "type": "computedString", "value": "Review your order" },
+      "backendDOMNodeId": 3
+    },
+    {
+      "nodeId": "4",
+      "ignored": false,
+      "role": { "type": "role", "value": "button" },
+      "name": { "type": "computedString", "value": "Place order" },
+      "properties": [
+        {
+          "name": "focusable",
+          "value": { "type": "booleanOrUndefined", "value": true }
+        }
+      ],
+      "backendDOMNodeId": 101
+    },
+    {
+      "nodeId": "5",
+      "ignored": false,
+      "role": { "type": "role", "value": "textbox" },
+      "name": { "type": "computedString", "value": "Promo code" },
+      "value": { "type": "string", "value": "SAVE20" },
+      "properties": [
+        {
+          "name": "editable",
+          "value": { "type": "token", "value": "plaintext" }
+        }
+      ],
+      "backendDOMNodeId": 102
+    }
+  ]
+}

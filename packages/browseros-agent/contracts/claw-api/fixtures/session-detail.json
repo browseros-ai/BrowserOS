@@ -1,0 +1,49 @@
+{
+  "session": {
+    "sessionId": "session-live",
+    "slug": "codex",
+    "label": "Codex",
+    "name": "Research BrowserClaw",
+    "startedAt": 1784300400000,
+    "durationMs": 1200,
+    "dispatchCount": 2,
+    "toolSequence": ["navigate", "snapshot"],
+    "status": "live",
+    "errorCount": 0,
+    "tokenUsage": {
+      "inputTokenEstimate": 120,
+      "outputTokenEstimate": 480,
+      "totalTokenEstimate": 600
+    },
+    "latestScreenshotId": 42
+  },
+  "dispatches": [
+    {
+      "dispatchId": 41,
+      "createdAt": 1784300400000,
+      "slug": "codex",
+      "label": "Codex",
+      "sessionId": "session-live",
+      "toolName": "navigate",
+      "pageId": 7,
+      "tabId": 101,
+      "targetId": "target-7",
+      "url": "https://browseros.com",
+      "title": "BrowserOS",
+      "durationMs": 800
+    },
+    {
+      "dispatchId": 42,
+      "createdAt": 1784300401200,
+      "slug": "codex",
+      "label": "Codex",
+      "sessionId": "session-live",
+      "toolName": "snapshot",
+      "pageId": 7,
+      "tabId": 101,
+      "targetId": "target-7",
+      "durationMs": 400,
+      "screenshotId": 42
+    }
+  ]
+}

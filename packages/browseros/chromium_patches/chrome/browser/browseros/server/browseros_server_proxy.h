@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_proxy.h b/chrome/browser/browseros/server/browseros_server_proxy.h
 new file mode 100644
-index 0000000000000..586296d473849
+index 0000000000000..0e62a9f7995e1
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_proxy.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,93 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,73 +11,87 @@ index 0000000000000..586296d473849
 +#ifndef CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_PROXY_H_
 +#define CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_PROXY_H_
 +
++#include <cstddef>
 +#include <memory>
-+#include <optional>
-+#include <string>
 +
 +#include "base/containers/flat_map.h"
 +#include "base/memory/scoped_refptr.h"
-+#include "net/server/http_server.h"
++#include "base/memory/weak_ptr.h"
++#include "base/threading/thread_checker.h"
 +
-+namespace network {
-+class PendingSharedURLLoaderFactory;
-+class SharedURLLoaderFactory;
-+class SimpleURLLoader;
-+}  // namespace network
++namespace net {
++class SSLServerContext;
++class SSLServerSocket;
++class StreamSocket;
++class TCPServerSocket;
++class X509Certificate;
++}  // namespace net
++
++namespace crypto::keypair {
++class PrivateKey;
++}  // namespace crypto::keypair
 +
 +namespace browseros {
 +
-+// HTTP proxy that binds a stable port and forwards all requests to the
-+// sidecar's ephemeral backend port. Returns 503 when no backend is configured.
++// HTTP and HTTPS proxy that fronts the BrowserOS sidecar without parsing or
++// rewriting traffic.
 +//
-+// Threading: The entire proxy runs on the IO thread. The manager obtains a
-+// SharedURLLoaderFactory on the UI thread, calls Clone() to get a
-+// PendingSharedURLLoaderFactory, and passes it to Start() on the IO thread.
-+// Start() binds it into a new SharedURLLoaderFactory usable from IO.
-+// This keeps net::HttpServer and SimpleURLLoader on the same thread.
-+class BrowserOSServerProxy : public net::HttpServer::Delegate {
++// HTTPS uses a per-start in-memory self-signed certificate. HTTPS setup
++// failures log and leave the proxy running HTTP-only.
++//
++// Threading: The entire proxy runs on the IO thread. The manager creates the
++// proxy on the UI thread, then starts, updates, stops, and destroys it on the
++// IO thread.
++class BrowserOSServerProxy {
 + public:
 +  BrowserOSServerProxy();
-+  ~BrowserOSServerProxy() override;
++  ~BrowserOSServerProxy();
 +
 +  BrowserOSServerProxy(const BrowserOSServerProxy&) = delete;
 +  BrowserOSServerProxy& operator=(const BrowserOSServerProxy&) = delete;
 +
-+  // Bind proxy on the given port. |pending_factory| is a cloned factory
-+  // that will be bound on the current (IO) thread. Returns true on success.
-+  bool Start(int port,
-+             std::unique_ptr<network::PendingSharedURLLoaderFactory>
-+                 pending_factory);
-+
++  // Binds the stable HTTP proxy port and starts accepting TCP connections.
++  bool Start(int http_port, int https_port);
 +  void Stop();
 +
 +  void SetBackendPort(int port);
 +  void SetAllowRemote(bool allow);
 +
-+  int GetPort() const { return bound_port_; }
++  int GetPort() const { return bound_http_port_; }
++  int GetHttpsPort() const { return bound_https_port_; }
++  size_t GetConnectionCountForTesting() const { return connections_.size(); }
 +
 + private:
-+  // net::HttpServer::Delegate
-+  void OnConnect(int connection_id) override;
-+  void OnHttpRequest(int connection_id,
-+                     const net::HttpServerRequestInfo& info) override;
-+  void OnWebSocketRequest(int connection_id,
-+                          const net::HttpServerRequestInfo& info) override;
-+  void OnWebSocketMessage(int connection_id, std::string data) override;
-+  void OnClose(int connection_id) override;
++  class Connection;
++  struct ListenerState;
 +
-+  void ForwardRequest(int connection_id,
-+                      const net::HttpServerRequestInfo& info);
-+  void OnBackendResponse(int connection_id,
-+                         std::optional<std::string> response_body);
++  bool StartHttpListener(int http_port);
++  bool StartHttpsListener(int https_port);
++  bool GenerateTlsCredentials();
++  void StartAccept(ListenerState* listener);
++  void OnAccept(ListenerState* listener, int result);
++  void StartConnection(std::unique_ptr<net::StreamSocket> client_socket);
++  void StartTlsHandshake(std::unique_ptr<net::StreamSocket> client_socket);
++  void OnTlsHandshakeDone(int handshake_id, int result);
++  void OnConnectionFinished(int connection_id);
 +
-+  std::unique_ptr<net::HttpServer> server_;
-+  base::flat_map<int, std::unique_ptr<network::SimpleURLLoader>>
-+      pending_loaders_;
-+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
++  std::unique_ptr<ListenerState> http_listener_;
++  std::unique_ptr<ListenerState> https_listener_;
++  base::flat_map<int, std::unique_ptr<Connection>> connections_;
++  base::flat_map<int, std::unique_ptr<net::SSLServerSocket>> tls_handshakes_;
++  int next_connection_id_ = 1;
++  int next_tls_handshake_id_ = 1;
 +  int backend_port_ = 0;
-+  int bound_port_ = 0;
++  int bound_http_port_ = 0;
++  int bound_https_port_ = 0;
 +  bool allow_remote_ = false;
++
++  std::unique_ptr<crypto::keypair::PrivateKey> tls_key_;
++  scoped_refptr<net::X509Certificate> tls_cert_;
++  std::unique_ptr<net::SSLServerContext> tls_context_;
++
++  THREAD_CHECKER(thread_checker_);
++  base::WeakPtrFactory<BrowserOSServerProxy> weak_factory_{this};
 +};
 +
 +}  // namespace browseros

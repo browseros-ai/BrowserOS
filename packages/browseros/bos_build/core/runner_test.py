@@ -119,15 +119,17 @@ class RunnerEventTest(unittest.TestCase):
         with self.assertRaisesRegex(StepExecutionError, "unknown step"):
             run(_ctx(), ["definitely_not_a_step"], name="r", available={})
 
-    def test_notify_flag_carried_on_events(self):
+    def test_phase_carried_on_events(self):
         rec = _Recorder()
 
-        class NotifyStep(_OkStep):
-            notify = True
+        class PhaseStep(_OkStep):
+            phase = "build"
 
-        run(_ctx(), [NotifyStep()], name="r", subscribers=(rec,))
+        run(_ctx(), [PhaseStep()], name="r", subscribers=(rec,))
         started = [e for e in rec.events if isinstance(e, StepStarted)]
-        self.assertTrue(started[0].notify)
+        finished = [e for e in rec.events if isinstance(e, StepFinished)]
+        self.assertEqual(started[0].phase, "build")
+        self.assertEqual(finished[0].phase, "build")
 
 
 if __name__ == "__main__":

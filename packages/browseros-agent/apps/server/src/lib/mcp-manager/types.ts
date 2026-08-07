@@ -8,7 +8,7 @@
  * consume without leaking the upstream's library types everywhere.
  */
 
-import type { AgentId } from 'agent-mcp-manager'
+import type { AgentId } from '@browseros/agent-mcp-manager'
 
 export type McpAgentId = AgentId
 

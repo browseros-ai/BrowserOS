@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Publish module - Copy versioned artifacts to download/ paths for fresh installs"""
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..core.context import Context
 from ..core.step import Step, ValidationError
-from ..lib.utils import log_info, log_error, log_success, log_warning
+from ..lib.utils import log_error, log_info, log_success, log_warning
 from ..lib.r2 import BOTO3_AVAILABLE, get_r2_client
 from .common import (
     PLATFORMS,
     PLATFORM_DISPLAY_NAMES,
     fetch_all_release_metadata,
     get_download_path_mapping,
+    validate_release_metadata,
 )
 
 
@@ -41,29 +42,107 @@ class PublishModule(Step):
     requires = []
     description = "Publish versioned artifacts to latest download URLs"
 
-    def __init__(self, platforms: Optional[List[str]] = None):
-        self.platforms = platforms or PLATFORMS
+    def __init__(
+        self,
+        platforms: Optional[List[str]] = None,
+        macos_arch: str = "universal",
+        source_sha: str = "",
+        workflow_run_id: str = "",
+        workflow_run_attempt: str = "",
+    ):
+        self.selected_platforms = platforms or PLATFORMS
+        self.allow_missing_platforms = platforms is None
+        self.macos_arch = macos_arch
+        self.source_sha = source_sha
+        self.workflow_run_id = workflow_run_id
+        self.workflow_run_attempt = workflow_run_attempt
 
-    def validate(self, ctx: Context) -> None:
+    def validate(self, context: Context) -> None:
         if not BOTO3_AVAILABLE:
             raise ValidationError(
                 "boto3 library not installed - run: pip install boto3"
             )
 
-        if not ctx.env.has_r2_config():
+        if not context.env.has_r2_config():
             raise ValidationError("R2 configuration not set")
 
-        if not ctx.release_version:
+        if not context.release_version:
             raise ValidationError("--version is required")
+        invalid = sorted(set(self.selected_platforms) - set(PLATFORMS))
+        if invalid:
+            raise ValidationError(
+                f"Unknown platform(s): {', '.join(invalid)}. "
+                f"Valid: {', '.join(PLATFORMS)}"
+            )
 
-    def execute(self, ctx: Context) -> None:
-        version = ctx.release_version
-        env = ctx.env
+    def execute(self, context: Context) -> None:
+        version = context.release_version
+        env = context.env
 
-        metadata = fetch_all_release_metadata(version, env, ctx.product.id)
+        metadata = fetch_all_release_metadata(version, env, context.product.id)
         if not metadata:
-            log_error(f"No release metadata found for version {version}")
-            return
+            raise RuntimeError(f"No release metadata found for version {version}")
+        missing_platforms = [
+            platform for platform in self.selected_platforms if platform not in metadata
+        ]
+        if missing_platforms and not self.allow_missing_platforms:
+            raise RuntimeError(
+                "Missing release metadata for requested platform(s): "
+                f"{', '.join(missing_platforms)}"
+            )
+        if missing_platforms:
+            log_warning(
+                "Skipping platforms with no release metadata: "
+                f"{', '.join(missing_platforms)}"
+            )
+        loaded_platforms = [
+            platform for platform in self.selected_platforms if platform in metadata
+        ]
+        if any(
+            (
+                self.source_sha,
+                self.workflow_run_id,
+                self.workflow_run_attempt,
+            )
+        ):
+            validated: Dict[str, dict] = {}
+            for platform in loaded_platforms:
+                selection = "windows" if platform == "win" else platform
+                validated.update(
+                    validate_release_metadata(
+                        metadata,
+                        version=version,
+                        product_id=context.product.id,
+                        platforms=selection,
+                        macos_arch=self.macos_arch,
+                        source_sha=self.source_sha,
+                        workflow_run_id=self.workflow_run_id,
+                        workflow_run_attempt=self.workflow_run_attempt,
+                    )
+                )
+            metadata = validated
+
+        candidates: Dict[str, List[Tuple[str, str, str]]] = {}
+        for platform in loaded_platforms:
+            release = metadata[platform]
+            artifacts = release.get("artifacts", {})
+            platform_mapping = get_download_path_mapping(context.product).get(
+                platform, {}
+            )
+            platform_candidates: List[Tuple[str, str, str]] = []
+            for artifact_key, artifact in artifacts.items():
+                if artifact_key not in platform_mapping:
+                    continue
+                dest_path = platform_mapping[artifact_key]
+                source_key = _release_source_key(context, platform, version, artifact)
+                platform_candidates.append(
+                    (artifact["filename"], source_key, dest_path)
+                )
+            if not platform_candidates:
+                raise RuntimeError(
+                    f"No promotable artifacts found for requested platform {platform}"
+                )
+            candidates[platform] = platform_candidates
 
         log_info(f"\n{'='*60}")
         log_info(f"Publishing v{version} to download/ paths")
@@ -71,33 +150,18 @@ class PublishModule(Step):
 
         client = get_r2_client(env)
         if not client:
-            log_error("Failed to create R2 client")
-            return
+            raise RuntimeError("Failed to create R2 client")
 
         results: List[Tuple[str, str, bool]] = []
 
-        for platform in self.platforms:
-            if platform not in metadata:
-                log_warning(f"Skipping {platform}: no release metadata")
-                continue
-
-            release = metadata[platform]
-            artifacts = release.get("artifacts", {})
-            platform_mapping = get_download_path_mapping(ctx.product).get(platform, {})
-
+        for platform, platform_candidates in candidates.items():
             log_info(f"\n{PLATFORM_DISPLAY_NAMES[platform]}:")
-
-            for artifact_key, artifact in artifacts.items():
-                if artifact_key not in platform_mapping:
-                    log_info(f"  Skipping {artifact_key}: no download path mapping")
-                    continue
-
-                dest_path = platform_mapping[artifact_key]
-                source_key = _release_source_key(ctx, platform, version, artifact)
-
-                log_info(f"  Copying {artifact['filename']} → {dest_path}")
-                success = copy_to_download_path(client, env.r2_bucket, source_key, dest_path)
-                results.append((artifact["filename"], dest_path, success))
+            for filename, source_key, dest_path in platform_candidates:
+                log_info(f"  Copying {filename} → {dest_path}")
+                success = copy_to_download_path(
+                    client, env.r2_bucket, source_key, dest_path
+                )
+                results.append((filename, dest_path, success))
 
                 if success:
                     log_success(f"    ✓ Published to {env.r2_cdn_base_url}/{dest_path}")
@@ -106,13 +170,16 @@ class PublishModule(Step):
         succeeded = sum(1 for _, _, ok in results if ok)
         failed = sum(1 for _, _, ok in results if not ok)
 
-        if failed == 0:
-            log_success(f"Published {succeeded} artifact(s) to download/ paths")
-        else:
-            log_warning(f"Published {succeeded}/{succeeded + failed} artifact(s)")
+        if not results:
+            raise RuntimeError("No promotable artifacts found in release metadata")
+        if failed:
             for filename, dest, ok in results:
                 if not ok:
                     log_error(f"  Failed: {filename} → {dest}")
+            raise RuntimeError(
+                f"Failed to publish {failed}/{succeeded + failed} artifact(s)"
+            )
+        log_success(f"Published {succeeded} artifact(s) to download/ paths")
 
 
 def _release_source_key(

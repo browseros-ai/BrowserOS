@@ -4,7 +4,7 @@ import type { RunStatus } from '@/lib/status'
 export interface ActivityRow {
   id: string
   agentLabel: string
-  /** Color the agent dot. Matches the per-agent color on AgentRow. */
+  /** Color for the per-agent dot in recent activity. */
   color: string
   status: Extract<
     RunStatus,
@@ -16,8 +16,8 @@ export interface ActivityRow {
   site?: string
   when: string
   /**
-   * Run id used to route a done row's Replay link to
-   * `/governance/audit/:runId/replay`. Only required on done rows.
+   * Run id used to route a done row's Replay link. Only required on
+   * done rows.
    */
   runId?: string
   /** Total tool dispatches recorded against this tab. Surfaces as a badge. */
@@ -44,7 +44,7 @@ const MOCK_ACTIVITY: ActivityRow[] = [
   {
     id: 'ac2',
     agentLabel: 'Cowork . Add to cart',
-    color: '#0f3e17',
+    color: '#0254ec',
     status: 'blocked',
     action: 'Add-to-cart blocked by your ACL rule on this site',
     site: 'amazon.com',

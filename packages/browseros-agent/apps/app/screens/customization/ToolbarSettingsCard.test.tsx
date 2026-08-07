@@ -32,7 +32,6 @@ const Feature = {
   QWEN_CODE_SUPPORT: 'QWEN_CODE_SUPPORT',
   CREDITS_SUPPORT: 'CREDITS_SUPPORT',
   AGENT_HARNESS_SUPPORT: 'AGENT_HARNESS_SUPPORT',
-  HERMES_AGENT_SUPPORT: 'HERMES_AGENT_SUPPORT',
 } as const
 
 type FeatureValue = (typeof Feature)[keyof typeof Feature]
@@ -82,15 +81,6 @@ function resolveFeatureStaticSupport({
   isDevelopment: boolean
   alphaFeaturesEnabled: boolean
 }): boolean | null {
-  if (feature === Feature.HERMES_AGENT_SUPPORT) {
-    const staticSupport = resolveStaticFeatureSupport({
-      isDevelopment,
-      alphaFeaturesEnabled,
-      requiresAlphaFlag: true,
-    })
-    if (staticSupport !== true) return staticSupport
-    return isDevelopment ? true : null
-  }
   if (feature === Feature.ALPHA_FEATURES_SUPPORT) {
     return alphaFeaturesEnabled
   }
@@ -103,9 +93,6 @@ function checkFeatureSupport(
 ): boolean {
   if (feature === Feature.AGENT_HARNESS_SUPPORT) {
     return compareVersionAtLeast(state.browserOSVersion, [0, 46, 0, 0])
-  }
-  if (feature === Feature.HERMES_AGENT_SUPPORT) {
-    return compareVersionAtLeast(state.serverVersion, [0, 0, 116])
   }
   return false
 }

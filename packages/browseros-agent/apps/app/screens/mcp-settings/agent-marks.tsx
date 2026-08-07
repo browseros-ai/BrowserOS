@@ -12,9 +12,11 @@
 
 import type { FC, SVGProps } from 'react'
 import { AnthropicBlack } from '@/components/ui/svgs/anthropicBlack'
+import { Antigravity } from '@/components/ui/svgs/antigravity'
 import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
 import { CodexLight } from '@/components/ui/svgs/codexLight'
 import { CursorLight } from '@/components/ui/svgs/cursorLight'
+import { Opencode } from '@/components/ui/svgs/opencode'
 import { Vscode } from '@/components/ui/svgs/vscode'
 import { ZedLogo } from '@/components/ui/svgs/zedLogo'
 
@@ -41,6 +43,14 @@ export const VSCodeMark: FC<AgentMarkProps> = (props) => (
 
 export const CodexMark: FC<AgentMarkProps> = (props) => (
   <CodexLight aria-hidden {...props} />
+)
+
+export const OpenCodeMark: FC<AgentMarkProps> = (props) => (
+  <Opencode aria-hidden {...props} />
+)
+
+export const AntigravityMark: FC<AgentMarkProps> = (props) => (
+  <Antigravity aria-hidden {...props} />
 )
 
 export const ZedMark: FC<AgentMarkProps> = (props) => (

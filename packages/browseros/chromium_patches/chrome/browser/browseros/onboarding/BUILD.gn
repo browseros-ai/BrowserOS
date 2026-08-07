@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/onboarding/BUILD.gn b/chrome/browser/browseros/onboarding/BUILD.gn
 new file mode 100644
-index 0000000000000..81c3bd53932f8
+index 0000000000000000000000000000000000000000..4b3ae75acf7793612ff587b86d45645b580a8a3a
 --- /dev/null
 +++ b/chrome/browser/browseros/onboarding/BUILD.gn
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,64 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -15,6 +15,12 @@ index 0000000000000..81c3bd53932f8
 +  "index.html",
 +  "app.css",
 +  "app.js",
++  "icon/16.png",
++  "icon/32.png",
++  "icon/48.png",
++  "icon/96.png",
++  "icon/128.png",
++  "icon/keychain-prompt.png",
 +]
 +
 +generate_grd("build_resources_grd") {
@@ -22,6 +28,7 @@ index 0000000000000..81c3bd53932f8
 +  out_grd = "$target_gen_dir/resources.grd"
 +  input_files = _browseros_onboarding_resource_files
 +  input_files_base_dir = rebase_path("resources", "//")
++  ignore_missing_input_files = true
 +}
 +
 +grit("resources") {
@@ -49,6 +56,7 @@ index 0000000000000..81c3bd53932f8
 +    "//base",
 +    "//chrome/browser:browser_process",
 +    "//chrome/browser/browseros/core:prefs",
++    "//chrome/browser/browseros/core:product",
 +    "//chrome/browser/importer",
 +    "//chrome/browser/importer:impl",
 +    "//chrome/browser/profiles:profile",

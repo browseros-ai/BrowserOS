@@ -67,7 +67,120 @@ def append_github_file(env_var: str, line: str) -> None:
         f.write(line + "\n")
 
 
-def ensure_depot_tools(root: Path) -> Path:
+def _repair_cached_depot_tools(depot_tools: Path) -> None:
+    """Normalize only line-ending drift in an explicitly disposable checkout."""
+    worktree = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    if (
+        worktree.returncode != 0
+        or worktree.stdout.strip() != "true"
+        or head.returncode != 0
+    ):
+        raise RuntimeError(
+            f"cached depot_tools is not a valid Git worktree: {depot_tools}"
+        )
+
+    index_state = subprocess.run(
+        ["git", "ls-files", "-v", "-z"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    if index_state.returncode != 0:
+        raise RuntimeError(
+            "could not inspect cached depot_tools index flags: "
+            f"{index_state.stderr.strip()}"
+        )
+    unsafe_index_entries = [
+        entry
+        for entry in index_state.stdout.split("\0")
+        if entry and not entry.startswith("H ")
+    ]
+    if unsafe_index_entries:
+        markers = sorted({entry[0] for entry in unsafe_index_entries})
+        raise RuntimeError(
+            "cached depot_tools has non-default index flags "
+            f"({', '.join(markers)}); refusing line-ending repair"
+        )
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0:
+        raise RuntimeError(
+            "could not inspect cached depot_tools tracked files: "
+            f"{status.stderr.strip()}"
+        )
+    if not status.stdout:
+        return
+
+    for diff_args in (
+        [
+            "diff",
+            "--quiet",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
+            "--ignore-cr-at-eol",
+            "--",
+        ],
+        [
+            "diff",
+            "--cached",
+            "--quiet",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=none",
+            "--ignore-cr-at-eol",
+            "--",
+        ],
+    ):
+        diff = subprocess.run(["git", *diff_args], cwd=depot_tools)
+        if diff.returncode == 1:
+            raise RuntimeError(
+                "cached depot_tools has substantive tracked changes; "
+                "refusing line-ending repair"
+            )
+        if diff.returncode != 0:
+            raise RuntimeError(
+                "could not classify cached depot_tools changes "
+                f"(git {' '.join(diff_args)} exited {diff.returncode})"
+            )
+
+    log_info("[source] Normalizing cached depot_tools line endings...")
+    run(["git", "reset", "--hard", "HEAD"], cwd=depot_tools)
+
+    verified = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
+        cwd=depot_tools,
+        capture_output=True,
+        text=True,
+    )
+    if verified.returncode != 0 or verified.stdout:
+        raise RuntimeError(
+            "cached depot_tools line-ending repair did not produce "
+            "a clean tracked worktree"
+        )
+
+
+def ensure_depot_tools(
+    root: Path,
+    *,
+    repair_cached_depot_tools: bool = False,
+) -> Path:
     depot_tools = root / "depot_tools"
     if not (depot_tools / ".git").exists():
         log_info("[source] Cloning depot_tools...")
@@ -77,6 +190,8 @@ def ensure_depot_tools(root: Path) -> Path:
         )
     else:
         log_info("[source] depot_tools already present")
+        if repair_cached_depot_tools:
+            _repair_cached_depot_tools(depot_tools)
 
     append_github_file("GITHUB_PATH", str(depot_tools))
     if sys.platform == "win32":
@@ -156,6 +271,7 @@ def ensure(
     version: str,
     strategy: str = "shallow",
     step_name: str = "all",
+    repair_cached_depot_tools: bool = False,
 ) -> None:
     """Idempotently provision root: depot_tools + .gclient + src @ pin.
 
@@ -163,7 +279,10 @@ def ensure(
     the clean step between checkout and sync.
     """
     root.mkdir(parents=True, exist_ok=True)
-    depot_tools = ensure_depot_tools(root)
+    depot_tools = ensure_depot_tools(
+        root,
+        repair_cached_depot_tools=repair_cached_depot_tools,
+    )
     ensure_gclient_config(root)
 
     if step_name in ("checkout", "all"):

@@ -85,6 +85,7 @@ def resolve_config(cli_args: Dict[str, Any]) -> List[Context]:
         Context(
             chromium_src=chromium_src,
             architecture=architecture,
+            plan_architectures=(architecture,),
             build_type=build_type,
             product=product,
             extra_gn_args=extra_gn_args,

@@ -2,122 +2,323 @@
  * @license
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * Pure unit tests for `buildTabView`. Lives in `tab-view.ts` (not
- * `replay.data.ts`) so bun test does not import the react-query-kit
- * hook graph, which sibling tests `mock.module`-poison globally.
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { ReplayEvent, ReplayFrame } from '@/modules/api/replay.hooks'
-import { type BuildTabViewInput, buildTabView } from './tab-view'
+import type { ReplayEvent } from '@/modules/api/replay.hooks'
+import type { ReplayTabData } from './replay.data'
+import {
+  buildReplayDocumentIds,
+  buildReplayEventCatalog,
+  buildReplayTabIds,
+} from './replay-events'
+import {
+  type BuildTabViewInput,
+  buildTabView,
+  isPlayableTabView,
+} from './tab-view'
 
-function frame(
-  t: number,
-  pageId: number | null,
-  extra: Partial<ReplayFrame> = {},
-): ReplayFrame {
+function event(
+  ts: number,
+  documentId: string,
+  tabId = 1,
+  type = 2,
+): ReplayEvent {
   return {
-    t,
-    kind: 'action',
-    verb: 'read',
-    node: 'test',
-    caption: 'test',
-    pageId,
-    ...extra,
+    sessionId: 'test',
+    documentId,
+    targetId: `target-${documentId}`,
+    tabId,
+    type,
+    data: {},
+    ts,
   }
 }
 
-function event(ts: number, tabPageId: number): ReplayEvent {
-  return { sessionId: 'test', tabPageId, type: 3, data: {}, ts }
+function tab(
+  tabId: number,
+  segments: Array<{
+    documentId: string
+    firstEventAt: number
+    lastEventAt: number
+    hasGap?: boolean
+    legacy?: boolean
+  }>,
+): ReplayTabData {
+  return {
+    tabId,
+    complete: true,
+    segments: segments.map((segment) => ({
+      targetId: `target-${segment.documentId}`,
+      hasGap: false,
+      legacy: false,
+      ...segment,
+    })),
+  }
 }
 
 function makeInput(
   overrides: Partial<BuildTabViewInput> = {},
 ): BuildTabViewInput {
   return {
-    frames: [],
+    tabs: [],
     eventsForTab: () => [],
-    startedAtMs: 1_000_000,
     ...overrides,
   }
 }
 
 describe('buildTabView', () => {
-  it('returns EMPTY for null tabPageId', () => {
-    const v = buildTabView(makeInput(), null)
-    expect(v.frames).toEqual([])
-    expect(v.events).toEqual([])
-    expect(v.totalSeconds).toBe(0)
+  it('returns empty without a selected tab', () => {
+    const view = buildTabView(makeInput(), null)
+    expect(view.events).toEqual([])
+    expect(view.originMs).toBeNull()
+    expect(view.endMs).toBeNull()
+    expect(view.totalSeconds).toBe(0)
+    expect(isPlayableTabView(view)).toBe(false)
   })
 
-  it('returns EMPTY when the tab has no frames AND no events', () => {
-    const v = buildTabView(makeInput({ frames: [frame(5, 1)] }), 42)
-    expect(v.frames).toEqual([])
-    expect(v.events).toEqual([])
-    expect(v.totalSeconds).toBe(0)
+  it('merges every document lifecycle from one tab into one track', () => {
+    const events = [
+      event(1_001_000, 'document-a', 1, 0),
+      event(1_001_001, 'document-a', 1, 4),
+      event(1_002_000, 'document-a', 1, 2),
+      event(1_003_000, 'document-a', 1, 3),
+      event(1_004_000, 'document-b', 1, 0),
+      event(1_004_001, 'document-b', 1, 4),
+      event(1_005_000, 'document-b', 1, 2),
+      event(1_006_000, 'document-b', 1, 3),
+      event(1_007_000, 'document-c', 2, 2),
+    ]
+    const catalog = buildReplayEventCatalog(events)
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-a',
+            firstEventAt: 1_001_000,
+            lastEventAt: 1_003_000,
+          },
+          {
+            documentId: 'document-b',
+            firstEventAt: 1_004_000,
+            lastEventAt: 1_006_000,
+          },
+        ]),
+      ],
+      eventsForTab: catalog.eventsForTab,
+    })
+
+    const view = buildTabView(input, 1)
+    expect(view.events.map(({ documentId }) => documentId)).toEqual([
+      'document-a',
+      'document-a',
+      'document-a',
+      'document-a',
+      'document-b',
+      'document-b',
+      'document-b',
+      'document-b',
+    ])
+    expect(view.originMs).toBe(1_001_000)
+    expect(view.endMs).toBe(1_006_000)
+    expect(view.totalSeconds).toBe(5)
+    expect(isPlayableTabView(view)).toBe(true)
   })
 
-  it('filters frames to only the target tab', () => {
-    const v = buildTabView(
-      makeInput({
-        frames: [frame(1, 1), frame(2, 4), frame(3, 1), frame(4, 5)],
-      }),
+  it('keeps a merged tab event array stable across audit polling', () => {
+    const events = [
+      event(1_001_000, 'document-a'),
+      event(1_002_000, 'document-a', 1, 3),
+      event(1_003_000, 'document-b'),
+      event(1_004_000, 'document-b', 1, 3),
+    ]
+    const catalog = buildReplayEventCatalog(events)
+    const tabs = [
+      tab(1, [
+        {
+          documentId: 'document-a',
+          firstEventAt: 1_001_000,
+          lastEventAt: 1_002_000,
+        },
+        {
+          documentId: 'document-b',
+          firstEventAt: 1_003_000,
+          lastEventAt: 1_004_000,
+        },
+      ]),
+    ]
+    const first = buildTabView(
+      makeInput({ tabs, eventsForTab: catalog.eventsForTab }),
       1,
     )
-    expect(v.frames).toHaveLength(2)
-    expect(v.frames.map((f) => f.pageId)).toEqual([1, 1])
-  })
-
-  it('shifts frame `t` to be tab-relative (first frame at t=0)', () => {
-    // Session started at 1_000_000 ms; frame at t=5 means the tab's
-    // first activity is 5 seconds into the session. In tab-relative
-    // time that first frame is at t=0.
-    const v = buildTabView(
-      makeInput({
-        frames: [frame(5, 7), frame(8, 7), frame(12, 7)],
-        eventsForTab: () => [event(1_005_000, 7), event(1_012_000, 7)],
-      }),
-      7,
-    )
-    expect(v.frames.map((f) => f.t)).toEqual([0, 3, 7])
-  })
-
-  it('totalSeconds = tab activity window (last event - first event)', () => {
-    const v = buildTabView(
-      makeInput({
-        frames: [frame(3, 1), frame(6, 1)],
-        eventsForTab: () => [event(1_003_000, 1), event(1_007_500, 1)],
-      }),
+    const afterAuditPoll = buildTabView(
+      makeInput({ tabs, eventsForTab: catalog.eventsForTab }),
       1,
     )
-    // 7500 - 3000 = 4500 ms = 4.5s
-    expect(v.totalSeconds).toBeCloseTo(4.5)
+
+    // Stable identity keeps the single rrweb player alive across polls.
+    expect(afterAuditPoll.events).toBe(first.events)
   })
 
-  it('falls back to frame timespan when no events exist', () => {
-    const v = buildTabView(
-      makeInput({
-        frames: [frame(2, 9), frame(10, 9)],
-        eventsForTab: () => [],
-      }),
-      9,
-    )
-    // 10 - 2 = 8 seconds
-    expect(v.totalSeconds).toBe(8)
-    expect(v.frames.map((f) => f.t)).toEqual([0, 8])
+  it('reuses the playable stream after leading orphan mutations', () => {
+    const rawEvents = [
+      event(1_001_000, 'document-a', 1, 3),
+      event(1_004_000, 'document-a'),
+      event(1_005_000, 'document-a', 1, 3),
+    ]
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-a',
+            firstEventAt: 1_001_000,
+            lastEventAt: 1_005_000,
+          },
+        ]),
+      ],
+      eventsForTab: () => rawEvents,
+    })
+
+    const first = buildTabView(input, 1)
+    const second = buildTabView(input, 1)
+    expect(first.events.map(({ type }) => type)).toEqual([2, 3])
+    expect(second.events).toBe(first.events)
+    // Bounds follow the playable slice, not the discarded orphan mutation.
+    expect(first.originMs).toBe(1_004_000)
+    expect(first.incompleteUntilMs).toBe(3_000)
+    expect(first.knownIncomplete).toBe(true)
   })
 
-  it('preserves other frame fields when shifting `t`', () => {
-    const v = buildTabView(
-      makeInput({
-        frames: [frame(5, 3, { verb: 'navigate', url: 'https://example.com' })],
-      }),
-      3,
-    )
-    expect(v.frames[0]?.verb).toBe('navigate')
-    expect(v.frames[0]?.url).toBe('https://example.com')
-    expect(v.frames[0]?.pageId).toBe(3)
-    expect(v.frames[0]?.t).toBe(0)
+  it('surfaces a cataloged gap even when the tab is playable', () => {
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-gap',
+            firstEventAt: 1_001_000,
+            lastEventAt: 1_002_000,
+            hasGap: true,
+          },
+        ]),
+      ],
+      eventsForTab: () => [
+        event(1_001_000, 'document-gap'),
+        event(1_002_000, 'document-gap', 1, 3),
+      ],
+    })
+
+    expect(buildTabView(input, 1).knownIncomplete).toBe(true)
+  })
+
+  it('marks an event stream without a full snapshot as incomplete', () => {
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-missing-snapshot',
+            firstEventAt: 1_001_000,
+            lastEventAt: 1_002_000,
+          },
+        ]),
+      ],
+      eventsForTab: () => [event(1_001_000, 'document-missing-snapshot', 1, 3)],
+    })
+
+    const view = buildTabView(input, 1)
+    expect(view.hasFullSnapshot).toBe(false)
+    expect(view.knownIncomplete).toBe(true)
+    expect(isPlayableTabView(view)).toBe(false)
+  })
+
+  it('reports a generic gap when omissions occur before and during playback', () => {
+    const events = [
+      event(1_000_000, 'document-a', 1, 3),
+      event(1_001_000, 'document-a'),
+      event(1_002_000, 'document-a', 1, 3),
+      event(1_003_000, 'document-b', 1, 3),
+      event(1_004_000, 'document-c'),
+      event(1_005_000, 'document-c', 1, 3),
+    ]
+    const input = makeInput({
+      tabs: [
+        tab(1, [
+          {
+            documentId: 'document-a',
+            firstEventAt: 1_000_000,
+            lastEventAt: 1_002_000,
+          },
+          {
+            documentId: 'document-b',
+            firstEventAt: 1_003_000,
+            lastEventAt: 1_003_000,
+          },
+          {
+            documentId: 'document-c',
+            firstEventAt: 1_004_000,
+            lastEventAt: 1_005_000,
+          },
+        ]),
+      ],
+      eventsForTab: buildReplayEventCatalog(events).eventsForTab,
+    })
+
+    const view = buildTabView(input, 1)
+    expect(view.events.map(({ documentId }) => documentId)).toEqual([
+      'document-a',
+      'document-a',
+      'document-c',
+      'document-c',
+    ])
+    expect(view.knownIncomplete).toBe(true)
+    expect(view.incompleteUntilMs).toBeNull()
+  })
+})
+
+describe('catalog ordering', () => {
+  it('orders logical tabs and documents from metadata before discoveries', () => {
+    expect(
+      buildReplayTabIds(
+        [
+          {
+            tabId: 2,
+            complete: true,
+            firstEventAt: 20,
+            lastEventAt: 30,
+            segments: [],
+          },
+          {
+            tabId: 1,
+            complete: true,
+            firstEventAt: 10,
+            lastEventAt: 15,
+            segments: [],
+          },
+        ],
+        [3],
+      ),
+    ).toEqual([1, 2, 3])
+    expect(
+      buildReplayDocumentIds(
+        [
+          {
+            documentId: 'later',
+            firstEventAt: 20,
+            lastEventAt: 30,
+            sizeBytes: 1,
+            eventCount: 1,
+            hasGap: false,
+          },
+          {
+            documentId: 'first',
+            firstEventAt: 10,
+            lastEventAt: 15,
+            sizeBytes: 1,
+            eventCount: 1,
+            hasGap: false,
+          },
+        ],
+        ['stream-only'],
+      ),
+    ).toEqual(['first', 'later', 'stream-only'])
   })
 })

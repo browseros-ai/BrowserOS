@@ -1,0 +1,47 @@
+storage:
+  get:
+    operationId: getAuditStorage
+    summary: Current audit storage usage and retention policy.
+    responses:
+      '200':
+        description: Audit storage usage and the active retention policy.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/audit.yaml#/AuditStorageState
+      '500':
+        $ref: ../responses.yaml#/InternalError
+retention:
+  put:
+    operationId: setAuditRetention
+    summary: Set the audit retention policy.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/audit.yaml#/SetAuditRetentionRequest
+    responses:
+      '200':
+        description: The updated retention policy.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/audit.yaml#/AuditRetention
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+cleanup:
+  post:
+    operationId: runAuditCleanup
+    summary: Apply the current retention policy immediately and reclaim disk space.
+    responses:
+      '200':
+        description: What the cleanup removed and the resulting usage.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/audit.yaml#/AuditCleanupResult
+      '500':
+        $ref: ../responses.yaml#/InternalError

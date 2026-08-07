@@ -42,9 +42,10 @@ class ExtensionSpec:
     """One packagable extension; name is the crx filename prefix.
 
     dist_path / manifest_path / env_dir are relative to the resolved source
-    root. env lists the variable names the build reads; they are also
-    written to <env_dir or source root>/.env because some bundler configs
-    only read env from file.
+    root. env lists the variable names the build reads; required_env is the
+    subset that must be present before production builds. Values are written
+    to <env_dir or source root>/.env because some bundler configs only read
+    env from file.
     """
 
     name: str
@@ -56,6 +57,7 @@ class ExtensionSpec:
     extension_id: str
     signing_key_env: str
     env: Tuple[str, ...] = ()
+    required_env: Tuple[str, ...] = ()
     env_dir: str = ""
 
     def crx_filename(self, version: str) -> str:
@@ -124,7 +126,12 @@ EXTENSION_SPECS: Tuple[ExtensionSpec, ...] = (
         manifest_path="apps/claw-app/package.json",
         extension_id=BROWSERCLAW_EXTENSION_ID,
         signing_key_env="BROWSERCLAW_KEY",
-        env=("NODE_ENV",),
+        env=(
+            "VITE_CLAW_POSTHOG_KEY",
+            "VITE_CLAW_POSTHOG_HOST",
+            "NODE_ENV",
+        ),
+        required_env=("VITE_CLAW_POSTHOG_KEY",),
         env_dir="apps/claw-app",
     ),
 )

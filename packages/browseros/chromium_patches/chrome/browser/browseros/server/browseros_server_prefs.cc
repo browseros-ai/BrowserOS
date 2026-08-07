@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_prefs.cc b/chrome/browser/browseros/server/browseros_server_prefs.cc
 new file mode 100644
-index 0000000000000..2dfba7e9914ab
+index 0000000000000..d1829772e773f
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_prefs.cc
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -19,6 +19,9 @@ index 0000000000000..2dfba7e9914ab
 +
 +// Stable MCP proxy port
 +const char kProxyPort[] = "browseros.server.proxy_port";
++
++// Stable HTTPS MCP proxy port
++const char kProxyHttpsPort[] = "browseros.server.proxy_https_port";
 +
 +// Sidecar backend server port
 +const char kServerPort[] = "browseros.server.server_port";
@@ -39,6 +42,7 @@ index 0000000000000..2dfba7e9914ab
 +void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
 +  registry->RegisterIntegerPref(kCDPServerPort, kDefaultCDPPort);
 +  registry->RegisterIntegerPref(kProxyPort, kDefaultProxyPort);
++  registry->RegisterIntegerPref(kProxyHttpsPort, kDefaultProxyHttpsPort);
 +  registry->RegisterIntegerPref(kServerPort, kDefaultServerPort);
 +  registry->RegisterBooleanPref(kAllowRemoteInMCP, false);
 +  registry->RegisterBooleanPref(kRestartServerRequested, false);

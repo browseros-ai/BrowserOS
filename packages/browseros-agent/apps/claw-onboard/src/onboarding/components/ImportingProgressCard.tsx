@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 interface ImportingProgressCardProps {
   currentItemLabel?: string
   progress: number
+  sourceLabel?: string
   total: number
 }
 
@@ -10,6 +11,7 @@ interface ImportingProgressCardProps {
 export function ImportingProgressCard({
   currentItemLabel,
   progress,
+  sourceLabel,
   total,
 }: ImportingProgressCardProps) {
   const percent = total === 0 ? 0 : Math.min(100, (progress / total) * 100)
@@ -21,6 +23,11 @@ export function ImportingProgressCard({
           Importing {currentItemLabel ?? 'data'}...
         </span>
       </div>
+      {sourceLabel && (
+        <div className="mb-3 font-bold text-[12px] text-ink-2">
+          {sourceLabel}
+        </div>
+      )}
       <div className="mb-2.5 h-2 overflow-hidden rounded-full bg-bg-sunken">
         <div
           className="h-full bg-accent transition-[width] duration-100"

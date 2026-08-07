@@ -19,7 +19,7 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 │                                                                      │
 │   /mcp ─────── MCP tool endpoints (53+ tools)                       │
 │   /chat ────── Agent streaming (AI SDK)                              │
-│   /health ─── Health check                                           │
+│   /system/health ─ Health check                                      │
 │                                                                      │
 │   ┌─────────────────────────────────────────────────────────────┐   │
 │   │  Agent Loop                                                  │   │
@@ -122,11 +122,11 @@ apps/server/
 ### Setup
 
 ```bash
-# Copy environment files
-cp .env.example .env.development
+# From this app directory, create the shared root development env file
+(cd ../.. && cp .env.development.example .env.development)
 
 # Start the server directly (dev:watch generates this config automatically)
-bun --env-file=.env.development src/index.ts --config ../../config.dev.json
+bun --env-file=../../.env.development src/index.ts --config ../../config.dev.json
 ```
 
 See the [agent monorepo README](../../README.md) for full environment variable reference and `dev:watch` setup.
@@ -166,4 +166,4 @@ The workflow validates the tag against the hardcoded package path. A tag push fa
 
 ## Sidecar Config
 
-`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, eval, and Chromium-managed launches generate this file before starting the binary.
+`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, and Chromium-managed launches generate this file before starting the binary.

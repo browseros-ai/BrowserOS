@@ -25,7 +25,7 @@ var pullCmd = &cobra.Command{
 			return err
 		}
 		runner := pipeline.ExecRunner{}
-		if err := pipeline.WriteProductionEnvFiles(cfg.AgentRoot(), cfg); err != nil {
+		if err := pipeline.WriteProductionEnvFile(cfg.AgentRoot(), cfg); err != nil {
 			return err
 		}
 		branch := pipeline.Branch(cfg.RepoPath, runner)

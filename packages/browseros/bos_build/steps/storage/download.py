@@ -28,6 +28,59 @@ from ...lib.r2 import (
 ARTIFACT_ZIP_DOWNLOAD = "artifact_zip"
 ARTIFACT_METADATA_NAME = "artifact-metadata.json"
 COPY_CHUNK_SIZE = 1024 * 1024
+RESOURCE_VERSION_FAMILIES = (
+    (("artifacts", "server"), "browseros_server_resource_version"),
+    (
+        ("claw-server-rust", "prod-resources"),
+        "browserclaw_server_resource_version",
+    ),
+    (
+        ("claw-onboard", "prod-resources"),
+        "browserclaw_onboard_resource_version",
+    ),
+)
+
+
+def resolve_resource_key(r2_key: str, context: Context) -> str:
+    """Resolve a latest resource key to an exact release version."""
+    parts = r2_key.split("/")
+
+    for prefix, env_property in RESOURCE_VERSION_FAMILIES:
+        version = getattr(context.env, env_property)
+        if not version or tuple(parts[: len(prefix)]) != prefix:
+            continue
+
+        expected_prefix = "/".join((*prefix, "latest"))
+        if len(parts) <= len(prefix) + 1:
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected "
+                f"{expected_prefix}/<artifact>"
+            )
+        if parts[len(prefix)] != "latest":
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected latest selector"
+            )
+
+        artifact_parts = parts[len(prefix) + 1 :]
+        if any(part in ("", ".", "..") for part in artifact_parts):
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected "
+                f"{expected_prefix}/<artifact>"
+            )
+        if (
+            version != version.strip()
+            or version in (".", "..")
+            or "/" in version
+            or "\\" in version
+        ):
+            raise ValueError(
+                f"Invalid resource version override {version!r}; "
+                "expected one safe path component"
+            )
+
+        return "/".join((*prefix, version, *artifact_parts))
+
+    return r2_key
 
 
 def extract_artifact_zip(archive_path: Path, destination: Path) -> list[Path]:
@@ -187,6 +240,41 @@ def _clear_destination(dest_path: Path) -> None:
     dest_path.unlink()
 
 
+def managed_binary_families(config_path: Path) -> set[str]:
+    """Return the resource families download_resources.yaml manages.
+
+    A family is the first path component after resources/binaries/ in an
+    operation destination; destinations elsewhere are ignored. Returns an
+    empty set for a missing or malformed config — callers must treat empty
+    as "unknown", never as "nothing is managed".
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError):
+        return set()
+
+    if not isinstance(config, dict):
+        return set()
+
+    operations = config.get("download_operations")
+    if not isinstance(operations, list):
+        return set()
+
+    families = set()
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        destination = op.get("destination")
+        if not isinstance(destination, str):
+            continue
+        parts = PurePosixPath(destination).parts
+        if len(parts) >= 3 and parts[:2] == ("resources", "binaries"):
+            families.add(parts[2])
+
+    return families
+
+
 @step("download_resources", phase="prep")
 class DownloadResourcesModule(Step):
     """Download resources from Cloudflare R2 before build
@@ -249,6 +337,7 @@ class DownloadResourcesModule(Step):
         bucket = context.env.r2_bucket
 
         for op in filtered_ops:
+            op = {**op, "r2_key": resolve_resource_key(op["r2_key"], context)}
             name = op.get("name", "Unnamed")
             destination = op["destination"]
             dest_path = context.root_dir / destination
@@ -305,9 +394,14 @@ class DownloadResourcesModule(Step):
         current_arch = context.architecture
         current_build_type = context.build_type
 
-        # For universal builds, we need both arm64 and x64
+        # For universal builds we need every macOS arch. A universal
+        # invocation expands into per-arch runs (arm64 prep, then x64, then
+        # merge), so the prep run executes with architecture="arm64" while
+        # carrying plan_architectures=("universal",) — expand here too, or
+        # the x64 server bundle is never refreshed and the merge folds a
+        # stale sibling arch into the app (release 29377078861).
         target_archs = [current_arch]
-        if current_arch == "universal":
+        if current_arch == "universal" or "universal" in context.plan_architectures:
             target_archs = ["arm64", "x64", "universal"]
 
         filtered = []

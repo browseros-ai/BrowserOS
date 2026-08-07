@@ -66,8 +66,21 @@ type fileConfig struct {
 	ProductionEnv     ProductionEnv           `yaml:"production_env"`
 }
 
-const LogDirName = "logs"
-const DefaultBranch = "main"
+const (
+	LogDirName = "logs"
+
+	DefaultBranch = "main"
+
+	DefaultBrowserOSAppPath   = "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS"
+	DefaultBrowserClawAppPath = "/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
+)
+
+type BrowserAppResolution struct {
+	Path          string
+	PreferredPath string
+	MissingPath   string
+	Fallback      bool
+}
 
 func Path() (string, error) {
 	home, err := os.UserHomeDir()
@@ -86,7 +99,7 @@ func DefaultConfigDir(home string) string {
 
 func Defaults(home string) Config {
 	cfg := Config{
-		BrowserOSAppPath:  "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS",
+		BrowserOSAppPath:  DefaultBrowserOSAppPath,
 		SourceUserDataDir: filepath.Join(home, "Library/Application Support/BrowserOS"),
 		SourceProfileDir:  "Default",
 		Branch:            DefaultBranch,
@@ -97,7 +110,47 @@ func Defaults(home string) Config {
 	return cfg
 }
 
-// DefaultTargets returns isolated BrowserOS and BrowserClaw runtime settings.
+// ResolveBrowserAppPath chooses the app binary for a target without freezing discovered defaults into config.
+func ResolveBrowserAppPath(target Target, configuredPath string, exists func(string) bool) BrowserAppResolution {
+	configuredPath = strings.TrimSpace(configuredPath)
+	if configuredPath == "" {
+		configuredPath = DefaultBrowserOSAppPath
+	}
+	if isCustomBrowserAppPath(configuredPath) {
+		if target != TargetClaw {
+			return BrowserAppResolution{Path: configuredPath, PreferredPath: configuredPath}
+		}
+		if exists == nil || exists(configuredPath) {
+			return BrowserAppResolution{Path: configuredPath, PreferredPath: configuredPath}
+		}
+		return BrowserAppResolution{
+			Path:          fallbackBrowserAppPath(target, exists),
+			PreferredPath: configuredPath,
+			MissingPath:   configuredPath,
+			Fallback:      true,
+		}
+	}
+	if target == TargetClaw {
+		if exists != nil && exists(DefaultBrowserClawAppPath) {
+			return BrowserAppResolution{
+				Path:          DefaultBrowserClawAppPath,
+				PreferredPath: DefaultBrowserClawAppPath,
+			}
+		}
+		return BrowserAppResolution{
+			Path:          DefaultBrowserOSAppPath,
+			PreferredPath: DefaultBrowserClawAppPath,
+			MissingPath:   DefaultBrowserClawAppPath,
+			Fallback:      true,
+		}
+	}
+	return BrowserAppResolution{
+		Path:          DefaultBrowserOSAppPath,
+		PreferredPath: DefaultBrowserOSAppPath,
+	}
+}
+
+// DefaultTargets returns isolated BrowserOS and BrowserOS neo runtime settings.
 func DefaultTargets(home string) map[string]TargetConfig {
 	cfgDir := DefaultConfigDir(home)
 	return map[string]TargetConfig{
@@ -287,9 +340,6 @@ func (c Config) Validate() error {
 	if c.RepoPath == "" {
 		return fmt.Errorf("repo_path is required")
 	}
-	if c.BrowserOSAppPath == "" {
-		return fmt.Errorf("browseros_app_path is required")
-	}
 	if c.SourceUserDataDir == "" || c.SourceProfileDir == "" {
 		return fmt.Errorf("source_user_data_dir and source_profile_dir are required")
 	}
@@ -305,12 +355,28 @@ func (c Config) Validate() error {
 	if err := validateRepo(c.AgentRoot()); err != nil {
 		return err
 	}
-	if info, err := os.Stat(c.BrowserOSAppPath); err != nil {
-		return fmt.Errorf("browseros_app_path: %w", err)
-	} else if info.IsDir() || info.Mode()&0111 == 0 {
-		return fmt.Errorf("browseros_app_path is not an executable file: %s", c.BrowserOSAppPath)
+	if c.Target != TargetClaw {
+		if c.BrowserOSAppPath == "" {
+			return fmt.Errorf("browseros_app_path is required")
+		}
+		if info, err := os.Stat(c.BrowserOSAppPath); err != nil {
+			return fmt.Errorf("browseros_app_path: %w", err)
+		} else if info.IsDir() || info.Mode()&0111 == 0 {
+			return fmt.Errorf("browseros_app_path is not an executable file: %s", c.BrowserOSAppPath)
+		}
 	}
 	return nil
+}
+
+func isCustomBrowserAppPath(path string) bool {
+	return path != "" && path != DefaultBrowserOSAppPath
+}
+
+func fallbackBrowserAppPath(target Target, exists func(string) bool) string {
+	if target == TargetClaw && exists != nil && exists(DefaultBrowserClawAppPath) {
+		return DefaultBrowserClawAppPath
+	}
+	return DefaultBrowserOSAppPath
 }
 
 func validateRepo(agentRoot string) error {
@@ -348,8 +414,6 @@ func DefaultProductionEnv() ProductionEnv {
 			"R2_ACCESS_KEY_ID":     "",
 			"R2_SECRET_ACCESS_KEY": "",
 			"R2_BUCKET":            "",
-			"R2_DOWNLOAD_PREFIX":   "artifacts/vendor",
-			"R2_UPLOAD_PREFIX":     "artifacts/server",
 			"NODE_ENV":             "production",
 			"LOG_LEVEL":            "debug",
 		},
@@ -359,7 +423,6 @@ func DefaultProductionEnv() ProductionEnv {
 			"R2_ACCESS_KEY_ID":     "",
 			"R2_SECRET_ACCESS_KEY": "",
 			"R2_BUCKET":            "browseros",
-			"R2_UPLOAD_PREFIX":     "",
 		},
 	}
 }

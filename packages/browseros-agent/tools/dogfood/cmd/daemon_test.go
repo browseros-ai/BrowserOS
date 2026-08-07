@@ -110,10 +110,9 @@ func TestWaitForServerHealthAcceptsMissingCDPConnected(t *testing.T) {
 	}
 }
 
-func TestHealthURLUsesClawSystemHealth(t *testing.T) {
+func TestHealthURLUsesSystemHealth(t *testing.T) {
 	got := healthURL(config.Config{
-		Target: config.TargetClaw,
-		Ports:  config.Ports{Server: 9200},
+		Ports: config.Ports{Server: 9200},
 	})
 	if got != "http://127.0.0.1:9200/system/health" {
 		t.Fatalf("got %q", got)

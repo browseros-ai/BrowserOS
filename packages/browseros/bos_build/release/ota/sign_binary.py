@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from ...lib.env import EnvConfig
 from ...products.server_binaries import (
+    ServerBundle,
     expected_windows_binary_paths,
     macos_sign_spec_for,
 )
@@ -20,6 +21,8 @@ from ...lib.utils import (
     log_warning,
     IS_MACOS,
     IS_WINDOWS,
+    get_command_secret_values,
+    redact_sensitive_text,
 )
 
 
@@ -273,6 +276,7 @@ def sign_windows_binary(
 
     log_info(f"Signing {binary_path.name}...")
 
+    secret_values: tuple[str, ...] = ()
     try:
         temp_output_dir = binary_path.parent / "signed_temp"
         temp_output_dir.mkdir(exist_ok=True)
@@ -294,6 +298,7 @@ def sign_windows_binary(
             "-override",
         ])
 
+        secret_values = get_command_secret_values(cmd)
         result = subprocess.run(
             " ".join(cmd),
             shell=True,
@@ -303,7 +308,8 @@ def sign_windows_binary(
         )
 
         if result.stdout and "Error:" in result.stdout:
-            log_error(f"Signing failed: {result.stdout}")
+            safe_output = redact_sensitive_text(result.stdout, secret_values)
+            log_error(f"Signing failed: {safe_output}")
             return False
 
         signed_file = temp_output_dir / binary_path.name
@@ -333,7 +339,8 @@ def sign_windows_binary(
         return True
 
     except Exception as e:
-        log_error(f"Signing failed: {e}")
+        safe_error = redact_sensitive_text(str(e), secret_values)
+        log_error(f"Signing failed: {safe_error}")
         return False
 
 
@@ -400,18 +407,23 @@ def sign_server_bundle_macos(
     return True
 
 
-def sign_server_bundle_windows(resources_dir: Path, env: EnvConfig) -> bool:
-    """Sign each Windows binary enumerated in ``WINDOWS_SERVER_BINARIES``.
+def sign_server_bundle_windows(
+    resources_dir: Path, env: EnvConfig, bundle: ServerBundle
+) -> bool:
+    """Sign each Windows binary declared by a server bundle.
 
     A missing expected binary is a hard error: publishing an incomplete
     Windows bundle would ship a broken OTA update without a pipeline signal.
     Symmetric with the macOS bundle's unknown-file guard.
     """
     bin_dir = resources_dir / "bin"
-    for path in expected_windows_binary_paths(bin_dir):
+    paths = expected_windows_binary_paths(bin_dir, bundle)
+    for path in paths:
         if not path.exists():
             log_error(f"Windows binary missing (cannot sign): {path}")
             return False
+
+    for path in paths:
         if not sign_windows_binary(path, env):
             return False
     return True

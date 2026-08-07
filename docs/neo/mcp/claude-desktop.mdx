@@ -1,0 +1,62 @@
+---
+title: "Claude Desktop and Cowork"
+description: "Give Claude Desktop, and Cowork inside it, a real browser via a one-file extension."
+keywords: ["Claude Desktop MCP", "Claude Cowork MCP", "BrowserOS neo Claude Desktop extension"]
+---
+
+[Claude Desktop](https://claude.ai/download) and [Claude Cowork](https://claude.com/product/cowork) both run inside the same Claude app. A single BrowserOS neo extension gives them both a real browser to work in.
+
+## Install
+
+<Steps>
+  <Step title="Install BrowserOS neo">
+    Download BrowserOS neo from [browseros.com/agents](https://browseros.com/agents) if you haven't already. Launch it at least once so the local server is running.
+  </Step>
+  <Step title="Download the BrowserOS neo extension">
+    Head to the [releases page](https://github.com/browseros-ai/browserclaw-claude-desktop/releases) and grab the latest `browserclaw-<version>.mcpb` file. This is the Claude Desktop extension package.
+  </Step>
+  <Step title="Drag it onto Claude Desktop">
+    Open Claude Desktop's Settings window and drag the `.mcpb` file onto it. Claude Desktop registers the extension and starts using BrowserOS neo's tools right away.
+  </Step>
+</Steps>
+
+<Note>
+The repo and the `.mcpb` file still carry the product's old name, BrowserClaw. Only the product was renamed, not the release artifacts, so download the file spelled exactly as above.
+</Note>
+
+## Verify
+
+Open BrowserOS neo, then in Claude Desktop ask:
+
+```text
+Open browseros.com/agents in a new tab and tell me the page title.
+```
+
+Claude opens the page inside BrowserOS neo and replies with the title.
+
+## Cowork gets it too
+
+Cowork runs inside Claude Desktop, so the same extension unlocks it there as well. Ask Cowork to do a task that involves the web, and it uses BrowserOS neo the same way Claude Desktop does. No second install.
+
+## Where the extension came from
+
+The extension is a small forwarding wrapper: Claude Desktop talks to it locally, and it forwards every call to BrowserOS neo's local endpoint. Nothing goes to a server we control. Source, install file, and privacy policy live in the [browserclaw-claude-desktop repo](https://github.com/browseros-ai/browserclaw-claude-desktop).
+
+## Troubleshooting
+
+**Claude says `BrowserClaw is not running`.** Open BrowserOS neo. The local server starts with the app. The message uses the old product name because it comes from the extension, which still ships under it.
+
+**The extension does not load.** Restart Claude Desktop. If it still fails, remove the extension from Settings and install the latest release again.
+
+**Claude is not using the browser when it should.** Say `Use BrowserClaw for this` the first time and Claude picks up the tools. That is the name of the MCP entry, so it is the name Claude recognizes.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="How BrowserOS neo works" icon="play" href="/neo/how-it-works">
+    A guided walkthrough from install to your first AI-driven session.
+  </Card>
+  <Card title="One-click setup" icon="plug" href="/neo/mcp">
+    The AI tools we support with one click today.
+  </Card>
+</CardGroup>

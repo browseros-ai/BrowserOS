@@ -94,7 +94,7 @@ class ExtractCommitModule(Step):
             force: Overwrite existing patches
             include_binary: Include binary files
             base: Base commit to diff from. Defaults to BASE_COMMIT.
-            feature: Prompt to add extracted files to a feature in features.yaml
+            feature: Prompt to add extracted files to a feature in .features.yaml
         """
         try:
             count, extracted_files = extract_single_commit(

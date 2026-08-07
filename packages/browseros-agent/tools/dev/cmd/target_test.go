@@ -8,11 +8,7 @@ import (
 
 func TestResolveDevTargetReadsDevelopmentEnvPorts(t *testing.T) {
 	root := t.TempDir()
-	serverDir := filepath.Join(root, "apps/server")
-	if err := os.MkdirAll(serverDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(serverDir, ".env.development"), []byte(
+	if err := os.WriteFile(filepath.Join(root, ".env.development"), []byte(
 		"BROWSEROS_CDP_PORT=9101\nBROWSEROS_SERVER_PORT=9201\nBROWSEROS_EXTENSION_PORT=9301\n",
 	), 0o644); err != nil {
 		t.Fatal(err)
@@ -39,11 +35,7 @@ func TestResolveDevTargetReadsDevelopmentEnvPorts(t *testing.T) {
 
 func TestResolveDevTargetFallsBackToExampleEnvPorts(t *testing.T) {
 	root := t.TempDir()
-	serverDir := filepath.Join(root, "apps/server")
-	if err := os.MkdirAll(serverDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(serverDir, ".env.example"), []byte(
+	if err := os.WriteFile(filepath.Join(root, ".env.development.example"), []byte(
 		"BROWSEROS_CDP_PORT=9000\nBROWSEROS_SERVER_PORT=9100\nBROWSEROS_EXTENSION_PORT=9300\n",
 	), 0o644); err != nil {
 		t.Fatal(err)

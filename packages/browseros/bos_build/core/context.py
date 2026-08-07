@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 from ..lib import versions as versions_mod
 from ..lib.env import EnvConfig
-from ..lib.paths import get_package_root
+from ..lib.paths import get_feature_registry_path, get_package_root
 from .products import (
     ProductDescriptor,
     default_product_descriptor,
@@ -65,6 +65,11 @@ class Context:
     chromium_src: Path = Path()
     out_dir: str = "out/Default"
     architecture: str = ""  # Defaults to host arch in __post_init__
+    # Full architecture set of the overall build invocation. A universal
+    # invocation expands into per-arch run Contexts whose own `architecture`
+    # is "arm64"/"x64"; this preserves the invocation's intent so the prep
+    # run still fetches every arch's resources. Empty = single-arch/unknown.
+    plan_architectures: tuple = ()
     build_type: str = "debug"
     chromium_version: str = ""
     browseros_build_offset: str = ""
@@ -81,6 +86,10 @@ class Context:
     # Per-invocation --gn-arg overrides; configure appends them last in
     # args.gn (GN last-write-wins). Never persisted to profiles.
     extra_gn_args: tuple[str, ...] = ()
+    resource_mode: str = "published"
+    prepared_resources: Optional[Path] = None
+    prepared_resources_supplied: bool = False
+    source_sha: str = ""
 
     # Third party pins
     SPARKLE_VERSION: str = "2.7.0"
@@ -143,7 +152,7 @@ class Context:
             return f"{self.product.app_base_name}{get_executable_extension()}"
         if IS_MACOS():
             return f"{self.product.app_base_name}.app"
-        return self.product.app_base_name.lower()
+        return self.product.linux.launcher_name
 
     @property
     def CHROMIUM_APP_NAME(self) -> str:
@@ -195,7 +204,9 @@ class Context:
 
     def get_extensions_manifest_url(self) -> str:
         """Get CDN URL for bundled extensions manifest"""
-        return "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        return self.env.bundled_extensions_manifest_url or (
+            "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        )
 
     def get_entitlements_dir(self) -> Path:
         """Get entitlements directory"""
@@ -295,6 +306,20 @@ class Context:
         base = self.get_chromium_replace_files_dir()
         return [base / "common", base / "products" / self.product.id]
 
+    @property
+    def required_extension_ids(self) -> tuple[tuple[str, str], ...]:
+        """Return bundled-extension requirements for the current build."""
+        if self.build_type != "debug":
+            return self.product.required_extension_ids
+
+        from ..products import PRODUCTS
+
+        required: Dict[str, str] = {}
+        for product in PRODUCTS.values():
+            for extension_id, name in product.required_extension_ids:
+                required.setdefault(extension_id, name)
+        return tuple(required.items())
+
     def get_product_gn_args(self) -> list[str]:
         """Product GN args: release bakes identity; debug keeps the runtime
         product switch working (it needs both server resource sets)."""
@@ -306,8 +331,8 @@ class Context:
         ]
 
     def get_features_yaml_path(self) -> Path:
-        """Get features.yaml file path"""
-        return join_paths(self.root_dir, "bos_build", "features.yaml")
+        """Get the canonical feature registry path."""
+        return get_feature_registry_path(self.root_dir)
 
     def get_patch_path_for_file(self, file_path: str) -> Path:
         """Convert a chromium file path to patch file path"""

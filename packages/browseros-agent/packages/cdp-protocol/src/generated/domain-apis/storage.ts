@@ -1,10 +1,6 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
 import type {
-  AttributionReportingReportSentEvent,
-  AttributionReportingSourceRegisteredEvent,
-  AttributionReportingTriggerRegisteredEvent,
-  AttributionReportingVerboseDebugReportSentEvent,
   CacheStorageContentUpdatedEvent,
   CacheStorageListUpdatedEvent,
   ClearCookiesParams,
@@ -15,8 +11,6 @@ import type {
   ClearTrustTokensResult,
   DeleteSharedStorageEntryParams,
   DeleteStorageBucketParams,
-  GetAffectedUrlsForThirdPartyCookieMetadataParams,
-  GetAffectedUrlsForThirdPartyCookieMetadataResult,
   GetCookiesParams,
   GetCookiesResult,
   GetInterestGroupDetailsParams,
@@ -41,9 +35,6 @@ import type {
   OverrideQuotaForOriginParams,
   ResetSharedStorageBudgetParams,
   RunBounceTrackingMitigationsResult,
-  SendPendingAttributionReportsResult,
-  SetAttributionReportingLocalTestingModeParams,
-  SetAttributionReportingTrackingParams,
   SetCookiesParams,
   SetInterestGroupAuctionTrackingParams,
   SetInterestGroupTrackingParams,
@@ -140,17 +131,7 @@ export interface StorageApi {
   ): Promise<void>
   deleteStorageBucket(params: DeleteStorageBucketParams): Promise<void>
   runBounceTrackingMitigations(): Promise<RunBounceTrackingMitigationsResult>
-  setAttributionReportingLocalTestingMode(
-    params: SetAttributionReportingLocalTestingModeParams,
-  ): Promise<void>
-  setAttributionReportingTracking(
-    params: SetAttributionReportingTrackingParams,
-  ): Promise<void>
-  sendPendingAttributionReports(): Promise<SendPendingAttributionReportsResult>
   getRelatedWebsiteSets(): Promise<GetRelatedWebsiteSetsResult>
-  getAffectedUrlsForThirdPartyCookieMetadata(
-    params: GetAffectedUrlsForThirdPartyCookieMetadataParams,
-  ): Promise<GetAffectedUrlsForThirdPartyCookieMetadataResult>
   setProtectedAudienceKAnonymity(
     params: SetProtectedAudienceKAnonymityParams,
   ): Promise<void>
@@ -202,21 +183,5 @@ export interface StorageApi {
   on(
     event: 'storageBucketDeleted',
     handler: (params: StorageBucketDeletedEvent) => void,
-  ): () => void
-  on(
-    event: 'attributionReportingSourceRegistered',
-    handler: (params: AttributionReportingSourceRegisteredEvent) => void,
-  ): () => void
-  on(
-    event: 'attributionReportingTriggerRegistered',
-    handler: (params: AttributionReportingTriggerRegisteredEvent) => void,
-  ): () => void
-  on(
-    event: 'attributionReportingReportSent',
-    handler: (params: AttributionReportingReportSentEvent) => void,
-  ): () => void
-  on(
-    event: 'attributionReportingVerboseDebugReportSent',
-    handler: (params: AttributionReportingVerboseDebugReportSentEvent) => void,
   ): () => void
 }

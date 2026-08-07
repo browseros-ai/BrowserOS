@@ -97,7 +97,7 @@ describe('compiled server native addon policy', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    await Bun.sleep(500)
+    await Bun.sleep(1000)
 
     const openFiles = await collectProcess(
       Bun.spawn(['lsof', '-p', String(app.pid)], {

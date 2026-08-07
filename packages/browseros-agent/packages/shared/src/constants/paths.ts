@@ -10,6 +10,8 @@ export const PATHS = {
   DEFAULT_EXECUTION_DIR: process.cwd(),
   BROWSEROS_DIR_NAME: '.browseros',
   DEV_BROWSEROS_DIR_NAME: '.browseros-dev',
+  BROWSERCLAW_DIR_NAME: '.browserclaw',
+  DEV_BROWSERCLAW_DIR_NAME: '.browserclaw-dev',
   CACHE_DIR_NAME: 'cache',
   DB_DIR_NAME: 'db',
   DB_FILE_NAME: 'browseros.sqlite',

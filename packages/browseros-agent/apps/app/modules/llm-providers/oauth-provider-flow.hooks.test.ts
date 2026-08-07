@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import * as _providerTemplates from '../../lib/llm-providers/providerTemplates'
+import type { LlmProviderConfig } from '../../lib/llm-providers/types'
 import type { OAuthProviderFlowConfig } from './oauth-provider-flow.hooks'
 
+// sonner is an npm package; total-replacement is intentional.
 mock.module('sonner', () => ({
   toast: {
     error: () => {},
@@ -10,22 +12,31 @@ mock.module('sonner', () => ({
   },
 }))
 
-mock.module('@/lib/metrics/track', () => ({
+// Bun's module registry is process-scoped, so complete replacements are
+// checked against the real module shape and partial mocks pass through exports.
+const trackMock = {
   track: () => {},
-}))
+} satisfies typeof import('@/lib/metrics/track')
+mock.module('@/lib/metrics/track', () => trackMock)
 
-mock.module('@/lib/llm-providers/client-oauth', () => ({
+const clientOauthMock = {
   requestDeviceCode: async () => {
     throw new Error('not used')
   },
   startTokenPolling: () => {},
-}))
+} satisfies typeof import('@/lib/llm-providers/client-oauth')
+mock.module('@/lib/llm-providers/client-oauth', () => clientOauthMock)
 
-mock.module('@/lib/llm-providers/provider-display-names', () => ({
+const providerDisplayNamesMock = {
   CHATGPT_PROVIDER_DISPLAY_NAME: 'ChatGPT',
-}))
+} satisfies typeof import('@/lib/llm-providers/provider-display-names')
+mock.module(
+  '@/lib/llm-providers/provider-display-names',
+  () => providerDisplayNamesMock,
+)
 
 mock.module('@/lib/llm-providers/providerTemplates', () => ({
+  ..._providerTemplates,
   getProviderTemplate: (providerType: string) =>
     providerType === 'chatgpt-pro'
       ? {
@@ -36,13 +47,20 @@ mock.module('@/lib/llm-providers/providerTemplates', () => ({
       : undefined,
 }))
 
-mock.module('@/modules/llm-providers/oauth-status.hooks', () => ({
+const oauthStatusHooksMock = {
   useOAuthStatus: () => ({
     status: null,
+    isPolling: false,
     startPolling: () => {},
+    stopPolling: () => {},
+    refresh: async () => null,
     disconnect: async () => {},
   }),
-}))
+} satisfies typeof import('@/modules/llm-providers/oauth-status.hooks')
+mock.module(
+  '@/modules/llm-providers/oauth-status.hooks',
+  () => oauthStatusHooksMock,
+)
 
 const chatgptConfig: OAuthProviderFlowConfig = {
   providerType: 'chatgpt-pro',

@@ -42,6 +42,7 @@ class ReleaseGoldenTest(unittest.TestCase):
                 "compile",
                 "sign_macos",
                 "package_macos",
+                "sparkle_sign",
                 "upload",
             ],
         )
@@ -117,6 +118,7 @@ class ReleaseGoldenTest(unittest.TestCase):
                         "compile",
                         "sign_macos",
                         "package_macos",
+                        "sparkle_sign",
                         "upload",
                     ],
                 ),
@@ -128,12 +130,19 @@ class ReleaseGoldenTest(unittest.TestCase):
                         "compile",
                         "sign_macos",
                         "package_macos",
+                        "sparkle_sign",
                         "upload",
                     ],
                 ),
                 (
                     "universal",
-                    ["merge_universal", "sign_macos", "package_macos", "upload"],
+                    [
+                        "merge_universal",
+                        "sign_macos",
+                        "package_macos",
+                        "sparkle_sign",
+                        "upload",
+                    ],
                 ),
             ],
         )
@@ -143,9 +152,10 @@ class ReleaseGoldenTest(unittest.TestCase):
             plan_runs(UNIVERSAL, "linux")
 
     def test_noupload_variant(self):
-        # release.macos.arm64.noupload.yaml == release minus upload
+        # release.macos.arm64.noupload.yaml == release minus upload;
+        # signed artifacts are still Sparkle-signed like Windows.
         steps = plan(Switches(preset="release", upload=False), "arm64", "macos")
-        self.assertEqual(steps[-1], "package_macos")
+        self.assertEqual(steps[-2:], ["package_macos", "sparkle_sign"])
         self.assertNotIn("upload", steps)
 
 
@@ -170,10 +180,12 @@ class CiGoldenTest(unittest.TestCase):
         )
 
     def test_windows_ci_swaps_sign_for_mini_installer(self):
-        # release.windows.ci.yaml — no winsparkle_setup, no sparkle_sign
+        # release.windows.ci.yaml — no sparkle_sign; winsparkle_setup stays
+        # (the release GN config links WinSparkle.dll even unsigned)
         self.assertEqual(
             plan(CI, "x64", "windows"),
             [
+                "winsparkle_setup",
                 "download_resources",
                 "resources",
                 "bundled_extensions",
@@ -209,14 +221,15 @@ class CiGoldenTest(unittest.TestCase):
 
 class DebugGoldenTest(unittest.TestCase):
     def test_debug_macos(self):
-        # config/debug.yaml — no clean, no bundled_extensions, no
-        # series_patches, no sparkle_setup, no sign, no upload
+        # config/debug.yaml — no clean, no series_patches, no sparkle_setup,
+        # no sign, no upload
         self.assertEqual(
             plan(Switches(preset="debug"), "arm64", "macos"),
             [
                 "git_setup",
                 "download_resources",
                 "resources",
+                "bundled_extensions",
                 "chromium_replace",
                 "string_replaces",
                 "patches",
@@ -229,6 +242,42 @@ class DebugGoldenTest(unittest.TestCase):
     def test_debug_rejects_universal(self):
         with self.assertRaisesRegex(ValueError, "not supported for debug"):
             plan_runs(Switches(preset="debug", architectures=("universal",)), "macos")
+
+    def test_debug_windows_builds_installer_before_packaging(self):
+        self.assertEqual(
+            plan(Switches(preset="debug"), "x64", "windows"),
+            [
+                "git_setup",
+                "winsparkle_setup",
+                "download_resources",
+                "resources",
+                "bundled_extensions",
+                "chromium_replace",
+                "string_replaces",
+                "patches",
+                "configure",
+                "compile",
+                "mini_installer",
+                "package_windows",
+            ],
+        )
+
+    def test_debug_linux(self):
+        self.assertEqual(
+            plan(Switches(preset="debug"), "x64", "linux"),
+            [
+                "git_setup",
+                "download_resources",
+                "resources",
+                "bundled_extensions",
+                "chromium_replace",
+                "string_replaces",
+                "patches",
+                "configure",
+                "compile",
+                "package_linux",
+            ],
+        )
 
     def test_debug_rejection_wins_over_platform(self):
         with self.assertRaisesRegex(ValueError, "not supported for debug"):
@@ -257,6 +306,52 @@ class SwitchesTest(unittest.TestCase):
     def test_build_type_follows_preset(self):
         self.assertEqual(Switches(preset="release").build_type, "release")
         self.assertEqual(Switches(preset="debug").build_type, "debug")
+
+    def test_resource_mode_defaults_to_published(self):
+        self.assertEqual(Switches().resolved().resource_mode, "published")
+
+    def test_invalid_resource_mode_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Invalid resource mode"):
+            Switches(resource_mode="mirror").resolved()
+
+    def test_source_mode_rejects_download(self):
+        with self.assertRaisesRegex(ValueError, "source mode"):
+            Switches(resource_mode="source", download=True).resolved()
+
+    def test_source_mode_rejects_debug_union_builds(self):
+        with self.assertRaisesRegex(ValueError, "release preset"):
+            Switches(preset="debug", resource_mode="source").resolved()
+
+    def test_source_mode_plans_local_resources(self):
+        steps = plan(
+            Switches(preset="release", resource_mode="source"), "x64", "linux"
+        )
+
+        self.assertNotIn("download_resources", steps)
+        self.assertLess(steps.index("prepare_common_resources"), steps.index("prepare_server_resources"))
+        self.assertLess(steps.index("prepare_server_resources"), steps.index("resources"))
+        self.assertLess(steps.index("resources"), steps.index("bundled_extensions"))
+        self.assertLess(steps.index("bundled_extensions"), steps.index("compile"))
+
+    def test_source_mode_universal_prepares_common_once_and_server_per_arch(self):
+        runs = plan_runs(
+            Switches(
+                preset="release",
+                architectures=("universal",),
+                resource_mode="source",
+            ),
+            "macos",
+        )
+
+        self.assertEqual([arch for arch, _ in runs], ["arm64", "x64", "universal"])
+        self.assertEqual(
+            sum("prepare_common_resources" in steps for _, steps in runs), 1
+        )
+        self.assertEqual(
+            [arch for arch, steps in runs if "prepare_server_resources" in steps],
+            ["arm64", "x64"],
+        )
+        self.assertEqual(runs[2][1][0], "merge_universal")
 
 
 class SkipTest(unittest.TestCase):
@@ -336,7 +431,7 @@ class SliceFromTest(unittest.TestCase):
     def test_slices_composed_plan_from_step(self):
         self.assertEqual(
             slice_from(plan(RELEASE, "arm64", "macos"), "sign_macos"),
-            ["sign_macos", "package_macos", "upload"],
+            ["sign_macos", "package_macos", "sparkle_sign", "upload"],
         )
 
     def test_slice_from_first_step_is_identity(self):
@@ -358,21 +453,17 @@ class SliceFromTest(unittest.TestCase):
         self.assertIn("sign_macos", message)
 
     def test_from_a_skipped_step_rejected(self):
-        steps = plan(
-            Switches(preset="release", skip=("sign_macos",)), "arm64", "macos"
-        )
+        steps = plan(Switches(preset="release", skip=("sign_macos",)), "arm64", "macos")
         with self.assertRaisesRegex(ValueError, "not in the composed plan"):
             slice_from(steps, "sign_macos")
 
 
 class SliceRunsFromTest(unittest.TestCase):
     def test_single_arch_run_sliced(self):
-        runs = plan_runs(
-            Switches(preset="release", architectures=("arm64",)), "macos"
-        )
+        runs = plan_runs(Switches(preset="release", architectures=("arm64",)), "macos")
         self.assertEqual(
             slice_runs_from(runs, "sign_macos"),
-            [("arm64", ["sign_macos", "package_macos", "upload"])],
+            [("arm64", ["sign_macos", "package_macos", "sparkle_sign", "upload"])],
         )
 
     def test_universal_merge_failure_resumes_without_recompiling(self):
@@ -382,7 +473,13 @@ class SliceRunsFromTest(unittest.TestCase):
             [
                 (
                     "universal",
-                    ["merge_universal", "sign_macos", "package_macos", "upload"],
+                    [
+                        "merge_universal",
+                        "sign_macos",
+                        "package_macos",
+                        "sparkle_sign",
+                        "upload",
+                    ],
                 )
             ],
         )
@@ -393,7 +490,15 @@ class SliceRunsFromTest(unittest.TestCase):
         self.assertEqual(runs[0][0], "arm64")
         self.assertEqual(
             runs[0][1],
-            ["resources", "configure", "compile", "sign_macos", "package_macos", "upload"],
+            [
+                "resources",
+                "configure",
+                "compile",
+                "sign_macos",
+                "package_macos",
+                "sparkle_sign",
+                "upload",
+            ],
         )
         self.assertEqual(runs[1:], full[1:])
 
@@ -416,8 +521,7 @@ class SliceRunsFromTest(unittest.TestCase):
 
 
 class RequiredEnvTest(unittest.TestCase):
-    def test_signed_macos_requires_cert_and_notarization(self):
-        # parity with release.*.macos.*.yaml required_envs
+    def test_signed_macos_requires_cert_notarization_and_sparkle_key(self):
         env = required_env(plan(RELEASE, "arm64", "macos"))
         self.assertEqual(
             env,
@@ -426,6 +530,7 @@ class RequiredEnvTest(unittest.TestCase):
                 "PROD_MACOS_NOTARIZATION_APPLE_ID",
                 "PROD_MACOS_NOTARIZATION_TEAM_ID",
                 "PROD_MACOS_NOTARIZATION_PWD",
+                "SPARKLE_PRIVATE_KEY",
             ],
         )
 
@@ -464,6 +569,20 @@ class ProfileTest(unittest.TestCase):
             plan(prof.switches, "arm64", "macos"), plan(CI, "arm64", "macos")
         )
 
+    def test_nightly_macos_profile_keeps_signed_defaults_without_downloads(self):
+        profile_path = (
+            Path(__file__).resolve().parents[1] / "profiles" / "nightly-macos.yaml"
+        )
+        switches = load_profile(profile_path).switches.resolved()
+
+        self.assertTrue(switches.clean)
+        self.assertEqual("full", switches.provision)
+        self.assertFalse(switches.download)
+        self.assertTrue(switches.sign)
+        self.assertTrue(switches.upload)
+        self.assertEqual(switches.resource_mode, "source")
+        self.assertNotIn("download_resources", plan(switches, "arm64", "macos"))
+
     def test_arch_list(self):
         prof = self._load("preset: release\narch: [x64, arm64]\n")
         self.assertEqual(prof.switches.architectures, ("x64", "arm64"))
@@ -476,6 +595,14 @@ class ProfileTest(unittest.TestCase):
         prof = self._load("preset: release\nskip: [upload, series_patches]\n")
         self.assertEqual(prof.switches.skip, ("upload", "series_patches"))
         self.assertEqual(self._load("skip: upload\n").switches.skip, ("upload",))
+
+    def test_resource_mode_profile_key(self):
+        prof = self._load("preset: release\nresource_mode: source\n")
+        self.assertEqual(prof.switches.resource_mode, "source")
+
+    def test_bundle_local_extensions_profile_key_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unknown profile keys"):
+            self._load("preset: release\nbundle_local_extensions: true\n")
 
     def test_flat_profile_has_no_modules(self):
         self.assertIsNone(self._load("preset: release\n").modules)
@@ -506,6 +633,7 @@ class ProfileTest(unittest.TestCase):
             ("download", "false"),
             ("sign", "false"),
             ("upload", "false"),
+            ("resource_mode", "source"),
             ("skip", "[upload]"),
         ):
             with self.assertRaisesRegex(ValueError, "do not combine", msg=key):
@@ -531,8 +659,6 @@ class ProfileTest(unittest.TestCase):
     def test_modules_arch_list_rejected(self):
         with self.assertRaisesRegex(ValueError, "single-arch"):
             self._load("modules: [compile]\narch: [x64, arm64]\n")
-
-
 
 
 class PreflightTest(unittest.TestCase):
@@ -599,28 +725,28 @@ class PreflightTest(unittest.TestCase):
 
 class DownloadSwitchTest(unittest.TestCase):
     def test_no_download_drops_resource_download_only(self):
-        # nightly-macos-build.yml stages server resources locally and used
-        # to rewrite the yaml to drop download_resources
+        # The signed macOS nightly profile stages server resources locally
+        # and disables only download_resources.
         with_dl = plan(RELEASE, "arm64", "macos")
         without = plan(Switches(preset="release", download=False), "arm64", "macos")
-        self.assertEqual(
-            [s for s in with_dl if s != "download_resources"], without
-        )
+        self.assertEqual([s for s in with_dl if s != "download_resources"], without)
 
     def test_shipped_nightly_ci_profile_matches_ci_switches(self):
-        shipped = (
-            Path(__file__).resolve().parents[1] / "profiles" / "nightly-ci.yaml"
-        )
+        shipped = Path(__file__).resolve().parents[1] / "profiles" / "nightly-ci.yaml"
         prof = load_profile(shipped)
         # Shipped profiles stay switch-based; modules: is a local-only opt-in.
         self.assertIsNone(prof.modules)
-        for platform, arch in (("macos", "arm64"), ("windows", "x64"), ("linux", "x64")):
+        self.assertEqual(prof.switches.resource_mode, "published")
+        for platform, arch in (
+            ("macos", "arm64"),
+            ("windows", "x64"),
+            ("linux", "x64"),
+        ):
             self.assertEqual(
                 plan(prof.switches, arch, platform),
                 plan(CI, arch, platform),
                 f"profile drift on {platform}/{arch}",
             )
-
 
 
 class UniversalRunsTest(unittest.TestCase):
@@ -650,7 +776,7 @@ class UniversalRunsTest(unittest.TestCase):
         self.assertEqual([arch for arch, _ in runs], ["arm64", "x64", "universal"])
         for arch, steps in runs:
             self.assertNotIn("upload", steps, arch)
-            self.assertEqual(steps[-1], "package_macos", arch)
+            self.assertEqual(steps[-2:], ["package_macos", "sparkle_sign"], arch)
 
     def test_non_universal_runs_match_flat_plan_per_arch(self):
         sw = Switches(preset="release", architectures=("x64", "arm64"))
@@ -661,8 +787,7 @@ class UniversalRunsTest(unittest.TestCase):
 
 
 class UniversalEnvTest(unittest.TestCase):
-    def test_universal_runs_require_signing_env_upfront(self):
-        # parity with the deleted release.*.macos.universal.yaml required_envs
+    def test_universal_runs_require_signing_and_sparkle_env_upfront(self):
         for arch, steps in plan_runs(UNIVERSAL, "macos"):
             self.assertEqual(
                 required_env(steps),
@@ -671,9 +796,11 @@ class UniversalEnvTest(unittest.TestCase):
                     "PROD_MACOS_NOTARIZATION_APPLE_ID",
                     "PROD_MACOS_NOTARIZATION_TEAM_ID",
                     "PROD_MACOS_NOTARIZATION_PWD",
+                    "SPARKLE_PRIVATE_KEY",
                 ],
                 arch,
             )
+
 
 if __name__ == "__main__":
     unittest.main()

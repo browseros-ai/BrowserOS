@@ -9,7 +9,7 @@ export const snapshot = defineTool({
   input: z.object({
     page: z.number().int().describe('Page id from `tabs` or `navigate`.'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Snapshot accessibility tree', readOnlyHint: true },
   handler: async (args, ctx) => {
     const { text } = await ctx.session.observe(args.page).snapshot()
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'

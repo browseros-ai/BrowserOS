@@ -126,24 +126,36 @@ func (mp *ManagedProc) run(ctx context.Context) {
 
 func (mp *ManagedProc) Stop() {
 	mp.cancel()
+	mp.terminateProcess(syscall.SIGTERM)
+}
+
+// Restart stops the current child process without canceling the supervisor loop.
+func (mp *ManagedProc) Restart() bool {
+	return mp.terminateProcess(syscall.SIGTERM)
+}
+
+func (mp *ManagedProc) terminateProcess(signal syscall.Signal) bool {
 	mp.mu.Lock()
 	proc := mp.proc
 	exited := mp.exited
 	mp.mu.Unlock()
 
-	if proc != nil {
-		_ = syscall.Kill(-proc.Pid, syscall.SIGTERM)
+	if proc == nil {
+		return false
+	}
+
+	_ = syscall.Kill(-proc.Pid, signal)
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
 		select {
 		case <-exited:
-		case <-time.After(5 * time.Second):
-			_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
-			select {
-			case <-exited:
-			case <-time.After(3 * time.Second):
-				LogMsg(mp.Cfg.Tag, WarnColor.Sprint("Process did not exit after SIGKILL, giving up"))
-			}
+		case <-time.After(3 * time.Second):
+			LogMsg(mp.Cfg.Tag, WarnColor.Sprint("Process did not exit after SIGKILL, giving up"))
 		}
 	}
+	return true
 }
 
 func (mp *ManagedProc) ForceKill() {

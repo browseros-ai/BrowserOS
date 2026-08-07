@@ -4,7 +4,7 @@ import type { SearchMatch } from './debugger'
 import type { UserAgentMetadata } from './emulation'
 import type { StreamHandle } from './io'
 import type { FrameId } from './page'
-import type { StackTrace } from './runtime'
+import type { ScriptId, StackTrace, UniqueDebuggerId } from './runtime'
 import type { CertificateId, MixedContentType, SecurityState } from './security'
 
 // ══ Types ══
@@ -579,6 +579,22 @@ export interface ClientSecurityState {
   localNetworkAccessRequestPolicy: LocalNetworkAccessRequestPolicy
 }
 
+export interface AdScriptIdentifier {
+  scriptId: ScriptId
+  debuggerId: UniqueDebuggerId
+  name: string
+}
+
+export interface AdAncestry {
+  ancestryChain: AdScriptIdentifier[]
+  rootScriptFilterlistRule?: string
+}
+
+export interface AdProvenance {
+  filterlistRule?: string
+  adScriptAncestry?: AdAncestry
+}
+
 export type CrossOriginOpenerPolicyValue =
   | 'SameOrigin'
   | 'SameOriginAllowPopups'
@@ -761,9 +777,17 @@ export type DeviceBoundSessionFetchResult =
   | 'FailedToUnwrapKey'
   | 'SessionDeletedDuringRefresh'
 
+export interface DeviceBoundSessionFailedRequest {
+  requestUrl: string
+  netError?: string
+  responseError?: number
+  responseErrorBody?: string
+}
+
 export interface CreationEventDetails {
   fetchResult: DeviceBoundSessionFetchResult
   newSession?: DeviceBoundSession
+  failedRequest?: DeviceBoundSessionFailedRequest
 }
 
 export interface RefreshEventDetails {
@@ -778,6 +802,7 @@ export interface RefreshEventDetails {
   fetchResult?: DeviceBoundSessionFetchResult
   newSession?: DeviceBoundSession
   wasFullyProactiveRefresh: boolean
+  failedRequest?: DeviceBoundSessionFailedRequest
 }
 
 export interface TerminationEventDetails {

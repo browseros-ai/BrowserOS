@@ -6,6 +6,10 @@
  * Centralized limits and thresholds.
  */
 
+export const RECORDING_INGEST_MAX_BYTES = 16 * 1024 * 1024
+/** Aggregate target used until a server explicitly advertises a larger ceiling. */
+export const RECORDING_INGEST_FALLBACK_MAX_BYTES = 2 * 1024 * 1024
+
 export const AGENT_LIMITS = {
   MAX_TURNS: 100,
   DEFAULT_CONTEXT_WINDOW: 200_000,
@@ -59,6 +63,8 @@ export const AGENT_LIMITS = {
 
 export const TOOL_LIMITS = {
   INLINE_PAGE_CONTENT_MAX_CHARS: 5_000,
+  GREP_MAX_MATCHES: 200,
+  GREP_MATCH_LINE_MAX_CHARS: 500,
   FILESYSTEM_READ_MAX_LINES: 500,
   FILESYSTEM_READ_MAX_CHARS: 15_000,
 } as const
@@ -76,14 +82,6 @@ export const CONTENT_LIMITS = {
   BODY_CONTEXT_SIZE: 10_000,
   MAX_QUEUE_SIZE: 1_000,
   CONSOLE_META_CHAR: 1_000,
-} as const
-
-export const SCREENCAST_LIMITS = {
-  DEFAULT_JPEG_QUALITY: 80,
-  EVERY_NTH_FRAME: 1,
-  MAX_WIDTH: 1280,
-  MAX_HEIGHT: 800,
-  SUBSCRIBER_BACKPRESSURE_BYTES: 4 * 1024 * 1024,
 } as const
 
 export const AGENT_HARNESS_LIMITS = {

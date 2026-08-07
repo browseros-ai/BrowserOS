@@ -37,11 +37,10 @@ class ExtensionSpec:
         return f"{CDN_BASE_URL}/{self.crx_key(version)}"
 
 
-# browserclaw ships bundled-only until it joins the live update feeds.
 EXTENSIONS: Tuple[ExtensionSpec, ...] = (
     ExtensionSpec("agent", BROWSEROS_AGENT_EXTENSION_ID, True),
     ExtensionSpec("bugreporter", BROWSEROS_BUG_REPORTER_EXTENSION_ID, True),
-    ExtensionSpec("browserclaw", BROWSERCLAW_EXTENSION_ID, False),
+    ExtensionSpec("browserclaw", BROWSERCLAW_EXTENSION_ID, True),
 )
 
 
@@ -65,6 +64,7 @@ class FeedSpec:
     link: str = ""  # channel <link> ("" for extensions kind)
     platform: str = ""  # browser feeds: "macos" | "win"
     artifact_keys: Tuple[str, ...] = ()  # browser feeds: release.json priority
+    legacy_titles: Tuple[str, ...] = ()
     bundle_id: str = ""  # server feeds: owning ServerBundle id
     publishable: bool = True
 
@@ -75,6 +75,7 @@ class FeedSpec:
 
 # Browser feed key infix per product ("" keeps today's browseros keys).
 _BROWSER_FEED_SLUGS = {"browseros": "", "browserclaw": "claw"}
+_BROWSER_FEED_LEGACY_DISPLAY_NAMES = {"browserclaw": "BrowserClaw"}
 
 # Products whose shipping updater selects this feed by browseros::GetProduct()
 # (sparkle_glue.mm / winsparkle_glue.cc). A product listed in
@@ -103,6 +104,7 @@ def _browser_feeds(product_id: str) -> Tuple[FeedSpec, ...]:
         )
     infix = f"-{slug}" if slug else ""
     display = get_product_descriptor(product_id).display_name
+    legacy_display = _BROWSER_FEED_LEGACY_DISPLAY_NAMES.get(product_id)
     publishable = product_id in _BROWSER_FEED_CLIENTS
 
     def feed(suffix: str, platform: str, artifact_keys: Tuple[str, ...],
@@ -117,6 +119,15 @@ def _browser_feeds(product_id: str) -> Tuple[FeedSpec, ...]:
             link=f"{CDN_BASE_URL}/{key}",
             platform=platform,
             artifact_keys=artifact_keys,
+            legacy_titles=(
+                (
+                    f"{legacy_display} Windows Updates"
+                    if platform == "win"
+                    else legacy_display
+                ),
+            )
+            if legacy_display
+            else (),
             publishable=publishable,
         )
 

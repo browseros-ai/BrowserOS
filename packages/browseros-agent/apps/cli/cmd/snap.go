@@ -25,7 +25,12 @@ func init() {
 				output.Error(err.Error(), 1)
 			}
 			if jsonOut {
-				output.JSON(result)
+				data := map[string]any{}
+				for key, value := range result.StructuredContent {
+					data[key] = value
+				}
+				data["snapshot"] = result.TextContent()
+				output.JSONRaw(data)
 			} else {
 				output.Text(result)
 			}

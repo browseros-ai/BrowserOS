@@ -1,92 +1,263 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import type { SessionBrowserTab } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { MemoryRouter } from 'react-router'
-import type { TabActivityRecord } from '@/modules/api/tabs.hooks'
-import type { AgentActivityRecord } from '@/screens/cockpit/cockpit.helpers'
-import { RunningGrid } from './RunningGrid'
+import { parseHTML } from 'linkedom'
+import { act, type ComponentProps, type ReactNode } from 'react'
+import type { Root } from 'react-dom/client'
+import * as _popover from '@/components/ui/popover'
+import * as _auditHooks from '@/modules/api/audit.hooks'
+import * as _cancelHooks from '@/modules/api/cancel.hooks'
+import * as _focusHooks from '@/modules/api/focus.hooks'
+import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 
-function renderWithRouter(ui: React.ReactNode): string {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+const cancelCalls: Array<{ sessionId: string }> = []
+const focusCalls: Array<{ browserTabId: number }> = []
+const invalidatedQueryKeys: unknown[] = []
+
+mock.module('@/modules/api/audit.hooks', () => ({
+  ..._auditHooks,
+  useSessionPreviewUrl: () => null,
+  // Null base keeps LivePreview from opening a real EventSource under linkedom.
+  useApiBaseUrl: () => null,
+}))
+
+mock.module('@/modules/api/cancel.hooks', () => ({
+  ..._cancelHooks,
+  useCancelSession: () => ({
+    isPending: false,
+    variables: undefined,
+    mutate: (
+      variables: { sessionId: string },
+      options?: { onSuccess?: () => void },
+    ) => {
+      cancelCalls.push(variables)
+      options?.onSuccess?.()
+    },
+  }),
+}))
+
+mock.module('@/modules/api/focus.hooks', () => ({
+  ..._focusHooks,
+  useFocusBrowserTab: () => ({
+    isPending: false,
+    variables: undefined,
+    mutate: (variables: { browserTabId: number }) => focusCalls.push(variables),
+  }),
+}))
+
+mock.module('@/components/ui/popover', () => ({
+  ..._popover,
+  Popover: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  PopoverTrigger: (props: ComponentProps<'button'>) => <button {...props} />,
+  PopoverContent: (props: ComponentProps<'div'>) => (
+    <div data-slot="popover-content" {...props} />
+  ),
+}))
+
+const globalDescriptors = new Map(
+  ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
+    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
+  ),
+)
+
+const { RunningGrid } = await import('./RunningGrid')
+
+function browserTab(over: Partial<SessionBrowserTab> = {}): SessionBrowserTab {
+  return {
+    browserTabId: 101,
+    url: 'https://example.com/foo',
+    title: 'Example',
+    firstActivityAt: 1_000,
+    lastActivityAt: 1_000,
+    lastToolName: 'navigate',
+    toolCount: 1,
+    recentTools: [{ name: 'navigate', at: 1_000 }],
+    ...over,
+  }
+}
+
+function session(
+  over: Partial<LiveSessionCardRecord> = {},
+): LiveSessionCardRecord {
+  const selectedTab = browserTab()
+  return {
+    sessionId: 'session-live',
+    profileId: 'profile-shared',
+    slug: 'codex',
+    label: 'Codex',
+    name: 'Research BrowserClaw',
+    harness: 'Codex',
+    color: '#0254ec',
+    startedAt: 100,
+    state: 'active',
+    selectedTab,
+    browserTabs: [selectedTab],
+    toolCount: 1,
+    recentTools: [{ name: 'navigate', at: 1_000 }],
+    ...over,
+  }
+}
+
+let root: Root
+let container: HTMLElement
+let queryClient: QueryClient
+
+beforeEach(async () => {
+  cancelCalls.length = 0
+  focusCalls.length = 0
+  invalidatedQueryKeys.length = 0
+  const dom = parseHTML(
+    '<!doctype html><html><body><div id="root"></div></body></html>',
+  )
+  const globals = {
+    window: dom.window,
+    document: dom.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+  }
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      writable: true,
+      value,
+    })
+  }
+  Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
+    configurable: true,
+    writable: true,
+    value: true,
   })
-  return renderToStaticMarkup(
-    <QueryClientProvider client={client}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
+  container = dom.document.getElementById('root') as unknown as HTMLElement
+  queryClient = new QueryClient()
+  const invalidateQueries = queryClient.invalidateQueries.bind(queryClient)
+  queryClient.invalidateQueries = ((
+    ...args: Parameters<QueryClient['invalidateQueries']>
+  ) => {
+    invalidatedQueryKeys.push(args[0]?.queryKey)
+    return invalidateQueries(...args)
+  }) as QueryClient['invalidateQueries']
+  const { createRoot } = await import('react-dom/client')
+  root = createRoot(container)
+})
+
+afterEach(async () => {
+  await act(async () => root.unmount())
+  for (const [name, descriptor] of globalDescriptors) {
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    else Reflect.deleteProperty(globalThis, name)
+  }
+  Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
+})
+
+async function render(sessions: LiveSessionCardRecord[]) {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <RunningGrid sessions={sessions} />
+      </QueryClientProvider>,
+    ),
   )
 }
 
-function tab(over: Partial<TabActivityRecord> = {}): TabActivityRecord {
-  return {
-    targetId: 't1',
-    pageId: 1,
-    url: 'https://example.com/foo',
-    title: 'Example',
-    agentId: 'claude-code',
-    slug: 'claude-code',
-    firstToolAt: 0,
-    lastToolAt: 0,
-    lastToolName: 'navigate',
-    toolCount: 3,
-    recentTools: [{ name: 'navigate', at: 0 }],
-    status: 'active',
-    agentLabel: 'claude-code',
-    harness: null,
-    color: null,
-    screencast: null,
-    ...over,
-  }
-}
-
-function agent(over: Partial<AgentActivityRecord> = {}): AgentActivityRecord {
-  const focus = tab()
-  return {
-    agentId: 'claude-code',
-    slug: 'claude-code',
-    agentLabel: 'claude-code',
-    harness: 'Claude Code',
-    color: '#000',
-    status: 'active',
-    firstToolAt: 0,
-    lastToolAt: 0,
-    lastToolName: 'navigate',
-    toolCount: 3,
-    recentTools: [
-      { name: 'navigate', at: 0 },
-      { name: 'read', at: 0 },
-      { name: 'tabs', at: 0 },
-    ],
-    tabs: [focus],
-    currentFocus: focus,
-    ...over,
-  }
-}
-
 describe('RunningGrid', () => {
-  it('renders nothing when no agents are connected', () => {
-    const html = renderWithRouter(<RunningGrid agents={[]} />)
-    expect(html).toBe('')
+  it('hides the Running now section when no live sessions are connected', async () => {
+    await render([])
+    expect(container.textContent).not.toContain('Running now')
+    expect(container.textContent).not.toContain('0 live')
   })
 
-  it('hides the header entirely in the empty case', () => {
-    const html = renderWithRouter(<RunningGrid agents={[]} />)
-    expect(html).not.toContain('Running now')
-    expect(html).not.toContain('0 live')
-  })
+  it('renders and cancels two same-profile sessions by distinct session ids', async () => {
+    await render([
+      session({ sessionId: 'session-a' }),
+      session({ sessionId: 'session-b' }),
+    ])
 
-  it('does not render the legacy AddAgentTile when agents are present', () => {
-    const html = renderWithRouter(<RunningGrid agents={[agent()]} />)
-    expect(html).not.toContain('New profile')
-    expect(html).not.toContain('harness . logins . guardrails')
-  })
-
-  it('renders one card per agent and reflects the live count', () => {
-    const html = renderWithRouter(
-      <RunningGrid
-        agents={[agent({ agentId: 'a' }), agent({ agentId: 'b' })]}
-      />,
+    expect(
+      [...container.querySelectorAll('[data-session-card]')].map((card) =>
+        card.getAttribute('data-session-card'),
+      ),
+    ).toEqual(['session-a', 'session-b'])
+    expect(container.querySelector('section')?.classList).toContain(
+      'ph-no-capture',
     )
-    expect(html).toContain('2 live')
+    const stopB = container.querySelector('[data-stop-session="session-b"]')
+    if (!stopB) throw new Error('session-b Stop button missing')
+    await act(async () => {
+      stopB.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(cancelCalls).toEqual([{ sessionId: 'session-b' }])
+    expect(invalidatedQueryKeys).toEqual([
+      _auditHooks.useLiveSessions.getKey(),
+      _auditHooks.useSessions.getKey(),
+    ])
+  })
+
+  it('counts connected sessions, including an idle zero-tab session', async () => {
+    await render([
+      session({ sessionId: 'session-active' }),
+      session({
+        sessionId: 'session-idle',
+        state: 'idle',
+        selectedTab: null,
+        browserTabs: [],
+        toolCount: 0,
+        recentTools: [],
+      }),
+    ])
+
+    expect(container.textContent).toContain('2 live')
+    const idleCard = container.querySelector(
+      '[data-session-card="session-idle"]',
+    )
+    expect(idleCard?.textContent).toContain('Idle')
+    expect(idleCard?.querySelector('[data-watch-browser-tab]')).toBeNull()
+    expect(idleCard?.querySelector('[data-preview-url]')).toBeNull()
+    expect(
+      idleCard?.querySelector('[data-stop-session="session-idle"]'),
+    ).not.toBeNull()
+  })
+
+  it('retains multi-tab count and merged tool trail', async () => {
+    const selectedTab = browserTab({
+      browserTabId: 41,
+      recentTools: [{ name: 'navigate', at: 100 }],
+    })
+    await render([
+      session({
+        selectedTab,
+        browserTabs: [selectedTab, browserTab({ browserTabId: 42 })],
+        toolCount: 3,
+        recentTools: [
+          { name: 'navigate', at: 100 },
+          { name: 'snapshot', at: 200 },
+          { name: 'act', at: 300 },
+        ],
+      }),
+    ])
+
+    expect(container.textContent).toContain('2 tabs')
+    expect(container.textContent).toContain('navigate -> snapshot -> act')
+    const trigger = container.querySelector('[data-tab-count="2"]')
+    if (!trigger) throw new Error('tab-count trigger missing')
+    const popover = container.querySelector('[data-slot="popover-content"]')
+    if (!popover) {
+      throw new Error(`tab popover missing: ${document.body.outerHTML}`)
+    }
+    expect(popover.getAttribute('class') ?? '').toContain('ph-no-capture')
+    expect(popover.textContent).toContain('Example')
+  })
+
+  it('watches the exact selected browser tab id', async () => {
+    const selectedTab = browserTab({ browserTabId: 42 })
+    await render([session({ selectedTab, browserTabs: [selectedTab] })])
+
+    const watch = container.querySelector('[data-watch-browser-tab="42"]')
+    if (!watch) throw new Error('Watch button missing')
+    await act(async () => {
+      watch.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(focusCalls).toEqual([{ browserTabId: 42 }])
   })
 })

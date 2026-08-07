@@ -11,7 +11,8 @@ import type { TaskDetail } from '@/modules/api/audit.hooks'
 import type { TaskDetailScreenData } from './task-detail.data'
 
 const baseData: TaskDetailScreenData = {
-  task: undefined,
+  detail: undefined,
+  screenshots: [],
   isPending: false,
   isError: false,
   error: null,
@@ -41,32 +42,35 @@ function render(): string {
 }
 
 const sampleTask: TaskDetail = {
-  sessionId: 'sess-1',
-  agentId: 'claude-code',
-  slug: 'claude-code',
-  agentLabel: 'Claude Code',
-  title: 'Browsed example.com',
-  site: 'example.com',
-  startedAt: Date.now() - 12000,
-  endedAt: Date.now(),
-  durationMs: 12000,
-  dispatchCount: 2,
-  toolSequence: ['tabs', 'screenshot'],
-  status: 'done',
-  errorCount: 0,
-  lastScreenshotDispatchId: 2,
-  cursorId: 2,
+  session: {
+    sessionId: 'sess-1',
+    slug: 'claude-code',
+    label: 'Claude Code',
+    name: 'Browsed example.com',
+    site: 'example.com',
+    startedAt: Date.now() - 12000,
+    endedAt: Date.now(),
+    durationMs: 12000,
+    dispatchCount: 2,
+    toolSequence: ['tabs', 'screenshot'],
+    status: 'done',
+    errorCount: 0,
+    latestScreenshotId: 20,
+    tokenUsage: {
+      inputTokenEstimate: 4200,
+      outputTokenEstimate: 8100,
+      totalTokenEstimate: 12300,
+    },
+  },
   dispatches: [
     {
-      id: 1,
+      dispatchId: 1,
       createdAt: Date.now() - 12000,
-      agentId: 'claude-code',
       slug: 'claude-code',
-      agentLabel: 'Claude Code',
+      label: 'Claude Code',
       sessionId: 'sess-1',
       toolName: 'tabs',
       pageId: 1,
-      targetId: null,
       url: 'https://example.com',
       title: 'Example',
       argsJson: '{"action":"new"}',
@@ -74,25 +78,20 @@ const sampleTask: TaskDetail = {
       durationMs: 12,
     },
     {
-      id: 2,
+      dispatchId: 2,
       createdAt: Date.now() - 9000,
-      agentId: 'claude-code',
       slug: 'claude-code',
-      agentLabel: 'Claude Code',
+      label: 'Claude Code',
       sessionId: 'sess-1',
       toolName: 'screenshot',
       pageId: 1,
-      targetId: null,
       url: 'https://example.com',
-      title: null,
       argsJson: '{"page":1}',
       resultMeta: '{"isError":false}',
       durationMs: 80,
+      screenshotId: 20,
     },
   ],
-  screenshotDispatchIds: [2],
-  startEvent: null,
-  endEvent: { createdAt: Date.now(), kind: 'closed', reason: null },
 }
 
 describe('TaskDetailPage', () => {
@@ -109,7 +108,13 @@ describe('TaskDetailPage', () => {
   })
 
   it('renders header + timeline + strip for a real task', () => {
-    dataOverride = { ...baseData, task: sampleTask }
+    dataOverride = {
+      ...baseData,
+      detail: sampleTask,
+      screenshots: [
+        { screenshotId: 20, capturedAt: Date.now() - 9000, toolName: 'act' },
+      ],
+    }
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
@@ -119,18 +124,54 @@ describe('TaskDetailPage', () => {
     expect(html).not.toContain('/audit/screenshot/2')
   })
 
+  it('renders the total token consumption on the summary card', () => {
+    dataOverride = { ...baseData, detail: sampleTask }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).toContain('12,300')
+  })
+
+  it('renders an em dash when the session has no measured token usage', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, tokenUsage: undefined },
+      },
+    }
+    const html = render()
+    expect(html).toContain('Tokens')
+    expect(html).not.toContain('12,300')
+  })
+
   it('renders no-screenshots placeholder when there are none', () => {
     const first = sampleTask.dispatches[0]
     if (!first) throw new Error('test fixture missing first dispatch')
     dataOverride = {
       ...baseData,
-      task: {
+      detail: {
         ...sampleTask,
-        screenshotDispatchIds: [],
         dispatches: [first],
       },
     }
     const html = render()
     expect(html).toContain('No screenshots captured for this task.')
+  })
+
+  it('renders cancelled sessions as stopped', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: { ...sampleTask.session, status: 'cancelled' },
+        dispatches: sampleTask.dispatches.map((dispatch) => ({
+          ...dispatch,
+          pageId: undefined,
+        })),
+      },
+    }
+    const html = render()
+    expect(html).toContain('Stopped')
+    expect(html).toContain('session stopped')
   })
 })

@@ -208,6 +208,26 @@ class WriteEnvFileTest(unittest.TestCase):
             self.assertNotIn("MISSING_VAR", content)
             self.assertNotIn("STALE", content)
 
+    def test_missing_required_var_fails_before_replacing_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_dir = Path(tmp)
+            env_path = env_dir / ".env"
+            env_path.write_text("PRESERVED=old\n")
+            with patch.dict("os.environ", {}, clear=False):
+                import os
+
+                os.environ.pop("VITE_CLAW_POSTHOG_KEY", None)
+                with self.assertRaisesRegex(
+                    EnvironmentError, "VITE_CLAW_POSTHOG_KEY"
+                ):
+                    write_env_file(
+                        env_dir,
+                        ("VITE_CLAW_POSTHOG_KEY", "VITE_CLAW_POSTHOG_HOST"),
+                        required_names=("VITE_CLAW_POSTHOG_KEY",),
+                    )
+
+            self.assertEqual(env_path.read_text(), "PRESERVED=old\n")
+
 
 class RunCommandTest(unittest.TestCase):
     def test_nonzero_exit_raises_with_command(self):

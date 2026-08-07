@@ -22,7 +22,7 @@ interface AuditHoverPreviewProps {
  * never a grey placeholder.
  */
 export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
-  const screenshotId = task?.lastScreenshotDispatchId ?? null
+  const screenshotId = task?.latestScreenshotId ?? null
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   return (
     <div
@@ -35,7 +35,11 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
       <div className="relative aspect-[16/10] w-full overflow-hidden">
         {task && screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
-            src={taskScreenshotUrl(screenshotId, screenshotBaseUrl)}
+            src={taskScreenshotUrl(
+              task.sessionId,
+              screenshotId,
+              screenshotBaseUrl,
+            )}
             alt=""
             className="absolute inset-0 h-full w-full object-cover object-top"
           />
@@ -49,11 +53,11 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
         <div className="flex flex-col gap-0.5 bg-ink-deep px-4 py-3 text-white">
           <div className="flex items-center gap-2 font-mono text-[10px] text-white/75 uppercase tracking-[0.08em]">
             <AgentDot slug={task.slug} />
-            <span className="truncate text-white/95">{task.agentLabel}</span>
+            <span className="truncate text-white/95">{task.label}</span>
             {task.status === 'live' && <LiveDot />}
           </div>
           <p className="truncate font-semibold text-[13px] text-white leading-tight">
-            {task.title}
+            {task.name}
           </p>
           <p className="font-mono text-[10.5px] text-white/65 tabular-nums">
             {formatDuration(task.durationMs)}{' '}
@@ -70,8 +74,8 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
 function NoShotComposition({ task }: { task: TaskSummary }) {
   const verbs = task.toolSequence.slice(0, 5)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-ink via-ink-2 to-ink">
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 pl-6 font-mono text-[22px] text-white/15 leading-tight tracking-tight">
+    <div className="absolute inset-0 bg-gradient-to-br from-accent-tint via-secondary to-muted">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 pl-6 font-mono text-[22px] text-ink/15 leading-tight tracking-tight">
         {verbs.map((verb, idx) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: tool sequence is stable-ordered per session, not a reorderable list
@@ -89,10 +93,10 @@ function NoShotComposition({ task }: { task: TaskSummary }) {
 
 function LiveDot() {
   return (
-    <span className="inline-flex items-center gap-1 text-[#b1dbb8]">
+    <span className="inline-flex items-center gap-1 text-[#8fb4ff]">
       <span
         aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#b1dbb8]"
+        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff]"
       />
       LIVE
     </span>

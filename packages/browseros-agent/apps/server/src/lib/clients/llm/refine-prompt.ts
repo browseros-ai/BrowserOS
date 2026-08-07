@@ -39,19 +39,29 @@ export async function refinePrompt(
   llmConfig: RefinePromptConfig,
   request: RefinePromptRequest,
   browserosId?: string,
+  runStreamText: typeof streamText = streamText,
 ): Promise<RefinePromptResult> {
   try {
     const resolvedConfig = await resolveLLMConfig(llmConfig, browserosId)
     const model = createLLMProvider(resolvedConfig)
 
-    // streamText works for all providers including Codex (which requires streaming)
-    const stream = streamText({
+    // AI SDK reports provider failures through onError while textStream ends cleanly.
+    let capturedError: unknown = null
+    const stream = runStreamText({
       model,
       system: buildSystemPrompt(request.name),
       messages: [{ role: 'user', content: request.prompt }],
       abortSignal: AbortSignal.timeout(TIMEOUTS.REFINE_PROMPT),
+      onError: ({ error }) => {
+        capturedError = error
+      },
     })
-    const refined = (await stream.text)?.trim()
+    const chunks: string[] = []
+    for await (const chunk of stream.textStream) {
+      chunks.push(chunk)
+    }
+    if (capturedError) throw capturedError
+    const refined = chunks.join('').trim()
 
     if (!refined) {
       return { success: false, message: 'Provider returned an empty response' }

@@ -182,7 +182,7 @@ export function ActivityRow({ row }: ActivityRowProps) {
         </button>
       ) : row.status === 'done' && row.runId ? (
         <Link
-          to={`/governance/audit/${row.runId}/replay`}
+          to={`/audit/${row.runId}/replay`}
           className="inline-flex shrink-0 items-center gap-1.5 self-center whitespace-nowrap rounded-md border border-border-2 bg-card px-2.5 py-1.5 font-bold text-[12px] text-accent-ink transition hover:brightness-95"
         >
           <History className="size-3.5" />

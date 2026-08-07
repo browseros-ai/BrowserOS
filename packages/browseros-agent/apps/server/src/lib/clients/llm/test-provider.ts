@@ -26,6 +26,7 @@ const TEST_PROMPT = "Respond with exactly: 'ok'"
 export async function testProviderConnection(
   config: ProviderTestConfig,
   browserosId?: string,
+  runStreamText: typeof streamText = streamText,
 ): Promise<ProviderTestResult> {
   const startTime = performance.now()
 
@@ -33,13 +34,22 @@ export async function testProviderConnection(
     const resolvedConfig = await resolveLLMConfig(config, browserosId)
     const model = createLLMProvider(resolvedConfig)
 
-    // streamText works for all providers including Codex (which requires streaming)
-    const stream = streamText({
+    // AI SDK reports provider failures through onError while textStream ends cleanly.
+    let capturedError: unknown = null
+    const stream = runStreamText({
       model,
       messages: [{ role: 'user', content: TEST_PROMPT }],
       abortSignal: AbortSignal.timeout(TIMEOUTS.TEST_PROVIDER),
+      onError: ({ error }) => {
+        capturedError = error
+      },
     })
-    const text = await stream.text
+    const chunks: string[] = []
+    for await (const chunk of stream.textStream) {
+      chunks.push(chunk)
+    }
+    if (capturedError) throw capturedError
+    const text = chunks.join('')
     const responseTime = Math.round(performance.now() - startTime)
 
     if (text) {

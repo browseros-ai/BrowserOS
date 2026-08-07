@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..fe576bc18a041
+index 0000000000000..b04a6ef039a6b
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,111 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -35,7 +35,13 @@ index 0000000000000..fe576bc18a041
 +inline constexpr char kShowToolbarLabels[] = "browseros.show_toolbar_labels";
 +
 +// Boolean: Enable vertical tabs (default: true)
-+inline constexpr char kVerticalTabsEnabled[] = "browseros.vertical_tabs_enabled";
++inline constexpr char kVerticalTabsEnabled[] =
++    "browseros.vertical_tabs_enabled";
++
++// Boolean: Show saved tab groups in the bookmark bar (default: true, false for
++// BrowserClaw).
++inline constexpr char kShowTabGroupsInBookmarkBar[] =
++    "browseros.show_tab_groups_in_bookmark_bar";
 +
 +// AI Provider prefs
 +// JSON string containing the list of AI providers and configuration
@@ -69,10 +75,21 @@ index 0000000000000..fe576bc18a041
 +// Check if vertical tabs should be enabled.
 +bool IsVerticalTabsEnabled(PrefService* pref_service);
 +
++// Check if saved tab groups should be shown in the bookmark bar.
++bool ShouldShowTabGroupsInBookmarkBar(PrefService* pref_service);
++
 +// Syncs the BrowserOS vertical tabs pref to the upstream Chrome pref.
 +// Call this early (e.g. during controller init) so the upstream pref
 +// reflects BrowserOS's default.
 +void SyncVerticalTabsPref(PrefService* pref_service);
++
++// Applies the BrowserOS saved tab groups bookmark bar pref to the upstream
++// Chrome pref.
++void ApplyShowTabGroupsInBookmarkBarPref(PrefService* pref_service);
++
++// Syncs the BrowserOS saved tab groups bookmark bar pref to the upstream Chrome
++// pref only while the upstream pref is still at its default value.
++void SyncShowTabGroupsInBookmarkBarPref(PrefService* pref_service);
 +
 +// Sets the default BrowserOS theme (blue tonal spot) on first run
 +// when the user hasn't customized the theme yet.
@@ -85,8 +102,7 @@ index 0000000000000..fe576bc18a041
 +// Returns false if action's visibility pref is false.
 +bool ShouldShowToolbarAction(actions::ActionId id, PrefService* pref_service);
 +
-+// Check if a BrowserOS extension should be pinned in the toolbar based on its
-+// extension metadata and visibility pref.
++// Check if a BrowserOS extension should be pinned from its catalog metadata.
 +bool ShouldPinBrowserOSExtension(const std::string& extension_id,
 +                                 PrefService* pref_service);
 +

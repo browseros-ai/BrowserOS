@@ -9,31 +9,55 @@ import (
 	"browseros-dogfood/config"
 )
 
-func TestWriteProductionEnvFiles(t *testing.T) {
+func TestWriteProductionEnvFile(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{
 		ProductionEnv: config.ProductionEnv{
 			Server: map[string]string{
-				"NODE_ENV":  "production",
-				"LOG_LEVEL": "debug",
+				"NODE_ENV":   "production",
+				"LOG_LEVEL":  "debug",
+				"R2_BUCKET":  "server-bucket",
+				"SHARED_KEY": "server",
 			},
 			CLI: map[string]string{
-				"R2_BUCKET":        "browseros",
-				"R2_UPLOAD_PREFIX": "",
+				"R2_BUCKET":  "cli-bucket",
+				"SHARED_KEY": "cli",
 			},
 		},
 	}
-	if err := WriteProductionEnvFiles(root, cfg); err != nil {
+	if err := WriteProductionEnvFile(root, cfg); err != nil {
 		t.Fatal(err)
 	}
-	assertMode(t, filepath.Join(root, "apps/server/.env.production"), 0600)
-	assertMode(t, filepath.Join(root, "apps/cli/.env.production"), 0600)
-	assertContains(t, filepath.Join(root, "apps/server/.env.production"), "BROWSEROS_CONFIG_URL=https://llm.browseros.com/api/browseros-server/config\n")
-	assertContains(t, filepath.Join(root, "apps/server/.env.production"), "LOG_LEVEL=debug\n")
-	assertContains(t, filepath.Join(root, "apps/server/.env.production"), "NODE_ENV=production\n")
-	assertContains(t, filepath.Join(root, "apps/cli/.env.production"), "POSTHOG_API_KEY=\n")
-	assertContains(t, filepath.Join(root, "apps/cli/.env.production"), "R2_BUCKET=browseros\n")
-	assertContains(t, filepath.Join(root, "apps/cli/.env.production"), "R2_UPLOAD_PREFIX=\n")
+	path := filepath.Join(root, ".env.production")
+	assertMode(t, path, 0600)
+	assertMissing(t, filepath.Join(root, "apps", "server", ".env.production"))
+	assertMissing(t, filepath.Join(root, "apps", "cli", ".env.production"))
+	assertContains(t, path, "BROWSEROS_CONFIG_URL=https://llm.browseros.com/api/browseros-server/config\n")
+	assertContains(t, path, "LOG_LEVEL=debug\n")
+	assertContains(t, path, "NODE_ENV=production\n")
+	assertContains(t, path, "POSTHOG_API_KEY=\n")
+	assertContains(t, path, "R2_BUCKET=server-bucket\n")
+	assertContains(t, path, "SHARED_KEY=server\n")
+	assertNotContains(t, path, "R2_UPLOAD_PREFIX")
+	assertNotContains(t, path, "R2_DOWNLOAD_PREFIX")
+}
+
+func TestWriteProductionEnvFileKeepsCLIDefaultWhenServerDefaultIsEmpty(t *testing.T) {
+	root := t.TempDir()
+	if err := WriteProductionEnvFile(root, config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertContains(t, filepath.Join(root, ".env.production"), "R2_BUCKET=browseros\n")
+}
+
+func TestWriteProductionEnvFileWritesServerOnlyEmptyValues(t *testing.T) {
+	root := t.TempDir()
+	if err := WriteProductionEnvFile(root, config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertContains(t, filepath.Join(root, ".env.production"), "SENTRY_DSN=\n")
 }
 
 func TestWriteEnvFileQuotesUnsafeValues(t *testing.T) {
@@ -59,6 +83,24 @@ func assertContains(t *testing.T, path string, want string) {
 	}
 	if !strings.Contains(string(got), want) {
 		t.Fatalf("%s missing %q in %q", path, want, string(got))
+	}
+}
+
+func assertNotContains(t *testing.T, path string, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), want) {
+		t.Fatalf("%s unexpectedly contains %q in %q", path, want, string(got))
+	}
+}
+
+func assertMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("%s should not exist, stat err %v", path, err)
 	}
 }
 

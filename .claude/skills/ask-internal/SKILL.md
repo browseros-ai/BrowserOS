@@ -2,6 +2,7 @@
 name: ask-internal
 description: Answer questions about BrowserOS internal stuff (setup, features, architecture, design decisions) by reading the private internal-docs submodule and the codebase. Use for "how do I X", "where is Y", "what is the deal with Z", or any question that mixes ops/setup knowledge with code knowledge. Can execute steps with per-command confirmation.
 allowed-tools: Bash, Read, Grep, Glob
+disable-model-invocation: true
 ---
 
 # Ask Internal

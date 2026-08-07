@@ -22,11 +22,12 @@ import {
   type ChatSessionLike,
   useVoiceLoop,
 } from '@/modules/voice/voice-loop.hooks'
+import { buildChatErrorProps } from './Chat.helpers'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
-import { RemoteHermesBootPill } from './RemoteHermesBootPill'
+import { IncognitoNotice } from './IncognitoNotice'
 
 /**
  * @public
@@ -49,7 +50,8 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
-    vmStatus,
+    isIncognito,
+    retryLastTurn,
   } = useChatSessionContext()
 
   const {
@@ -206,6 +208,12 @@ export const Chat = () => {
     onStopRecording: handleStopRecording,
   }
 
+  const chatErrorProps = buildChatErrorProps({
+    chatError,
+    selectedProvider,
+    retryLastTurn,
+  })
+
   return (
     <>
       <main className="mt-4 flex h-full flex-1 flex-col space-y-4 overflow-y-auto">
@@ -240,12 +248,10 @@ export const Chat = () => {
             providerType={selectedProvider?.type}
           />
         )}
-        {chatError && (
-          <ChatError error={chatError} providerType={selectedProvider?.type} />
-        )}
+        {chatErrorProps && <ChatError {...chatErrorProps} />}
       </main>
 
-      {vmStatus && <RemoteHermesBootPill vm={vmStatus} />}
+      {isIncognito && <IncognitoNotice />}
 
       <ChatFooter
         mode={mode}

@@ -2,10 +2,6 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * BrowserOS Server Application
- *
- * Manages server lifecycle: initialization, startup, and shutdown.
  */
 
 import fs from 'node:fs'
@@ -17,10 +13,6 @@ import { createHttpServer } from './api/server'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
 import {
-  configureClaudeRuntime,
-  configureCodexRuntime,
-} from './lib/agents/runtime'
-import {
   cleanOldSessions,
   ensureBrowserosDir,
   getDbPath,
@@ -30,7 +22,7 @@ import {
 import { initializeDb } from './lib/db'
 import { identity } from './lib/identity'
 import { logger } from './lib/logger'
-import { reconcileUrl } from './lib/mcp-manager'
+import { selfHealMcpLinks } from './lib/mcp-manager'
 import { metrics } from './lib/metrics'
 import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
@@ -50,8 +42,6 @@ export class Application {
       resourcesDir: path.resolve(this.config.resourcesDir),
     })
 
-    configureClaudeRuntime()
-    configureCodexRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {
@@ -82,6 +72,7 @@ export class Application {
         executionDir: this.config.executionDir,
         resourcesDir: this.config.resourcesDir,
         aiSdkDevtoolsEnabled: this.config.aiSdkDevtoolsEnabled,
+        onShutdown: () => this.stop('shutdown-endpoint'),
       })
     } catch (error) {
       this.handleStartupError('HTTP server', this.config.serverPort, error)
@@ -103,29 +94,26 @@ export class Application {
       })
     }
 
-    // Reconcile every linked agent's BrowserOS MCP URL against the
-    // proxy URL external clients actually reach. The agent server's
-    // own `serverPort` is NOT that URL — in production the browser
-    // proxies `/mcp` from a separately-configured proxy port. We
-    // only reconcile when the launching process passes the public
-    // URL via `BROWSEROS_MCP_PUBLIC_URL`; otherwise we'd rewrite
-    // every agent config with the wrong port and break installs that
-    // were previously working. The UI's install flow records the
-    // correct URL per click; reconcile is the boot-time recovery
-    // path for port drift.
+    // Boot self-heal for the MCP integration. First drops BrowserOS
+    // from any agent no longer in the curated surface, then repairs
+    // every remaining agent's BrowserOS MCP URL against the proxy URL
+    // external clients actually reach. The agent server's own
+    // `serverPort` is NOT that URL: in production the browser proxies
+    // `/mcp` from a separately-configured proxy port. The URL repair
+    // only runs when the launching process passes the public URL via
+    // `BROWSEROS_MCP_PUBLIC_URL`; otherwise we'd rewrite every agent
+    // config with the wrong port. The non-curated cleanup needs no URL
+    // and always runs. The UI's install flow records the correct URL
+    // per click; this is the boot-time recovery path.
     const publicMcpUrl = process.env.BROWSEROS_MCP_PUBLIC_URL
-    if (publicMcpUrl) {
-      reconcileUrl({ currentUrl: publicMcpUrl }).catch((err) => {
-        logger.warn(
-          'MCP manager URL reconcile failed; agent configs may be stale',
-          {
-            error: err instanceof Error ? err.message : String(err),
-          },
-        )
+    selfHealMcpLinks({ currentUrl: publicMcpUrl }).catch((err) => {
+      logger.warn('MCP manager self-heal failed; agent configs may be stale', {
+        error: err instanceof Error ? err.message : String(err),
       })
-    } else {
+    })
+    if (!publicMcpUrl) {
       logger.debug(
-        'Skipping MCP manager URL reconcile — BROWSEROS_MCP_PUBLIC_URL not set',
+        'MCP manager URL reconcile skipped — BROWSEROS_MCP_PUBLIC_URL not set',
       )
     }
 
@@ -133,7 +121,7 @@ export class Application {
       `HTTP server listening on http://127.0.0.1:${this.config.serverPort}`,
     )
     logger.info(
-      `Health endpoint: http://127.0.0.1:${this.config.serverPort}/health`,
+      `Health endpoint: http://127.0.0.1:${this.config.serverPort}/system/health`,
     )
 
     this.logStartupSummary()

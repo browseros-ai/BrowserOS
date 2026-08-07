@@ -63,5 +63,5 @@ export async function getProxyPort(): Promise<number> {
 /** Returns the MCP proxy health-check endpoint. */
 export async function getHealthCheckUrl(): Promise<string> {
   const port = await getProxyPort()
-  return `http://127.0.0.1:${port}/health`
+  return `http://127.0.0.1:${port}/system/health`
 }

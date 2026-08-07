@@ -28,7 +28,7 @@ var targetRequiredCommands = map[string]struct{}{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&targetBrowserOS, "browseros", "b", false, "Target BrowserOS dogfood")
-	rootCmd.PersistentFlags().BoolVarP(&targetClaw, "claw", "c", false, "Target BrowserClaw dogfood")
+	rootCmd.PersistentFlags().BoolVarP(&targetClaw, "claw", "c", false, "Target BrowserOS neo dogfood")
 	rootCmd.PersistentPreRunE = requireTargetForLifecycleCommand
 }
 

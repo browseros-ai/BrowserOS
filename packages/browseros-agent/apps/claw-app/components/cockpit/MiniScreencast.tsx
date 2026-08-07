@@ -1,97 +1,102 @@
 import { Globe } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import type { ScreencastFrame } from '@/modules/api/tabs.hooks'
+import { useSessionPreviewUrl } from '@/modules/api/audit.hooks'
+
+const PREVIEW_REFRESH_MS = 1500
 
 interface MiniScreencastProps {
   site: string
+  sessionId: string
   live?: boolean
-  /**
-   * Latest poller frame for this page. When present the component
-   * renders the JPEG as the card top; when null/undefined the
-   * placeholder globe + host tile is shown. The container has a
-   * fixed height either way so the card never shifts as frames
-   * appear or disappear.
-   */
-  screencast?: ScreencastFrame | null
+  /** AgentRunningCard overrides the compact default to fill its preview zone. */
+  className?: string
+}
+
+interface DecodedPreviewFrame {
+  sessionId: string
+  src: string
 }
 
 /**
- * Card-top tile on the Running-now homepage cards. Renders the live
- * screencast JPEG from the background poller when available; falls
- * back to a tinted block with the site host and a small globe when
- * the cache is cold or the page is in failure backoff.
+ * Renders a live session's latest JPEG from the canonical binary route,
+ * with a host placeholder when there is no captured frame.
  *
- * Flicker-free frame swap: every time `screencast.capturedAt` ticks
- * we kick off an off-screen `new Image()` to pre-decode the next
- * frame, and only swap the visible `<img src>` once the decode has
- * completed. Without this the browser unloads the old pixels the
- * moment the src attribute changes, briefly exposing the container
- * backdrop between paints; the operator sees that as a flicker
- * every 1.5s. The pre-decode trades one extra render per frame for
- * a perfectly stable visible image.
- *
- * The `live` flag adds a pulsing dot top-right matching the design's
- * running indicator. The dot gets a translucent ring so it reads
- * against busy thumbnails.
+ * An off-screen Image decodes each refreshed response before the visible frame
+ * advances. Previous pixels remain while a newer frame for the same session
+ * loads; identity changes render the placeholder immediately so one session
+ * can never be shown as another.
  */
-export function MiniScreencast({
+export function MiniScreencast({ sessionId, ...props }: MiniScreencastProps) {
+  return (
+    <SessionMiniScreencast key={sessionId} sessionId={sessionId} {...props} />
+  )
+}
+
+function SessionMiniScreencast({
   site,
+  sessionId,
   live,
-  screencast,
+  className,
 }: MiniScreencastProps) {
-  const incomingSrc =
-    screencast && screencast.jpegBase64.length > 0
-      ? `data:image/jpeg;base64,${screencast.jpegBase64}`
+  const [refresh, setRefresh] = useState(Date.now)
+  const incomingSrc = useSessionPreviewUrl(sessionId, refresh)
+  const [decodedFrame, setDecodedFrame] = useState<DecodedPreviewFrame | null>(
+    null,
+  )
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const displayedSrc =
+    decodedFrame !== null && decodedFrame.sessionId === sessionId
+      ? decodedFrame.src
       : null
 
-  // `displayedSrc` is the src actually painted in the DOM. It only
-  // moves forward once the new bytes have decoded successfully.
-  const [displayedSrc, setDisplayedSrc] = useState<string | null>(incomingSrc)
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setRefresh(Date.now()),
+      PREVIEW_REFRESH_MS,
+    )
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
-    if (incomingSrc === null) {
-      setDisplayedSrc(null)
-      return
-    }
-    if (incomingSrc === displayedSrc) return
-    // Pre-decode in an off-screen Image. The browser caches the
-    // decoded pixels keyed by the data URL, so when we then set
-    // them on the visible <img> the swap is instant (no blank gap).
+    if (incomingSrc === null) return
+    if (failedSrc === incomingSrc) return
+    if (decodedFrame?.src === incomingSrc) return
     let cancelled = false
-    const img = new Image()
-    img.onload = () => {
-      if (!cancelled) setDisplayedSrc(incomingSrc)
+    const image = new Image()
+    image.onload = () => {
+      if (cancelled) return
+      setDecodedFrame({ sessionId, src: incomingSrc })
+      setFailedSrc(null)
     }
-    img.onerror = () => {
-      // Decode failed (truncated bytes, unexpected encoding). Skip
-      // this frame; the next poll will retry with fresh bytes.
+    image.onerror = () => {
+      if (cancelled) return
+      setFailedSrc(incomingSrc)
     }
-    img.src = incomingSrc
+    image.src = incomingSrc
     return () => {
       cancelled = true
     }
-  }, [incomingSrc, displayedSrc])
-
-  const showImage = displayedSrc !== null
+  }, [decodedFrame?.src, failedSrc, incomingSrc, sessionId])
 
   return (
-    <div className="relative flex h-[132px] items-center justify-center overflow-hidden bg-bg-sunken">
-      {showImage ? (
-        // biome-ignore lint/performance/noImgElement: data URL only;
-        // there is no remote URL for next/image to optimise.
+    <div
+      className={cn(
+        'relative flex items-center justify-center overflow-hidden bg-bg-sunken',
+        className ?? 'h-[132px] w-full',
+      )}
+    >
+      {displayedSrc ? (
         <img
+          data-preview-url={displayedSrc}
           src={displayedSrc}
           alt={`Live view of ${site}`}
           className="h-full w-full object-cover"
-          // Catches corruption that slipped past the off-screen
-          // pre-decode (most relevant on initial mount, where
-          // displayedSrc is seeded directly from incomingSrc
-          // without going through the Image() decode gate).
-          // Falling back to null here re-renders into the globe
-          // placeholder so the operator never sees a browser
-          // broken-image icon.
-          onError={() => setDisplayedSrc(null)}
+          // Bad visible bytes fall back to the placeholder without retrying the same URL.
+          onError={() => {
+            setDecodedFrame(null)
+            setFailedSrc(displayedSrc)
+          }}
         />
       ) : (
         <div className="flex flex-col items-center gap-1.5 text-ink-3">
@@ -104,8 +109,7 @@ export function MiniScreencast({
           aria-hidden
           className={cn(
             'absolute top-2.5 right-2.5 size-2 animate-pulse-dot rounded-full bg-green',
-            // Translucent ring so the dot stays readable against busy
-            // live thumbnails.
+            // The translucent ring keeps the dot readable over busy previews.
             'ring-2 ring-bg-canvas/70',
           )}
         />

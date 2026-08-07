@@ -49,7 +49,7 @@ index 0000000000000..9a25f32a0da56
 +ServerLaunchConfig BuildLaunchConfig() {
 +  ServerLaunchConfig config;
 +  config.config_file_name = FILE_PATH_LITERAL("config.json");
-+  config.health_path = "/health";
++  config.health_path = "/system/health";
 +  config.log_name = "test server";
 +  config.enable_updater = true;
 +
@@ -111,7 +111,7 @@ index 0000000000000..9a25f32a0da56
 +            ToPathString(descriptor.binary_name));
 +  EXPECT_EQ(base::FilePath::StringType(FILE_PATH_LITERAL("config.json")),
 +            ToPathString(descriptor.config_file_name));
-+  EXPECT_EQ(std::string_view("/health"), descriptor.health_path);
++  EXPECT_EQ(std::string_view("/system/health"), descriptor.health_path);
 +  EXPECT_TRUE(descriptor.enable_updater);
 +
 +  // Empty state dir preserves the legacy .browseros/current_version layout.

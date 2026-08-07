@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/BUILD.gn b/chrome/browser/browseros/server/BUILD.gn
 new file mode 100644
-index 0000000000000..8f1f42fae7854
+index 0000000000000000000000000000000000000000..5fadaa41de9c2259e4d0cd35a08b758f694ba703
 --- /dev/null
 +++ b/chrome/browser/browseros/server/BUILD.gn
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,183 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -63,11 +63,18 @@ index 0000000000000..8f1f42fae7854
 +    "process_controller.h",
 +    "process_controller_impl.cc",
 +    "process_controller_impl.h",
++    "server_process_launcher.h",
 +    "server_state_store.h",
 +    "server_state_store_impl.cc",
 +    "server_state_store_impl.h",
 +    "server_updater.h",
 +  ]
++
++  if (is_win) {
++    sources += [ "server_process_launcher_win.cc" ]
++  } else {
++    sources += [ "server_process_launcher.cc" ]
++  }
 +
 +  deps = [
 +    "//base",
@@ -110,7 +117,9 @@ index 0000000000000..8f1f42fae7854
 +    "browseros_appcast_parser_unittest.cc",
 +    "browseros_server_config_unittest.cc",
 +    "browseros_server_manager_unittest.cc",
++    "browseros_server_proxy_unittest.cc",
 +    "browseros_server_utils_unittest.cc",
++    "server_process_launcher_unittest.cc",
 +  ]
 +
 +  deps = [
@@ -122,6 +131,7 @@ index 0000000000000..8f1f42fae7854
 +    "//chrome/browser/browseros/core",
 +    "//components/prefs:test_support",
 +    "//net",
++    "//net:test_support",
 +    "//testing/gmock",
 +    "//testing/gtest",
 +  ]

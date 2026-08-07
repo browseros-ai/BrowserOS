@@ -11,7 +11,7 @@ function sessionWithSnapshot(text: string): BrowserSession {
 }
 
 describe('grep tool', () => {
-  it('returns matched lines with page, over, and count in structured output', async () => {
+  it('returns matched lines in structured output', async () => {
     const session = sessionWithSnapshot(
       'button "Save" [ref=e1]\nlink "Home"\nbutton "Save draft" [ref=e2]',
     )

@@ -73,6 +73,25 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${remMin}m`
 }
 
+const TOKEN_COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  compactDisplay: 'short',
+  maximumFractionDigits: 1,
+})
+const TOKEN_WHOLE_FORMAT = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+})
+
+/** Compact token count for dense rows: `948`, `12.3k`, `1.2m` (lowercase suffix). */
+export function formatTokensCompact(tokens: number): string {
+  return TOKEN_COMPACT_FORMAT.format(Math.max(0, tokens)).toLowerCase()
+}
+
+/** Grouped exact token count for the detail card: `12,345`. */
+export function formatTokensFull(tokens: number): string {
+  return TOKEN_WHOLE_FORMAT.format(Math.max(0, tokens))
+}
+
 /**
  * Short trail of tool names with an ellipsis when the sequence is
  * longer than `cap`. Mirrors the abbreviated trail shown on each
@@ -84,7 +103,6 @@ export function abbreviateSequence(seq: string[], cap = 5): string {
 }
 
 export interface AgentChip {
-  agentId: string
   slug: string
   agentLabel: string
   count: number
@@ -93,15 +111,14 @@ export interface AgentChip {
 export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
   const map = new Map<string, AgentChip>()
   for (const t of tasks) {
-    const existing = map.get(t.agentId)
+    const existing = map.get(t.slug)
     if (existing) {
       existing.count += 1
       continue
     }
-    map.set(t.agentId, {
-      agentId: t.agentId,
+    map.set(t.slug, {
       slug: t.slug,
-      agentLabel: t.agentLabel,
+      agentLabel: t.label,
       count: 1,
     })
   }
@@ -111,9 +128,14 @@ export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
 export function statusOptions(
   tasks: TaskSummary[],
 ): { status: TaskStatus; count: number }[] {
-  const counts: Record<TaskStatus, number> = { live: 0, done: 0, failed: 0 }
+  const counts: Record<TaskStatus, number> = {
+    live: 0,
+    done: 0,
+    failed: 0,
+    cancelled: 0,
+  }
   for (const t of tasks) counts[t.status] += 1
-  return (['live', 'done', 'failed'] as TaskStatus[])
+  return (['live', 'done', 'failed', 'cancelled'] as TaskStatus[])
     .filter((s) => counts[s] > 0)
     .map((s) => ({ status: s, count: counts[s] }))
 }
@@ -131,7 +153,7 @@ export function siteOptions(
     .sort((a, b) => b.count - a.count)
 }
 
-export function parseResultMeta(raw: string | null): {
+export function parseResultMeta(raw: string | null | undefined): {
   isError: boolean
   contentSummary: string
   structuredKeys: string[]

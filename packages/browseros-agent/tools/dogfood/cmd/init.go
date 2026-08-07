@@ -69,7 +69,7 @@ var initCmd = &cobra.Command{
 		if err := config.Save(path, cfg); err != nil {
 			return err
 		}
-		if err := pipeline.WriteProductionEnvFiles(cfg.AgentRoot(), cfg); err != nil {
+		if err := pipeline.WriteProductionEnvFile(cfg.AgentRoot(), cfg); err != nil {
 			return err
 		}
 		printInitNextSteps(cmd.OutOrStdout(), path, target)

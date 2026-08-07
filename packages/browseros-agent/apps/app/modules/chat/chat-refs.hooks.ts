@@ -3,10 +3,7 @@ import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { type McpServer, useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { usePersonalization } from '@/lib/personalization/personalizationStorage'
-import {
-  useAgentAdapters,
-  useHarnessAgents,
-} from '@/modules/agents/agents.hooks'
+import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import {
   buildSidepanelChatTargets,
@@ -40,8 +37,7 @@ export const useChatRefs = () => {
     setDefaultProvider,
     isLoading: isLoadingProviders,
   } = useLlmProviders()
-  const { adapters, loading: isLoadingAdapters } = useAgentAdapters()
-  const { harnessAgents, loading: isLoadingAgents } = useHarnessAgents()
+  const { agents, loading: isLoadingAgents } = useAcpAgents()
   const { personalization } = usePersonalization()
   const [targetSelection, setTargetSelection] =
     useState<SidepanelChatTargetSelection | null>(null)
@@ -60,10 +56,9 @@ export const useChatRefs = () => {
     () =>
       buildSidepanelChatTargets({
         providers: llmProviders,
-        adapters,
-        agents: harnessAgents,
+        agents,
       }),
-    [llmProviders, adapters, harnessAgents],
+    [llmProviders, agents],
   )
 
   const selectedChatTarget = useMemo(
@@ -75,6 +70,22 @@ export const useChatRefs = () => {
       }),
     [chatTargets, llmProviders, selectedLlmProvider, targetSelection],
   )
+
+  useEffect(() => {
+    if (isLoadingProviders || isLoadingAgents || !targetSelection) return
+    if (
+      selectedChatTarget?.kind === targetSelection.kind &&
+      selectedChatTarget.id === targetSelection.id
+    ) {
+      return
+    }
+
+    const repairedSelection = selectedChatTarget
+      ? { kind: selectedChatTarget.kind, id: selectedChatTarget.id }
+      : null
+    setTargetSelection(repairedSelection)
+    void persistSidepanelChatTargetSelection(selectedChatTarget)
+  }, [isLoadingAgents, isLoadingProviders, selectedChatTarget, targetSelection])
 
   const selectedLlmProviderRef = useRef<LlmProviderConfig | null>(
     selectedLlmProvider,
@@ -121,7 +132,6 @@ export const useChatRefs = () => {
     selectedChatTarget,
     selectChatTarget,
     selectedLlmProvider,
-    isLoadingProviders:
-      isLoadingProviders || isLoadingAdapters || isLoadingAgents,
+    isLoadingProviders: isLoadingProviders || isLoadingAgents,
   }
 }

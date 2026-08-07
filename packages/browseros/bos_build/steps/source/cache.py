@@ -84,11 +84,28 @@ def _object_exists(client, bucket: str, key: str) -> bool:
         return False
 
 
-def _run_pipeline(producer, consumer) -> None:
-    _log(f"$ {' '.join(producer)} | {' '.join(consumer)}")
-    p1 = subprocess.Popen(producer, stdout=subprocess.PIPE)
+def _format_pipeline_command(cmd, cwd: Path | None) -> str:
+    command = " ".join(cmd)
+    if cwd is None:
+        return command
+    return f"{command}  (cwd={cwd})"
+
+
+def _run_pipeline(
+    producer,
+    consumer,
+    *,
+    producer_cwd: Path | None = None,
+    consumer_cwd: Path | None = None,
+) -> None:
+    _log(
+        "$ "
+        f"{_format_pipeline_command(producer, producer_cwd)} | "
+        f"{_format_pipeline_command(consumer, consumer_cwd)}"
+    )
+    p1 = subprocess.Popen(producer, stdout=subprocess.PIPE, cwd=producer_cwd)
     assert p1.stdout is not None  # guaranteed by stdout=PIPE
-    p2 = subprocess.Popen(consumer, stdin=p1.stdout)
+    p2 = subprocess.Popen(consumer, stdin=p1.stdout, cwd=consumer_cwd)
     p1.stdout.close()
     rc2 = p2.wait()
     rc1 = p1.wait()
@@ -96,6 +113,58 @@ def _run_pipeline(producer, consumer) -> None:
         raise SystemExit(
             f"[source.cache] pipeline failed (producer={rc1}, consumer={rc2})"
         )
+
+
+def _run_command(
+    cmd,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    _log(f"$ {_format_pipeline_command(cmd, cwd)}")
+    return subprocess.run(cmd, cwd=cwd, env=env, check=False).returncode
+
+
+def _unlink_if_exists(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _restore_windows_tarball(tarball: Path, root: Path) -> None:
+    tar_file = tarball.with_suffix("")
+    try:
+        rc = _run_command(
+            [find_tool("zstd"), "-d", "-f", "-o", str(tar_file), str(tarball)]
+        )
+        if rc != 0:
+            raise SystemExit(f"[source.cache] zstd decompression failed (rc={rc})")
+
+        # Drop the compressed archive as soon as the rewindable tar exists.
+        _unlink_if_exists(tarball)
+
+        # --force-local: MSYS tar reads the colon in C:\... as a remote host
+        # ("Cannot connect to C: resolve failed") without it.
+        tar_cmd = [find_tool("tar"), "--force-local", "-xf", str(tar_file)]
+        tar_env = {**os.environ, "MSYS": "winsymlinks:nativestrict"}
+        _log("extract pass 1/2")
+        first_rc = _run_command(tar_cmd, cwd=root, env=tar_env)
+        if first_rc == 0:
+            return
+
+        _log("extract pass 1/2 failed; retrying full archive")
+        _log("extract pass 2/2")
+        second_rc = _run_command(tar_cmd, cwd=root, env=tar_env)
+        if second_rc == 0:
+            return
+
+        raise SystemExit(
+            "[source.cache] tar extraction failed after retry "
+            f"(pass1={first_rc}, pass2={second_rc})"
+        )
+    finally:
+        _unlink_if_exists(tar_file)
 
 
 def restore(key: str, root: Path) -> bool:
@@ -124,11 +193,15 @@ def restore(key: str, root: Path) -> bool:
     size_gb = tarball.stat().st_size / 1024**3
     _log(f"Downloaded {size_gb:.1f} GiB; extracting to {root}")
 
-    _run_pipeline(
-        [find_tool("zstd"), "-d", "-c", str(tarball)],
-        [find_tool("tar"), "-xf", "-", "-C", str(root)],
-    )
-    tarball.unlink()
+    if sys.platform == "win32":
+        _restore_windows_tarball(tarball, root)
+    else:
+        _run_pipeline(
+            [find_tool("zstd"), "-d", "-c", str(tarball)],
+            [find_tool("tar"), "-xf", "-"],
+            consumer_cwd=root,
+        )
+        tarball.unlink()
     write_github_output("cache-hit", "true")
     return True
 
@@ -158,11 +231,10 @@ def save(key: str, root: Path) -> None:
             "-cf",
             "-",
             "--exclude=./src/out",
-            "-C",
-            str(root),
             ".",
         ],
         [find_tool("zstd"), "-T0", "-3", "-f", "-o", str(tarball)],
+        producer_cwd=root,
     )
     size_gb = tarball.stat().st_size / 1024**3
     _log(f"Uploading {size_gb:.1f} GiB -> s3://{bucket}/{object_key}")

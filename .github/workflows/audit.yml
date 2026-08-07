@@ -32,7 +32,7 @@ jobs:
 
           # Check if vulnerabilities exist
           VULN_COUNT=$(cat audit-results.json | bun -e "const data = JSON.parse(require('fs').readFileSync(0, 'utf-8')); console.log(Object.keys(data).reduce((sum, pkg) => sum + data[pkg].length, 0))")
-          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+          echo "vuln_count=$VULN_COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Parse audit results
         id: parse
@@ -183,4 +183,4 @@ jobs:
           curl -X POST \
             -H 'Content-Type: application/json' \
             -d @slack-payload.json \
-            $SLACK_WEBHOOK_URL
+            "$SLACK_WEBHOOK_URL"

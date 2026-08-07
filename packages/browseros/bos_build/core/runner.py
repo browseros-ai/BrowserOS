@@ -85,7 +85,7 @@ def run(
             log_info(f"🔧 Running step: {step_name}")
             log_info(f"{'=' * 70}")
 
-            _emit(subscribers, StepStarted(run=name, step=step_name, notify=step.notify))
+            _emit(subscribers, StepStarted(run=name, step=step_name, phase=step.phase))
             step_start = time.time()
             _warn_missing_requires(ctx, step, step_name)
 
@@ -178,13 +178,15 @@ def _finish_step(
 ) -> float:
     duration = time.time() - step_start
     status: RunStatus = "failed" if error else "success"
-    results.steps.append(StepResult(name=_step_name(step), status=status, duration=duration))
+    results.steps.append(
+        StepResult(name=_step_name(step), status=status, duration=duration)
+    )
     _emit(
         subscribers,
         StepFinished(
             run=run_name,
             step=_step_name(step),
-            notify=step.notify,
+            phase=step.phase,
             status=status,
             duration=duration,
             error=error,

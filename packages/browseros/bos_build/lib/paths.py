@@ -43,3 +43,8 @@ def get_package_root() -> Path:
         "Expected to find pyproject.toml with name = 'browseros' "
         f"in ancestors of {Path(__file__).resolve()}"
     )
+
+
+def get_feature_registry_path(root_dir: Path) -> Path:
+    """Return the canonical bpatch feature registry for a BrowserOS package root."""
+    return root_dir / "chromium_patches" / ".features.yaml"

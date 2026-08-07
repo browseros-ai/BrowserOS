@@ -1,17 +1,14 @@
 import { cn } from '@/lib/utils'
 import { SidebarBranding } from './SidebarBranding'
+import { SidebarHelp } from './SidebarHelp'
 import { SidebarNavigation } from './SidebarNavigation'
-import { SidebarThemeToggle } from './SidebarThemeToggle'
+import { SidebarPrivacy } from './SidebarPrivacy'
 
 export interface AppSidebarProps {
   expanded?: boolean
 }
 
-/**
- * Wraps the branding + navigation, with the theme toggle as the footer.
- * The rest of the design's settings/identity surface lands in a
- * follow-up once there's a real setting to surface.
- */
+/** Sidebar shell: branding, primary navigation, and a bottom help footer. */
 export function AppSidebar({ expanded = false }: AppSidebarProps) {
   return (
     <div
@@ -22,9 +19,10 @@ export function AppSidebar({ expanded = false }: AppSidebarProps) {
     >
       <SidebarBranding expanded={expanded} />
       <SidebarNavigation expanded={expanded} />
-      <div className="shrink-0 p-2">
-        <SidebarThemeToggle expanded={expanded} />
+      <div className="px-2 pb-1">
+        <SidebarPrivacy expanded={expanded} />
       </div>
+      <SidebarHelp expanded={expanded} />
     </div>
   )
 }

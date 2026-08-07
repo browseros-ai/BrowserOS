@@ -70,7 +70,7 @@ func newHealthyServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/system/health" {
 			http.NotFound(w, r)
 			return
 		}

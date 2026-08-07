@@ -39,19 +39,36 @@ export interface BrowserOSImportSource {
   displayName: string
   browserName: string
   profileName: string
+  accountName: string
+  isManaged: boolean
   supportedItems: BrowserOSImportItem[]
   recommendedItems: BrowserOSImportItem[]
 }
 
 export interface BrowserOSImportProgress {
   currentItem?: BrowserOSImportItem
+  currentSourceId?: string
+  currentSourceName?: string
   completedItems: BrowserOSImportItem[]
   totalItems: number
+  completedSources?: number
+  totalSources?: number
 }
 
 export interface BrowserOSOnboardingError {
   code: string
   message: string
+}
+
+export type BrowserOSImportSourceResultStatus =
+  | 'importing'
+  | 'succeeded'
+  | 'failed'
+
+export interface BrowserOSImportSourceResult {
+  sourceId: string
+  displayName: string
+  status: BrowserOSImportSourceResultStatus
 }
 
 export interface BrowserOSOnboardingState {
@@ -60,8 +77,11 @@ export interface BrowserOSOnboardingState {
   sources: BrowserOSImportSource[]
   progress?: BrowserOSImportProgress
   error?: BrowserOSOnboardingError
+  /** Single-source imports report one per-source result. */
+  results?: BrowserOSImportSourceResult[]
 }
 
+/** Starts one source import from the visible Import action; Chromium rejects hidden/non-interactive requests for macOS keychain safety. */
 export interface BrowserOSStartImportRequest {
   sourceId: string
   items?: BrowserOSImportItem[]

@@ -8,6 +8,7 @@
  * dispatch rows without a React tree.
  */
 
+import type { SessionScreenshot } from '@browseros/claw-api'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
 
 export interface TabGroup {
@@ -29,56 +30,31 @@ export interface TabGroup {
   /** Chronological subset of the task's dispatches for this group. */
   dispatches: ToolDispatchRow[]
   dispatchCount: number
-  /** Subset of `allScreenshotIds` whose dispatch belongs to this group. */
-  screenshotDispatchIds: number[]
+  /** Chronological subset of the session's screenshots for this group. */
+  screenshots: SessionScreenshot[]
 }
 
-/**
- * Groups a task's dispatch stream into a leftmost "Session"
- * overview bucket plus one bucket per distinct `pageId`.
- *
- * The Session bucket is the task-level overview: it contains
- * EVERY dispatch and EVERY screenshot, so the operator can see
- * the whole task at a glance without picking a specific tab.
- * Each per-page bucket contains only the dispatches + screenshots
- * scoped to that tab.
- *
- * Page tabs are labelled sequentially (`Tab 1`, `Tab 2`, ...) in
- * chronological order of first appearance. The underlying BrowserOS
- * pageId is intentionally not surfaced in the label: it is stable
- * across the extension's lifetime and can range into the hundreds,
- * which reads as noise.
- *
- * Complexity: O(N) over dispatches, one pass. Callers should
- * memoise per task-detail response.
- */
+/** Groups task dispatches into a session overview and first-seen page buckets for task detail. */
 export function groupDispatchesByTab(
   dispatches: ToolDispatchRow[],
-  allScreenshotIds: readonly number[],
+  allScreenshots: readonly SessionScreenshot[],
 ): TabGroup[] {
-  const screenshotSet = new Set(allScreenshotIds)
   const buckets = new Map<number, ToolDispatchRow[]>()
-  // Preserve first-seen order for the sequential Tab numbering
-  // (agents typically open tabs in chronological order, so this
-  // matches the operator's mental narrative better than sorting
-  // by raw pageId).
-  const pageOrder: number[] = []
+  const pageBuckets: Array<[number, ToolDispatchRow[]]> = []
   for (const d of dispatches) {
-    if (d.pageId === null) continue
+    if (d.pageId === undefined) continue
     const arr = buckets.get(d.pageId)
     if (arr) {
       arr.push(d)
     } else {
-      buckets.set(d.pageId, [d])
-      pageOrder.push(d.pageId)
+      const rows = [d]
+      buckets.set(d.pageId, rows)
+      pageBuckets.push([d.pageId, rows])
     }
   }
 
   const groups: TabGroup[] = []
 
-  // Session overview: EVERY dispatch and EVERY screenshot. This is
-  // the default view when the operator opens the task and does not
-  // yet know which tab they want to drill into.
   if (dispatches.length > 0) {
     groups.push({
       id: 'session',
@@ -88,27 +64,21 @@ export function groupDispatchesByTab(
       displayTitle: null,
       dispatches,
       dispatchCount: dispatches.length,
-      screenshotDispatchIds: dispatches
-        .map((d) => d.id)
-        .filter((id) => screenshotSet.has(id)),
+      screenshots: [...allScreenshots],
     })
   }
 
-  // Per-page buckets, numbered by first-appearance order.
-  pageOrder.forEach((pageId, idx) => {
-    const rows = buckets.get(pageId)!
-    // Prefer a dispatch that carries url + title TOGETHER so the
-    // tab header shows a consistent (url, title) pair from a
-    // single moment in time. If no such paired dispatch exists in
-    // this tab, fall back to the last individual non-null values
-    // independently. The edge case: mid-navigation dispatches may
-    // have a url but null title (or vice versa); without this
-    // guard the header could show a stale title alongside a fresh
-    // url.
+  pageBuckets.forEach(([pageId, rows], idx) => {
+    // Prefer a paired title/url snapshot to avoid showing a stale title beside a fresh URL.
     const reversed = [...rows].reverse()
-    const lastPaired = reversed.find((d) => d.url !== null && d.title !== null)
-    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url !== null)
-    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title !== null)
+    const lastPaired = reversed.find((d) => d.url && d.title)
+    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url)
+    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title)
+    const screenshotIds = new Set(
+      rows.flatMap((row) =>
+        row.screenshotId === undefined ? [] : [row.screenshotId],
+      ),
+    )
     groups.push({
       id: `page-${pageId}`,
       pageId,
@@ -117,22 +87,16 @@ export function groupDispatchesByTab(
       displayTitle: lastWithTitle?.title ?? null,
       dispatches: rows,
       dispatchCount: rows.length,
-      screenshotDispatchIds: rows
-        .map((d) => d.id)
-        .filter((id) => screenshotSet.has(id)),
+      screenshots: allScreenshots.filter((screenshot) =>
+        screenshotIds.has(screenshot.screenshotId),
+      ),
     })
   })
 
   return groups
 }
 
-/**
- * Picks which tab should be selected first. Prefers the Session
- * overview so the operator sees the task-wide screenshot strip
- * and timeline on entry; page tabs are drill-downs. Falls back to
- * the first available id when Session is absent (e.g. an empty
- * task).
- */
+/** Selects the session overview when available so task detail opens at the task-wide timeline. */
 export function pickDefaultTabId(groups: TabGroup[]): string | undefined {
   const session = groups.find((g) => g.id === 'session')
   return session?.id ?? groups[0]?.id

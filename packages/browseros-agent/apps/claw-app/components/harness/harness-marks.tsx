@@ -4,46 +4,93 @@
  * installed from the `@svgl` shadcn registry (see `components.json`).
  * Mirror of `apps/app/screens/mcp-settings/agent-marks.tsx`.
  *
- * Brand marks paint themselves with their own colours; do not pass
- * color via className. Tile chrome (bg, border) is the consumer's
- * job, the mark just needs sizing.
+ * Brand marks choose their own colors, including light/dark variants.
+ * Consumer className should only provide sizing.
  */
 
 import type { FC, SVGProps } from 'react'
 import { AnthropicBlack } from '@/components/ui/svgs/anthropicBlack'
-import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
+import { AnthropicWhite } from '@/components/ui/svgs/anthropicWhite'
+import { Antigravity } from '@/components/ui/svgs/antigravity'
+import { CodexDark } from '@/components/ui/svgs/codexDark'
 import { CodexLight } from '@/components/ui/svgs/codexLight'
+import { CursorDark } from '@/components/ui/svgs/cursorDark'
 import { CursorLight } from '@/components/ui/svgs/cursorLight'
-import { Gemini } from '@/components/ui/svgs/gemini'
+import { Opencode } from '@/components/ui/svgs/opencode'
+import { OpencodeDark } from '@/components/ui/svgs/opencodeDark'
 import { Vscode } from '@/components/ui/svgs/vscode'
 import { ZedLogo } from '@/components/ui/svgs/zedLogo'
+import { cn } from '@/lib/utils'
 
 export type HarnessMarkProps = SVGProps<SVGSVGElement>
 
-export const ClaudeCodeMark: FC<HarnessMarkProps> = (props) => (
-  <AnthropicBlack aria-hidden {...props} />
+export const ClaudeCodeMark: FC<HarnessMarkProps> = ({
+  className,
+  ...props
+}) => (
+  <>
+    <AnthropicBlack
+      aria-hidden
+      className={cn(className, 'dark:hidden')}
+      {...props}
+    />
+    <AnthropicWhite
+      aria-hidden
+      className={cn(className, 'hidden dark:block')}
+      {...props}
+    />
+  </>
 )
 
-export const ClaudeDesktopMark: FC<HarnessMarkProps> = (props) => (
-  <ClaudeAiIcon aria-hidden {...props} />
-)
-
-export const CursorMark: FC<HarnessMarkProps> = (props) => (
-  <CursorLight aria-hidden {...props} />
+export const CursorMark: FC<HarnessMarkProps> = ({ className, ...props }) => (
+  <>
+    <CursorLight
+      aria-hidden
+      className={cn(className, 'fill-[#111] dark:hidden')}
+      {...props}
+    />
+    <CursorDark
+      aria-hidden
+      className={cn(className, 'hidden fill-white dark:block')}
+      {...props}
+    />
+  </>
 )
 
 export const VSCodeMark: FC<HarnessMarkProps> = (props) => (
   <Vscode aria-hidden {...props} />
 )
 
-export const CodexMark: FC<HarnessMarkProps> = (props) => (
-  <CodexLight aria-hidden {...props} />
+export const CodexMark: FC<HarnessMarkProps> = ({ className, ...props }) => (
+  <>
+    <CodexLight
+      aria-hidden
+      className={cn(className, 'dark:hidden')}
+      {...props}
+    />
+    <CodexDark
+      aria-hidden
+      className={cn(className, 'hidden dark:block')}
+      {...props}
+    />
+  </>
 )
 
 export const ZedMark: FC<HarnessMarkProps> = (props) => (
   <ZedLogo aria-hidden {...props} />
 )
 
-export const GeminiMark: FC<HarnessMarkProps> = (props) => (
-  <Gemini aria-hidden {...props} />
+export const OpenCodeMark: FC<HarnessMarkProps> = ({ className, ...props }) => (
+  <>
+    <Opencode aria-hidden className={cn(className, 'dark:hidden')} {...props} />
+    <OpencodeDark
+      aria-hidden
+      className={cn(className, 'hidden dark:block')}
+      {...props}
+    />
+  </>
+)
+
+export const AntigravityMark: FC<HarnessMarkProps> = (props) => (
+  <Antigravity aria-hidden {...props} />
 )

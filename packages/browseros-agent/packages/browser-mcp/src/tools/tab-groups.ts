@@ -52,7 +52,11 @@ export const tab_groups = defineTool({
       .optional()
       .describe('Collapse/expand the group for "update".'),
   }),
-  annotations: { openWorldHint: true },
+  annotations: {
+    title: 'Manage tab groups',
+    destructiveHint: true,
+    openWorldHint: true,
+  },
   handler: async (args, ctx) => {
     const { pages } = ctx.session
 

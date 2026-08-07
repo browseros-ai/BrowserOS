@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useParams } from 'react-router'
-import { ScreenshotLightbox } from '@/components/audit/ScreenshotLightbox'
+import {
+  ScreenshotLightbox,
+  type ScreenshotLightboxItem,
+} from '@/components/audit/ScreenshotLightbox'
 import { TaskHeader } from '@/components/audit/TaskHeader'
 import { EmptyState } from '@/components/cockpit/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -26,16 +29,31 @@ import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
  */
 export function TaskDetailPage() {
   const { sessionId = '' } = useParams()
-  const { task, isPending, isError, error } = useTaskDetailScreenData(sessionId)
-  const [lightboxId, setLightboxId] = useState<number | null>(null)
+  const { detail, screenshots, isPending, isError, error } =
+    useTaskDetailScreenData(sessionId)
+  const [openScreenshotId, setOpenScreenshotId] = useState<number | null>(null)
 
   const groups = useMemo(
-    () =>
-      task
-        ? groupDispatchesByTab(task.dispatches, task.screenshotDispatchIds)
-        : [],
-    [task],
+    () => (detail ? groupDispatchesByTab(detail.dispatches, screenshots) : []),
+    [detail, screenshots],
   )
+
+  const lightboxItems = useMemo<ScreenshotLightboxItem[]>(() => {
+    if (!detail) return []
+    const urlByScreenshot = new Map<number, string | null>()
+    for (const dispatch of detail.dispatches) {
+      if (dispatch.screenshotId != null) {
+        urlByScreenshot.set(dispatch.screenshotId, dispatch.url ?? null)
+      }
+    }
+    return [...screenshots]
+      .sort((a, b) => a.capturedAt - b.capturedAt)
+      .map((screenshot) => ({
+        screenshotId: screenshot.screenshotId,
+        sourceUrl: urlByScreenshot.get(screenshot.screenshotId) ?? null,
+        offsetMs: Math.max(0, screenshot.capturedAt - detail.session.startedAt),
+      }))
+  }, [detail, screenshots])
 
   if (isPending) {
     return (
@@ -47,7 +65,7 @@ export function TaskDetailPage() {
       </div>
     )
   }
-  if (isError || !task) {
+  if (isError || !detail) {
     return (
       <div className="mx-auto w-full max-w-5xl px-8 pt-10 pb-20">
         <EmptyState
@@ -61,6 +79,20 @@ export function TaskDetailPage() {
     )
   }
 
+  const { session } = detail
+  const endEvent = session.endedAt
+    ? {
+        createdAt: session.endedAt,
+        kind:
+          session.status === 'failed'
+            ? ('errored' as const)
+            : session.status === 'cancelled'
+              ? ('cancelled' as const)
+              : ('closed' as const),
+        reason: null,
+      }
+    : null
+
   const items: AutoHideTabsItem[] = groups.map((g) => ({
     id: g.id,
     label: (
@@ -73,25 +105,28 @@ export function TaskDetailPage() {
     ),
     content: (
       <TabView
+        sessionId={sessionId}
         group={g}
-        startedAt={task.startedAt}
-        endEvent={task.endEvent}
-        onScreenshotClick={setLightboxId}
+        startedAt={session.startedAt}
+        endEvent={endEvent}
+        onScreenshotClick={(screenshotId) => setOpenScreenshotId(screenshotId)}
       />
     ),
   }))
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
-      <TaskHeader task={task} />
+      <TaskHeader detail={detail} />
       <AutoHideTabs
         items={items}
         defaultId={pickDefaultTabId(groups)}
         listVariant="line"
       />
       <ScreenshotLightbox
-        dispatchId={lightboxId}
-        onClose={() => setLightboxId(null)}
+        sessionId={sessionId}
+        items={lightboxItems}
+        startId={openScreenshotId}
+        onClose={() => setOpenScreenshotId(null)}
       />
     </div>
   )

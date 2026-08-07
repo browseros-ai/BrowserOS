@@ -1,0 +1,25 @@
+diff --git a/chrome/installer/setup/BUILD.gn b/chrome/installer/setup/BUILD.gn
+index 2b1d7cb7ae257669d56bcfefb2b4a31e4aa035f7..83a2f242b7e2375c563f0a98503e2b3c55a23eb5 100644
+--- a/chrome/installer/setup/BUILD.gn
++++ b/chrome/installer/setup/BUILD.gn
+@@ -11,6 +11,8 @@ import("//testing/test.gni")
+ if (is_win) {
+   executable("setup") {
+     sources = [
++      "browseros_install_ui.cc",
++      "browseros_install_ui.h",
+       "setup.rc",
+       "setup_main.cc",
+       "setup_main.h",
+@@ -48,7 +50,10 @@ if (is_win) {
+       "//url",
+     ]
+ 
+-    libs = [ "netapi32.lib" ]
++    libs = [
++      "comctl32.lib",
++      "netapi32.lib",
++    ]
+   }
+ 
+   static_library("lib") {

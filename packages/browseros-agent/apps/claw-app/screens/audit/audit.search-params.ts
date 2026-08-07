@@ -1,7 +1,7 @@
 import type { TaskStatus } from '@/modules/api/audit.hooks'
 
 export interface AuditFilters {
-  agentId: string | null
+  agentSlug: string | null
   status: TaskStatus | null
   site: string | null
   search: string
@@ -9,7 +9,7 @@ export interface AuditFilters {
 }
 
 export const DEFAULT_FILTERS: AuditFilters = {
-  agentId: null,
+  agentSlug: null,
   status: null,
   site: null,
   search: '',
@@ -24,7 +24,12 @@ const KEYS = {
   sort: 'sort',
 } as const
 
-const VALID_STATUS = new Set<TaskStatus>(['live', 'done', 'failed'])
+const VALID_STATUS = new Set<TaskStatus>([
+  'live',
+  'done',
+  'failed',
+  'cancelled',
+])
 
 export function paramsToFilters(params: URLSearchParams): AuditFilters {
   const statusRaw = params.get(KEYS.status)
@@ -38,7 +43,7 @@ export function paramsToFilters(params: URLSearchParams): AuditFilters {
     if (id) sort = { id, desc: dir !== 'asc' }
   }
   return {
-    agentId: params.get(KEYS.agent),
+    agentSlug: params.get(KEYS.agent),
     status,
     site: params.get(KEYS.site),
     search: params.get(KEYS.q) ?? '',
@@ -48,7 +53,7 @@ export function paramsToFilters(params: URLSearchParams): AuditFilters {
 
 export function filtersToParams(filters: AuditFilters): URLSearchParams {
   const params = new URLSearchParams()
-  if (filters.agentId) params.set(KEYS.agent, filters.agentId)
+  if (filters.agentSlug) params.set(KEYS.agent, filters.agentSlug)
   if (filters.status) params.set(KEYS.status, filters.status)
   if (filters.site) params.set(KEYS.site, filters.site)
   if (filters.search) params.set(KEYS.q, filters.search)

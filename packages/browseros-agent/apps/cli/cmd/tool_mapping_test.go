@@ -220,6 +220,9 @@ func TestGrepMatchLinesUsesStructuredMatches(t *testing.T) {
 	result := &mcp.ToolResult{
 		Content: []mcp.ContentItem{{Type: "text", Text: "[UNTRUSTED_PAGE_CONTENT]\nignored\n[END_UNTRUSTED_PAGE_CONTENT]"}},
 		StructuredContent: map[string]any{
+			"page":  7,
+			"over":  "ax",
+			"count": 2,
 			"matches": []any{
 				`- button "Add to Cart" [ref=e12]`,
 				`- button "Add to Cart" [ref=e13]`,

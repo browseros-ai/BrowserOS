@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Patch-stack doctor: read-only health checks for features.yaml ↔ chromium_patches/.
+"""Patch-stack doctor: read-only health checks for .features.yaml ↔ chromium_patches/.
 
 Answers "how healthy is the patch stack" without touching any tree:
-repo-local consistency (every features.yaml entry resolves to a patch,
+repo-local consistency (every patch-backed feature entry resolves to a patch,
 every patch is claimed, claims don't overlap) plus an optional dry-run
 apply report against a chromium checkout. Pure functions returning
 findings — callers render and decide exit codes.
@@ -12,7 +12,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from .batch_apply import MARKER_SUFFIXES
+from .batch_apply import MARKER_SUFFIXES, METADATA_ROOT_FILES
+from .features_io import canonical_features_path, patch_backed_features
 from .validation import validate_description, validate_feature_name
 
 # Features whose description carries this prefix list files touched by
@@ -64,6 +65,8 @@ def patch_base_paths(patches_dir: Path) -> Set[str]:
         if not path.is_file() or path.name.startswith("."):
             continue
         rel = path.relative_to(patches_dir).as_posix()
+        if rel in METADATA_ROOT_FILES:
+            continue
         for suffix in MARKER_SUFFIXES:
             if rel.endswith(suffix):
                 rel = rel[: -len(suffix)]
@@ -75,7 +78,7 @@ def patch_base_paths(patches_dir: Path) -> Set[str]:
 def compute_claims(features: Dict, bases: Set[str]) -> Dict[str, List[str]]:
     """Map each on-disk base path to the sorted features claiming it."""
     claims: Dict[str, Set[str]] = {base: set() for base in bases}
-    for name, spec in features.items():
+    for name, spec in patch_backed_features(features).items():
         if is_series_feature(spec):
             continue
         for entry in spec.get("files") or []:
@@ -92,7 +95,7 @@ def check_feature_metadata(
     features: Dict, feature: Optional[str] = None
 ) -> List[Finding]:
     findings = []
-    for name, spec in features.items():
+    for name, spec in patch_backed_features(features).items():
         if feature is not None and name != feature:
             continue
         valid, error = validate_feature_name(name)
@@ -112,7 +115,7 @@ def check_entries_resolve(
     features: Dict, bases: Set[str], feature: Optional[str] = None
 ) -> List[Finding]:
     findings = []
-    for name, spec in features.items():
+    for name, spec in patch_backed_features(features).items():
         if feature is not None and name != feature:
             continue
         if is_series_feature(spec):
@@ -181,6 +184,7 @@ def check_repo(
     features: Dict, patches_dir: Path, feature: Optional[str] = None
 ) -> List[Finding]:
     """All repo-local checks; raises ValueError for an unknown feature filter."""
+    features = patch_backed_features(features)
     _require_known_feature(features, feature)
     bases = patch_base_paths(patches_dir)
     claims = compute_claims(features, bases)
@@ -193,10 +197,10 @@ def check_repo(
 
 
 def load_features(root_dir: Path) -> Dict:
-    """Load and shape-validate features.yaml; raises ValueError on a broken file."""
+    """Load and shape-validate the canonical patch-backed feature map."""
     from .features_io import load_features_yaml
 
-    features_file = root_dir / "bos_build" / "features.yaml"
+    features_file = canonical_features_path(root_dir)
     data = load_features_yaml(features_file)
     if not isinstance(data, dict):
         raise ValueError(f"{features_file}: top level must be a mapping")
@@ -221,7 +225,7 @@ def load_features(root_dir: Path) -> Dict:
             raise ValueError(
                 f"{features_file}: feature '{name}' files must be a list of paths"
             )
-    return features
+    return patch_backed_features(features)
 
 
 def diagnose_repo(root_dir: Path, feature: Optional[str] = None) -> List[Finding]:
@@ -238,6 +242,7 @@ def check_apply(
     """Dry-run every patch against a chromium tree, grouping failures by feature."""
     from .batch_apply import check_patch_applies, find_patch_files
 
+    features = patch_backed_features(features)
     _require_known_feature(features, feature)
     claims = compute_claims(features, patch_base_paths(patches_dir))
     total = 0
@@ -275,6 +280,7 @@ def build_report(
     """Assemble the stable machine-readable report consumed by --json and renderers."""
     from .batch_apply import find_patch_files
 
+    features = patch_backed_features(features)
     errors = sum(1 for f in findings if f.severity == "error")
     warnings = sum(1 for f in findings if f.severity == "warning")
     report: Dict = {

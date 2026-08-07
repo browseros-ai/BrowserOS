@@ -15,10 +15,26 @@ import { uploadLlmProvidersToGraphql } from './uploadLlmProvidersToGraphql'
 
 export { DEFAULT_PROVIDER_ID } from './provider-selection'
 
+const REMOVED_PROVIDER_TYPES = new Set([
+  'remote-hermes',
+  'claude-code',
+  'codex',
+  'acp-custom',
+])
+
+function dropRemovedProviderConfigs(
+  providers: LlmProviderConfig[] | null,
+): LlmProviderConfig[] | null {
+  if (!providers) return providers
+  return providers.filter(
+    (provider) => !REMOVED_PROVIDER_TYPES.has(String(provider.type)),
+  )
+}
+
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',
   {
-    version: 3,
+    version: 5,
     migrations: {
       2: (
         providers: LlmProviderConfig[] | null,
@@ -39,21 +55,19 @@ export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
       ): LlmProviderConfig[] | null => {
         return migrateLlmProvidersToV3(providers)
       },
+      4: dropRemovedProviderConfigs,
+      5: dropRemovedProviderConfigs,
     },
   },
 )
 
-/** Mirrors provider data into BrowserOS prefs without blocking local writes. */
 async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
   try {
     const adapter = getBrowserOSAdapter()
     await adapter.setPref(BROWSEROS_PREFS.PROVIDERS, JSON.stringify(backup))
-  } catch {
-    // BrowserOS API not available - ignore
-  }
+  } catch {}
 }
 
-/** Sets up one-way sync of LLM providers to BrowserOS prefs. */
 export function setupLlmProvidersBackupToBrowserOS(): () => void {
   const unsubscribe = providersStorage.watch(async (providers) => {
     if (providers) {
@@ -64,7 +78,6 @@ export function setupLlmProvidersBackupToBrowserOS(): () => void {
   return unsubscribe
 }
 
-/** Uploads provider metadata for signed-in users. */
 export async function syncLlmProviders(): Promise<void> {
   const providers = await providersStorage.getValue()
   if (!providers || providers.length === 0) return
@@ -76,28 +89,27 @@ export async function syncLlmProviders(): Promise<void> {
   await uploadLlmProvidersToGraphql(providers, userId)
 }
 
-/** Sets up one-way sync of LLM providers to the GraphQL backend. */
 export function setupLlmProvidersSyncToBackend(): () => void {
   syncLlmProviders().catch(() => {})
 
   const unsubscribe = providersStorage.watch(async () => {
     try {
       await syncLlmProviders()
-    } catch {
-      // Sync failed silently - will retry on next storage change
-    }
+    } catch {}
   })
   return unsubscribe
 }
 
-/** Returns provider configs after applying display-name compatibility fixes. */
 export async function loadProviders(): Promise<LlmProviderConfig[]> {
   const providers = (await providersStorage.getValue()) || []
-  const normalizedProviders = normalizeProviderNames(providers)
+  const supportedProviders = dropRemovedProviderConfigs(providers) ?? []
+  const normalizedProviders = normalizeProviderNames(supportedProviders)
 
-  // Keep storage consistent so every consumer sees the same provider name.
   if (
-    normalizedProviders.some((provider, index) => provider !== providers[index])
+    supportedProviders.length !== providers.length ||
+    normalizedProviders.some(
+      (provider, index) => provider !== supportedProviders[index],
+    )
   ) {
     await providersStorage.setValue(normalizedProviders)
   }
@@ -105,7 +117,6 @@ export async function loadProviders(): Promise<LlmProviderConfig[]> {
   return normalizedProviders
 }
 
-/** Creates the default BrowserOS provider configuration */
 export function createDefaultBrowserOSProvider(): LlmProviderConfig {
   const timestamp = Date.now()
   return {
@@ -122,7 +133,6 @@ export function createDefaultBrowserOSProvider(): LlmProviderConfig {
   }
 }
 
-/** Creates the default providers configuration. Only call when storage is empty. */
 export function createDefaultProvidersConfig(): LlmProviderConfig[] {
   return [createDefaultBrowserOSProvider()]
 }

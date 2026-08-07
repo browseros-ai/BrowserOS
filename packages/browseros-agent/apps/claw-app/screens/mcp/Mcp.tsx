@@ -1,49 +1,25 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
-import {
-  useBrowserosConnections,
-  useConnectBrowseros,
-  useDisconnectBrowseros,
-} from '@/modules/api/connections.hooks'
-import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import {
   type Harness,
-  RETIRED_HARNESSES,
-} from '@/screens/new-agent/new-agent.schemas'
+  isUserFacingHarness,
+} from '@/components/harness/harness.types'
+import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
+import {
+  useConnectHarness,
+  useConnections,
+  useDisconnectHarness,
+} from '@/modules/api/connections.hooks'
+import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
-/**
- * Editorial MCP install board. Compressed hero with a single dark-
- * ink endpoint strip; hairline-separated Connected-agents list below.
- * Three groups of harnesses are hidden at the render layer; the
- * underlying `useBrowserosConnections` data source is untouched:
- *
- *   - `RETIRED_HARNESSES` (currently Claude Desktop): stdio-only host
- *     configs whose recommended `npx mcp-remote` bridge requires
- *     Node on the user's machine, which BrowserOS cannot guarantee.
- *     Mirrors the new-agent picker's `SELECTABLE_HARNESSES` filter.
- *   - Hermes / OpenClaw: BrowserOS-internal harnesses that read as
- *     Built-in and do not need a user-facing Connect flow.
- *   - Gemini CLI: dropped per operator direction.
- *
- * Live MCP-session state (who is connected right now) is surfaced on
- * the cockpit's running grid, not here; this page is the install
- * board.
- */
-const HIDDEN_HARNESSES: readonly Harness[] = [
-  ...RETIRED_HARNESSES,
-  'Hermes',
-  'OpenClaw',
-  'Gemini CLI',
-]
-
 export function Mcp() {
   const [url, setUrl] = useState<string | null>(null)
-  const connections = useBrowserosConnections()
-  const connect = useConnectBrowseros()
-  const disconnect = useDisconnectBrowseros()
+  const connections = useConnections()
+  const connect = useConnectHarness()
+  const disconnect = useDisconnectHarness()
   const queryClient = useQueryClient()
   const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
 
@@ -60,8 +36,8 @@ export function Mcp() {
   const isLoading = connections.isPending && !connections.data
 
   const visibleRows = useMemo(() => {
-    const list = connections.data?.connections ?? []
-    return list.filter((c) => !HIDDEN_HARNESSES.includes(c.harness))
+    const list = connections.data?.items ?? []
+    return list.filter((c) => isUserFacingHarness(c.harness))
   }, [connections.data])
 
   const connectedCount = visibleRows.filter((c) => c.installed).length
@@ -75,7 +51,7 @@ export function Mcp() {
         setErrors((prev) => ({ ...prev, [harness]: result.message }))
       }
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -90,7 +66,7 @@ export function Mcp() {
     try {
       await disconnect.mutateAsync({ harness })
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -112,7 +88,7 @@ export function Mcp() {
       <HeroCard url={url} />
       <section className="space-y-2">
         <header className="flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold text-ink-1 text-lg">Connected agents</h2>
+          <h2 className="font-semibold text-ink text-lg">Connected agents</h2>
           {!isLoading && !connections.isError && (
             <span className="font-mono text-[10.5px] text-ink-3 uppercase tabular-nums tracking-[0.08em]">
               {connectedCount} of {totalCount} connected
@@ -143,6 +119,7 @@ export function Mcp() {
           </div>
         )}
       </section>
+      <ClaudeDesktopCard />
     </div>
   )
 }

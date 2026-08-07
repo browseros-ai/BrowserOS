@@ -1,85 +1,121 @@
 /**
  * Pins the editorial MCP page shape: compressed hero + single
- * endpoint URL strip (CLI snippet removed), inline Connected-agents
- * header with an `N of M connected` mono chip, hairline row list
- * filtered to exclude Hermes / OpenClaw / Gemini CLI.
+ * endpoint URL strip, inline Connected-agents header with an
+ * `N of M connected` mono chip, hairline row list of the 7 supported
+ * harnesses.
  */
 
-import { describe, expect, it, mock } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import * as _connectionsHooks from '@/modules/api/connections.hooks'
 
-mock.module('@/modules/api/connections.hooks', () => ({
-  useBrowserosConnections: Object.assign(
-    () => ({
+const mcpBrowserosConnections = [
+  {
+    harness: 'Claude Code',
+    installed: false,
+    message: '',
+  },
+  {
+    harness: 'Cursor',
+    installed: true,
+    configPath: '/tmp/cursor.json',
+    message: 'Configured in Cursor.',
+  },
+  {
+    harness: 'Codex',
+    installed: false,
+    message: '',
+  },
+  {
+    harness: 'OpenCode',
+    installed: false,
+    message: '',
+  },
+  {
+    harness: 'Antigravity',
+    installed: false,
+    message: '',
+  },
+  {
+    harness: 'VS Code',
+    installed: false,
+    message: '',
+  },
+  {
+    harness: 'Zed',
+    installed: false,
+    message: '',
+  },
+]
+
+const connectionsHookResultKey = '__browserclawConnectionsHookResult'
+
+function connectionsHookState() {
+  return globalThis as Record<string, unknown>
+}
+
+function setConnectionsHookResult(result: unknown) {
+  connectionsHookState()[connectionsHookResultKey] = result
+}
+
+function getConnectionsHookResult() {
+  return (
+    connectionsHookState()[connectionsHookResultKey] ?? {
       data: {
-        connections: [
-          {
-            harness: 'Claude Code',
-            installed: false,
-            agentId: 'claude-code',
-            message: '',
-          },
-          // Claude Desktop is a retired harness (stdio-only host
-          // config, `npx mcp-remote` bridge requires Node) and gets
-          // filtered out at the render layer; the row list should
-          // not include it.
-          {
-            harness: 'Claude Desktop',
-            installed: false,
-            agentId: 'claude-desktop',
-            message: '',
-          },
-          {
-            harness: 'Cursor',
-            installed: true,
-            agentId: 'cursor',
-            configPath: '/tmp/cursor.json',
-            message: 'Configured in Cursor.',
-          },
-          {
-            harness: 'Codex',
-            installed: false,
-            agentId: 'codex',
-            message: '',
-          },
-          // Hermes is BrowserOS-internal and gets filtered out at the
-          // render layer; the row list should not include it.
-          {
-            harness: 'Hermes',
-            installed: true,
-            agentId: null,
-            message: 'Runs inside BrowserOS.',
-          },
-          // Gemini CLI is also filtered out at the render layer.
-          {
-            harness: 'Gemini CLI',
-            installed: false,
-            agentId: 'gemini-cli',
-            message: '',
-          },
-        ],
+        items: mcpBrowserosConnections,
       },
       isPending: false,
       isError: false,
-    }),
-    { getKey: () => ['cockpit', 'connections'] },
-  ),
-  useConnectBrowseros: () => ({
+    }
+  )
+}
+
+// Spread the real module so unrelated tests that import a different
+// hook from connections.hooks still work: partial mock.module()
+// replacements corrupt Bun's process-scoped module registry (see the
+// 2026-07-17 test reliability audit).
+mock.module('@/modules/api/connections.hooks', () => ({
+  ..._connectionsHooks,
+  useConnections: Object.assign(() => getConnectionsHookResult(), {
+    getKey: () => ['cockpit', 'connections'],
+  }),
+  useConnectHarness: () => ({
     isPending: false,
     variables: undefined,
     mutateAsync: async () => ({ installed: true }),
   }),
-  useDisconnectBrowseros: () => ({
+  useDisconnectHarness: () => ({
     isPending: false,
     variables: undefined,
     mutateAsync: async () => ({ installed: false }),
   }),
 }))
 
+beforeEach(() => {
+  setConnectionsHookResult({
+    data: {
+      items: mcpBrowserosConnections,
+    },
+    isPending: false,
+    isError: false,
+  })
+})
+
+afterEach(() => {
+  setConnectionsHookResult({
+    data: undefined,
+    isPending: true,
+    isError: false,
+  })
+})
+
 const { Mcp } = await import('./Mcp')
 const { HeroCard } = await import('./HeroCard')
+const { COWORK_REQUIREMENT_LINE, EXTENSION_DOWNLOAD_URL } = await import(
+  './install-guide.data'
+)
 
 function renderApp(): string {
   const client = new QueryClient({
@@ -125,32 +161,48 @@ describe('Mcp (editorial)', () => {
     expect(html).not.toContain('--transport http')
   })
 
-  it('renders the Connected-agents header with the filtered-count chip', () => {
+  it('renders the Connected-agents header with the count chip', () => {
     const html = renderApp()
     expect(html).toContain('Connected agents')
-    // Visible list = Claude Code, Cursor, Codex (Hermes + Gemini CLI
-    // filtered). Connected among visible = 1 (Cursor).
-    expect(html).toContain('1 of 3 connected')
+    expect(html).toContain('1 of 7 connected')
   })
 
-  it('renders one row per visible harness and hides the filtered ones', () => {
+  it('renders one row per supported harness', () => {
     const html = renderApp()
     expect(html).toContain('Claude Code')
     expect(html).toContain('Cursor')
     expect(html).toContain('Codex')
-    // Filtered out at the render layer.
-    expect(html).not.toContain('Claude Desktop')
+    expect(html).toContain('OpenCode')
+    expect(html).toContain('Antigravity')
+    expect(html).toContain('VS Code')
+    expect(html).toContain('Zed')
     expect(html).not.toContain('Hermes')
     expect(html).not.toContain('Gemini CLI')
     expect(html).not.toContain('OpenClaw')
   })
 
+  it('renders the Claude Desktop callout as an in-app guide trigger, not a repo link', () => {
+    const html = renderApp()
+    expect(html).toContain('Claude Desktop')
+    expect(html).toContain('Give Claude Desktop a real browser.')
+    expect(html).toContain('show me how')
+    expect(html).toContain(COWORK_REQUIREMENT_LINE)
+    // The walkthrough replaced the link-out; nothing here should leave the app.
+    expect(html).not.toContain(
+      'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension',
+    )
+    expect(html).not.toContain('Also works with Cowork.')
+  })
+
+  it('keeps the install walkthrough closed until the callout is activated', () => {
+    const html = renderApp()
+    expect(html).not.toContain('Install BrowserOS neo')
+    expect(html).not.toContain(EXTENSION_DOWNLOAD_URL)
+  })
+
   it('renders editorial state voices (silent success, mono uppercase action text)', () => {
     const html = renderApp()
-    // Connect action link renders in mono uppercase (single word).
     expect(html).toMatch(/>\s*connect\s*/)
-    // Connected state renders inline `connected` label + disconnect
-    // link.
     expect(html).toMatch(/>\s*connected\s*/)
     expect(html).toMatch(/>\s*disconnect\s*/)
   })
@@ -164,13 +216,6 @@ describe('Mcp (editorial)', () => {
     const html = renderApp()
     expect(html).not.toContain('Built-in')
     expect(html).not.toContain('built-in')
-  })
-
-  it('does NOT render the legacy McpRow / RegenerateUrlDialog / "Add agent" CTA', () => {
-    const html = renderApp()
-    expect(html).not.toContain('Add agent')
-    expect(html).not.toContain('Regenerate URL')
-    expect(html).not.toContain('No endpoints yet')
   })
 
   it('does NOT render the removed marketing subtitle from the old HeroCard', () => {

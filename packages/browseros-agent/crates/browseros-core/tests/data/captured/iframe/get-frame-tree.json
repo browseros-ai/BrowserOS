@@ -1,0 +1,69 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "85D36A879FFFBC2F7EF82787CC415832",
+      "loaderId": "FC9D3DEB3CB81D99FDC39CBAD2734F53",
+      "url": "http://127.0.0.1:17243/iframe.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:17243",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    },
+    "childFrames": [
+      {
+        "frame": {
+          "id": "93125E2369D1742B39CFAB609F4FF1CF",
+          "parentId": "85D36A879FFFBC2F7EF82787CC415832",
+          "loaderId": "D625CB096719912A24A5CCA1377D4767",
+          "name": "child",
+          "url": "http://127.0.0.1:17243/iframe-child.html",
+          "domainAndRegistry": "",
+          "securityOrigin": "http://127.0.0.1:17243",
+          "securityOriginDetails": {
+            "isLocalhost": true
+          },
+          "mimeType": "text/html",
+          "adFrameStatus": {
+            "adFrameType": "none",
+            "explanations": []
+          },
+          "secureContextType": "SecureLocalhost",
+          "crossOriginIsolatedContextType": "NotIsolated",
+          "gatedAPIFeatures": []
+        },
+        "childFrames": [
+          {
+            "frame": {
+              "id": "491566DD3A7E3FFB8B1B508036E49AF4",
+              "parentId": "93125E2369D1742B39CFAB609F4FF1CF",
+              "loaderId": "5069744B633D877372835B43B53827D0",
+              "name": "grandchild",
+              "url": "http://127.0.0.1:17243/iframe-grandchild.html",
+              "domainAndRegistry": "",
+              "securityOrigin": "http://127.0.0.1:17243",
+              "securityOriginDetails": {
+                "isLocalhost": true
+              },
+              "mimeType": "text/html",
+              "adFrameStatus": {
+                "adFrameType": "none",
+                "explanations": []
+              },
+              "secureContextType": "SecureLocalhost",
+              "crossOriginIsolatedContextType": "NotIsolated",
+              "gatedAPIFeatures": []
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

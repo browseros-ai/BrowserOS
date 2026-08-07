@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Iframe fixture</title>
+  </head>
+  <body>
+    <h1>Iframe fixture</h1>
+    <p>Top-level text outside every frame.</p>
+    <button id="top-button" type="button">Top button</button>
+    <iframe id="child" title="Child frame" src="/iframe-child.html" width="600" height="400"></iframe>
+    <script>
+      // `?childOrigin=<origin>` swaps the child to a second fixture origin so the
+      // same page exercises both same-process and out-of-process iframes.
+      const childOrigin = new URLSearchParams(location.search).get('childOrigin')
+      if (childOrigin) {
+        document.getElementById('child').src = `${childOrigin}/iframe-child.html`
+      }
+    </script>
+  </body>
+</html>

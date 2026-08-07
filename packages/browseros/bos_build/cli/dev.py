@@ -4,7 +4,7 @@ Dev CLI - Chromium patch extraction and patch-stack health
 
 Extracts commits or files from a Chromium checkout into chromium_patches/,
 and reports patch-stack health (doctor). Interactive patch application,
-sync, and conflict handling live in the Go tool (tools/patch, `bpatch`).
+sync, and conflict handling live in the Rust tool (tools/bpatch, `bpatch`).
 """
 
 import json
@@ -85,8 +85,8 @@ def main(
       browseros dev doctor
       browseros dev doctor --against ~/chromium/src --json
 
-    Applying and syncing patches is handled by the Go tool: bpatch
-    (packages/browseros/tools/patch).
+    Applying and syncing patches is handled by bpatch
+    (packages/browseros/tools/bpatch).
     """
     state.chromium_src = chromium_src
     state.verbose = verbose
@@ -156,8 +156,7 @@ def doctor(
     against: Optional[Path] = Option(
         None,
         "--against",
-        help="Chromium source tree to dry-run every patch against "
-        "(git apply --check)",
+        help="Chromium source tree to dry-run every patch against (git apply --check)",
         exists=True,
         file_okay=False,
     ),
@@ -170,7 +169,7 @@ def doctor(
 ):
     """Read-only patch-stack health report.
 
-    Verifies features.yaml against the patches on disk (every entry resolves,
+    Verifies .features.yaml against the patches on disk (every entry resolves,
     every patch is claimed by a feature, claims don't overlap); with --against,
     dry-runs every patch and groups failures by feature. Read-only: nothing is
     written to the chromium tree. Exit 0 healthy / 1 findings / 2 usage or
@@ -231,7 +230,7 @@ def extract_commit(
         help="Base commit to diff from for BASE_COMMIT-relative extraction (defaults to BASE_COMMIT)",
     ),
     feature: bool = Option(
-        False, "--feature", help="Add extracted files to a feature in features.yaml"
+        False, "--feature", help="Add extracted files to a feature in .features.yaml"
     ),
 ):
     """Extract patches from a single commit"""
@@ -275,7 +274,7 @@ def extract_patch_cmd(
         False, "--force", "-f", help="Overwrite existing patch without prompting"
     ),
     feature: bool = Option(
-        False, "--feature", help="Add extracted file to a feature in features.yaml"
+        False, "--feature", help="Add extracted file to a feature in .features.yaml"
     ),
 ):
     """Extract patch for a specific file"""
@@ -334,7 +333,7 @@ def extract_range(
         help="Base commit to diff from (defaults to BASE_COMMIT)",
     ),
     feature: bool = Option(
-        False, "--feature", help="Add extracted files to a feature in features.yaml"
+        False, "--feature", help="Add extracted files to a feature in .features.yaml"
     ),
 ):
     """Extract patches from a range of commits"""

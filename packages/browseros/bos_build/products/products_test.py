@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Golden tests: define() must reproduce the original hand-written
-descriptors (copied verbatim from the pre-factory products.py) field
-for field, so the derivation conventions can't silently drift."""
+"""Golden tests for shipped product descriptors and define() conventions."""
 
 import unittest
 
@@ -19,8 +17,7 @@ BROWSEROS_AGENT_EXTENSION_ID = "bflpfmnmnokmjhmgnolecpppdbdophmk"
 BROWSEROS_BUG_REPORTER_EXTENSION_ID = "adlpneommgkgeanpaekgoaolcpncohkf"
 BROWSERCLAW_EXTENSION_ID = "pjimfkbpehlcllblajnpfamdfjhhlgkc"
 
-# Verbatim from the pre-define() products.py (commit d6ff84c0 lineage).
-ORIGINAL_BROWSEROS = ProductDescriptor(
+EXPECTED_BROWSEROS = ProductDescriptor(
     id="browseros",
     gn_product="browseros",
     display_name="BrowserOS",
@@ -39,9 +36,8 @@ ORIGINAL_BROWSEROS = ProductDescriptor(
     description="BrowserOS is a privacy-focused web browser built on Chromium.",
     string_replacements=_replacements("BrowserOS"),
     required_extension_ids=(
-        (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
         (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-        (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
+        (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
     ),
     server_bundle_ids=("browseros-server",),
     mac=MacProductIdentity(
@@ -69,28 +65,27 @@ ORIGINAL_BROWSEROS = ProductDescriptor(
     ),
 )
 
-ORIGINAL_BROWSERCLAW = ProductDescriptor(
+EXPECTED_BROWSERCLAW = ProductDescriptor(
     id="browserclaw",
     gn_product="browserclaw",
-    display_name="BrowserClaw",
-    dev_display_name="BrowserClaw Dev",
+    display_name="BrowserOS neo",
+    dev_display_name="BrowserOS neo Dev",
     company_full_name="BrowserOS",
     company_short_name="BrowserOS",
-    installer_full_name="BrowserClaw Installer",
-    dev_installer_full_name="BrowserClaw Dev Installer",
-    app_base_name="BrowserClaw",
-    artifact_prefix="BrowserClaw",
+    installer_full_name="BrowserOS neo Installer",
+    dev_installer_full_name="BrowserOS neo Dev Installer",
+    app_base_name="BrowserOS neo",
+    artifact_prefix="BrowserOS_neo",
     release_prefix="browserclaw",
     homepage_url="https://www.browseros.com/",
     support_url="https://docs.browseros.com/",
     bugtracker_url="https://github.com/browseros-ai/BrowserOS/issues",
     summary="The open source browser for web agents",
-    description="BrowserClaw is a Chromium-based browser for agent workflows.",
-    string_replacements=_replacements("BrowserClaw"),
+    description="BrowserOS neo is a Chromium-based browser for agent workflows.",
+    string_replacements=_replacements("BrowserOS neo"),
     required_extension_ids=(
+        (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
         (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-        (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-        (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
     ),
     server_bundle_ids=("browserclaw-server",),
     mac=MacProductIdentity(
@@ -98,9 +93,9 @@ ORIGINAL_BROWSERCLAW = ProductDescriptor(
         dev_bundle_id="com.browseros.dev.BrowserClaw",
         signing_identifier="com.browseros.BrowserClaw",
         dev_signing_identifier="com.browseros.dev.BrowserClaw",
-        framework_name="BrowserClaw Framework.framework",
-        dev_framework_name="BrowserClaw Dev Framework.framework",
-        dmg_volume_name="BrowserClaw",
+        framework_name="BrowserOS neo Framework.framework",
+        dev_framework_name="BrowserOS neo Dev Framework.framework",
+        dmg_volume_name="BrowserOS neo",
     ),
     linux=LinuxProductIdentity(
         package_name="browserclaw",
@@ -120,11 +115,11 @@ ORIGINAL_BROWSERCLAW = ProductDescriptor(
 
 
 class DefineGoldenTest(unittest.TestCase):
-    def test_browseros_matches_original_hand_written_descriptor(self):
-        self.assertEqual(get_product_descriptor("browseros"), ORIGINAL_BROWSEROS)
+    def test_browseros_matches_expected_descriptor(self):
+        self.assertEqual(get_product_descriptor("browseros"), EXPECTED_BROWSEROS)
 
-    def test_browserclaw_matches_original_hand_written_descriptor(self):
-        self.assertEqual(get_product_descriptor("browserclaw"), ORIGINAL_BROWSERCLAW)
+    def test_browserclaw_matches_expected_descriptor(self):
+        self.assertEqual(get_product_descriptor("browserclaw"), EXPECTED_BROWSERCLAW)
 
 
 class DefineBehaviorTest(unittest.TestCase):
@@ -148,6 +143,7 @@ class DefineBehaviorTest(unittest.TestCase):
         self.assertEqual(p.windows.app_user_model_id, "BrowserOS.AcmeFox")
         self.assertEqual(p.server_bundle_ids, ("acmefox-server",))
         self.assertEqual(p.release_prefix, "acmefox")
+        self.assertEqual(p.required_extension_ids, ())
 
     def test_override_wins_over_derivation(self):
         p = self._minimal(artifact_prefix="Acme")

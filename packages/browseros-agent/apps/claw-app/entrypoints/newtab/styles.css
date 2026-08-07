@@ -5,25 +5,27 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * BrowserClaw cockpit palette — ease-health.
- *
  * The shadcn base-vega primitives we installed all read --color-background,
- * --color-foreground, --color-primary etc. We re-point those at the
- * ease-health palette (cream #fffefc surfaces, deep-green #0f3e17 primary,
- * sage/mint tints) so shadcn Cards, Badges and Buttons sit cleanly inside
- * the cockpit. The bespoke BrowserOS tokens (bg-canvas, accent-ink, status
- * colors, etc.) live alongside as additional utility classes.
+ * --color-foreground, --color-primary etc. We re-point those at the app
+ * palette via variables so `.dark` can flip the whole system by re-declaring
+ * plain variables.
  *
- * `accent` deliberately equals `primary`: the app uses accent as the vivid
- * brand color (pulse dots, emphasis text, gradients), not as shadcn's pale
- * hover tint.
+ * Palette: Wiz (stylecn/wiz PR #16). Signal Blue #0254ec is the sole
+ * saturated color, applied to primary CTAs, links, focus rings, and
+ * accent-card borders on Sky Tint #eaf1ff surfaces; Wiz Steel #393f49
+ * is the editorial charcoal-navy for headings and body ink; Slate
+ * Border #cbd5e1 is the hairline divider.
  *
- * Every color maps through a var() so the `.dark` block can flip the whole
- * palette by re-declaring the plain variables; the concrete light values
- * live in :root and the dark values in .dark.
+ * `accent` deliberately equals `primary` in this app: the codebase
+ * uses accent as the vivid brand color (pulse dots, emphasis text,
+ * gradients), not as shadcn's pale hover tint. Where a pale
+ * hover-tint surface is needed, the code uses --secondary or the
+ * bespoke --accent-tint / --accent-tint-2. Keeping accent equal to
+ * primary preserves every existing text-accent / bg-accent site
+ * without touching component code.
  */
 @theme inline {
-  /* shadcn primitives: re-pointed to ease-health surfaces */
+  /* shadcn primitives: re-pointed through app palette variables */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -49,12 +51,9 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
 
-  /* BrowserOS bespoke surfaces. ink-deep is the shared dark-chrome
-     surface (terminal blocks, caption strips, viewport pills) so all
-     dark strips read as one ease-health green-black, not mixed blacks.
-     Unlike --ink (which flips to light for text), it stays a dark chip
-     in both themes — elevated in dark so it reads as raised, not lost
-     against the dark page. Carries hardcoded white text. */
+  /* BrowserOS bespoke surfaces. ink-deep stays a dark chip in both themes,
+     elevated in dark so it reads as raised, not lost against the page. It
+     carries hardcoded white text. */
   --color-bg-canvas: var(--bg-canvas);
   --color-bg-sunken: var(--bg-sunken);
   --color-card-tint: var(--card-tint);
@@ -68,7 +67,7 @@
   --color-ink-3: var(--ink-3);
   --color-ink-4: var(--ink-4);
 
-  /* Accent ink (high-contrast green text on tinted backgrounds) */
+  /* Accent ink (high-contrast text on tinted backgrounds) */
   --color-accent-2: var(--accent-2);
   --color-accent-ink: var(--accent-ink);
   --color-accent-tint: var(--accent-tint);
@@ -89,11 +88,13 @@
   --font-serif: "Newsreader", Georgia, serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 
-  /* Shadows from the design's --shadow-* tokens */
+  /* Shadows tinted with Wiz --ink-deep #01123f (hsl 224 97% 13%). Deep
+     navy at low opacity so cards and popovers sit against the Sky Tint
+     wash with a subtle navy lift, not a neutral gray drop-shadow. */
   --shadow-card:
-    0 1px 2px hsl(150 25% 10% / 0.04), 0 1px 3px hsl(150 25% 10% / 0.03);
+    0 1px 2px hsl(224 97% 13% / 0.05), 0 1px 3px hsl(224 97% 13% / 0.04);
   --shadow-pop:
-    0 8px 30px hsl(150 25% 10% / 0.14), 0 2px 8px hsl(150 25% 10% / 0.08);
+    0 8px 30px hsl(224 97% 13% / 0.14), 0 2px 8px hsl(224 97% 13% / 0.08);
 
   /* Animations referenced by JSX utilities (animate-pulse-dot, etc.) */
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
@@ -107,13 +108,15 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Explicit radius ramp from stylecn/wiz (PR #16). --radius-4xl is a
+     full pill so primary CTAs render as the Wiz signature pill button. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-4xl: 9999px;
 }
 
 /* Keyframes lifted from the design prototype's \3c style> block */
@@ -160,47 +163,51 @@ body,
 body {
   color: var(--color-foreground);
   font-family: var(--font-sans);
-  /* The design's body has a layered gradient on cream. We replicate
-     the same three layers (sage, blue-gray mist, sage-to-moss wash) so
-     the cockpit chrome reads as the design, not a flat white page.
-
-     background-attachment: fixed anchors the gradient to the viewport
+  /* background-attachment: fixed anchors the gradient to the viewport
      instead of the body box. Without it, the gradient is sized to body
      height (== viewport since `html, body { height: 100% }`) and scrolls
      away when content overflows; the user sees the gradient stop mid
      scroll and bare white below. With fixed, the gradient stays anchored
      to the viewport regardless of how tall the scrolled content is. */
+  /* Wash: two Sky Tint radials (matched to --muted #eaf1ff) with a
+     warm-to-cool linear beneath. Anchors the cockpit chrome as the
+     Wiz palette, not a bare white page. */
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
-      hsl(140 30% 91%) 0%,
-      hsl(140 30% 91% / 0) 60%
+      hsl(220 100% 96%) 0%,
+      hsl(220 100% 96% / 0) 60%
     ),
     radial-gradient(
       1000px 800px at 100% 110%,
-      hsl(196 30% 92%) 0%,
-      hsl(196 30% 92% / 0) 55%
+      hsl(215 100% 97%) 0%,
+      hsl(215 100% 97% / 0) 55%
     ),
-    linear-gradient(155deg, hsl(150 20% 88%) 0%, hsl(90 20% 91%) 100%);
+    linear-gradient(155deg, hsl(220 60% 98%) 0%, hsl(210 50% 98%) 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Same three layers, flipped to deep green-black for dark mode. */
+/* Dark wash: two navy radials on the deep Wiz --background #0a0f1e,
+   with a linear that runs from bg to slightly lifted card so the
+   viewport reads as a single continuous navy surface. The claw-app
+   is locked to light mode today (the theme toggle was removed) but
+   the .dark block below is kept so any downstream tool or embedding
+   scope that opts in via .dark still gets a coherent palette. */
 .dark body {
   background:
     radial-gradient(
       1200px 700px at 18% -8%,
-      hsl(140 20% 11%) 0%,
-      hsl(140 20% 11% / 0) 60%
+      hsl(224 45% 14%) 0%,
+      hsl(224 45% 14% / 0) 60%
     ),
     radial-gradient(
       1000px 800px at 100% 110%,
-      hsl(196 22% 12%) 0%,
-      hsl(196 22% 12% / 0) 55%
+      hsl(220 40% 14%) 0%,
+      hsl(220 40% 14% / 0) 55%
     ),
-    linear-gradient(155deg, hsl(150 22% 8%) 0%, hsl(140 18% 9%) 100%);
+    linear-gradient(155deg, hsl(224 51% 8%) 0%, hsl(222 42% 11%) 100%);
   background-attachment: fixed;
 }
 
@@ -234,123 +241,184 @@ body {
  ---break---
  */
 :root {
-  --background: #fffefc;
-  --foreground: #000000;
-  --card: #fffefc;
-  --card-foreground: #000000;
-  --popover: #fffefc;
-  --popover-foreground: #000000;
-  --primary: #0f3e17;
-  --primary-foreground: #fffefc;
-  --secondary: #cfe7d3;
-  --secondary-foreground: #0f3e17;
-  --muted: #e1f4df;
-  --muted-foreground: #333333;
-  --accent: #0f3e17;
-  --accent-foreground: #fffefc;
-  --destructive: #b7301b;
-  --destructive-foreground: #fffefc;
-  --border: #e5e7eb;
-  --input: #e5e7eb;
-  --ring: #0f3e17;
-  --chart-1: #0f3e17;
-  --chart-2: #2d7a3a;
-  --chart-3: #6ea8b8;
-  --chart-4: #b1dbb8;
-  --chart-5: #333333;
-  --radius: 0.45rem;
-  --sidebar: #f2f8f0;
-  --sidebar-foreground: #000000;
-  --sidebar-primary: #0f3e17;
-  --sidebar-primary-foreground: #fffefc;
-  --sidebar-accent: #cfe7d3;
-  --sidebar-accent-foreground: #0f3e17;
-  --sidebar-border: #e5e7eb;
-  --sidebar-ring: #0f3e17;
+  color-scheme: light;
 
-  --bg-canvas: #fbfdf8;
-  --bg-sunken: #ebf3ea;
-  --card-tint: #fcfefb;
-  --ink-deep: #0a1810;
-  --border-2: #dbe3dc;
-  --border-strong: #c6d1c8;
-  --ink: #000000;
-  --ink-2: #333333;
-  --ink-3: #68706a;
-  --ink-4: #99a29b;
-  --accent-2: #2d7a3a;
-  --accent-ink: #0f3e17;
-  --accent-tint: #e1f4df;
-  --accent-tint-2: #cfe7d3;
-  --green: #2d7a3a;
-  --green-tint: #d9edda;
-  --amber: hsl(35 80% 40%);
-  --amber-tint: hsl(40 75% 92%);
-  --red: #b7301b;
+  /* Shadcn tokens from stylecn/wiz (PR #16). One electric Signal Blue
+     CTA on warm white, Wiz Steel foreground, Sky Tint secondary/muted/
+     accent surface, Slate Border hairlines. */
+  --background: #ffffff;
+  --foreground: #393f49;
+  --card: #ffffff;
+  --card-foreground: #393f49;
+  --popover: #ffffff;
+  --popover-foreground: #393f49;
+  --primary: #0254ec;
+  --primary-foreground: #ffffff;
+  --secondary: #eaf1ff;
+  --secondary-foreground: #0254ec;
+  --muted: #eaf1ff;
+  --muted-foreground: #717783;
+  --accent: #0254ec;
+  --accent-foreground: #ffffff;
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+  --border: #cbd5e1;
+  --input: #cbd5e1;
+  --ring: #0254ec;
+  --chart-1: #0254ec;
+  --chart-2: #0042ca;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #717783;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #393f49;
+  --sidebar-primary: #0254ec;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eaf1ff;
+  --sidebar-accent-foreground: #0254ec;
+  --sidebar-border: #cbd5e1;
+  --sidebar-ring: #0254ec;
+
+  /* Radius ramp explicit values from PR #16. --radius-4xl is a full pill
+     for buttons, which is the Wiz signature CTA shape. */
+  --radius: 0.75rem;
+
+  /* BrowserOS bespoke tokens re-derived against the Wiz palette. Wiz
+     Steel (#393f49) becomes the ink scale anchor; Signal Blue and
+     Sapphire Deep drive the accent ink; Sky Tint is the accent tint;
+     Slate Border stays the divider. ink-deep keeps the deep navy so
+     dark-strip surfaces (terminal blocks, viewport pills) still read
+     as one unified elevated chip in both themes. */
+  --bg-canvas: #f9fbff;
+  --bg-sunken: #dae5ff;
+  --card-tint: #f5f8ff;
+  --ink-deep: #01123f;
+  --border-2: #dae5ff;
+  /* --border-strong is a real step deeper than --border so it has
+     visual weight when used on elevated panels, focused inputs, or
+     section separators. Was #cbd5e1 (identical to --border) after
+     the wiz palette adoption; restored the two-step border chain. */
+  --border-strong: #94a3b8;
+
+  /* Elevated Sky Tint step so alternate rows, section rails, hover
+     states, and bg-sunken can differentiate from the base --muted
+     value. Without this, five semantic layers collapse into one
+     Sky Tint plateau. */
+  --sky-tint-2: #dae5ff;
+
+  /* Consistent surround for embedded media (thumbnails of real
+     websites, replay viewport). Transparent in light so nothing
+     changes; dark mode paints a scrim behind media so bright
+     embedded content does not dominate. */
+  --media-scrim: transparent;
+  --ink: #393f49;
+  --ink-2: #575d69;
+  --ink-3: #717783;
+  --ink-4: #9aa1ae;
+  --accent-2: #0042ca;
+  --accent-ink: #0143c4;
+  --accent-tint: #eaf1ff;
+  --accent-tint-2: #d3e2ff;
+  --green: #16a34a;
+  --green-tint: #e6f6ec;
+  --amber: hsl(35 85% 42%);
+  --amber-tint: hsl(42 90% 94%);
+  --red: #e11d48;
   --red-tint: hsl(4 65% 95%);
-  --blue: #3e7285;
+  --blue: #0e7490;
 }
-/*
- ---break---
- */
-
-/* Dark counterpart on the ease-health green axes: deep green-black
-   surfaces, the brand green kept vivid so `text-accent`, pulse dots and
-   dropdown highlights stay legible on dark. Tints flip from "mint wash
-   on cream" to "deep green on green-black"; the ink scale inverts. */
+/* Dark theme values. The app is locked to light mode today (the theme
+   toggle was removed) but the shadcn token surface expects a coherent
+   .dark {} to exist so any downstream tool, storybook, or embedding
+   scope that opts in via `.dark` still renders correctly. Not currently
+   applied at runtime; kept as canonical palette reference. */
 .dark {
-  --background: #0a1810;
-  --foreground: #fffefc;
-  --card: #142919;
-  --card-foreground: #fffefc;
-  --popover: #142919;
-  --popover-foreground: #fffefc;
-  --primary: #2d7a3a;
-  --primary-foreground: #fffefc;
-  --secondary: #1f3a26;
-  --secondary-foreground: #fffefc;
-  --muted: #1f3a26;
-  --muted-foreground: #a8c4ab;
-  --accent: #4a9c56;
-  --accent-foreground: #0a1810;
-  --destructive: #e34432;
-  --destructive-foreground: #fffefc;
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.12);
-  --ring: #2d7a3a;
-  --chart-1: #4a9c56;
-  --chart-2: #b1dbb8;
-  --chart-3: #b6ced5;
-  --chart-4: #cfe7d3;
-  --chart-5: #d4d4d4;
-  --sidebar: #142919;
-  --sidebar-foreground: #fffefc;
-  --sidebar-primary: #2d7a3a;
-  --sidebar-primary-foreground: #fffefc;
-  --sidebar-accent: rgba(255, 255, 255, 0.06);
-  --sidebar-accent-foreground: #fffefc;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #2d7a3a;
+  color-scheme: dark;
+  --background: #0a0f1e;
+  --foreground: #f8f8fa;
+  /* Card lifted from #151c30 -> #1a2337 so card boundaries are
+     perceptible against --background #0a0f1e. Was too flat before. */
+  --card: #1a2337;
+  --card-foreground: #f8f8fa;
+  --popover: #1a2337;
+  --popover-foreground: #f8f8fa;
+  --primary: #2f7cff;
+  --primary-foreground: #0a0f1e;
+  --secondary: #1e2842;
+  --secondary-foreground: #f8f8fa;
+  --muted: #1e2842;
+  /* Muted-foreground warmed and brightened from #a4acbd -> #c1c8d8
+     so section headers ('TUESDAY 07 JULY' etc.) anchor visually
+     against the cool #0a0f1e body. Same WCAG tier, stronger
+     perceptual signal. */
+  --muted-foreground: #c1c8d8;
+  --accent: #2f7cff;
+  --accent-foreground: #0a0f1e;
+  --destructive: #ff5a75;
+  --destructive-foreground: #ffffff;
+  /* Border and input lifted from 0.10 / 0.15 -> 0.14 / 0.18 so
+     hairlines are actually visible on dark surfaces. */
+  --border: rgba(255, 255, 255, 0.14);
+  --input: rgba(255, 255, 255, 0.18);
+  --ring: #2f7cff;
+  --chart-1: #2f7cff;
+  --chart-2: #7ea6ff;
+  --chart-3: #f5b957;
+  --chart-4: #f7cad5;
+  --chart-5: #a4acbd;
+  /* Sidebar dropped below --card so the rail reads as a step down
+     from the body, mirroring the light mode 'no tint on rail'
+     pattern. Was identical to --card at #151c30, indistinguishable. */
+  --sidebar: #101728;
+  --sidebar-foreground: #f8f8fa;
+  --sidebar-primary: #2f7cff;
+  --sidebar-primary-foreground: #0a0f1e;
+  /* Active tab / sidebar-accent lifted from 0.06 -> 0.10 so the
+     highlight registers. */
+  --sidebar-accent: rgba(255, 255, 255, 0.1);
+  --sidebar-accent-foreground: #f8f8fa;
+  --sidebar-border: rgba(255, 255, 255, 0.14);
+  --sidebar-ring: #2f7cff;
 
-  --bg-canvas: #07120c;
-  --bg-sunken: #0f2015;
-  --card-tint: #17301e;
-  --ink-deep: #1a3020;
-  --border-2: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --ink: #fffefc;
-  --ink-2: #cdddce;
-  --ink-3: #9fb5a3;
-  --ink-4: #748a78;
-  --accent-2: #5fb06c;
-  --accent-ink: #8fce9b;
-  --accent-tint: #1f3a26;
-  --accent-tint-2: #24462e;
-  --green: #4a9c56;
-  --green-tint: #16281b;
-  --amber: hsl(38 80% 58%);
-  --amber-tint: hsl(40 40% 14%);
-  --red: #e34432;
-  --red-tint: #2c1512;
-  --blue: #6ea8b8;
+  /* BrowserOS bespoke tokens re-derived against the Wiz dark palette.
+     Card + muted + accent share the same lifted #1e2842 tint so the
+     tint chain reads as one warm-navy block; ink-deep stays a deeper
+     elevated chip below the card lift. Ink scale anchored on the new
+     #f8f8fa foreground. */
+  --bg-canvas: #080d1a;
+  --bg-sunken: #050912;
+  --card-tint: #1e2842;
+  /* --ink-deep recovers its 'recessed dark chrome' semantic in dark
+     mode. Was #1e2842 identical to --muted / --secondary / --accent-
+     tint; now dropped to #050912 (deeper than --background #0a0f1e)
+     so terminal blocks, viewport pills, and dark chrome surfaces
+     read as pressed into the page, matching the light-mode metaphor
+     where they sit as Navy Deep chips on Sky Tint. */
+  --ink-deep: #050912;
+  --border-2: #212c40;
+  --border-strong: #334159;
+
+  /* Elevated Sky Tint step parallel to light --sky-tint-2. Sits
+     between --card and --muted so semantic layers can differentiate. */
+  --sky-tint-2: #1a2337;
+
+  /* Semi-transparent scrim for embedded media (thumbnails of real
+     websites, replay viewport) so bright light-mode content does
+     not dominate the dark UI. */
+  --media-scrim: rgba(0, 0, 0, 0.5);
+  --ink: #f8f8fa;
+  --ink-2: #d5dded;
+  --ink-3: #a4acbd;
+  --ink-4: #767e91;
+  --accent-2: #7ea6ff;
+  --accent-ink: #8fb4ff;
+  --accent-tint: #1e2842;
+  --accent-tint-2: #253355;
+  --green: #34c26b;
+  --green-tint: #10281a;
+  --amber: hsl(38 85% 58%);
+  --amber-tint: hsl(38 45% 15%);
+  --red: #ff5a75;
+  --red-tint: #2b1414;
+  --blue: #56b8d8;
 }

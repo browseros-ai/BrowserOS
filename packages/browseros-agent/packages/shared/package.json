@@ -6,6 +6,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "jsonc-parser": "^3.3.1",
     "zod": "^3.25.76"
   },
   "exports": {
@@ -33,9 +34,17 @@
       "types": "./src/constants/paths.ts",
       "default": "./src/constants/paths.ts"
     },
-    "./constants/hermes": {
-      "types": "./src/constants/hermes.ts",
-      "default": "./src/constants/hermes.ts"
+    "./env/registry": {
+      "types": "./src/env/registry.ts",
+      "default": "./src/env/registry.ts"
+    },
+    "./env/load": {
+      "types": "./src/env/load.ts",
+      "default": "./src/env/load.ts"
+    },
+    "./env/generate": {
+      "types": "./src/env/generate.ts",
+      "default": "./src/env/generate.ts"
     },
     "./types/logger": {
       "types": "./src/types/logger.ts",
@@ -49,6 +58,10 @@
       "types": "./src/schemas/llm.ts",
       "default": "./src/schemas/llm.ts"
     },
+    "./schemas/agent": {
+      "types": "./src/schemas/agent.ts",
+      "default": "./src/schemas/agent.ts"
+    },
     "./schemas/ui-stream": {
       "types": "./src/schemas/ui-stream.ts",
       "default": "./src/schemas/ui-stream.ts"
@@ -56,6 +69,10 @@
     "./schemas/browser-context": {
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
+    },
+    "./mcp/claude-code-transport-tag": {
+      "types": "./src/mcp/claude-code-transport-tag.ts",
+      "default": "./src/mcp/claude-code-transport-tag.ts"
     },
     "./schemas/sidecar-config": {
       "types": "./src/schemas/sidecar-config.ts",

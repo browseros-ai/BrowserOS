@@ -126,20 +126,9 @@ const providers: LlmProviderConfig[] = [
     updatedAt: timestamp,
   },
   {
-    id: 'codex-provider',
-    type: 'codex',
-    name: 'Codex',
-    modelId: 'gpt-5.3-codex',
-    supportsImages: false,
-    contextWindow: 400000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'claude-code-provider',
-    type: 'claude-code',
-    name: 'Claude Code',
+    id: 'anthropic-provider',
+    type: 'anthropic',
+    name: 'Anthropic',
     modelId: 'claude-sonnet-4-6',
     supportsImages: false,
     contextWindow: 200000,
@@ -163,33 +152,19 @@ beforeEach(() => {
 })
 
 describe('resolveSelectedProvider', () => {
-  it('selects a Codex provider config by the persisted default id', () => {
-    expect(resolveSelectedProvider(providers, 'codex-provider')).toEqual(
+  it('selects a configured provider by the persisted default id', () => {
+    expect(resolveSelectedProvider(providers, 'anthropic-provider')).toEqual(
       providers[1],
-    )
-  })
-
-  it('selects a Claude Code provider config by the persisted default id', () => {
-    expect(resolveSelectedProvider(providers, 'claude-code-provider')).toEqual(
-      providers[2],
     )
   })
 })
 
 describe('persistDefaultProviderId', () => {
-  it('writes a Codex provider id to default-provider storage', async () => {
-    await persistDefaultProviderId('codex-provider')
+  it('writes a provider id to default-provider storage', async () => {
+    await persistDefaultProviderId('anthropic-provider')
 
     expect(storageValues.get('local:default-provider-id')).toBe(
-      'codex-provider',
-    )
-  })
-
-  it('writes a Claude Code provider id to default-provider storage', async () => {
-    await persistDefaultProviderId('claude-code-provider')
-
-    expect(storageValues.get('local:default-provider-id')).toBe(
-      'claude-code-provider',
+      'anthropic-provider',
     )
   })
 })
@@ -273,15 +248,9 @@ describe('upsertProviderConfig', () => {
 })
 
 describe('resolveDefaultProviderId', () => {
-  it('keeps a Codex provider id when it exists', () => {
-    expect(resolveDefaultProviderId(providers, 'codex-provider')).toBe(
-      'codex-provider',
-    )
-  })
-
-  it('keeps a Claude Code provider id when it exists', () => {
-    expect(resolveDefaultProviderId(providers, 'claude-code-provider')).toBe(
-      'claude-code-provider',
+  it('keeps a provider id when it exists', () => {
+    expect(resolveDefaultProviderId(providers, 'anthropic-provider')).toBe(
+      'anthropic-provider',
     )
   })
 

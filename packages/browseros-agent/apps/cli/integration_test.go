@@ -28,7 +28,7 @@ func TestMain(m *testing.M) {
 	}
 
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(serverURL + "/health")
+	resp, err := client.Get(serverURL + "/system/health")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Skipping integration tests: server not reachable at %s\n", serverURL)
 		os.Exit(0)

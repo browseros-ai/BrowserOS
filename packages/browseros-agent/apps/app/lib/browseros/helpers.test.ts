@@ -81,7 +81,7 @@ describe('BrowserOS helper URLs', () => {
     const { getHealthCheckUrl } = await import('./helpers')
 
     await expect(getHealthCheckUrl()).resolves.toBe(
-      'http://127.0.0.1:9106/health',
+      'http://127.0.0.1:9106/system/health',
     )
   })
 })

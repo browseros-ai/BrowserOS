@@ -1,0 +1,253 @@
+name: "Release: Windows Browser"
+
+on:
+  workflow_dispatch:
+    inputs:
+      products:
+        description: "Product set to build"
+        type: choice
+        default: browseros
+        options:
+          - browseros
+          - browserclaw
+          - all
+      upload_to_r2:
+        description: "Upload release metadata/artifacts to R2"
+        type: boolean
+        default: true
+      sign:
+        description: "Sign Windows binaries and update artifacts"
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      products:
+        description: "Product set to build: browseros, browserclaw, or all"
+        required: false
+        type: string
+        default: browseros
+      upload_to_r2:
+        description: "Upload release metadata/artifacts to R2"
+        required: false
+        type: boolean
+        default: true
+      sign:
+        description: "Sign Windows binaries and update artifacts"
+        required: false
+        type: boolean
+        default: true
+      resource_mode:
+        description: "Resource provider: published or source"
+        required: false
+        type: string
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
+        required: false
+        type: string
+        default: ""
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Published-mode checkout ref"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
+      ESIGNER_USERNAME:
+        required: false
+      ESIGNER_PASSWORD:
+        required: false
+      ESIGNER_TOTP_SECRET:
+        required: false
+      ESIGNER_CREDENTIAL_ID:
+        required: false
+      SPARKLE_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Resolve product matrix
+        id: plan
+        env:
+          PRODUCTS: ${{ inputs.products || 'browseros' }}
+          RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
+            echo "::error::source mode builds one candidate product per lane"
+            exit 1
+          fi
+          case "$PRODUCTS" in
+            all)
+              matrix='[{"product":"browseros"},{"product":"browserclaw"}]'
+              ;;
+            browseros|browserclaw)
+              matrix="$(jq -cn --arg product "$PRODUCTS" '[{product:$product}]')"
+              ;;
+            *)
+              echo "::error::products must be one of: browseros, browserclaw, all"
+              exit 1
+              ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check signing secrets
+        env:
+          SIGN: ${{ inputs.sign }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGN" != "true" ]; then
+            echo "Windows signing disabled; skipping signing secret preflight."
+            exit 0
+          fi
+
+          missing=()
+          [ -n "${ESIGNER_USERNAME:-}" ] || missing+=(ESIGNER_USERNAME)
+          [ -n "${ESIGNER_PASSWORD:-}" ] || missing+=(ESIGNER_PASSWORD)
+          [ -n "${ESIGNER_TOTP_SECRET:-}" ] || missing+=(ESIGNER_TOTP_SECRET)
+          [ -n "${SPARKLE_PRIVATE_KEY:-}" ] || missing+=(SPARKLE_PRIVATE_KEY)
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Windows signing requested, but missing required secrets: %s\n' "${missing[*]}"
+            echo "::error::Add the missing repository secrets or rerun this workflow with sign=false for an unsigned mini_installer build. ESIGNER_CREDENTIAL_ID is optional."
+            exit 1
+          fi
+
+  # WarpBuild provisions runners on demand via webhook; when none arrive
+  # (org runner-group policy, bad label, account issue) the build jobs sit
+  # queued until GitHub discards them 24h later, holding the release-windows
+  # concurrency group all day. Fail fast instead - see the troubleshooting
+  # section of packages/browseros/bos_build/docs/warpbuild-ci.md.
+  queue-watchdog:
+    needs: [plan, preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: Fail fast when no runner picks up the builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONCURRENCY_GROUP: release-windows
+          RUNNER_LABEL: warp-custom-browseros-windows-2025-x64-32x
+          JOB_FILTER: >-
+            [.jobs[]
+            | select(any(.labels[]?; . == $runner_label))
+            | {name, status}]
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 20 * 60 ))
+          failures=0
+          while :; do
+            if response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100")" \
+              && jobs="$(jq -c --arg runner_label "$RUNNER_LABEL" "$JOB_FILTER" <<<"$response")"; then
+              failures=0
+            else
+              failures=$(( failures + 1 ))
+              if [ "$failures" -ge 3 ]; then
+                echo "::error::queue-watchdog could not list this run's jobs (3 consecutive failures); builds are unwatched this run."
+                exit 1
+              fi
+              sleep 120
+              continue
+            fi
+            total="$(jq 'length' <<<"$jobs")"
+            queued="$(jq '[.[] | select(.status == "queued")] | length' <<<"$jobs")"
+            in_progress="$(jq '[.[] | select(.status == "in_progress")] | length' <<<"$jobs")"
+            if [ "$total" -gt 0 ] && [ "$queued" -eq 0 ]; then
+              echo "All $total build jobs picked up by runners."
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              doc="packages/browseros/bos_build/docs/warpbuild-ci.md"
+              if [ "$total" -eq 0 ]; then
+                echo "::error::queue-watchdog matched no build jobs - did the lane's runner label change? Fix the filter; not cancelling."
+                exit 1
+              fi
+              stuck="$(jq -r '[.[] | select(.status == "queued") | .name] | join(", ")' <<<"$jobs")"
+              # Cancel only when nothing is live: a queued job is then the
+              # only thing keeping the run (and concurrency group) pinned.
+              if [ "$queued" -gt 0 ] && [ "$in_progress" -eq 0 ]; then
+                echo "::error::No build job is running and these never left the queue: $stuck. Check the runner-group public-repo setting, runner labels, and the WarpBuild dashboard - see $doc. Cancelling the run to free the $CONCURRENCY_GROUP concurrency group."
+                gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+              else
+                echo "::error::Still queued after 20 min: $stuck. In-progress builds keep running - see $doc."
+              fi
+              exit 1
+            fi
+            sleep 120
+          done
+
+  build:
+    needs: [plan, preflight]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: build (${{ matrix.product }} windows-x64)
+    uses: ./.github/workflows/build-browseros.yml
+    with:
+      platform: windows
+      arch: x64
+      product: ${{ matrix.product }}
+      runner: warp-custom-browseros-windows-2025-x64-32x
+      timeout-minutes: 780
+      profile: release-ci
+      sign: ${{ inputs.sign }}
+      upload: ${{ inputs.upload_to_r2 }}
+      resource-mode: ${{ inputs.resource_mode || 'published' }}
+      candidate-sha: ${{ inputs.candidate_sha || '' }}
+      prepared-resources-artifact: ${{ inputs.prepared_resources_artifact || '' }}
+      ref: ${{ inputs.ref || '' }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+      ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+      ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}

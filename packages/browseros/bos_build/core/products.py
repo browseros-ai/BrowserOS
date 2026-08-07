@@ -17,13 +17,6 @@ BROWSERCLAW_EXTENSION_ID = "pjimfkbpehlcllblajnpfamdfjhhlgkc"
 # Packaged to the CDN but neither bundled nor in the update feeds.
 BROWSEROS_CONTROLLER_EXTENSION_ID = "nlnihljpboknmfagkikhkdblbedophja"
 
-# TODO: nikhil - remove packaging all extensions after chromium fix
-DEFAULT_REQUIRED_EXTENSIONS: Tuple[Tuple[str, str], ...] = (
-    (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-    (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-    (BROWSERCLAW_EXTENSION_ID, "BrowserClaw app"),
-)
-
 
 @dataclass(frozen=True)
 class MacProductIdentity:
@@ -139,7 +132,7 @@ class ProductDescriptor:
         homepage_url: str = "https://www.browseros.com/",
         support_url: str = "https://docs.browseros.com/",
         bugtracker_url: str = "https://github.com/browseros-ai/BrowserOS/issues",
-        required_extensions: Tuple[Tuple[str, str], ...] = DEFAULT_REQUIRED_EXTENSIONS,
+        required_extensions: Tuple[Tuple[str, str], ...] = (),
         **overrides,
     ) -> "ProductDescriptor":
         """Build a descriptor from irreducible inputs; derive the rest.

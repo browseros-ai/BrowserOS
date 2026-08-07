@@ -104,6 +104,7 @@ export const ChatError: FC<ChatErrorProps> = ({
     if (isConnectionError) return 'Connection failed'
     return 'Something went wrong'
   }
+  const canRetry = !!onRetry && !isRateLimit
 
   return (
     <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
@@ -153,7 +154,7 @@ export const ChatError: FC<ChatErrorProps> = ({
           </a>
         </p>
       )}
-      {onRetry && (
+      {canRetry && (
         <Button
           variant="outline"
           size="sm"

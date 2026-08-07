@@ -48,11 +48,17 @@ SERVER_RESOURCES_JUNK_FILES = {".DS_Store"}
 
 
 def verify_server_resources_bundle(
-    app_path: Path, chromium_src: Path, product_id: Optional[str] = None
+    app_path: Path,
+    chromium_src: Path,
+    product_id: Optional[str] = None,
 ) -> List[str]:
     """Check bundled server resources match what the build staged."""
     problems: List[str] = []
-    bundles = server_bundles_for_product(product_id) if product_id else all_server_bundles()
+    bundles = (
+        server_bundles_for_product(product_id)
+        if product_id
+        else all_server_bundles()
+    )
     for bundle in bundles:
         problems.extend(_verify_server_resource_bundle(bundle, app_path, chromium_src))
     return problems
@@ -155,7 +161,6 @@ def unlock_keychain(env: Optional[EnvConfig] = None) -> None:
     "sign_macos",
     phase="sign",
     platforms=("macos",),
-    notify=True,
     env=(
         "MACOS_CERTIFICATE_NAME",
         "PROD_MACOS_NOTARIZATION_APPLE_ID",
@@ -223,7 +228,9 @@ class MacOSSignModule(Step):
 
     def _verify_server_resources(self, app_path: Path, ctx: Context) -> None:
         problems = verify_server_resources_bundle(
-            app_path, ctx.chromium_src, ctx.product.id
+            app_path,
+            ctx.chromium_src,
+            ctx.product.id,
         )
         if problems:
             raise RuntimeError(
@@ -336,8 +343,8 @@ def find_components_to_sign(
         framework_names = [
             "BrowserOS Framework.framework",
             "BrowserOS Dev Framework.framework",
-            "BrowserClaw Framework.framework",
-            "BrowserClaw Dev Framework.framework",
+            "BrowserOS neo Framework.framework",
+            "BrowserOS neo Dev Framework.framework",
         ]
     nxtscape_framework_paths = []
 
@@ -402,7 +409,11 @@ def find_components_to_sign(
         if nested_app not in components["helpers"]:
             components["apps"].append(nested_app)
 
-    bundles = server_bundles_for_product(ctx.product.id) if ctx else all_server_bundles()
+    bundles = (
+        server_bundles_for_product(ctx.product.id)
+        if ctx
+        else all_server_bundles()
+    )
     for bundle in bundles:
         bundle_root = app_path / bundle.macos_bundle_resources_root
         if not bundle_root.exists():

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_switches.h b/chrome/browser/browseros/core/browseros_switches.h
 new file mode 100644
-index 0000000000000..3fa2177e4df87
+index 0000000000000..98317c9cd677f
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_switches.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,32 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -33,8 +33,6 @@ index 0000000000000..3fa2177e4df87
 +inline constexpr char kSparkleVerbose[] = "sparkle-verbose";
 +inline constexpr char kBrowserOSProduct[] = "browseros-product";
 +inline constexpr char kDockIcon[] = "browseros-dock-icon";
-+inline constexpr char kFirstRun[] = "browseros-welcome";
-+
 +}  // namespace browseros
 +
 +#endif  // CHROME_BROWSER_BROWSEROS_CORE_BROWSEROS_SWITCHES_H_

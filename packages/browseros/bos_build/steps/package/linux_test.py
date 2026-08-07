@@ -12,7 +12,9 @@ from bos_build.core.context import Context
 from bos_build.core.products import get_product_descriptor
 from bos_build.steps.package.linux import (
     LINUX_HOST_APPIMAGETOOL,
+    appimage_icon_source,
     copy_browser_files,
+    copy_icon,
     create_apparmor_profile,
     create_desktop_file,
     create_launcher_script,
@@ -71,6 +73,75 @@ class HostAppImageToolTest(unittest.TestCase):
 
 
 class CopyBrowserFilesTest(unittest.TestCase):
+    def test_copies_required_extensions_beside_browser_for_both_products(
+        self,
+    ) -> None:
+        for product_id in ("browseros", "browserclaw"):
+            with self.subTest(product_id=product_id), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                out_dir = root / "out" / "Release"
+                target_dir = root / "package"
+                extensions_dir = out_dir / "browseros_extensions"
+                extensions_dir.mkdir(parents=True)
+                (out_dir / product_id).write_text("browser")
+                (extensions_dir / "bundled_extensions.json").write_text("{}")
+                (extensions_dir / f"{product_id}.crx").write_text(product_id)
+                resources_dir = out_dir / "resources"
+                resources_dir.mkdir()
+                (resources_dir / "not-packaged.txt").write_text("chromium")
+
+                ctx = cast(
+                    Context,
+                    SimpleNamespace(
+                        chromium_src=root,
+                        out_dir=Path("out") / "Release",
+                        BROWSEROS_APP_NAME=product_id,
+                        product=get_product_descriptor(product_id),
+                    ),
+                )
+
+                with patch("bos_build.steps.package.linux.log_warning"):
+                    self.assertTrue(copy_browser_files(ctx, target_dir))
+
+                self.assertEqual((target_dir / product_id).read_text(), "browser")
+                self.assertEqual(
+                    (
+                        target_dir
+                        / "browseros_extensions"
+                        / f"{product_id}.crx"
+                    ).read_text(),
+                    product_id,
+                )
+                self.assertFalse((target_dir / "resources").exists())
+
+    def test_missing_required_extensions_raises_precise_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out" / "Release"
+            target_dir = root / "package"
+            out_dir.mkdir(parents=True)
+            (out_dir / "browseros").write_text("browser")
+            expected_dir = out_dir / "browseros_extensions"
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    chromium_src=root,
+                    out_dir=Path("out") / "Release",
+                    BROWSEROS_APP_NAME="browseros",
+                    product=get_product_descriptor("browseros"),
+                ),
+            )
+
+            with self.assertRaises(FileNotFoundError) as raised:
+                copy_browser_files(ctx, target_dir)
+
+            self.assertEqual(
+                str(raised.exception),
+                f"Required bundled extensions directory not found at {expected_dir}; "
+                f"expected browseros_extensions in Chromium output directory {out_dir}",
+            )
+            self.assertFalse(target_dir.exists())
+
     def test_copies_browseros_and_claw_server_roots_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -78,6 +149,9 @@ class CopyBrowserFilesTest(unittest.TestCase):
             target_dir = root / "package"
             out_dir.mkdir(parents=True)
             (out_dir / "browseros").write_text("browser")
+            extensions_dir = out_dir / "browseros_extensions"
+            extensions_dir.mkdir()
+            (extensions_dir / "bundled_extensions.json").write_text("{}")
 
             for bundle_name in ("BrowserOSServer", "BrowserClawServer"):
                 resources = out_dir / bundle_name / "default" / "resources"
@@ -105,6 +179,15 @@ class CopyBrowserFilesTest(unittest.TestCase):
                     / "marker.txt"
                 ).exists()
             )
+            self.assertTrue(
+                (
+                    target_dir
+                    / "BrowserClawServer"
+                    / "default"
+                    / "resources"
+                    / "marker.txt"
+                ).exists()
+            )
 
     def test_product_context_copies_only_owned_server_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,6 +196,9 @@ class CopyBrowserFilesTest(unittest.TestCase):
             target_dir = root / "package"
             out_dir.mkdir(parents=True)
             (out_dir / "browserclaw").write_text("browser")
+            extensions_dir = out_dir / "browseros_extensions"
+            extensions_dir.mkdir()
+            (extensions_dir / "bundled_extensions.json").write_text("{}")
 
             for bundle_name in ("BrowserOSServer", "BrowserClawServer"):
                 resources = out_dir / bundle_name / "default" / "resources"
@@ -145,30 +231,79 @@ class CopyBrowserFilesTest(unittest.TestCase):
 
 
 class LinuxProductMetadataTest(unittest.TestCase):
-    def test_browserclaw_helpers_use_product_package_names(self) -> None:
+    def test_helpers_use_product_package_names(self) -> None:
+        for product_id in ("browseros", "browserclaw"):
+            with self.subTest(product_id=product_id), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                product = get_product_descriptor(product_id)
+                ctx = cast(
+                    Context,
+                    SimpleNamespace(
+                        product=product,
+                        BROWSEROS_APP_NAME=product_id,
+                        get_browseros_chromium_version=lambda: "137.0.7231.69",
+                    ),
+                )
+
+                desktop = create_desktop_file(
+                    ctx, root / "applications", f"/usr/bin/{product_id}"
+                )
+                create_launcher_script(ctx, root / "bin")
+                create_apparmor_profile(ctx, root / "apparmor")
+                create_metainfo_file(ctx, root / "metainfo")
+
+                desktop_content = desktop.read_text()
+                self.assertEqual(desktop.name, f"{product_id}.desktop")
+                self.assertIn(f"Name={product.display_name}", desktop_content)
+                self.assertIn(f"Icon={product_id}", desktop_content)
+                self.assertTrue((root / "bin" / product_id).exists())
+                self.assertTrue((root / "apparmor" / product_id).exists())
+                self.assertTrue(
+                    (root / "metainfo" / f"{product_id}.metainfo.xml").exists()
+                )
+
+    def test_browserclaw_icons_copy_from_product_resource_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            icon_src = root / "resources" / "browserclaw" / "icons"
+            icon_src.mkdir(parents=True)
+            (icon_src / "product_logo_16.png").write_text("browserclaw-16")
+            browseros_icons = root / "resources" / "browseros" / "icons"
+            browseros_icons.mkdir(parents=True)
+            (browseros_icons / "product_logo_16.png").write_text("browseros-16")
             ctx = cast(
                 Context,
                 SimpleNamespace(
+                    root_dir=root,
                     product=get_product_descriptor("browserclaw"),
-                    BROWSEROS_APP_NAME="browserclaw",
-                    get_browseros_chromium_version=lambda: "137.0.7231.69",
                 ),
             )
 
-            desktop = create_desktop_file(
-                ctx, root / "applications", "/usr/bin/browserclaw"
-            )
-            create_launcher_script(ctx, root / "bin")
-            create_apparmor_profile(ctx, root / "apparmor")
-            create_metainfo_file(ctx, root / "metainfo")
+            self.assertTrue(copy_icon(ctx, root / "hicolor"))
 
-            self.assertEqual(desktop.name, "browserclaw.desktop")
-            self.assertIn("Name=BrowserClaw", desktop.read_text())
-            self.assertTrue((root / "bin" / "browserclaw").exists())
-            self.assertTrue((root / "apparmor" / "browserclaw").exists())
-            self.assertTrue((root / "metainfo" / "browserclaw.metainfo.xml").exists())
+            dest = root / "hicolor" / "16x16" / "apps" / "browserclaw.png"
+            self.assertEqual(dest.read_text(), "browserclaw-16")
+
+    def test_appimage_icon_source_uses_active_product_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            icon_dir = root / "resources" / "browserclaw" / "icons"
+            icon_dir.mkdir(parents=True)
+            fallback = icon_dir / "product_logo.png"
+            fallback.write_text("fallback")
+            ctx = cast(
+                Context,
+                SimpleNamespace(
+                    root_dir=root,
+                    product=get_product_descriptor("browserclaw"),
+                ),
+            )
+
+            self.assertEqual(appimage_icon_source(ctx), fallback)
+
+            preferred = icon_dir / "product_logo_256.png"
+            preferred.write_text("preferred")
+            self.assertEqual(appimage_icon_source(ctx), preferred)
 
 
 if __name__ == "__main__":

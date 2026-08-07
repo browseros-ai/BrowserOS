@@ -38,7 +38,7 @@ func (c *Client) connect(ctx context.Context) (*sdkmcp.ClientSession, error) {
 	}, nil)
 
 	transport := &sdkmcp.StreamableClientTransport{
-		Endpoint:             c.BaseURL + "/mcp",
+		Endpoint:             c.BaseURL + "/mcp?structured=1",
 		HTTPClient:           c.HTTPClient,
 		DisableStandaloneSSE: true,
 	}
@@ -139,9 +139,9 @@ func convertResult(r *sdkmcp.CallToolResult) *ToolResult {
 
 // Health checks BrowserOS-compatible REST health endpoints.
 func (c *Client) Health() (map[string]any, error) {
-	data, err := c.restGET("/health")
+	data, err := c.restGET("/system/health")
 	if isHTTPStatus(err, http.StatusNotFound) {
-		return c.restGET("/system/health")
+		return c.restGET("/health")
 	}
 	return data, err
 }

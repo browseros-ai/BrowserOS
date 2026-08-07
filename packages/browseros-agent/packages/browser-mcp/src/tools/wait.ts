@@ -36,7 +36,7 @@ export const wait = defineTool({
       .optional()
       .describe('Max wait in ms before giving up (default 2000).'),
   }),
-  annotations: { readOnlyHint: true },
+  annotations: { title: 'Wait', readOnlyHint: true },
   handler: async (args, ctx) => {
     const timeout = clampTimeout(
       args.timeout,

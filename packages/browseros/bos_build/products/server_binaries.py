@@ -9,7 +9,7 @@ cycle (product files import these types).
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -35,23 +35,42 @@ class ServerBundle:
     windows_bundle_resources_root: Path
     macos_binaries: Dict[str, SignSpec]
     windows_binaries: Tuple[str, ...]
+    source_builder: Literal["bun", "cargo"]
+    source_component: str
+    runtime_binary_name: str
     required_in_chromium_output: bool = True
+    unsigned_artifact_prefix: str = "artifacts/server"
+    unsigned_artifact_base_name: Optional[str] = None
+
+    def unsigned_artifact_key(
+        self,
+        target: str,
+        *,
+        version: Optional[str] = None,
+    ) -> str:
+        """R2 source key of the unsigned resource zip consumed by OTA."""
+        base_name = self.unsigned_artifact_base_name or f"{self.id}-resources"
+        source = version or "latest"
+        return f"{self.unsigned_artifact_prefix}/{source}/{base_name}-{target}.zip"
 
 
 def all_server_bundles() -> Tuple[ServerBundle, ...]:
-    """Every product's server bundles, in product registry order."""
-    from . import SERVER_BUNDLES
-
-    return SERVER_BUNDLES
+    """Every product's active browser-build server bundles."""
+    return _browser_build_server_bundles()
 
 
 def server_bundles_for_product(product_id: str) -> Tuple[ServerBundle, ...]:
-    """Return server bundles owned by one build product."""
+    """Return active browser-build server bundles owned by one product."""
     return tuple(
         bundle
         for bundle in all_server_bundles()
         if product_id in bundle.product_ids
     )
+
+
+def server_ota_bundles_for_product(product_id: str) -> Tuple[ServerBundle, ...]:
+    """Return the active server bundles eligible for OTA publication."""
+    return server_bundles_for_product(product_id)
 
 
 def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
@@ -63,23 +82,32 @@ def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
     return None
 
 
-def expected_windows_binary_paths(server_bin_dir: Path) -> List[Path]:
-    """Resolve the browseros server's Windows binaries under resources/bin."""
-    bundles = server_bundles_for_product("browseros")
-    return [
-        server_bin_dir / rel for bundle in bundles for rel in bundle.windows_binaries
-    ]
+def expected_windows_binary_paths(
+    server_bin_dir: Path, bundle: ServerBundle
+) -> List[Path]:
+    """Resolve a server bundle's Windows binaries under resources/bin."""
+    return [server_bin_dir / rel for rel in bundle.windows_binaries]
 
 
 def expected_windows_bundle_binary_paths(
-    build_output_dir: Path, product_id: Optional[str] = None
+    build_output_dir: Path,
+    product_id: Optional[str] = None,
 ) -> List[Path]:
     """Resolve all bundled server binaries under a Chromium build output dir."""
     paths: List[Path] = []
     bundles = (
-        server_bundles_for_product(product_id) if product_id else all_server_bundles()
+        server_bundles_for_product(product_id)
+        if product_id
+        else all_server_bundles()
     )
     for bundle in bundles:
         bin_dir = build_output_dir / bundle.windows_bundle_resources_root / "bin"
         paths.extend(bin_dir / rel for rel in bundle.windows_binaries)
     return paths
+
+
+def _browser_build_server_bundles() -> Tuple[ServerBundle, ...]:
+    from .browseros.product import BROWSEROS_SERVER_BUNDLE
+    from .browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
+
+    return (BROWSEROS_SERVER_BUNDLE, BROWSERCLAW_SERVER_BUNDLE)

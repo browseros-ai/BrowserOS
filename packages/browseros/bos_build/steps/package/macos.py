@@ -7,10 +7,9 @@ from typing import Optional, List
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import run_command, log_info, log_error, log_success, IS_MACOS
-from ...lib.notify import get_notifier, COLOR_GREEN
 
 
-@step("package_macos", phase="package", platforms=("macos",), notify=True)
+@step("package_macos", phase="package", platforms=("macos",))
 class MacOSPackageModule(Step):
     produces = ["dmg"]
     requires = []
@@ -40,18 +39,6 @@ class MacOSPackageModule(Step):
 
         ctx.artifact_registry.add("dmg", dmg_path)
         log_success(f"DMG created: {dmg_name}")
-
-        notifier = get_notifier()
-        notifier.notify(
-            "📀 Package Created",
-            "DMG package created successfully",
-            {
-                "Artifact": dmg_name,
-                "Version": ctx.semantic_version,
-                "Path": str(dmg_path),
-            },
-            color=COLOR_GREEN,
-        )
 
     def _create_dmg(
         self, app_path: Path, dmg_path: Path, pkg_dmg_path: Path, ctx: Context

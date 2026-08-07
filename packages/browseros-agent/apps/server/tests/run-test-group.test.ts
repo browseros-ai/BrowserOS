@@ -25,7 +25,7 @@ describe('buildTestCommand', () => {
   it('preloads the test env bootstrap before running targets', () => {
     expect(buildTestCommand(['./tests/api'])).toEqual([
       process.execPath,
-      '--env-file=.env.development',
+      '--env-file=../../.env.development',
       'test',
       '--preload=./tests/__helpers__/test-env.ts',
       './tests/api',
@@ -36,6 +36,12 @@ describe('buildTestCommand', () => {
 describe('test groups', () => {
   it('includes the lib tests in the group list', () => {
     expect(listAllGroups()).toContain('lib')
+  })
+
+  it('excludes helper-only directories from the group list', () => {
+    expect(listAllGroups()).not.toContain('_helpers')
+    expect(listAllGroups()).not.toContain('__helpers__')
+    expect(listAllGroups()).not.toContain('__fixtures__')
   })
 
   it('runs available integration tests in the integration group', () => {

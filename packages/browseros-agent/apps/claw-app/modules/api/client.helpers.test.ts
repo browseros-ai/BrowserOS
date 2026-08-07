@@ -3,7 +3,7 @@ import {
   resolveBrowserOSMcpBaseUrl,
   resolveBrowserOSServerBaseUrl,
 } from './browseros-ports'
-import { api } from './client'
+import { apiClient, apiClientForBaseUrl } from './client'
 import { resolveApiBaseUrlFromSources } from './client.helpers'
 
 const fallback = 'http://127.0.0.1:9200'
@@ -245,24 +245,30 @@ describe('BrowserOS managed port resolution', () => {
     expect(requests).toEqual([])
   })
 
-  it('routes Hono API calls through the BrowserOS server port pref', async () => {
+  it('routes typed API calls through the BrowserOS server port pref', async () => {
     installBrowserOSPrefs({ 'browseros.server.server_port': 9511 })
     const requests = installFetchRecorder()
 
-    const response = await api.system.health.$get()
+    const response = await (await apiClient()).getHealth()
 
-    expect(response.status).toBe(200)
+    expect(response).toEqual({ status: 'ok' })
     expect(requests).toEqual(['http://127.0.0.1:9511/system/health'])
   })
 
-  it('routes Hono API calls through trusted fallbacks when the pref is invalid', async () => {
+  it('routes typed API calls through trusted fallbacks when the pref is invalid', async () => {
     installWindow('?apiUrl=http%3A%2F%2F127.0.0.1%3A9432')
     installBrowserOSPrefs({ 'browseros.server.server_port': '9511' })
     const requests = installFetchRecorder()
 
-    const response = await api.system.health.$get()
+    const response = await (await apiClient()).getHealth()
 
-    expect(response.status).toBe(200)
+    expect(response).toEqual({ status: 'ok' })
     expect(requests).toEqual(['http://127.0.0.1:9432/system/health'])
+  })
+
+  it('reuses one typed client per resolved base URL', () => {
+    const first = apiClientForBaseUrl('http://127.0.0.1:9200')
+    expect(apiClientForBaseUrl('http://127.0.0.1:9200')).toBe(first)
+    expect(apiClientForBaseUrl('http://127.0.0.1:9300')).not.toBe(first)
   })
 })

@@ -10,8 +10,7 @@ import type {
 } from '../../../src/api/services/klavis'
 
 interface McpServerCreation {
-  executionDir: string | undefined
-  remoteAgentHarness: { outputFileAccess?: unknown } | undefined
+  includeStructuredContent: boolean | undefined
   proxyStatus: KlavisProxyStatus | null
   selectedServerNames: readonly string[] | undefined
 }
@@ -36,12 +35,10 @@ const createMcpServerSpy = mock(
   (deps: {
     klavis?: { getProxyStatus(): KlavisProxyStatus }
     connectorScope?: ConnectorToolScope
-    executionDir?: string
-    remoteAgentHarness?: { outputFileAccess?: unknown }
+    includeStructuredContent?: boolean
   }) => {
     serverCreations.push({
-      executionDir: deps.executionDir,
-      remoteAgentHarness: deps.remoteAgentHarness,
+      includeStructuredContent: deps.includeStructuredContent,
       proxyStatus: deps.klavis?.getProxyStatus() ?? null,
       selectedServerNames: deps.connectorScope?.selectedServerNames,
     })
@@ -68,7 +65,6 @@ function createTestMcpRoutes(
   return createMcpRoutes({
     version: '0.0.0-test',
     browserSession: {} as never,
-    executionDir: '/tmp/browseros-execution',
     createMcpServer: createMcpServerSpy as never,
     createMcpTransport: createMcpTransportSpy as never,
     ...overrides,
@@ -131,14 +127,12 @@ describe('createMcpRoutes', () => {
     expect(second.status).toBe(200)
     expect(serverCreations).toEqual([
       {
-        executionDir: '/tmp/browseros-execution',
-        remoteAgentHarness: undefined,
+        includeStructuredContent: false,
         proxyStatus: { state: 'connecting' },
         selectedServerNames: [],
       },
       {
-        executionDir: '/tmp/browseros-execution',
-        remoteAgentHarness: undefined,
+        includeStructuredContent: false,
         proxyStatus: { state: 'ready', toolCount: 3 },
         selectedServerNames: ['Slack', 'Google Docs'],
       },
@@ -147,42 +141,15 @@ describe('createMcpRoutes', () => {
     expect(connectCalls).toEqual(transportInstances)
   })
 
-  it('sets the remote agent harness context only for the remote harness source', async () => {
+  it('opts into browser structured content only for structured=1', async () => {
     const app = createTestMcpRoutes()
 
-    const defaultResponse = await postMcp(app)
-    const remoteHarnessResponse = await postMcp(
-      app,
-      {},
-      '/?source=remote-agent-harness',
-    )
+    await postMcp(app)
+    await postMcp(app, {}, '/?structured=1')
+    await postMcp(app, {}, '/?structured=true')
 
-    expect(defaultResponse.status).toBe(200)
-    expect(remoteHarnessResponse.status).toBe(200)
-    expect(serverCreations).toEqual([
-      {
-        executionDir: '/tmp/browseros-execution',
-        remoteAgentHarness: undefined,
-        proxyStatus: null,
-        selectedServerNames: [],
-      },
-      {
-        executionDir: '/tmp/browseros-execution',
-        remoteAgentHarness: { outputFileAccess: expect.any(Object) },
-        proxyStatus: null,
-        selectedServerNames: [],
-      },
-    ])
-  })
-
-  it('keeps remote agent harness context stable by source', async () => {
-    const app = createTestMcpRoutes()
-
-    await postMcp(app, {}, '/?source=remote-agent-harness')
-    await postMcp(app, {}, '/?source=remote-agent-harness')
-
-    expect(serverCreations[0].remoteAgentHarness).toBe(
-      serverCreations[1].remoteAgentHarness,
-    )
+    expect(
+      serverCreations.map((creation) => creation.includeStructuredContent),
+    ).toEqual([false, true, false])
   })
 })

@@ -103,12 +103,30 @@ def update_manifest_version(manifest_path: Path, version: str) -> None:
     log_success(f"{manifest_path.name}: version {old} -> {version}")
 
 
-def write_env_file(directory: Path, names: Iterable[str]) -> Path:
+def require_env(name: str) -> str:
+    """Return a non-placeholder env value or raise with the release convention."""
+    value = os.environ.get(name, "").strip()
+    # 0-1 chars is an unset or placeholder value ("0", "-"), never a real key.
+    if len(value) <= 1:
+        raise EnvironmentError(f"Missing or empty environment variable: {name}")
+    return value
+
+
+def write_env_file(
+    directory: Path,
+    names: Iterable[str],
+    *,
+    required_names: Iterable[str] = (),
+) -> Path:
     """Recreate <directory>/.env from the named process env vars.
 
     Some bundler configs only read env from file (old builder.py constraint),
-    so the build env is materialized next to the app. Unset vars are skipped.
+    so the build env is materialized next to the app. Required values are
+    checked before replacing the file; other unset vars are skipped.
     """
+    for name in required_names:
+        require_env(name)
+
     env_path = directory / ".env"
     env_path.write_text("")
     for name in names:
