@@ -1,5 +1,6 @@
 import { ArrowRight, X } from 'lucide-react'
 import { type FC, type ReactNode, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
 import ProductHuntLogo from '@/assets/producthunt.svg'
 import { Button } from '@/components/ui/button'
 import {
@@ -14,7 +15,7 @@ import { productHuntBannerDismissedStorage } from './product-hunt-banner.storage
 /**
  * @public
  */
-export const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
+export const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ph'
 
 // The banner is available immediately and auto-hides after the end of Aug 14
 // 2026 (PDT), so it never lingers past the launch window.
@@ -34,19 +35,19 @@ export const ProductHuntBannerCard: FC<{
     />
     <div className="min-w-0 flex-1">
       <p className="font-semibold text-sm">
-        We&apos;re live on Product Hunt 🎉
+        Upvote us on Product Hunt and get 100 credits 🎉
       </p>
       <p className="text-muted-foreground text-xs">
-        BrowserOS neo just launched. Take a look and share your feedback.
+        Upvote and comment, then DM us on Discord with a screenshot.
       </p>
     </div>
     <Button
       size="sm"
       onClick={onOpen}
-      aria-label="Check out our Product Hunt launch"
+      aria-label="Upvote BrowserOS on Product Hunt"
       className="shrink-0 gap-1.5 bg-[#ff6154] text-white hover:bg-[#e5563f]"
     >
-      Check out our launch
+      Upvote us
       <ArrowRight className="h-3 w-3" />
     </Button>
     <button
@@ -64,6 +65,7 @@ export const ProductHuntBanner: FC<{ fallback?: ReactNode }> = ({
   fallback = null,
 }) => {
   const [dismissed, setDismissed] = useState<boolean | null>(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     productHuntBannerDismissedStorage
@@ -92,6 +94,9 @@ export const ProductHuntBanner: FC<{ fallback?: ReactNode }> = ({
   const handleOpen = () => {
     track(PRODUCT_HUNT_BANNER_CLICKED_EVENT)
     chrome.tabs.create({ url: PRODUCT_HUNT_URL })
+    // Product Hunt takes the foreground; this tab moves to the credits page so
+    // the Discord handle form is waiting when they come back.
+    navigate('/settings/usage')
   }
 
   const handleDismiss = async () => {

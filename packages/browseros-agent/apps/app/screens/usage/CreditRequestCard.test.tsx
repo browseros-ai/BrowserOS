@@ -27,20 +27,14 @@ const idleSubmission: Submission = {
 
 let submission: Submission = idleSubmission
 
+const DISCORD_INVITE_URL = 'https://discord.com/invite/YKwjt5vuKr'
+
 mock.module('@/assets/producthunt.svg', () => ({
   default: 'producthunt.svg',
 }))
 
 mock.module('@/components/promo/ProductHuntBanner', () => ({
-  PRODUCT_HUNT_URL: 'https://bit.ly/browseros-ext',
-}))
-
-mock.module('sonner', () => ({
-  toast: { error: () => {} },
-}))
-
-mock.module('@/lib/sentry/sentry', () => ({
-  sentry: { captureException: () => {} },
+  PRODUCT_HUNT_URL: 'https://bit.ly/browseros-ph',
 }))
 
 mock.module('./credit-request.hooks', () => ({
@@ -49,7 +43,7 @@ mock.module('./credit-request.hooks', () => ({
 }))
 
 mock.module('@/lib/constants/productUrls', () => ({
-  discordUrl: 'https://discord.gg/browseros',
+  discordUrl: DISCORD_INVITE_URL,
 }))
 
 mock.module('@/components/ui/button', () => ({
@@ -87,17 +81,20 @@ function render(browserosId?: string) {
 }
 
 describe('CreditRequestCard', () => {
-  it('shows the ID, the copy button and the handle form once the ID is known', () => {
+  it('shows the handle form once the ID is known', () => {
     const html = render(BROWSEROS_ID)
 
-    expect(html).toContain('Upvote us and get free credits')
-    expect(html).toContain(BROWSEROS_ID)
-    expect(html).toContain('font-mono')
-    expect(html).toContain('Copy')
+    expect(html).toContain('Upvote us and get 100 free credits')
     expect(html).toContain('id="discord-handle"')
     expect(html).toContain('maxLength="64"')
-    expect(html).toContain('https://discord.gg/browseros')
+    expect(html).toContain(DISCORD_INVITE_URL)
     expect(html).toContain('Upvote on Product Hunt')
+  })
+
+  it('never renders the BrowserOS ID — it is only sent to the gateway', () => {
+    const html = render(BROWSEROS_ID)
+
+    expect(html).not.toContain(BROWSEROS_ID)
   })
 
   for (const [label, browserosId] of [
@@ -105,18 +102,17 @@ describe('CreditRequestCard', () => {
     ['empty', ''],
     ['whitespace only', '   '],
   ] as const) {
-    it(`falls back to guidance instead of a copyable blank when the ID is ${label}`, () => {
+    it(`falls back to guidance instead of an unmatchable request when the ID is ${label}`, () => {
       const html = render(browserosId)
 
-      expect(html).toContain('available right now')
+      expect(html).toContain('could not identify your browser')
       expect(html).not.toContain('undefined')
-      // Nothing to copy and nothing to submit: both controls must be absent,
-      // not merely disabled, so an empty ID can never reach the clipboard.
-      expect(html).not.toContain('Copy')
+      // The form must be absent, not merely disabled, so a request the founder
+      // cannot match back to a browser can never be sent.
       expect(html).not.toContain('id="discord-handle"')
       expect(html).not.toContain('Submit')
       // The card still has to explain how to reach us.
-      expect(html).toContain('https://discord.gg/browseros')
+      expect(html).toContain(DISCORD_INVITE_URL)
       expect(html).toContain('Upvote on Product Hunt')
     })
   }

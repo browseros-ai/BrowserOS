@@ -11,6 +11,10 @@ mock.module('@/assets/producthunt.svg', () => ({
   default: 'producthunt.svg',
 }))
 
+mock.module('react-router', () => ({
+  useNavigate: () => () => {},
+}))
+
 mock.module('@/lib/metrics/track', () => ({
   track: () => {},
 }))
@@ -66,8 +70,8 @@ describe('ProductHuntBanner', () => {
       }),
     )
 
-    expect(html).toContain('live on Product Hunt')
-    expect(html).toContain('Check out our launch')
+    expect(html).toContain('Upvote us on Product Hunt and get 100 credits')
+    expect(html).toContain('Upvote us')
     expect(html).toContain('Product Hunt')
   })
 

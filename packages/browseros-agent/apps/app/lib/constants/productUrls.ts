@@ -32,7 +32,7 @@ export const contributorsUrl =
 /**
  * @public
  */
-export const discordUrl = 'https://discord.gg/browseros'
+export const discordUrl = 'https://discord.com/invite/YKwjt5vuKr'
 
 /**
  * @public

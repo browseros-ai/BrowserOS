@@ -14,6 +14,10 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform(parseBrowserOSApiUrl),
+  // Overrides the LLM gateway origin. Exists so a dev build can be pointed at a
+  // locally-run gateway (`wrangler dev` on 8787); unset everywhere else, so
+  // production keeps using the hardcoded default.
+  VITE_PUBLIC_BROWSEROS_GATEWAY: z.string().optional(),
   PROD: z.boolean().optional().default(false),
 })
 
