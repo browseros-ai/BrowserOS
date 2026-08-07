@@ -17,6 +17,31 @@ import { productHuntBannerDismissedStorage } from './product-hunt-banner.storage
  */
 export const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ph'
 
+/**
+ * Opens Product Hunt without taking the foreground.
+ *
+ * The banner navigates this tab to the credits page at the same time, so
+ * letting Product Hunt steal focus would hide the page it just sent you to.
+ *
+ * @public
+ */
+export function openProductHuntInBackground(): void {
+  chrome.tabs.create({ url: PRODUCT_HUNT_URL, active: false })
+}
+
+/**
+ * Opens Product Hunt in front, by omitting `active` and taking Chrome's
+ * foreground default.
+ *
+ * Deliberately different from the banner: this one is for the card's own
+ * button, where the click is an explicit "take me there" rather than a nudge.
+ *
+ * @public
+ */
+export function openProductHuntFocused(): void {
+  chrome.tabs.create({ url: PRODUCT_HUNT_URL })
+}
+
 // The banner is available immediately and auto-hides after the end of Aug 14
 // 2026 (PDT), so it never lingers past the launch window.
 const HIDE_AFTER = Date.parse('2026-08-15T07:00:00Z')
@@ -96,7 +121,7 @@ export const ProductHuntBanner: FC<{ fallback?: ReactNode }> = ({
     // Product Hunt loads in the background so it does not steal focus; this tab
     // stays in front and moves to the credits page, where the Discord handle
     // form is waiting.
-    chrome.tabs.create({ url: PRODUCT_HUNT_URL, active: false })
+    openProductHuntInBackground()
     navigate('/settings/usage')
   }
 

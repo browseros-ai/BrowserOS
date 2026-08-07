@@ -1,7 +1,7 @@
 import { Gift } from 'lucide-react'
 import { type ChangeEvent, type FC, type FormEvent, useState } from 'react'
 import ProductHuntLogo from '@/assets/producthunt.svg'
-import { PRODUCT_HUNT_URL } from '@/components/promo/ProductHuntBanner'
+import { openProductHuntFocused } from '@/components/promo/ProductHuntBanner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,7 +28,7 @@ export const CreditRequestCard: FC<CreditRequestCardProps> = ({
   const handle = discordHandle.trim()
 
   const handleOpenProductHunt = () => {
-    chrome.tabs.create({ url: PRODUCT_HUNT_URL })
+    openProductHuntFocused()
   }
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {

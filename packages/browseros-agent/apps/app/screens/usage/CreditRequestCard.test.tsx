@@ -35,6 +35,7 @@ mock.module('@/assets/producthunt.svg', () => ({
 
 mock.module('@/components/promo/ProductHuntBanner', () => ({
   PRODUCT_HUNT_URL: 'https://bit.ly/browseros-ph',
+  openProductHuntFocused: () => {},
 }))
 
 mock.module('./credit-request.hooks', () => ({

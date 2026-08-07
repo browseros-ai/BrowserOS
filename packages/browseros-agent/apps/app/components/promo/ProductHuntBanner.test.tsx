@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, mock } from 'bun:test'
+import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { type ComponentProps, createElement, type FC } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
@@ -49,16 +49,35 @@ mock.module('./product-hunt-banner.storage', () => ({
   },
 }))
 
+/** Records the exact argument object handed to chrome.tabs.create. */
+let tabsCreateCalls: Array<{ url?: string; active?: boolean }> = []
+
+beforeEach(() => {
+  tabsCreateCalls = []
+})
+
+;(globalThis as unknown as { chrome: unknown }).chrome = {
+  tabs: {
+    create: (options: { url?: string; active?: boolean }) => {
+      tabsCreateCalls.push(options)
+    },
+  },
+}
+
 let ProductHuntBanner: FC
 let ProductHuntBannerCard: FC<{
   onOpen: () => void
   onDismiss: () => void
 }>
+let openProductHuntInBackground: () => void
+let openProductHuntFocused: () => void
 
 beforeAll(async () => {
   const bannerModule = await import('./ProductHuntBanner')
   ProductHuntBanner = bannerModule.ProductHuntBanner
   ProductHuntBannerCard = bannerModule.ProductHuntBannerCard
+  openProductHuntInBackground = bannerModule.openProductHuntInBackground
+  openProductHuntFocused = bannerModule.openProductHuntFocused
 })
 
 describe('ProductHuntBanner', () => {
@@ -79,5 +98,41 @@ describe('ProductHuntBanner', () => {
     const html = renderToStaticMarkup(createElement(ProductHuntBanner))
 
     expect(html).toBe('')
+  })
+})
+
+/**
+ * These assert the whole argument object, not just that tabs.create was called.
+ * The point is to pin `active`, so a call-count assertion would not have caught
+ * the bug these exist to prevent - a later tidy-up dropping the flag as
+ * redundant, silently handing the foreground back to Product Hunt.
+ */
+describe('opening Product Hunt', () => {
+  it('opens in a background tab from the banner', () => {
+    openProductHuntInBackground()
+
+    expect(tabsCreateCalls).toEqual([
+      { url: 'https://bit.ly/browseros-ph', active: false },
+    ])
+    // Spelled out separately: `false` is the whole point, and toEqual would
+    // also pass if the key were merely absent.
+    expect(tabsCreateCalls[0].active).toBe(false)
+  })
+
+  it('opens focused from the card button', () => {
+    openProductHuntFocused()
+
+    expect(tabsCreateCalls).toEqual([{ url: 'https://bit.ly/browseros-ph' }])
+    // Omitting `active` is deliberate - Chrome defaults it to true, which is
+    // what an explicit "take me there" click should do.
+    expect(tabsCreateCalls[0].active).toBeUndefined()
+  })
+
+  it('keeps the two paths different', () => {
+    openProductHuntInBackground()
+    openProductHuntFocused()
+
+    expect(tabsCreateCalls[0].active).toBe(false)
+    expect(tabsCreateCalls[1].active).toBeUndefined()
   })
 })
