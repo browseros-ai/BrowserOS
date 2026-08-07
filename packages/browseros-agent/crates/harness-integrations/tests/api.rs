@@ -332,6 +332,15 @@ fn migration_scopes_foreign_authority_and_preserves_timestamps_and_formatting()
         AgentId::Cursor,
     );
     migration.config_path = Some(config.clone());
+    migration.allow_destination_overwrite = false;
+    let before_rejected_migration = fs::read_to_string(&config)?;
+    assert!(matches!(
+        manager.migrate_server(migration.clone()),
+        Err(Error::ForeignEntry { .. })
+    ));
+    assert_eq!(fs::read_to_string(&config)?, before_rejected_migration);
+
+    migration.allow_destination_overwrite = true;
     let summary = manager.migrate_server(migration.clone())?;
     assert!(summary.migrated);
     assert!(summary.overwrote_foreign);

@@ -65,7 +65,7 @@ describe('buildCanonicalMcpCliCommand', () => {
   it('produces the standard Claude MCP registration command', () => {
     installWindow('')
     expect(buildCanonicalMcpCliCommand()).toBe(
-      'claude mcp add "BrowserOS neo" http://127.0.0.1:9200/mcp --transport http --scope user',
+      'claude mcp add browseros-neo http://127.0.0.1:9200/mcp --transport http --scope user',
     )
   })
 })

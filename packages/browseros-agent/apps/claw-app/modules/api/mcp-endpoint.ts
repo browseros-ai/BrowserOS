@@ -36,5 +36,5 @@ export async function resolveCanonicalMcpEndpointUrl(): Promise<string> {
 
 export function buildCanonicalMcpCliCommand(): string {
   const url = buildCanonicalMcpEndpointUrl()
-  return `claude mcp add "${BROWSEROS_MCP_SERVER_NAME}" ${url} --transport http --scope user`
+  return `claude mcp add ${BROWSEROS_MCP_SERVER_NAME} ${url} --transport http --scope user`
 }

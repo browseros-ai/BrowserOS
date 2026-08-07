@@ -38,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use ulid::Ulid;
 
-const SERVER_NAME: &str = "browserclaw";
+const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
@@ -70,7 +70,6 @@ struct StartedSession {
 }
 
 impl ClawMcpService {
-    /// Creates the BrowserOS neo-owned rmcp server over the shared browser tool catalog.
     #[must_use]
     pub fn new(state: AppState) -> Self {
         Self {
@@ -428,7 +427,6 @@ struct SessionRename {
     response: String,
 }
 
-/// Validates and commits a session rename before any browser-side title synchronization.
 async fn rename_session(
     session: Option<&Session>,
     raw_args: &Value,
@@ -621,7 +619,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_info_uses_browserclaw_branding_and_prompt() -> anyhow::Result<()> {
+    async fn initialize_info_uses_browseros_neo_identity_and_prompt() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let info = service.get_info();
