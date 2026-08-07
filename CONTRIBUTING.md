@@ -82,7 +82,7 @@ yarn build:dev       # One-time build
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
 4. Select `packages/browseros-agent/dist/`
-5. Press Agent icon from extensions toolbar to open the agent panel
+5. Click the Agent icon in the extensions toolbar to open the agent panel
 
 **For detailed setup, architecture, and code standards, see [Agent Contributing Guide](packages/browseros-agent/CONTRIBUTING.md).**
 

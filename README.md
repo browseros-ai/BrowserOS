@@ -33,7 +33,7 @@ Free · Open source · Everything runs on your machine
 2. **It finds your agents.** Claude Code, Codex, Cursor, VS Code, OpenClaw, Hermes; connect with one click. 
 3. **Give it a task from your agent.** *"Book me the cheapest flight to London."* Watch it live from your new tab, replay it later.
 
-To be clear, BrowserOS neo is NOT a Chrome replacement. It's a secondary browser that sits next to Chrome, and we’ve made it agent friendly. 
+To be clear, BrowserOS neo is NOT a Chrome replacement. It's a secondary browser that sits next to Chrome, and we’ve made it agent-friendly. 
 
 ### What can your agents do?
 Anything that needs a logged-in browser:
@@ -75,12 +75,12 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 
 - **Your logins.** Agents automate your real work using your logged-in accounts, not a blank sandbox. [How it works](https://docs.browseros.com/neo/how-it-works)
 - **Parallel agents.** Fire off several tasks at once. Each agent works in its own tab while you keep browsing.
-- **Fewer tokens.** For the same task, BrowserOS neo consumes significantly less tokens compare to other solutions (like Claude's chrome extension, Codex browser).
+- **Fewer tokens.** For the same task, BrowserOS neo consumes significantly fewer tokens compared to other solutions (like Claude's Chrome extension, Codex browser).
 - **Local-only, privacy-first.** Sessions, screenshots, and history live under `~/.browserclaw/` and never leave your machine. [Privacy](https://docs.browseros.com/neo/privacy)
 
 ### Why BrowserOS neo over the alternatives?
 
-- **Not a headless driver.** Playwright and agent-browser spin up a fresh Chrome subprocess with no logins. Great for CI, useless for real work which requires your logged-in state like "read my inbox." BrowserOS neo imports your logins with one click and persists it across sessions.
+- **Not a headless driver.** Playwright and agent-browser spin up a fresh Chrome subprocess with no logins. Great for CI, useless for real work which requires your logged-in state like "read my inbox." BrowserOS neo imports your logins with one click and persists them across sessions.
 - **Not a cloud browser.** Cloud browsers (like browser-use, browserbase) run in a datacenter, so logging into your accounts is a pain, and sites like Twitter and LinkedIn block you because you are on a datacenter IP. BrowserOS neo runs on your machine, on `127.0.0.1`.
 - **Not a locked-in AI browser.** Atlas, Comet, and Dia only work with their own AI. BrowserOS neo works with the agents you already use and pay for -- Claude Code, Cowork, Codex, Cursor, etc.
 
