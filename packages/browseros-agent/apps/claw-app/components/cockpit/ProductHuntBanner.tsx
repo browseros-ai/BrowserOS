@@ -43,19 +43,20 @@ export function ProductHuntBannerCard({
       <ProductHuntIcon className="size-9 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-foreground text-sm">
-          We&apos;re live on Product Hunt 🎉
+          We&apos;re live on Product Hunt today 🎉
         </p>
         <p className="text-muted-foreground text-xs">
-          BrowserOS neo just launched. Take a look and share your feedback.
+          An upvote or comment would mean a lot — it helps us keep BrowserOS
+          free and supported.
         </p>
       </div>
       <Button
         size="sm"
         onClick={onOpen}
-        aria-label="Check out our Product Hunt launch"
+        aria-label="Support BrowserOS on Product Hunt"
         className="shrink-0 bg-[#ff6154] text-white hover:bg-[#e5563f]"
       >
-        Check out our launch
+        Support us →
       </Button>
       <button
         type="button"
