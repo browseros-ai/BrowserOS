@@ -1,4 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { cn } from '@/lib/utils'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 import {
   abbreviateSequence,
@@ -153,30 +154,30 @@ function TokensCell({ task }: { task: TaskSummary }) {
   )
 }
 
+/**
+ * Exceptional-state pills. One geometry for all three so they read as a
+ * family; only Live carries a saturated fill. No dot and no animation —
+ * a run being live is a state to notice, not an alarm to chase.
+ */
+const STATE_CHIP =
+  'inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] font-semibold text-[11px] leading-[14px]'
+
 function LiveInlineChip() {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-tint px-1.5 py-px font-semibold text-[9.5px] text-green uppercase tracking-[0.06em]">
-      <span
-        aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-green"
-      />
+    <span
+      className={cn(STATE_CHIP, 'bg-cyanotype-live text-cyanotype-live-ink')}
+    >
       Live
     </span>
   )
 }
 
 function FailedInlineChip() {
-  return (
-    <span className="inline-flex shrink-0 items-center rounded-full bg-red-tint px-1.5 py-px font-semibold text-[9.5px] text-red uppercase tracking-[0.06em]">
-      Failed
-    </span>
-  )
+  return <span className={cn(STATE_CHIP, 'bg-red-tint text-red')}>Failed</span>
 }
 
 function StoppedInlineChip() {
   return (
-    <span className="inline-flex shrink-0 items-center rounded-full bg-card-tint px-1.5 py-px font-semibold text-[9.5px] text-ink-3 uppercase tracking-[0.06em]">
-      Stopped
-    </span>
+    <span className={cn(STATE_CHIP, 'bg-card-tint text-ink-3')}>Stopped</span>
   )
 }

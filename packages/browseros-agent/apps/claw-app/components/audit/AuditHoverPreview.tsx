@@ -1,4 +1,3 @@
-import { AgentDot } from '@/components/audit/AgentDot'
 import { activityCardCaptionTones } from '@/components/cockpit/activityCardTone'
 import { cn } from '@/lib/utils'
 import {
@@ -58,9 +57,8 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
           data-caption-tone="blue"
         >
           <div className="flex items-center gap-2 font-mono text-[10px] text-white/75 uppercase tracking-[0.08em]">
-            <AgentDot slug={task.slug} />
             <span className="truncate text-white/95">{task.label}</span>
-            {task.status === 'live' && <LiveDot />}
+            {task.status === 'live' && <LiveChip />}
           </div>
           <p className="truncate font-semibold text-[13px] text-white leading-tight">
             {task.name}
@@ -97,14 +95,11 @@ function NoShotComposition({ task }: { task: TaskSummary }) {
   )
 }
 
-function LiveDot() {
+/** Matches the audit table's static Live pill so both surfaces read the same. */
+function LiveChip() {
   return (
-    <span className="inline-flex items-center gap-1 text-[#8fb4ff]">
-      <span
-        aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff]"
-      />
-      LIVE
+    <span className="inline-flex shrink-0 items-center rounded-full bg-cyanotype-live px-2.5 py-[3px] font-sans font-semibold text-[11px] text-cyanotype-live-ink normal-case leading-[14px] tracking-normal">
+      Live
     </span>
   )
 }

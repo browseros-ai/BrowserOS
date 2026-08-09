@@ -148,6 +148,17 @@ describe('Audit screen', () => {
     expect(html).toContain('Load older tasks')
   })
 
+  it('renders a live row as a static Live pill with no animation', () => {
+    dataOverride = {
+      ...baseData,
+      tasks: [{ ...sampleTask, status: 'live' }],
+      statusOptions: [{ status: 'live', count: 1 }],
+    }
+    const html = renderApp()
+    expect(html).toContain('Live')
+    expect(html).not.toMatch(/animate-\[pulse-dot/)
+  })
+
   it('labels cancelled rows as stopped', () => {
     dataOverride = {
       ...baseData,

@@ -84,7 +84,10 @@ export function FilterBar({
           )}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="ph-no-capture min-w-52">
+        <DropdownMenuContent
+          align="start"
+          className="ph-no-capture min-w-52 bg-popover before:hidden"
+        >
           <DropdownMenuItem onClick={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
             {selectedAgentSlug === null && <Check className="size-3.5" />}
@@ -118,7 +121,10 @@ export function FilterBar({
           {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="ph-no-capture min-w-44">
+        <DropdownMenuContent
+          align="start"
+          className="ph-no-capture min-w-44 bg-popover before:hidden"
+        >
           <DropdownMenuItem onClick={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
@@ -154,7 +160,7 @@ export function FilterBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto"
+            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto bg-popover before:hidden"
           >
             <DropdownMenuItem onClick={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
@@ -210,25 +216,13 @@ export function FilterBar({
 function StatusPill({ status }: { status: TaskStatus }) {
   if (status === 'live') {
     return (
-      <span className="inline-flex items-center gap-1 text-accent">
-        <span
-          aria-hidden
-          className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent"
-        />
+      <span className="inline-flex items-center rounded-full bg-cyanotype-live px-2 py-px font-semibold text-[11px] text-cyanotype-live-ink">
         Live
       </span>
     )
   }
   if (status === 'failed') {
-    return (
-      <span className="inline-flex items-center gap-1 text-red-500">
-        <span
-          aria-hidden
-          className="inline-block size-1.5 rounded-full bg-red-500"
-        />
-        Failed
-      </span>
-    )
+    return <span className="text-red-500">Failed</span>
   }
   if (status === 'cancelled') return <span>Stopped</span>
   return <span>Done</span>
