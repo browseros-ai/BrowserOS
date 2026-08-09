@@ -29,7 +29,7 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     accessorKey: 'agentLabel',
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
-        <span className="min-w-0 truncate text-[11px] text-ledger-link">
+        <span className="min-w-0 truncate text-[12px] text-ledger-link">
           {row.original.label}
         </span>
         {row.original.status === 'live' && <LiveInlineChip />}
@@ -62,7 +62,7 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     // rendering bug next to the explicit trailing ellipsis. The wider
     // cockpit tiles keep the default.
     cell: ({ row }) => (
-      <span className="block truncate text-[11px] text-ledger-ink-3">
+      <span className="block truncate text-[12px] text-ledger-ink-3">
         {abbreviateSequence(row.original.toolSequence, 4)}
       </span>
     ),
@@ -80,7 +80,7 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     header: 'Duration',
     accessorFn: (t) => t.durationMs,
     cell: ({ getValue }) => (
-      <span className="text-[11px] text-ledger-ink-2 tabular-nums">
+      <span className="text-[12px] text-ledger-ink-2 tabular-nums">
         {formatDuration(getValue<number>())}
       </span>
     ),
@@ -91,7 +91,7 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     header: 'When',
     accessorKey: 'startedAt',
     cell: ({ getValue }) => (
-      <span className="text-[11px] text-ledger-ink-3 tabular-nums">
+      <span className="text-[12px] text-ledger-ink-3 tabular-nums">
         {formatRelative(getValue<number>(), Date.now())}
       </span>
     ),
@@ -121,7 +121,7 @@ export const NUMERIC_COLUMN_IDS = new Set(['tokens', 'duration', 'when'])
  */
 export const COLUMN_WIDTHS: Record<string, string> = {
   agent: 'w-[260px]',
-  sequence: 'w-[256px]',
+  sequence: 'w-[288px]',
   tokens: 'w-[88px]',
   duration: 'w-[88px]',
   when: 'w-[88px]',
@@ -137,7 +137,7 @@ function TokensCell({ task }: { task: TaskSummary }) {
   if (!usage) {
     return (
       <span
-        className="text-[11px] text-ledger-ink-3 tabular-nums"
+        className="text-[12px] text-ledger-ink-3 tabular-nums"
         title="Token usage not measured for this session"
       >
         —
@@ -146,7 +146,7 @@ function TokensCell({ task }: { task: TaskSummary }) {
   }
   return (
     <span
-      className="text-[11px] text-ledger-ink-2 tabular-nums"
+      className="text-[12px] text-ledger-ink-2 tabular-nums"
       title={`${formatTokensFull(usage.totalTokenEstimate)} tokens`}
     >
       {formatTokensCompact(usage.totalTokenEstimate)}
@@ -160,7 +160,7 @@ function TokensCell({ task }: { task: TaskSummary }) {
  * a run being live is a state to notice, not an alarm to chase.
  */
 const STATE_CHIP =
-  'inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] font-semibold text-[11px] leading-[14px]'
+  '-my-[3px] inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] font-semibold text-[11px] leading-[14px]'
 
 function LiveInlineChip() {
   return (

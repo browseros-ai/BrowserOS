@@ -58,7 +58,7 @@ export function ConnectionRow({
             {state.harness}
           </div>
           {state.installed && state.configPath && (
-            <div className="truncate font-mono text-[11px] text-cyanotype-muted">
+            <div className="truncate font-mono text-[12px] text-cyanotype-muted">
               {state.configPath}
             </div>
           )}
@@ -104,7 +104,7 @@ function RowAction({
     <span
       className={cn(
         'inline-flex shrink-0 items-center gap-1.5 text-[12px] text-cyanotype-blue',
-        'transition-colors group-hover:text-accent-2',
+        'transition-colors group-hover:text-cyanotype-blue-hover',
       )}
     >
       Connect

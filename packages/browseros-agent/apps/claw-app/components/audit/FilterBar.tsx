@@ -216,7 +216,7 @@ export function FilterBar({
 function StatusPill({ status }: { status: TaskStatus }) {
   if (status === 'live') {
     return (
-      <span className="inline-flex items-center rounded-full bg-cyanotype-live px-2 py-px font-semibold text-[11px] text-cyanotype-live-ink">
+      <span className="inline-flex items-center rounded-full bg-cyanotype-live px-2.5 py-[3px] font-semibold text-[11px] text-cyanotype-live-ink leading-[14px]">
         Live
       </span>
     )

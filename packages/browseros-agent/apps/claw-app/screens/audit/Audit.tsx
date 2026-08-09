@@ -243,7 +243,7 @@ function LedgerHeader({ table }: LedgerTableProps) {
               key={h.id}
               className={cn(
                 CELL_PADDING,
-                'h-auto font-medium text-[11px] text-ledger-head-ink',
+                'h-auto font-medium text-[12px] text-ledger-head-ink',
                 COLUMN_WIDTHS[h.column.id],
                 NUMERIC_COLUMN_IDS.has(h.column.id) && 'text-right',
               )}

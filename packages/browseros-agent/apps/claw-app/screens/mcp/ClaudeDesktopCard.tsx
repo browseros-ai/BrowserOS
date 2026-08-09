@@ -37,7 +37,7 @@ export function ClaudeDesktopCard() {
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-          <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors group-hover:text-accent-2">
+          <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors group-hover:text-cyanotype-blue-hover">
             Show me how
             <ArrowRight
               aria-hidden

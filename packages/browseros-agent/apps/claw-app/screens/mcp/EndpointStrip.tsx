@@ -28,7 +28,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
             type="button"
             onClick={copy}
             aria-label={`Copy ${label}`}
-            className="group inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors hover:text-accent-2"
+            className="group inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors hover:text-cyanotype-blue-hover"
           >
             {copied ? 'Copied ✓' : 'Copy'}
             {!copied && (

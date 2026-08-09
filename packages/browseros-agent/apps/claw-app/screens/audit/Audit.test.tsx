@@ -156,7 +156,7 @@ describe('Audit screen', () => {
     }
     const html = renderApp()
     expect(html).toContain('Live')
-    expect(html).not.toMatch(/animate-\[pulse-dot/)
+    expect(html).not.toContain('pulse-dot')
   })
 
   it('labels cancelled rows as stopped', () => {

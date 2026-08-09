@@ -134,8 +134,8 @@ describe('Mcp (editorial)', () => {
   it('renders the editorial hero without exposing the fallback endpoint before pref resolution', () => {
     const html = renderApp()
     expect(html).toContain('MCP')
-    expect(html).toContain('every')
-    expect(html).toContain('harness.')
+    expect(html).toContain('One endpoint, every harness.')
+    expect(html).not.toContain('font-serif')
     expect(html).not.toContain('http://127.0.0.1:9200/mcp')
     expect(html).not.toContain('Copy')
   })
@@ -202,9 +202,9 @@ describe('Mcp (editorial)', () => {
 
   it('renders the row action voices in title case with no status dot', () => {
     const html = renderApp()
-    expect(html).toMatch(/>\s*Connect\s*/)
-    expect(html).toMatch(/>\s*Connected\s*/)
-    expect(html).toMatch(/>\s*Disconnect\s*/)
+    expect(html).toMatch(/>Connect</)
+    expect(html).toMatch(/>Connected</)
+    expect(html).toMatch(/>Disconnect</)
     // The green word carries the state; the mock has no dot.
     expect(html).not.toContain('rounded-full bg-green')
   })
