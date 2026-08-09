@@ -15,30 +15,30 @@ export function ClaudeDesktopCard() {
   return (
     <section className="space-y-2">
       <header className="flex items-baseline justify-between gap-3">
-        <h2 className="font-semibold text-ink text-lg">Claude Desktop</h2>
-        <span className="font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]">
-          extension
-        </span>
+        <h2 className="font-semibold text-cyanotype-ink text-lg">
+          Claude Desktop
+        </h2>
+        <span className="text-[12px] text-cyanotype-muted">Extension</span>
       </header>
       <button
         type="button"
         onClick={() => setGuideOpen(true)}
-        className="group block w-full rounded-xl border border-border-2 bg-card-tint px-4 py-4 text-left transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="group block w-full rounded-9 border border-cyanotype-border bg-card p-4 text-left transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <div className="flex items-start gap-3">
           <ClaudeMark className="size-7 shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-semibold text-[15px] text-ink leading-snug">
+            <p className="font-semibold text-[15px] text-cyanotype-ink leading-snug">
               Give Claude Desktop a real browser.
             </p>
-            <p className="text-[13px] text-ink-2 leading-snug">
+            <p className="text-[13px] text-cyanotype-muted leading-snug">
               {COWORK_REQUIREMENT_LINE}
             </p>
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-accent uppercase tracking-[0.08em] transition-colors group-hover:text-accent-2">
-            show me how
+          <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors group-hover:text-accent-2">
+            Show me how
             <ArrowRight
               aria-hidden
               className="size-3.5 transition-transform group-hover:translate-x-0.5"

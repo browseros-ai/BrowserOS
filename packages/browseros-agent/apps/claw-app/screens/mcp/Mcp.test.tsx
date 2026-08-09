@@ -137,7 +137,7 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('every')
     expect(html).toContain('harness.')
     expect(html).not.toContain('http://127.0.0.1:9200/mcp')
-    expect(html).not.toContain('copy')
+    expect(html).not.toContain('Copy')
   })
 
   it('renders the endpoint copy strip once the resolved URL is available', () => {
@@ -148,7 +148,7 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('http://127.0.0.1:9512/mcp')
     expect(html).not.toContain('/mcp/claude-code')
     expect(html).not.toContain('/cockpit')
-    expect(html).toContain('copy')
+    expect(html).toContain('Copy')
   })
 
   it('does NOT render the removed CLI snippet block', () => {
@@ -185,7 +185,7 @@ describe('Mcp (editorial)', () => {
     const html = renderApp()
     expect(html).toContain('Claude Desktop')
     expect(html).toContain('Give Claude Desktop a real browser.')
-    expect(html).toContain('show me how')
+    expect(html).toContain('Show me how')
     expect(html).toContain(COWORK_REQUIREMENT_LINE)
     // The walkthrough replaced the link-out; nothing here should leave the app.
     expect(html).not.toContain(
@@ -200,11 +200,13 @@ describe('Mcp (editorial)', () => {
     expect(html).not.toContain(EXTENSION_DOWNLOAD_URL)
   })
 
-  it('renders editorial state voices (silent success, mono uppercase action text)', () => {
+  it('renders the row action voices in title case with no status dot', () => {
     const html = renderApp()
-    expect(html).toMatch(/>\s*connect\s*/)
-    expect(html).toMatch(/>\s*connected\s*/)
-    expect(html).toMatch(/>\s*disconnect\s*/)
+    expect(html).toMatch(/>\s*Connect\s*/)
+    expect(html).toMatch(/>\s*Connected\s*/)
+    expect(html).toMatch(/>\s*Disconnect\s*/)
+    // The green word carries the state; the mock has no dot.
+    expect(html).not.toContain('rounded-full bg-green')
   })
 
   it('does NOT render the removed floating footer paragraph', () => {

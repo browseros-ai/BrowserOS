@@ -88,9 +88,11 @@ export function Mcp() {
       <HeroCard url={url} />
       <section className="space-y-2">
         <header className="flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold text-ink text-lg">Connected agents</h2>
+          <h2 className="font-semibold text-cyanotype-ink text-lg">
+            Connected agents
+          </h2>
           {!isLoading && !connections.isError && (
-            <span className="font-mono text-[10.5px] text-ink-3 uppercase tabular-nums tracking-[0.08em]">
+            <span className="text-[12px] text-cyanotype-muted tabular-nums">
               {connectedCount} of {totalCount} connected
             </span>
           )}
@@ -132,8 +134,8 @@ function SkeletonList() {
   return (
     <div>
       {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
-        <div key={id} className="border-border-2 border-t">
-          <div className="flex items-center gap-3 py-3">
+        <div key={id} className="border-cyanotype-border border-t">
+          <div className="flex items-center gap-3 px-2 py-3">
             <div className="size-5 shrink-0 animate-pulse rounded bg-card-tint" />
             <div className="flex-1">
               <div className="h-3 w-32 animate-pulse rounded bg-card-tint" />
