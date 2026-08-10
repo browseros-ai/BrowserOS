@@ -246,6 +246,11 @@ function main(): void {
   if (githubOutput) {
     appendFileSync(githubOutput, `matrix=${JSON.stringify(matrix)}\n`)
     appendFileSync(githubOutput, `has_any=${hasAny}\n`)
+    // Full suite universe so the summary comment can mark the non-affected ones.
+    appendFileSync(
+      githubOutput,
+      `all_suites=${JSON.stringify(Object.keys(SUITES))}\n`,
+    )
   }
   console.log(JSON.stringify(matrix))
 }
