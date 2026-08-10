@@ -4,13 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { TurnRegistry } from '../../lib/agents/turns/active-turn-registry'
-
 export class ServerActivity {
   private activeChatStreams = 0
   private activeMcpToolExecutions = 0
-
-  constructor(private readonly turnRegistry: TurnRegistry) {}
 
   beginChatStream(): void {
     this.activeChatStreams += 1
@@ -79,10 +75,6 @@ export class ServerActivity {
   }
 
   isBusy(): boolean {
-    return (
-      this.activeChatStreams > 0 ||
-      this.activeMcpToolExecutions > 0 ||
-      this.turnRegistry.hasRunning()
-    )
+    return this.activeChatStreams > 0 || this.activeMcpToolExecutions > 0
   }
 }

@@ -21,12 +21,18 @@ function section(start: string, end?: string): string {
 describe('release-server workflow', () => {
   it('exposes the reusable build/finalize interface and outputs', () => {
     const call = section('  workflow_call:', '\npermissions:')
+    const publishOta = call.slice(
+      call.indexOf('      publish_ota:'),
+      call.indexOf('    outputs:'),
+    )
     expect(call).toContain('mode:')
     expect(call).toContain('default: "build"')
     expect(call).toContain('defer_finalize:')
     expect(call).toContain('default: false')
     expect(call).toContain('version:')
     expect(call).toContain('ref:')
+    expect(call).toContain('publish_ota:')
+    expect(publishOta).toContain('default: false')
     expect(call).toContain('outputs:')
     expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.version }}`)
     expect(call).toContain(`value: ${dollar}{{ jobs.prepare.outputs.tag }}`)
@@ -37,8 +43,9 @@ describe('release-server workflow', () => {
 
   it('reserves a private draft without creating a public tag', () => {
     const prepare = section('  prepare:', '  build-publish:')
-    expect(prepare).toContain('gh api --paginate --slurp')
-    expect(prepare).toContain('--release-records "$RELEASE_RECORDS"')
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare).toContain('--component server')
+    expect(prepare).not.toContain('prepare-server-release.sh')
     expect(prepare).toContain('gh release create "$RELEASE_TAG"')
     expect(prepare).toContain('--draft')
     expect(prepare).toContain('--target "$RELEASE_SHA"')
@@ -49,7 +56,8 @@ describe('release-server workflow', () => {
   it('checks public allocations under the component lock before mutations', () => {
     const prepare = section('  prepare:', '  build-publish:')
     expect(workflow).toContain('group: release-server')
-    expect(prepare.indexOf('Read allocated GitHub releases')).toBeLessThan(
+    expect(prepare).toContain('browseros release component resolve')
+    expect(prepare.indexOf('Setup uv')).toBeLessThan(
       prepare.indexOf('Resolve release'),
     )
     expect(prepare.indexOf('Resolve release')).toBeLessThan(
@@ -71,6 +79,10 @@ describe('release-server workflow', () => {
       `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
     expect(build).not.toContain('artifacts/server/latest/')
+    expect(build).toContain(
+      'browseros release component stamp --component server',
+    )
+    expect(build).not.toContain('package["version"] = version')
   })
 
   it('finalizes only after verifying assets and versioned objects', () => {
@@ -91,11 +103,11 @@ describe('release-server workflow', () => {
     const latestIndex = finalize.indexOf('Copy versioned objects to latest')
     expect(verifyIndex).toBeGreaterThanOrEqual(0)
     expect(tagIndex).toBeGreaterThan(verifyIndex)
-    expect(publishIndex).toBeGreaterThan(tagIndex)
-    expect(latestIndex).toBeGreaterThan(publishIndex)
+    expect(latestIndex).toBeGreaterThan(tagIndex)
+    expect(publishIndex).toBeGreaterThan(latestIndex)
   })
 
-  it('defers finalization for full releases and gates side effects on it', () => {
+  it('defers finalization for reusable callers and gates side effects on it', () => {
     const finalize = section('  finalize:', '  publish-ota:')
     expect(finalize).toContain("needs.prepare.outputs.mode == 'finalize'")
     expect(finalize).toContain('inputs.defer_finalize != true')
@@ -103,5 +115,25 @@ describe('release-server workflow', () => {
       '- finalize',
     )
     expect(section('  reflect-version:')).toContain('- finalize')
+  })
+
+  it('publishes and persists standalone alpha releases by default', () => {
+    const dispatch = section('  workflow_dispatch:', '  workflow_call:')
+    const ota = section('  publish-ota:', '  reflect-version:')
+    expect(dispatch).toContain('publish_ota:')
+    expect(dispatch).toContain('default: true')
+    expect(ota).toContain("github.event_name != 'push'")
+    expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
+    expect(ota).toContain('product: browseros')
+    expect(ota).toContain(
+      `version: ${dollar}{{ needs.prepare.outputs.version }}`,
+    )
+    expect(ota).toContain(
+      `release_sha: ${dollar}{{ needs.prepare.outputs.release_sha }}`,
+    )
+    expect(ota).toContain('secrets: inherit')
+    expect(ota).toContain('updates/server/appcast-server.alpha.xml')
+    expect(ota).not.toContain('updates/server/appcast-claw-server.alpha.xml')
   })
 })

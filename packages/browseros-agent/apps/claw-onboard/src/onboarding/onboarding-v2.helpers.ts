@@ -97,61 +97,32 @@ export function importItemListLabel(items: readonly string[]): string {
   return items.map(importItemLabel).join(', ')
 }
 
-export function selectableItemsForSource(
-  source: BrowserOSImportSource,
-): BrowserOSImportItem[] {
-  return [
-    ...(source.recommendedItems.length
-      ? source.recommendedItems
-      : source.supportedItems),
-  ]
-}
-
-/**
- * The only items that let an agent act inside your accounts. Everything else
- * Chromium offers is human-browser furniture — no MCP tool exposes history,
- * bookmarks, search engines, autofill or extensions to an agent, so copying
- * them buys nothing and makes the ask look bigger than it is.
- */
-export const AGENT_LOGIN_ITEMS: readonly BrowserOSImportItem[] = [
-  'cookies',
-  'passwords',
+export const OPTIONAL_IMPORT_ITEMS: readonly BrowserOSImportItem[] = [
+  'searchEngines',
+  'extensions',
 ]
 
-function isLoginItem(item: BrowserOSImportItem): boolean {
-  return AGENT_LOGIN_ITEMS.includes(item)
+function isOptionalImportItem(item: BrowserOSImportItem): boolean {
+  return OPTIONAL_IMPORT_ITEMS.includes(item)
 }
 
-export function loginItemsForSource(
-  source: BrowserOSImportSource,
-): BrowserOSImportItem[] {
-  return source.supportedItems.filter(isLoginItem)
-}
-
-/**
- * Default checked set for a profile: logins only. Falls back to Chromium's own
- * recommendation when a profile carries no logins at all, so a history-only
- * profile still offers something to copy instead of a dead Import button.
- */
 export function defaultImportItemsForSource(
   source: BrowserOSImportSource,
 ): BrowserOSImportItem[] {
-  const loginItems = loginItemsForSource(source)
-  return loginItems.length > 0 ? loginItems : selectableItemsForSource(source)
+  return source.supportedItems.filter((item) => !isOptionalImportItem(item))
 }
 
 export interface ImportSelectionSplit {
-  loginItems: BrowserOSImportItem[]
-  extraItems: BrowserOSImportItem[]
+  defaultItems: BrowserOSImportItem[]
+  optionalItems: BrowserOSImportItem[]
 }
 
-/** Splits a selection into logins and the optional browsing-setup extras. */
 export function splitImportSelection(
   items: readonly BrowserOSImportItem[],
 ): ImportSelectionSplit {
   return {
-    loginItems: items.filter(isLoginItem),
-    extraItems: items.filter((item) => !isLoginItem(item)),
+    defaultItems: items.filter((item) => !isOptionalImportItem(item)),
+    optionalItems: items.filter(isOptionalImportItem),
   }
 }
 

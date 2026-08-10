@@ -3,14 +3,11 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * First-run onboarding hero: the recording plays inline and autoplays with
- * sound. A browser that blocks unmuted autoplay (no user gesture yet, and stock
- * Chromium applies this to extension pages too) makes play() reject; we then
- * fall back to a muted autoplay so the demo always starts, and the reader can
- * unmute via the controls. A single focused player reads as "watch this first".
+ * First-run onboarding hero: the recording stays paused behind its poster
+ * until the reader starts it with the native video controls. A single focused
+ * player reads as "watch this first".
  */
 
-import { useEffect, useRef } from 'react'
 import {
   ONBOARDING_VIDEOS,
   type OnboardingVideo,
@@ -27,25 +24,12 @@ export function VideoFeature() {
 
 function FeatureVideo({ video }: { video: OnboardingVideo }) {
   const tracking = useOnboardingVideoTracking(video)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  // External-system side effect: kick off playback and, if the browser blocks
-  // unmuted autoplay, retry muted so the demo always starts. Cannot be done
-  // declaratively because we need the play() promise to detect the block.
-  useEffect(() => {
-    const el = videoRef.current
-    if (!el) return
-    el.play().catch(() => {
-      el.muted = true
-      el.play().catch(() => {})
-    })
-  }, [])
+  // Playback stays user-driven; mounting onboarding must not start the video.
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-3xl border border-border-2 bg-black shadow-sm ring-1 ring-foreground/5 md:aspect-auto md:h-full">
       <video
-        ref={videoRef}
         src={videoUrlFor(video)}
         poster={posterFor(video)}
-        autoPlay
         playsInline
         controls
         className="h-full w-full object-cover"

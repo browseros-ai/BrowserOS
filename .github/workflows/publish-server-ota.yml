@@ -1,0 +1,343 @@
+name: Publish server alpha OTA
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      release_sha:
+        required: true
+        type: string
+      snapshot_path:
+        required: true
+        type: string
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+      SPARKLE_PRIVATE_KEY:
+        required: true
+      MACOS_CERTIFICATE_P12:
+        required: true
+      MACOS_CERTIFICATE_PWD:
+        required: true
+      MACOS_CERTIFICATE_NAME:
+        required: true
+      MACOS_KEYCHAIN_PASSWORD:
+        required: true
+      PROD_MACOS_NOTARIZATION_APPLE_ID:
+        required: true
+      PROD_MACOS_NOTARIZATION_TEAM_ID:
+        required: true
+      PROD_MACOS_NOTARIZATION_PWD:
+        required: true
+      ESIGNER_USERNAME:
+        required: true
+      ESIGNER_PASSWORD:
+        required: true
+      ESIGNER_TOTP_SECRET:
+        required: true
+      ESIGNER_CREDENTIAL_ID:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate product snapshot ownership
+        env:
+          PRODUCT: ${{ inputs.product }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+        run: |
+          set -euo pipefail
+          case "$PRODUCT:$SNAPSHOT_PATH" in
+            browseros:updates/server/appcast-server.alpha.xml) ;;
+            browserclaw:updates/server/appcast-claw-server.alpha.xml) ;;
+            *)
+              echo "::error::Invalid product snapshot ownership"
+              exit 1
+              ;;
+          esac
+
+  build-payloads:
+    needs: validate
+    name: Sign OTA / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin_arm64
+            target: darwin-arm64
+            runner: macos-14
+          - platform: darwin_x64
+            target: darwin-x64
+            runner: macos-14
+          - platform: linux_arm64
+            target: linux-arm64
+            runner: ubuntu-latest
+          - platform: linux_x64
+            target: linux-x64
+            runner: ubuntu-latest
+          - platform: windows_x64
+            target: windows-x64
+            runner: windows-latest
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      PRODUCT: ${{ inputs.product }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_sha }}
+
+      - name: Preflight storage and payload signing credentials
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET SPARKLE_PRIVATE_KEY)
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Preflight macOS signing credentials
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          required=(MACOS_CERTIFICATE_NAME MACOS_KEYCHAIN_PASSWORD PROD_MACOS_NOTARIZATION_APPLE_ID PROD_MACOS_NOTARIZATION_TEAM_ID PROD_MACOS_NOTARIZATION_PWD)
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Preflight Windows signing credentials
+        if: runner.os == 'Windows'
+        env:
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(ESIGNER_USERNAME ESIGNER_PASSWORD ESIGNER_TOTP_SECRET)
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${MACOS_CERTIFICATE_P12:-}" ] || missing+=(MACOS_CERTIFICATE_P12)
+          [ -n "${MACOS_CERTIFICATE_PWD:-}" ] || missing+=(MACOS_CERTIFICATE_PWD)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secret(s): ${missing[*]}"
+            exit 1
+          fi
+          cert_path="$RUNNER_TEMP/browseros-signing-cert.p12"
+          keychain_path="$RUNNER_TEMP/browseros-ci-signing.keychain-db"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$cert_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$cert_path" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+      - name: Install SSL.com CodeSignTool
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $uri = 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows'
+          Invoke-WebRequest -Uri $uri -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+          $tool = Get-ChildItem -Path $extractRoot -Filter CodeSignTool.bat -Recurse | Select-Object -First 1
+          if (-not $tool) {
+            throw "CodeSignTool.bat was not found after extracting $zipPath"
+          }
+          "CODE_SIGN_TOOL_PATH=$($tool.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Sign and upload macOS OTA payload
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros ota server release \
+            --version "$VERSION" \
+            --release-sha "$RELEASE_SHA" \
+            --channel alpha \
+            --product "$PRODUCT" \
+            --platform "$PLATFORM"
+
+      - name: Sign and upload Windows OTA payload
+        if: runner.os == 'Windows'
+        env:
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros ota server release \
+            --version "$VERSION" \
+            --release-sha "$RELEASE_SHA" \
+            --channel alpha \
+            --product "$PRODUCT" \
+            --platform "$PLATFORM"
+
+      - name: Upload Linux OTA payload
+        if: runner.os == 'Linux'
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project packages/browseros browseros ota server release \
+            --version "$VERSION" \
+            --release-sha "$RELEASE_SHA" \
+            --channel alpha \
+            --product "$PRODUCT" \
+            --platform "$PLATFORM"
+
+      - name: Upload platform appcast fragment
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-ota-fragment-${{ matrix.target }}
+          path: ${{ inputs.snapshot_path }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs:
+      - validate
+      - build-payloads
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PRODUCT: ${{ inputs.product }}
+      SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_sha }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: server-ota-fragment-*
+          path: server-ota-fragments
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Assemble and publish live alpha appcast
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          snapshot_name="$(basename "$SNAPSHOT_PATH")"
+          fragments=()
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+            platform="${target//-/_}"
+            fragment="server-ota-fragments/server-ota-fragment-${target}/${snapshot_name}"
+            if [ ! -f "$fragment" ]; then
+              echo "::error::Missing OTA fragment for $target"
+              exit 1
+            fi
+            fragments+=(--fragment "$platform=$fragment")
+          done
+          uv run --project packages/browseros browseros ota server assemble-appcast \
+            --version "$VERSION" \
+            --channel alpha \
+            --product "$PRODUCT" \
+            "${fragments[@]}"
+          uv run --project packages/browseros browseros ota server release-appcast --channel alpha --product "$PRODUCT" --publish
+
+      - name: Persist alpha appcast snapshot
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          packages/browseros-agent/scripts/release/commit-update-snapshot.sh \
+            "$SNAPSHOT_PATH" \
+            "$DEFAULT_BRANCH" \
+            "chore(release): snapshot ${PRODUCT} server alpha v${VERSION}"

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -131,6 +132,35 @@ describe('resource manifest and artifact staging', () => {
     )
   })
 
+  it('writes opt-in release identity into artifact metadata', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
+    const binaryPath = join(tempDir, 'compiled')
+    const product = testProduct({ distRoot: join(tempDir, 'dist') })
+    const releaseSha = 'a'.repeat(40)
+    await writeFile(binaryPath, 'server')
+
+    const artifact = await stageCompiledArtifact(
+      product,
+      binaryPath,
+      testTarget(),
+      '1.2.3',
+      [],
+      tempDir,
+      {
+        component: 'claw-server-rust/prod-resources',
+        releaseSha,
+      },
+    )
+
+    const metadata = JSON.parse(await readFile(artifact.metadataPath, 'utf8'))
+    expect(metadata).toMatchObject({
+      component: 'claw-server-rust/prod-resources',
+      version: '1.2.3',
+      target: 'darwin-arm64',
+      releaseSha,
+    })
+  })
+
   it('copies recursive local resources without allowing destination escape', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
     const sourceRoot = join(tempDir, 'source')
@@ -261,6 +291,36 @@ describe('resource manifest and artifact staging', () => {
     ])
     expect(uploadResults[0]?.versionR2Key).toBe(uploadedKeys[0])
     expect(uploadResults[0]?.latestR2Key).toBe(uploadedKeys[1])
+  })
+
+  it('can archive only files for workflow-compatible member lists', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
+    const binaryPath = join(tempDir, 'compiled')
+    const product = testProduct({ distRoot: join(tempDir, 'dist') })
+    await writeFile(binaryPath, 'server')
+    const artifact = await stageCompiledArtifact(
+      product,
+      binaryPath,
+      testTarget(),
+      '0.0.0-test',
+    )
+
+    const [result] = await archiveArtifacts(
+      [artifact],
+      product.archiveBaseName,
+      { filesOnly: true },
+    )
+    if (!result) throw new Error('Missing archive result')
+    const members = execFileSync('unzip', ['-Z1', result.zipPath], {
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')
+
+    expect(members).toEqual([
+      'artifact-metadata.json',
+      'resources/bin/test_server',
+    ])
   })
 
   it('does not overwrite a versioned object with different bytes', async () => {

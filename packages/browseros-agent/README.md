@@ -132,6 +132,7 @@ cd apps/server && bun --env-file=../../.env.development src/index.ts --config ..
 # Build
 bun run build                 # Build server and agent
 bun run build:server          # Build production server resource artifacts and upload zips to R2
+bun run build:claw-server     # Build five-platform BrowserClaw Rust resources and upload zips to R2
 bun run build:agent           # Build agent extension
 
 # Test
@@ -161,6 +162,65 @@ bun scripts/build/server.ts --target=all
 bun scripts/build/server.ts --target=darwin-arm64,linux-x64
 bun scripts/build/server.ts --target=all --manifest=scripts/build/config/server-prod-resources.json
 bun scripts/build/server.ts --target=all --no-upload
+```
+
+### BrowserClaw Rust production artifacts
+
+The BrowserClaw Rust builder runs on macOS and produces the same five resource
+ZIPs as `release-claw-server.yml`: macOS ARM64/x64, Linux ARM64/x64, and Windows
+x64. Darwin targets use Cargo and Xcode, Linux targets use Zig with a glibc 2.17
+floor, and Windows uses the MSVC ABI through `cargo-xwin`.
+
+Install the one-time host toolchain:
+
+```bash
+xcrun --find clang || xcode-select --install
+brew install rustup zig llvm cmake nasm
+rustup-init
+export PATH="$(brew --prefix llvm)/bin:$PATH"
+
+cargo install --locked cargo-zigbuild --version 0.23.0
+cargo install --locked cargo-xwin --version 0.23.0
+rustup target add \
+  aarch64-apple-darwin \
+  x86_64-apple-darwin \
+  aarch64-unknown-linux-gnu \
+  x86_64-unknown-linux-gnu \
+  x86_64-pc-windows-msvc
+```
+
+The build command preflights every selected target before compiling and repeats
+the relevant install command for anything missing. `cargo-xwin` downloads and
+caches the Microsoft CRT and Windows SDK on its first build.
+
+```bash
+# Build and package all five targets without R2 credentials
+bun scripts/build/claw-server-rust.ts --target=all --ci
+
+# Use production telemetry configuration but keep every artifact local
+bun scripts/build/claw-server-rust.ts --target=all --no-upload
+
+# Build selected targets
+bun scripts/build/claw-server-rust.ts --target=darwin-arm64,linux-x64 --no-upload
+
+# Upload immutable version keys without moving latest
+RELEASE_SHA="$(git rev-parse HEAD)" \
+  bun scripts/build/claw-server-rust.ts --target=all --upload --versioned-only
+```
+
+Normal builds read `CLAW_POSTHOG_KEY`, optional `CLAW_POSTHOG_HOST`, and R2
+credentials from the root `.env.production` plus exported environment values.
+`--ci` always embeds a non-production placeholder and never uploads. Output
+directories and ZIPs live under `dist/prod/claw-server-rust/`.
+
+The artifact version comes from `apps/claw-server-rust/Cargo.toml`. When
+replacing the build stage of a prepared release, stamp that version in a clean,
+disposable checkout before building:
+
+```bash
+VERSION=0.0.27
+(cd ../browseros && uv run browseros release component stamp \
+  --component claw-server-rust --version "$VERSION")
 ```
 
 ## License

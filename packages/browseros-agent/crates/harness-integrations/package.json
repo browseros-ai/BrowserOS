@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/harness-integrations-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package harness-integrations -- --check && cargo clippy --package harness-integrations --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package harness-integrations --locked"
+  }
+}

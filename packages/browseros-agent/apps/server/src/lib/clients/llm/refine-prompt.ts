@@ -39,21 +39,15 @@ export async function refinePrompt(
   llmConfig: RefinePromptConfig,
   request: RefinePromptRequest,
   browserosId?: string,
+  runStreamText: typeof streamText = streamText,
 ): Promise<RefinePromptResult> {
   try {
     const resolvedConfig = await resolveLLMConfig(llmConfig, browserosId)
     const model = createLLMProvider(resolvedConfig)
 
-    // streamText works for all providers including Codex (which requires streaming).
-    // Capture streaming errors: the SDK's default onError just logs to
-    // console and does not propagate, so provider failures (bad URL,
-    // auth, timeout) end up as internal error chunks that `textStream`
-    // filters out. Without capturing, the loop exits with zero chunks
-    // and we misreport the failure as "Provider returned an empty
-    // response". Re-throw after the loop so the catch below surfaces
-    // the real error message.
+    // AI SDK reports provider failures through onError while textStream ends cleanly.
     let capturedError: unknown = null
-    const stream = streamText({
+    const stream = runStreamText({
       model,
       system: buildSystemPrompt(request.name),
       messages: [{ role: 'user', content: request.prompt }],

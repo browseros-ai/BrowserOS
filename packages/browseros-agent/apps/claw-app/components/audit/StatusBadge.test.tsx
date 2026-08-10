@@ -8,4 +8,10 @@ describe('StatusBadge', () => {
       'Stopped',
     )
   })
+
+  it('renders a static live badge with no animation', () => {
+    const html = renderToStaticMarkup(<StatusBadge status="live" />)
+    expect(html).toContain('Live')
+    expect(html).not.toContain('animate-pulse')
+  })
 })

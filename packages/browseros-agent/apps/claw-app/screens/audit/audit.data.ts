@@ -42,7 +42,6 @@ export interface AuditScreenData {
   setStatusFilter: (status: TaskStatus | null) => void
   setSiteFilter: (site: string | null) => void
   setSearch: (q: string) => void
-  setSort: (sort: AuditFilters['sort']) => void
 }
 
 /**
@@ -149,6 +148,5 @@ export function useAuditScreenData(): AuditScreenData {
     setStatusFilter: (status) => update({ status }),
     setSiteFilter: (site) => update({ site }),
     setSearch: (search) => update({ search }),
-    setSort: (sort) => update({ sort }),
   }
 }

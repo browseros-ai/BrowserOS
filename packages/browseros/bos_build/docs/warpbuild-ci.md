@@ -7,12 +7,12 @@ Azure BYOC runners:
 - `.github/workflows/release-windows.yml`
 - `.github/workflows/build-browseros.yml`
 
-The per-platform workflows resolve product matrices and delegate each browser
-build to the reusable `build-browseros.yml` workflow. That reusable workflow
-owns the WarpBuild checkout, cache, sync, build, upload-artifact, and
-queue-watchdog assumptions documented here. The signed macOS release and
-nightly lanes use the repo-scoped Mac Mini runner instead; see
-`release-ci.md` and `nightly-macos-ci.md` for those paths.
+The full product workflows call the Linux and Windows wrappers, which delegate
+one native lane to the reusable `build-browseros.yml` workflow. That workflow
+owns the WarpBuild checkout, cache, sync, one `bos_build` invocation, browser
+artifact upload, and lane attestation. The wrappers own their product matrix
+and queue watchdog. Signed macOS releases and nightlies use the repo-scoped Mac
+builder; see `release-ci.md` and `nightly-macos-ci.md`.
 
 ## Runners
 
@@ -119,10 +119,11 @@ Only dispatch one when you intentionally want to spend Azure compute time.
 
 `release-linux.yml` and `release-windows.yml` build one matrix entry per
 selected product (`browseros`, `browserclaw`, or `all`) and call
-`.github/workflows/build-browseros.yml` with `profile=release-ci`. Linux always
-builds unsigned artifacts. Windows follows the caller's `sign` input and can be
-used for unsigned verification with `sign=false`. Both lanes pass
-`upload_to_r2` through to the reusable workflow.
+`.github/workflows/build-browseros.yml` with `profile=release-ci`. Full product
+releases set `resource-mode=source`, pass the exact candidate SHA and prepared
+common-resource artifact, and always build one product. Standalone wrapper
+dispatches default to `published` for intentional released-resource builds.
+Linux is unsigned. Windows follows the caller's `sign` input.
 
 The reusable workflow performs the per-platform recipe:
 
@@ -148,10 +149,20 @@ The reusable workflow performs the per-platform recipe:
    revalidates depot_tools, then runs `gclient sync -D --no-history
    --shallow`, exactly what the git_setup module runs.
 7. Save the cache (only when the restore missed, i.e. first run per pin).
-8. `uv run browseros build --profile release-ci --product <product>
-   --arch <arch> --chromium-src .../src`, with signing and R2 upload flags
-   resolved from workflow inputs.
-9. Upload release build artifacts to the Actions run with 14-day retention.
+8. In source mode, download and validate the candidate-bound common-resource
+   artifact. Set up Bun for the BrowserOS server or the native Rust target for
+   the BrowserOS neo server.
+9. Invoke `uv run browseros build` once with the selected profile, product,
+   architecture, resource mode, Chromium path, signing/upload switches, and
+   prepared directory. `bos_build` builds the native server, stages validated
+   resources, compiles, packages, signs when requested, uploads browser
+   deliverables, and writes the lane manifest.
+10. Upload the lane manifest with 30-day retention in source mode and browser
+    build artifacts with 14-day retention.
+
+Source mode never downloads server, onboarding, or product-extension resources
+from R2; the only downloaded build input is the prepared GitHub artifact.
+Published mode deliberately retains the `download_resources` provider.
 
 The `release-ci` profile is the release preset minus `clean`/`git_setup`
 (steps 5-6 replace them). Why not run `git_setup` as-is: it does
@@ -218,8 +229,10 @@ acceleration on WarpCache for Linux and the R2 tarball for Windows; do not add
 ## Operating release lanes
 
 ```bash
-# BrowserOS Linux release artifact build without R2 upload.
-gh workflow run release-linux.yml -f products=browseros -f upload_to_r2=false
+# BrowserOS Linux build from intentionally published component resources.
+gh workflow run release-linux.yml \
+  -f products=browseros \
+  -f upload_to_r2=false
 
 # BrowserClaw unsigned Windows verification without R2 upload.
 gh workflow run release-windows.yml \
@@ -227,9 +240,16 @@ gh workflow run release-windows.yml \
   -f sign=false \
   -f upload_to_r2=false
 
-# Both products on Linux with R2 upload.
-gh workflow run release-linux.yml -f products=all -f upload_to_r2=true
+# Full source-built matrices start only from the product orchestrators.
+gh workflow run release-browseros.yml --ref main
+gh workflow run release-browserclaw.yml --ref main
 ```
+
+Manual wrapper dispatches are published-mode only. Source mode is available
+through `workflow_call` because its prepared-resource artifact belongs to the
+parent full-release run. Retry a failed full-release lane with
+`gh run rerun <run-id> --failed` so it keeps the same candidate and artifact
+namespace.
 
 The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next run is cold again for that version. To force a fresh

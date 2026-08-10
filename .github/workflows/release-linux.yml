@@ -27,26 +27,43 @@ on:
         required: false
         type: boolean
         default: true
-      browseros_server_version:
-        description: "Exact BrowserOS server resource version; empty uses latest"
+      resource_mode:
+        description: "Resource provider: published or source"
+        required: false
+        type: string
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
         required: false
         type: string
         default: ""
-      browserclaw_server_version:
-        description: "Exact BrowserClaw server resource version; empty uses latest"
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
         required: false
         type: string
         default: ""
-      browserclaw_onboard_version:
-        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
+      ref:
+        description: "Published-mode checkout ref"
         required: false
         type: string
         default: ""
-      bundled_extensions_manifest_url:
-        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+    secrets:
+      R2_ACCOUNT_ID:
         required: false
-        type: string
-        default: ""
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -65,8 +82,13 @@ jobs:
         id: plan
         env:
           PRODUCTS: ${{ inputs.products || 'browseros' }}
+          RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
         run: |
           set -euo pipefail
+          if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
+            echo "::error::source mode builds one candidate product per lane"
+            exit 1
+          fi
           case "$PRODUCTS" in
             all)
               matrix='[{"product":"browseros"},{"product":"browserclaw"}]'
@@ -163,8 +185,16 @@ jobs:
       profile: release-ci
       sign: false
       upload: ${{ inputs.upload_to_r2 }}
-      browseros_server_version: ${{ inputs.browseros_server_version }}
-      browserclaw_server_version: ${{ inputs.browserclaw_server_version }}
-      browserclaw_onboard_version: ${{ inputs.browserclaw_onboard_version }}
-      bundled_extensions_manifest_url: ${{ inputs.bundled_extensions_manifest_url }}
-    secrets: inherit
+      resource-mode: ${{ inputs.resource_mode || 'published' }}
+      candidate-sha: ${{ inputs.candidate_sha || '' }}
+      prepared-resources-artifact: ${{ inputs.prepared_resources_artifact || '' }}
+      ref: ${{ inputs.ref || '' }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}

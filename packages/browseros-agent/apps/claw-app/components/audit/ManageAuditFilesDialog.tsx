@@ -107,7 +107,7 @@ export function ManageAuditFilesDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" className="rounded-9 px-2.5">
             Manage audit files
           </Button>
         }

@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/browseros-mcp-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package browseros-mcp -- --check && cargo clippy --package browseros-mcp --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package browseros-mcp --locked"
+  }
+}

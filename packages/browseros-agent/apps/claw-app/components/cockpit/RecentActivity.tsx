@@ -1,4 +1,4 @@
-import { ArrowRight, History } from 'lucide-react'
+import { History } from 'lucide-react'
 import { NavLink } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { type TaskSummary, useSessions } from '@/modules/api/audit.hooks'
@@ -22,10 +22,8 @@ const HOME_TASK_LIMIT = 12
  *   │                        │  s3    │  s4    │
  *   └────────────────────────┴────────┴────────┘
  *
- * Rows are locked to `auto-rows-[150px]` so every supporting cell
- * is the same size regardless of internal content. The lead spans
- * both rows so it doubles that height (~300px) without ballooning.
- * At mobile: everything single-column.
+ * Rows are locked to 216px at the bento breakpoint. At mobile the
+ * cards stack into a single column and keep an explicit media area.
  */
 export function RecentActivity() {
   const query = useSessions({
@@ -43,8 +41,8 @@ export function RecentActivity() {
   const tail = ordered.slice(5)
 
   return (
-    <section className="ph-no-capture space-y-4">
-      <SectionHeader />
+    <section className="ph-no-capture space-y-5">
+      <SectionHeader sessionCount={ordered.length} />
       {query.isPending ? (
         <BentoSkeleton />
       ) : !lead ? (
@@ -56,26 +54,35 @@ export function RecentActivity() {
       ) : (
         <>
           <BentoGrid lead={lead} supporting={supporting} now={now} />
-          {tail.length > 0 && <Tail tail={tail} now={now} />}
+          {tail.length > 0 && <ActivityTable tail={tail} now={now} />}
         </>
       )}
-      <div className="pt-1">
+      <div className="pt-0.5">
         <NavLink
           to="/audit"
-          className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink"
+          className="group inline-flex items-center gap-2.5 font-medium text-[12px] text-cyanotype-blue leading-4 transition-colors hover:text-cyanotype-blue-hover"
         >
-          View all activity
-          <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+          <span>View all activity</span>
+          <span
+            aria-hidden
+            className="h-px w-[22px] bg-current transition-[width] group-hover:w-8"
+          />
         </NavLink>
       </div>
     </section>
   )
 }
 
-function SectionHeader() {
+function SectionHeader({ sessionCount }: { sessionCount: number }) {
   return (
-    <header className="flex items-baseline gap-3">
-      <h2 className="font-semibold text-ink text-lg">Recent activity</h2>
+    <header className="flex items-center gap-3.5 pb-1">
+      <h2 className="shrink-0 font-medium text-[15px] text-cyanotype-ink leading-[18px]">
+        Recent activity
+      </h2>
+      <span aria-hidden className="h-px flex-1 bg-cyanotype-border" />
+      <span className="shrink-0 text-[11px] text-cyanotype-muted tabular-nums leading-[14px]">
+        {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
+      </span>
     </header>
   )
 }
@@ -88,11 +95,12 @@ interface BentoGridProps {
 
 function BentoGrid({ lead, supporting, now }: BentoGridProps) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[200px_200px]">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[216px_216px]">
       <LeadRunTile
         task={lead}
         now={now}
-        className="md:col-span-6 md:row-span-2"
+        captionTone="blue"
+        className="min-h-[360px] md:col-span-6 md:row-span-2 md:min-h-0"
       />
       {supporting.map((task, idx) => (
         <SupportingTile
@@ -124,24 +132,38 @@ function supportingSlotClass(idx: number): string {
   }
 }
 
-function Tail({ tail, now }: { tail: TaskSummary[]; now: number }) {
+function ActivityTable({ tail, now }: { tail: TaskSummary[]; now: number }) {
   return (
-    <div className="pt-2">
-      {tail.map((task) => (
-        <RunRow key={task.sessionId} task={task} now={now} />
-      ))}
+    <div
+      className="overflow-hidden rounded-[9px] border border-cyanotype-border bg-card"
+      data-testid="recent-activity-table"
+    >
+      <div>
+        <div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_64px_64px] items-center gap-3 bg-cyanotype-blue px-4 py-2 text-[11px] text-white leading-[14px] md:grid-cols-[236px_minmax(0,1fr)_240px_72px_64px] md:gap-4">
+          <span>Agent</span>
+          <span>Target</span>
+          <span className="hidden md:block">Tool chain</span>
+          <span className="text-right">Duration</span>
+          <span className="text-right">When</span>
+        </div>
+        <div>
+          {tail.map((task) => (
+            <RunRow key={task.sessionId} task={task} now={now} />
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
 
 function BentoSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[200px_200px]">
-      <Skeleton className="rounded-[18px] md:col-span-6 md:row-span-2" />
-      <Skeleton className="rounded-2xl md:col-span-3 md:col-start-7 md:row-start-1" />
-      <Skeleton className="rounded-2xl md:col-span-3 md:col-start-10 md:row-start-1" />
-      <Skeleton className="rounded-2xl md:col-span-3 md:col-start-7 md:row-start-2" />
-      <Skeleton className="rounded-2xl md:col-span-3 md:col-start-10 md:row-start-2" />
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[216px_216px]">
+      <Skeleton className="min-h-[360px] rounded-[9px] md:col-span-6 md:row-span-2 md:min-h-0" />
+      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-7 md:row-start-1 md:min-h-0" />
+      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-10 md:row-start-1 md:min-h-0" />
+      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-7 md:row-start-2 md:min-h-0" />
+      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-10 md:row-start-2 md:min-h-0" />
     </div>
   )
 }

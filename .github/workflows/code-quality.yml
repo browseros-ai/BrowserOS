@@ -45,9 +45,15 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # Full history so Turbo's --affected can compute the merge base;
+          # a shallow checkout silently makes it treat every package as changed.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Start Turbo remote cache (GitHub Actions cache)
+        uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1
 
       - name: Install dependencies
         run: bun ci
@@ -55,14 +61,15 @@ jobs:
       - name: Check env examples
         run: bun run env:examples:check
 
-      - name: Prepare wxt
-        run: VITE_PUBLIC_BROWSEROS_API=http://localhost:3000 bun run --cwd apps/app wxt prepare
+      - name: Create dev env file
+        run: cp .env.development.example .env.development
 
-      - name: Run codegen
-        run: bun run --cwd apps/app codegen
-
-      - name: Run Typecheck
-        run: bun run typecheck
+      # Turbo runs each affected package's typecheck (its script self-contains
+      # wxt prepare) after its `codegen` task dep, so unchanged packages are
+      # cache hits. Replaces the manual wxt-prepare + codegen + `bun run
+      # typecheck` steps.
+      - name: Run Typecheck (affected)
+        run: bunx turbo run typecheck --affected
 
   claw-api-codegen:
     name: runner / Claw API generated code

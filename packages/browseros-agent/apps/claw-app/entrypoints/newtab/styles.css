@@ -73,6 +73,38 @@
   --color-accent-tint: var(--accent-tint);
   --color-accent-tint-2: var(--accent-tint-2);
 
+  /* Cyanotype activity surface */
+  --color-cyanotype-blue: var(--cyanotype-blue);
+  --color-cyanotype-blue-hover: var(--cyanotype-blue-hover);
+  --color-cyanotype-well: var(--cyanotype-well);
+  --color-cyanotype-border: var(--cyanotype-border);
+  --color-cyanotype-ink: var(--cyanotype-ink);
+  --color-cyanotype-muted: var(--cyanotype-muted);
+  --color-cyanotype-soft: var(--cyanotype-soft);
+  --color-cyanotype-rule: var(--cyanotype-rule);
+  --color-cyanotype-hover: var(--cyanotype-hover);
+  --color-cyanotype-live: var(--cyanotype-live);
+  --color-cyanotype-live-ink: var(--cyanotype-live-ink);
+  --color-cyanotype-live-text: var(--cyanotype-live-text);
+  --color-cyanotype-error: var(--cyanotype-error);
+
+  /* Ledger surfaces: the cobalt-headed data table on the audit screen.
+     The palette is shared with the cyanotype set above — same hexes, one
+     design system — but kept under its own role names for now; folding
+     the two vocabularies into one is a follow-up, not a merge-time
+     rename. --ledger-band / --ledger-band-ink / --ledger-head-ink are
+     genuinely new and have no cyanotype equivalent. */
+  --color-ledger-head: var(--ledger-head);
+  --color-ledger-head-ink: var(--ledger-head-ink);
+  --color-ledger-band: var(--ledger-band);
+  --color-ledger-band-ink: var(--ledger-band-ink);
+  --color-ledger-border: var(--ledger-border);
+  --color-ledger-divider: var(--ledger-divider);
+  --color-ledger-link: var(--ledger-link);
+  --color-ledger-ink: var(--ledger-ink);
+  --color-ledger-ink-2: var(--ledger-ink-2);
+  --color-ledger-ink-3: var(--ledger-ink-3);
+
   /* Status palette */
   --color-green: var(--green);
   --color-green-tint: var(--green-tint);
@@ -117,6 +149,11 @@
   --radius-2xl: 16px;
   --radius-3xl: 20px;
   --radius-4xl: 9999px;
+  /* The corner radius the material-design pass standardises on. Sits
+     between --radius-lg and --radius-xl rather than replacing either, so
+     screens can adopt it one at a time instead of the ramp shifting under
+     every existing component at once. */
+  --radius-9: 9px;
 }
 
 /* Keyframes lifted from the design prototype's \3c style> block */
@@ -319,6 +356,19 @@ body {
   --accent-ink: #0143c4;
   --accent-tint: #eaf1ff;
   --accent-tint-2: #d3e2ff;
+  --cyanotype-blue: #0043cd;
+  --cyanotype-blue-hover: #0036a6;
+  --cyanotype-well: #e3eaf1;
+  --cyanotype-border: #c8d4e0;
+  --cyanotype-ink: #0c2742;
+  --cyanotype-muted: #4a6480;
+  --cyanotype-soft: #5f7794;
+  --cyanotype-rule: #dfe7ee;
+  --cyanotype-hover: #f3f6f9;
+  --cyanotype-live: #2fe08c;
+  --cyanotype-live-ink: #04331d;
+  --cyanotype-live-text: #00713e;
+  --cyanotype-error: #c2123c;
   --green: #16a34a;
   --green-tint: #e6f6ec;
   --amber: hsl(35 85% 42%);
@@ -326,6 +376,22 @@ body {
   --red: #e11d48;
   --red-tint: hsl(4 65% 95%);
   --blue: #0e7490;
+
+  /* Ledger table. A deeper cobalt than --primary #0254ec: the header is a
+     filled bar, not a CTA, so it carries more weight without competing
+     with the buttons on the same screen. The three ledger inks are a
+     blue-shifted parallel of the neutral ink scale, so column text reads
+     as one family with the cobalt chrome rather than as grey on blue. */
+  --ledger-head: #0043cd;
+  --ledger-head-ink: #ffffff;
+  --ledger-band: #eaf1fd;
+  --ledger-band-ink: #0043cd;
+  --ledger-border: #c8d4e0;
+  --ledger-divider: #dfe7ee;
+  --ledger-link: #155da8;
+  --ledger-ink: #0c2742;
+  --ledger-ink-2: #4a6480;
+  --ledger-ink-3: #5f7794;
 }
 /* Dark theme values. The app is locked to light mode today (the theme
    toggle was removed) but the shadcn token surface expects a coherent
@@ -414,6 +480,19 @@ body {
   --accent-ink: #8fb4ff;
   --accent-tint: #1e2842;
   --accent-tint-2: #253355;
+  --cyanotype-blue: #0043cd;
+  --cyanotype-blue-hover: #155da8;
+  --cyanotype-well: #1e2842;
+  --cyanotype-border: #334159;
+  --cyanotype-ink: #f8f8fa;
+  --cyanotype-muted: #d5dded;
+  --cyanotype-soft: #a4acbd;
+  --cyanotype-rule: #212c40;
+  --cyanotype-hover: #253355;
+  --cyanotype-live: #2fe08c;
+  --cyanotype-live-ink: #04331d;
+  --cyanotype-live-text: #34c26b;
+  --cyanotype-error: #ff5a75;
   --green: #34c26b;
   --green-tint: #10281a;
   --amber: hsl(38 85% 58%);
@@ -421,4 +500,18 @@ body {
   --red: #ff5a75;
   --red-tint: #2b1414;
   --blue: #56b8d8;
+
+  /* Ledger table, dark. The header bar drops to a deep cobalt that still
+     reads as a filled band against --card, and the link / ink roles
+     invert to the light end of the blue ramp. */
+  --ledger-head: #16306e;
+  --ledger-head-ink: #eaf1ff;
+  --ledger-band: #16203a;
+  --ledger-band-ink: #8fb4ff;
+  --ledger-border: #212c40;
+  --ledger-divider: #1b2537;
+  --ledger-link: #8fb4ff;
+  --ledger-ink: #f8f8fa;
+  --ledger-ink-2: #c1c8d8;
+  --ledger-ink-3: #a4acbd;
 }

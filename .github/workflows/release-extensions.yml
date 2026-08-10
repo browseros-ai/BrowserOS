@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish_alpha_feed:
+        description: "Publish and persist the alpha feed after finalization"
+        required: false
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       version:
@@ -61,6 +66,11 @@ on:
         default: "build"
       defer_finalize:
         description: "Leave a successful build private for a later finalize call"
+        required: false
+        type: boolean
+        default: false
+      publish_alpha_feed:
+        description: "Publish and persist the alpha feed after finalization"
         required: false
         type: boolean
         default: false
@@ -116,12 +126,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-extensions
+  group: release-extensions-and-feeds
   cancel-in-progress: false
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 20
     outputs:
       mode: ${{ steps.validate.outputs.mode }}
@@ -181,68 +194,47 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Read allocated extension releases and tags
-        id: records
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_RECORDS: ${{ runner.temp }}/extension-release-records.json
-        run: |
-          set -euo pipefail
-          git fetch origin --tags --prune
-          release_pages="${RUNNER_TEMP}/extension-release-pages.json"
-          raw_releases="${RUNNER_TEMP}/extension-raw-releases.json"
-          releases="${RUNNER_TEMP}/extension-releases.json"
-          tag_lines="${RUNNER_TEMP}/extension-tag-records.jsonl"
-          tags="${RUNNER_TEMP}/extension-tags.json"
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$release_pages"
-          jq '[.[][] | {tag_name, draft, target_commitish}]' "$release_pages" > "$raw_releases"
-          : > "$tag_lines"
-          while IFS= read -r tag; do
-            sha="$(git rev-list -n 1 "$tag")"
-            object="$(git cat-file -t "refs/tags/$tag")"
-            jq -nc --arg tag "$tag" --arg sha "$sha" --arg object "$object" \
-              '{tag_name: $tag, release_sha: $sha, tag_object: $object}' >> "$tag_lines"
-          done < <(git tag --list 'ext-*/v*')
-          jq -s '.' "$tag_lines" > "$tags"
-          jq --slurpfile tags "$tags" '
-            [.[] as $release
-              | ($tags[0] | map(select(.tag_name == $release.tag_name)) | first) as $tag
-              | $release + {
-                  tag_object: ($tag.tag_object // "missing"),
-                  tag_release_sha: ($tag.release_sha // null)
-                }
-            ]
-          ' "$raw_releases" > "$releases"
-          jq -s 'add' "$releases" "$tags" > "$RELEASE_RECORDS"
-          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
-
       - name: Resolve extension release
         id: release
         working-directory: packages/browseros
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
           EXTENSION: ${{ inputs.extension }}
-          RELEASE_RECORDS: ${{ steps.records.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
           release_sha="$(git rev-parse HEAD)"
-          args=(
-            --name "$EXTENSION"
-            --source-sha "$release_sha"
-            --release-records "$RELEASE_RECORDS"
-            --version "$REQUESTED_VERSION"
-            --github-output "$GITHUB_OUTPUT"
-          )
-          if [ -z "$REQUESTED_VERSION" ]; then
-            for name in bundled-manifest.xml update-manifest.alpha.xml update-manifest.xml; do
-              path="${RUNNER_TEMP}/${name}"
-              curl --fail --location --retry 3 \
-                "https://cdn.browseros.com/extensions/${name}" \
-                --output "$path"
-              args+=(--manifest "$path")
-            done
+          if [ "$EXTENSION" = "agent" ] || [ "$EXTENSION" = "browserclaw" ]; then
+            args=(
+              --component "$EXTENSION"
+              --event-name "$EVENT_NAME"
+              --default-branch "$DEFAULT_BRANCH"
+              --requested-version "$REQUESTED_VERSION"
+              --release-ref HEAD
+              --repo "$GITHUB_REPOSITORY"
+              --github-output "$GITHUB_OUTPUT"
+              --github-summary "$GITHUB_STEP_SUMMARY"
+            )
+            if [ -z "$REQUESTED_VERSION" ]; then
+              args+=(
+                --manifest https://cdn.browseros.com/extensions/bundled-manifest.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.alpha.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.xml
+              )
+            fi
+            uv run browseros release component resolve "${args[@]}"
+          else
+            records="${RUNNER_TEMP}/explicit-extension-records.json"
+            echo '[]' > "$records"
+            uv run browseros ext resolve-version \
+              --name "$EXTENSION" \
+              --source-sha "$release_sha" \
+              --release-records "$records" \
+              --version "$REQUESTED_VERSION" \
+              --github-output "$GITHUB_OUTPUT"
           fi
-          uv run browseros ext resolve-version "${args[@]}"
 
       - name: Reserve private drafts
         if: ${{ steps.validate.outputs.mode == 'build' }}
@@ -352,7 +344,7 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.mode == 'build'
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 45
     env:
       EXTENSION: ${{ inputs.extension }}
@@ -375,6 +367,11 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Stamp in-repository extension version
+        if: ${{ inputs.extension == 'agent' || inputs.extension == 'browserclaw' }}
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component "$EXTENSION" --version "$VERSION"
 
       - name: Verify Chrome is available
         run: google-chrome --version
@@ -452,12 +449,102 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  finalize:
+  preflight_alpha:
     needs:
       - prepare
       - build
     if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 10
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
+      should_publish: ${{ steps.render.outputs.should_publish }}
+    env:
+      NAMES: ${{ needs.prepare.outputs.names }}
+      PUBLISH_ALPHA_FEED: ${{ inputs.publish_alpha_feed }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Record feed snapshot base
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Preflight alpha feed update
+        id: render
+        working-directory: packages/browseros
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH_ALPHA_FEED" != "true" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Alpha publication is owned by the calling workflow"
+            exit 0
+          fi
+          args=(--channel alpha)
+          pin_count=0
+          for NAME in $NAMES; do
+            case "$NAME" in
+              agent|bugreporter|browserclaw)
+                args+=(--set "$NAME=$VERSION")
+                pin_count=$((pin_count + 1))
+                ;;
+            esac
+          done
+          if [ "$pin_count" -eq 0 ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "No selected extension is registered in the alpha update feed"
+            exit 0
+          fi
+          uv run browseros release extensions "${args[@]}"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Stage exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          mkdir -p "$artifact_root/updates/extensions"
+          for path in "${paths[@]}"; do
+            cp "$path" "$artifact_root/$path"
+          done
+          (
+            cd "$artifact_root"
+            sha256sum "${paths[@]}" > SHA256SUMS
+          )
+
+      - name: Upload exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    needs:
+      - prepare
+      - build
+      - preflight_alpha
+    if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 20
     env:
       EXTENSION: ${{ inputs.extension }}
@@ -573,3 +660,88 @@ jobs:
               echo "Release $TAG is already published"
             fi
           done
+
+  publish_alpha:
+    needs:
+      - prepare
+      - preflight_alpha
+      - finalize
+    if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight_alpha.outputs.base_sha }}
+
+      - name: Download exact alpha feed snapshot
+        uses: actions/download-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+
+      - name: Restore exact alpha feed snapshot
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          (
+            cd "$artifact_root"
+            sha256sum --check SHA256SUMS
+          )
+          for path in "${paths[@]}"; do
+            cp "$artifact_root/$path" "$GITHUB_WORKSPACE/$path"
+          done
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Commit tracked alpha feed snapshots
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          git add -- "${paths[@]}"
+          base_sha="$(git rev-parse HEAD)"
+          git fetch origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          remote_sha="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          if [ "$base_sha" != "$remote_sha" ]; then
+            echo "::error::Default branch moved during feed generation; rerun the release finalization"
+            exit 1
+          fi
+          if git diff --cached --quiet; then
+            echo "Tracked alpha feed snapshots already match"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(release): update extension alpha feeds to ${VERSION}"
+          git push origin "HEAD:$DEFAULT_BRANCH"
+
+      - name: Publish committed alpha feeds
+        working-directory: packages/browseros
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run browseros release feeds publish-local \
+            extensions/update-manifest.alpha.xml \
+            extensions/extensions.alpha.json \
+            extensions/bundled-manifest.xml \
+            --publish

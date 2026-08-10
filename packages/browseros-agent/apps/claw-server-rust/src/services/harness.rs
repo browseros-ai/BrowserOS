@@ -24,11 +24,19 @@ use std::{
 use tokio::sync::Mutex;
 use url::Url;
 
-pub const BROWSEROS_MCP_SERVER_NAME: &str = "BrowserOS neo";
-pub const BROWSEROS_LEGACY_MCP_SERVER_NAME: &str = "BrowserClaw";
+pub const BROWSEROS_MCP_SERVER_NAME: &str = "browseros-neo";
+pub const BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME: &str = "BrowserOS neo";
+pub const BROWSERCLAW_LEGACY_MCP_SERVER_NAME: &str = "BrowserClaw";
 
-const BROWSEROS_MCP_SERVER_NAMES: [&str; 2] =
-    [BROWSEROS_MCP_SERVER_NAME, BROWSEROS_LEGACY_MCP_SERVER_NAME];
+const BROWSEROS_LEGACY_MCP_SERVER_NAMES: [&str; 2] = [
+    BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME,
+    BROWSERCLAW_LEGACY_MCP_SERVER_NAME,
+];
+const BROWSEROS_MCP_SERVER_NAMES: [&str; 3] = [
+    BROWSEROS_MCP_SERVER_NAME,
+    BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME,
+    BROWSERCLAW_LEGACY_MCP_SERVER_NAME,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Harness {
@@ -215,7 +223,6 @@ impl HarnessService {
         }
     }
 
-    /// Registers BrowserOS neo while restoring the prior spec on relink failure.
     pub async fn connect_browseros(
         &self,
         harness: Harness,
@@ -233,20 +240,18 @@ impl HarnessService {
                 .map_err(HarnessOperationError::Manager)?
                 .into_iter()
                 .any(|link| link.agent == agent);
-            let legacy_link = managed_browseros_links(&manager, &workspace_dir)
-                .map_err(HarnessOperationError::Manager)?
-                .into_iter()
-                .find(|link| {
-                    link.agent == agent
-                        && link.server_name == BROWSEROS_LEGACY_MCP_SERVER_NAME
-                });
+            let managed_links = managed_browseros_links(&manager, &workspace_dir)
+                .map_err(HarnessOperationError::Manager)?;
             if let Err(error) = migrate_browseros_agent(
                 &manager,
                 &workspace_dir,
                 agent,
                 &target_mcp_url,
-                legacy_link.as_ref(),
+                &managed_links,
             ) {
+                if matches!(&error, ManagerError::ForeignEntry { .. }) {
+                    return Err(HarnessOperationError::Manager(error));
+                }
                 tracing::warn!(harness = %harness, agent = %agent, %error, "BrowserOS MCP identity migration before connect failed");
             }
             let canonical_path = managed_browseros_links(&manager, &workspace_dir)
@@ -256,13 +261,20 @@ impl HarnessService {
                     link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME
                 })
                 .map(|link| link.config_path);
+            let allow_overwrite = allow_canonical_destination_overwrite(
+                &manager,
+                agent,
+                canonical_path.as_deref(),
+                canonical_path.is_some(),
+            )
+            .map_err(HarnessOperationError::Manager)?;
             let summary = relink_managed_server(
                 &manager,
                 &workspace_dir,
                 BROWSEROS_MCP_SERVER_NAME,
                 agent,
                 spec,
-                true,
+                allow_overwrite,
                 canonical_path.as_deref(),
             )?;
             let config_path = managed_browseros_links(&manager, &workspace_dir)
@@ -307,7 +319,6 @@ impl HarnessService {
         }
     }
 
-    /// Removes both managed BrowserOS MCP aliases from one harness.
     pub async fn disconnect_browseros(&self, harness: Harness) -> AppResult<ConnectionState> {
         let _guard = self.mutex.lock().await;
         let agent = harness.agent_id();
@@ -315,7 +326,7 @@ impl HarnessService {
         let workspace_dir = self.workspace_dir.clone();
         let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
-            adopt_config_only_legacy_for_disconnect(&manager, &workspace_dir, agent)
+            adopt_config_only_aliases_for_disconnect(&manager, &workspace_dir, agent)
                 .map_err(HarnessOperationError::Manager)?;
             let mut unlinked = false;
             let mut removed_manifest = false;
@@ -372,7 +383,6 @@ impl HarnessService {
         }
     }
 
-    /// Lists one logical BrowserOS connection per installed harness.
     pub async fn list_browseros_connections(&self) -> AppResult<Vec<ConnectionState>> {
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
@@ -431,7 +441,6 @@ impl HarnessService {
             .collect())
     }
 
-    /// Auto-connects detected harnesses only when no BrowserOS link exists.
     pub async fn first_run_connect(&self, mcp_url: &str) -> AppResult<FirstRunConnectOutcome> {
         let connections = self.list_browseros_connections().await?;
         let already_linked = connections.iter().filter(|state| state.installed).count();
@@ -455,7 +464,6 @@ impl HarnessService {
         Ok(outcome)
     }
 
-    /// Rescans managed entries and repairs drifted or missing files from manifest specs.
     pub async fn run_integrity_scan(&self) -> AppResult<IntegrityScanOutcome> {
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
@@ -465,7 +473,6 @@ impl HarnessService {
             .map_err(manager_app_error)
     }
 
-    /// Reconciles the product skill from the current MCP manifest links.
     pub async fn run_skill_reconciliation(&self) -> AppResult<SkillReconcileOutcome> {
         let _guard = self.mutex.lock().await;
         let Some(managed_skill) = self.managed_skill.clone() else {
@@ -480,7 +487,6 @@ impl HarnessService {
         .map_err(manager_app_error)
     }
 
-    /// Migrates eligible BrowserClaw entries independently on every startup.
     pub async fn migrate_browseros_identity(
         &self,
         target_mcp_url: &str,
@@ -496,7 +502,6 @@ impl HarnessService {
         .map_err(manager_app_error)
     }
 
-    /// Re-links every managed BrowserOS connection to the current MCP URL.
     pub async fn migrate_connected_urls(
         &self,
         target_mcp_url: &str,
@@ -609,7 +614,6 @@ fn with_skill_retry_message(message: String, warning: Option<String>) -> String 
     }
 }
 
-/// Selects HTTP when the catalog supports it, otherwise wraps the URL with `mcp-remote`.
 pub fn spec_for(agent: AgentId, mcp_url: &str) -> Result<McpServerSpec, ManagerError> {
     let surface = resolve_agent_surface(agent, AgentScope::System)?;
     if surface
@@ -656,20 +660,21 @@ fn recognized_browseros_links(
         if linked_agents.contains(&agent) {
             continue;
         }
-        match manager.inspect_entry(InspectEntryInput::new(
-            BROWSEROS_LEGACY_MCP_SERVER_NAME,
-            agent,
-        )) {
-            Ok(Some(entry)) if is_historical_browseros_spec(&entry.spec) => {
-                links.push(ListedLink {
-                    server_name: BROWSEROS_LEGACY_MCP_SERVER_NAME.to_string(),
-                    agent,
-                    config_path: entry.config_path,
-                });
-            }
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(agent = %agent, %error, "legacy BrowserOS MCP entry inspection failed");
+        for server_name in BROWSEROS_LEGACY_MCP_SERVER_NAMES {
+            match manager.inspect_entry(InspectEntryInput::new(server_name, agent)) {
+                Ok(Some(entry)) if is_historical_browseros_spec(&entry.spec) => {
+                    links.push(ListedLink {
+                        server_name: server_name.to_string(),
+                        agent,
+                        config_path: entry.config_path,
+                    });
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(agent = %agent, %server_name, %error, "legacy BrowserOS MCP entry inspection failed");
+                    break;
+                }
             }
         }
     }
@@ -688,39 +693,47 @@ fn deduplicate_browseros_links(links: Vec<ListedLink>) -> BTreeMap<AgentId, List
     by_agent
 }
 
-fn adopt_config_only_legacy_for_disconnect(
+fn adopt_config_only_aliases_for_disconnect(
     manager: &McpManager,
     workspace_dir: &Path,
     agent: AgentId,
 ) -> Result<(), ManagerError> {
-    if managed_browseros_links(manager, workspace_dir)?
-        .iter()
-        .any(|link| link.agent == agent && link.server_name == BROWSEROS_LEGACY_MCP_SERVER_NAME)
-    {
-        return Ok(());
-    }
-    let entry = match manager.inspect_entry(InspectEntryInput::new(
-        BROWSEROS_LEGACY_MCP_SERVER_NAME,
-        agent,
-    )) {
-        Ok(Some(entry)) if is_historical_browseros_spec(&entry.spec) => entry,
-        Ok(_) => return Ok(()),
-        Err(error) => {
-            tracing::warn!(agent = %agent, %error, "legacy BrowserOS MCP disconnect inspection failed");
-            return Ok(());
+    let linked_names = managed_browseros_links(manager, workspace_dir)?
+        .into_iter()
+        .filter(|link| link.agent == agent)
+        .map(|link| link.server_name)
+        .collect::<BTreeSet<_>>();
+    for source_name in BROWSEROS_LEGACY_MCP_SERVER_NAMES {
+        if linked_names.contains(source_name) {
+            continue;
         }
-    };
-    let mut input = MigrateServerInput::new(
-        BROWSEROS_LEGACY_MCP_SERVER_NAME,
-        McpServer {
-            name: BROWSEROS_MCP_SERVER_NAME.to_string(),
-            spec: entry.spec.clone(),
-        },
-        agent,
-    );
-    input.config_path = Some(entry.config_path);
-    input.unmanaged_source_spec = Some(entry.spec);
-    with_legacy_manifest_migration(workspace_dir, || manager.migrate_server(input.clone()))?;
+        let entry = match manager.inspect_entry(InspectEntryInput::new(source_name, agent)) {
+            Ok(Some(entry)) if is_historical_browseros_spec(&entry.spec) => entry,
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(agent = %agent, %source_name, %error, "legacy BrowserOS MCP disconnect inspection failed");
+                continue;
+            }
+        };
+        let allow_destination_overwrite = allow_canonical_destination_overwrite(
+            manager,
+            agent,
+            Some(&entry.config_path),
+            linked_names.contains(BROWSEROS_MCP_SERVER_NAME),
+        )?;
+        let mut input = MigrateServerInput::new(
+            source_name,
+            McpServer {
+                name: BROWSEROS_MCP_SERVER_NAME.to_string(),
+                spec: entry.spec.clone(),
+            },
+            agent,
+        );
+        input.config_path = Some(entry.config_path);
+        input.unmanaged_source_spec = Some(entry.spec);
+        input.allow_destination_overwrite = allow_destination_overwrite;
+        with_legacy_manifest_migration(workspace_dir, || manager.migrate_server(input.clone()))?;
+    }
     Ok(())
 }
 
@@ -729,16 +742,17 @@ fn migrate_browseros_identity(
     workspace_dir: &Path,
     target_mcp_url: &str,
 ) -> Result<IdentityMigrationOutcome, ManagerError> {
-    let legacy_links = managed_browseros_links(manager, workspace_dir)?
-        .into_iter()
-        .filter(|link| link.server_name == BROWSEROS_LEGACY_MCP_SERVER_NAME)
-        .map(|link| (link.agent, link))
-        .collect::<BTreeMap<_, _>>();
+    let managed_links = managed_browseros_links(manager, workspace_dir)?;
     let mut outcome = IdentityMigrationOutcome::default();
     for harness in Harness::ALL {
         let agent = harness.agent_id();
-        let legacy_link = legacy_links.get(&agent);
-        match migrate_browseros_agent(manager, workspace_dir, agent, target_mcp_url, legacy_link) {
+        match migrate_browseros_agent(
+            manager,
+            workspace_dir,
+            agent,
+            target_mcp_url,
+            &managed_links,
+        ) {
             Ok(true) => {
                 outcome.migrated += 1;
                 tracing::info!(harness = %harness, agent = %agent, "migrated BrowserOS neo MCP identity");
@@ -758,37 +772,121 @@ fn migrate_browseros_agent(
     workspace_dir: &Path,
     agent: AgentId,
     target_mcp_url: &str,
-    legacy_link: Option<&ListedLink>,
+    managed_links: &[ListedLink],
 ) -> Result<bool, ManagerError> {
-    let unmanaged_source = if legacy_link.is_none() {
-        match manager.inspect_entry(InspectEntryInput::new(
-            BROWSEROS_LEGACY_MCP_SERVER_NAME,
-            agent,
-        ))? {
-            Some(entry) if is_historical_browseros_spec(&entry.spec) => Some(entry),
-            _ => return Ok(false),
-        }
+    let mut destination_managed = managed_links
+        .iter()
+        .any(|link| link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME);
+    let mut migrated = if destination_managed {
+        false
     } else {
-        None
+        adopt_config_only_canonical(manager, workspace_dir, agent, target_mcp_url)?
     };
-    let mut input = MigrateServerInput::new(
-        BROWSEROS_LEGACY_MCP_SERVER_NAME,
+    destination_managed |= migrated;
+    for source_name in BROWSEROS_LEGACY_MCP_SERVER_NAMES {
+        let legacy_link = managed_links
+            .iter()
+            .find(|link| link.agent == agent && link.server_name == source_name);
+        let alias_migrated = migrate_browseros_alias(
+            manager,
+            workspace_dir,
+            agent,
+            target_mcp_url,
+            source_name,
+            legacy_link,
+            destination_managed,
+        )?;
+        migrated |= alias_migrated;
+        destination_managed |= alias_migrated;
+    }
+    Ok(migrated)
+}
+
+fn adopt_config_only_canonical(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    agent: AgentId,
+    target_mcp_url: &str,
+) -> Result<bool, ManagerError> {
+    let entry =
+        match manager.inspect_entry(InspectEntryInput::new(BROWSEROS_MCP_SERVER_NAME, agent))? {
+            Some(entry) if is_historical_browseros_spec(&entry.spec) => entry,
+            _ => return Ok(false),
+        };
+    let mut input = LinkInput::new(
         McpServer {
             name: BROWSEROS_MCP_SERVER_NAME.to_string(),
             spec: spec_for(agent, target_mcp_url)?,
         },
         agent,
     );
-    input.config_path = legacy_link
+    input.config_path = Some(entry.config_path);
+    input.allow_overwrite = true;
+    with_legacy_manifest_migration(workspace_dir, || manager.link(input.clone()))
+        .map(|summary| summary.created)
+}
+
+fn migrate_browseros_alias(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    agent: AgentId,
+    target_mcp_url: &str,
+    source_name: &str,
+    legacy_link: Option<&ListedLink>,
+    destination_managed: bool,
+) -> Result<bool, ManagerError> {
+    let unmanaged_source = if legacy_link.is_none() {
+        match manager.inspect_entry(InspectEntryInput::new(source_name, agent))? {
+            Some(entry) if is_historical_browseros_spec(&entry.spec) => Some(entry),
+            _ => return Ok(false),
+        }
+    } else {
+        None
+    };
+    let config_path = legacy_link
         .map(|link| link.config_path.clone())
         .or_else(|| {
             unmanaged_source
                 .as_ref()
                 .map(|entry| entry.config_path.clone())
         });
+    let allow_destination_overwrite = allow_canonical_destination_overwrite(
+        manager,
+        agent,
+        config_path.as_deref(),
+        destination_managed,
+    )?;
+    let mut input = MigrateServerInput::new(
+        source_name,
+        McpServer {
+            name: BROWSEROS_MCP_SERVER_NAME.to_string(),
+            spec: spec_for(agent, target_mcp_url)?,
+        },
+        agent,
+    );
+    input.config_path = config_path;
     input.unmanaged_source_spec = unmanaged_source.map(|entry| entry.spec);
+    input.allow_destination_overwrite = allow_destination_overwrite;
     with_legacy_manifest_migration(workspace_dir, || manager.migrate_server(input.clone()))
         .map(|summary| summary.migrated)
+}
+
+fn allow_canonical_destination_overwrite(
+    manager: &McpManager,
+    agent: AgentId,
+    config_path: Option<&Path>,
+    destination_managed: bool,
+) -> Result<bool, ManagerError> {
+    if destination_managed {
+        return Ok(true);
+    }
+    let mut input = InspectEntryInput::new(BROWSEROS_MCP_SERVER_NAME, agent);
+    if let Some(config_path) = config_path {
+        input = input.at_path(config_path);
+    }
+    Ok(manager
+        .inspect_entry(input)?
+        .is_some_and(|entry| is_historical_browseros_spec(&entry.spec)))
 }
 
 fn is_historical_browseros_spec(spec: &McpServerSpec) -> bool {
@@ -1130,9 +1228,6 @@ impl From<std::io::Error> for AppError {
     }
 }
 
-/// Decides first-launch auto-connect targets (Option B). Returns `None` when any
-/// harness is already linked, marking this an existing install to seed without
-/// sweeping; otherwise the full detected-but-unlinked set to connect.
 fn first_run_connect_targets(connections: &[ConnectionState]) -> Option<Vec<Harness>> {
     if connections.iter().any(|state| state.installed) {
         return None;

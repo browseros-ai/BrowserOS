@@ -96,6 +96,30 @@ class WorkflowSecretScannerTest(unittest.TestCase):
             consumers,
         )
 
+    def test_server_ota_workflow_is_registered_with_signing_secrets(self):
+        workflow = "publish-server-ota.yml"
+        self.assertIn(workflow, {path.name for path in RELEASE_WORKFLOW_FILES})
+
+        consumers = {spec.name for spec in ALLOWLIST if workflow in spec.consumers}
+        self.assertEqual(
+            {
+                "ESIGNER_CREDENTIAL_ID",
+                "ESIGNER_PASSWORD",
+                "ESIGNER_TOTP_SECRET",
+                "ESIGNER_USERNAME",
+                "MACOS_CERTIFICATE_NAME",
+                "PROD_MACOS_NOTARIZATION_APPLE_ID",
+                "PROD_MACOS_NOTARIZATION_PWD",
+                "PROD_MACOS_NOTARIZATION_TEAM_ID",
+                "R2_ACCESS_KEY_ID",
+                "R2_ACCOUNT_ID",
+                "R2_BUCKET",
+                "R2_SECRET_ACCESS_KEY",
+                "SPARKLE_PRIVATE_KEY",
+            },
+            consumers,
+        )
+
     def test_browserclaw_build_key_is_required_and_host_is_optional(self):
         expected_consumers = {
             "VITE_CLAW_POSTHOG_KEY": (

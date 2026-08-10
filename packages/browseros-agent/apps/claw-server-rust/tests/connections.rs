@@ -9,7 +9,8 @@ use claw_server_rust::{
     build_router,
     config::Config,
     services::harness::{
-        BROWSEROS_LEGACY_MCP_SERVER_NAME, BROWSEROS_MCP_SERVER_NAME, Harness, HarnessService,
+        BROWSERCLAW_LEGACY_MCP_SERVER_NAME, BROWSEROS_MCP_SERVER_NAME,
+        BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME, Harness, HarnessService,
     },
 };
 use harness_integrations::{
@@ -188,12 +189,17 @@ async fn run_connections_case() -> anyhow::Result<()> {
         json!({ "type": "http", "url": MCP_URL })
     );
     assert_eq!(
-        claude_json["mcpServers"][BROWSEROS_LEGACY_MCP_SERVER_NAME],
+        claude_json["mcpServers"][BROWSERCLAW_LEGACY_MCP_SERVER_NAME],
         json!({ "command": "unrelated" })
     );
+    assert_eq!(
+        claude_json["mcpServers"][BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME],
+        json!({ "command": "foreign" })
+    );
 
-    let codex_toml: toml::Value =
-        toml::from_str(&fs::read_to_string(path_for(&paths, AgentId::Codex)?)?)?;
+    let codex_raw = fs::read_to_string(path_for(&paths, AgentId::Codex)?)?;
+    assert!(codex_raw.contains("[mcp_servers.browseros-neo]"));
+    let codex_toml: toml::Value = toml::from_str(&codex_raw)?;
     assert_eq!(
         codex_toml["mcp_servers"][BROWSEROS_MCP_SERVER_NAME]["url"].as_str(),
         Some(MCP_URL)
@@ -278,8 +284,6 @@ async fn run_connections_case() -> anyhow::Result<()> {
     let restored_skill = service.run_skill_reconciliation().await?;
     assert_eq!(restored_skill.updated, 2);
 
-    // Proxy port moved on this launch: migrating re-links every connected
-    // harness to the new URL and rewrites their config files + the manifest.
     const NEW_MCP_URL: &str = "http://127.0.0.1:9999/mcp";
     let migrated = service.migrate_connected_urls(NEW_MCP_URL).await?;
     assert_eq!(migrated.migrated, 3);
@@ -303,15 +307,12 @@ async fn run_connections_case() -> anyhow::Result<()> {
         NEW_MCP_URL
     );
 
-    // Regression: a crash mid-migration can leave the manifest already at the
-    // target while some agent configs are still stale. Re-running must repair
-    // the straggler, not short-circuit on the manifest URL. Simulate it by
-    // reverting one agent's config to a stale port with the manifest untouched.
+    // A crash can update the manifest before every agent config reaches the new URL.
     const STALE_MCP_URL: &str = "http://127.0.0.1:8888/mcp";
     fs::write(
         claude_path,
         format!(
-            r#"{{"mcpServers":{{"BrowserOS neo":{{"type":"http","url":"{STALE_MCP_URL}"}}}}}}"#
+            r#"{{"mcpServers":{{"{BROWSEROS_MCP_SERVER_NAME}":{{"type":"http","url":"{STALE_MCP_URL}"}}}}}}"#
         ),
     )?;
     let repaired = service.migrate_connected_urls(NEW_MCP_URL).await?;
@@ -323,7 +324,6 @@ async fn run_connections_case() -> anyhow::Result<()> {
         "a straggler left on a stale port is repaired, not skipped"
     );
 
-    // Restore the original URL so the rest of this scenario is unaffected.
     let restored = service.migrate_connected_urls(MCP_URL).await?;
     assert_eq!(restored.migrated, 3);
     assert_eq!(configured[0].message, "Configured in Claude Code.");
@@ -482,7 +482,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("missing Claude MCP object"))?
         .insert(
-            BROWSEROS_LEGACY_MCP_SERVER_NAME.to_string(),
+            BROWSERCLAW_LEGACY_MCP_SERVER_NAME.to_string(),
             json!({ "command": "unrelated" }),
         );
     fs::write(
@@ -496,7 +496,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         assert!(!repeated.installed, "{}", repeated.message);
     }
     let claude_after_disconnect = fs::read_to_string(claude_path)?;
-    assert!(claude_after_disconnect.contains(BROWSEROS_LEGACY_MCP_SERVER_NAME));
+    assert!(claude_after_disconnect.contains(BROWSERCLAW_LEGACY_MCP_SERVER_NAME));
     assert!(!claude_after_disconnect.contains(BROWSEROS_MCP_SERVER_NAME));
     let captured = analytics.take();
     assert_eq!(captured.len(), Harness::ALL.len() * 2);
@@ -544,9 +544,17 @@ async fn assert_identity_migration(
             path_for(paths, agent)?.to_path_buf()
         };
         fs::create_dir_all(parent(&config_path)?)?;
+        let source_name = if matches!(
+            agent,
+            AgentId::ClaudeCode | AgentId::Codex | AgentId::Cursor | AgentId::OpenCode
+        ) {
+            BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME
+        } else {
+            BROWSERCLAW_LEGACY_MCP_SERVER_NAME
+        };
         let mut input = LinkInput::new(
             McpServer {
-                name: BROWSEROS_LEGACY_MCP_SERVER_NAME.to_string(),
+                name: source_name.to_string(),
                 spec: source_spec.clone(),
             },
             agent,
@@ -559,9 +567,9 @@ async fn assert_identity_migration(
         }
         migration_paths.push((agent, config_path));
     }
-    let legacy = manager.list()?.remove(0);
-    let legacy_added_at = legacy.added_at;
-    let legacy_created_at = legacy.links[&AgentId::ClaudeCode].created_at.clone();
+    let source = manager.list()?.remove(0);
+    let source_added_at = source.added_at;
+    let source_created_at = source.links[&AgentId::ClaudeCode].created_at.clone();
 
     let vscode_path = path_for(&migration_paths, AgentId::VsCode)?;
     let mut collision = LinkInput::new(
@@ -596,15 +604,19 @@ async fn assert_identity_migration(
     assert!(!path_for(paths, AgentId::ClaudeCode)?.exists());
     assert!(analytics.take().is_empty());
     for (agent, config_path) in &migration_paths {
-        assert!(
-            manager
-                .inspect_entry(
-                    InspectEntryInput::new(BROWSEROS_LEGACY_MCP_SERVER_NAME, *agent)
-                        .at_path(config_path),
-                )?
-                .is_none(),
-            "{agent}"
-        );
+        for source_name in [
+            BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME,
+            BROWSERCLAW_LEGACY_MCP_SERVER_NAME,
+        ] {
+            assert!(
+                manager
+                    .inspect_entry(
+                        InspectEntryInput::new(source_name, *agent).at_path(config_path)
+                    )?
+                    .is_none(),
+                "{agent}: {source_name}"
+            );
+        }
         assert_eq!(
             manager
                 .inspect_entry(
@@ -621,10 +633,10 @@ async fn assert_identity_migration(
     let canonical = manager.list()?.remove(0);
     assert_eq!(canonical.name, BROWSEROS_MCP_SERVER_NAME);
     assert_eq!(canonical.links.len(), 7);
-    assert_eq!(canonical.added_at, legacy_added_at);
+    assert_eq!(canonical.added_at, source_added_at);
     assert_eq!(
         canonical.links[&AgentId::ClaudeCode].created_at,
-        legacy_created_at
+        source_created_at
     );
     assert_eq!(
         canonical.links[&AgentId::ClaudeCode].config_path,
@@ -643,9 +655,38 @@ async fn assert_identity_migration(
         fs::remove_dir_all(home.join(".gemini"))?;
     }
 
+    let canonical_workspace = home.join("claw/identity-canonical-manager");
+    let canonical_manager = McpManager::new(&canonical_workspace);
+    let canonical_service = HarnessService::new(canonical_workspace.clone(), home.to_path_buf());
+    let cursor_path = path_for(paths, AgentId::Cursor)?;
+    let canonical_raw = format!(
+        r#"{{"mcpServers":{{"{BROWSEROS_MCP_SERVER_NAME}":{{"type":"http","url":"{STALE_URL}"}}}},"keep":true}}"#
+    );
+    fs::write(cursor_path, canonical_raw)?;
+    let canonical = canonical_service
+        .migrate_browseros_identity(MCP_URL)
+        .await?;
+    assert_eq!(canonical.migrated, 1);
+    assert_eq!(canonical.failed, 0);
+    assert_eq!(canonical.skipped, 6);
+    let canonical_entry = canonical_manager
+        .inspect_entry(
+            InspectEntryInput::new(BROWSEROS_MCP_SERVER_NAME, AgentId::Cursor).at_path(cursor_path),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("missing adopted canonical entry"))?;
+    assert_eq!(
+        canonical_entry.spec,
+        McpServerSpec::Http {
+            url: MCP_URL.to_string(),
+            headers: Default::default(),
+        }
+    );
+    assert!(fs::read_to_string(cursor_path)?.contains(r#""keep":true"#));
+    assert_eq!(canonical_manager.list()?.remove(0).links.len(), 1);
+    fs::remove_file(cursor_path)?;
+
     let foreign_workspace = home.join("claw/identity-foreign-manager");
     let foreign_service = HarnessService::new(foreign_workspace.clone(), home.to_path_buf());
-    let cursor_path = path_for(paths, AgentId::Cursor)?;
     let foreign_raw = r#"{"mcpServers":{"BrowserClaw":{"command":"foreign"},"BrowserOS neo":{"command":"standalone"}},"keep":true}"#;
     fs::write(cursor_path, foreign_raw)?;
     let foreign = foreign_service.migrate_browseros_identity(MCP_URL).await?;
@@ -655,12 +696,52 @@ async fn assert_identity_migration(
     assert!(!foreign_workspace.join("manifest.json").exists());
     fs::remove_file(cursor_path)?;
 
+    let collision_workspace = home.join("claw/identity-collision-manager");
+    let collision_service = HarnessService::new(collision_workspace.clone(), home.to_path_buf());
+    let collision_raw = format!(
+        r#"{{"mcpServers":{{"{BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME}":{{"type":"http","url":"{MCP_URL}"}},"{BROWSEROS_MCP_SERVER_NAME}":{{"command":"foreign"}}}},"keep":true}}"#
+    );
+    fs::write(cursor_path, &collision_raw)?;
+    let collision = collision_service
+        .migrate_browseros_identity(MCP_URL)
+        .await?;
+    assert_eq!(collision.migrated, 0);
+    assert_eq!(collision.failed, 1);
+    assert_eq!(collision.skipped, 6);
+    assert_eq!(fs::read_to_string(cursor_path)?, collision_raw);
+    assert!(!collision_workspace.join("manifest.json").exists());
+
+    let collision_disconnect = collision_service
+        .disconnect_browseros(Harness::Cursor)
+        .await?;
+    assert!(!collision_disconnect.installed);
+    assert!(
+        collision_disconnect
+            .message
+            .contains(BROWSEROS_MCP_SERVER_NAME)
+    );
+    assert_eq!(fs::read_to_string(cursor_path)?, collision_raw);
+    assert!(!collision_workspace.join("manifest.json").exists());
+
+    let collision_connect = collision_service
+        .connect_browseros(Harness::Cursor, MCP_URL)
+        .await?;
+    assert!(!collision_connect.installed);
+    assert!(
+        collision_connect
+            .message
+            .contains(BROWSEROS_MCP_SERVER_NAME)
+    );
+    assert_eq!(fs::read_to_string(cursor_path)?, collision_raw);
+    assert!(!collision_workspace.join("manifest.json").exists());
+    fs::remove_file(cursor_path)?;
+
     let failure_workspace = home.join("claw/identity-failure-manager");
     let failure_seed = McpManager::new(home.join("claw/identity-failure-seed"));
     let claude_path = path_for(paths, AgentId::ClaudeCode)?;
     let mut legacy = LinkInput::new(
         McpServer {
-            name: BROWSEROS_LEGACY_MCP_SERVER_NAME.to_string(),
+            name: BROWSERCLAW_LEGACY_MCP_SERVER_NAME.to_string(),
             spec: source_spec,
         },
         AgentId::ClaudeCode,
@@ -681,7 +762,7 @@ async fn assert_identity_migration(
     let compatibility_manager = McpManager::new(&compatibility_workspace);
     let mut legacy = LinkInput::new(
         McpServer {
-            name: BROWSEROS_LEGACY_MCP_SERVER_NAME.to_string(),
+            name: BROWSERCLAW_LEGACY_MCP_SERVER_NAME.to_string(),
             spec: McpServerSpec::Http {
                 url: STALE_URL.to_string(),
                 headers: Default::default(),
@@ -707,7 +788,7 @@ async fn assert_identity_migration(
     assert_eq!(url_outcome.migrated, 1);
     let updated = compatibility_manager
         .inspect_entry(
-            InspectEntryInput::new(BROWSEROS_LEGACY_MCP_SERVER_NAME, AgentId::Cursor)
+            InspectEntryInput::new(BROWSERCLAW_LEGACY_MCP_SERVER_NAME, AgentId::Cursor)
                 .at_path(cursor_path),
         )?
         .ok_or_else(|| anyhow::anyhow!("missing compatible legacy entry"))?;

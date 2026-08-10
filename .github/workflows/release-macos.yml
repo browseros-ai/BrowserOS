@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       products:
-        description: Products to build
+        description: "Product set to build"
         type: choice
         default: browseros
         options:
@@ -12,79 +12,88 @@ on:
           - browserclaw
           - all
       arch:
-        description: macOS architecture to build
+        description: "macOS architecture"
         type: choice
         default: universal
         options:
           - arm64
           - universal
-      bump:
-        description: Version bump level
-        type: choice
-        default: none
-        options:
-          - offset-only
-          - offset+build
-          - offset+patch
-          - none
-      commit_version:
-        description: Commit and push the version bump to the built branch
-        type: boolean
-        default: false
       upload_to_r2:
-        description: Publish build to R2/CDN after packaging
+        description: "Upload release metadata/artifacts to R2"
         type: boolean
         default: true
       ref:
-        description: Git ref to build; defaults to the repository default branch
+        description: "Published-mode checkout ref"
         type: string
         default: ""
   workflow_call:
     inputs:
       products:
-        description: Products to build (browseros, browserclaw, all)
+        description: "Product set to build: browseros, browserclaw, or all"
+        required: false
         type: string
         default: browseros
       arch:
-        description: macOS architecture to build (universal, universal)
+        description: "macOS architecture: arm64 or universal"
+        required: false
         type: string
         default: universal
-      bump:
-        description: Version bump level (offset-only, offset+build, offset+patch, none)
-        type: string
-        default: none
-      commit_version:
-        description: Commit and push the version bump to the built branch
-        type: boolean
-        default: false
       upload_to_r2:
-        description: Publish build to R2/CDN after packaging
+        description: "Upload release metadata/artifacts to R2"
+        required: false
         type: boolean
         default: true
+      resource_mode:
+        description: "Resource provider: published or source"
+        required: false
+        type: string
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
+        required: false
+        type: string
+        default: ""
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
+        required: false
+        type: string
+        default: ""
       ref:
-        description: Git ref to build; defaults to the repository default branch
-        type: string
-        default: ""
-      browseros_server_version:
-        description: "Exact BrowserOS server resource version; empty uses latest"
+        description: "Published-mode checkout ref"
         required: false
         type: string
         default: ""
-      browserclaw_server_version:
-        description: "Exact BrowserClaw server resource version; empty uses latest"
+    secrets:
+      R2_ACCOUNT_ID:
         required: false
-        type: string
-        default: ""
-      browserclaw_onboard_version:
-        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
+      R2_ACCESS_KEY_ID:
         required: false
-        type: string
-        default: ""
-      bundled_extensions_manifest_url:
-        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+      R2_SECRET_ACCESS_KEY:
         required: false
-        type: string
-        default: ""
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
+      MACOS_CERTIFICATE_NAME:
+        required: false
+      MACOS_KEYCHAIN_PASSWORD:
+        required: false
+      PROD_MACOS_NOTARIZATION_APPLE_ID:
+        required: false
+      PROD_MACOS_NOTARIZATION_TEAM_ID:
+        required: false
+      PROD_MACOS_NOTARIZATION_PWD:
+        required: false
+      SPARKLE_PRIVATE_KEY:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions:
   contents: read
@@ -94,146 +103,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  resolve_inputs:
-    runs-on: ubuntu-latest
-    outputs:
-      target_ref: ${{ steps.workflow_inputs.outputs.target_ref }}
-      product_ids: ${{ steps.workflow_inputs.outputs.product_ids }}
-      build_browseros: ${{ steps.workflow_inputs.outputs.build_browseros }}
-      build_browserclaw: ${{ steps.workflow_inputs.outputs.build_browserclaw }}
-      arch: ${{ steps.workflow_inputs.outputs.arch }}
-      bump_mode: ${{ steps.workflow_inputs.outputs.bump_mode }}
-      commit_version: ${{ steps.workflow_inputs.outputs.commit_version }}
-      upload_to_r2: ${{ steps.workflow_inputs.outputs.upload_to_r2 }}
-      timeout_minutes: ${{ steps.workflow_inputs.outputs.timeout_minutes }}
-    steps:
-      - name: Resolve workflow inputs
-        id: workflow_inputs
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          INPUT_PRODUCTS: ${{ inputs.products }}
-          INPUT_ARCH: ${{ inputs.arch }}
-          INPUT_BUMP: ${{ inputs.bump }}
-          INPUT_COMMIT_VERSION: ${{ inputs.commit_version }}
-          INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
-          INPUT_REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-
-          products="${INPUT_PRODUCTS:-browseros}"
-          arch="${INPUT_ARCH:-universal}"
-          bump_mode="${INPUT_BUMP:-none}"
-          commit_version="${INPUT_COMMIT_VERSION:-false}"
-          upload_to_r2="${INPUT_UPLOAD_TO_R2:-true}"
-          target_ref="${INPUT_REF:-$DEFAULT_BRANCH}"
-
-          case "$products" in
-            browseros)
-              product_ids="browseros"
-              build_browseros="true"
-              build_browserclaw="false"
-              ;;
-            browserclaw)
-              product_ids="browserclaw"
-              build_browseros="false"
-              build_browserclaw="true"
-              ;;
-            all)
-              product_ids="browseros browserclaw"
-              build_browseros="true"
-              build_browserclaw="true"
-              ;;
-            *)
-              echo "::error::Invalid products input: $products"
-              exit 1
-              ;;
-          esac
-
-          case "$arch" in
-            arm64|universal) ;;
-            *)
-              echo "::error::Invalid arch input: $arch"
-              exit 1
-              ;;
-          esac
-
-          case "$bump_mode" in
-            offset-only|offset+build|offset+patch|none) ;;
-            *)
-              echo "::error::Invalid bump input: $bump_mode"
-              exit 1
-              ;;
-          esac
-
-          case "$commit_version" in
-            true|false) ;;
-            *)
-              echo "::error::Invalid commit_version input: $commit_version"
-              exit 1
-              ;;
-          esac
-
-          case "$upload_to_r2" in
-            true|false) ;;
-            *)
-              echo "::error::Invalid upload_to_r2 input: $upload_to_r2"
-              exit 1
-              ;;
-          esac
-
-          timeout_minutes="600"
-          if [ "$products" = "all" ] || [ "$arch" = "universal" ]; then
-            timeout_minutes="1200"
-          fi
-
-          {
-            echo "target_ref=$target_ref"
-            echo "product_ids=$product_ids"
-            echo "build_browseros=$build_browseros"
-            echo "build_browserclaw=$build_browserclaw"
-            echo "arch=$arch"
-            echo "bump_mode=$bump_mode"
-            echo "commit_version=$commit_version"
-            echo "upload_to_r2=$upload_to_r2"
-            echo "timeout_minutes=$timeout_minutes"
-          } >> "$GITHUB_OUTPUT"
-
   build:
-    needs: resolve_inputs
     runs-on: [self-hosted, macOS, ARM64, browseros-builder]
-    permissions:
-      contents: write
-      pull-requests: write
-    timeout-minutes: ${{ fromJSON(needs.resolve_inputs.outputs.timeout_minutes) }}
+    timeout-minutes: 1200
     env:
       BROWSEROS_REPO: ${{ vars.BROWSEROS_REPO_PATH }}
       CHROMIUM_SRC: ${{ vars.BROWSEROS_CHROMIUM_SRC }}
     steps:
       - name: Resolve build inputs
-        id: build_inputs
+        id: inputs
         env:
-          TARGET_REF: ${{ needs.resolve_inputs.outputs.target_ref }}
-          PRODUCT_IDS: ${{ needs.resolve_inputs.outputs.product_ids }}
-          ARCH: ${{ needs.resolve_inputs.outputs.arch }}
-          BUMP_MODE: ${{ needs.resolve_inputs.outputs.bump_mode }}
-          COMMIT_VERSION: ${{ needs.resolve_inputs.outputs.commit_version }}
-          UPLOAD_TO_R2: ${{ needs.resolve_inputs.outputs.upload_to_r2 }}
+          ARCH: ${{ inputs.arch }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_resources_artifact }}
+          PRODUCTS: ${{ inputs.products }}
+          REF: ${{ inputs.ref }}
+          RESOURCE_MODE: ${{ inputs.resource_mode }}
+          UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
         run: |
           set -euo pipefail
+          repo="${BROWSEROS_REPO/#\~/$HOME}"
+          chromium_src="${CHROMIUM_SRC/#\~/$HOME}"
+          products="${PRODUCTS:-browseros}"
+          arch="${ARCH:-universal}"
+          resource_mode="${RESOURCE_MODE:-published}"
+          upload_to_r2="${UPLOAD_TO_R2:-true}"
+          target_ref="${REF:-$DEFAULT_BRANCH}"
 
-          repo="${BROWSEROS_REPO:-}"
-          chromium_src="${CHROMIUM_SRC:-}"
-          if [ -z "$repo" ]; then
-            echo "::error::Set repository variable BROWSEROS_REPO_PATH"
-            exit 1
-          fi
-          if [ -z "$chromium_src" ]; then
-            echo "::error::Set repository variable BROWSEROS_CHROMIUM_SRC"
-            exit 1
-          fi
-
-          repo="${repo/#\~/$HOME}"
-          chromium_src="${chromium_src/#\~/$HOME}"
           if [ ! -d "$repo/.git" ]; then
             echo "::error::BROWSEROS_REPO_PATH does not point to a git checkout: $repo"
             exit 1
@@ -242,232 +139,213 @@ jobs:
             echo "::error::BROWSEROS_CHROMIUM_SRC does not exist: $chromium_src"
             exit 1
           fi
+          case "$products" in
+            browseros|browserclaw)
+              product_ids="$products"
+              ;;
+            all)
+              if [ "$resource_mode" = "source" ]; then
+                echo "::error::source mode builds one candidate product per lane"
+                exit 1
+              fi
+              product_ids="browseros browserclaw"
+              ;;
+            *)
+              echo "::error::products must be browseros, browserclaw, or all"
+              exit 1
+              ;;
+          esac
+          case "$arch" in
+            arm64|universal) ;;
+            *)
+              echo "::error::arch must be arm64 or universal"
+              exit 1
+              ;;
+          esac
+          case "$resource_mode" in
+            published) ;;
+            source)
+              if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "::error::source mode requires a full candidate_sha"
+                exit 1
+              fi
+              if [ -z "$PREPARED_ARTIFACT" ]; then
+                echo "::error::source mode requires prepared_resources_artifact"
+                exit 1
+              fi
+              target_ref="$CANDIDATE_SHA"
+              ;;
+            *)
+              echo "::error::resource_mode must be published or source"
+              exit 1
+              ;;
+          esac
 
+          prepared_dir="$RUNNER_TEMP/prepared-resources-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          lane_manifest="$RUNNER_TEMP/lane-$products-macos-$arch-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
           {
+            echo "arch=$arch"
             echo "browseros_repo=$repo"
             echo "chromium_src=$chromium_src"
-            echo "target_ref=$TARGET_REF"
-            echo "product_ids=$PRODUCT_IDS"
-            echo "arch=$ARCH"
-            echo "bump_mode=$BUMP_MODE"
-            echo "commit_version=$COMMIT_VERSION"
-            echo "upload_to_r2=$UPLOAD_TO_R2"
+            echo "lane_artifact=lane-$products-macos-$arch"
+            echo "lane_manifest=$lane_manifest"
+            echo "prepared_dir=$prepared_dir"
+            echo "product_ids=$product_ids"
+            echo "products=$products"
+            echo "resource_mode=$resource_mode"
+            echo "target_ref=$target_ref"
+            echo "upload_to_r2=$upload_to_r2"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Sync build repo to target ref
+      - name: Sync build repo to exact ref
         env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          TARGET_REF: ${{ steps.build_inputs.outputs.target_ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RESOURCE_MODE: ${{ steps.inputs.outputs.resource_mode }}
+          TARGET_REF: ${{ steps.inputs.outputs.target_ref }}
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}
         run: |
           set -euo pipefail
-          cd "$BROWSEROS_REPO"
-          # Rolling nightly release tags move nightly; persistent checkouts must force-update and prune deleted tags.
-          git fetch origin --tags --prune --prune-tags --force
-          # Wipe any local edits before switching refs. The builder's working
-          # tree can carry stray modifications to tracked files, which would
-          # otherwise make the checkout below abort before reset --hard runs.
+          git fetch origin --tags --prune --prune-tags --force \
+            '+refs/heads/*:refs/remotes/origin/*'
           git reset --hard
           git clean -fd
-          if git show-ref --verify --quiet "refs/remotes/origin/$TARGET_REF"; then
+          if [ "$RESOURCE_MODE" = "source" ]; then
+            git cat-file -e "$CANDIDATE_SHA^{commit}"
+            git checkout --detach "$CANDIDATE_SHA"
+            git reset --hard "$CANDIDATE_SHA"
+            test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          elif git show-ref --verify --quiet "refs/remotes/origin/$TARGET_REF"; then
             git checkout -B "$TARGET_REF" "origin/$TARGET_REF"
             git reset --hard "origin/$TARGET_REF"
           else
-            git checkout -f "$TARGET_REF"
-            git reset --hard "$TARGET_REF"
+            git fetch origin "$TARGET_REF"
+            git checkout --detach FETCH_HEAD
           fi
 
-      - name: Bump version
-        id: bump
-        env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          BUMP_MODE: ${{ steps.build_inputs.outputs.bump_mode }}
-        run: |
-          set -euo pipefail
-          cd "$BROWSEROS_REPO/packages/browseros"
-          version="$(uv run python bos_build/scripts/bump_version.py --mode "$BUMP_MODE")"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Built version: $version"
-
-      - name: Commit version bump via pull request
-        if: ${{ steps.build_inputs.outputs.commit_version == 'true' && steps.build_inputs.outputs.bump_mode != 'none' }}
-        env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          TARGET_REF: ${{ steps.build_inputs.outputs.target_ref }}
-          VERSION: ${{ steps.bump.outputs.version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          cd "$BROWSEROS_REPO"
-          version_files=(
-            packages/browseros/resources/BROWSEROS_VERSION
-            packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET
-          )
-          git add "${version_files[@]}"
-          if git diff --cached --quiet; then
-            echo "No version changes to commit."
-            exit 0
-          fi
-          git -c user.name="BrowserOS CI" -c user.email="ci@browseros.com" \
-            commit -m "chore(release): build v$VERSION [skip ci]"
-
-          safe_target_ref="${TARGET_REF//[^A-Za-z0-9._-]/-}"
-          branch="bot/release-macos-version-${safe_target_ref}-v${VERSION}"
-          expected_sha="$(git ls-remote --heads origin "$branch" | awk '{print $1}')"
-          if [ -n "$expected_sha" ]; then
-            git push --force-with-lease="refs/heads/$branch:$expected_sha" \
-              origin "HEAD:refs/heads/$branch"
-          else
-            git push origin "HEAD:refs/heads/$branch"
-          fi
-
-          pr_url="$(gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --base "$TARGET_REF" \
-            --head "$branch" \
-            --state open \
-            --json url \
-            --jq '.[0].url // ""')"
-          if [ -z "$pr_url" ]; then
-            pr_body="$(mktemp)"
-            trap 'rm -f "$pr_body"' EXIT
-            cat > "$pr_body" <<EOF
-          Automated release macOS version bump for v$VERSION.
-
-          Source run: $RUN_URL
-          Target ref: $TARGET_REF
-          EOF
-            pr_url="$(gh pr create \
-              --repo "$GITHUB_REPOSITORY" \
-              --base "$TARGET_REF" \
-              --head "$branch" \
-              --title "chore(release): build v$VERSION" \
-              --body-file "$pr_body")"
-          fi
-
-          echo "Version bump PR: $pr_url"
-          if gh pr merge "$pr_url" \
-            --repo "$GITHUB_REPOSITORY" \
-            --squash \
-            --delete-branch \
-            --subject "chore(release): build v$VERSION [skip ci]" \
-            --body "Automated release macOS version bump."; then
-            exit 0
-          fi
-
-          merge_state="$(gh pr view "$pr_url" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json mergeStateStatus \
-            --jq '.mergeStateStatus // "UNKNOWN"' || echo "UNKNOWN")"
-          failed_checks="$(gh pr view "$pr_url" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json statusCheckRollup \
-            --jq '[.statusCheckRollup[]? | select((.__typename == "CheckRun" and ((.conclusion // "") == "FAILURE" or (.conclusion // "") == "CANCELLED" or (.conclusion // "") == "TIMED_OUT" or (.conclusion // "") == "ACTION_REQUIRED")) or (.__typename == "StatusContext" and ((.state // "") == "FAILURE" or (.state // "") == "ERROR")))] | length' || echo "0")"
-          if [ "$merge_state" = "DIRTY" ] || [ "$failed_checks" -gt 0 ]; then
-            echo "::warning::Leaving version bump PR open (mergeStateStatus=$merge_state, failedChecks=$failed_checks): $pr_url"
-            exit 0
-          fi
-
-          if gh pr merge "$pr_url" \
-            --repo "$GITHUB_REPOSITORY" \
-            --auto \
-            --squash \
-            --delete-branch \
-            --subject "chore(release): build v$VERSION [skip ci]" \
-            --body "Automated release macOS version bump."; then
-            echo "Enabled auto-merge for version bump PR: $pr_url"
-          else
-            echo "::warning::Could not merge or enable auto-merge for version bump PR; leaving it open: $pr_url"
-          fi
+      - uses: astral-sh/setup-uv@v8.3.2
 
       - name: Setup Bun
+        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.6"
 
-      - name: Build selected products
-        env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
-          PRODUCT_IDS: ${{ steps.build_inputs.outputs.product_ids }}
-          ARCH: ${{ steps.build_inputs.outputs.arch }}
-          UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
-          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.browseros_server_version }}
-          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.browserclaw_server_version }}
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.browserclaw_onboard_version }}
-          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.bundled_extensions_manifest_url }}
+      - name: Install BrowserOS server dependencies
+        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros-agent
+        run: bun ci
+
+      - name: Setup BrowserOS neo server toolchain
+        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browserclaw'
         run: |
           set -euo pipefail
-          cd "$BROWSEROS_REPO/packages/browseros"
-          for product in $PRODUCT_IDS; do
-            echo "Building $product for macOS $ARCH"
-            flags=(--preset release --product "$product" --arch "$ARCH")
-            if [ "$UPLOAD_TO_R2" != "true" ]; then
-              flags+=(--no-upload)
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Download prepared common resources
+        if: steps.inputs.outputs.resource_mode == 'source'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.prepared_resources_artifact }}
+          path: ${{ steps.inputs.outputs.prepared_dir }}
+
+      - name: Resolve browser version
+        id: version
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
+        run: |
+          version="$(uv run python bos_build/scripts/bump_version.py --mode none)"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build selected products
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
+        env:
+          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          for product in ${{ steps.inputs.outputs.product_ids }}; do
+            args=(
+              --preset release
+              --product "$product"
+              --arch "${{ steps.inputs.outputs.arch }}"
+              --resource-mode "${{ steps.inputs.outputs.resource_mode }}"
+              --chromium-src "${{ steps.inputs.outputs.chromium_src }}"
+            )
+            if [ "${{ steps.inputs.outputs.upload_to_r2 }}" != "true" ]; then
+              args+=(--no-upload)
             fi
-            uv run browseros build "${flags[@]}" --chromium-src "$CHROMIUM_SRC"
+            if [ "${{ steps.inputs.outputs.resource_mode }}" = "source" ]; then
+              args+=(
+                --prepared-resources "${{ steps.inputs.outputs.prepared_dir }}"
+                --lane-manifest "${{ steps.inputs.outputs.lane_manifest }}"
+                --toolchain-id "runner=self-hosted-macos-arm64"
+                --toolchain-id "workflow-run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              )
+            fi
+            uv run browseros build "${args[@]}"
           done
 
-      - name: Upload BrowserOS DMG artifact
-        if: ${{ always() && steps.bump.outputs.version != '' && needs.resolve_inputs.outputs.build_browseros == 'true' }}
+      - name: Upload lane manifest
+        if: steps.inputs.outputs.resource_mode == 'source'
         uses: actions/upload-artifact@v7
         with:
-          name: BrowserOS_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
+          name: ${{ steps.inputs.outputs.lane_artifact }}
+          path: ${{ steps.inputs.outputs.lane_manifest }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+      - name: Upload BrowserOS DMG artifact
+        if: always() && (steps.inputs.outputs.products == 'browseros' || steps.inputs.outputs.products == 'all')
+        uses: actions/upload-artifact@v7
+        with:
+          name: BrowserOS_v${{ steps.version.outputs.value }}_${{ steps.inputs.outputs.arch }}
           path: |
-            ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_*.dmg
-            !${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
+            ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_*.dmg
+            !${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
       - name: Upload BrowserOS neo DMG artifact
-        if: ${{ always() && steps.bump.outputs.version != '' && needs.resolve_inputs.outputs.build_browserclaw == 'true' }}
+        if: always() && (steps.inputs.outputs.products == 'browserclaw' || steps.inputs.outputs.products == 'all')
         uses: actions/upload-artifact@v7
         with:
-          name: BrowserOS_neo_v${{ steps.bump.outputs.version }}_${{ needs.resolve_inputs.outputs.arch }}
-          path: ${{ steps.build_inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.bump.outputs.version }}/BrowserOS_neo_*.dmg
+          name: BrowserOS_neo_v${{ steps.version.outputs.value }}_${{ steps.inputs.outputs.arch }}
+          path: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ steps.version.outputs.value }}/BrowserOS_neo_*.dmg
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
       - name: Slack failure ping
-        if: ${{ failure() }}
+        if: failure()
         env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-          TARGET_REF: ${{ steps.build_inputs.outputs.target_ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          set -euo pipefail
-          hook="$(
-            python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          env_file = Path(os.environ["BROWSEROS_REPO"]) / "packages/browseros/.env"
-          if not env_file.exists():
-              raise SystemExit(0)
-          for line in env_file.read_text().splitlines():
-              if line.startswith("SLACK_WEBHOOK_URL="):
-                  print(line.split("=", 1)[1].strip().strip("'\""))
-                  break
-          PY
-          )"
-          if [ -z "$hook" ]; then
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
             exit 0
           fi
-          python3 - <<'PY' > /tmp/browseros-release-macos-slack-payload.json
+          payload="$(python3 - <<'PY'
           import json
           import os
 
-          print(
-              json.dumps(
-                  {
-                      "text": (
-                          ":x: Release macOS build failed on "
-                          f"`{os.environ['TARGET_REF']}` - {os.environ['RUN_URL']}"
-                      )
-                  }
-              )
-          )
+          print(json.dumps({"text": f":x: macOS release failed — {os.environ['RUN_URL']}"}))
           PY
+          )"
           curl -fsS -X POST -H "Content-type: application/json" \
-            --data @/tmp/browseros-release-macos-slack-payload.json "$hook" || true
+            --data "$payload" "$SLACK_WEBHOOK_URL" || true

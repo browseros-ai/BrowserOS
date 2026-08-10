@@ -2,7 +2,6 @@
 """Build, stamp, pack, and upload extension CRXs."""
 
 import hashlib
-import json
 import os
 import re
 from pathlib import Path
@@ -12,9 +11,13 @@ from ...core.step import Step, ValidationError
 from ...lib.paths import get_package_root
 from ...lib.r2 import BOTO3_AVAILABLE, get_r2_client
 from ...lib.utils import log_info, log_success, log_warning
-from ..feeds.spec import CDN_BASE_URL, EXTENSIONS as FEED_EXTENSIONS
+from ..feeds.spec import CDN_BASE_URL
 from ..feeds.render import extract_manifest_versions
-from .crx import find_chrome_binary, pack_crx
+from .build import (
+    build_extension_crx,
+    validate_manifest_update_url,
+)
+from .crx import find_chrome_binary
 from .specs import (
     ExtensionSpec,
     ExternalRepoSource,
@@ -22,22 +25,18 @@ from .specs import (
     select_specs,
     spec_by_name,
 )
-from .workspace import (
-    require_env,
-    resolve_source,
-    run_command,
-    update_manifest_version,
-    write_env_file,
-)
+from .workspace import require_env
 
 _VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}$")
-_UPDATE_FEED_EXTENSION_NAMES = frozenset(
-    extension.name for extension in FEED_EXTENSIONS if extension.in_update_feed
-)
-_UPDATE_MANIFEST_URL = f"{CDN_BASE_URL}/extensions/update-manifest.xml"
 _AUTO_VERSION_EXTENSION_NAMES = frozenset({"agent", "browserclaw"})
 _SOURCE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _CRX_BINDING_SCHEMA = "browseros-extension-crx-v1"
+
+
+def _validate_manifest_update_url(
+    spec: ExtensionSpec, manifest: Mapping[str, object], dist_path: Path
+) -> None:
+    validate_manifest_update_url(spec, manifest, dist_path)
 
 
 def _error_response(error: Exception) -> Tuple[str, Optional[int]]:
@@ -229,6 +228,7 @@ def resolve_extension_version(
     release_sha: str,
     release_records: Sequence[Mapping[str, object]],
     manifest_contents: Sequence[str],
+    committed_version: str = "",
 ) -> str:
     """Resolve an explicit or automatically allocated extension version."""
     names = extension_names(extension)
@@ -282,6 +282,10 @@ def resolve_extension_version(
             allocated.append(_version_parts(version))
 
     maximum = max(allocated, default=(0, 0, 0, 0))
+    if committed_version:
+        committed = _version_parts(committed_version)
+        if committed > maximum:
+            return ".".join(str(part) for part in committed)
     return increment_extension_version(".".join(str(part) for part in maximum))
 
 
@@ -314,20 +318,6 @@ def verify_versioned_crx_objects(
             (output_dir / spec.crx_filename(version)).write_bytes(data)
         keys.append(key)
     return tuple(keys)
-
-
-def _validate_manifest_update_url(
-    spec: ExtensionSpec, manifest: Mapping[str, object], dist_path: Path
-) -> None:
-    """Require update-feed extensions to declare the stable updater manifest."""
-    if spec.name not in _UPDATE_FEED_EXTENSION_NAMES:
-        return
-    update_url = manifest.get("update_url")
-    if update_url != _UPDATE_MANIFEST_URL:
-        raise RuntimeError(
-            f"Extension '{spec.name}' build at '{dist_path}' has update_url "
-            f"{update_url!r}; expected '{_UPDATE_MANIFEST_URL}'"
-        )
 
 
 class ExtensionReleaseModule(Step):
@@ -432,13 +422,16 @@ class ExtensionReleaseModule(Step):
             ):
                 log_success(f"CRX live at {CDN_BASE_URL}/{r2_key}")
                 continue
-            source_root = resolve_source(
-                spec,
+            build_extension_crx(
+                spec=spec,
+                version=self.version,
+                output_path=crx_path,
                 monorepo_root=monorepo_root,
                 work_root=work_root,
                 branch_override=self.branch_override,
+                chrome_binary=chrome,
+                stamp_version=True,
             )
-            update_manifest_version(source_root / spec.manifest_path, self.version)
             if isinstance(spec.source, InRepoSource):
                 touched = spec.manifest_path
                 if spec.env:
@@ -447,29 +440,6 @@ class ExtensionReleaseModule(Step):
                     f"stamped {touched} in the working tree — "
                     "revert them if this was a local test run"
                 )
-            if spec.env:
-                env_dir = source_root / spec.env_dir if spec.env_dir else source_root
-                write_env_file(
-                    env_dir,
-                    spec.env,
-                    required_names=spec.required_env,
-                )
-            if spec.pre_build:
-                run_command(spec.pre_build, source_root)
-            run_command(spec.build, source_root)
-
-            dist_path = source_root / spec.dist_path
-            manifest = json.loads(
-                (dist_path / "manifest.json").read_text(encoding="utf-8")
-            )
-            _validate_manifest_update_url(spec, manifest, dist_path)
-            crx_path = pack_crx(
-                dist_path,
-                require_env(spec.signing_key_env),
-                chrome,
-                crx_path,
-            )
-
             upload_bound_extension_crx(
                 client,
                 ctx.env.r2_bucket,

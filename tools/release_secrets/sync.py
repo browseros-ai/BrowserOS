@@ -29,7 +29,8 @@ RELEASE_WORKFLOW_FILES = (
     Path(".github/workflows/release-extensions.yml"),
     Path(".github/workflows/release-server.yml"),
     Path(".github/workflows/release-claw-onboard.yml"),
-    Path(".github/workflows/release-claw-server-rust.yml"),
+    Path(".github/workflows/release-claw-server.yml"),
+    Path(".github/workflows/publish-server-ota.yml"),
 )
 
 KEY_RE = re.compile(r"[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=")
@@ -74,7 +75,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-onboard.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
+            "publish-server-ota.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -87,7 +89,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-onboard.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
+            "publish-server-ota.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -100,7 +103,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-onboard.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
+            "publish-server-ota.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -113,7 +117,8 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-onboard.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
+            "publish-server-ota.yml",
             "release-extension-feeds.yml",
             "release-extensions.yml",
         ),
@@ -137,6 +142,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-windows.yml",
+            "publish-server-ota.yml",
         ),
     ),  # Windows signing preflight and CodeSignTool auth.
     SecretSpec(
@@ -146,6 +152,7 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-windows.yml",
+            "publish-server-ota.yml",
         ),
     ),  # Windows signing preflight and CodeSignTool auth.
     SecretSpec(
@@ -155,11 +162,12 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browseros.yml",
             "release-browserclaw.yml",
             "release-windows.yml",
+            "publish-server-ota.yml",
         ),
     ),  # Windows signing preflight and CodeSignTool auth.
     SecretSpec(
         "ESIGNER_CREDENTIAL_ID",
-        ("build-browseros.yml",),
+        ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # Optional SSL.com credential selector used by the builder.
     SecretSpec(
         "SPARKLE_PRIVATE_KEY",
@@ -169,24 +177,25 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
             "release-browserclaw.yml",
             "release-windows.yml",
             "release-server.yml",
-            "release-claw-server-rust.yml",
+            "release-claw-server.yml",
+            "publish-server-ota.yml",
         ),
     ),  # Sparkle/WinSparkle artifact signatures and optional server OTA.
     SecretSpec(
         "MACOS_CERTIFICATE_NAME",
-        ("build-browseros.yml",),
+        ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # macOS signing certificate identity.
     SecretSpec(
         "PROD_MACOS_NOTARIZATION_APPLE_ID",
-        ("build-browseros.yml",),
+        ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # macOS notarization account.
     SecretSpec(
         "PROD_MACOS_NOTARIZATION_TEAM_ID",
-        ("build-browseros.yml",),
+        ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # macOS notarization team.
     SecretSpec(
         "PROD_MACOS_NOTARIZATION_PWD",
-        ("build-browseros.yml",),
+        ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # macOS notarization app-specific password.
     SecretSpec(
         "BROWSEROS_AGENT_V2_KEY",

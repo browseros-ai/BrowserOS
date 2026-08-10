@@ -25,6 +25,8 @@ class RegistryContentTest(unittest.TestCase):
                 "sparkle_setup",
                 "winsparkle_setup",
                 "download_resources",
+                "prepare_common_resources",
+                "prepare_server_resources",
                 "resources",
                 "bundled_extensions",
                 "chromium_replace",

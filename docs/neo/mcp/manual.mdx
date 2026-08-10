@@ -15,7 +15,7 @@ http://127.0.0.1:9200/mcp
 Now pick your AI tool below.
 
 <Note>
-The examples name the server `browserclaw`, the product's old name. That matches what the one-click setup writes, so keep it if you want both paths to agree. The name is yours to choose, but whatever you pick is the name your AI tool will know the browser by.
+The examples name the server `browseros-neo`, matching the one-click setup. The name is yours to choose, but whatever you pick is the name your AI tool will know the browser by.
 </Note>
 
 ## Hermes Agent
@@ -26,7 +26,7 @@ Open `~/.hermes/config.yaml` and add a `mcp_servers` entry:
 
 ```yaml
 mcp_servers:
-  browserclaw:
+  browseros-neo:
     url: "http://127.0.0.1:9200/mcp"
 ```
 
@@ -35,7 +35,7 @@ Then reload Hermes:
 - Inside an existing `hermes chat` session, run `/reload-mcp`.
 - Or restart Hermes.
 
-Hermes also has a CLI command that adds a server interactively: `hermes mcp add browserclaw`. Either path works.
+Hermes also has a CLI command that adds a server interactively: `hermes mcp add browseros-neo`. Either path works.
 
 ## Vercel AI SDK
 
@@ -73,7 +73,7 @@ The AI SDK docs recommend closing the client once you're done. In streaming code
 The fastest path is the CLI:
 
 ```bash
-openclaw mcp add browserclaw --url http://127.0.0.1:9200/mcp --transport streamable-http
+openclaw mcp add browseros-neo --url http://127.0.0.1:9200/mcp --transport streamable-http
 ```
 
 Or edit `~/.openclaw/openclaw.json` directly:
@@ -82,7 +82,7 @@ Or edit `~/.openclaw/openclaw.json` directly:
 {
   "mcp": {
     "servers": {
-      "browserclaw": {
+      "browseros-neo": {
         "url": "http://127.0.0.1:9200/mcp",
         "transport": "streamable-http"
       }
@@ -94,7 +94,7 @@ Or edit `~/.openclaw/openclaw.json` directly:
 Verify the connection with the built-in doctor:
 
 ```bash
-openclaw mcp doctor browserclaw --probe
+openclaw mcp doctor browseros-neo --probe
 ```
 
 ## Any other MCP-compatible AI tool

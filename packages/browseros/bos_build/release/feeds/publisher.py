@@ -122,7 +122,7 @@ def _strict_appcast_versions(content: str) -> Optional[List[str]]:
         if len(version_elements) != 1:
             return None
         value = version_elements[0].text
-        if _strict_dotted_version(value) is None:
+        if value is None or _strict_dotted_version(value) is None:
             return None
         versions.append(value.strip())
     return versions
@@ -436,6 +436,11 @@ class FeedPublisher:
         ):
             return False
 
+        if publish and live == content:
+            staging = self.stage(spec, content)
+            log_success(f"Already published {spec.url} (staging: {staging})")
+            return True
+
         if verbose:
             self._print_content_and_diff(spec, content, live)
 
@@ -605,27 +610,36 @@ class FeedPublisher:
             return False
         title, link = extract_channel_metadata(live)
         if title != spec.title or link != spec.link:
-            reason = f"live channel metadata mismatch (title={title!r}, link={link!r})"
-            if repair_invalid_live:
-                live_versions = _strict_appcast_versions(live)
-                if not live_versions:
-                    log_error(
-                        f"{spec.key}: wrong-channel live appcast has no "
-                        "strict version; refusing repair."
-                    )
-                    return False
-                return self._repair_invalid_appcast(
-                    spec,
-                    content,
-                    live,
-                    new_version,
-                    reason,
-                    allow_downgrade,
-                    require_live_version=True,
-                    known_live_versions=live_versions,
+            if title in spec.legacy_titles and link == spec.link:
+                log_warning(
+                    f"{spec.key}: migrating live channel title {title!r} "
+                    f"to {spec.title!r}"
                 )
-            self._check_channel_metadata(spec, live)
-            return False
+            else:
+                reason = (
+                    f"live channel metadata mismatch "
+                    f"(title={title!r}, link={link!r})"
+                )
+                if repair_invalid_live:
+                    live_versions = _strict_appcast_versions(live)
+                    if not live_versions:
+                        log_error(
+                            f"{spec.key}: wrong-channel live appcast has no "
+                            "strict version; refusing repair."
+                        )
+                        return False
+                    return self._repair_invalid_appcast(
+                        spec,
+                        content,
+                        live,
+                        new_version,
+                        reason,
+                        allow_downgrade,
+                        require_live_version=True,
+                        known_live_versions=live_versions,
+                    )
+                self._check_channel_metadata(spec, live)
+                return False
 
         live_versions = _strict_appcast_versions(live)
         if not live_versions:

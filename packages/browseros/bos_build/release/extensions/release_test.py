@@ -241,6 +241,19 @@ class ExtensionVersionResolutionTest(unittest.TestCase):
             "0.0.125.0",
         )
 
+    def test_committed_manifest_version_is_an_allocation_floor(self) -> None:
+        self.assertEqual(
+            resolve_extension_version(
+                extension="agent",
+                requested_version="",
+                release_sha="new-sha",
+                release_records=[],
+                manifest_contents=[],
+                committed_version="0.0.130",
+            ),
+            "0.0.130.0",
+        )
+
     def test_malformed_historical_versions_are_ignored(self) -> None:
         self.assertEqual(
             resolve_extension_version(
@@ -655,14 +668,7 @@ class ExecuteTest(unittest.TestCase):
         self.work = Path("/work")
 
         patches = {
-            "resolve_source": MagicMock(
-                side_effect=lambda spec, **kw: Path("/src") / spec.name
-            ),
-            "update_manifest_version": MagicMock(),
-            "write_env_file": MagicMock(),
-            "run_command": MagicMock(),
-            "_validate_manifest_update_url": MagicMock(),
-            "pack_crx": MagicMock(side_effect=lambda dist, key, chrome, out, **kw: out),
+            "build_extension_crx": MagicMock(),
             "materialize_bound_extension_crx": MagicMock(return_value=False),
             "upload_bound_extension_crx": MagicMock(return_value="uploaded"),
             "get_r2_client": MagicMock(return_value="r2-client"),
@@ -676,10 +682,6 @@ class ExecuteTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
             self.mocks[name] = mock
             self.tracker.attach_mock(mock, name)
-
-        read_text_patcher = patch(f"{MODULE}.Path.read_text", return_value="{}")
-        self.read_text = read_text_patcher.start()
-        self.addCleanup(read_text_patcher.stop)
 
         env_patcher = patch.dict("os.environ", ALL_KEYS)
         env_patcher.start()
@@ -698,8 +700,6 @@ class ExecuteTest(unittest.TestCase):
     def test_agent_flow_order_and_arguments(self):
         self._module(("agent",)).execute(_ctx())
 
-        self.read_text.assert_called_once_with(encoding="utf-8")
-
         called = [c[0] for c in self.tracker.mock_calls]
         self.assertEqual(
             called,
@@ -707,55 +707,22 @@ class ExecuteTest(unittest.TestCase):
                 "get_r2_client",
                 "find_chrome_binary",
                 "materialize_bound_extension_crx",
-                "resolve_source",
-                "update_manifest_version",
-                "write_env_file",
-                "run_command",
-                "run_command",
-                "_validate_manifest_update_url",
-                "pack_crx",
+                "build_extension_crx",
                 "upload_bound_extension_crx",
             ],
         )
 
-        resolve_kwargs = self.mocks["resolve_source"].call_args.kwargs
-        self.assertEqual(resolve_kwargs["monorepo_root"], self.monorepo)
-        self.assertEqual(resolve_kwargs["work_root"], self.work)
-        self.assertIsNone(resolve_kwargs["branch_override"])
-
-        self.mocks["update_manifest_version"].assert_called_once_with(
-            Path("/src/agent/apps/app/package.json"), "1.0.0"
-        )
-        self.mocks["write_env_file"].assert_called_once()
-        env_args = self.mocks["write_env_file"].call_args.args
-        self.assertEqual(env_args[0], Path("/src/agent/apps/app"))
-        self.assertIn("VITE_PUBLIC_BROWSEROS_API", env_args[1])
+        build_kwargs = self.mocks["build_extension_crx"].call_args.kwargs
+        self.assertEqual(build_kwargs["spec"], spec_by_name("agent"))
+        self.assertEqual(build_kwargs["version"], "1.0.0")
         self.assertEqual(
-            self.mocks["write_env_file"].call_args.kwargs,
-            {
-                "required_names": (),
-            },
+            build_kwargs["output_path"], self.work / "dist" / "agent-1.0.0.crx"
         )
-
-        commands = [c.args for c in self.mocks["run_command"].call_args_list]
-        self.assertEqual(
-            commands,
-            [
-                ("bun ci", Path("/src/agent")),
-                ("bun run build:agent", Path("/src/agent")),
-            ],
-        )
-
-        validate_args = self.mocks["_validate_manifest_update_url"].call_args.args
-        self.assertEqual(validate_args[0].name, "agent")
-        self.assertEqual(validate_args[1], {})
-        self.assertEqual(validate_args[2], Path("/src/agent/apps/app/dist/chrome-mv3"))
-
-        pack_args = self.mocks["pack_crx"].call_args.args
-        self.assertEqual(pack_args[0], Path("/src/agent/apps/app/dist/chrome-mv3"))
-        self.assertEqual(pack_args[1], "agent-pem")
-        self.assertEqual(pack_args[2], "chrome-bin")
-        self.assertEqual(pack_args[3], self.work / "dist" / "agent-1.0.0.crx")
+        self.assertEqual(build_kwargs["monorepo_root"], self.monorepo)
+        self.assertEqual(build_kwargs["work_root"], self.work)
+        self.assertIsNone(build_kwargs["branch_override"])
+        self.assertEqual(build_kwargs["chrome_binary"], "chrome-bin")
+        self.assertTrue(build_kwargs["stamp_version"])
 
         self.mocks["upload_bound_extension_crx"].assert_called_once_with(
             "r2-client",
@@ -766,10 +733,10 @@ class ExecuteTest(unittest.TestCase):
             self.work / "dist" / "agent-1.0.0.crx",
         )
 
-    def test_env_file_lands_at_source_root_without_env_dir(self):
+    def test_external_extension_uses_shared_builder(self):
         self._module(("bugreporter",)).execute(_ctx())
-        env_args = self.mocks["write_env_file"].call_args.args
-        self.assertEqual(env_args[0], Path("/src/bugreporter"))
+        build_kwargs = self.mocks["build_extension_crx"].call_args.kwargs
+        self.assertEqual(build_kwargs["spec"], spec_by_name("bugreporter"))
 
     def test_upload_failure_stops_later_extensions(self):
         self.mocks["upload_bound_extension_crx"].side_effect = RuntimeError(
@@ -778,13 +745,16 @@ class ExecuteTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "extensions/agent-1.0.0.crx"):
             self._module(("agent", "bugreporter")).execute(_ctx())
 
-        resolved = [c.args[0].name for c in self.mocks["resolve_source"].call_args_list]
-        self.assertEqual(resolved, ["agent"])
+        built = [
+            call.kwargs["spec"].name
+            for call in self.mocks["build_extension_crx"].call_args_list
+        ]
+        self.assertEqual(built, ["agent"])
 
     def test_branch_override_reaches_resolver(self):
         self._module(("bugreporter",), branch_override="canary").execute(_ctx())
         self.assertEqual(
-            self.mocks["resolve_source"].call_args.kwargs["branch_override"],
+            self.mocks["build_extension_crx"].call_args.kwargs["branch_override"],
             "canary",
         )
 
@@ -800,8 +770,7 @@ class ExecuteTest(unittest.TestCase):
 
         self._module(("browserclaw",)).execute(_ctx())
 
-        self.mocks["resolve_source"].assert_not_called()
-        self.mocks["pack_crx"].assert_not_called()
+        self.mocks["build_extension_crx"].assert_not_called()
         self.mocks["upload_bound_extension_crx"].assert_not_called()
         self.mocks["materialize_bound_extension_crx"].assert_called_once_with(
             "r2-client",

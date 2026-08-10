@@ -73,6 +73,50 @@ describe('build config', () => {
     expect(config.r2?.downloadPrefix).toBe('artifacts/vendor')
   })
 
+  it('reads a product version from Cargo TOML', async () => {
+    const rootDir = await writeProdRoot(REQUIRED_INLINE_ENV)
+    const packageDir = join(rootDir, 'apps/test-server')
+    await rm(join(packageDir, 'package.json'))
+    await writeFile(
+      join(packageDir, 'Cargo.toml'),
+      '[package]\nname = "test-server"\nversion = "1.2.3"\n',
+    )
+
+    const config = loadBuildConfig(
+      rootDir,
+      testProduct({
+        versionSource: {
+          type: 'cargo-toml',
+          path: 'apps/test-server/Cargo.toml',
+        },
+      }),
+    )
+
+    expect(config.version).toBe('1.2.3')
+  })
+
+  it('reports an invalid Cargo version with its manifest path', async () => {
+    const rootDir = await writeProdRoot(REQUIRED_INLINE_ENV)
+    const packageDir = join(rootDir, 'apps/test-server')
+    await rm(join(packageDir, 'package.json'))
+    await writeFile(
+      join(packageDir, 'Cargo.toml'),
+      '[package]\nname = "test"\n',
+    )
+
+    expect(() =>
+      loadBuildConfig(
+        rootDir,
+        testProduct({
+          versionSource: {
+            type: 'cargo-toml',
+            path: 'apps/test-server/Cargo.toml',
+          },
+        }),
+      ),
+    ).toThrow('apps/test-server/Cargo.toml')
+  })
+
   it('lets process env override inline env and R2 prefixes', async () => {
     const rootDir = await writeProdRoot({
       ...REQUIRED_INLINE_ENV,
@@ -124,6 +168,22 @@ describe('build config', () => {
     const config = loadBuildConfig(rootDir, product)
 
     expect(config.envVars.LOG_LEVEL).toBe('info')
+  })
+
+  it('lets CI-specific overrides replace available production values', async () => {
+    const rootDir = await writeProdRoot(REQUIRED_INLINE_ENV)
+    const product = testProduct({
+      env: {
+        ...testProduct().env,
+        ciInlineEnvOverrides: {
+          TEST_CONFIG_URL: 'https://ci.invalid/config',
+        },
+      },
+    })
+
+    const config = loadBuildConfig(rootDir, product, { ci: true })
+
+    expect(config.envVars.TEST_CONFIG_URL).toBe('https://ci.invalid/config')
   })
 
   it('does not require a production env file in CI mode', async () => {

@@ -36,7 +36,6 @@ pub(crate) struct PlannedMigrationInstall {
     pub(crate) overwrote_foreign: bool,
 }
 
-/// Computes a link plan without touching the filesystem or mutating the state snapshot.
 pub(crate) fn plan_link(state: &State, input: &LinkInput, now: &str) -> Result<PlannedLink, Error> {
     let name = input.server.name.trim();
     if name.is_empty() {
@@ -139,7 +138,7 @@ pub(crate) fn plan_migration_install(
     let mut link_input = LinkInput::new(input.destination.clone(), input.agent);
     link_input.scope = input.scope;
     link_input.config_path = Some(agent_file.config_path.clone());
-    link_input.allow_overwrite = true;
+    link_input.allow_overwrite = input.allow_destination_overwrite;
     let mut planned = plan_link(state, &link_input, now)?;
     let destination_name = planned.summary.server_name.clone();
     let existing_destination = state.manifest.servers.get(&destination_name);
@@ -253,7 +252,6 @@ pub(crate) fn plan_migration_cleanup(
     Ok(Plan { ops, next_manifest })
 }
 
-/// Computes an unlink plan using the manifest-recorded config path.
 pub(crate) fn plan_unlink(state: &State, input: &UnlinkInput) -> Result<PlannedUnlink, Error> {
     let no_op = || PlannedUnlink {
         plan: Plan {
@@ -300,7 +298,6 @@ pub(crate) fn plan_unlink(state: &State, input: &UnlinkInput) -> Result<PlannedU
     })
 }
 
-/// Computes a single-agent disconnect without producing operations for any other agent.
 pub(crate) fn plan_disconnect(
     state: &State,
     input: &DisconnectInput,
@@ -373,7 +370,6 @@ pub(crate) fn plan_disconnect(
     })
 }
 
-/// Classifies manifest links against their recorded-path file snapshots without writing.
 pub(crate) fn plan_rescan(state: &State) -> Result<RescanReport, Error> {
     let mut report = RescanReport::default();
     for server in state.manifest.servers.values() {

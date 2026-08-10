@@ -168,6 +168,13 @@ describe('RunningGrid', () => {
     expect(container.textContent).not.toContain('0 live')
   })
 
+  it('uses the Audit hover blue caption tone', async () => {
+    await render([session()])
+
+    const card = container.querySelector('[data-session-card="session-live"]')
+    expect(card?.querySelector('[data-caption-tone="blue"]')).not.toBeNull()
+  })
+
   it('renders and cancels two same-profile sessions by distinct session ids', async () => {
     await render([
       session({ sessionId: 'session-a' }),

@@ -69,6 +69,9 @@ concurrency:
 jobs:
   prepare:
     if: github.event_name != 'push' || github.event.deleted != true
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -83,6 +86,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
 
       - name: Validate lifecycle inputs
         id: validate
@@ -102,35 +108,27 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Read allocated GitHub releases
-        id: releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_RECORDS: ${{ runner.temp }}/claw-onboard-release-records.json
-        run: |
-          set -euo pipefail
-          pages="${RUNNER_TEMP}/claw-onboard-release-pages.json"
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
-          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
-          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
-
       - name: Resolve release
         id: release
+        working-directory: packages/browseros
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
-          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
-          packages/browseros-agent/scripts/release/prepare-claw-onboard-release.sh \
+          uv run browseros release component resolve \
+            --component claw-onboard \
             --event-name "$EVENT_NAME" \
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
             --release-ref HEAD \
-            --release-records "$RELEASE_RECORDS"
+            --repo "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve effective lifecycle mode
         id: lifecycle
@@ -214,6 +212,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.release_sha }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -224,24 +225,8 @@ jobs:
         run: bun ci
 
       - name: Stamp onboarding artifact version
-        working-directory: packages/browseros-agent
-        run: |
-          set -euo pipefail
-          node - "$VERSION" <<'JS'
-          const fs = require('fs')
-          const version = process.argv[2]
-          const packagePath = 'apps/claw-onboard/package.json'
-          const lockPath = 'bun.lock'
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
-          packageJson.version = version
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
-          let lock = fs.readFileSync(lockPath, 'utf8')
-          const pattern = /("apps\/claw-onboard":\s*\{\s*"name":\s*"@browseros\/claw-onboard",\s*"version":\s*")([^"]+)(")/
-          const matches = lock.match(new RegExp(pattern.source, 'g'))
-          if (matches?.length !== 1) throw new Error(`Expected one claw-onboard lock entry, found ${matches?.length ?? 0}`)
-          lock = lock.replace(pattern, `$1${version}$3`)
-          fs.writeFileSync(lockPath, lock)
-          JS
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component claw-onboard --version "$VERSION"
 
       - name: Publish onboarding resources to R2
         working-directory: packages/browseros-agent
@@ -410,6 +395,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch || 'main' }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
       - name: Reflect onboarding version on main via PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -423,20 +411,9 @@ jobs:
 
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-
-          node - "$package_json" "$lock" "$VERSION" <<'JS'
-          const fs = require('fs')
-          const [packagePath, lockPath, version] = process.argv.slice(2)
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
-          packageJson.version = version
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
-          let lock = fs.readFileSync(lockPath, 'utf8')
-          const pattern = /("apps\/claw-onboard":\s*\{\s*"name":\s*"@browseros\/claw-onboard",\s*"version":\s*")([^"]+)(")/
-          const matches = lock.match(new RegExp(pattern.source, 'g'))
-          if (matches?.length !== 1) throw new Error(`Expected one claw-onboard lock entry, found ${matches?.length ?? 0}`)
-          lock = lock.replace(pattern, `$1${version}$3`)
-          fs.writeFileSync(lockPath, lock)
-          JS
+          uv run --directory packages/browseros browseros release component stamp \
+            --component claw-onboard \
+            --version "$VERSION"
 
           if git diff --quiet -- "$package_json" "$lock"; then
             echo "claw-onboard is already at $VERSION"

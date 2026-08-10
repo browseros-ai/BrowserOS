@@ -93,7 +93,7 @@ describe('buildCanonicalMcpCliCommand', () => {
   it('produces the standard `claude mcp add` shape with the canonical URL', () => {
     installWindow('')
     expect(buildCanonicalMcpCliCommand()).toBe(
-      'claude mcp add "BrowserOS neo" http://127.0.0.1:9200/mcp --transport http --scope user',
+      'claude mcp add browseros-neo http://127.0.0.1:9200/mcp --transport http --scope user',
     )
   })
 })

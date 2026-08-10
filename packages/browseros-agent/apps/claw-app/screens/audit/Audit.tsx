@@ -1,12 +1,10 @@
 import {
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
-  type SortingState,
   useReactTable,
 } from '@tanstack/react-table'
 import { ArrowRight } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, type ReactNode, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
@@ -22,7 +20,11 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
-import { NUMERIC_COLUMN_IDS, TASK_COLUMNS } from './audit.columns'
+import {
+  COLUMN_WIDTHS,
+  NUMERIC_COLUMN_IDS,
+  TASK_COLUMNS,
+} from './audit.columns'
 import { useAuditScreenData } from './audit.data'
 import {
   formatDayHeading,
@@ -30,18 +32,20 @@ import {
   orderByLiveThenRecency,
 } from './audit.helpers'
 
-/** Keeps the implemented token column dormant without discarding its sorting and cell behavior. */
+/** Keeps the implemented token column dormant without discarding its cell behavior. */
 const SHOW_TOKEN_USAGE_COLUMN = false
 
+/** First cell gets the card's left inset, last cell its right inset; the 8px
+ *  each interior cell carries on both sides adds up to the 16px column gap. */
+const CELL_PADDING = 'px-2 py-2.5 first:pl-4 last:pr-4'
+
 /**
- * Editorial audit screen. Preserves the tanstack-table + shadcn
- * Table primitives (sortable headers, keyboard nav, infinite
- * pagination) and restyles them to match the cockpit's language:
- * hairline-separated rows on the shell, mono tabular numerics for
- * grid data, agent-dot identity, LIVE / FAILED folded inline into
- * the agent cell, DONE silent. Day-of-week headings are injected
- * as spanning `<TableRow>` dividers between date groups when the
- * default `when`-descending sort is active. On row hover, a fixed
+ * Audit ledger. Preserves the tanstack-table + shadcn Table primitives
+ * and restyles them as a single bordered card: a cobalt header bar,
+ * tinted day bands separating date groups, and hairline-separated rows
+ * beneath. Rows are ordered LIVE-first then newest-first and are not
+ * re-sortable — arbitrary column sorts would shred the day bands, and
+ * the filter bar covers retrieval instead. On row hover, a fixed
  * top-right panel shows the session's screenshot preview.
  */
 export function Audit() {
@@ -60,7 +64,6 @@ export function Audit() {
     setStatusFilter,
     setSiteFilter,
     setSearch,
-    setSort,
   } = useAuditScreenData()
   const navigate = useNavigate()
   const location = useLocation()
@@ -71,45 +74,21 @@ export function Audit() {
     filters.site !== null ||
     filters.search.length > 0
 
-  // LIVE-first pre-sort so a running session floats to the top of
-  // the initial view. Operator column sorts still work: they run
-  // through tanstack-table's sortingState on top of this input.
+  // LIVE-first pre-sort so a running session floats to the top of the
+  // list regardless of when it started.
   const orderedTasks = useMemo(() => orderByLiveThenRecency(tasks), [tasks])
 
-  const sortId = filters.sort?.id
-  const sortDesc = filters.sort?.desc
-  const sorting = useMemo<SortingState>(
-    () =>
-      sortId !== undefined && sortDesc !== undefined
-        ? [{ id: sortId, desc: sortDesc }]
-        : [],
-    [sortId, sortDesc],
-  )
   const state = useMemo(
-    () => ({
-      sorting,
-      columnVisibility: { tokens: SHOW_TOKEN_USAGE_COLUMN },
-    }),
-    [sorting],
+    () => ({ columnVisibility: { tokens: SHOW_TOKEN_USAGE_COLUMN } }),
+    [],
   )
 
   const table = useReactTable<TaskSummary>({
     data: orderedTasks,
     columns: TASK_COLUMNS,
     state,
-    onSortingChange: (updater) => {
-      const next = typeof updater === 'function' ? updater(sorting) : updater
-      setSort(next[0] ?? null)
-    },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   })
-
-  // Day-of-week headings only make sense when rows are date-ordered.
-  // If the operator picks a non-`when` sort (e.g. sort by duration
-  // desc), skip the dividers so we do not scramble day groups.
-  const activeSortId = sorting[0]?.id
-  const showDayHeadings = !activeSortId || activeSortId === 'when'
 
   const [hoveredTask, setHoveredTask] = useState<TaskSummary | null>(null)
   const rows = table.getRowModel().rows
@@ -149,111 +128,68 @@ export function Audit() {
       ) : (
         <>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: the onMouseLeave clears the supplementary hover-preview panel; the panel is a pointer-only progressive enhancement and does not gate any core information. */}
-          <div className="relative" onMouseLeave={() => setHoveredTask(null)}>
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow
-                    key={hg.id}
-                    className="border-border-2 border-b hover:bg-transparent"
-                  >
-                    {hg.headers.map((h) => {
-                      const canSort = h.column.getCanSort()
-                      const isNumeric = NUMERIC_COLUMN_IDS.has(h.column.id)
-                      const sortDir = h.column.getIsSorted()
-                      return (
-                        <TableHead
-                          key={h.id}
-                          onClick={
-                            canSort
-                              ? h.column.getToggleSortingHandler()
-                              : undefined
-                          }
-                          className={cn(
-                            'font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]',
-                            canSort && 'cursor-pointer select-none',
-                            isNumeric && 'text-right',
-                          )}
-                        >
-                          <span className="inline-flex items-center gap-1">
-                            {h.isPlaceholder
-                              ? null
-                              : flexRender(
-                                  h.column.columnDef.header,
-                                  h.getContext(),
-                                )}
-                            {canSort && sortDir === 'asc' && (
-                              <span aria-hidden>▲</span>
-                            )}
-                            {canSort && sortDir === 'desc' && (
-                              <span aria-hidden>▼</span>
-                            )}
-                          </span>
-                        </TableHead>
-                      )
-                    })}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {rows.map((row, idx) => {
-                  const prev = idx > 0 ? rows[idx - 1] : null
-                  // Null-check narrows prev so we do not need the
-                  // non-null assertion inside isSameLocalDay's number
-                  // parameters. Biome's noNonNullAssertion rule bans
-                  // the `!` form; this preserves the type discipline.
-                  const dayChanged =
-                    showDayHeadings &&
-                    (prev === null ||
+          <div onMouseLeave={() => setHoveredTask(null)}>
+            <LedgerCard>
+              <Table className="table-fixed">
+                <LedgerHeader table={table} />
+                <TableBody>
+                  {rows.map((row, idx) => {
+                    const prev = idx > 0 ? rows[idx - 1] : null
+                    // Null-check narrows prev so we do not need the
+                    // non-null assertion inside isSameLocalDay's number
+                    // parameters. Biome's noNonNullAssertion rule bans
+                    // the `!` form; this preserves the type discipline.
+                    const dayChanged =
+                      prev === null ||
                       !isSameLocalDay(
                         row.original.startedAt,
                         prev.original.startedAt,
-                      ))
-                  return (
-                    <Fragment key={row.id}>
-                      {dayChanged && (
-                        <TableRow className="hover:bg-transparent">
-                          <TableCell
-                            colSpan={visibleColumnCount}
-                            className="border-none pt-6 pb-1"
-                          >
-                            <span className="font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]">
+                      )
+                    return (
+                      <Fragment key={row.id}>
+                        {dayChanged && (
+                          <TableRow className="border-none hover:bg-transparent">
+                            <TableCell
+                              colSpan={visibleColumnCount}
+                              className="bg-ledger-band px-4 py-[7px] font-semibold text-[12px] text-ledger-band-ink"
+                            >
                               {formatDayHeading(row.original.startedAt)}
-                            </span>
-                          </TableCell>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        <TableRow
+                          data-testid={`task-row-${row.original.sessionId}`}
+                          onMouseEnter={() => setHoveredTask(row.original)}
+                          onClick={() =>
+                            navigate(
+                              `/audit/${encodeURIComponent(row.original.sessionId)}`,
+                              { state: { from: location.pathname } },
+                            )
+                          }
+                          className="cursor-pointer border-ledger-divider border-b hover:bg-card-tint"
+                        >
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell
+                              key={cell.id}
+                              className={cn(
+                                CELL_PADDING,
+                                NUMERIC_COLUMN_IDS.has(cell.column.id) &&
+                                  'text-right',
+                              )}
+                            >
+                              {flexRender(
+                                cell.column.columnDef.cell,
+                                cell.getContext(),
+                              )}
+                            </TableCell>
+                          ))}
                         </TableRow>
-                      )}
-                      <TableRow
-                        data-testid={`task-row-${row.original.sessionId}`}
-                        onMouseEnter={() => setHoveredTask(row.original)}
-                        onClick={() =>
-                          navigate(
-                            `/audit/${encodeURIComponent(row.original.sessionId)}`,
-                            { state: { from: location.pathname } },
-                          )
-                        }
-                        className="group cursor-pointer border-border-2 border-t hover:bg-card-tint"
-                      >
-                        {row.getVisibleCells().map((cell) => (
-                          <TableCell
-                            key={cell.id}
-                            className={cn(
-                              NUMERIC_COLUMN_IDS.has(cell.column.id) &&
-                                'text-right',
-                            )}
-                          >
-                            {flexRender(
-                              cell.column.columnDef.cell,
-                              cell.getContext(),
-                            )}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    </Fragment>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                      </Fragment>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </LedgerCard>
           </div>
           {hasNextPage && (
             <div className="pt-2 text-center">
@@ -261,7 +197,7 @@ export function Audit() {
                 type="button"
                 onClick={fetchNextPage}
                 disabled={isFetchingNextPage}
-                className="group inline-flex items-center gap-1.5 font-mono text-[12px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                className="group inline-flex items-center gap-1.5 font-medium text-[13px] text-ink-2 transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isFetchingNextPage ? 'Loading...' : 'Load older tasks'}
                 <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -276,53 +212,71 @@ export function Audit() {
   )
 }
 
-interface TableShellProps {
+/**
+ * White card the ledger sits in. `overflow-clip` is what rounds the
+ * cobalt header bar's top corners and the last row's bottom corners —
+ * neither element carries a radius of its own.
+ */
+function LedgerCard({ children }: { children: ReactNode }) {
+  return (
+    <div className="overflow-clip rounded-9 border border-ledger-border bg-card">
+      {children}
+    </div>
+  )
+}
+
+interface LedgerTableProps {
   table: ReturnType<typeof useReactTable<TaskSummary>>
 }
 
-/**
- * Loading-state skeleton table shell. Renders the real header row
- * plus 6 empty `<TableRow>` shells so the layout does not jump when
- * data lands.
- */
-function TableShell({ table }: TableShellProps) {
+/** Cobalt header bar. Labels only — the ledger is not operator-sortable. */
+function LedgerHeader({ table }: LedgerTableProps) {
   return (
-    <div className="relative">
-      <Table>
-        <TableHeader>
-          {table.getHeaderGroups().map((hg) => (
-            <TableRow
-              key={hg.id}
-              className="border-border-2 border-b hover:bg-transparent"
+    <TableHeader>
+      {table.getHeaderGroups().map((hg) => (
+        <TableRow
+          key={hg.id}
+          className="border-none bg-ledger-head hover:bg-ledger-head"
+        >
+          {hg.headers.map((h) => (
+            <TableHead
+              key={h.id}
+              className={cn(
+                CELL_PADDING,
+                'h-auto font-medium text-[12px] text-ledger-head-ink',
+                COLUMN_WIDTHS[h.column.id],
+                NUMERIC_COLUMN_IDS.has(h.column.id) && 'text-right',
+              )}
             >
-              {hg.headers.map((h) => {
-                const isNumeric = NUMERIC_COLUMN_IDS.has(h.column.id)
-                return (
-                  <TableHead
-                    key={h.id}
-                    className={cn(
-                      'font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]',
-                      isNumeric && 'text-right',
-                    )}
-                  >
-                    {h.isPlaceholder
-                      ? null
-                      : flexRender(h.column.columnDef.header, h.getContext())}
-                  </TableHead>
-                )
-              })}
-            </TableRow>
+              {h.isPlaceholder
+                ? null
+                : flexRender(h.column.columnDef.header, h.getContext())}
+            </TableHead>
           ))}
-        </TableHeader>
+        </TableRow>
+      ))}
+    </TableHeader>
+  )
+}
+
+/**
+ * Loading-state skeleton. Renders the real card + header bar plus 6
+ * empty rows so the layout does not jump when data lands.
+ */
+function TableShell({ table }: LedgerTableProps) {
+  return (
+    <LedgerCard>
+      <Table className="table-fixed">
+        <LedgerHeader table={table} />
         <TableBody>
           {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
             <TableRow
               key={id}
-              className="border-border-2 border-t hover:bg-transparent"
+              className="border-ledger-divider border-b hover:bg-transparent"
             >
               <TableCell
                 colSpan={table.getVisibleFlatColumns().length}
-                className="py-4"
+                className="px-4 py-4"
               >
                 <div className="h-4 w-full animate-pulse rounded bg-card-tint" />
               </TableCell>
@@ -330,6 +284,6 @@ function TableShell({ table }: TableShellProps) {
           ))}
         </TableBody>
       </Table>
-    </div>
+    </LedgerCard>
   )
 }

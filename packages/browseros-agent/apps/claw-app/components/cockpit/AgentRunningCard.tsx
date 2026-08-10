@@ -1,6 +1,8 @@
 import { ExternalLink, RefreshCw, Square } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { formatToolTrail, siteOf } from '@/screens/cockpit/cockpit.helpers'
+import { activityCardCaptionTones } from './activityCardTone'
 import { LivePreview } from './LivePreview'
 import { TabCountChip } from './TabCountChip'
 
@@ -28,7 +30,7 @@ interface SessionRunningCardProps {
  * target shows its last frame rather than a false live view.
  *
  * The LIVE indicator uses light blue rather than the vivid brand accent, which
- * is near-invisible on the dark caption block.
+ * is near-invisible on the saturated blue caption block.
  */
 export function AgentRunningCard({
   session,
@@ -77,7 +79,13 @@ export function AgentRunningCard({
           </div>
         )}
       </div>
-      <div className="flex flex-col gap-1.5 bg-ink-deep px-4 py-3 text-white">
+      <div
+        className={cn(
+          'flex flex-col gap-1.5 px-4 py-3',
+          activityCardCaptionTones.blue.surface,
+        )}
+        data-caption-tone="blue"
+      >
         <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
           <span className="inline-flex min-w-0 items-center gap-1.5">
             <span

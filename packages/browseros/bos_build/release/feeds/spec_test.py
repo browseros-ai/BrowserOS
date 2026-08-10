@@ -64,6 +64,27 @@ class FeedTableTest(unittest.TestCase):
         # sparkle_glue.mm and winsparkle_glue.cc select the claw feed.
         self.assertTrue(all(feed.publishable for feed in claw_feeds))
 
+    def test_browserclaw_browser_feed_titles_include_legacy_migration(self):
+        claw_feeds = browser_feeds_for_product("browserclaw")
+        self.assertEqual(
+            [feed.title for feed in claw_feeds],
+            [
+                "BrowserOS neo",
+                "BrowserOS neo",
+                "BrowserOS neo Windows Updates",
+                "BrowserOS neo Windows Updates",
+            ],
+        )
+        self.assertEqual(
+            [feed.legacy_titles for feed in claw_feeds],
+            [
+                ("BrowserClaw",),
+                ("BrowserClaw",),
+                ("BrowserClaw Windows Updates",),
+                ("BrowserClaw Windows Updates",),
+            ],
+        )
+
     def test_browseros_browser_feeds_are_publishable(self):
         feeds = browser_feeds_for_product("browseros")
         self.assertTrue(all(feed.publishable for feed in feeds))

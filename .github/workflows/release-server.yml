@@ -17,10 +17,10 @@ on:
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel server OTA artifacts after finalization"
+        description: "Publish the live alpha-channel server OTA release after finalization"
         required: false
         type: boolean
-        default: false
+        default: true
   workflow_call:
     inputs:
       mode:
@@ -44,7 +44,7 @@ on:
         type: string
         default: ""
       publish_ota:
-        description: "Publish alpha-channel server OTA artifacts after finalization"
+        description: "Publish the live alpha-channel server OTA release after finalization"
         required: false
         type: boolean
         default: false
@@ -87,6 +87,9 @@ concurrency:
 jobs:
   prepare:
     if: github.event_name != 'push' || github.event.deleted != true
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -101,6 +104,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && (github.event.repository.default_branch || 'main') || (inputs.ref || github.event.repository.default_branch || 'main') }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
 
       - name: Validate lifecycle inputs
         id: validate
@@ -120,35 +126,27 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Read allocated GitHub releases
-        id: releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_RECORDS: ${{ runner.temp }}/server-release-records.json
-        run: |
-          set -euo pipefail
-          pages="${RUNNER_TEMP}/server-release-pages.json"
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages"
-          jq '[.[][] | {tag_name, draft, target_commitish}]' "$pages" > "$RELEASE_RECORDS"
-          echo "path=$RELEASE_RECORDS" >> "$GITHUB_OUTPUT"
-
       - name: Resolve release
         id: release
+        working-directory: packages/browseros
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
-          RELEASE_RECORDS: ${{ steps.releases.outputs.path }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
-          packages/browseros-agent/scripts/release/prepare-server-release.sh \
+          uv run browseros release component resolve \
+            --component server \
             --event-name "$EVENT_NAME" \
             --default-branch "$DEFAULT_BRANCH" \
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
             --release-ref HEAD \
-            --release-records "$RELEASE_RECORDS"
+            --repo "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve effective lifecycle mode
         id: lifecycle
@@ -242,6 +240,9 @@ jobs:
           lfs: true
           ref: ${{ needs.prepare.outputs.release_sha }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
       - name: Preflight required secrets
         run: |
           set -euo pipefail
@@ -275,28 +276,8 @@ jobs:
         run: bun ci
 
       - name: Stamp release version for artifacts
-        working-directory: packages/browseros-agent
-        run: |
-          set -euo pipefail
-          python3 - "$VERSION" <<'PY'
-          import json
-          import re
-          import sys
-          from pathlib import Path
-
-          version = sys.argv[1]
-          package_path = Path("apps/server/package.json")
-          lock_path = Path("bun.lock")
-          package = json.loads(package_path.read_text())
-          package["version"] = version
-          package_path.write_text(json.dumps(package, indent=2) + "\n")
-          lock = lock_path.read_text()
-          pattern = re.compile(r'("apps/server":\s*\{\s*"name":\s*"@browseros/server",\s*"version":\s*")([^"]+)(")')
-          updated, count = pattern.subn(rf"\g<1>{version}\3", lock)
-          if count != 1:
-              raise SystemExit(f"Expected exactly one apps/server version entry in bun.lock, found {count}")
-          lock_path.write_text(updated)
-          PY
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component server --version "$VERSION"
 
       - name: Build and upload immutable server resources
         working-directory: packages/browseros-agent
@@ -419,15 +400,6 @@ jobs:
             git push origin "refs/tags/$RELEASE_TAG"
           fi
 
-      - name: Publish private draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$RELEASE_TAG" --draft=false
-          fi
-
       - name: Copy versioned objects to latest
         env:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
@@ -458,35 +430,29 @@ jobs:
             fi
           done
 
+      - name: Publish private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
+
   publish-ota:
     needs:
       - prepare
       - finalize
-    if: ${{ needs.finalize.result == 'success' && inputs.publish_ota == true }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-      VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
-      - name: Preflight OTA signing key
-        run: |
-          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
-            echo "::error::SPARKLE_PRIVATE_KEY is required when publish_ota is true"
-            exit 1
-          fi
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v8.3.2
-      - name: Publish alpha server OTA artifacts
-        working-directory: packages/browseros
-        run: uv run browseros ota server release --version "$VERSION" --channel alpha --product browseros
+    if: ${{ needs.finalize.result == 'success' && github.event_name != 'push' && inputs.publish_ota == true }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-server-ota.yml
+    with:
+      product: browseros
+      version: ${{ needs.prepare.outputs.version }}
+      release_sha: ${{ needs.prepare.outputs.release_sha }}
+      snapshot_path: updates/server/appcast-server.alpha.xml
+    secrets: inherit
 
   reflect-version:
     needs:
@@ -504,6 +470,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch || 'main' }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
       - name: Reflect version on main via PR
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
@@ -516,19 +485,9 @@ jobs:
           branch="chore-bump-server-v${VERSION}"
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-          node - "$package_json" "$lock" "$VERSION" <<'JS'
-          const fs = require('fs')
-          const [packagePath, lockPath, version] = process.argv.slice(2)
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
-          packageJson.version = version
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
-          let lock = fs.readFileSync(lockPath, 'utf8')
-          const pattern = /("apps\/server":\s*\{\s*"name":\s*"@browseros\/server",\s*"version":\s*")([^"]+)(")/
-          const matches = lock.match(new RegExp(pattern.source, 'g'))
-          if (matches?.length !== 1) throw new Error(`Expected one server lock entry, found ${matches?.length ?? 0}`)
-          lock = lock.replace(pattern, `$1${version}$3`)
-          fs.writeFileSync(lockPath, lock)
-          JS
+          uv run --directory packages/browseros browseros release component stamp \
+            --component server \
+            --version "$VERSION"
           if git diff --quiet -- "$package_json" "$lock"; then exit 0; fi
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
             pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"

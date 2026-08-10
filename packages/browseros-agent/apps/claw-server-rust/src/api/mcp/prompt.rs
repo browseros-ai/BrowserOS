@@ -13,6 +13,8 @@ Shared with other agents:
   tabs action="list" shows yours vs other agents' vs the user's.
 - If the user points you at a tab you don't own, open its URL with
   tabs action="new" and work on that copy; leave the original untouched.
+- Preserve useful pages: leave anything the user may want to inspect open
+  instead of closing it when the task ends.
 - Rename your session early with name_session using a 2-3 word task label;
   tabs group as <client>/<name>.
 - The user oversees this browser from the BrowserOS neo cockpit (live view,
@@ -38,8 +40,9 @@ Reading and output:
 - screenshot is for visual checks only; pdf archives the page; download
   clicks a ref and saves the file; upload sets local paths on a file input.
 
-Prefer act over JavaScript for single interactions. run does real multi-step
-flows and bulk extraction in one call; evaluate is one-shot page-context JS.
+Choose the tools that fit the task. Prefer act over JavaScript for single
+interactions; run can compose multi-step flows and bulk extraction in one call;
+evaluate is for one-shot page-context JavaScript.
 
 Parallelize when it helps: independent subtasks get their own tabs — at most
 5 at a time unless the user asks for more.

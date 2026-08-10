@@ -8,7 +8,7 @@ on:
   workflow_call:
     inputs:
       platform:
-        description: "Target platform: linux, windows, or macos"
+        description: "Target platform: linux or windows"
         required: true
         type: string
       arch:
@@ -42,28 +42,23 @@ on:
         required: false
         type: boolean
         default: false
-      bundle-local-extensions:
-        description: "Prepare Bun and extension env for profiles that set bundle_local_extensions"
+      resource-mode:
+        description: "Resource provider: published or source"
         required: false
-        type: boolean
-        default: false
-      browseros_server_version:
-        description: "Exact BrowserOS server resource version; empty uses latest"
+        type: string
+        default: published
+      candidate-sha:
+        description: "Exact candidate commit required by source mode"
         required: false
         type: string
         default: ""
-      browserclaw_server_version:
-        description: "Exact BrowserClaw server resource version; empty uses latest"
+      prepared-resources-artifact:
+        description: "Actions artifact containing prepared common resources"
         required: false
         type: string
         default: ""
-      browserclaw_onboard_version:
-        description: "Exact BrowserClaw onboarding resource version; empty uses latest"
-        required: false
-        type: string
-        default: ""
-      bundled_extensions_manifest_url:
-        description: "Run-scoped bundled extension manifest URL; empty uses the live manifest"
+      lane-artifact-name:
+        description: "Actions artifact name for the emitted lane manifest"
         required: false
         type: string
         default: ""
@@ -77,6 +72,37 @@ on:
         required: false
         type: string
         default: ""
+    outputs:
+      lane-artifact:
+        description: "Uploaded lane-manifest artifact name"
+        value: ${{ jobs.build.outputs.lane-artifact }}
+    secrets:
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
+      ESIGNER_USERNAME:
+        required: false
+      ESIGNER_PASSWORD:
+        required: false
+      ESIGNER_TOTP_SECRET:
+        required: false
+      ESIGNER_CREDENTIAL_ID:
+        required: false
+      SPARKLE_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -86,6 +112,8 @@ jobs:
     name: build (${{ inputs.product }} ${{ inputs.platform }}-${{ inputs.arch }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      lane-artifact: ${{ steps.lane_name.outputs.value }}
     defaults:
       run:
         shell: bash
@@ -97,14 +125,17 @@ jobs:
     steps:
       - name: Validate inputs
         env:
+          CANDIDATE_SHA: ${{ inputs.candidate-sha }}
           PLATFORM: ${{ inputs.platform }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared-resources-artifact }}
           PRODUCT: ${{ inputs.product }}
+          RESOURCE_MODE: ${{ inputs.resource-mode }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
-            linux|windows|macos) ;;
+            linux|windows) ;;
             *)
-              echo "::error::platform must be one of: linux, windows, macos"
+              echo "::error::platform must be one of: linux, windows"
               exit 1
               ;;
           esac
@@ -115,10 +146,34 @@ jobs:
               exit 1
               ;;
           esac
+          case "$RESOURCE_MODE" in
+            published) ;;
+            source)
+              if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "::error::source mode requires a full candidate-sha"
+                exit 1
+              fi
+              if [ -z "$PREPARED_ARTIFACT" ]; then
+                echo "::error::source mode requires prepared-resources-artifact"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::resource-mode must be published or source"
+              exit 1
+              ;;
+          esac
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+          ref: ${{ inputs.candidate-sha || inputs.ref || github.sha }}
+
+      - name: Verify exact candidate checkout
+        if: inputs.resource-mode == 'source'
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Configure Git for depot_tools
         if: runner.os == 'Windows'
@@ -151,10 +206,33 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
 
       - name: Setup Bun
-        if: inputs['bundle-local-extensions']
+        if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.6"
+
+      - name: Install BrowserOS server dependencies
+        if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
+        working-directory: packages/browseros-agent
+        run: bun ci
+
+      - name: Setup BrowserOS neo server toolchain
+        if: inputs.resource-mode == 'source' && inputs.product == 'browserclaw'
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          case "${{ inputs.platform }}" in
+            linux) rustup target add x86_64-unknown-linux-gnu ;;
+            windows) rustup target add x86_64-pc-windows-msvc ;;
+          esac
+
+      - name: Download prepared common resources
+        if: inputs.resource-mode == 'source'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.prepared-resources-artifact }}
+          path: ${{ runner.temp }}/prepared-resources
 
       - name: Resolve chromium pin and paths
         id: pin
@@ -260,34 +338,6 @@ jobs:
           sudo apt-get install -y libfuse2
           "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
 
-      - name: Import macOS signing certificate
-        if: inputs.sign && inputs.platform == 'macos'
-        env:
-          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          missing=()
-          [ -n "${MACOS_CERTIFICATE_P12:-}" ] || missing+=(MACOS_CERTIFICATE_P12)
-          [ -n "${MACOS_CERTIFICATE_PWD:-}" ] || missing+=(MACOS_CERTIFICATE_PWD)
-          [ -n "${MACOS_KEYCHAIN_PASSWORD:-}" ] || missing+=(MACOS_KEYCHAIN_PASSWORD)
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::macOS signing requested, but missing required secrets: %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-          cert_path="$RUNNER_TEMP/browseros-signing-cert.p12"
-          keychain_path="$RUNNER_TEMP/browseros-ci-signing.keychain-db"
-          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$cert_path"
-          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
-          security import "$cert_path" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$keychain_path"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
-          security list-keychains -d user -s "$keychain_path"
-          security default-keychain -d user -s "$keychain_path"
-
       - name: Install SSL.com CodeSignTool
         if: inputs.sign && inputs.platform == 'windows'
         shell: pwsh
@@ -306,80 +356,22 @@ jobs:
           }
           "CODE_SIGN_TOOL_PATH=$($tool.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Export bundled extension local-build env
-        if: inputs['bundle-local-extensions']
-        env:
-          BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
-          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          VITE_PUBLIC_POSTHOG_KEY: ${{ secrets.VITE_PUBLIC_POSTHOG_KEY }}
-          VITE_PUBLIC_POSTHOG_HOST: ${{ secrets.VITE_PUBLIC_POSTHOG_HOST }}
-          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
-          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
-          VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
-          GRAPHQL_SCHEMA_PATH: apps/app/schema/graphql.schema.json
-          NODE_ENV: production
-        run: |
-          set -euo pipefail
-          write_env() {
-            local name="$1"
-            local value="${!name:-}"
-            local delimiter
-            delimiter="${name}_$(openssl rand -hex 8)"
-            {
-              echo "$name<<$delimiter"
-              printf '%s\n' "$value"
-              echo "$delimiter"
-            } >> "$GITHUB_ENV"
-          }
-
-          write_env BROWSEROS_AGENT_V2_KEY
-          write_env BROWSERCLAW_KEY
-          write_env POSTHOG_API_KEY
-          write_env VITE_PUBLIC_SENTRY_DSN
-          write_env SENTRY_AUTH_TOKEN
-          write_env SENTRY_ORG
-          write_env SENTRY_PROJECT
-          write_env VITE_PUBLIC_POSTHOG_KEY
-          write_env VITE_PUBLIC_POSTHOG_HOST
-          write_env VITE_CLAW_POSTHOG_KEY
-          write_env VITE_CLAW_POSTHOG_HOST
-          write_env VITE_PUBLIC_BROWSEROS_API
-          write_env GRAPHQL_SCHEMA_PATH
-          write_env NODE_ENV
-
       - name: Build ${{ inputs.product }}
         working-directory: packages/browseros
         env:
-          # download_resources pulls product server bundles from R2.
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.browseros_server_version }}
-          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.browserclaw_server_version }}
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.browserclaw_onboard_version }}
-          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.bundled_extensions_manifest_url }}
-
-          # macOS signing and notarization.
-          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
-          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
-          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
-          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
-
-          # Windows signing via SSL.com CodeSignTool.
-          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
-          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
-          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
-          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
-
-          # Sparkle/WinSparkle artifact signatures.
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          BROWSEROS_CONFIG_URL: ${{ inputs.product == 'browseros' && secrets.BROWSEROS_CONFIG_URL || '' }}
+          POSTHOG_API_KEY: ${{ inputs.product == 'browseros' && secrets.POSTHOG_API_KEY || '' }}
+          SENTRY_DSN: ${{ inputs.product == 'browseros' && secrets.SENTRY_DSN || '' }}
+          CLAW_POSTHOG_KEY: ${{ inputs.product == 'browserclaw' && secrets.CLAW_POSTHOG_KEY || '' }}
+          ESIGNER_USERNAME: ${{ inputs.platform == 'windows' && secrets.ESIGNER_USERNAME || '' }}
+          ESIGNER_PASSWORD: ${{ inputs.platform == 'windows' && secrets.ESIGNER_PASSWORD || '' }}
+          ESIGNER_TOTP_SECRET: ${{ inputs.platform == 'windows' && secrets.ESIGNER_TOTP_SECRET || '' }}
+          ESIGNER_CREDENTIAL_ID: ${{ inputs.platform == 'windows' && secrets.ESIGNER_CREDENTIAL_ID || '' }}
+          SPARKLE_PRIVATE_KEY: ${{ inputs.platform == 'windows' && secrets.SPARKLE_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
           sign_flag="--no-sign"
@@ -391,13 +383,44 @@ jobs:
             upload_flag="--upload"
           fi
 
-          uv run browseros build \
-            --profile "${{ inputs.profile }}" \
-            --product "${{ inputs.product }}" \
-            --arch "${{ inputs.arch }}" \
-            "$sign_flag" \
-            "$upload_flag" \
+          args=(
+            --profile "${{ inputs.profile }}"
+            --product "${{ inputs.product }}"
+            --arch "${{ inputs.arch }}"
+            --resource-mode "${{ inputs.resource-mode }}"
+            "$sign_flag"
+            "$upload_flag"
             --chromium-src "$CHROMIUM_SRC"
+          )
+          if [ "${{ inputs.resource-mode }}" = "source" ]; then
+            args+=(
+              --prepared-resources "$RUNNER_TEMP/prepared-resources"
+              --lane-manifest "$RUNNER_TEMP/lane-manifest.json"
+              --toolchain-id "runner=${{ inputs.runner }}"
+              --toolchain-id "workflow-run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            )
+          fi
+          uv run browseros build "${args[@]}"
+
+      - name: Resolve lane artifact name
+        id: lane_name
+        if: inputs.resource-mode == 'source'
+        run: |
+          value="${{ inputs.lane-artifact-name }}"
+          if [ -z "$value" ]; then
+            value="lane-${{ inputs.product }}-${{ inputs.platform }}-${{ inputs.arch }}"
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Upload lane manifest
+        if: inputs.resource-mode == 'source'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.lane_name.outputs.value }}
+          path: ${{ runner.temp }}/lane-manifest.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
 
       - name: Report disk usage
         if: always()
@@ -429,6 +452,7 @@ jobs:
         with:
           name: ${{ inputs.artifact-name || format('{0}-{1}-{2}-{3}', inputs.product, inputs.profile, inputs.platform, inputs.arch) }}
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
           compression-level: 0
           path: |

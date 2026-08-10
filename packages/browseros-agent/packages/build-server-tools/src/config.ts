@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import {
   type ResolvedEnv,
@@ -9,13 +9,34 @@ import {
 
 import type { BuildConfig, ProductBuildSpec } from './types'
 
-function readPackageVersion(
+function requireVersion(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Product version is missing or invalid: ${path}`)
+  }
+  return value
+}
+
+function readProductVersion(
   rootDir: string,
   product: ProductBuildSpec,
 ): string {
-  const pkgPath = join(rootDir, product.packageDir, 'package.json')
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-  return pkg.version
+  const source = product.versionSource ?? {
+    type: 'package-json',
+    path: join(product.packageDir, 'package.json'),
+  }
+  const sourcePath = resolve(rootDir, source.path)
+  const content = readFileSync(sourcePath, 'utf-8')
+  if (source.type === 'package-json') {
+    const document = JSON.parse(content) as Record<string, unknown>
+    return requireVersion(document.version, source.path)
+  }
+  const document = Bun.TOML.parse(content) as Record<string, unknown>
+  const packageSection = document.package
+  const version =
+    typeof packageSection === 'object' && packageSection !== null
+      ? (packageSection as Record<string, unknown>).version
+      : undefined
+  return requireVersion(version, source.path)
 }
 
 function buildInlineEnv(
@@ -81,7 +102,6 @@ export interface LoadBuildConfigOptions {
   requireR2?: boolean
 }
 
-/** Loads version, inline env, subprocess env, and optional R2 config for one product build. */
 export function loadBuildConfig(
   rootDir: string,
   product: ProductBuildSpec,
@@ -102,6 +122,9 @@ export function loadBuildConfig(
     }
   }
   Object.assign(envVars, product.env.inlineEnvOverrides ?? {})
+  if (options.ci) {
+    Object.assign(envVars, product.env.ciInlineEnvOverrides ?? {})
+  }
   if (!options.ci) {
     requireProductEnv(product, resolved, product.env.requiredInlineEnvKeys, {
       ...resolved.values,
@@ -116,7 +139,7 @@ export function loadBuildConfig(
   }
 
   const config: BuildConfig = {
-    version: readPackageVersion(rootDir, product),
+    version: readProductVersion(rootDir, product),
     envVars,
     processEnv,
   }

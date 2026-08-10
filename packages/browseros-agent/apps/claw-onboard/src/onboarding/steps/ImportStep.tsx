@@ -21,7 +21,6 @@ import {
   importProgressTotal,
   sanitizeImportSelection,
   selectedSourceById,
-  splitImportSelection,
 } from '../onboarding-v2.helpers'
 import type { OnboardingFormValues } from '../onboarding-v2.schemas'
 import type { ImportPhase } from '../onboarding-v2.types'
@@ -35,11 +34,6 @@ interface ImportStepProps {
   onContinue: () => void
 }
 
-/**
- * Names the logins rather than counting them, so the default action reads as a
- * credential handover instead of a bulk browser import. Extras stay countable
- * because they are opt-in and the user should see what they added.
- */
 function importButtonLabelFor(
   hasSource: boolean,
   hasSupportedItems: boolean,
@@ -50,17 +44,11 @@ function importButtonLabelFor(
   if (!hasSupportedItems) return 'Nothing to copy from this profile'
   if (checkedItems.length === 0) return 'Select what to copy'
 
-  const { loginItems, extraItems } = splitImportSelection(checkedItems)
-  if (loginItems.length === 0) {
-    return `Copy ${extraItems.length} ${
-      extraItems.length === 1 ? 'item' : 'items'
-    } from ${sourceName}`
-  }
-  if (extraItems.length === 0) return `Copy logins from ${sourceName}`
-  return `Copy logins + ${extraItems.length} more from ${sourceName}`
+  return `Copy ${checkedItems.length} ${
+    checkedItems.length === 1 ? 'item' : 'items'
+  } from ${sourceName}`
 }
 
-/** Renders the browser import step across quit, picker, progress, and success states. */
 export function ImportStep({
   phase,
   state,

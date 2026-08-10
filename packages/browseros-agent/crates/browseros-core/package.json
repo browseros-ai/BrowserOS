@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/browseros-core-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package browseros-core -- --check && cargo clippy --package browseros-core --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package browseros-core --locked"
+  }
+}

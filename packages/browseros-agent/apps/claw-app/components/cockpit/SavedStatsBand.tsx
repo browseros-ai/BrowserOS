@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 export type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 
 interface SavedStatsBandProps {
+  runningCount: number
   stats: CockpitStats
 }
 
@@ -25,7 +26,7 @@ const wholeNumberFormat = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
-export function SavedStatsBand({ stats }: SavedStatsBandProps) {
+export function SavedStatsBand({ runningCount, stats }: SavedStatsBandProps) {
   const [selectedWindow, setSelectedWindow] = useState<WindowKey>('allTime')
 
   if (!stats.hasMeasuredStats) return null
@@ -33,29 +34,34 @@ export function SavedStatsBand({ stats }: SavedStatsBandProps) {
   return (
     <Tabs
       className="min-w-0 gap-4"
+      data-saved-stats
       onValueChange={(value) => {
         if (isWindowKey(value)) setSelectedWindow(value)
       }}
       render={<section />}
       value={selectedWindow}
     >
-      <header className="flex flex-wrap items-center gap-3">
-        <h2 className="font-semibold text-ink text-lg">Since you started</h2>
-        <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em]">
-          <span
-            aria-hidden
-            className="inline-block size-1.5 rounded-full bg-ink-4"
-          />
-          nothing running
+      <header
+        className="flex flex-wrap items-center gap-3"
+        data-saved-stats-header
+      >
+        <h2 className="font-semibold text-[18px] text-cyanotype-ink leading-7">
+          Since you started
+        </h2>
+        <span
+          className="text-[12px] text-cyanotype-muted leading-4"
+          data-running-status
+        >
+          {runningCount === 0 ? 'Nothing running' : `${runningCount} running`}
         </span>
         <TabsList
           activateOnFocus
           aria-label="Saved stats window"
-          className="ml-auto h-auto bg-card-tint p-1"
+          className="ml-auto h-9 rounded-[9px] bg-cyanotype-well p-1"
         >
           {WINDOWS.map(({ key, tabLabel }) => (
             <TabsTrigger
-              className="h-auto flex-none rounded-md border-0 px-3 py-1.5 font-mono font-normal text-[11px] text-ink-3 uppercase tracking-[0.06em] shadow-none transition-[background-color,color,box-shadow] hover:text-ink data-active:bg-card data-active:font-semibold data-active:text-accent-ink data-active:shadow-sm motion-reduce:transition-none"
+              className="h-7 flex-none rounded-md border-0 px-3 py-1 font-normal text-[12px] text-cyanotype-muted leading-4 shadow-none transition-[background-color,color,box-shadow] hover:text-cyanotype-ink data-active:bg-white data-active:font-semibold data-active:text-cyanotype-blue data-active:shadow-[0_1px_3px_rgba(12,39,66,0.12)] motion-reduce:transition-none"
               key={key}
               value={key}
             >
@@ -67,7 +73,7 @@ export function SavedStatsBand({ stats }: SavedStatsBandProps) {
 
       {WINDOWS.map((windowDefinition) => (
         <TabsContent
-          className="flex min-w-0 flex-col items-stretch gap-6 rounded-2xl border border-border-2 bg-card px-5 py-6 shadow-card md:flex-row md:items-center md:gap-8 md:px-7"
+          className="flex min-w-0 flex-col items-stretch gap-6 rounded-[9px] border border-cyanotype-border bg-card px-7 py-6 shadow-card md:flex-row md:items-center md:gap-8"
           data-saved-stats-card
           key={windowDefinition.key}
           value={windowDefinition.key}
@@ -103,62 +109,47 @@ function SavedStatsPanel({
 
   return (
     <>
-      <div className="min-w-0 flex-[2]">
+      <div className="min-w-0 flex-[2]" data-stats-primary>
         <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2">
           <div>
-            <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.12em]">
+            <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
               Tokens saved · {windowDefinition.valueLabel}
             </div>
             <div
-              className="font-extrabold text-[46px] text-ink tabular-nums leading-none tracking-[-0.03em]"
+              className="font-extrabold text-[46px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.03em]"
               data-stat="tokens-saved"
             >
               {formatCompact(visibleSavings)}
             </div>
           </div>
-          <div className="inline-flex items-baseline gap-1.5 rounded-full border border-accent-tint-2 bg-accent-tint px-3 py-1">
+          <div
+            className="inline-flex items-baseline gap-1.5 rounded-full border border-cyanotype-border bg-cyanotype-well px-3 py-1"
+            data-savings-pill
+          >
             <span
-              className="font-extrabold text-accent-ink text-sm tabular-nums"
+              className="font-extrabold text-[14px] text-cyanotype-blue tabular-nums leading-4"
               data-stat="percentage"
             >
               {Math.round(savingsRatio * 100)}%
             </span>
-            <span className="font-mono text-[10px] text-accent-ink uppercase tracking-[0.06em]">
+            <span className="text-[12px] text-cyanotype-blue leading-4">
               fewer tokens
             </span>
           </div>
         </div>
 
-        {/* Usage gauge. The full bar is what a screenshot-first agent would
-            spend; the accent fill is what BrowserClaw actually used. Both
-            numbers live in the legend row above the bar — never absolutely
-            positioned inside the bounded, overflow-hidden track — so they can
-            never overlap or clip, at any used/total ratio or label length. The
-            legend wraps to two lines before the labels would ever meet. */}
+        {/* Keep both labels outside the bounded track so no ratio can overlap
+            or clip them. */}
         <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono font-semibold text-[11px] text-accent-ink tracking-[0.04em]">
-            <span className="relative size-2.5 shrink-0">
-              <span
-                aria-hidden
-                className="absolute inset-0 animate-ping rounded-full bg-accent/50 motion-reduce:animate-none"
-                data-used-marker-ping
-              />
-              <span
-                aria-hidden
-                className="absolute inset-0 rounded-full bg-accent ring-2 ring-card"
-              />
-            </span>
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-semibold text-[12px] text-cyanotype-blue leading-4">
             used{' '}
             <span className="tabular-nums" data-stat="browserclaw-tokens">
               {formatCompact(windowStats.browserClawTokenEstimate)}
             </span>
           </span>
-          <span className="font-mono text-[11px] text-ink-3 tracking-[0.04em]">
+          <span className="text-[12px] text-cyanotype-muted leading-4">
             a screenshot-first agent would spend{' '}
-            <span
-              className="text-ink-2 tabular-nums"
-              data-stat="comparison-tokens"
-            >
+            <span className="tabular-nums" data-stat="comparison-tokens">
               {formatCompact(windowStats.screenshotFirstTokenEstimate)}
             </span>
           </span>
@@ -166,47 +157,55 @@ function SavedStatsPanel({
 
         <div
           aria-hidden
-          className="relative h-3 min-w-0 overflow-hidden rounded-full bg-[repeating-linear-gradient(135deg,var(--color-card-tint),var(--color-card-tint)_9px,var(--color-card)_9px,var(--color-card)_10px)] shadow-[inset_0_0_0_1px_var(--color-border-2)]"
+          className="relative h-3 min-w-0 overflow-hidden rounded-full bg-cyanotype-well shadow-[inset_0_0_0_1px_var(--color-cyanotype-border)]"
           data-budget-track
         >
           <div
-            className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-accent-2 shadow-[0_2px_10px_color-mix(in_srgb,var(--color-accent)_45%,transparent)] transition-[width] duration-300 motion-reduce:transition-none"
+            className="absolute inset-y-0 left-0 rounded-full bg-cyanotype-blue transition-[width] duration-300 motion-reduce:transition-none"
             data-used-fill
             style={{ width: `${usedRatio * 100}%` }}
           />
         </div>
-        <p className="mt-2.5 font-mono text-[10.5px] text-ink-4 tracking-[0.04em]">
+        <p
+          className="mt-2.5 text-[12px] text-cyanotype-soft leading-4"
+          data-saved-stats-caption
+        >
           compact DOM &amp; tool responses instead of a screenshot per call
         </p>
       </div>
 
-      <div aria-hidden className="h-px w-full bg-border md:h-auto md:w-px" />
+      <div
+        aria-hidden
+        className="h-px w-full bg-cyanotype-border md:h-auto md:w-px md:self-stretch"
+        data-stats-divider
+      />
 
-      <div className="flex min-w-0 flex-1 flex-col gap-5">
+      <div className="flex min-w-0 flex-1 flex-col gap-5" data-stats-secondary>
         <div>
-          <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
+          <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
             Human time saved
           </div>
           <div
-            className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]"
+            className="font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
             data-stat="human-time"
           >
             {formatHumanTime(windowStats.humanTimeSavedMs)}
           </div>
         </div>
         <div>
-          <div className="mb-1.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.1em]">
+          <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
             Sessions · tool calls
           </div>
-          <div className="font-extrabold text-[28px] text-ink tabular-nums leading-none tracking-[-0.02em]">
+          <div
+            className="min-w-0 max-w-full break-all font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
+            data-session-tool-metrics
+          >
             <span data-stat="sessions">
               {formatWhole(windowStats.sessionCount)}
             </span>{' '}
-            <span className="font-bold text-base text-ink-4">
-              ·{' '}
-              <span data-stat="tool-calls">
-                {formatWhole(windowStats.toolCallCount)}
-              </span>
+            ·{' '}
+            <span data-stat="tool-calls">
+              {formatWhole(windowStats.toolCallCount)}
             </span>
           </div>
         </div>

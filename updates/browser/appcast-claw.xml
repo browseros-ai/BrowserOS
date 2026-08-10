@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>BrowserClaw</title>
+    <title>BrowserOS neo</title>
     <link>https://cdn.browseros.com/appcast-claw.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
 
     <item>
-      <title>BrowserClaw - 0.48.1</title>
+      <title>BrowserOS neo - 0.49.5</title>
       <description sparkle:format="plain-text">
       </description>
-      <sparkle:version>10000.0.48.1.0</sparkle:version>
-      <sparkle:shortVersionString>0.48.1</sparkle:shortVersionString>
-      <pubDate>Wed, 22 Jul 2026 21:02:28 +0000</pubDate>
+      <sparkle:version>10000.0.49.5.0</sparkle:version>
+      <sparkle:shortVersionString>0.49.5</sparkle:shortVersionString>
+      <pubDate>Fri, 07 Aug 2026 03:32:25 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/browserclaw/0.48.1/macos/BrowserClaw_v0.48.1_universal.dmg"
-        sparkle:edSignature="zC2UWP3BfH9YSGZJg5fM+tHL6mKy9i44t4+HTvPe0YcI7ccgCzX2D48Dqbj2yUUAMdWKnAJHyVDLK8950oC8Bw=="
-        length="271543676"
+        url="http://cdn.browseros.com/releases/browserclaw/0.49.5/macos/BrowserOS_neo_v0.49.5_universal.dmg"
+        sparkle:edSignature="RBjOQAW6MPvNZyZKnGvvnRl1IQ9O839DOLXIWIDDCmI5+o67AycSfZBNA/PEk3CKQoAlDh4B/masLQdNuQ6iAA=="
+        length="273586689"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>

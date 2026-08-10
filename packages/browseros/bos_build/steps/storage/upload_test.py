@@ -3,11 +3,13 @@
 
 import unittest
 import tempfile
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 from bos_build.core.context import ArtifactRegistry
+from bos_build.release.prepared_resources import PreparedResourcesManifest
 from bos_build.steps.storage.upload import (
     _get_artifact_key,
     generate_release_json,
@@ -65,6 +67,38 @@ class UploadMetadataTest(unittest.TestCase):
         self.assertEqual(release["workflow_run_id"], "30418029456")
         self.assertEqual(release["workflow_run_attempt"], "2")
 
+    def test_source_release_json_uses_candidate_provenance_not_github_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            "os.environ", {"GITHUB_SHA": "9" * 40}, clear=False
+        ):
+            ctx = _upload_ctx(Path(tmp))
+            ctx.resource_mode = "source"
+            ctx.source_sha = "2" * 40
+            manifest = PreparedResourcesManifest(
+                product="browseros",
+                parent_sha="1" * 40,
+                source_sha="2" * 40,
+                browser_version="1.2.3",
+                component_versions={
+                    "server": "0.0.128",
+                    "agent": "0.0.116.0",
+                    "claw-onboard": "0.0.12",
+                },
+                files={},
+            )
+            ctx.artifact_registry.add("prepared_resources", manifest)
+
+            release = generate_release_json(
+                ctx,
+                [{"filename": "BrowserOS_v1.2.3_x64.AppImage", "size": 12}],
+                "linux",
+            )
+
+        self.assertEqual(release["source_sha"], "2" * 40)
+        self.assertEqual(release["parent_sha"], "1" * 40)
+        self.assertEqual(release["component_versions"], manifest.component_versions)
+        self.assertEqual(release["common_manifest_digest"], manifest.digest())
+
     def test_linux_x64_artifacts_use_x64_keys(self) -> None:
         self.assertEqual(
             _get_artifact_key("BrowserOS_v1.2.3_x64.AppImage", "linux"),
@@ -117,6 +151,9 @@ class UploadMetadataTest(unittest.TestCase):
                 "bos_build.steps.storage.upload.get_r2_client", return_value=object()
             ),
             mock.patch(
+                "bos_build.steps.storage.upload.get_release_json", return_value=None
+            ),
+            mock.patch(
                 "bos_build.steps.storage.upload.upload_file_to_r2",
                 return_value=True,
             ),
@@ -136,6 +173,8 @@ class UploadMetadataTest(unittest.TestCase):
         self.assertEqual(artifact["filename"], dmg_name)
         self.assertEqual(artifact["sparkle_signature"], "SIG==")
         self.assertEqual(artifact["sparkle_length"], 3)
+        self.assertEqual(artifact["sha256"], hashlib.sha256(b"dmg").hexdigest())
+        self.assertEqual(ctx.artifact_registry.get("release_metadata"), release)
 
     def test_upload_filters_macos_artifacts_to_context_product(self) -> None:
         cases = [
@@ -165,6 +204,10 @@ class UploadMetadataTest(unittest.TestCase):
                 mock.patch(
                     "bos_build.steps.storage.upload.get_r2_client",
                     return_value=object(),
+                ),
+                mock.patch(
+                    "bos_build.steps.storage.upload.get_release_json",
+                    return_value=None,
                 ),
                 mock.patch(
                     "bos_build.steps.storage.upload.upload_file_to_r2",
@@ -200,6 +243,9 @@ class UploadMetadataTest(unittest.TestCase):
             mock.patch("bos_build.steps.storage.upload.IS_WINDOWS", lambda: False),
             mock.patch(
                 "bos_build.steps.storage.upload.get_r2_client", return_value=object()
+            ),
+            mock.patch(
+                "bos_build.steps.storage.upload.get_release_json", return_value=None
             ),
             mock.patch(
                 "bos_build.steps.storage.upload.upload_file_to_r2",
@@ -286,6 +332,35 @@ class UploadMetadataTest(unittest.TestCase):
             merged["artifacts"]["x64_appimage"]["filename"], "new.AppImage"
         )
         self.assertEqual(merged["artifacts"]["x64_appimage"]["size"], 2)
+
+    def test_merge_release_metadata_keeps_existing_signature_fields(self) -> None:
+        existing = {
+            "source_sha": "same",
+            "artifacts": {
+                "arm64": {
+                    "filename": "BrowserOS_v1.2.3_arm64.dmg",
+                    "sparkle_signature": "SIG==",
+                    "sparkle_length": 3,
+                }
+            },
+        }
+        new = {
+            "source_sha": "same",
+            "artifacts": {
+                "arm64": {
+                    "filename": "BrowserOS_v1.2.3_arm64.dmg",
+                    "size": 3,
+                    "sha256": "a" * 64,
+                }
+            },
+        }
+
+        merged = merge_release_metadata(existing, new)
+
+        self.assertEqual(
+            merged["artifacts"]["arm64"]["sparkle_signature"], "SIG=="
+        )
+        self.assertEqual(merged["artifacts"]["arm64"]["sha256"], "a" * 64)
 
     def test_merge_release_metadata_replaces_an_earlier_run(self) -> None:
         existing = {

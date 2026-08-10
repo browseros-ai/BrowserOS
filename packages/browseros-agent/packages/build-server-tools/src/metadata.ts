@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
+import type { ArtifactMetadataIdentity } from './types'
+
 interface MetadataFile {
   path: string
   sha256: string
@@ -45,6 +47,7 @@ export async function writeArtifactMetadata(
   artifactRoot: string,
   targetId: string,
   version: string,
+  identity?: ArtifactMetadataIdentity,
 ): Promise<string> {
   const fileList = await collectFiles(artifactRoot, artifactRoot)
   const files: MetadataFile[] = []
@@ -54,18 +57,17 @@ export async function writeArtifactMetadata(
   }
 
   const metadataPath = join(artifactRoot, 'artifact-metadata.json')
-  await writeFile(
-    metadataPath,
-    JSON.stringify(
-      {
+  const document = identity
+    ? {
+        component: identity.component,
         version,
         target: targetId,
+        releaseSha: identity.releaseSha,
         files,
-      },
-      null,
-      2,
-    ),
-  )
+      }
+    : { version, target: targetId, files }
+  const serialized = JSON.stringify(document, null, 2)
+  await writeFile(metadataPath, identity ? `${serialized}\n` : serialized)
 
   return metadataPath
 }

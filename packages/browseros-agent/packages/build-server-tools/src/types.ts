@@ -39,6 +39,7 @@ export interface BuildEnvSpec {
   requiredInlineEnvKeys: readonly string[]
   inlineEnvKeys: readonly string[]
   ciInlineEnvDefaults?: Record<string, string>
+  ciInlineEnvOverrides?: Record<string, string>
   inlineEnvOverrides?: Record<string, string>
   defaultR2UploadPrefix: string
   defaultR2DownloadPrefix?: string
@@ -53,16 +54,27 @@ export interface ProductBuildSpec {
   label: string
   packageDir: string
   env: BuildEnvSpec
+  versionSource?: ProductVersionSource
 }
 
-export interface BuildProductDescriptor extends ProductBuildSpec {
-  entrypoint: string
+export type ProductVersionSource =
+  | { type: 'package-json'; path: string }
+  | { type: 'cargo-toml'; path: string }
+
+export interface ResourceBuildProductDescriptor extends ProductBuildSpec {
   distRoot: string
-  rawBinaryBaseName: string
   stagedBinaryBaseName: string
   archiveBaseName: string
   defaultManifestPath: string
   defaultUpload?: boolean
+  includeArtifactIdentity?: boolean
+  archiveFilesOnly?: boolean
+  expectedArtifactFiles?: (target: BuildTarget) => readonly string[]
+}
+
+export interface BuildProductDescriptor extends ResourceBuildProductDescriptor {
+  entrypoint: string
+  rawBinaryBaseName: string
   bundle?: BundleOptions
 }
 
@@ -122,6 +134,23 @@ export interface ResourceManifest {
 export interface CompiledServerBinary {
   target: BuildTarget
   binaryPath: string
+}
+
+export type ProductCompiler<
+  TProduct extends
+    ResourceBuildProductDescriptor = ResourceBuildProductDescriptor,
+> = (
+  product: TProduct,
+  targets: BuildTarget[],
+  envVars: Record<string, string>,
+  processEnv: NodeJS.ProcessEnv,
+  version: string,
+  options?: { ci?: boolean },
+) => Promise<CompiledServerBinary[]>
+
+export interface ArtifactMetadataIdentity {
+  component: string
+  releaseSha: string
 }
 
 export interface StagedArtifact {

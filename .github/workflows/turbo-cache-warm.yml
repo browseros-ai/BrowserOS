@@ -1,0 +1,63 @@
+name: Turbo Cache Warm
+
+# Populates the Turbo cache on `main` so PR branches inherit warm cache.
+# GitHub Actions caches restore only from the same branch or the base/default
+# branch, so without a run on `main` every PR would start cold. Neither the
+# Tests nor Code Quality workflows run on `main`, so this is that run.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/turbo-cache-warm.yml
+      - packages/browseros-agent/**
+  schedule:
+    # Weekly full warm to backstop GitHub's 7-day unused-cache eviction for
+    # packages that rarely change (a cache read counts as access, so frequently
+    # depended-on packages stay warm on their own).
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turbo-cache-warm-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: packages/browseros-agent
+
+jobs:
+  warm:
+    name: Warm Turbo cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history so Turbo's `--affected` can compute the merge base.
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Start Turbo remote cache (GitHub Actions cache)
+        uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Create dev env file
+        run: cp .env.development.example .env.development
+
+      - name: Warm cache
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Full run: refresh every package's cached artifacts + access time.
+            bunx turbo run typecheck
+          else
+            # Per-merge: warm only what this merge changed.
+            bunx turbo run typecheck --affected
+          fi

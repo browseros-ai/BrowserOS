@@ -1,317 +1,327 @@
-# BrowserOS Release CI
+# Browser release CI
 
-The BrowserOS and BrowserClaw full-release workflows build one deterministic
-release from a fixed default-branch commit. They are dispatch-only because the
-browser lanes use paid runners and the dedicated macOS builder.
+The full BrowserOS and BrowserOS neo workflows build one immutable candidate
+from source on every supported host. GitHub Actions chooses runners, scopes
+secrets, transports artifacts, and enforces job dependencies. `bos_build` owns
+version allocation, resource production, browser builds, attestations, the
+release gate, and finalization.
 
 ## Full-release graph
 
-Both products follow the same publication boundary:
+Both products use the same fixed graph:
 
 ```text
-preflight
-  -> prepare selected components in parallel
-  -> snapshot immutable resource pins and the bundled manifest into the release plan
-  -> build selected browser platforms with exact component pins
-  -> validate selected and skipped platform results
-  -> preview every selected update feed, or record a successful no-op
-  -> finalize selected components in parallel
-  -> write the summary and optionally create the browser GitHub draft
+dispatch from main
+  -> create or recover candidate commit and PR
+  -> build common resources once
+  -> Linux x64 ───────┐
+     Windows x64 ─────┼─> validate complete lane evidence
+     macOS universal ─┘
+  -> merge the unchanged candidate PR
+  -> create or refresh the browser draft and appcast preview
 ```
 
-BrowserOS prepares the BrowserOS server and agent extension. BrowserClaw
-prepares the Rust server, onboarding resources, and BrowserClaw extension.
-Preparation uploads immutable versioned objects and leaves private GitHub
-drafts. Public component tags/releases and mutable server `latest` aliases are
-not created or moved until every selected browser build and the feed preview
-succeeds.
+The candidate commit bumps the product's server and extension versions:
 
-The browser GitHub draft is a separate final action. Setting
-`github_release_draft=false` skips only that browser draft; selected component
-finalizers still run.
+| Product | Bumped | Rebuilt without a bump |
+| --- | --- | --- |
+| BrowserOS | Bun server, `agent` | onboarding |
+| BrowserOS neo | Rust server, `browserclaw` | onboarding |
 
-## Dispatch rules
+The common job builds the product CRX and onboarding bundle, resolves one
+pinned bug reporter CRX from the canonical bundled manifest, and records every
+file in `prepared-resources.json`. That directory moves between jobs as a
+candidate-bound GitHub artifact. It is not published to R2.
 
-A full release must be dispatched from the repository default branch. The
-workflow rejects another branch or tag before reserving a component version.
-The dispatch event SHA becomes the sole source for component preparation,
-release-plan metadata, macOS checkout, browser artifacts, component
-finalization, and the browser draft target.
+Each native lane validates the common manifest, builds only its native server
+targets, stages the resources into the existing Chromium layout, runs the full
+browser build, uploads browser deliverables, and emits a lane manifest. The
+gate requires Linux x64, signed Windows x64, and signed macOS arm64, x64, and
+universal outcomes from the same candidate and common-resource digest.
 
-The extension channel defaults to `alpha`. The full workflows do not accept an
-extension version: `agent` and `browserclaw` automatically allocate or reuse the
-next source-bound four-part version. Standalone extension workflows retain an
-explicit version input for repair and exceptional operations.
+The full workflows do not call standalone component workflows and do not
+publish component tags, GitHub releases, `latest` aliases, server appcasts, or
+extension feeds. Component OTA remains a separate operation.
 
-Normal full releases:
+## Dispatch
+
+There are no release-shape inputs. A full release always builds the required
+matrix, signs Windows and macOS, uploads browser deliverables, and creates a
+browser draft plus an appcast preview.
 
 ```bash
-gh workflow run release-browseros.yml \
-  --ref main \
-  -f platforms=all \
-  -f include_servers=true \
-  -f sign_windows=true \
-  -f macos_arch=universal \
-  -f upload_to_r2=true \
-  -f extensions=alpha \
-  -f github_release_draft=true
-
-gh workflow run release-browserclaw.yml \
-  --ref main \
-  -f platforms=all \
-  -f include_servers=true \
-  -f sign_windows=true \
-  -f macos_arch=universal \
-  -f upload_to_r2=true \
-  -f extensions=alpha \
-  -f github_release_draft=true
+gh workflow run release-browseros.yml --ref main
+gh workflow run release-browserclaw.yml --ref main
 ```
 
-Useful partial runs:
+A new candidate is accepted only when the dispatch ref is the repository
+default branch and the checked-out SHA equals the dispatch SHA. Product-level
+concurrency is non-cancelling, so one candidate cannot replace another while
+paid native lanes are running.
+
+## Candidate identity and recovery
+
+`browseros release candidate ensure` uses a deterministic branch for the
+product and parent commit. The first call allocates versions, stamps only the
+selected manifests and lockfile entries, creates one commit, pushes the branch,
+and opens a PR. Later calls for the same parent verify and return that exact
+candidate; they never amend or force-push it.
+
+The workflow stores the candidate record as:
+
+```text
+release-candidate-<product>-<candidate-sha>
+```
+
+Common resources and gate evidence use the same immutable identity:
+
+```text
+release-resources-<product>-<candidate-sha>
+release-gate-<product>-<candidate-sha>
+release-finalization-<product>-<candidate-sha>
+```
+
+To create or recover a candidate outside Actions, start from a clean checkout
+of the default branch:
 
 ```bash
-gh workflow run release-browseros.yml \
+cd /path/to/BrowserOS
+git switch main
+git pull --ff-only
+
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+PARENT_SHA="$(git rev-parse HEAD)"
+CANDIDATE_RECORD="$(mktemp)"
+
+cd packages/browseros
+uv run browseros release candidate ensure \
+  --product browseros \
+  --parent-sha "$PARENT_SHA" \
+  --default-branch "$DEFAULT_BRANCH" \
+  --dispatch-ref "$DEFAULT_BRANCH" \
+  --repo "$REPO" \
+  --output "$CANDIDATE_RECORD"
+```
+
+Use `--product browserclaw` for BrowserOS neo. Repeating the same command with
+the same parent recovers the existing candidate record.
+
+## Local source build
+
+Source mode is the same resource path used by full releases and nightlies. It
+builds the product extension, onboarding bundle, and active host's server from
+the checkout; only the pinned bug reporter is downloaded. Chrome, Bun, and the
+product's build-time secrets must be available. BrowserOS neo additionally
+needs a native Rust toolchain.
+
+On a clean checkout, one command prepares the local common directory and runs
+the active host lane:
+
+```bash
+cd /path/to/BrowserOS/packages/browseros
+SOURCE_SHA="$(git rev-parse HEAD)"
+
+uv run browseros build \
+  --preset release \
+  --product browseros \
+  --arch x64 \
+  --resource-mode source \
+  --source-sha "$SOURCE_SHA" \
+  --no-sign \
+  --no-upload \
+  --chromium-src /path/to/chromium/src
+```
+
+Choose the architecture supported by the host. Omit `--no-sign` only when the
+host has the required signing identity. Source mode does not bump versions,
+commit, push, or open a PR.
+
+When `--prepared-resources` is omitted, the exact common directory is:
+
+```text
+packages/browseros/resources/binaries/prepared_common/
+  <product>/<source-sha>/<browser-version>/
+```
+
+The source SHA and browser version are both part of the path so two local
+nightly versions from one commit cannot reuse incompatible resources.
+
+## Build from an exact prepared directory
+
+A candidate record can prepare the platform-independent resources once, then
+any compatible host can validate and consume the same directory:
+
+```bash
+SOURCE_REPO=/path/to/BrowserOS
+CANDIDATE_RECORD=/path/to/candidate.json
+REPO_ROOT=/tmp/BrowserOS-candidate
+PREPARED_DIR=/path/to/prepared-browseros
+CANDIDATE_SHA="$(jq -r .candidate_sha "$CANDIDATE_RECORD")"
+CANDIDATE_BRANCH="$(jq -r .branch "$CANDIDATE_RECORD")"
+
+git -C "$SOURCE_REPO" fetch origin "$CANDIDATE_BRANCH"
+git -C "$SOURCE_REPO" worktree add --detach "$REPO_ROOT" "$CANDIDATE_SHA"
+
+cd "$REPO_ROOT/packages/browseros"
+uv run browseros release resources prepare \
+  --candidate "$CANDIDATE_RECORD" \
+  --repo-root "$REPO_ROOT" \
+  --output "$PREPARED_DIR"
+
+uv run browseros build \
+  --profile release-ci \
+  --product browseros \
+  --arch x64 \
+  --resource-mode source \
+  --prepared-resources "$PREPARED_DIR" \
+  --no-sign \
+  --no-upload \
+  --chromium-src /path/to/chromium/src
+```
+
+`REPO_ROOT` must be checked out at the candidate SHA recorded in
+`candidate.json`. A product, source SHA, browser version, component version,
+path, size, extension ID, or checksum mismatch fails before Chromium compile.
+The command still builds the current host's server locally; prepared common
+resources are intentionally platform-independent.
+
+## Host compatibility boundary
+
+One machine cannot produce the complete signed release matrix.
+
+| Host lane | Browser outcomes | Server targets |
+| --- | --- | --- |
+| Linux x64 | Linux x64 | `linux-x64` |
+| Windows x64 | signed Windows x64 | `windows-x64` |
+| macOS arm64, universal plan | signed macOS arm64, x64, universal | `darwin-arm64`, `darwin-x64` |
+
+Common resources can be prepared on any supported machine with Bun, Chrome,
+network access, and the extension signing secret. The Rust BrowserOS neo server
+must be built on the target operating system. Browser signing and notarization
+must run on the corresponding configured host.
+
+## Retry procedures
+
+### A lane fails before merge
+
+Rerun only the failed jobs in the same workflow run:
+
+```bash
+RUN_ID=<github-run-id>
+gh run rerun "$RUN_ID" --failed
+gh run watch "$RUN_ID" --exit-status
+```
+
+The candidate SHA and artifact names do not change. Successful artifacts remain
+available, the common job validates or recovers its candidate-bound artifact,
+and the candidate PR stays unmerged until the complete gate passes. Do not
+dispatch a new version or run a standalone component release to repair a lane.
+
+### Finalization fails after merge
+
+The merge command is idempotent and the merged candidate record is retained.
+Rerun the failed finalization job in the original run:
+
+```bash
+RUN_ID=<github-run-id>
+gh run rerun "$RUN_ID" --failed
+gh run watch "$RUN_ID" --exit-status
+```
+
+This refreshes the draft and appcast preview from the existing gate. It does
+not allocate versions or rebuild browsers. For a manual recovery, download the
+merged candidate and gate artifacts and call the same Python finalizer:
+
+```bash
+gh run download "$RUN_ID" \
+  --name "release-candidate-$PRODUCT-$CANDIDATE_SHA" \
+  --dir /tmp/browser-candidate
+gh run download "$RUN_ID" \
+  --name "release-gate-$PRODUCT-$CANDIDATE_SHA" \
+  --dir /tmp/browser-gate
+
+cd packages/browseros
+uv run browseros release browser finalize \
+  --candidate /tmp/browser-candidate/candidate.json \
+  --gate /tmp/browser-gate/gate.json \
+  --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+  --preview-dir /tmp/browser-finalization/previews \
+  --output /tmp/browser-finalization/finalization.json
+```
+
+Set `PRODUCT` to `browseros` or `browserclaw` and `CANDIDATE_SHA` to the value
+shown in the workflow summary.
+
+## Intentional published-resource builds
+
+Published mode remains available for one-off consumers that deliberately want
+the already released component resources from R2/CDN. It is not the full
+browser release path and does not create a candidate:
+
+```bash
+gh workflow run release-linux.yml \
   --ref main \
-  -f platforms=linux \
-  -f include_servers=false \
-  -f extensions=skip
-
-gh workflow run release-browserclaw.yml \
-  --ref main \
-  -f platforms=macos \
-  -f include_servers=true \
-  -f extensions=skip
+  -f products=browseros \
+  -f upload_to_r2=false
 ```
 
-When `include_servers=false`, the plan snapshots the currently promoted exact
-resource versions without preparing or publishing a component release. When
-`extensions=skip`, it preserves the complete live extension version set in an
-immutable run-scoped manifest without preparing an extension release. Browser
-jobs never receive a blank pin that can fall back to a mutable live object.
-
-## Immutable release plan
-
-Before browser jobs start, `bos_build.release.plan` validates every selected
-component's version, exact tag, and source SHA. It writes deterministic JSON to
-a run/attempt-specific R2 key:
-
-```text
-release-plans/<product>/<source-sha>/run-<run-id>-attempt-<attempt>/release-plan.json
-```
-
-The schema-v2 plan records the product, browser version, fixed source SHA, run
-identity, each selected component version/tag/source, and all three server and
-onboarding resource pins. A prepared component supplies its new exact pin. For
-every reused family, the helper reads all `latest` targets, resolves one
-coherent version, verifies the matching versioned objects, then rereads every
-alias to reject a concurrent promotion. Current objects with source-bound R2
-metadata use that binding; legacy objects resolve only when exactly one
-version's ETag and size match every target. R2 creation uses conditional
-`If-None-Match` writes with source, run, plan-key, object-kind, and SHA-256
-bindings. A retry may reuse only byte-identical, binding-identical objects.
-
-The helper always reads the complete live bundled manifest, validates its exact
-known structure, and verifies every versioned CRX URL. It preserves all pins
-when extension release is skipped; otherwise it overrides only the selected
-extension. It uploads the result beside the plan:
-
-```text
-release-plans/<product>/<source-sha>/run-<run-id>-attempt-<attempt>/bundled-manifest.xml
-```
-
-All selected browser platforms receive the same manifest URL and component
-versions. The live `extensions/bundled-manifest.xml` is never changed before a
-browser build. The plan directory is also uploaded as the retry-unique Actions
-artifact `release-plan-<product>-<run-id>-<attempt>`.
-
-GitHub increments the workflow attempt when only failed jobs are rerun. A
-successful platform from an earlier attempt and a retried platform may
-therefore contribute metadata to the same release. Browser metadata consumers
-bind every platform to the fixed source SHA and workflow run ID, but
-intentionally do not require one ambient attempt. Plan R2 keys and Actions
-artifacts keep the attempt in their identities so rerun outputs remain
-separate.
-
-## Exact browser inputs
-
-The full workflows pass these reusable-workflow inputs:
-
-| Product | Exact inputs |
-| --- | --- |
-| BrowserOS | `browseros_server_version`, `browserclaw_server_version`, `browserclaw_onboard_version`, `bundled_extensions_manifest_url` |
-| BrowserClaw | `browseros_server_version`, `browserclaw_server_version`, `browserclaw_onboard_version`, `bundled_extensions_manifest_url` |
-
-Linux and Windows build at the caller's fixed workflow SHA. macOS receives the
-same SHA through its explicit `ref` input. A selected component that fails,
-cancels, returns blank outputs, reports another SHA, or is unexpectedly skipped
-blocks every browser job.
-
-After browser jobs finish, a single gate enforces the platform truth table. A
-selected platform must succeed, and every unselected platform must be skipped.
-Failure, cancellation, or an unexpected skip prevents feed preview and all
-component finalizers.
-
-## Feed previews
-
-Full releases never silently publish client update feeds. They render through
-the guarded publisher in dry-run mode and stage files only under the canonical
-repository homes:
-
-```text
-updates/browser/
-updates/extensions/
-```
-
-The artifact keeps those exact relative paths and is named
-`staged-update-feeds-<product>-<run-id>-<attempt>`. Routine workflow commands do
-not use `--allow-downgrade` or `--repair-invalid-live`.
-
-Linux-only with `extensions=skip`, or another selection with no appcast or
-extension surface, is a successful no-op. It is distinct from an upstream
-failure and does not block component finalization. Preview summaries never
-contain actionable publication commands. The final summary emits them only
-after every selected browser lane and component finalizer succeeds.
-
-After inspecting the artifact and browser draft, publish selected surfaces
-explicitly:
+The equivalent local command is:
 
 ```bash
 cd packages/browseros
-
-uv run browseros release publish \
-  --version <browser-version> \
-  --product <browseros-or-browserclaw> \
-  --platform linux --platform win --platform macos \
-  --source-sha <fixed-source-sha> \
-  --workflow-run-id <run-id>
-
-uv run browseros release appcast \
-  --version <browser-version> \
-  --product <browseros-or-browserclaw> \
-  --platforms all \
-  --source-sha <fixed-source-sha> \
-  --workflow-run-id <run-id> \
-  --publish
-
-uv run browseros release extensions \
-  --channel alpha \
-  --set <agent-or-browserclaw>=<prepared-extension-version> \
-  --publish
+uv run browseros build \
+  --preset release \
+  --product browseros \
+  --arch x64 \
+  --resource-mode published \
+  --no-sign \
+  --no-upload \
+  --chromium-src /path/to/chromium/src
 ```
 
-An alpha extension feed can be inspected in production first, then the same
-immutable CRX version can be promoted to `prod`; no rebuild is required.
+Published mode uses `config/download_resources.yaml` and may resolve mutable
+component aliases. Never substitute it into a full candidate or nightly.
 
-## Feed ownership and reconciliation
+## Publication boundary
 
-This repository owns all deployed feed snapshots under root `updates/`:
+After the gate merges the candidate PR, finalization creates or refreshes a
+draft browser GitHub release targeted at the original candidate SHA and renders
+a browser appcast preview. It never publishes the appcast.
 
-```text
-updates/browser/       # BrowserOS and BrowserClaw appcasts
-updates/server/        # prod and alpha server OTA appcasts
-updates/extensions/    # update manifests, JSON config, bundled manifest
-updates/upload.sh      # local menu around the guarded publisher
-```
+Inspect the draft, retained lane evidence, and preview before promoting the
+browser through the explicit release commands. Server OTA and extension feed
+publication belong to their standalone workflows:
 
-`updates/upload.sh` loads local R2 configuration through `EnvConfig` and
-delegates validation, backups, and writes to the guarded publisher. After this
-path is deployed and verified in production, remove the old
-`api-worker/updates` copies and stop using its uploader so there is only one
-feed authority.
-
-The currently deployed alpha manifest is malformed, and the two production
-server appcasts contain alpha channel metadata. After this change merges and
-before the first default `extensions=alpha` full release, repair those three
-live objects once. Otherwise the paid browser builds will finish before the
-feed preview fails closed. First review the repair dry run:
-
-```bash
-cd packages/browseros
-uv run browseros release feeds publish-local \
-  extensions/update-manifest.alpha.xml \
-  appcast-server.xml \
-  appcast-claw-server.xml \
-  --repair-invalid-live
-```
-
-Publish exactly the reviewed repair, then verify that the ordinary rails pass
-without repair authority:
-
-```bash
-uv run browseros release feeds publish-local \
-  extensions/update-manifest.alpha.xml \
-  appcast-server.xml \
-  appcast-claw-server.xml \
-  --repair-invalid-live \
-  --publish
-
-uv run browseros release feeds publish-local \
-  extensions/update-manifest.alpha.xml \
-  appcast-server.xml \
-  appcast-claw-server.xml
-
-uv run browseros release feeds status
-```
-
-The repair flag does not authorize a version downgrade; that remains a
-separate explicit operation.
-
-## Server OTA policy
-
-Full browser releases pass `publish_ota=false`. A successful server finalizer
-publishes its component release and promotes versioned browser resources to the
-resource `latest` alias, but it does not publish `updates/server` OTA appcasts.
-Server OTA promotion remains an explicit standalone operation with the
-appropriate server workflow or OTA command.
-
-The server finalizers also enforce monotonic publication. If a newer version
-became public while browsers were building, an older prepared release cannot
-move `latest` backward.
-
-## Standalone workflows
-
-| Workflow | Purpose |
+| Workflow | Owned publication |
 | --- | --- |
-| `release-server.yml` | BrowserOS server resources and optional server OTA |
-| `release-claw-server-rust.yml` | BrowserClaw Rust server resources and optional server OTA |
-| `release-claw-onboard.yml` | BrowserClaw onboarding resources |
-| `release-extensions.yml` | CRX preparation/finalization without feed publication |
-| `release-extension-feeds.yml` | Extension feed preview or explicit publication |
-| `release-linux.yml` | Linux browser build |
-| `release-windows.yml` | Windows browser build and optional signing |
-| `release-macos.yml` | Signed macOS browser build on the persistent builder |
+| `release-server.yml` | BrowserOS server release, versioned/`latest` resources, and live alpha OTA by default |
+| `release-claw-server.yml` | BrowserOS neo server release, versioned/`latest` resources, and live alpha OTA by default |
+| `release-claw-onboard.yml` | onboarding release and resources |
+| `release-extensions.yml` | extension CRX release, alpha feed snapshots, and CDN objects |
+| `release-extension-feeds.yml` | extension manifest preview or publication |
 
-The reusable `workflow_call` interfaces for server-like and extension
-workflows expose `mode=build|finalize`. The full orchestrators use deferred
-`build` calls to reserve and upload immutable component objects without public
-tags or aliases, then call `finalize` with the exact prepared version and
-source. Direct server and onboarding dispatches perform the complete lifecycle
-and do not accept `mode`; the extension dispatch retains explicit `mode` and
-`defer_finalize` controls for standalone repair work.
+A direct server dispatch defaults `publish_ota=true`. After the immutable
+release and every `latest` alias are finalized, native jobs produce all five
+platform appcast fragments, publish the live alpha appcast through the guarded
+feed publisher, and commit the deployed snapshot under `updates/server/`. Use
+`publish_ota=false` to stop after component finalization. Production promotion
+remains an explicit `browseros ota server promote --product <id> --publish`.
+
+The full browser workflows never invoke these standalone publishers. They only
+consume resources built from their candidate and leave every component OTA
+surface unchanged.
 
 ## Required configuration
 
-Every full run needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` because the immutable release plan is
-always uploaded, even when browser `upload_to_r2=false`.
+The common producer needs Chrome, Bun, network access to the bundled extension
+manifest, and the selected product's extension signing/build secrets. BrowserOS
+native lanes need `BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, and `SENTRY_DSN`.
+BrowserOS neo native lanes need `CLAW_POSTHOG_KEY` and Rust/Cargo. Browser
+uploads use the `R2_*` secrets.
 
-Selected BrowserOS server preparation additionally needs
-`BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, and `SENTRY_DSN`. BrowserClaw server
-preparation needs `CLAW_POSTHOG_KEY`. Selected extension preparation needs its
-signing key and associated build-time configuration. Signed Windows lanes need
-the eSigner credentials and `SPARKLE_PRIVATE_KEY`. macOS lanes need repository
-variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus the existing
-signing/notarization secrets on the persistent builder.
-
-Use `tools/release_secrets/sync.py` to inspect or sync the allowlisted
-repository secrets without printing their values:
-
-```bash
-tools/release_secrets/sync.py --env-file .env.production --dry-run
-tools/release_secrets/sync.py --env-file .env.production --apply
-tools/release_secrets/sync.py --check
-```
-
-Linux and Windows release builds use WarpBuild runners. macOS uses the
-dedicated self-hosted builder. Runner labels, cost expectations, cache behavior,
-and queue troubleshooting remain documented in `bos_build/docs/warpbuild-ci.md`.
+Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses
+repository variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus
+the signing and notarization secrets on the persistent builder. Runner labels,
+cache behavior, and queue recovery are documented in `warpbuild-ci.md`;
+persistent macOS setup is in `nightly-macos-ci.md`.

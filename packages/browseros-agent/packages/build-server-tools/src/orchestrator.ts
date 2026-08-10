@@ -1,9 +1,14 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 
 import type { S3Client } from '@aws-sdk/client-s3'
 
-import { archiveAndUploadArtifacts, archiveArtifacts } from './archive'
+import {
+  archiveAndUploadArtifacts,
+  archiveArtifacts,
+  validateArtifactArchive,
+} from './archive'
 import { parseBuildArgs } from './cli'
 import { compileProductBinaries } from './compile'
 import { loadBuildConfig } from './config'
@@ -16,9 +21,12 @@ import {
 } from './r2'
 import { stageCompiledArtifact, stageTargetArtifact } from './stage'
 import type {
+  ArtifactMetadataIdentity,
   BuildProductDescriptor,
   BuildTarget,
+  ProductCompiler,
   R2Config,
+  ResourceBuildProductDescriptor,
   ResourceManifest,
   UploadResult,
 } from './types'
@@ -32,7 +40,7 @@ function manifestNeedsR2(manifest: ResourceManifest): boolean {
 }
 
 export async function recoverVersionedTargets(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   targets: BuildTarget[],
   version: string,
   releaseSha: string,
@@ -68,6 +76,19 @@ export async function recoverVersionedTargets(
       },
     )
     if (recovered) {
+      const expectedFiles = product.expectedArtifactFiles?.(target)
+      if (expectedFiles) {
+        validateArtifactArchive(
+          zipPath,
+          {
+            component: r2.uploadPrefix,
+            releaseSha,
+            target: target.id,
+            version,
+          },
+          expectedFiles,
+        )
+      }
       recoveredResults.push({
         targetId: target.id,
         versionR2Key,
@@ -110,8 +131,73 @@ function logArtifactResults(results: UploadResult[]): void {
   }
 }
 
-export async function runProdResourceBuild(
-  product: BuildProductDescriptor,
+function requireFullReleaseSha(value: string, source: string): string {
+  if (!/^[0-9a-f]{40}$/i.test(value)) {
+    throw new Error(`${source} must be a full 40-character git SHA`)
+  }
+  return value.toLowerCase()
+}
+
+function currentReleaseSha(rootDir: string): string {
+  try {
+    return requireFullReleaseSha(
+      execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: rootDir,
+        encoding: 'utf8',
+      }).trim(),
+      'git rev-parse HEAD',
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Could not resolve artifact release SHA: ${message}`)
+  }
+}
+
+function resolveReleaseContext(
+  product: ResourceBuildProductDescriptor,
+  uploadPrefix: string,
+  rootDir: string,
+  versionedOnly: boolean,
+): {
+  releaseSha?: string
+  artifactIdentity?: ArtifactMetadataIdentity
+} {
+  const releaseShaValue = process.env.RELEASE_SHA?.trim()
+  const releaseSha = releaseShaValue
+    ? requireFullReleaseSha(releaseShaValue, 'RELEASE_SHA')
+    : undefined
+  const checkoutReleaseSha =
+    releaseSha || product.includeArtifactIdentity
+      ? currentReleaseSha(rootDir)
+      : undefined
+  if (releaseSha && releaseSha !== checkoutReleaseSha) {
+    throw new Error(
+      `RELEASE_SHA ${releaseSha} does not match checkout HEAD ${checkoutReleaseSha}`,
+    )
+  }
+  if (versionedOnly && !releaseSha) {
+    throw new Error('RELEASE_SHA is required for versioned-only uploads')
+  }
+  if (!product.includeArtifactIdentity) {
+    return { releaseSha }
+  }
+  if (!checkoutReleaseSha) {
+    throw new Error('Could not resolve the artifact release SHA')
+  }
+  return {
+    releaseSha,
+    artifactIdentity: {
+      component: uploadPrefix,
+      releaseSha: checkoutReleaseSha,
+    },
+  }
+}
+
+export async function runCompiledResourceBuild<
+  TProduct extends ResourceBuildProductDescriptor,
+>(
+  product: TProduct,
+  compiler: ProductCompiler<TProduct>,
   argv: string[],
   options: { rootDir?: string } = {},
 ): Promise<void> {
@@ -129,13 +215,19 @@ export async function runProdResourceBuild(
     ci: args.ci,
     requireR2,
   })
+  const { releaseSha, artifactIdentity } = resolveReleaseContext(
+    product,
+    buildConfig.r2?.uploadPrefix ?? product.env.defaultR2UploadPrefix,
+    rootDir,
+    args.versionedOnly,
+  )
 
   log.header(`Building ${product.label} artifacts v${buildConfig.version}`)
   log.info(`Targets: ${args.targets.map((target) => target.id).join(', ')}`)
   log.info(`Mode: ${buildModeLabel(args.ci)}`)
 
   if (args.ci) {
-    const compiled = await compileProductBinaries(
+    const compiled = await compiler(
       product,
       args.targets,
       buildConfig.envVars,
@@ -157,6 +249,7 @@ export async function runProdResourceBuild(
         buildConfig.version,
         rules,
         rootDir,
+        artifactIdentity,
       )
       localArtifacts.push(staged)
       log.success(`Packaged ${binary.target.id}`)
@@ -165,6 +258,7 @@ export async function runProdResourceBuild(
     const archiveResults = await archiveArtifacts(
       localArtifacts,
       product.archiveBaseName,
+      { filesOnly: product.archiveFilesOnly },
     )
     log.done('CI build completed')
     for (const result of archiveResults) {
@@ -175,10 +269,6 @@ export async function runProdResourceBuild(
 
   if (!buildConfig.r2 && requireR2) {
     throw new Error(`R2 configuration is required for ${product.label} builds`)
-  }
-  const releaseSha = process.env.RELEASE_SHA?.trim()
-  if (args.versionedOnly && !releaseSha) {
-    throw new Error('RELEASE_SHA is required for versioned-only uploads')
   }
 
   const stagedArtifacts = []
@@ -200,7 +290,7 @@ export async function runProdResourceBuild(
 
     const compiled =
       targetsToBuild.length > 0
-        ? await compileProductBinaries(
+        ? await compiler(
             product,
             targetsToBuild,
             buildConfig.envVars,
@@ -225,6 +315,7 @@ export async function runProdResourceBuild(
               client,
               r2,
               buildConfig.version,
+              artifactIdentity,
             )
           : await stageCompiledArtifact(
               product,
@@ -233,6 +324,7 @@ export async function runProdResourceBuild(
               buildConfig.version,
               rules,
               rootDir,
+              artifactIdentity,
             )
       stagedArtifacts.push(staged)
       log.success(`Staged ${binary.target.id}`)
@@ -247,9 +339,15 @@ export async function runProdResourceBuild(
             r2,
             args.upload,
             product.archiveBaseName,
-            { releaseSha, versionedOnly: args.versionedOnly },
+            {
+              releaseSha: releaseSha ?? artifactIdentity?.releaseSha,
+              versionedOnly: args.versionedOnly,
+              filesOnly: product.archiveFilesOnly,
+            },
           )
-        : await archiveArtifacts(stagedArtifacts, product.archiveBaseName)
+        : await archiveArtifacts(stagedArtifacts, product.archiveBaseName, {
+            filesOnly: product.archiveFilesOnly,
+          })
 
     const orderedResults = orderArtifactResults(args.targets, [
       ...recoveredResults,
@@ -261,4 +359,17 @@ export async function runProdResourceBuild(
   } finally {
     client?.destroy()
   }
+}
+
+export async function runProdResourceBuild(
+  product: BuildProductDescriptor,
+  argv: string[],
+  options: { rootDir?: string } = {},
+): Promise<void> {
+  return runCompiledResourceBuild(
+    product,
+    compileProductBinaries,
+    argv,
+    options,
+  )
 }

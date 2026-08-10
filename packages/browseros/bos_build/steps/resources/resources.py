@@ -9,6 +9,8 @@ from pathlib import Path
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import log_info, log_success, log_error, log_warning, get_platform
+from ..storage.download import extract_artifact_zip
+from .source import validated_common_resources
 
 
 @step("resources", phase="prep")
@@ -24,8 +26,24 @@ class ResourcesModule(Step):
 
     def execute(self, ctx: Context) -> None:
         log_info("\n📦 Copying resources...")
+        if ctx.resource_mode == "source":
+            stage_prepared_onboarding(ctx)
         if not copy_resources_impl(ctx, commit_each=False):
             raise RuntimeError("Failed to copy resources")
+
+
+def stage_prepared_onboarding(ctx: Context) -> Path:
+    """Extract validated onboarding resources into the managed source path."""
+    manifest = validated_common_resources(ctx)
+    prepared = manifest.files["onboarding"]
+    if ctx.prepared_resources is None:
+        raise RuntimeError("Prepared resources were not registered")
+    archive = ctx.prepared_resources / prepared.path
+    destination = ctx.root_dir / "resources/binaries/browseros_claw_onboard"
+    clear_path(destination)
+    extract_artifact_zip(archive, destination)
+    ctx.artifact_registry.add("onboarding_resources", destination)
+    return destination
 
 
 def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
@@ -46,6 +64,14 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
         log_info("⚠️  No copy_operations defined in configuration")
         return True
 
+    operations = config["copy_operations"]
+    for destination in {
+        operation["destination"]
+        for operation in operations
+        if operation.get("managed") is True
+    }:
+        clear_path(ctx.chromium_src / destination)
+
     if commit_each:
         log_info(
             "📝 Git commit mode enabled - will create a commit after each resource copy"
@@ -53,7 +79,7 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
 
     all_ok = True
 
-    for operation in config["copy_operations"]:
+    for operation in operations:
         name = operation.get("name", "Unnamed operation")
         source = operation["source"]
         destination = operation["destination"]
@@ -63,13 +89,16 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
         arch_condition = operation.get("arch")
         product_condition = operation.get("product")
 
-        if not product_matches(product_condition, ctx.product.id):
+        if not product_matches(
+            product_condition, ctx.product.id, ctx.build_type
+        ):
             log_info(
                 f"  ⏭️  Skipping {name} (product: {product_condition}, current: {ctx.product.id})"
             )
             continue
 
         clear_destination = operation.get("clear_destination", False)
+        required = operation.get("required", False)
         renames = operation.get("renames")
 
         if build_type_condition and build_type_condition != ctx.build_type:
@@ -103,7 +132,10 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
             if clear_destination:
                 clear_path(dst_base)
             if op_type == "directory":
-                if src_path.exists() and src_path.is_dir():
+                has_files = src_path.is_dir() and any(
+                    path.is_file() for path in src_path.rglob("*")
+                )
+                if has_files:
                     dst_path = dst_base
                     dst_path.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
@@ -114,7 +146,12 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                             name, source, destination, ctx.chromium_src
                         )
                 else:
-                    log_warning(f"    Source directory not found: {source}")
+                    message = f"    Source directory missing or empty: {source}"
+                    if required:
+                        log_error(message)
+                        all_ok = False
+                    else:
+                        log_warning(message)
 
             elif op_type == "files":
                 files = glob.glob(str(ctx.root_dir / source))
@@ -133,7 +170,12 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                             name, source, destination, ctx.chromium_src
                         )
                 else:
-                    log_warning(f"    No files found matching: {source}")
+                    message = f"    No files found matching: {source}"
+                    if required:
+                        log_error(message)
+                        all_ok = False
+                    else:
+                        log_warning(message)
 
             elif op_type == "file":
                 if src_path.exists() and src_path.is_file():
@@ -146,7 +188,12 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
                             name, source, destination, ctx.chromium_src
                         )
                 else:
-                    log_warning(f"    Source file not found: {source}")
+                    message = f"    Source file not found: {source}"
+                    if required:
+                        log_error(message)
+                        all_ok = False
+                    else:
+                        log_warning(message)
 
             if copied and renames:
                 apply_renames(dst_base, renames)
@@ -160,9 +207,13 @@ def copy_resources_impl(ctx: Context, commit_each: bool = False) -> bool:
     return all_ok
 
 
-def product_matches(product_condition, product_id: str) -> bool:
+def product_matches(
+    product_condition, product_id: str, build_type: str = "release"
+) -> bool:
     """Return whether a config operation applies to the active product."""
     if product_condition is None:
+        return True
+    if build_type == "debug":
         return True
     if product_condition == "all":
         raise ValueError("Use a missing product field for all products, not product: all")
@@ -225,7 +276,6 @@ def commit_resource_copy(
 ) -> bool:
     """Create a git commit for the copied resource"""
     try:
-        # Stage all changes
         cmd_add = ["git", "add", "-A"]
         result = subprocess.run(
             cmd_add, capture_output=True, text=True, cwd=chromium_src
@@ -236,10 +286,8 @@ def commit_resource_copy(
                 log_warning(f"Error: {result.stderr}")
             return False
 
-        # Create commit message
         commit_message = f"resource: {name.lower()}"
 
-        # Create the commit
         cmd_commit = ["git", "commit", "-m", commit_message]
         result = subprocess.run(
             cmd_commit, capture_output=True, text=True, cwd=chromium_src

@@ -7,6 +7,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import hashlib
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -31,6 +32,76 @@ _WINDOWS_CANDIDATES = (
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     "chrome",
 )
+
+
+def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while offset < len(data) and shift < 70:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, offset
+        shift += 7
+    raise ValueError("Invalid CRX protobuf varint")
+
+
+def _protobuf_bytes_field(data: bytes, wanted: int) -> bytes:
+    offset = 0
+    while offset < len(data):
+        key, offset = _read_varint(data, offset)
+        field = key >> 3
+        wire_type = key & 0x7
+        if wire_type == 0:
+            _, offset = _read_varint(data, offset)
+            continue
+        if wire_type == 1:
+            offset += 8
+            continue
+        if wire_type == 5:
+            offset += 4
+            continue
+        if wire_type != 2:
+            raise ValueError("Unsupported CRX protobuf wire type")
+        length, offset = _read_varint(data, offset)
+        end = offset + length
+        if end > len(data):
+            raise ValueError("Truncated CRX protobuf field")
+        value = data[offset:end]
+        if field == wanted:
+            return value
+        offset = end
+    raise ValueError(f"CRX protobuf field {wanted} is missing")
+
+
+def _extension_id(raw_id: bytes) -> str:
+    if len(raw_id) != 16:
+        raise ValueError("CRX extension id must contain 16 bytes")
+    return "".join(chr(ord("a") + nibble) for byte in raw_id for nibble in divmod(byte, 16))
+
+
+def read_crx_extension_id(data: bytes) -> str:
+    """Return the extension id bound into a CRX2 or CRX3 file."""
+    if len(data) < 12 or data[:4] != b"Cr24":
+        raise ValueError("Invalid CRX header")
+    version = int.from_bytes(data[4:8], "little")
+    if version == 2:
+        public_key_size = int.from_bytes(data[8:12], "little")
+        signature_size = int.from_bytes(data[12:16], "little") if len(data) >= 16 else 0
+        end = 16 + public_key_size + signature_size
+        if public_key_size <= 0 or end > len(data):
+            raise ValueError("Invalid CRX2 header")
+        public_key = data[16 : 16 + public_key_size]
+        return _extension_id(hashlib.sha256(public_key).digest()[:16])
+    if version != 3:
+        raise ValueError(f"Unsupported CRX version {version}")
+    header_size = int.from_bytes(data[8:12], "little")
+    if header_size <= 0 or 12 + header_size > len(data):
+        raise ValueError("Invalid CRX3 header size")
+    header = data[12 : 12 + header_size]
+    signed_header = _protobuf_bytes_field(header, 10000)
+    return _extension_id(_protobuf_bytes_field(signed_header, 1))
 
 
 def _is_valid_binary(path: str) -> bool:

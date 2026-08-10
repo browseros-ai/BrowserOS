@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { CockpitStats } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { parseHTML } from 'linkedom'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
@@ -217,6 +218,42 @@ function renderApp(
 }
 
 describe('Cockpit (v2)', () => {
+  it('renders the three-part Schibsted hero with a cobalt italic middle segment', () => {
+    const html = renderApp({ stats: 'measured' })
+    const document = parseHTML(html).document
+    const hero = document.querySelector('[data-cockpit-hero]')
+    const segments = [
+      ...document.querySelectorAll('[data-cockpit-hero-segment]'),
+    ]
+
+    expect(hero?.tagName).toBe('H1')
+    expect(segments.map((segment) => segment.textContent)).toEqual([
+      'What are your agents',
+      'working on',
+      'right now?',
+    ])
+    const heroClasses = hero?.getAttribute('class') ?? ''
+    for (const className of [
+      'flex',
+      'flex-wrap',
+      'items-baseline',
+      'gap-[9px]',
+      'pt-1',
+      'font-sans',
+      'font-extrabold',
+      'text-[36px]',
+      'text-cyanotype-ink',
+      'leading-[1.15]',
+      'tracking-[-0.025em]',
+    ]) {
+      expect(heroClasses).toContain(className)
+    }
+    const accentClasses = segments[1]?.getAttribute('class') ?? ''
+    for (const className of ['font-bold', 'text-cyanotype-blue', 'italic']) {
+      expect(accentClasses).toContain(className)
+    }
+  })
+
   it('renders measured idle stats between the hero and recent activity', () => {
     const html = renderApp({ stats: 'measured' })
 
@@ -226,7 +263,7 @@ describe('Cockpit (v2)', () => {
     expect(heroIndex).toBeGreaterThan(-1)
     expect(savedStatsIndex).toBeGreaterThan(heroIndex)
     expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
-    expect(html).toContain('nothing running')
+    expect(html).toContain('Nothing running')
     expect(html).not.toContain('Running now')
     expect(statsQueryEnabled()).toBe(true)
   })
