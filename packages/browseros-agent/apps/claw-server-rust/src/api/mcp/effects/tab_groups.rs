@@ -445,6 +445,7 @@ async fn dispatch_tab_groups(
         cancel: operation_cancel.clone(),
         output_files,
         inner_call_hook: None,
+        preloaded_helpers: Vec::new(),
     });
     let execution = timeout(TAB_GROUP_OPERATION, execute_tool(tab_groups, args, &ctx)).await;
     let result = match execution {

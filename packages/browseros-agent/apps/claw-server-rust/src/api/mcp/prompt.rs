@@ -47,6 +47,21 @@ evaluate is for one-shot page-context JavaScript.
 Parallelize when it helps: independent subtasks get their own tabs — at most
 5 at a time unless the user asks for more.
 
+Reuse what already works. A run's result may include helpersAvailable: saved
+helpers for the hosts your tabs are on, each with an ageDays freshness signal, a
+description, and the exact call form to copy. browser.listHelpers({ page }) lists
+them and browser.readHelper(name, { page }) shows one helper's full doc; read the
+relevant helper before inventing an approach, and call a hot-loaded one with
+bracket access using the call form shown: helpers["name"](browser, inputs) for a
+helper that opens its own page and returns it, or helpers["name"](browser, page,
+inputs) for one that acts on a page you pass. When a multi-step flow works, save
+it with browser.saveHelper(name, source, { page }) where source is a function
+expression like async (browser, page, inputs = {}) => { ... }; a proven run is
+also distilled into a candidate helper for you automatically. Treat a stale
+helper (high ageDays) as a hint, not a guarantee: cross-check it against the live
+page before trusting it, then re-save. Keep personal data out of saved helpers,
+they are shared across your sessions on that host.
+
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.

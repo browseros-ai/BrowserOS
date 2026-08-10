@@ -1,6 +1,6 @@
 use crate::framework::{
-    InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult, execute_tool,
-    page_json, parse_args, text_result,
+    HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
+    execute_tool, page_json, parse_args, text_result,
 };
 use browseros_core::{
     PageId, Ref, SessionId, WindowId, input::ScrollDirection, pages::NewPageOptions,
@@ -49,9 +49,12 @@ Read / wait / capture:
   browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   browser.grep(pageId, { pattern })  -> matching lines as a STRING
   browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready (default is a timed pause of `value` ms). There is no `ms` option; a plain pause is { value: 3000 }.
-  browser.screenshot(pageId) / evaluate(pageId, { code }) / pdf(pageId)
+  browser.screenshot(pageId) / evaluate(pageId, { code } | { func }) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
+Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page).
+  browser.saveHelper(name, source, { page } | { host }) - source is a function expression, e.g. async (browser, page) => { ... }
+  browser.listHelpers({ page } | { host }) -> { host, helpers: [{ name, ageDays, candidate }] }; browser.readHelper(name, { page } | { host }) -> source string
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. Efficient pattern:
@@ -97,7 +100,9 @@ const BOOTSTRAP_JS: &str = r#"
   }
 
   function call(method, args) {
-    return __browserosCall(method, JSON.stringify(args ?? []));
+    // The third flag marks primitives that ran inside a hot-loaded helper, so
+    // distillation can skip a successful reuse's replayed actions.
+    return __browserosCall(method, JSON.stringify(args ?? []), (globalThis.__helperDepth || 0) > 0);
   }
 
   function scoped(prefix, pageId) {
@@ -153,6 +158,20 @@ const BOOTSTRAP_JS: &str = r#"
     upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
     tabGroups: (opts) => call('tool:tab_groups', [opts]),
     windows: (opts) => call('tool:windows', [opts]),
+    saveHelper: (name, source, opts) => {
+      if (typeof source !== 'string' || !source.trim()) {
+        throw new Error('saveHelper: source must be a non-empty function-expression string');
+      }
+      let fn;
+      try { fn = new Function('return (' + source + '\n);')(); }
+      catch (e) { throw new Error('saveHelper: source must be valid JS (' + e + ')'); }
+      if (typeof fn !== 'function') {
+        throw new Error('saveHelper: source must evaluate to a function, e.g. async (browser, page) => { ... }');
+      }
+      return call('helpers.save', [String(name), source, opts || {}]);
+    },
+    listHelpers: (opts) => call('helpers.list', [opts || {}]),
+    readHelper: (name, opts) => call('helpers.read', [String(name), opts || {}]),
   };
 
   const sink = (level) => (...parts) => {
@@ -370,13 +389,36 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
     }
 }
 
+/// Loads the host-provided helpers into the script context as `helpers.<name>`
+/// after the SDK bootstrap. A broken helper is contained by its try/catch and
+/// reported through the captured console; it never fails the run.
+fn load_preloaded_helpers(ctx: &Ctx<'_>, helpers: &[HelperSource]) {
+    // Always expose the namespace, even with nothing to load, so a script that
+    // references `helpers.<name>` gets a clean `undefined` instead of a
+    // `ReferenceError: helpers is not defined`.
+    let _ = ctx
+        .eval::<(), _>("globalThis.helpers = globalThis.helpers || {}; globalThis.__helperDepth = globalThis.__helperDepth || 0;")
+        .catch(ctx);
+    for helper in helpers {
+        let name = serde_json::to_string(&helper.name).unwrap_or_else(|_| "\"helper\"".to_string());
+        // Wrap so calls made inside the helper run at helperDepth > 0, tagging
+        // their primitives as replayed; the depth is restored even if it throws.
+        let snippet = format!(
+            "try {{ const __fn = (\n{source}\n); helpers[{name}] = async (...args) => {{ globalThis.__helperDepth++; try {{ return await __fn(...args); }} finally {{ globalThis.__helperDepth--; }} }}; }} catch (e) {{ console.log('helper load failed: ' + {name} + ': ' + e); }}",
+            source = helper.source,
+        );
+        let _ = ctx.eval::<(), _>(snippet).catch(ctx);
+    }
+}
+
 async fn execute_quickjs(
     code: String,
-    tool_ctx: ToolCtx,
+    mut tool_ctx: ToolCtx,
     logs: SharedLogs,
     control: RunControl,
     duration: Duration,
 ) -> Result<RunOutcome, RunError> {
+    let preloaded_helpers = std::mem::take(&mut tool_ctx.preloaded_helpers);
     let runtime = AsyncRuntime::new().map_err(engine_error)?;
     runtime.set_memory_limit(RUN_MEMORY_LIMIT_BYTES).await;
     runtime.set_max_stack_size(RUN_STACK_SIZE_BYTES).await;
@@ -397,6 +439,7 @@ async fn execute_quickjs(
                     js_error_message(&ctx, err)
                 ))
             })?;
+            load_preloaded_helpers(&ctx, &preloaded_helpers);
 
             let make_run: Function<'_> = ctx
                 .globals()
@@ -495,10 +538,10 @@ fn install_globals<'js>(
     };
     let call_bridge = {
         let bridge = bridge.clone();
-        move |ctx: Ctx<'js>, method: String, args_json: String| {
+        move |ctx: Ctx<'js>, method: String, args_json: String, from_helper: bool| {
             let bridge = bridge.clone();
             async move {
-                match bridge.call(&method, &args_json).await {
+                match bridge.call(&method, &args_json, from_helper).await {
                     Ok(BrowserCallValue::Json(value)) => json_to_js(&ctx, value),
                     Ok(BrowserCallValue::Undefined) => Ok(JsValue::new_undefined(ctx.clone())),
                     Err(message) => Err(Exception::throw_message(&ctx, &message)),
@@ -522,9 +565,17 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
-    async fn call(&self, method: &str, args_json: &str) -> Result<BrowserCallValue, String> {
+    async fn call(
+        &self,
+        method: &str,
+        args_json: &str,
+        from_helper: bool,
+    ) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
+        // Kept for the audit record and the self-healing distiller; dispatch
+        // consumes the owned args below.
+        let recorded_args = Value::Array(args.clone());
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
@@ -540,6 +591,8 @@ impl BrowserBridge {
             hook.record(InnerCallRecord {
                 method,
                 page,
+                args: &recorded_args,
+                from_helper,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
             })
@@ -741,12 +794,71 @@ impl BrowserBridge {
                 let value = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
                 Ok(BrowserCallValue::Json(value))
             }
+            "helpers.save" => {
+                let name = string_arg(&args, 0, "name")?;
+                let source = string_arg(&args, 1, "source")?;
+                let opts = optional_object_arg(&args, 2)?;
+                let host = self.resolve_helper_host(opts).await?;
+                self.helper_hook()?
+                    .save_helper(&host, &name, &source)
+                    .await?;
+                Ok(BrowserCallValue::Json(
+                    json!({ "saved": name, "host": host }),
+                ))
+            }
+            "helpers.list" => {
+                let opts = optional_object_arg(&args, 0)?;
+                let host = self.resolve_helper_host(opts).await?;
+                let helpers = self.helper_hook()?.list_helpers(&host).await;
+                Ok(BrowserCallValue::Json(
+                    json!({ "host": host, "helpers": helpers }),
+                ))
+            }
+            "helpers.read" => {
+                let name = string_arg(&args, 0, "name")?;
+                let opts = optional_object_arg(&args, 1)?;
+                let host = self.resolve_helper_host(opts).await?;
+                match self.helper_hook()?.read_helper(&host, &name).await {
+                    Some(source) => Ok(BrowserCallValue::Json(Value::String(source))),
+                    None => Ok(BrowserCallValue::Json(Value::Null)),
+                }
+            }
             method if method.starts_with("tool:") => {
                 let tool_name = &method["tool:".len()..];
                 self.run_tool(tool_name, build_tool_args(&args)).await
             }
             _ => Err(format!("Unknown browser method {method}")),
         }
+    }
+
+    /// The injected hook, or an error surfaced to the script when helpers are
+    /// unavailable (no host attached, e.g. a unit-test context).
+    fn helper_hook(&self) -> Result<&Arc<dyn crate::framework::InnerCallHook>, String> {
+        self.ctx
+            .inner_call_hook
+            .as_ref()
+            .ok_or_else(|| "helpers are not available in this context".to_string())
+    }
+
+    /// Resolves the helper host bucket from `{ host }` (explicit) or `{ page }`
+    /// (the page's URL, host-side). One is required.
+    async fn resolve_helper_host(
+        &self,
+        opts: Option<&Map<String, Value>>,
+    ) -> Result<String, String> {
+        if let Some(host) = optional_string_field(opts, "host")? {
+            return Ok(host);
+        }
+        if let Some(page) = optional_i64_field(opts, "page")? {
+            let page = u32::try_from(page).map_err(|_| "page id is out of range".to_string())?;
+            if let Some(host) = self.helper_hook()?.resolve_host(page).await {
+                return Ok(host);
+            }
+            return Err(format!(
+                "no host for page {page}; navigate to a site first or pass an explicit host"
+            ));
+        }
+        Err("helpers need a host: pass { host } or { page }".to_string())
     }
 
     /// Dispatches a tool-backed primitive through the real tool handler so the
@@ -1316,6 +1428,7 @@ mod tests {
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
             inner_call_hook: None,
+            preloaded_helpers: Vec::new(),
         })
     }
 
@@ -1346,6 +1459,8 @@ mod tests {
         created: Vec<u32>,
         reject: Option<String>,
         annotated: usize,
+        saved: Vec<(String, String, String)>,
+        from_helper: Vec<(String, bool)>,
     }
 
     struct MockHook(Arc<Mutex<HookLog>>);
@@ -1365,11 +1480,14 @@ mod tests {
         }
 
         fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
-            self.0
+            let mut log = self
+                .0
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .recorded
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            log.recorded
                 .push((record.method.to_owned(), record.page, record.is_error));
+            log.from_helper
+                .push((record.method.to_owned(), record.from_helper));
             Box::pin(async move {})
         }
 
@@ -1399,12 +1517,212 @@ mod tests {
                 .collect();
             Box::pin(async move { tagged })
         }
+
+        fn resolve_host<'a>(&'a self, _page: u32) -> BoxFuture<'a, Option<String>> {
+            Box::pin(async move { Some("resolved.example".to_string()) })
+        }
+
+        fn save_helper<'a>(
+            &'a self,
+            host: &'a str,
+            name: &'a str,
+            source: &'a str,
+        ) -> BoxFuture<'a, Result<(), String>> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .saved
+                .push((host.to_owned(), name.to_owned(), source.to_owned()));
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn list_helpers<'a>(&'a self, _host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+            Box::pin(
+                async move { vec![json!({ "name": "greet", "ageDays": 2, "candidate": false })] },
+            )
+        }
+
+        fn read_helper<'a>(
+            &'a self,
+            _host: &'a str,
+            _name: &'a str,
+        ) -> BoxFuture<'a, Option<String>> {
+            Box::pin(async move { Some("async () => 42".to_string()) })
+        }
     }
 
     fn ctx_with_hook(log: Arc<Mutex<HookLog>>) -> ToolCtx {
         let mut ctx = test_ctx();
         ctx.inner_call_hook = Some(Arc::new(MockHook(log)));
         ctx
+    }
+
+    #[tokio::test]
+    async fn run_tags_primitives_called_inside_a_helper() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let mut ctx = ctx_with_hook(log.clone());
+        ctx.preloaded_helpers = vec![HelperSource {
+            name: "act".to_string(),
+            source: "async (browser) => browser.pages.getInfo(1)".to_string(),
+        }];
+        // One direct primitive, then one via the helper.
+        let result = run_tool_with_ctx(
+            "await browser.pages.getInfo(1); await helpers.act(browser); return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The direct call is not from a helper; the one inside act() is.
+        assert_eq!(
+            log.from_helper,
+            vec![
+                ("pages.getInfo".to_string(), false),
+                ("pages.getInfo".to_string(), true),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_exposes_an_empty_helpers_namespace_without_preloads() -> anyhow::Result<()> {
+        // No preloaded_helpers: referencing helpers.<name> must not throw.
+        let ctx = test_ctx();
+        let result = run_tool_with_ctx(
+            "return { kind: typeof helpers, missing: typeof helpers.nope };",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["kind"], json!("object"));
+        assert_eq!(structured["value"]["missing"], json!("undefined"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_hot_loads_preloaded_helpers_and_skips_a_broken_one() -> anyhow::Result<()> {
+        let mut ctx = test_ctx();
+        ctx.preloaded_helpers = vec![
+            HelperSource {
+                name: "double".to_string(),
+                source: "async (x) => x * 2".to_string(),
+            },
+            // A syntax-broken helper must be skipped without failing the run.
+            HelperSource {
+                name: "broken".to_string(),
+                source: "async (x) => {".to_string(),
+            },
+        ];
+        let result = run_tool_with_ctx(
+            "const ok = typeof helpers.broken; return { doubled: await helpers.double(21), broken: ok };",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["doubled"], json!(42));
+        assert_eq!(structured["value"]["broken"], json!("undefined"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_save_helper_routes_to_the_hook_with_explicit_host() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "return await browser.saveHelper('greet', 'async (browser, page) => 1', { host: 'linkedin.com' })",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(
+            log.saved,
+            vec![(
+                "linkedin.com".to_string(),
+                "greet".to_string(),
+                "async (browser, page) => 1".to_string()
+            )]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_save_helper_resolves_the_host_from_a_page() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "return await browser.saveHelper('greet', 'async () => 1', { page: 1 })",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(log.saved[0].0, "resolved.example");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_save_helper_rejects_a_non_function_source() -> anyhow::Result<()> {
+        let ctx = test_ctx();
+        let result = run_tool_with_ctx(
+            "try { await browser.saveHelper('x', '123', { host: 'h' }); return 'saved'; } catch (e) { return String(e); }",
+            None,
+            &ctx,
+        )
+        .await?;
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        let value = structured["value"].as_str().unwrap_or_default();
+        assert!(
+            value.contains("saveHelper"),
+            "expected rejection, got: {value}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_list_and_read_helpers_route_to_the_hook() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log);
+        let listed = run_tool_with_ctx(
+            "return (await browser.listHelpers({ host: 'h' })).helpers.map((x) => x.name)",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert_eq!(
+            listed.structured_content,
+            Some(json!({ "ok": true, "value": ["greet"], "logs": [] }))
+        );
+        let read = run_tool_with_ctx(
+            "return await browser.readHelper('greet', { host: 'h' })",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert_eq!(
+            read.structured_content,
+            Some(json!({ "ok": true, "value": "async () => 42", "logs": [] }))
+        );
+        Ok(())
     }
 
     #[tokio::test]

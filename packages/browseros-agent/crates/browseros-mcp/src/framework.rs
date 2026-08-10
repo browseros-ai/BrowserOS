@@ -24,6 +24,14 @@ pub struct BrowserToolDefaults {
     pub default_tab_group_id: Option<String>,
 }
 
+/// A saved helper the host hot-loads into a script's runtime so the agent can
+/// call it by name. `source` is a bare function expression (header stripped).
+#[derive(Debug, Clone)]
+pub struct HelperSource {
+    pub name: String,
+    pub source: String,
+}
+
 #[derive(Clone)]
 pub struct BrowserToolOptions {
     pub session: Arc<BrowserSession>,
@@ -33,6 +41,9 @@ pub struct BrowserToolOptions {
     /// Host hook a script tool invokes around each primitive; `None` outside
     /// the host (unit tests, non-host callers), which disables the hook.
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// Helpers the host loads into the script runtime before the agent's code
+    /// runs, exposed as `helpers.<name>`. Empty outside the host.
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 #[derive(Clone)]
@@ -43,6 +54,8 @@ pub struct ToolCtx {
     pub output_files: OutputFileAccess,
     /// See [`BrowserToolOptions::inner_call_hook`].
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// See [`BrowserToolOptions::preloaded_helpers`].
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 impl ToolCtx {
@@ -54,6 +67,7 @@ impl ToolCtx {
             cancel: options.cancel,
             output_files: options.output_files,
             inner_call_hook: options.inner_call_hook,
+            preloaded_helpers: options.preloaded_helpers,
         }
     }
 
@@ -94,6 +108,37 @@ pub trait InnerCallHook: Send + Sync {
     fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
         Box::pin(async move { pages.to_vec() })
     }
+
+    /// Resolve a page id to its helper host bucket (hostname minus a leading
+    /// `www.`). `browseros-mcp` cannot read a page's URL from ownership state,
+    /// so the host does it. The default has no host.
+    fn resolve_host<'a>(&'a self, _page: u32) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
+
+    /// Persist a reusable helper for a host under `helpers/<host>/<name>.js` with
+    /// a provenance header. `Err(reason)` is surfaced to the script. The default
+    /// reports that persistence is unavailable (no host attached).
+    fn save_helper<'a>(
+        &'a self,
+        _host: &'a str,
+        _name: &'a str,
+        _source: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { Err("helpers are not available in this context".to_string()) })
+    }
+
+    /// List a host's saved helpers with provenance for discovery. Each value is
+    /// `{ name, ageDays, candidate, agent }`. The default has none.
+    fn list_helpers<'a>(&'a self, _host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { Vec::new() })
+    }
+
+    /// Read a helper's source body (provenance header stripped), ready to eval.
+    /// The default has none.
+    fn read_helper<'a>(&'a self, _host: &'a str, _name: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
 }
 
 /// A completed inner primitive handed to [`InnerCallHook::record`].
@@ -103,6 +148,12 @@ pub struct InnerCallRecord<'a> {
     pub method: &'a str,
     /// Target page id, when the primitive addressed a specific page.
     pub page: Option<u32>,
+    /// The primitive's arguments as a JSON array, so the audit shows what ran
+    /// and the self-healing distiller can replay the sequence.
+    pub args: &'a Value,
+    /// Whether this primitive ran inside a hot-loaded helper call (a replay), so
+    /// the distiller can skip a successful reuse's actions.
+    pub from_helper: bool,
     /// Whether the primitive failed.
     pub is_error: bool,
     /// Wall-clock duration of the primitive in milliseconds.

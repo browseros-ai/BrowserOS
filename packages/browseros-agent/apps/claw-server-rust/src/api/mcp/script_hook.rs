@@ -1,13 +1,15 @@
 use crate::{
     api::mcp::dispatch::{ToolCall, ToolIdentity},
     api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
+    clock::now_epoch_ms,
     db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     ids::DispatchId,
+    services::helpers,
 };
 use browseros_core::PageId;
 use browseros_mcp::{InnerCallHook, InnerCallRecord};
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
@@ -64,6 +66,8 @@ impl InnerCallHook for ScriptInnerCallHook {
         let page = record.page;
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
+        let from_helper = record.from_helper;
+        let raw_args = record.args.clone();
         Box::pin(async move {
             let Some(identity) = self.identity() else {
                 return;
@@ -107,8 +111,8 @@ impl InnerCallHook for ScriptInnerCallHook {
                     .map(|page| page.target_id.as_str().to_string()),
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
-                args_json: bounded_args_json(&json!({ "page": page })),
-                result_meta: result_meta(is_error, false, &Value::Null, 0),
+                args_json: bounded_args_json(&raw_args),
+                result_meta: child_result_meta(is_error, from_helper),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
                 // the parent script dispatch, which is stamped with its start.
@@ -187,6 +191,76 @@ impl InnerCallHook for ScriptInnerCallHook {
             .await
         })
     }
+
+    fn resolve_host<'a>(&'a self, page: u32) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let browser = self.call.browser_session.as_ref()?;
+            let info = browser.pages.get_info(PageId(page)).await?;
+            helpers::host_bucket(&info.url)
+        })
+    }
+
+    fn save_helper<'a>(
+        &'a self,
+        host: &'a str,
+        name: &'a str,
+        source: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let Some(identity) = self.identity() else {
+                return Err("no agent identity for this script".to_string());
+            };
+            let (opens_page, inputs) = helpers::analyze_source(source);
+            let meta = helpers::HelperMeta {
+                name: name.to_string(),
+                host: host.to_string(),
+                last_verified: now_epoch_ms(),
+                agent: identity.agent.slug().to_string(),
+                candidate: false,
+                opens_page,
+                inputs,
+                description: format!("Saved helper for {host}"),
+                session: String::new(),
+            };
+            helpers::save_helper(&self.call.state.config.browserclaw_dir, &meta, source)
+                .map_err(|error| format!("could not save helper: {error}"))
+        })
+    }
+
+    fn list_helpers<'a>(&'a self, host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move {
+            let now = now_epoch_ms();
+            helpers::list_helper_meta(&self.call.state.config.browserclaw_dir, host)
+                .iter()
+                .map(|meta| super::helper_runtime::helper_info_json(meta, now))
+                .collect()
+        })
+    }
+
+    fn read_helper<'a>(&'a self, host: &'a str, name: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            // The agent-facing read returns the full self-documenting doc
+            // (description, call form, source), not the bare source: hot-load uses
+            // the extracted source; a reader wants the context.
+            helpers::read_helper(&self.call.state.config.browserclaw_dir, host, name)
+        })
+    }
+}
+
+/// Result metadata for a child primitive: the standard summary, plus a
+/// `fromHelper` marker when the primitive ran inside a hot-loaded helper, so the
+/// distiller can skip a successful reuse's replayed actions.
+fn child_result_meta(is_error: bool, from_helper: bool) -> String {
+    let base = result_meta(is_error, false, &Value::Null, 0);
+    if !from_helper {
+        return base;
+    }
+    let mut value: Value =
+        serde_json::from_str(&base).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("fromHelper".to_string(), Value::Bool(true));
+    }
+    value.to_string()
 }
 
 #[cfg(test)]
@@ -198,6 +272,7 @@ mod tests {
     use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
+    use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
@@ -409,6 +484,8 @@ mod tests {
         hook.record(InnerCallRecord {
             method: "input.click",
             page: Some(1),
+            args: &json!([1, "e5"]),
+            from_helper: false,
             is_error: false,
             duration_ms: 3,
         })
@@ -432,6 +509,8 @@ mod tests {
         hook.record(InnerCallRecord {
             method: "input.click",
             page: Some(4),
+            args: &json!([4, "e5"]),
+            from_helper: false,
             is_error: false,
             duration_ms: 12,
         })
@@ -455,6 +534,31 @@ mod tests {
             Some(call.dispatch_id.as_str())
         );
         assert_eq!(child.page_id, Some(4));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_helper_writes_provenance_and_lists_and_reads_back() -> anyhow::Result<()> {
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let hook = hook_for(&call);
+        hook.save_helper("linkedin.com", "greet", "async (browser, page) => 1")
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+
+        // Lists with provenance: a fresh save reads back candidate=false, ageDays 0.
+        let listed = hook.list_helpers("linkedin.com").await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["name"], json!("greet"));
+        assert_eq!(listed[0]["candidate"], json!(false));
+        assert_eq!(listed[0]["ageDays"], json!(0));
+
+        // Reads back the source body with the provenance header stripped.
+        assert_eq!(
+            hook.read_helper("linkedin.com", "greet").await.as_deref(),
+            Some("async (browser, page) => 1")
+        );
+        // A distinct host does not collide.
+        assert!(hook.list_helpers("docs.google.com").await.is_empty());
         Ok(())
     }
 }
