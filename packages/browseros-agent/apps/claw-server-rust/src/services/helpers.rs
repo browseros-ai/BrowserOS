@@ -111,7 +111,12 @@ pub fn read_helper(browserclaw_dir: &Path, host: &str, name: &str) -> Option<Str
 
 /// Writes a helper file verbatim, creating the host directory. Errors on an
 /// unsafe host or name.
-pub fn write_helper(browserclaw_dir: &Path, host: &str, name: &str, content: &str) -> io::Result<()> {
+pub fn write_helper(
+    browserclaw_dir: &Path,
+    host: &str,
+    name: &str,
+    content: &str,
+) -> io::Result<()> {
     let path = helper_path(browserclaw_dir, host, name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsafe helper host or name"))?;
     if let Some(parent) = path.parent() {
@@ -258,7 +263,11 @@ fn render_body(meta: &HelperMeta, source: &str) -> String {
 /// fenced `js` block.
 #[must_use]
 pub fn format_helper(meta: &HelperMeta, source: &str) -> String {
-    format!("{}\n{}", render_frontmatter(meta), render_body(meta, source))
+    format!(
+        "{}\n{}",
+        render_frontmatter(meta),
+        render_body(meta, source)
+    )
 }
 
 /// Whether a fence info string names JavaScript (first token `js`/`javascript`).
@@ -498,15 +507,17 @@ mod tests {
 
     #[test]
     fn analyze_source_infers_shape_and_inputs() {
-        let (opens_page, inputs) =
-            analyze_source("async (browser, inputs = {}) => { return inputs.field0 + inputs.field1; }");
+        let (opens_page, inputs) = analyze_source(
+            "async (browser, inputs = {}) => { return inputs.field0 + inputs.field1; }",
+        );
         assert!(opens_page);
         assert_eq!(inputs.len(), 2);
         assert!(inputs.contains_key("field0"));
         assert!(inputs.contains_key("field1"));
 
-        let (opens_page, inputs) =
-            analyze_source("async (browser, page, inputs = {}) => { await browser.input(page).fill('e', inputs.field0); }");
+        let (opens_page, inputs) = analyze_source(
+            "async (browser, page, inputs = {}) => { await browser.input(page).fill('e', inputs.field0); }",
+        );
         assert!(!opens_page);
         assert_eq!(inputs.len(), 1);
 
@@ -530,7 +541,9 @@ mod tests {
         // The raw doc a reader sees carries the description and call form.
         let doc = read_helper(root, "amazon.in", "search-amazon").unwrap_or_default();
         assert!(doc.contains("Opens amazon.in search for a query"));
-        assert!(doc.contains("helpers[\"search-amazon\"](browser, { field0: \"<search query>\" })"));
+        assert!(
+            doc.contains("helpers[\"search-amazon\"](browser, { field0: \"<search query>\" })")
+        );
         // Frontmatter round-trips through the parser.
         let listed = list_helper_meta(root, "amazon.in");
         assert_eq!(listed.len(), 1);
@@ -539,7 +552,10 @@ mod tests {
         assert!(listed[0].candidate);
         assert!(listed[0].opens_page);
         assert_eq!(listed[0].agent, "codex");
-        assert_eq!(listed[0].inputs.get("field0").map(String::as_str), Some("search query"));
+        assert_eq!(
+            listed[0].inputs.get("field0").map(String::as_str),
+            Some("search query")
+        );
         assert_eq!(listed[0].description, "Opens amazon.in search for a query");
         assert_eq!(listed[0].session, "convo-1");
         Ok(())
@@ -551,7 +567,11 @@ mod tests {
         let root = dir.path();
         // The canonical opensPage search helper (a candidate) must survive a
         // burst of passed-page fragments.
-        save_helper(root, &search_meta(), "async (browser, inputs = {}) => { return 1; }")?;
+        save_helper(
+            root,
+            &search_meta(),
+            "async (browser, inputs = {}) => { return 1; }",
+        )?;
         let fragment = |name: &str, verified: i64| HelperMeta {
             name: name.to_string(),
             host: "amazon.in".to_string(),
@@ -564,14 +584,21 @@ mod tests {
             session: String::new(),
         };
         for i in 1..=4 {
-            save_helper(root, &fragment(&format!("candidate-{i}"), i), "async () => 1")?;
+            save_helper(
+                root,
+                &fragment(&format!("candidate-{i}"), i),
+                "async () => 1",
+            )?;
         }
         prune_candidates(root, "amazon.in", 1);
         let names: Vec<String> = list_helper_meta(root, "amazon.in")
             .into_iter()
             .map(|meta| meta.name)
             .collect();
-        assert!(names.contains(&"search-amazon".to_string()), "search helper evicted: {names:?}");
+        assert!(
+            names.contains(&"search-amazon".to_string()),
+            "search helper evicted: {names:?}"
+        );
         Ok(())
     }
 

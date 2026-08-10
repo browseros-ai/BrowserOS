@@ -361,12 +361,16 @@ fn build_inputs(source: &str, count: usize) -> BTreeMap<String, String> {
             let field = format!("field{index}");
             // Only the first field read into a URL is the search query; the rest
             // are generic input values.
-            let is_search = !labeled_search
-                && source.contains(&format!("encodeURIComponent(inputs.{field})"));
+            let is_search =
+                !labeled_search && source.contains(&format!("encodeURIComponent(inputs.{field})"));
             if is_search {
                 labeled_search = true;
             }
-            let desc = if is_search { "search query" } else { "input value" };
+            let desc = if is_search {
+                "search query"
+            } else {
+                "input value"
+            };
             (field, desc.to_string())
         })
         .collect()
@@ -379,10 +383,7 @@ fn is_distillable(source: &str) -> bool {
     if !(MIN_ACTIONS..=MAX_ACTIONS).contains(&actions) {
         return false;
     }
-    source
-        .matches("encodeURIComponent(inputs.field")
-        .count()
-        <= 1
+    source.matches("encodeURIComponent(inputs.field").count() <= 1
 }
 
 /// The (opensPage, action-count) rank of an existing candidate, read from its
@@ -615,7 +616,10 @@ mod tests {
     fn build_inputs_labels_search_query_field_and_describes_flow() {
         let search = "const page = await browser.pages.newPage(\"https://www.amazon.in/s?k=\" + encodeURIComponent(inputs.field0));";
         let inputs = build_inputs(search, 1);
-        assert_eq!(inputs.get("field0").map(String::as_str), Some("search query"));
+        assert_eq!(
+            inputs.get("field0").map(String::as_str),
+            Some("search query")
+        );
         assert_eq!(
             describe("amazon.in", 2, true, true),
             "Opens amazon.in search for a query and returns the results page"
@@ -626,7 +630,10 @@ mod tests {
             build_inputs(fill, 1).get("field0").map(String::as_str),
             Some("input value")
         );
-        assert_eq!(describe("example.com", 3, false, false), "Replays 3 step(s) on example.com");
+        assert_eq!(
+            describe("example.com", 3, false, false),
+            "Replays 3 step(s) on example.com"
+        );
     }
 
     #[test]
@@ -656,8 +663,14 @@ mod tests {
     fn build_inputs_labels_only_the_first_search_field() {
         let two_search = "newPage(\"a\" + encodeURIComponent(inputs.field0)); nav(page).goto(\"b\" + encodeURIComponent(inputs.field1));";
         let inputs = build_inputs(two_search, 2);
-        assert_eq!(inputs.get("field0").map(String::as_str), Some("search query"));
-        assert_eq!(inputs.get("field1").map(String::as_str), Some("input value"));
+        assert_eq!(
+            inputs.get("field0").map(String::as_str),
+            Some("search query")
+        );
+        assert_eq!(
+            inputs.get("field1").map(String::as_str),
+            Some("input value")
+        );
     }
 
     #[test]

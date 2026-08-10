@@ -176,7 +176,10 @@ fn format_helper_ref(helper: &Value) -> String {
         .filter(|desc| !desc.is_empty())
         .map(|desc| format!(": {desc}"))
         .unwrap_or_default();
-    let call = helper.get("call").and_then(Value::as_str).unwrap_or_default();
+    let call = helper
+        .get("call")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     format!("  - {name} ({age}{candidate}){description}\n    {call}")
 }
 

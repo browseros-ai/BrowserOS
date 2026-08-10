@@ -552,10 +552,14 @@ mod tests {
         assert_eq!(listed[0]["candidate"], json!(false));
         assert_eq!(listed[0]["ageDays"], json!(0));
 
-        // Reads back the source body with the provenance header stripped.
-        assert_eq!(
-            hook.read_helper("linkedin.com", "greet").await.as_deref(),
-            Some("async (browser, page) => 1")
+        // Reads back the full self-documenting doc, which carries the source.
+        let doc = hook
+            .read_helper("linkedin.com", "greet")
+            .await
+            .unwrap_or_default();
+        assert!(
+            doc.contains("async (browser, page) => 1"),
+            "doc missing source: {doc}"
         );
         // A distinct host does not collide.
         assert!(hook.list_helpers("docs.google.com").await.is_empty());
