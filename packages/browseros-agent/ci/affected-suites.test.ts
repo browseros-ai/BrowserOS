@@ -86,10 +86,16 @@ describe('computeAffectedSuites', () => {
 
   it('adds claw-mcp when the claw-api or claw-mcp contract changes', () => {
     expect(
-      suiteNames([], ['packages/browseros-agent/contracts/claw-api/openapi.yaml']),
+      suiteNames(
+        [],
+        ['packages/browseros-agent/contracts/claw-api/openapi.yaml'],
+      ),
     ).toEqual(['claw-mcp'])
     expect(
-      suiteNames([], ['packages/browseros-agent/contracts/claw-mcp/tools.json']),
+      suiteNames(
+        [],
+        ['packages/browseros-agent/contracts/claw-mcp/tools.json'],
+      ),
     ).toEqual(['claw-mcp'])
   })
 

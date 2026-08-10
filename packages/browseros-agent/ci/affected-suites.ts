@@ -197,7 +197,8 @@ export function computeAffectedSuites(
   }
 
   // Path signals for things that are not workspace packages.
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}scripts/`))) keys.add('build')
+  if (changedFiles.some((f) => f.startsWith(`${AGENT}scripts/`)))
+    keys.add('build')
   if (
     changedFiles.some(
       (f) =>
