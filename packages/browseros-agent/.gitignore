@@ -204,3 +204,6 @@ test-results/
 .agent/
 .llm/
 .grove/
+
+# Turborepo
+.turbo

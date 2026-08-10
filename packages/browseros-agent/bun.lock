@@ -17,6 +17,7 @@
         "lefthook": "^2.1.10",
         "openapi-typescript": "7.13.0",
         "picocolors": "^1.1.1",
+        "turbo": "^2.9.6",
         "typedoc": "^0.28.20",
         "typescript": "^7.0.2",
         "yaml": "2.9.0",
@@ -208,6 +209,10 @@
         "vite": "^7.3.6",
       },
     },
+    "apps/claw-server-rust": {
+      "name": "@browseros/claw-server-rust",
+      "version": "0.0.0",
+    },
     "apps/server": {
       "name": "@browseros/server",
       "version": "0.0.129",
@@ -257,6 +262,26 @@
         "pino-pretty": "^13.1.3",
         "puppeteer": "^25.3.0",
       },
+    },
+    "crates/browseros-cdp": {
+      "name": "@browseros/browseros-cdp-rust",
+      "version": "0.0.0",
+    },
+    "crates/browseros-core": {
+      "name": "@browseros/browseros-core-rust",
+      "version": "0.0.0",
+    },
+    "crates/browseros-mcp": {
+      "name": "@browseros/browseros-mcp-rust",
+      "version": "0.0.0",
+    },
+    "crates/claw-api": {
+      "name": "@browseros/claw-api-rust",
+      "version": "0.0.0",
+    },
+    "crates/harness-integrations": {
+      "name": "@browseros/harness-integrations-rust",
+      "version": "0.0.0",
     },
     "packages/acpx-ai-provider": {
       "name": "@browseros/acpx-ai-provider",
@@ -569,6 +594,12 @@
 
     "@browseros/browser-mcp": ["@browseros/browser-mcp@workspace:packages/browser-mcp"],
 
+    "@browseros/browseros-cdp-rust": ["@browseros/browseros-cdp-rust@workspace:crates/browseros-cdp"],
+
+    "@browseros/browseros-core-rust": ["@browseros/browseros-core-rust@workspace:crates/browseros-core"],
+
+    "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
+
     "@browseros/build-server-tools": ["@browseros/build-server-tools@workspace:packages/build-server-tools"],
 
     "@browseros/cdp-protocol": ["@browseros/cdp-protocol@workspace:packages/cdp-protocol"],
@@ -577,9 +608,15 @@
 
     "@browseros/claw-api-client": ["@browseros/claw-api-client@workspace:packages/claw-api-client"],
 
+    "@browseros/claw-api-rust": ["@browseros/claw-api-rust@workspace:crates/claw-api"],
+
     "@browseros/claw-app": ["@browseros/claw-app@workspace:apps/claw-app"],
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
+
+    "@browseros/claw-server-rust": ["@browseros/claw-server-rust@workspace:apps/claw-server-rust"],
+
+    "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 
@@ -1660,6 +1697,18 @@
     "@tokenlens/models": ["@tokenlens/models@1.3.0", "", { "dependencies": { "@tokenlens/core": "1.3.0" } }, "sha512-9mx7ZGeewW4ndXAiD7AT1bbCk4OpJeortbjHHyNkgap+pMPPn1chY6R5zqe1ggXIUzZ2l8VOAKfPqOvpcrisJw=="],
 
     "@tsconfig/svelte": ["@tsconfig/svelte@1.0.13", "", {}, "sha512-5lYJP45Xllo4yE/RUBccBT32eBlRDbqN8r1/MIvQbKxW3aFqaYPCNgm8D5V20X4ShHcwvYWNlKg3liDh1MlBoA=="],
+
+    "@turbo/darwin-64": ["@turbo/darwin-64@2.10.8", "", { "os": "darwin", "cpu": "x64" }, "sha512-po+7rfJfUnFXjWlcoN2RwhErgzCdRtBc1T26vYPcywHlggmCQiQe1uWaE4j+BibI2uY9/2pDoFzMN0rmSaPFOw=="],
+
+    "@turbo/darwin-arm64": ["@turbo/darwin-arm64@2.10.8", "", { "os": "darwin", "cpu": "arm64" }, "sha512-+zB2btDJ00lnPRuqOvpVvgl4x34k/djZQGZTTCfjn7JgNCl8QFY5Njo5+dqkY1g/+9gbbsnAvWm9CmJg9ebcXA=="],
+
+    "@turbo/linux-64": ["@turbo/linux-64@2.10.8", "", { "os": [ "linux", "android", ], "cpu": "x64" }, "sha512-K1dxqiVisyN7cViVsfQLs6xscQbYuI8aO2nbUhFURDACgEDfZRdP/b4CCxeosBJpcMfhYyiibWqJorCnvz9kKg=="],
+
+    "@turbo/linux-arm64": ["@turbo/linux-arm64@2.10.8", "", { "os": [ "linux", "android", ], "cpu": "arm64" }, "sha512-Gi77ibVnrE1fEmvr+/wBD/yvRqhwp/RQuCp2+//lv1U1wNFFyVg0V7Wj8FG9FXPFAw5QHReo8rxc9+wBSDZjzA=="],
+
+    "@turbo/windows-64": ["@turbo/windows-64@2.10.8", "", { "os": "win32", "cpu": "x64" }, "sha512-znnLO1haJPYTHoKMKwlAvlkjRiYbbhBzME6wIGaMd+fwir23U6jVd1ecaTWWi1fbnRVqxMfgDBKseQ/hLKb83g=="],
+
+    "@turbo/windows-arm64": ["@turbo/windows-arm64@2.10.8", "", { "os": "win32", "cpu": "arm64" }, "sha512-VN30vh3b3Czh2WzYHNTfF1FE0YMZ5aHsLO8dBMGHJewA6792wX6iJR8ZxlzFW6WdOu0gEAKIvlYhfyT81Wkm4Q=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
 
@@ -3928,6 +3977,8 @@
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
     "tsx": ["tsx@4.23.1", "", { "dependencies": { "esbuild": "~0.28.0" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "bin": { "tsx": "dist/cli.mjs" } }, "sha512-GQHnkIfxyx1wYCOS/wonik5MVRZU9hi1TEZmzGZSCJB1y9YgoZ8H6itNE/u4suE+yLmOzuE4E5S4TZ/ZX2wcWQ=="],
+
+    "turbo": ["turbo@2.10.8", "", { "optionalDependencies": { "@turbo/darwin-64": "2.10.8", "@turbo/darwin-arm64": "2.10.8", "@turbo/linux-64": "2.10.8", "@turbo/linux-arm64": "2.10.8", "@turbo/windows-64": "2.10.8", "@turbo/windows-arm64": "2.10.8" }, "bin": { "turbo": "bin/turbo" } }, "sha512-9+8YX5QOkGXzZxcIykTHgaooRHGMWO+jfdyRK0o+rN0U7hBIig2MrJ8r/aNzIPDPhdA73SGb0O+tIztaModTMg=="],
 
     "tw-animate-css": ["tw-animate-css@1.4.0", "", {}, "sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ=="],
 
