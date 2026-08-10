@@ -159,15 +159,34 @@ function isRustPackage(path: string): boolean {
   return path.startsWith('crates/') || path === 'apps/claw-server-rust'
 }
 
+const AGENT = 'packages/browseros-agent/'
+
+/**
+ * A change to the test harness itself (this workflow, this discovery script, or
+ * the shared test runners used by every suite) must run the full matrix, so a
+ * harness regression cannot merge without any suite exercising it.
+ */
+function isHarnessChange(changedFiles: string[]): boolean {
+  return changedFiles.some(
+    (f) =>
+      f === '.github/workflows/test.yml' ||
+      f.startsWith(`${AGENT}ci/`) ||
+      f.startsWith(`${AGENT}scripts/run-bun-test`) ||
+      f.startsWith(`${AGENT}scripts/run-cargo-test`),
+  )
+}
+
 /**
  * Pure mapping from affected workspace packages + changed file paths (relative
- * to `packages/browseros-agent`) to the suite matrix. Over-inclusive by design:
- * bias toward running a suite when uncertain, never toward skipping one.
+ * to the repository root) to the suite matrix. Over-inclusive by design: bias
+ * toward running a suite when uncertain, never toward skipping one.
  */
 export function computeAffectedSuites(
   packages: AffectedPackage[],
   changedFiles: string[],
 ): SuiteConfig[] {
+  if (isHarnessChange(changedFiles)) return Object.values(SUITES)
+
   const keys = new Set<string>()
 
   for (const pkg of packages) {
@@ -178,12 +197,12 @@ export function computeAffectedSuites(
   }
 
   // Path signals for things that are not workspace packages.
-  if (changedFiles.some((f) => f.startsWith('scripts/'))) keys.add('build')
+  if (changedFiles.some((f) => f.startsWith(`${AGENT}scripts/`))) keys.add('build')
   if (
     changedFiles.some(
       (f) =>
-        f.startsWith('contracts/claw-mcp/') ||
-        f.startsWith('contracts/claw-api/'),
+        f.startsWith(`${AGENT}contracts/claw-mcp/`) ||
+        f.startsWith(`${AGENT}contracts/claw-api/`),
     )
   ) {
     keys.add('claw-mcp')
@@ -211,11 +230,11 @@ function readAffectedPackages(): AffectedPackage[] {
 
 function readChangedFiles(base: string): string[] {
   const range = base ? `${base}...HEAD` : 'HEAD'
-  const raw = execFileSync(
-    'git',
-    ['diff', '--name-only', '--relative', range],
-    { encoding: 'utf8' },
-  )
+  // Repo-root-relative paths (no --relative) so `.github/**` harness changes
+  // outside packages/browseros-agent are visible to isHarnessChange.
+  const raw = execFileSync('git', ['diff', '--name-only', range], {
+    encoding: 'utf8',
+  })
   return raw.split('\n').filter(Boolean)
 }
 

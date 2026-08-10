@@ -58,7 +58,22 @@ describe('computeAffectedSuites', () => {
   })
 
   it('adds the build suite when scripts change', () => {
-    expect(suiteNames([], ['scripts/build/server.ts'])).toEqual(['build'])
+    expect(
+      suiteNames([], ['packages/browseros-agent/scripts/build/server.ts']),
+    ).toEqual(['build'])
+  })
+
+  it('runs the full matrix on a test-harness change', () => {
+    for (const harnessFile of [
+      '.github/workflows/test.yml',
+      'packages/browseros-agent/ci/affected-suites.ts',
+      'packages/browseros-agent/scripts/run-bun-test.ts',
+      'packages/browseros-agent/scripts/run-cargo-test.ts',
+    ]) {
+      expect(new Set(suiteNames([], [harnessFile]))).toEqual(
+        new Set(Object.keys(SUITES)),
+      )
+    }
   })
 
   it('adds the build suite when build-server-tools is affected', () => {
@@ -70,12 +85,12 @@ describe('computeAffectedSuites', () => {
   })
 
   it('adds claw-mcp when the claw-api or claw-mcp contract changes', () => {
-    expect(suiteNames([], ['contracts/claw-api/openapi.yaml'])).toEqual([
-      'claw-mcp',
-    ])
-    expect(suiteNames([], ['contracts/claw-mcp/tools.json'])).toEqual([
-      'claw-mcp',
-    ])
+    expect(
+      suiteNames([], ['packages/browseros-agent/contracts/claw-api/openapi.yaml']),
+    ).toEqual(['claw-mcp'])
+    expect(
+      suiteNames([], ['packages/browseros-agent/contracts/claw-mcp/tools.json']),
+    ).toEqual(['claw-mcp'])
   })
 
   it('ignores unrelated non-package files', () => {
@@ -89,7 +104,7 @@ describe('computeAffectedSuites', () => {
         pkg('@browseros/app', 'apps/app'),
         pkg('@browseros/browseros-mcp-rust', 'crates/browseros-mcp'),
       ],
-      ['contracts/claw-api/openapi.yaml'],
+      ['packages/browseros-agent/contracts/claw-api/openapi.yaml'],
     )
     // claw-mcp appears once even though both the rust crate and the contract
     // path request it, and the order follows the SUITES declaration.
