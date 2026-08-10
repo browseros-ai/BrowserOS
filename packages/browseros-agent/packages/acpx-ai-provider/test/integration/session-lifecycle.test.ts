@@ -119,6 +119,21 @@ describe('runtime injection and lifecycle methods', () => {
     expect(runtime.closeCalls[0]?.reason).toBe('done')
   })
 
+  test('close can discard persistent session state', async () => {
+    const runtime = new MockAcpRuntime({ turnScripts: noopScripts(1) })
+    const provider = createAcpxProvider({ agent: 'claude', cwd: '/r', runtime })
+    await drain(
+      (await provider.languageModel().doStream({ prompt: HISTORY })).stream,
+    )
+
+    await provider.close('deleted', { discardPersistentState: true })
+
+    expect(runtime.closeCalls[0]).toMatchObject({
+      reason: 'deleted',
+      discardPersistentState: true,
+    })
+  })
+
   test('setMode and setConfigOption fan out to every cached handle', async () => {
     const runtime = new MockAcpRuntime({ turnScripts: noopScripts(2) })
     const provider = createAcpxProvider({ agent: 'claude', cwd: '/r', runtime })

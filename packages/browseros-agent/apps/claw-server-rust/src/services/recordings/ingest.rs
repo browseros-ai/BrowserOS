@@ -1,4 +1,4 @@
-use super::{RecordingEventInput, RecordingStore};
+use super::{LiveRecordingBus, RecordingEventInput, RecordingStore};
 use crate::{
     error::AppResult,
     services::browser::{BrowserService, TabRegistry},
@@ -9,6 +9,7 @@ pub struct RecordingIngestService {
     recordings: Arc<RecordingStore>,
     browser: Arc<BrowserService>,
     tabs: Arc<TabRegistry>,
+    live: Arc<LiveRecordingBus>,
 }
 
 impl RecordingIngestService {
@@ -16,11 +17,13 @@ impl RecordingIngestService {
         recordings: Arc<RecordingStore>,
         browser: Arc<BrowserService>,
         tabs: Arc<TabRegistry>,
+        live: Arc<LiveRecordingBus>,
     ) -> Arc<Self> {
         Arc::new(Self {
             recordings,
             browser,
             tabs,
+            live,
         })
     }
 
@@ -37,7 +40,8 @@ impl RecordingIngestService {
             .tabs
             .resolve(tab_id, session, self.browser.state().epoch)
             .await;
-        self.recordings
+        let outcome = self
+            .recordings
             .append_batch(
                 document_id,
                 tab_id,
@@ -46,6 +50,18 @@ impl RecordingIngestService {
                 batch_id,
                 has_gap,
             )
-            .await
+            .await?;
+        // Fan the freshly accepted events out to any live-preview subscribers,
+        // tagged with the document's committed length after this batch. A
+        // subscriber forwards the batch only when that length exceeds what its
+        // bootstrap already read, so a batch the bootstrap captured is never
+        // double-applied. `committed_len` is `Some` only for a newly accepted,
+        // non-empty batch, so a duplicate or empty batch is never republished.
+        if let Some(committed_len) = outcome.committed_len {
+            self.live
+                .publish(document_id, committed_len, Arc::from(events))
+                .await;
+        }
+        Ok(outcome.accepted)
     }
 }

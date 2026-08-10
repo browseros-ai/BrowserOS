@@ -27,4 +27,22 @@ describe('build CLI', () => {
 
     expect(args.upload).toBe(true)
   })
+
+  it('supports versioned-only uploads', () => {
+    const args = parseBuildArgs(
+      ['--target=darwin-arm64', '--versioned-only'],
+      testProduct(),
+    )
+
+    expect(args.versionedOnly).toBe(true)
+  })
+
+  it('rejects versioned-only without upload', () => {
+    expect(() =>
+      parseBuildArgs(
+        ['--target=darwin-arm64', '--no-upload', '--versioned-only'],
+        testProduct(),
+      ),
+    ).toThrow('--versioned-only requires upload')
+  })
 })

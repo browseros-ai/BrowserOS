@@ -2,15 +2,14 @@ import { type FC, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
+import { ProductHuntBanner } from '@/components/promo/ProductHuntBanner'
 import { Feature } from '@/lib/browseros/capabilities'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import {
-  useAgentAdapters,
-  useHarnessAgents,
-} from '@/modules/agents/agents.hooks'
+import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { toProviderOption } from '@/modules/chat/chat-session-request'
+import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import {
   buildSidepanelChatTargets,
   persistSidepanelChatTargetSelection,
@@ -26,11 +25,7 @@ import {
   ConversationInput,
   type ConversationInputSendInput,
 } from './ConversationInput'
-import {
-  resolveHomeLlmRoutingMode,
-  routeHomeSend,
-} from './home-compose.helpers'
-import { setPendingInitialMessage } from './pending-initial-message'
+import { resolveHomeLlmRoutingMode } from './home-compose.helpers'
 
 export const AgentCommandHome: FC = () => {
   const navigate = useNavigate()
@@ -40,8 +35,7 @@ export const AgentCommandHome: FC = () => {
     defaultProviderId,
     setDefaultProvider,
   } = useLlmProviders()
-  const { harnessAgents } = useHarnessAgents()
-  const { adapters } = useAgentAdapters()
+  const { agents } = useAcpAgents()
   const { supports, isLoading: capabilitiesLoading } = useCapabilities()
   const supportsInlineChat = supports(Feature.NEWTAB_CHAT_SUPPORT)
   const llmRoutingMode = resolveHomeLlmRoutingMode({
@@ -58,10 +52,9 @@ export const AgentCommandHome: FC = () => {
     () =>
       buildSidepanelChatTargets({
         providers: llmProviders,
-        adapters,
-        agents: harnessAgents,
+        agents,
       }),
-    [llmProviders, adapters, harnessAgents],
+    [llmProviders, agents],
   )
   const providerOptions = useMemo(
     () => targets.map(toProviderOption),
@@ -88,35 +81,15 @@ export const AgentCommandHome: FC = () => {
   const handleSend = async (input: ConversationInputSendInput) => {
     if (!selectedProvider) return
     if (selectedProvider.kind === 'llm' && llmRoutingMode === 'wait') return
-    const agentSessionId =
-      selectedProvider.kind === 'acp' ? crypto.randomUUID() : undefined
-    const route = routeHomeSend(selectedProvider, input.text, {
-      agentSessionId,
-      selectedTabs: input.selectedTabs,
-    })
-    if (!route) return
-    if (route.kind === 'acp') {
-      if (!agentSessionId) return
-      // Stash text + attachments in the in-memory registry. Text also travels
-      // in `?q=` so a hard refresh / shareable URL still works for text-only
-      // prompts; attachments are registry-only (a multi-MB dataUrl can't ride
-      // a URL param). The chat screen prefers the registry when both exist.
-      setPendingInitialMessage({
-        agentId: route.agentId,
-        sessionId: agentSessionId,
-        text: input.text,
-        attachments: input.attachments,
-        createdAt: Date.now(),
-      })
-      navigate(route.path)
-      return
-    }
     const target = targets.find(
-      (entry) => entry.kind === 'llm' && entry.id === route.providerId,
+      (entry) =>
+        entry.kind === selectedProvider.kind &&
+        entry.id === selectedProvider.id,
     )
+    if (!target) return
     await persistSidepanelChatTargetSelection(target)
-    await setDefaultProvider(route.providerId)
-    if (llmRoutingMode === 'sidepanel') {
+    if (target.kind === 'llm') await setDefaultProvider(target.id)
+    if (target.kind === 'llm' && llmRoutingMode === 'sidepanel') {
       const action = createBrowserOSAction({
         mode: 'chat',
         message: input.text,
@@ -129,7 +102,21 @@ export const AgentCommandHome: FC = () => {
       })
       return
     }
-    navigate(route.path)
+    const search = new URLSearchParams({ q: input.text, mode: 'agent' })
+    if (input.attachments.length > 0) {
+      search.set(
+        'handoff',
+        stagePendingHomeMessage({
+          text: input.text,
+          attachments: input.attachments,
+        }),
+      )
+    }
+    const tabIds = input.selectedTabs
+      .map((tab) => tab.id)
+      .filter((id): id is number => id !== undefined)
+    if (tabIds.length > 0) search.set('tabs', tabIds.join(','))
+    navigate(`/home/chat?${search.toString()}`)
   }
 
   return (
@@ -159,7 +146,7 @@ export const AgentCommandHome: FC = () => {
               onSend={handleSend}
               streaming={false}
               disabled={!selectedProvider || waitingForLlmCapabilities}
-              attachmentsEnabled={true}
+              attachmentsEnabled={selectedProvider?.kind === 'acp'}
               placeholder={
                 selectedProvider
                   ? `Ask ${selectedProvider.name} to handle a task...`
@@ -174,7 +161,7 @@ export const AgentCommandHome: FC = () => {
 
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 pb-12">
           <RecentSites />
-          <BrowserClawPromoBanner />
+          <ProductHuntBanner fallback={<BrowserClawPromoBanner />} />
           <ScheduleResults />
         </div>
       </div>

@@ -3,9 +3,7 @@ import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout'
 import { SidebarLayout } from '@/components/layout/SidebarLayout'
-import { AgentCommandConversation } from '@/screens/agent-command/AgentCommandConversation'
 import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
-import { AgentCommandLayout } from '@/screens/agent-command/AgentCommandLayout'
 import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
 import { LoginPage } from '@/screens/auth/LoginPage'
 import { LogoutPage } from '@/screens/auth/LogoutPage'
@@ -31,13 +29,6 @@ function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const experimentId = params.get('experimentId') ?? 'default'
   const maxTurns = maxTurnsStr ? Number.parseInt(maxTurnsStr, 10) : 7
   return { maxTurns, experimentId }
-}
-
-// Agent management moved into AI & Agents settings; conversations live under
-// /home/agents. Keep old /agents links alive.
-const LegacyAgentRedirect: FC = () => {
-  const params = useParams()
-  return <Navigate to={`/home/agents/${params.agentId ?? ''}`} replace />
 }
 
 const OptionsRedirect: FC = () => {
@@ -73,17 +64,7 @@ export const App: FC = () => {
 
         <Route element={<SidebarLayout />}>
           <Route path="home" element={<NewTabLayout />}>
-            <Route element={<AgentCommandLayout />}>
-              <Route index element={<AgentCommandHome />} />
-              <Route
-                path="agents/:agentId"
-                element={<AgentCommandConversation />}
-              />
-              <Route
-                path="agents/:agentId/sessions/:sessionId"
-                element={<AgentCommandConversation />}
-              />
-            </Route>
+            <Route index element={<AgentCommandHome />} />
             <Route path="chat" element={<NewTabChat />} />
             <Route path="personalize" element={<Personalize />} />
           </Route>
@@ -135,7 +116,10 @@ export const App: FC = () => {
           path="/agents"
           element={<Navigate to="/settings/ai" replace />}
         />
-        <Route path="/agents/:agentId" element={<LegacyAgentRedirect />} />
+        <Route
+          path="/agents/:agentId"
+          element={<Navigate to="/settings/ai" replace />}
+        />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         <Route path="*" element={<Navigate to="/home" replace />} />

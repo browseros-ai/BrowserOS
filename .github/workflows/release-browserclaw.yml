@@ -1,999 +1,386 @@
-# BrowserClaw release is dispatch-only. It builds versioned artifacts, stages
-# update-feed XML/JSON files as an Actions artifact, and leaves live promotion
-# to the operator.
-name: "Release: BrowserClaw (full)"
+name: "Release: BrowserOS neo (full)"
 
 on:
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: "Browser platforms to build"
-        type: choice
-        default: all
-        options:
-          - all
-          - linux
-          - windows
-          - macos
-      include_servers:
-        description: "Build and upload BrowserClaw server resource bundles before browser builds"
-        type: boolean
-        default: true
-      sign_windows:
-        description: "Sign Windows binaries and update artifacts"
-        type: boolean
-        default: true
-      macos_arch:
-        description: "macOS architecture to build"
-        type: choice
-        default: universal
-        options:
-          - arm64
-          - universal
-      upload_to_r2:
-        description: "Upload browser release metadata/artifacts to R2"
-        type: boolean
-        default: true
-      extensions:
-        description: "Build/upload the BrowserClaw extension CRX and stage this feed channel"
-        type: choice
-        default: alpha
-        options:
-          - skip
-          - alpha
-          - prod
-      extensions_version:
-        description: "BrowserClaw extension version to release when extensions is not skip"
-        required: false
-        type: string
-        default: ""
-      github_release_draft:
-        description: "Create or refresh draft GitHub release assets after successful builds"
-        type: boolean
-        default: true
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release-browserclaw
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    name: Preflight
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      extensions_version: ${{ steps.extension_version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Resolve release version
-        id: version
-        run: |
-          set -euo pipefail
-          version_file="packages/browseros/resources/BROWSEROS_VERSION"
-          if [ ! -f "$version_file" ]; then
-            echo "::error::Missing $version_file"
-            exit 1
-          fi
-
-          first_line="$(sed -n '1p' "$version_file" | tr -d '[:space:]')"
-          if [ -n "$first_line" ] && [[ "$first_line" != *"="* ]]; then
-            version="$first_line"
-          else
-            major=0
-            minor=0
-            build=0
-            patch=0
-            while IFS='=' read -r key value; do
-              key="${key//[[:space:]]/}"
-              value="${value//[[:space:]]/}"
-              case "$key" in
-                BROWSEROS_MAJOR) major="$value" ;;
-                BROWSEROS_MINOR) minor="$value" ;;
-                BROWSEROS_BUILD) build="$value" ;;
-                BROWSEROS_PATCH) patch="$value" ;;
-              esac
-            done < "$version_file"
-
-            if [ "$patch" != "0" ]; then
-              version="$major.$minor.$build.$patch"
-            elif [ "$build" != "0" ]; then
-              version="$major.$minor.$build"
-            else
-              version="$major.$minor.0"
-            fi
-          fi
-
-          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
-            echo "::error::Invalid BrowserOS release version: $version"
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Resolved BrowserOS release version: $version"
-
-      - name: Resolve extension version
-        id: extension_version
-        env:
-          INPUT_EXTENSIONS: ${{ inputs.extensions }}
-          INPUT_EXTENSIONS_VERSION: ${{ inputs.extensions_version }}
-        run: |
-          set -euo pipefail
-          version="$(printf '%s' "$INPUT_EXTENSIONS_VERSION" | tr -d '[:space:]')"
-          if [ "$INPUT_EXTENSIONS" = "skip" ]; then
-            echo "version=" >> "$GITHUB_OUTPUT"
-            echo "Extension release skipped."
-            exit 0
-          fi
-
-          if [ -z "$version" ]; then
-            echo "::error::extensions_version is required when extensions is not skip"
-            exit 1
-          fi
-          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]; then
-            echo "::error::Invalid extension version '$version'; expected 1-4 dot-separated integers"
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Resolved BrowserClaw extension version: $version"
-
-      - name: Validate selected lane configuration
-        env:
-          INPUT_PLATFORMS: ${{ inputs.platforms }}
-          INPUT_INCLUDE_SERVERS: ${{ inputs.include_servers }}
-          INPUT_SIGN_WINDOWS: ${{ inputs.sign_windows }}
-          INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
-          INPUT_EXTENSIONS: ${{ inputs.extensions }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
-          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
-          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
-          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
-          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
-          BROWSEROS_REPO_PATH: ${{ vars.BROWSEROS_REPO_PATH }}
-          BROWSEROS_CHROMIUM_SRC: ${{ vars.BROWSEROS_CHROMIUM_SRC }}
-        run: |
-          set -euo pipefail
-
-          platform_selected() {
-            [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "$1" ]
-          }
-
-          missing=()
-          require_value() {
-            local name="$1"
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          }
-
-          r2_needed=false
-          if [ "$INPUT_INCLUDE_SERVERS" = "true" ] || [ "$INPUT_UPLOAD_TO_R2" = "true" ] || [ "$INPUT_EXTENSIONS" != "skip" ]; then
-            r2_needed=true
-          fi
-          if [ "$r2_needed" = "true" ]; then
-            require_value R2_ACCOUNT_ID
-            require_value R2_ACCESS_KEY_ID
-            require_value R2_SECRET_ACCESS_KEY
-            require_value R2_BUCKET
-          fi
-
-          if platform_selected windows && [ "$INPUT_SIGN_WINDOWS" = "true" ]; then
-            require_value ESIGNER_USERNAME
-            require_value ESIGNER_PASSWORD
-            require_value ESIGNER_TOTP_SECRET
-            require_value SPARKLE_PRIVATE_KEY
-          fi
-
-          if platform_selected macos; then
-            require_value BROWSEROS_REPO_PATH
-            require_value BROWSEROS_CHROMIUM_SRC
-          fi
-
-          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            require_value CLAW_POSTHOG_KEY
-          fi
-
-          if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-            require_value BROWSERCLAW_KEY
-            require_value VITE_CLAW_POSTHOG_KEY
-          fi
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::Missing required secret/variable(s) for this release selection: %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-  onboard_browserclaw:
-    name: BrowserClaw onboarding resources
-    needs: preflight
-    if: ${{ inputs.include_servers }}
-    uses: ./.github/workflows/release-claw-onboard.yml
+  candidate:
+    name: Prepare immutable candidate
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
-    with:
-      ref: ${{ github.sha }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      browser_version: ${{ steps.candidate.outputs.browser_version }}
+      candidate_artifact: release-candidate-browserclaw-${{ steps.candidate.outputs.candidate_sha }}
+      candidate_sha: ${{ steps.candidate.outputs.candidate_sha }}
+      common_artifact: release-resources-browserclaw-${{ steps.candidate.outputs.candidate_sha }}
+      gate_artifact: release-gate-browserclaw-${{ steps.candidate.outputs.candidate_sha }}
+      parent_sha: ${{ steps.candidate.outputs.parent_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
 
-  server_browserclaw:
-    name: BrowserClaw server resources
-    needs: preflight
-    if: ${{ inputs.include_servers }}
-    uses: ./.github/workflows/release-claw-server-rust.yml
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Create or recover candidate
+        id: candidate
+        working-directory: packages/browseros
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          uv run browseros release candidate ensure \
+            --product browserclaw \
+            --parent-sha "$GITHUB_SHA" \
+            --default-branch "${{ github.event.repository.default_branch }}" \
+            --dispatch-ref "${{ github.ref_name }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/release-candidate/candidate.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate record
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate-browserclaw-${{ steps.candidate.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/release-candidate/candidate.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  common:
+    name: Prepare common resources
+    needs: candidate
     permissions:
-      contents: write
-    with:
-      ref: ${{ github.sha }}
-      publish_ota: false
-    secrets: inherit
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate.outputs.candidate_sha }}
 
-  release_linux:
-    name: Linux browser builds
-    needs: [preflight, onboard_browserclaw, server_browserclaw]
-    if: >-
-      ${{
-        always() &&
-        (inputs.platforms == 'all' || inputs.platforms == 'linux') &&
-        needs.preflight.result == 'success' &&
-        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
-      }}
+      - name: Verify exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Verify Chrome is available
+        run: google-chrome --version
+
+      - name: Download candidate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Recover prepared common resources
+        id: recover
+        env:
+          ARTIFACT_NAME: ${{ needs.candidate.outputs.common_artifact }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/prepared-resources"
+          rm -rf "$output"
+          mkdir -p "$output"
+          run_id="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ARTIFACT_NAME&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id][0] // empty')"
+          recovered=false
+          if [ -n "$run_id" ] && gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir "$output"; then
+            recovered=true
+          fi
+          if [ "$recovered" != "true" ]; then
+            rm -rf "$output"
+            mkdir -p "$output"
+          fi
+          echo "recovered=$recovered" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare or validate common resources
+        working-directory: packages/browseros
+        env:
+          BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
+          NODE_ENV: production
+          VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
+          VITE_CLAW_POSTHOG_KEY: ${{ secrets.VITE_CLAW_POSTHOG_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release resources prepare \
+            --candidate "$RUNNER_TEMP/candidate/candidate.json" \
+            --output "$RUNNER_TEMP/prepared-resources"
+
+      - name: Upload prepared common resources
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.candidate.outputs.common_artifact }}
+          path: ${{ runner.temp }}/prepared-resources
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  linux:
+    name: Linux x64
+    needs: [candidate, common]
     uses: ./.github/workflows/release-linux.yml
     permissions:
       actions: write
       contents: read
     with:
       products: browserclaw
-      upload_to_r2: ${{ inputs.upload_to_r2 }}
-    secrets: inherit
+      upload_to_r2: true
+      resource_mode: source
+      candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
+      prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
 
-  release_windows:
-    name: Windows browser builds
-    needs: [preflight, onboard_browserclaw, server_browserclaw]
-    if: >-
-      ${{
-        always() &&
-        (inputs.platforms == 'all' || inputs.platforms == 'windows') &&
-        needs.preflight.result == 'success' &&
-        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
-      }}
+  windows:
+    name: Windows x64
+    needs: [candidate, common]
     uses: ./.github/workflows/release-windows.yml
     permissions:
       actions: write
       contents: read
     with:
       products: browserclaw
-      upload_to_r2: ${{ inputs.upload_to_r2 }}
-      sign: ${{ inputs.sign_windows }}
-    secrets: inherit
+      sign: true
+      upload_to_r2: true
+      resource_mode: source
+      candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
+      prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+      ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+      ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
-  release_macos:
-    name: macOS browser builds
-    needs: [preflight, onboard_browserclaw, server_browserclaw]
-    if: >-
-      ${{
-        always() &&
-        (inputs.platforms == 'all' || inputs.platforms == 'macos') &&
-        needs.preflight.result == 'success' &&
-        (needs.onboard_browserclaw.result == 'success' || needs.onboard_browserclaw.result == 'skipped') &&
-        (needs.server_browserclaw.result == 'success' || needs.server_browserclaw.result == 'skipped')
-      }}
-    concurrency:
-      group: macos-build
-      cancel-in-progress: false
+  macos:
+    name: macOS universal
+    needs: [candidate, common]
     uses: ./.github/workflows/release-macos.yml
     permissions:
-      contents: write
-      pull-requests: write
+      actions: read
+      contents: read
     with:
       products: browserclaw
-      arch: ${{ inputs.macos_arch }}
-      bump: none
-      commit_version: false
-      upload_to_r2: ${{ inputs.upload_to_r2 }}
-      ref: ${{ github.sha }}
-    secrets: inherit
+      arch: universal
+      upload_to_r2: true
+      resource_mode: source
+      candidate_sha: ${{ needs.candidate.outputs.candidate_sha }}
+      prepared_resources_artifact: ${{ needs.candidate.outputs.common_artifact }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+      MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+      PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+      PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-  release_extensions:
-    name: BrowserClaw extension CRX
-    needs: [preflight, release_linux, release_windows, release_macos]
-    if: >-
-      ${{
-        always() &&
-        inputs.extensions != 'skip' &&
-        needs.preflight.result == 'success' &&
-        ((inputs.platforms != 'all' && inputs.platforms != 'linux') || needs.release_linux.result == 'success') &&
-        ((inputs.platforms != 'all' && inputs.platforms != 'windows') || needs.release_windows.result == 'success') &&
-        ((inputs.platforms != 'all' && inputs.platforms != 'macos') || needs.release_macos.result == 'success')
-      }}
-    uses: ./.github/workflows/release-extensions.yml
+  gate:
+    name: Gate native lanes
+    needs: [candidate, linux, windows, macos]
     permissions:
-      contents: write
-    with:
-      version: ${{ needs.preflight.outputs.extensions_version }}
-      extension: browserclaw
-      branch: ${{ github.sha }}
-    secrets: inherit
-
-  stage_updates:
-    name: Stage update feeds
-    needs:
-      - preflight
-      - onboard_browserclaw
-      - server_browserclaw
-      - release_linux
-      - release_windows
-      - release_macos
-      - release_extensions
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    permissions:
+      actions: read
       contents: read
-    env:
-      PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
-      EXTENSION_NAME: browserclaw
-      VERSION: ${{ needs.preflight.outputs.version }}
-      EXTENSIONS_VERSION: ${{ needs.preflight.outputs.extensions_version }}
-      INPUT_PLATFORMS: ${{ inputs.platforms }}
-      INPUT_MACOS_ARCH: ${{ inputs.macos_arch }}
-      INPUT_INCLUDE_SERVERS: ${{ inputs.include_servers }}
-      INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
-      INPUT_EXTENSIONS: ${{ inputs.extensions }}
-      INPUT_GITHUB_RELEASE_DRAFT: ${{ inputs.github_release_draft }}
-      PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-      ONBOARD_RESULT: ${{ needs.onboard_browserclaw.result }}
-      SERVER_RESULT: ${{ needs.server_browserclaw.result }}
-      LINUX_RESULT: ${{ needs.release_linux.result }}
-      WINDOWS_RESULT: ${{ needs.release_windows.result }}
-      MACOS_RESULT: ${{ needs.release_macos.result }}
-      EXTENSIONS_RESULT: ${{ needs.release_extensions.result }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Evaluate staged feed gate
-        id: stage_gate
-        run: |
-          set -euo pipefail
-
-          selected_platforms() {
-            case "$INPUT_PLATFORMS" in
-              all) printf '%s\n' linux windows macos ;;
-              linux|windows|macos) printf '%s\n' "$INPUT_PLATFORMS" ;;
-            esac
-          }
-
-          platform_result() {
-            case "$1" in
-              linux) echo "$LINUX_RESULT" ;;
-              windows) echo "$WINDOWS_RESULT" ;;
-              macos) echo "$MACOS_RESULT" ;;
-            esac
-          }
-
-          should_stage=true
-          reasons=()
-
-          if [ -z "${VERSION:-}" ]; then
-            should_stage=false
-            reasons+=("release version was not resolved")
-          fi
-          if [ "$PREFLIGHT_RESULT" != "success" ]; then
-            should_stage=false
-            reasons+=("preflight result is $PREFLIGHT_RESULT")
-          fi
-          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            if [ "$ONBOARD_RESULT" != "success" ]; then
-              should_stage=false
-              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
-            fi
-            if [ "$SERVER_RESULT" != "success" ]; then
-              should_stage=false
-              reasons+=("BrowserClaw server result is $SERVER_RESULT")
-            fi
-          fi
-          while IFS= read -r platform; do
-            result="$(platform_result "$platform")"
-            if [ "$result" != "success" ]; then
-              should_stage=false
-              reasons+=("$platform result is $result")
-            fi
-          done < <(selected_platforms)
-          if [ "$INPUT_EXTENSIONS" != "skip" ] && [ "$EXTENSIONS_RESULT" != "success" ]; then
-            should_stage=false
-            reasons+=("extension result is $EXTENSIONS_RESULT")
-          fi
-          if [ "$INPUT_EXTENSIONS" = "skip" ] && { [ "$INPUT_PLATFORMS" = "linux" ] || [ "$INPUT_UPLOAD_TO_R2" != "true" ]; }; then
-            should_stage=false
-            reasons+=("no browser appcast or extension feed is selected")
-          fi
-
-          reason="ready"
-          if [ "${#reasons[@]}" -gt 0 ]; then
-            reason="$(printf '%s; ' "${reasons[@]}")"
-            reason="${reason%; }"
-          fi
-
-          {
-            echo "should_stage=$should_stage"
-            echo "reason=$reason"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Write staged feed skip summary
-        if: ${{ steps.stage_gate.outputs.should_stage != 'true' }}
-        run: |
-          {
-            echo "## Staged update feeds"
-            echo
-            echo "Skipped: ${{ steps.stage_gate.outputs.reason }}."
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - uses: actions/checkout@v7
-        if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.candidate.outputs.candidate_sha }}
 
       - uses: astral-sh/setup-uv@v8.3.2
-        if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
 
-      - name: Render staged update feeds
-        id: stage_feeds
-        if: ${{ steps.stage_gate.outputs.should_stage == 'true' }}
+      - name: Download candidate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Download lane manifests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: lane-browserclaw-*
+          path: ${{ runner.temp }}/lanes
+
+      - name: Validate complete native matrix
         working-directory: packages/browseros
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -euo pipefail
-
-          summary="$GITHUB_STEP_SUMMARY"
-          artifact_root="$GITHUB_WORKSPACE/staged-update-feeds"
-          appcast_dir="bos_build/config/appcast"
-          extensions_dir="../../updates/extensions"
-          appcast_log="$RUNNER_TEMP/appcast.log"
-          extensions_log="$RUNNER_TEMP/extensions.log"
-
-          rm -rf "$artifact_root"
-          mkdir -p "$artifact_root" "$appcast_dir" "$extensions_dir"
-
-          appcast_targets=()
-          if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "macos" ]; then
-              case "$INPUT_MACOS_ARCH" in
-                arm64) appcast_targets+=(appcast-claw.xml) ;;
-                x64) appcast_targets+=(appcast-claw-x86_64.xml) ;;
-                universal) appcast_targets+=(appcast-claw.xml appcast-claw-x86_64.xml) ;;
-                *)
-                  echo "::error::Unsupported macOS architecture: $INPUT_MACOS_ARCH"
-                  exit 1
-                  ;;
-              esac
-            fi
-            if [ "$INPUT_PLATFORMS" = "all" ] || [ "$INPUT_PLATFORMS" = "windows" ]; then
-              appcast_targets+=(appcast-claw-win.xml)
-            fi
+          mapfile -t lanes < <(find "$RUNNER_TEMP/lanes" -type f -name '*.json' | sort)
+          if [ "${#lanes[@]}" -ne 3 ]; then
+            echo "::error::Expected three lane manifests, found ${#lanes[@]}"
+            exit 1
           fi
-          extension_targets=()
-          if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-            if [ "$INPUT_EXTENSIONS" = "alpha" ]; then
-              extension_targets=(
-                update-manifest.alpha.xml
-                extensions.alpha.json
-                bundled-manifest.xml
-              )
-            else
-              extension_targets=(
-                update-manifest.xml
-                extensions.json
-                bundled-manifest.xml
-              )
-            fi
-          fi
-
-          if [ "${#appcast_targets[@]}" -gt 0 ]; then
-            for file in "${appcast_targets[@]}"; do
-              rm -f "$appcast_dir/$file"
-            done
-          fi
-          for file in update-manifest.xml update-manifest.alpha.xml extensions.json extensions.alpha.json bundled-manifest.xml; do
-            rm -f "$extensions_dir/$file"
+          args=()
+          for lane in "${lanes[@]}"; do
+            args+=(--lane "$lane")
           done
+          uv run browseros release browser gate \
+            "${args[@]}" \
+            --output "$RUNNER_TEMP/release-gate/gate.json" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
-          appcast_rc=0
-          if [ "${#appcast_targets[@]}" -gt 0 ]; then
-            set +e
-            uv run browseros release appcast \
-              --version "$VERSION" \
-              --product "$PRODUCT" \
-              --platforms "$INPUT_PLATFORMS" \
-              --macos-arch "$INPUT_MACOS_ARCH" \
-              --source-sha "$GITHUB_SHA" \
-              --workflow-run-id "$GITHUB_RUN_ID" \
-              --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-              > "$appcast_log" 2>&1
-            appcast_rc=$?
-            set -e
-          fi
-          if [ "$appcast_rc" -ne 0 ]; then
-            echo "::error::Appcast staging failed for $PRODUCT v$VERSION; see step summary."
-          fi
-
-          extensions_rc=0
-          if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-            set +e
-            uv run browseros release extensions --channel "$INPUT_EXTENSIONS" --set "${EXTENSION_NAME}=${EXTENSIONS_VERSION}" > "$extensions_log" 2>&1
-            extensions_rc=$?
-            set -e
-            if [ "$extensions_rc" -ne 0 ]; then
-              echo "::error::Extension feed staging failed for $EXTENSION_NAME v$EXTENSIONS_VERSION; see step summary."
-            fi
-          fi
-
-          if [ "$appcast_rc" -eq 0 ] && [ "${#appcast_targets[@]}" -gt 0 ]; then
-            for file in "${appcast_targets[@]}"; do
-              if [ ! -f "$appcast_dir/$file" ]; then
-                echo "Missing expected staged appcast: $file" >> "$appcast_log"
-                appcast_rc=1
-              fi
-            done
-          fi
-          if [ "$extensions_rc" -eq 0 ] && [ "${#extension_targets[@]}" -gt 0 ]; then
-            for file in "${extension_targets[@]}"; do
-              if [ ! -f "$extensions_dir/$file" ]; then
-                echo "Missing expected staged extension feed: $file" >> "$extensions_log"
-                extensions_rc=1
-              fi
-            done
-          fi
-
-          if [ "$appcast_rc" -ne 0 ]; then
-            if [ "${#appcast_targets[@]}" -gt 0 ]; then
-              for file in "${appcast_targets[@]}"; do
-                rm -f "$appcast_dir/$file"
-              done
-            fi
-          fi
-          if [ "$extensions_rc" -ne 0 ]; then
-            if [ "${#extension_targets[@]}" -gt 0 ]; then
-              for file in "${extension_targets[@]}"; do
-                rm -f "$extensions_dir/$file"
-              done
-            fi
-          fi
-
-          staged_files=()
-          copy_if_exists() {
-            local src="$1"
-            local rel="$2"
-            if [ -f "$src" ]; then
-              mkdir -p "$artifact_root/$(dirname "$rel")"
-              cp "$src" "$artifact_root/$rel"
-              staged_files+=("$rel")
-            fi
-          }
-
-          if [ "$appcast_rc" -eq 0 ]; then
-            if [ "${#appcast_targets[@]}" -gt 0 ]; then
-              for file in "${appcast_targets[@]}"; do
-                copy_if_exists "$appcast_dir/$file" "packages/browseros/$appcast_dir/$file"
-              done
-            fi
-          fi
-          if [ "$extensions_rc" -eq 0 ]; then
-            if [ "${#extension_targets[@]}" -gt 0 ]; then
-              for file in "${extension_targets[@]}"; do
-                copy_if_exists "$extensions_dir/$file" "updates/extensions/$file"
-              done
-            fi
-          fi
-
-          publish_platform_args=()
-          case "$INPUT_PLATFORMS" in
-            all) publish_platform_args=(--platform linux --platform win --platform macos) ;;
-            windows) publish_platform_args=(--platform win) ;;
-            linux|macos) publish_platform_args=(--platform "$INPUT_PLATFORMS") ;;
-          esac
-
-          {
-            echo "has_files=$([ "${#staged_files[@]}" -gt 0 ] && echo true || echo false)"
-            echo "files<<EOF"
-            if [ "${#staged_files[@]}" -gt 0 ]; then
-              printf '%s\n' "${staged_files[@]}"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo "## Staged update feeds"
-            echo
-            echo "- Product: \`$PRODUCT\`"
-            echo "- Version: \`$VERSION\`"
-            echo "- Appcast command: \`uv run browseros release appcast --version $VERSION --product $PRODUCT\`"
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "- Extension command: \`uv run browseros release extensions --channel $INPUT_EXTENSIONS --set $EXTENSION_NAME=$EXTENSIONS_VERSION\`"
-            else
-              echo "- Extension command: skipped"
-            fi
-            echo
-            echo "### Staged files"
-            echo
-            if [ "${#staged_files[@]}" -eq 0 ]; then
-              echo "- No XML/JSON files were staged."
-            else
-              for file in "${staged_files[@]}"; do
-                echo "- \`$file\`"
-              done
-            fi
-            echo
-            if [ "$appcast_rc" -ne 0 ]; then
-              echo "### Appcast staging error"
-              echo
-              echo '```text'
-              tail -n 120 "$appcast_log"
-              echo '```'
-              echo
-            fi
-            if [ "$extensions_rc" -ne 0 ]; then
-              echo "### Extension feed staging error"
-              echo
-              echo '```text'
-              tail -n 120 "$extensions_log"
-              echo '```'
-              echo
-            fi
-            echo "### Manual promote commands"
-            echo
-            echo '```bash'
-            echo "cd packages/browseros"
-            if [ "$INPUT_UPLOAD_TO_R2" = "true" ]; then
-              echo "uv run browseros release publish --version $VERSION --product $PRODUCT ${publish_platform_args[*]} --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT"
-            else
-              echo "# Browser artifact promotion skipped: upload_to_r2=false."
-            fi
-            if [ "$appcast_rc" -eq 0 ] && [ "${#appcast_targets[@]}" -gt 0 ]; then
-              echo "uv run browseros release appcast --version $VERSION --product $PRODUCT --platforms $INPUT_PLATFORMS --macos-arch $INPUT_MACOS_ARCH --source-sha $GITHUB_SHA --workflow-run-id $GITHUB_RUN_ID --workflow-run-attempt $GITHUB_RUN_ATTEMPT --publish"
-            elif [ "${#appcast_targets[@]}" -gt 0 ]; then
-              echo "# Appcast publish blocked: resolve the staging error and rerun the preview before publishing."
-            else
-              echo "# Browser appcast publish skipped: no macOS or Windows appcast was selected."
-            fi
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              if [ "$extensions_rc" -eq 0 ]; then
-                echo "uv run browseros release extensions --channel $INPUT_EXTENSIONS --set $EXTENSION_NAME=$EXTENSIONS_VERSION --publish"
-              else
-                echo "# Extension manifest publish blocked: resolve the staging warning and rerun the preview before publishing."
-              fi
-            fi
-            echo '```'
-            echo
-            if [ "$INPUT_GITHUB_RELEASE_DRAFT" = "true" ]; then
-              echo "Draft GitHub release: inspect the draft for \`$PRODUCT\` v\`$VERSION\`, then publish it manually in GitHub."
-            else
-              echo "Draft GitHub release: skipped because github_release_draft=false."
-            fi
-          } >> "$summary"
-
-          if [ "$appcast_rc" -ne 0 ] || [ "$extensions_rc" -ne 0 ]; then
-            exit 1
-          fi
-          if [ "${#staged_files[@]}" -eq 0 ]; then
-            echo "::error::Feed staging was selected but produced no files."
-            exit 1
-          fi
-
-      - name: Upload staged update feeds
-        if: ${{ steps.stage_feeds.outputs.has_files == 'true' }}
+      - name: Upload gate record
         uses: actions/upload-artifact@v7
         with:
-          name: staged-update-feeds-browserclaw-${{ needs.preflight.outputs.version }}
-          path: staged-update-feeds
+          name: ${{ needs.candidate.outputs.gate_artifact }}
+          path: ${{ runner.temp }}/release-gate/gate.json
           if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+  merge:
+    name: Merge candidate
+    needs: [candidate, gate]
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
+      state: ${{ steps.merge.outputs.state }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate.outputs.candidate_sha }}
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Download candidate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Download gate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.gate_artifact }}
+          path: ${{ runner.temp }}/gate
+
+      - name: Merge exact candidate
+        id: merge
+        working-directory: packages/browseros
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          uv run browseros release candidate merge \
+            --record "$RUNNER_TEMP/candidate/candidate.json" \
+            --gate "$RUNNER_TEMP/gate/gate.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload merged candidate record
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.candidate.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate/candidate.json
+          if-no-files-found: error
+          overwrite: true
           retention-days: 30
 
   finalize:
-    name: Finalize
-    needs:
-      - preflight
-      - onboard_browserclaw
-      - server_browserclaw
-      - release_linux
-      - release_windows
-      - release_macos
-      - release_extensions
-      - stage_updates
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
+    name: Finalize browser draft
+    needs: [candidate, gate, merge]
     permissions:
+      actions: read
       contents: write
-    env:
-      PRODUCT: browserclaw
-      PRODUCT_LABEL: BrowserClaw
-      VERSION: ${{ needs.preflight.outputs.version }}
-      INPUT_PLATFORMS: ${{ inputs.platforms }}
-      INPUT_INCLUDE_SERVERS: ${{ inputs.include_servers }}
-      INPUT_SIGN_WINDOWS: ${{ inputs.sign_windows }}
-      INPUT_MACOS_ARCH: ${{ inputs.macos_arch }}
-      INPUT_UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
-      INPUT_EXTENSIONS: ${{ inputs.extensions }}
-      EXTENSIONS_VERSION: ${{ needs.preflight.outputs.extensions_version }}
-      INPUT_GITHUB_RELEASE_DRAFT: ${{ inputs.github_release_draft }}
-      PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-      ONBOARD_RESULT: ${{ needs.onboard_browserclaw.result }}
-      SERVER_RESULT: ${{ needs.server_browserclaw.result }}
-      LINUX_RESULT: ${{ needs.release_linux.result }}
-      WINDOWS_RESULT: ${{ needs.release_windows.result }}
-      MACOS_RESULT: ${{ needs.release_macos.result }}
-      EXTENSIONS_RESULT: ${{ needs.release_extensions.result }}
-      STAGE_UPDATES_RESULT: ${{ needs.stage_updates.result }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Write release summary
-        run: |
-          set -euo pipefail
-          version="${VERSION:-unresolved}"
-
-          selected_platforms() {
-            case "$INPUT_PLATFORMS" in
-              all) printf '%s\n' linux windows macos ;;
-              linux|windows|macos) printf '%s\n' "$INPUT_PLATFORMS" ;;
-            esac
-          }
-
-          platform_result() {
-            case "$1" in
-              linux) echo "$LINUX_RESULT" ;;
-              windows) echo "$WINDOWS_RESULT" ;;
-              macos) echo "$MACOS_RESULT" ;;
-            esac
-          }
-
-          browser_artifacts() {
-            local platform="$1"
-            case "$platform" in
-              linux)
-                printf '%s' "browserclaw-release-ci-linux-x64<br>BrowserClaw_v${version}_x64.AppImage<br>BrowserClaw_v${version}_amd64.deb"
-                ;;
-              windows)
-                printf '%s' "browserclaw-release-ci-windows-x64<br>BrowserClaw_v${version}_x64_installer.exe<br>BrowserClaw_v${version}_x64_installer.zip"
-                ;;
-              macos)
-                printf '%s' "BrowserClaw_v${version}_${INPUT_MACOS_ARCH}<br>BrowserClaw_v${version}_${INPUT_MACOS_ARCH}.dmg"
-                ;;
-            esac
-          }
-
-          {
-            echo "## BrowserClaw release summary"
-            echo
-            echo "- Version: \`$version\`"
-            echo "- Platforms: \`$INPUT_PLATFORMS\`"
-            echo "- Server resources: \`$INPUT_INCLUDE_SERVERS\`"
-            echo "- Browser R2 upload: \`$INPUT_UPLOAD_TO_R2\`"
-            echo "- Windows signing: \`$INPUT_SIGN_WINDOWS\`"
-            echo "- Extension channel: \`$INPUT_EXTENSIONS\`"
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "- Extension version: \`$EXTENSIONS_VERSION\`"
-            fi
-            echo "- Staged feed job: \`$STAGE_UPDATES_RESULT\`"
-            echo "- Draft GitHub release: \`$INPUT_GITHUB_RELEASE_DRAFT\`"
-            echo
-            echo "### Browser builds"
-            echo
-            echo "| Platform | Result | Version | Artifacts |"
-            echo "| --- | --- | --- | --- |"
-            while IFS= read -r platform; do
-              result="$(platform_result "$platform")"
-              artifacts="$(browser_artifacts "$platform")"
-              echo "| \`$platform\` | \`$result\` | \`$version\` | $artifacts |"
-            done < <(selected_platforms)
-            echo
-            echo "### Server resources"
-            echo
-            if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-              echo "- BrowserClaw onboarding resources: \`$ONBOARD_RESULT\`"
-              echo "- BrowserClaw server resources: \`$SERVER_RESULT\`"
-            else
-              echo "- BrowserClaw server resources: \`skipped\`"
-            fi
-            echo
-            echo "### Extension CRX"
-            echo
-            if [ "$INPUT_EXTENSIONS" != "skip" ]; then
-              echo "- BrowserClaw extension: \`$EXTENSIONS_RESULT\`"
-            else
-              echo "- BrowserClaw extension: \`skipped\`"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Evaluate draft release gate
-        id: release_gate
-        run: |
-          set -euo pipefail
-
-          selected_platforms() {
-            case "$INPUT_PLATFORMS" in
-              all) printf '%s\n' linux windows macos ;;
-              linux|windows|macos) printf '%s\n' "$INPUT_PLATFORMS" ;;
-            esac
-          }
-
-          platform_result() {
-            case "$1" in
-              linux) echo "$LINUX_RESULT" ;;
-              windows) echo "$WINDOWS_RESULT" ;;
-              macos) echo "$MACOS_RESULT" ;;
-            esac
-          }
-
-          should_create=true
-          reasons=()
-
-          if [ "$INPUT_GITHUB_RELEASE_DRAFT" != "true" ]; then
-            should_create=false
-            reasons+=("github_release_draft=false")
-          fi
-          if [ "$INPUT_UPLOAD_TO_R2" != "true" ]; then
-            should_create=false
-            reasons+=("upload_to_r2=false")
-          fi
-          if [ -z "${VERSION:-}" ]; then
-            should_create=false
-            reasons+=("release version was not resolved")
-          fi
-          if [ "$PREFLIGHT_RESULT" != "success" ]; then
-            should_create=false
-            reasons+=("preflight result is $PREFLIGHT_RESULT")
-          fi
-          if [ "$INPUT_INCLUDE_SERVERS" = "true" ]; then
-            if [ "$ONBOARD_RESULT" != "success" ]; then
-              should_create=false
-              reasons+=("BrowserClaw onboarding result is $ONBOARD_RESULT")
-            fi
-            if [ "$SERVER_RESULT" != "success" ]; then
-              should_create=false
-              reasons+=("BrowserClaw server result is $SERVER_RESULT")
-            fi
-          fi
-          while IFS= read -r platform; do
-            result="$(platform_result "$platform")"
-            if [ "$result" != "success" ]; then
-              should_create=false
-              reasons+=("$platform result is $result")
-            fi
-          done < <(selected_platforms)
-          if [ "$INPUT_EXTENSIONS" != "skip" ] && [ "$EXTENSIONS_RESULT" != "success" ]; then
-            should_create=false
-            reasons+=("extension result is $EXTENSIONS_RESULT")
-          fi
-          if [ "$STAGE_UPDATES_RESULT" != "success" ]; then
-            should_create=false
-            reasons+=("staged feed result is $STAGE_UPDATES_RESULT")
-          fi
-
-          reason="ready"
-          if [ "${#reasons[@]}" -gt 0 ]; then
-            reason="$(printf '%s; ' "${reasons[@]}")"
-            reason="${reason%; }"
-          fi
-
-          {
-            echo "should_create=$should_create"
-            echo "reason=$reason"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo
-            if [ "$should_create" = "true" ]; then
-              echo "Draft GitHub release gate: ready."
-            else
-              echo "Draft GitHub release gate: skipped - $reason."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - uses: actions/checkout@v7
-        if: ${{ steps.release_gate.outputs.should_create == 'true' }}
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.candidate.outputs.candidate_sha }}
 
       - uses: astral-sh/setup-uv@v8.3.2
-        if: ${{ steps.release_gate.outputs.should_create == 'true' }}
 
-      - name: Create or refresh draft GitHub release
-        if: ${{ steps.release_gate.outputs.should_create == 'true' }}
+      - name: Download merged candidate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Download gate record
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.candidate.outputs.gate_artifact }}
+          path: ${{ runner.temp }}/gate
+
+      - name: Create or refresh browser draft
         working-directory: packages/browseros
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
+          uv run browseros release browser finalize \
+            --candidate "$RUNNER_TEMP/candidate/candidate.json" \
+            --gate "$RUNNER_TEMP/gate/gate.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --preview-dir "$RUNNER_TEMP/finalization/previews" \
+            --output "$RUNNER_TEMP/finalization/finalization.json" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
-          normalize_tag() {
-            local version="$1"
-            local major minor build _rest
-            IFS='.' read -r major minor build _rest <<< "$version"
-            echo "browserclaw/v$major.$minor.$build"
-          }
-
-          tag="$(normalize_tag "$VERSION")"
-          tag_uri="$(jq -rn --arg value "$tag" '$value | @uri')"
-          set +e
-          release_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri" 2>&1)"
-          release_probe_rc=$?
-          set -e
-          release_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$release_probe")"
-
-          if [ "$release_status" = "200" ] && [ "$release_probe_rc" -eq 0 ]; then
-            release_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$release_probe")"
-            is_draft="$(jq -r '.draft' <<< "$release_json")"
-            if [ "$is_draft" != "true" ]; then
-              echo "::error::GitHub release $tag already exists and is not a draft; refusing to modify live release assets."
-              exit 1
-            fi
-          elif [ "$release_status" = "404" ]; then
-            release_json=""
-          else
-            echo "::error::Could not inspect release $tag (HTTP ${release_status:-unknown}, gh rc=$release_probe_rc); refusing to assume it is absent."
-            exit 1
-          fi
-
-          set +e
-          tag_probe="$(gh api --include "repos/$GITHUB_REPOSITORY/commits/$tag_uri" 2>&1)"
-          tag_probe_rc=$?
-          set -e
-          tag_status="$(sed -n '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' <<< "$tag_probe")"
-          tag_json="$(awk 'body { print } /^[[:space:]]*$/ { body=1 }' <<< "$tag_probe")"
-          tag_absent=false
-          if [ "$tag_status" = "404" ]; then
-            tag_absent=true
-          elif [ "$tag_status" = "422" ]; then
-            tag_error="$(jq -r '.message // ""' <<< "$tag_json" 2>/dev/null || true)"
-            if [ "$tag_error" = "No commit found for SHA: $tag" ]; then
-              tag_absent=true
-            fi
-          fi
-          if [ "$tag_status" = "200" ] && [ "$tag_probe_rc" -eq 0 ]; then
-            actual_target="$(jq -r '.sha' <<< "$tag_json")"
-            if [ "$actual_target" != "$GITHUB_SHA" ]; then
-              echo "::error::Release tag $tag resolves to $actual_target, not workflow SHA $GITHUB_SHA. Delete/recreate the tag or dispatch a new version."
-              exit 1
-            fi
-          elif [ "$tag_absent" = "true" ]; then
-            if [ -n "$release_json" ]; then
-              target_commitish="$(jq -r '.target_commitish // ""' <<< "$release_json")"
-              if [ "$target_commitish" != "$GITHUB_SHA" ]; then
-                echo "::error::Untagged draft release $tag targets $target_commitish, not workflow SHA $GITHUB_SHA. Refusing to retarget a draft that may already contain assets; use a new version or recreate the draft."
-                exit 1
-              fi
-            fi
-          else
-            echo "::error::Could not resolve release tag $tag (HTTP ${tag_status:-unknown}, gh rc=$tag_probe_rc)."
-            exit 1
-          fi
-
-          uv run browseros release github create \
-            --version "$VERSION" \
-            --draft \
-            --product "$PRODUCT" \
-            --platforms "$INPUT_PLATFORMS" \
-            --macos-arch "$INPUT_MACOS_ARCH" \
-            --source-sha "$GITHUB_SHA" \
-            --workflow-run-id "$GITHUB_RUN_ID" \
-            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --target "$GITHUB_SHA"
+      - name: Upload finalization previews
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-finalization-browserclaw-${{ needs.candidate.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/finalization
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30

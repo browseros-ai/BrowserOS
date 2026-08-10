@@ -4,13 +4,12 @@ import {
   buildSidepanelPreparedSendMessagesRequest,
   prepareSidepanelSendMessagesRequest,
 } from './chat-session-request'
-import type { ChatMode } from './chat-types'
 import type { SidepanelChatTarget } from './sidepanel-chat-targets'
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
 
-describe('buildSidepanelPreparedSendMessagesRequest', () => {
-  it('keeps LLM targets on the existing /chat request body', () => {
+describe('chat request preparation', () => {
+  it('sends BrowserOS providers to the unified chat endpoint', () => {
     const request = buildSidepanelPreparedSendMessagesRequest({
       agentServerUrl: 'http://127.0.0.1:5151',
       target: llmTarget,
@@ -21,92 +20,52 @@ describe('buildSidepanelPreparedSendMessagesRequest', () => {
 
     expect(request.api).toBe('http://127.0.0.1:5151/chat')
     expect(request.body).toMatchObject({
-      message: 'Summarize this page',
-      conversationId,
+      target: { type: 'browseros', providerId: 'browseros' },
       provider: 'browseros',
-      providerType: 'browseros',
-      providerName: 'BrowserOS',
-      model: 'gpt-5',
-      mode: 'agent',
-      browserContext: {
-        activeTab: { id: 10, url: 'https://example.com', title: 'Example' },
-        enabledMcpServers: ['slack'],
-      },
-      userSystemPrompt: 'Be concise',
-      userWorkingDir: '/tmp/work',
-      previousConversation: [{ role: 'assistant', content: 'Prior answer' }],
-      selectedText: 'selected text',
-      selectedTextSource: {
-        url: 'https://example.com',
-        title: 'Example',
-      },
+      message: 'Summarize this page',
     })
   })
 
-  it('sends created-agent targets to the agent-id sidepanel route', () => {
+  it('sends ACP agents to the same endpoint without provider fields', () => {
     const request = buildSidepanelPreparedSendMessagesRequest({
       agentServerUrl: 'http://127.0.0.1:5151',
       target: acpTarget,
       fallbackProvider,
       message: 'Inspect the current tab',
-      ...commonRequestInput(),
-    })
-
-    expect(request.api).toBe(
-      'http://127.0.0.1:5151/agents/agent-codex/sidepanel/chat',
-    )
-    expect(request.body).toEqual({
-      conversationId,
-      agentSessionId: conversationId,
-      message: 'Inspect the current tab',
-      browserContext: {
-        activeTab: { id: 10, url: 'https://example.com', title: 'Example' },
-        enabledMcpServers: ['slack'],
-      },
-      userSystemPrompt: 'Be concise',
-      userWorkingDir: '/tmp/work',
-      selectedText: 'selected text',
-      selectedTextSource: {
-        url: 'https://example.com',
-        title: 'Example',
-      },
-    })
-  })
-
-  it('can send created-agent targets through the main agent session', () => {
-    const request = buildSidepanelPreparedSendMessagesRequest({
-      agentServerUrl: 'http://127.0.0.1:5151',
-      target: acpTarget,
-      fallbackProvider,
-      agentSessionId: 'main',
-      message: 'Inspect from new tab',
-      ...commonRequestInput(),
-    })
-
-    expect(request.body).toMatchObject({
-      conversationId,
-      agentSessionId: 'main',
-      message: 'Inspect from new tab',
-    })
-  })
-
-  it('uses fallback provider when no explicit target is selected', () => {
-    const request = buildSidepanelPreparedSendMessagesRequest({
-      agentServerUrl: 'http://127.0.0.1:5151',
-      target: undefined,
-      fallbackProvider,
+      attachments: [
+        {
+          mediaType: 'image/png',
+          data: 'data:image/png;base64,Zm9v',
+        },
+      ],
       ...commonRequestInput(),
     })
 
     expect(request.api).toBe('http://127.0.0.1:5151/chat')
-    expect(request.body).toMatchObject({
-      message: '',
-      provider: 'browseros',
-      model: 'gpt-5',
+    expect(request.body).toEqual({
+      target: { type: 'codex', agentId: acpTarget.agentId },
+      conversationId,
+      message: 'Inspect the current tab',
+      mode: 'agent',
+      browserContext: commonRequestInput().browserContext,
+      userSystemPrompt: 'Be concise',
+      userWorkingDir: '/tmp/work',
+      supportsImages: undefined,
+      previousConversation: commonRequestInput().previousConversation,
+      declinedApps: ['gmail'],
+      selectedText: 'selected text',
+      selectedTextSource: commonRequestInput().selectedTextSource,
+      attachments: [
+        {
+          mediaType: 'image/png',
+          data: 'data:image/png;base64,Zm9v',
+        },
+      ],
     })
+    expect('provider' in request.body).toBe(false)
   })
 
-  it('resolves the server URL every time a request is prepared', async () => {
+  it('resolves the server URL for every send', async () => {
     let port = 9200
     const resolveAgentServerUrl = async () => `http://127.0.0.1:${port++}`
 
@@ -114,14 +73,12 @@ describe('buildSidepanelPreparedSendMessagesRequest', () => {
       resolveAgentServerUrl,
       target: llmTarget,
       fallbackProvider,
-      message: 'First request',
       ...commonRequestInput(),
     })
     const second = await prepareSidepanelSendMessagesRequest({
       resolveAgentServerUrl,
       target: llmTarget,
       fallbackProvider,
-      message: 'Second request',
       ...commonRequestInput(),
     })
 
@@ -133,7 +90,7 @@ describe('buildSidepanelPreparedSendMessagesRequest', () => {
 function commonRequestInput() {
   return {
     conversationId,
-    mode: 'agent' as ChatMode,
+    mode: 'agent' as const,
     browserContext: {
       activeTab: { id: 10, url: 'https://example.com', title: 'Example' },
       enabledMcpServers: ['slack'],
@@ -156,12 +113,12 @@ const fallbackProvider: LlmProviderConfig = {
   id: 'browseros',
   type: 'browseros',
   name: 'BrowserOS',
-  modelId: 'gpt-5',
+  modelId: 'browseros-auto',
   supportsImages: true,
-  contextWindow: 128000,
-  temperature: 0.7,
-  createdAt: 1000,
-  updatedAt: 1000,
+  contextWindow: 200000,
+  temperature: 0.2,
+  createdAt: 1,
+  updatedAt: 1,
 }
 
 const llmTarget: SidepanelChatTarget = {
@@ -172,17 +129,15 @@ const llmTarget: SidepanelChatTarget = {
   provider: fallbackProvider,
 }
 
-const acpTarget: SidepanelChatTarget = {
+const acpTarget: Extract<SidepanelChatTarget, { kind: 'acp' }> = {
   kind: 'acp',
-  id: 'agent-codex',
+  id: '00000000-0000-4000-8000-000000000002',
   name: 'Review bot',
   type: 'acp',
-  agentId: 'agent-codex',
-  adapter: 'codex',
+  agentId: '00000000-0000-4000-8000-000000000002',
+  agentType: 'codex',
   adapterName: 'Codex',
   modelId: 'gpt-5.5',
   modelLabel: 'GPT-5.5',
-  modelControl: 'best-effort',
   reasoningEffort: 'medium',
-  reasoningEffortLabel: 'Medium',
 }

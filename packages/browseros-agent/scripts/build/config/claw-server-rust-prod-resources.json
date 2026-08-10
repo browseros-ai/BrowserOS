@@ -1,0 +1,12 @@
+{
+  "resources": [
+    {
+      "name": "BrowserOS neo skill",
+      "source": {
+        "type": "local",
+        "path": "resources/skills/browserclaw/SKILL.md"
+      },
+      "destination": "resources/skills/browserclaw/SKILL.md"
+    }
+  ]
+}

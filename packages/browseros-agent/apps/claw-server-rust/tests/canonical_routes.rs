@@ -934,7 +934,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "accepted": 2 }));
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 2, "stop": false }));
 
     let (status, _, bytes) = request_with_headers(
         &app.router,
@@ -946,7 +946,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "accepted": 0 }));
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 0, "stop": false }));
 
     let second_headers = [
         ("x-recording-tab-id", "102"),
@@ -966,7 +966,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1, "stop": false }));
 
     let (status, _, bytes) = request(
         &app.router,
@@ -1049,7 +1049,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1, "stop": false }));
 
     let (status, _, bytes) = request(
         &app.router,
@@ -1147,7 +1147,46 @@ async fn recording_ingest_accepts_bodies_larger_than_ten_mebibytes() -> anyhow::
     .await?;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1 }));
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1, "stop": false }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn recording_ingest_signals_stop_after_the_session_released_the_tab() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    // Claim then release a tab: its ownership has ended, so its recorder should stop.
+    app.state.session_tabs.enqueue_claim_tab_for_session(
+        202,
+        Some("target-x".to_string()),
+        "session-x".to_string(),
+        "convo-x".to_string(),
+        0,
+    );
+    app.state.session_tabs.drain_writes().await;
+    app.state
+        .session_tabs
+        .enqueue_release_claims_for_session("session-x".to_string());
+    app.state.session_tabs.drain_writes().await;
+
+    let headers = [
+        ("x-recording-tab-id", "202"),
+        (
+            "x-recording-document-id",
+            "33D25F3CF060E81B14070BC356FF1872",
+        ),
+        ("x-recording-batch-id", "batch-x"),
+    ];
+    let (status, _, bytes) = request_with_headers(
+        &app.router,
+        "POST",
+        "/api/v1/recordings/events",
+        Some("application/x-ndjson"),
+        &headers,
+        "{\"ts\":10}\n",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "accepted": 1, "stop": true }));
     Ok(())
 }
 

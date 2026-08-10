@@ -519,7 +519,7 @@ func printSummary(cfg config.Config, agentRoot string) {
 func targetLabel(target config.Target) string {
 	switch target {
 	case config.TargetClaw:
-		return "BrowserClaw"
+		return "BrowserOS neo"
 	default:
 		return "BrowserOS"
 	}

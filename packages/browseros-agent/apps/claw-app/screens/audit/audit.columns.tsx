@@ -1,6 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { ChevronRight } from 'lucide-react'
-import { AgentDot } from '@/components/audit/AgentDot'
+import { cn } from '@/lib/utils'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 import {
   abbreviateSequence,
@@ -16,10 +15,12 @@ import {
  * re-builds its internal column tree every render. Defining this
  * outside the component is the canonical stable-reference recipe.
  *
- * Editorial cockpit language: mono tabular numerics for grid data,
- * agent dot + mono-uppercase label for identity, LIVE / FAILED / STOPPED
- * folded inline into the agent cell so the row's identity carries
- * its state (DONE stays silent, no Status column).
+ * Ledger language: a cobalt header bar over a white card, agent
+ * identity as a blue link, the target in near-black at reading size,
+ * and the supporting grid data in the muted blue ink scale. Rows are
+ * not individually actionable — the whole row navigates — so there is
+ * no trailing affordance column. LIVE / FAILED / STOPPED fold inline
+ * into the agent cell; DONE stays silent, which is the common case.
  */
 export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
   {
@@ -27,9 +28,8 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     header: 'Agent',
     accessorKey: 'agentLabel',
     cell: ({ row }) => (
-      <div className="inline-flex items-center gap-2">
-        <AgentDot slug={row.original.slug} />
-        <span className="font-mono text-[11px] text-ink-2 uppercase tracking-[0.06em]">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 truncate text-[12px] text-ledger-link">
           {row.original.label}
         </span>
         {row.original.status === 'live' && <LiveInlineChip />}
@@ -37,14 +37,17 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
         {row.original.status === 'cancelled' && <StoppedInlineChip />}
       </div>
     ),
-    enableSorting: true,
+    enableSorting: false,
   },
   {
     id: 'title',
-    header: 'Title',
+    header: 'Target',
     accessorKey: 'title',
+    // system-ui rather than the app's Schibsted Grotesk sans: the target is
+    // the one cell a reader scans rather than skims, and the design calls
+    // for the platform UI face at reading size here.
     cell: ({ row }) => (
-      <span className="block truncate text-[13px] text-ink">
+      <span className="block truncate font-[system-ui,sans-serif] text-[13px] text-ledger-ink">
         {row.original.name}
       </span>
     ),
@@ -52,87 +55,77 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
   },
   {
     id: 'sequence',
-    header: 'Tools used',
+    header: 'Tool chain',
     accessorFn: (t) => t.toolSequence.join('/'),
+    // Four links, not the shared default of five: five overflows the 240px
+    // track for almost every real chain, and a CSS clip mid-word reads as a
+    // rendering bug next to the explicit trailing ellipsis. The wider
+    // cockpit tiles keep the default.
     cell: ({ row }) => (
-      <span className="block max-w-[240px] truncate font-mono text-[11.5px] text-ink-3">
-        {abbreviateSequence(row.original.toolSequence)}
+      <span className="block truncate text-[12px] text-ledger-ink-3">
+        {abbreviateSequence(row.original.toolSequence, 4)}
       </span>
     ),
     enableSorting: false,
   },
   {
-    id: 'tools',
-    header: 'Actions',
-    accessorFn: (t) => t.dispatchCount,
-    cell: ({ getValue }) => (
-      <span className="font-mono text-[11.5px] text-ink-2 tabular-nums">
-        {getValue<number>()}
-      </span>
-    ),
-    enableSorting: true,
-  },
-  {
     id: 'tokens',
     header: 'Tokens',
-    // Unmeasured sessions have no total; returning undefined + `sortUndefined: 'last'`
-    // sinks them to the bottom in BOTH sort directions instead of masquerading as 0
-    // (which would surface them first on an ascending sort).
     accessorFn: (t) => t.tokenUsage?.totalTokenEstimate,
     cell: ({ row }) => <TokensCell task={row.original} />,
-    sortUndefined: 'last',
-    sortingFn: 'basic',
-    enableSorting: true,
+    enableSorting: false,
   },
   {
     id: 'duration',
-    header: 'Dur.',
+    header: 'Duration',
     accessorFn: (t) => t.durationMs,
     cell: ({ getValue }) => (
-      <span className="font-mono text-[11.5px] text-ink-2 tabular-nums">
+      <span className="text-[12px] text-ledger-ink-2 tabular-nums">
         {formatDuration(getValue<number>())}
       </span>
     ),
-    sortingFn: 'basic',
-    enableSorting: true,
+    enableSorting: false,
   },
   {
     id: 'when',
     header: 'When',
     accessorKey: 'startedAt',
     cell: ({ getValue }) => (
-      <span className="font-mono text-[11.5px] text-ink-3 tabular-nums">
+      <span className="text-[12px] text-ledger-ink-3 tabular-nums">
         {formatRelative(getValue<number>(), Date.now())}
       </span>
-    ),
-    enableSorting: true,
-  },
-  {
-    id: 'chevron',
-    header: '',
-    cell: () => (
-      <ChevronRight
-        className="size-3.5 text-ink-4 opacity-0 transition-opacity group-hover:opacity-100"
-        aria-hidden
-      />
     ),
     enableSorting: false,
   },
 ]
 
 /**
- * Column ids whose cells + headers should be right-aligned. Used by
- * the Audit screen wrapper to decorate `<TableHead>` / `<TableCell>`
- * with `text-right`. Kept as a single source of truth so header +
- * cell alignment cannot drift.
+ * Column ids whose cells + headers are right-aligned. Used by the Audit
+ * screen wrapper to decorate `<TableHead>` / `<TableCell>` with
+ * `text-right`. Kept as a single source of truth so header + cell
+ * alignment cannot drift.
  */
-export const NUMERIC_COLUMN_IDS = new Set([
-  'tools',
-  'tokens',
-  'duration',
-  'when',
-  'chevron',
-])
+export const NUMERIC_COLUMN_IDS = new Set(['tokens', 'duration', 'when'])
+
+/**
+ * Per-column track widths for the `table-fixed` ledger. Every column is
+ * pinned except `title`, which absorbs the remaining width — that is what
+ * makes the truncation in the fixed columns land on a predictable edge
+ * instead of drifting with content.
+ *
+ * These are TRACK widths, so each one is the design's content width plus
+ * the 16px of cell padding around it (`CELL_PADDING` in Audit.tsx splits
+ * that as 8px + 8px, or 16px on the card's outer edges). Sizing them to
+ * the bare content width instead would shave 16px off every column and
+ * push the tool chain into permanent mid-word clipping.
+ */
+export const COLUMN_WIDTHS: Record<string, string> = {
+  agent: 'w-[260px]',
+  sequence: 'w-[288px]',
+  tokens: 'w-[88px]',
+  duration: 'w-[88px]',
+  when: 'w-[88px]',
+}
 
 /**
  * Session token consumption. Shows a compact total ("12.3k") with the exact
@@ -144,7 +137,7 @@ function TokensCell({ task }: { task: TaskSummary }) {
   if (!usage) {
     return (
       <span
-        className="font-mono text-[11.5px] text-ink-4 tabular-nums"
+        className="text-[12px] text-ledger-ink-3 tabular-nums"
         title="Token usage not measured for this session"
       >
         —
@@ -153,7 +146,7 @@ function TokensCell({ task }: { task: TaskSummary }) {
   }
   return (
     <span
-      className="font-mono text-[11.5px] text-ink-2 tabular-nums"
+      className="text-[12px] text-ledger-ink-2 tabular-nums"
       title={`${formatTokensFull(usage.totalTokenEstimate)} tokens`}
     >
       {formatTokensCompact(usage.totalTokenEstimate)}
@@ -161,38 +154,30 @@ function TokensCell({ task }: { task: TaskSummary }) {
   )
 }
 
+/**
+ * Exceptional-state pills. One geometry for all three so they read as a
+ * family; only Live carries a saturated fill. No dot and no animation —
+ * a run being live is a state to notice, not an alarm to chase.
+ */
+const STATE_CHIP =
+  '-my-[3px] inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] font-semibold text-[11px] leading-[14px]'
+
 function LiveInlineChip() {
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-[10px] text-accent uppercase tracking-[0.08em]">
-      <span
-        aria-hidden
-        className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_6px_hsl(221_90%_55%/0.5)]"
-      />
-      LIVE
+    <span
+      className={cn(STATE_CHIP, 'bg-cyanotype-live text-cyanotype-live-ink')}
+    >
+      Live
     </span>
   )
 }
 
 function FailedInlineChip() {
-  return (
-    <span className="inline-flex items-center gap-1 font-mono text-[10px] text-red-500 uppercase tracking-[0.08em]">
-      <span
-        aria-hidden
-        className="inline-block size-1.5 rounded-full bg-red-500"
-      />
-      FAILED
-    </span>
-  )
+  return <span className={cn(STATE_CHIP, 'bg-red-tint text-red')}>Failed</span>
 }
 
 function StoppedInlineChip() {
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-[10px] text-ink-3 uppercase tracking-[0.08em]">
-      <span
-        aria-hidden
-        className="inline-block size-1.5 rounded-full bg-ink-3"
-      />
-      STOPPED
-    </span>
+    <span className={cn(STATE_CHIP, 'bg-card-tint text-ink-3')}>Stopped</span>
   )
 }

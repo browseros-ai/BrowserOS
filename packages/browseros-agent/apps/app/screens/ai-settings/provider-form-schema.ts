@@ -1,5 +1,4 @@
 import { z } from 'zod/v3'
-import { isLocalRuntimeProviderType } from '../../lib/llm-providers/provider-runtime'
 
 const providerTypeEnum = z.enum([
   'moonshot',
@@ -16,21 +15,11 @@ const providerTypeEnum = z.enum([
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',
-  'codex',
-  'claude-code',
-  'acp-custom',
 ])
 
 const credentiallessProviderTypes: ReadonlySet<
   z.infer<typeof providerTypeEnum>
-> = new Set([
-  'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
-  'codex',
-  'claude-code',
-  'acp-custom',
-])
+> = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
 
 export const providerFormSchema = z
   .object({
@@ -51,9 +40,6 @@ export const providerFormSchema = z
       .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
       .optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
-    acpAgentId: z.string().optional(),
-    acpCommand: z.string().optional(),
-    acpFixedWorkspacePath: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'azure') {
@@ -119,20 +105,8 @@ export function isCredentiallessProviderType(
   return credentiallessProviderTypes.has(type)
 }
 
-/** Removes stale endpoint and credential fields from local runtime configs. */
 export function normalizeProviderFormValues(
   values: ProviderFormValues,
 ): ProviderFormValues {
-  if (!isLocalRuntimeProviderType(values.type)) return values
-
-  return {
-    ...values,
-    baseUrl: '',
-    apiKey: '',
-    resourceName: '',
-    accessKeyId: '',
-    secretAccessKey: '',
-    region: '',
-    sessionToken: '',
-  }
+  return values
 }

@@ -1,3 +1,5 @@
 mod builder;
 
-pub use builder::{ReplayEvent, ReplayMeta, ReplaySegmentMeta, ReplayService, ReplayTabMeta};
+pub use builder::{
+    LiveDocument, ReplayEvent, ReplayMeta, ReplaySegmentMeta, ReplayService, ReplayTabMeta,
+};

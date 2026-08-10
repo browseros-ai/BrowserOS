@@ -310,7 +310,7 @@ index 0000000000000000000000000000000000000000..08612fa1795d97550c56f02254ea8916
 +  const std::wstring display_version =
 +      base::UTF8ToWide(version_info::GetBrowserOSVersionNumber());
 +  win_sparkle_set_app_details(L"BrowserOS",
-+                              is_claw ? L"BrowserClaw" : L"BrowserOS",
++                              is_claw ? L"BrowserOS neo" : L"BrowserOS",
 +                              display_version.c_str());
 +
 +  const std::wstring build_version = base::UTF8ToWide(GetUpdateFeedVersion());

@@ -2,6 +2,7 @@
 """Upload module for BrowserOS build artifacts to Cloudflare R2"""
 
 import json
+import hashlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,55 @@ from ...lib.r2 import (
     get_release_json,
     upload_file_to_r2,
 )
+from ...release.prepared_resources import (
+    PreparedResourcesManifest,
+    load_prepared_resources,
+)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_manifest(ctx: Context) -> PreparedResourcesManifest:
+    manifest = ctx.artifact_registry.get("prepared_resources")
+    if not isinstance(manifest, PreparedResourcesManifest):
+        prepared = getattr(ctx, "prepared_resources", None)
+        if not isinstance(prepared, Path):
+            raise ValueError("Source release metadata requires prepared resources")
+        manifest = load_prepared_resources(prepared)
+    if manifest.product != ctx.product.id:
+        raise ValueError("Prepared-resource product does not match release metadata")
+    if manifest.source_sha != ctx.source_sha:
+        raise ValueError("Prepared-resource source SHA does not match release metadata")
+    if manifest.browser_version != ctx.get_semantic_version():
+        raise ValueError("Prepared-resource browser version does not match release metadata")
+    return manifest
+
+
+def _release_provenance(ctx: Context) -> dict[str, object]:
+    provenance: dict[str, object] = {
+        "source_sha": os.environ.get("GITHUB_SHA", ""),
+    }
+    if getattr(ctx, "resource_mode", "published") == "source":
+        manifest = _source_manifest(ctx)
+        provenance = {
+            "source_sha": manifest.source_sha,
+            "parent_sha": manifest.parent_sha,
+            "component_versions": dict(manifest.component_versions),
+            "common_manifest_digest": manifest.digest(),
+        }
+    provenance.update(
+        {
+            "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+            "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+        }
+    )
+    return {key: value for key, value in provenance.items() if value}
 
 
 def _get_platform() -> str:
@@ -103,14 +153,7 @@ def generate_release_json(
         "build_date": datetime.now(timezone.utc).isoformat(),
         "artifacts": {},
     }
-    actions_provenance = {
-        "source_sha": os.environ.get("GITHUB_SHA", ""),
-        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
-        "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-    }
-    release_data.update(
-        {key: value for key, value in actions_provenance.items() if value}
-    )
+    release_data.update(_release_provenance(ctx))
 
     # Sparkle (macOS) and WinSparkle (Windows) both compare against this
     # epoch-prefixed BrowserOS version in the appcast (Context.get_sparkle_version).
@@ -143,6 +186,9 @@ def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
 
     provenance_fields = (
         "source_sha",
+        "parent_sha",
+        "component_versions",
+        "common_manifest_digest",
         "workflow_run_id",
         "workflow_run_attempt",
     )
@@ -153,7 +199,8 @@ def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
     merged.update({key: value for key, value in new.items() if key != "artifacts"})
 
     artifacts = dict(existing.get("artifacts", {}))
-    artifacts.update(new.get("artifacts", {}))
+    for key, artifact in new.get("artifacts", {}).items():
+        artifacts[key] = {**artifacts.get(key, {}), **artifact}
     merged["artifacts"] = artifacts
     return merged
 
@@ -306,6 +353,7 @@ def upload_release_artifacts(
         metadata = {
             "filename": artifact_path.name,
             "size": artifact_path.stat().st_size,
+            "sha256": _sha256(artifact_path),
         }
 
         if extra_metadata and artifact_path.name in extra_metadata:
@@ -314,14 +362,10 @@ def upload_release_artifacts(
         artifact_metadata.append(metadata)
 
     release_data = generate_release_json(ctx, artifact_metadata, platform)
-    if platform in ("linux", "win"):
-        # Per-arch release jobs (linux x64/arm64, win x64/arm64) must be
-        # sequenced. A parallel fetch-merge-upload flow can still race and
-        # drop one architecture.
-        existing_release_data = get_release_json(
-            ctx.get_semantic_version(), platform, env, ctx.product.id
-        )
-        release_data = merge_release_metadata(existing_release_data, release_data)
+    existing_release_data = get_release_json(
+        ctx.get_semantic_version(), platform, env, ctx.product.id
+    )
+    release_data = merge_release_metadata(existing_release_data, release_data)
     release_json_path = ctx.get_dist_dir() / "release.json"
     release_json_path.write_text(json.dumps(release_data, indent=2))
 
@@ -341,5 +385,6 @@ def upload_release_artifacts(
         for artifact in release_data["artifacts"].values()
     ]
     ctx.artifact_registry.add("release_links", release_links)
+    ctx.artifact_registry.add("release_metadata", release_data)
 
     return True, release_data

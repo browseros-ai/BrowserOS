@@ -1,18 +1,18 @@
-/**
- * Cockpit hero. Editorial-cockpit direction: compressed vertical
- * space, left-aligned, Newsreader italic accent on "working on"
- * preserved as the app signature. Filters live in the section
- * header below, not here.
- */
 export function CockpitHero() {
   return (
-    <header className="pt-1">
-      <h1 className="font-extrabold text-3xl leading-[1.15] tracking-tight md:text-4xl">
-        What are your agents{' '}
-        <span className="font-medium font-serif text-accent italic">
+    <header>
+      <h1
+        className="flex flex-wrap items-baseline gap-[9px] pt-1 font-extrabold font-sans text-[36px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]"
+        data-cockpit-hero
+      >
+        <span data-cockpit-hero-segment="lead">What are your agents</span>{' '}
+        <span
+          className="font-bold text-cyanotype-blue italic"
+          data-cockpit-hero-segment="accent"
+        >
           working on
         </span>{' '}
-        right now?
+        <span data-cockpit-hero-segment="tail">right now?</span>
       </h1>
     </header>
   )

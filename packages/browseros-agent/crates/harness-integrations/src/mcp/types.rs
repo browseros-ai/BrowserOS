@@ -100,7 +100,6 @@ pub struct LinkInput {
 }
 
 impl LinkInput {
-    /// Creates a system-scope link request with overwrite protection enabled.
     pub fn new(server: McpServer, agent: AgentId) -> Self {
         Self {
             server,
@@ -113,6 +112,75 @@ impl LinkInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectEntryInput {
+    pub server_name: String,
+    pub agent: AgentId,
+    pub scope: AgentScope,
+    pub config_path: Option<PathBuf>,
+}
+
+impl InspectEntryInput {
+    pub fn new(server_name: impl Into<String>, agent: AgentId) -> Self {
+        Self {
+            server_name: server_name.into(),
+            agent,
+            scope: AgentScope::System,
+            config_path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn at_path(mut self, config_path: impl Into<PathBuf>) -> Self {
+        self.config_path = Some(config_path.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectedEntry {
+    pub server_name: String,
+    pub agent: AgentId,
+    pub scope: AgentScope,
+    pub config_path: PathBuf,
+    pub spec: McpServerSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrateServerInput {
+    pub source_name: String,
+    pub destination: McpServer,
+    pub allow_destination_overwrite: bool,
+    pub agent: AgentId,
+    pub scope: AgentScope,
+    pub config_path: Option<PathBuf>,
+    pub unmanaged_source_spec: Option<McpServerSpec>,
+}
+
+impl MigrateServerInput {
+    pub fn new(source_name: impl Into<String>, destination: McpServer, agent: AgentId) -> Self {
+        Self {
+            source_name: source_name.into(),
+            destination,
+            allow_destination_overwrite: true,
+            agent,
+            scope: AgentScope::System,
+            config_path: None,
+            unmanaged_source_spec: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrateServerSummary {
+    pub source_name: String,
+    pub destination_name: String,
+    pub agent: AgentId,
+    pub scope: AgentScope,
+    pub migrated: bool,
+    pub overwrote_foreign: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlinkInput {
     pub server_name: String,
     pub agent: AgentId,
@@ -121,7 +189,6 @@ pub struct UnlinkInput {
 }
 
 impl UnlinkInput {
-    /// Creates a system-scope unlink request that uses the manifest-recorded path.
     pub fn new(server_name: impl Into<String>, agent: AgentId) -> Self {
         Self {
             server_name: server_name.into(),
@@ -141,7 +208,6 @@ pub struct DisconnectInput {
 }
 
 impl DisconnectInput {
-    /// Creates a system-scope disconnect request that removes a last-link manifest entry.
     pub fn new(server_name: impl Into<String>, agent: AgentId) -> Self {
         Self {
             server_name: server_name.into(),

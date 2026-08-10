@@ -3,7 +3,7 @@ use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use tracing::warn;
 
-const NOT_CONNECTED: &str = "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserClaw and check the cockpit connection status; do not fall back to another browser tool.";
+const NOT_CONNECTED: &str = "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool.";
 
 /// Rejects calls until the server is attached to a live browser session.
 pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {

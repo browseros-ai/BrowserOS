@@ -20,11 +20,14 @@ interface StarterPromptTileProps {
    * rather than waiting for the next session poll.
    */
   onCopied?: () => void
+  /** `inline` puts Copy in the row; `block` stacks a full-width primary button. */
+  variant?: 'inline' | 'block'
 }
 
 export function StarterPromptTile({
   prompt,
   onCopied,
+  variant = 'inline',
 }: StarterPromptTileProps) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
@@ -37,6 +40,28 @@ export function StarterPromptTile({
       setCopied(false)
     }
   }
+
+  if (variant === 'block') {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start gap-2.5 rounded-xl border border-border-2 bg-card px-4 py-3.5">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+          <span className="text-[13.5px] text-ink leading-relaxed">
+            {prompt}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 font-semibold text-[13px] text-accent-foreground transition hover:opacity-90 active:scale-[0.99]"
+        >
+          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          {copied ? 'Copied' : 'Copy task'}
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center gap-3 rounded-xl border border-border-2 bg-card px-4 py-3.5">
       <Sparkles className="size-4 shrink-0 text-accent" />

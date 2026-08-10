@@ -1,4 +1,5 @@
-import type { MiddlewareHandler } from 'hono'
+import type { Context, MiddlewareHandler } from 'hono'
+import type { Env } from '../types'
 import { isLocalhostRequest } from './security'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
@@ -25,23 +26,19 @@ export function isTrustedAppOrigin(origin: string | undefined): boolean {
 
 export function requireTrustedAppOrigin(): MiddlewareHandler {
   return async (c, next) => {
-    const origin = c.req.header('origin')
-    if (origin) {
-      if (!isTrustedAppOrigin(origin)) {
-        return c.json({ error: 'Forbidden' }, 403)
-      }
-      return next()
-    }
-
-    // Some local reads arrive without an Origin header. Allow those only when
-    // the actual client socket is loopback. This avoids Host-header spoofing.
-    if (
-      ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
-      isLocalhostRequest(c)
-    ) {
+    if (isTrustedAppRequest(c)) {
       return next()
     }
 
     return c.json({ error: 'Forbidden' }, 403)
   }
+}
+
+export function isTrustedAppRequest(c: Context<Env>): boolean {
+  if (!isLocalhostRequest(c)) return false
+
+  const origin = c.req.header('origin')
+  if (origin) return isTrustedAppOrigin(origin)
+
+  return ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)
 }

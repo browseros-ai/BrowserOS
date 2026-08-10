@@ -32,7 +32,7 @@ import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { sentry } from '@/lib/sentry/sentry'
-import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
+import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
@@ -54,6 +54,7 @@ import type { IncompleteProvider } from './IncompleteProviderCard'
 import { IncompleteProvidersList } from './IncompleteProvidersList'
 import { LlmProvidersHeader } from './LlmProvidersHeader'
 import { McpPromoBanner } from './McpPromoBanner'
+import { NewCodingAgentDialog } from './NewCodingAgentDialog'
 import { NewProviderDialog } from './NewProviderDialog'
 import { ProviderTemplatesSection } from './ProviderTemplatesSection'
 import { partitionSyncedProviders } from './synced-providers'
@@ -180,6 +181,7 @@ export const BrowserOsAiPane: FC = () => {
   }, [deleteRemoteProvider, retiredProviderIds])
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
+  const [newAgentType, setNewAgentType] = useState<AcpAgentType | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [templateValues, setTemplateValues] = useState<
     Partial<LlmProviderConfig> | undefined
@@ -271,17 +273,8 @@ export const BrowserOsAiPane: FC = () => {
     setIsNewDialogOpen(true)
   }
 
-  const handleUseCodingAgentTemplate = (adapterId: HarnessAgentAdapter) => {
-    setTemplateValues({
-      type: adapterId === 'codex' ? 'codex' : 'claude-code',
-      name: adapterId === 'codex' ? 'Codex' : 'Claude Code',
-      baseUrl: '',
-      modelId: '',
-      supportsImages: true,
-      contextWindow: adapterId === 'codex' ? 400000 : 200000,
-      temperature: 0.2,
-    })
-    setIsNewDialogOpen(true)
+  const handleUseCodingAgentTemplate = (type: AcpAgentType) => {
+    setNewAgentType(type)
   }
 
   const handleEditProvider = (provider: LlmProviderConfig) => {
@@ -410,7 +403,6 @@ export const BrowserOsAiPane: FC = () => {
       <McpPromoBanner />
 
       <ProviderTemplatesSection
-        codingAdapters={coding.adapters}
         onCreateAgent={handleUseCodingAgentTemplate}
         onUseTemplate={handleUseTemplate}
       />
@@ -442,6 +434,14 @@ export const BrowserOsAiPane: FC = () => {
         onOpenChange={setIsNewDialogOpen}
         initialValues={templateValues}
         onSave={handleSaveProvider}
+      />
+
+      <NewCodingAgentDialog
+        type={newAgentType}
+        open={newAgentType !== null}
+        onOpenChange={(open) => {
+          if (!open) setNewAgentType(null)
+        }}
       />
 
       <NewProviderDialog

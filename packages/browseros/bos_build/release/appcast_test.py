@@ -182,7 +182,7 @@ class AppcastModuleTest(unittest.TestCase):
                 "artifacts": {
                     **_win_release("x64_installer")["artifacts"],
                     "x64_zip": _artifact(
-                        "BrowserClaw_v0.47.0.2_x64_installer.zip"
+                        "BrowserOS_neo_v0.47.0.2_x64_installer.zip"
                     ),
                 },
             },
@@ -195,10 +195,10 @@ class AppcastModuleTest(unittest.TestCase):
                 "workflow_run_attempt": "1",
                 "artifacts": {
                     "x64_appimage": _artifact(
-                        "BrowserClaw_v0.47.0.2_x64.AppImage"
+                        "BrowserOS_neo_v0.47.0.2_x64.AppImage"
                     ),
                     "x64_deb": _artifact(
-                        "BrowserClaw_v0.47.0.2_amd64.deb"
+                        "BrowserOS_neo_v0.47.0.2_amd64.deb"
                     ),
                 },
             },

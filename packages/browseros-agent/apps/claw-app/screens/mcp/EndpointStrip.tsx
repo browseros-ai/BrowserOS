@@ -22,21 +22,19 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em]">
-          {label}
-        </span>
+        <span className="text-[12px] text-cyanotype-muted">{label}</span>
         {hasValue && (
           <button
             type="button"
             onClick={copy}
             aria-label={`Copy ${label}`}
-            className="group inline-flex items-center gap-1 font-mono text-[10.5px] text-ink-3 uppercase tracking-[0.08em] transition-colors hover:text-accent"
+            className="group inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors hover:text-cyanotype-blue-hover"
           >
-            {copied ? 'copied ✓' : 'copy'}
+            {copied ? 'Copied ✓' : 'Copy'}
             {!copied && (
               <span
                 aria-hidden
-                className="transition-transform group-hover:translate-x-0.5"
+                className="font-mono text-[10.5px] text-ink-3 tracking-[0.08em] transition-transform group-hover:translate-x-0.5"
               >
                 →
               </span>
@@ -44,7 +42,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
           </button>
         )}
       </div>
-      <div className="overflow-hidden rounded-xl bg-ink-deep px-4 py-3">
+      <div className="overflow-hidden rounded-9 bg-cyanotype-blue px-4 py-3">
         {hasValue ? (
           <code
             className="block truncate font-mono text-[12.5px] text-white/95"

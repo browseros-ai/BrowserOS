@@ -13,6 +13,7 @@ const EXPECTED_TOOLS = [
   'download',
   'evaluate',
   'grep',
+  'history',
   'name_session',
   'navigate',
   'pdf',

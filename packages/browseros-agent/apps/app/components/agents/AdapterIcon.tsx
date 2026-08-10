@@ -1,14 +1,9 @@
 import { Bot, Cpu, Sparkles } from 'lucide-react'
 import type { FC } from 'react'
-import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
+import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 
-/**
- * Single icon component for any adapter the agent rail can render.
- * Falls back to a generic bot when the adapter is unknown so future
- * adapters land without a code change at the call site.
- */
 export interface AdapterIconProps {
-  adapter: HarnessAgentAdapter | 'unknown'
+  adapter: AcpAgentType | 'unknown'
   className?: string
 }
 
@@ -23,7 +18,7 @@ export const AdapterIcon: FC<AdapterIconProps> = ({ adapter, className }) => {
   }
 }
 
-export function adapterLabel(adapter: HarnessAgentAdapter | 'unknown'): string {
+export function adapterLabel(adapter: AcpAgentType | 'unknown'): string {
   switch (adapter) {
     case 'claude':
       return 'Claude Code'

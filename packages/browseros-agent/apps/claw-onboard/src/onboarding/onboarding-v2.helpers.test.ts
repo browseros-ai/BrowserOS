@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { BrowserOSImportSource } from './browseros-onboarding-api'
 import {
-  AGENT_LOGIN_ITEMS,
   completedImportItemCount,
   DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
   defaultImportItemsForSource,
@@ -9,11 +8,10 @@ import {
   importItemListLabel,
   importProgressTotal,
   importSourceSelectionChangeFor,
-  loginItemsForSource,
   MOCK_BROWSEROS_IMPORT_SOURCES,
+  OPTIONAL_IMPORT_ITEMS,
   STARTER_PROMPTS,
   sanitizeImportSelection,
-  selectableItemsForSource,
   selectedSourceById,
   splitImportSelection,
   startImportRequestFor,
@@ -78,15 +76,6 @@ describe('source selection helpers', () => {
     ).toBeNull()
   })
 
-  it('falls back to supported items when recommended items are empty', () => {
-    expect(
-      selectableItemsForSource({
-        ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
-        recommendedItems: [],
-      }),
-    ).toEqual(MOCK_BROWSEROS_IMPORT_SOURCES[0].supportedItems)
-  })
-
   it('sanitizes explicit item selections against supported items in source order', () => {
     expect(
       sanitizeImportSelection(MOCK_BROWSEROS_IMPORT_SOURCES[0], [
@@ -118,7 +107,7 @@ describe('source selection helpers', () => {
   it('builds the Chromium start-import request for one source', () => {
     expect(startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual({
       sourceId: 'chrome-work',
-      items: ['cookies', 'passwords'],
+      items: ['history', 'bookmarks', 'cookies', 'passwords', 'autofill'],
     })
   })
 
@@ -154,48 +143,63 @@ describe('source selection helpers', () => {
   })
 })
 
-describe('login-scoped import defaults', () => {
-  it('treats only cookies and passwords as agent login items', () => {
-    expect([...AGENT_LOGIN_ITEMS]).toEqual(['cookies', 'passwords'])
+describe('default and optional import items', () => {
+  it('treats only search engines and extensions as optional', () => {
+    expect([...OPTIONAL_IMPORT_ITEMS]).toEqual(['searchEngines', 'extensions'])
   })
 
-  it('picks the login items a profile actually supports', () => {
-    expect(loginItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual([
-      'cookies',
-      'passwords',
+  it('defaults every supported non-optional item', () => {
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords', 'autofill'])
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[1]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords', 'autofill'])
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[2]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords'])
+  })
+
+  it('uses supported items instead of Chromium recommendations', () => {
+    const partiallyRecommended: BrowserOSImportSource = {
+      ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      supportedItems: ['extensions', 'autofill', 'searchEngines', 'history'],
+      recommendedItems: ['extensions'],
+    }
+
+    expect(defaultImportItemsForSource(partiallyRecommended)).toEqual([
+      'autofill',
+      'history',
     ])
   })
 
-  // The whole point of the reframe: browsing setup must not ride along by
-  // default, because no MCP tool exposes any of it to an agent.
-  it('defaults to logins only, never the browsing setup', () => {
-    for (const source of MOCK_BROWSEROS_IMPORT_SOURCES) {
-      expect(defaultImportItemsForSource(source)).toEqual([
-        'cookies',
-        'passwords',
-      ])
-    }
-  })
-
-  // A profile with no logins must still offer something, or the step dead-ends
-  // on a disabled button the way it did before #1795.
-  it('falls back to the Chromium recommendation when a profile has no logins', () => {
-    const historyOnly: BrowserOSImportSource = {
+  it('leaves optional-only sources unchecked by default', () => {
+    const optionalOnly: BrowserOSImportSource = {
       ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
-      supportedItems: ['history', 'bookmarks'],
-      recommendedItems: ['history'],
+      supportedItems: ['extensions', 'searchEngines'],
+      recommendedItems: ['extensions'],
     }
 
-    expect(loginItemsForSource(historyOnly)).toEqual([])
-    expect(defaultImportItemsForSource(historyOnly)).toEqual(['history'])
+    expect(defaultImportItemsForSource(optionalOnly)).toEqual([])
+    expect(startImportRequestFor(optionalOnly)).toBeNull()
+    expect(startImportRequestFor(optionalOnly, ['searchEngines'])).toEqual({
+      sourceId: 'chrome-work',
+      items: ['searchEngines'],
+    })
   })
 
-  it('splits a selection into logins and opted-in extras', () => {
+  it('splits default and optional items without changing their order', () => {
     expect(
-      splitImportSelection(['history', 'cookies', 'extensions', 'passwords']),
+      splitImportSelection([
+        'history',
+        'searchEngines',
+        'cookies',
+        'extensions',
+        'passwords',
+      ]),
     ).toEqual({
-      loginItems: ['cookies', 'passwords'],
-      extraItems: ['history', 'extensions'],
+      defaultItems: ['history', 'cookies', 'passwords'],
+      optionalItems: ['searchEngines', 'extensions'],
     })
   })
 })

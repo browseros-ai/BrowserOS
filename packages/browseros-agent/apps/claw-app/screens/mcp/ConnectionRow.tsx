@@ -17,10 +17,11 @@ interface ConnectionRowProps {
  * icon square. The whole row is a single click target: clicking
  * anywhere on the row fires the currently visible action.
  *
- *   Not connected   click row -> connect. Row shows `connect →` as
- *                    the visual label (mono uppercase accent green).
+ *   Not connected   click row -> connect. Row shows `Connect →` as
+ *                    the visual label, in cobalt.
  *   Connected       click row -> disconnect. Row shows
- *                    `● connected · disconnect →` as the label.
+ *                    `Connected · Disconnect →` as the label. The green
+ *                    word carries the state, so there is no status dot.
  *
  * The row highlights on hover / focus / active with `bg-card-tint`
  * so the affordance is unambiguous. Errors render as a red hairline
@@ -45,7 +46,7 @@ export function ConnectionRow({
           : `Connect ${state.harness}`
       }
       className={cn(
-        'group block w-full border-border-2 border-t text-left transition-colors',
+        'group block w-full border-cyanotype-border border-t text-left transition-colors',
         'hover:bg-card-tint focus-visible:bg-card-tint focus-visible:outline-none',
         'disabled:cursor-not-allowed disabled:opacity-70',
       )}
@@ -53,11 +54,11 @@ export function ConnectionRow({
       <div className="flex items-center gap-3 px-2 py-3">
         <HarnessIcon harness={state.harness} className="size-5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="font-semibold text-[14px] text-ink">
+          <div className="font-semibold text-[14px] text-cyanotype-ink">
             {state.harness}
           </div>
           {state.installed && state.configPath && (
-            <div className="truncate font-mono text-[11px] text-ink-3">
+            <div className="truncate font-mono text-[12px] text-cyanotype-muted">
               {state.configPath}
             </div>
           )}
@@ -86,24 +87,15 @@ function RowAction({
   if (state.installed) {
     return (
       <div className="flex shrink-0 items-center gap-3">
-        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em]">
-          <span
-            aria-hidden
-            className="inline-block size-1.5 rounded-full bg-green"
-          />
-          connected
+        <span className="font-semibold text-[12px] text-cyanotype-live-text">
+          Connected
         </span>
-        <span aria-hidden className="text-ink-4">
+        <span aria-hidden className="text-[16px] text-cyanotype-border">
           ·
         </span>
-        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em] transition-colors group-hover:text-ink">
-          disconnect
-          <span
-            aria-hidden
-            className="transition-transform group-hover:translate-x-0.5"
-          >
-            →
-          </span>
+        <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-muted transition-colors group-hover:text-cyanotype-ink">
+          Disconnect
+          <ActionArrow />
         </span>
       </div>
     )
@@ -111,17 +103,23 @@ function RowAction({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]',
-        'transition-colors group-hover:text-accent-2',
+        'inline-flex shrink-0 items-center gap-1.5 text-[12px] text-cyanotype-blue',
+        'transition-colors group-hover:text-cyanotype-blue-hover',
       )}
     >
-      connect
-      <span
-        aria-hidden
-        className="transition-transform group-hover:translate-x-0.5"
-      >
-        →
-      </span>
+      Connect
+      <ActionArrow />
+    </span>
+  )
+}
+
+function ActionArrow() {
+  return (
+    <span
+      aria-hidden
+      className="font-mono text-[11px] tracking-[0.08em] transition-transform group-hover:translate-x-0.5"
+    >
+      →
     </span>
   )
 }

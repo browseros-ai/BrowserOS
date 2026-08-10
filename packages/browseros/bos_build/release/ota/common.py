@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Common utilities for OTA update modules.
-
-Appcast rendering/parsing lives in release/feeds (the FeedSpec table owns
-titles, links, and key naming); this module keeps the server bundle
-mechanics and re-exports the feed types its callers historically imported.
-"""
+"""Common utilities for OTA update modules."""
 
 import zipfile
 from pathlib import Path
 from typing import List, Optional
 
-from ...lib.utils import log_error, log_success
-
-# Re-exported so callers (and ota/__init__.py) can get sparkle_sign_file
-# from ota.common alongside the other OTA helpers.
 from ...lib.sparkle import sparkle_sign_file as sparkle_sign_file
+from ...lib.utils import log_error, log_success
+from ..feeds.publisher import FeedPublisher
 from ..feeds.render import (
     ExistingAppcast as ExistingAppcast,
     SignedArtifact as SignedArtifact,
@@ -34,11 +27,7 @@ SERVER_PLATFORMS = [
 
 
 def find_server_resources_dir(binaries_dir: Path, platform: dict) -> Optional[Path]:
-    """Return the extracted ``resources/`` dir for a platform, or ``None``.
-
-    ``binaries_dir`` is the temp root created by ``_download_artifacts``; each
-    platform lives at ``<binaries_dir>/<target>/resources/``.
-    """
+    """Return a platform's extracted resources directory when present."""
     target = platform.get("target", platform["name"].replace("_", "-"))
     resources = binaries_dir / target / "resources"
     return resources if resources.is_dir() else None
@@ -57,12 +46,7 @@ def generate_server_appcast(
 
 
 def merge_base_appcast(publisher, spec: FeedSpec, staging_path: Path) -> Optional[ExistingAppcast]:
-    """Same-version merge base for a server appcast: live feed first.
-
-    A stale checkout's git-tracked staging copy must not silently drop (or
-    resurrect) platforms already live for this version; the staging file is
-    only the fallback when there is no readable live object.
-    """
+    """Choose the live appcast as the merge base before local staging."""
     live = publisher.fetch_live(spec.key)
     if live is not None:
         parsed = parse_server_appcast_content(live)
@@ -73,12 +57,7 @@ def merge_base_appcast(publisher, spec: FeedSpec, staging_path: Path) -> Optiona
 
 
 def promote_appcast_content(source_content: str, target_spec: FeedSpec) -> str:
-    """Re-render an appcast under another channel's spec (title/link swap).
-
-    Version, pubDate and enclosures are preserved; promoting alpha→prod goes
-    through render so the prod key can never carry alpha channel metadata
-    (the historical byte-copy bug).
-    """
+    """Re-render an appcast under another channel's feed specification."""
     existing = parse_server_appcast_content(source_content)
     if existing is None:
         raise ValueError(
@@ -92,13 +71,7 @@ def promote_appcast_content(source_content: str, target_spec: FeedSpec) -> str:
 
 
 def create_server_bundle_zip(resources_dir: Path, output_zip: Path) -> bool:
-    """Zip an extracted ``resources/`` tree into a Sparkle payload.
-
-    Produces entries like ``resources/bin/browseros_server`` and
-    ``resources/bin/third_party/bun`` — mirroring what the agent build
-    staged and what the Chromium build bakes into the installed app.
-    File modes are preserved by ``ZipFile.write`` so executable bits survive.
-    """
+    """Zip an extracted resources tree into a Sparkle payload."""
     if not resources_dir.is_dir():
         log_error(f"Resources dir not found: {resources_dir}")
         return False
@@ -119,6 +92,5 @@ def create_server_bundle_zip(resources_dir: Path, output_zip: Path) -> bool:
 
 
 def get_appcast_path(channel: str = "alpha", bundle_id: str = "browseros-server") -> Path:
-    """Local staging path in config/appcast for a bundle+channel appcast."""
-    appcast_dir = Path(__file__).parent.parent.parent / "config" / "appcast"
-    return appcast_dir / server_feed(bundle_id, channel).key
+    """Return the tracked staging path for a server appcast."""
+    return FeedPublisher().staging_path(server_feed(bundle_id, channel))

@@ -113,6 +113,9 @@ afterEach(() => {
 
 const { Mcp } = await import('./Mcp')
 const { HeroCard } = await import('./HeroCard')
+const { COWORK_REQUIREMENT_LINE, EXTENSION_DOWNLOAD_URL } = await import(
+  './install-guide.data'
+)
 
 function renderApp(): string {
   const client = new QueryClient({
@@ -131,10 +134,10 @@ describe('Mcp (editorial)', () => {
   it('renders the editorial hero without exposing the fallback endpoint before pref resolution', () => {
     const html = renderApp()
     expect(html).toContain('MCP')
-    expect(html).toContain('every')
-    expect(html).toContain('harness.')
+    expect(html).toContain('One endpoint, every harness.')
+    expect(html).not.toContain('font-serif')
     expect(html).not.toContain('http://127.0.0.1:9200/mcp')
-    expect(html).not.toContain('copy')
+    expect(html).not.toContain('Copy')
   })
 
   it('renders the endpoint copy strip once the resolved URL is available', () => {
@@ -145,7 +148,7 @@ describe('Mcp (editorial)', () => {
     expect(html).toContain('http://127.0.0.1:9512/mcp')
     expect(html).not.toContain('/mcp/claude-code')
     expect(html).not.toContain('/cockpit')
-    expect(html).toContain('copy')
+    expect(html).toContain('Copy')
   })
 
   it('does NOT render the removed CLI snippet block', () => {
@@ -178,21 +181,32 @@ describe('Mcp (editorial)', () => {
     expect(html).not.toContain('OpenClaw')
   })
 
-  it('renders the Claude Desktop extension callout linking to the repo install steps', () => {
+  it('renders the Claude Desktop callout as an in-app guide trigger, not a repo link', () => {
     const html = renderApp()
     expect(html).toContain('Claude Desktop')
     expect(html).toContain('Give Claude Desktop a real browser.')
-    expect(html).toContain('Also works with Cowork.')
-    expect(html).toContain(
+    expect(html).toContain('Show me how')
+    expect(html).toContain(COWORK_REQUIREMENT_LINE)
+    // The walkthrough replaced the link-out; nothing here should leave the app.
+    expect(html).not.toContain(
       'https://github.com/browseros-ai/browserclaw-claude-desktop#install-the-extension',
     )
+    expect(html).not.toContain('Also works with Cowork.')
   })
 
-  it('renders editorial state voices (silent success, mono uppercase action text)', () => {
+  it('keeps the install walkthrough closed until the callout is activated', () => {
     const html = renderApp()
-    expect(html).toMatch(/>\s*connect\s*/)
-    expect(html).toMatch(/>\s*connected\s*/)
-    expect(html).toMatch(/>\s*disconnect\s*/)
+    expect(html).not.toContain('Install BrowserOS neo')
+    expect(html).not.toContain(EXTENSION_DOWNLOAD_URL)
+  })
+
+  it('renders the row action voices in title case with no status dot', () => {
+    const html = renderApp()
+    expect(html).toMatch(/>Connect</)
+    expect(html).toMatch(/>Connected</)
+    expect(html).toMatch(/>Disconnect</)
+    // The green word carries the state; the mock has no dot.
+    expect(html).not.toContain('rounded-full bg-green')
   })
 
   it('does NOT render the removed floating footer paragraph', () => {

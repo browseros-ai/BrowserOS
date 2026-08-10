@@ -38,13 +38,13 @@ index ee62888f89705a08a95f130505ebfafb246f4bc2..a0835e7f66dd12edeed11c672368f2d6
 +#if BUILDFLAG(BROWSEROS_PRODUCT_BROWSERCLAW)
 +inline constexpr wchar_t kProductPathName[] = L"BrowserClaw";
 +inline constexpr ProductInstallIdentity kProductInstallIdentity = {
-+    .base_app_name = L"BrowserClaw",
++    .base_app_name = L"BrowserOS neo",
 +    .base_app_id = L"BrowserClaw",
 +    .browser_prog_id_prefix = L"BClawHTML",
-+    .browser_prog_id_description = L"BrowserClaw HTML Document",
++    .browser_prog_id_description = L"BrowserOS neo HTML Document",
 +    .direct_launch_url_scheme = "browserclaw",
 +    .pdf_prog_id_prefix = L"BClawPDF",
-+    .pdf_prog_id_description = L"BrowserClaw PDF Document",
++    .pdf_prog_id_description = L"BrowserOS neo PDF Document",
 +    .active_setup_guid = L"{E9E65674-914E-4A29-83A9-A98D407446EC}",
 +    .legacy_command_execute_clsid = L"",
 +    .toast_activator_clsid = {0xD0A19C03,

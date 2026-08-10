@@ -541,6 +541,8 @@ export interface components {
     AppendRecordingEventsResponse: {
       /** Format: int64 */
       accepted: number
+      /** @description True when the tab's session has ended and the recorder should stop. */
+      stop: boolean
     }
     ToolEvent: {
       name: string

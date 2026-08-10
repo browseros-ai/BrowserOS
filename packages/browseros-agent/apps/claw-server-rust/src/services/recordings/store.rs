@@ -65,6 +65,17 @@ pub struct RetentionSweepResult {
     pub claims_deleted: u64,
 }
 
+/// Outcome of appending a batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchAppend {
+    /// True when this batch was newly persisted (false for a duplicate accept).
+    pub accepted: bool,
+    /// The document's committed byte length after this batch, when it added
+    /// events; `None` for a duplicate or an empty batch. Live subscribers fan a
+    /// batch out only when this exceeds the length their bootstrap already read.
+    pub committed_len: Option<i64>,
+}
+
 /// One step of migrating a document's rrweb payload from the SQLite blob to its
 /// on-disk replay file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +123,7 @@ impl RecordingStore {
         events: &[RecordingEventInput],
         batch_id: &str,
         has_gap: bool,
-    ) -> AppResult<bool> {
+    ) -> AppResult<BatchAppend> {
         let document_lock = self.lock_for(document_id).await;
         let guard = document_lock.lock().await;
         let result = self
@@ -131,12 +142,18 @@ impl RecordingStore {
         events: &[RecordingEventInput],
         batch_id: &str,
         has_gap: bool,
-    ) -> AppResult<bool> {
+    ) -> AppResult<BatchAppend> {
         if self.index.batch_accepted(document_id, batch_id).await? {
-            return Ok(false);
+            return Ok(BatchAppend {
+                accepted: false,
+                committed_len: None,
+            });
         }
         if events.is_empty() {
-            return Ok(true);
+            return Ok(BatchAppend {
+                accepted: true,
+                committed_len: None,
+            });
         }
         let mut payload = String::new();
         for event in events {
@@ -183,7 +200,10 @@ impl RecordingStore {
                 payload_bytes,
             })
             .await?;
-        Ok(true)
+        Ok(BatchAppend {
+            accepted: true,
+            committed_len: Some(payload_bytes),
+        })
     }
 
     /// Appends the batch payload to the document's `replays/` file. Truncates to
@@ -224,6 +244,17 @@ impl RecordingStore {
     /// the DB blob for a document that predates the file migration.
     async fn load_payload(&self, document_id: &str) -> AppResult<Option<String>> {
         let committed = self.index.committed_payload_bytes(document_id).await?;
+        self.load_payload_at(document_id, committed).await
+    }
+
+    /// Loads the committed payload bounded to an already-read committed length,
+    /// so a caller that also needs the length reads it once and the file view
+    /// and the length can never disagree.
+    async fn load_payload_at(
+        &self,
+        document_id: &str,
+        committed: i64,
+    ) -> AppResult<Option<String>> {
         if committed > 0 {
             let path = self.replay_path_for(document_id);
             let bytes = match fs::read(&path).await {
@@ -261,6 +292,21 @@ impl RecordingStore {
             return Ok(Vec::new());
         };
         Ok(read_payload_range(&payload, from, to))
+    }
+
+    /// Reads a document's committed events together with the committed byte
+    /// length the read was bounded to. A live subscriber forwards only batches
+    /// whose end offset exceeds this length: batches are atomic and contiguous,
+    /// so the cutoff is exact and the bootstrap never overlaps or gaps the live
+    /// tail. Reads the length once and reuses it for the file view so the two
+    /// cannot drift.
+    pub async fn read_committed(&self, document_id: &str) -> AppResult<(Vec<RecordedEvent>, i64)> {
+        let committed = self.index.committed_payload_bytes(document_id).await?;
+        let events = match self.load_payload_at(document_id, committed).await? {
+            Some(payload) => read_payload_range(&payload, i64::MIN, i64::MAX),
+            None => Vec::new(),
+        };
+        Ok((events, committed))
     }
 
     pub async fn read_legacy_range(
@@ -734,6 +780,7 @@ mod tests {
                     false
                 )
                 .await?
+                .accepted
         );
         let recreated = RecordingStore::new(
             store.root.clone(),
@@ -746,10 +793,46 @@ mod tests {
             !recreated
                 .append_batch(document_id, 11, None, &[event(100)], "batch-a", false)
                 .await?
+                .accepted
         );
         assert_eq!(index.stream_count().await?, 1);
         assert!(index.batch_exists(document_id, "batch-a").await?);
         assert_eq!(recreated.read_range(document_id, 100, 150).await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_committed_cutoff_is_the_appended_batch_boundary() -> anyhow::Result<()> {
+        let (_dir, _index, store) = setup().await?;
+        let doc = "018f47a7-1c2b-7def-8123-0123456789ab";
+
+        let a = store
+            .append_batch(doc, 11, None, &[event(100), event(150)], "batch-a", false)
+            .await?;
+        let (events_a, cutoff_a) = store.read_committed(doc).await?;
+        assert_eq!(events_a.len(), 2);
+        // A live batch tags itself with the committed length the bootstrap reads
+        // back, so the subscriber's `end_offset <= cutoff` test is on one scale.
+        assert_eq!(a.committed_len, Some(cutoff_a));
+
+        let b = store
+            .append_batch(doc, 11, None, &[event(200)], "batch-b", false)
+            .await?;
+        let (events_ab, cutoff_b) = store.read_committed(doc).await?;
+        assert_eq!(events_ab.len(), 3);
+        assert_eq!(b.committed_len, Some(cutoff_b));
+        // Monotonic: batch-b lies entirely past batch-a's cutoff, so a subscriber
+        // bootstrapped at cutoff_a forwards it exactly once (no gap, no dupe).
+        assert!(cutoff_b > cutoff_a);
+        assert!(b.committed_len > a.committed_len);
+
+        // A duplicate re-accept advances nothing and is never fanned out.
+        let dup = store
+            .append_batch(doc, 11, None, &[event(200)], "batch-b", false)
+            .await?;
+        assert!(!dup.accepted);
+        assert_eq!(dup.committed_len, None);
+        assert_eq!(store.read_committed(doc).await?.1, cutoff_b);
         Ok(())
     }
 
@@ -891,6 +974,7 @@ mod tests {
             store
                 .append_batch(doc, 11, None, &[event(30)], "new-batch", false)
                 .await?
+                .accepted
         );
 
         // The inline extraction consumed the blob, so migration has nothing left

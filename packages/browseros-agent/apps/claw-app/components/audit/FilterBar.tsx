@@ -70,7 +70,7 @@ export function FilterBar({
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+              className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
             />
           }
         >
@@ -84,7 +84,10 @@ export function FilterBar({
           )}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="ph-no-capture min-w-52">
+        <DropdownMenuContent
+          align="start"
+          className="ph-no-capture min-w-52 bg-popover before:hidden"
+        >
           <DropdownMenuItem onClick={() => onAgentChange(null)}>
             <span className="flex-1">All</span>
             {selectedAgentSlug === null && <Check className="size-3.5" />}
@@ -111,14 +114,17 @@ export function FilterBar({
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+              className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
             />
           }
         >
           {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
           <ChevronDown className="size-3 text-ink-3" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="ph-no-capture min-w-44">
+        <DropdownMenuContent
+          align="start"
+          className="ph-no-capture min-w-44 bg-popover before:hidden"
+        >
           <DropdownMenuItem onClick={() => onStatusChange(null)}>
             <span className="flex-1">All</span>
             {selectedStatus === null && <Check className="size-3.5" />}
@@ -145,7 +151,7 @@ export function FilterBar({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8 gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em] hover:bg-card-tint"
+                className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
               />
             }
           >
@@ -154,7 +160,7 @@ export function FilterBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto"
+            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto bg-popover before:hidden"
           >
             <DropdownMenuItem onClick={() => onSiteChange(null)}>
               <span className="flex-1">All</span>
@@ -179,14 +185,17 @@ export function FilterBar({
       )}
 
       <div className="relative ml-auto flex items-center">
-        <Search className="absolute left-2.5 size-3.5 text-ink-3" aria-hidden />
+        <Search
+          className="absolute left-2.5 z-10 size-3.5 text-ink-3"
+          aria-hidden
+        />
         <Input
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
           placeholder="search sessions..."
           // pr-7 reserves space for the inline clear button so the
           // text never sits under the icon.
-          className="h-8 w-64 border-none bg-transparent pr-7 pl-8 font-mono text-[11.5px] text-ink placeholder:text-ink-3 focus-visible:bg-card-tint focus-visible:ring-0"
+          className="h-8 w-64 rounded-9 border-none bg-card pr-7 pl-8 font-mono text-[13px] text-ink shadow-xs placeholder:text-ink-3 focus-visible:ring-0"
         />
         {localSearch.length > 0 && (
           <button
@@ -207,25 +216,13 @@ export function FilterBar({
 function StatusPill({ status }: { status: TaskStatus }) {
   if (status === 'live') {
     return (
-      <span className="inline-flex items-center gap-1 text-accent">
-        <span
-          aria-hidden
-          className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent"
-        />
+      <span className="inline-flex items-center rounded-full bg-cyanotype-live px-2.5 py-[3px] font-semibold text-[11px] text-cyanotype-live-ink leading-[14px]">
         Live
       </span>
     )
   }
   if (status === 'failed') {
-    return (
-      <span className="inline-flex items-center gap-1 text-red-500">
-        <span
-          aria-hidden
-          className="inline-block size-1.5 rounded-full bg-red-500"
-        />
-        Failed
-      </span>
-    )
+    return <span className="text-red-500">Failed</span>
   }
   if (status === 'cancelled') return <span>Stopped</span>
   return <span>Done</span>

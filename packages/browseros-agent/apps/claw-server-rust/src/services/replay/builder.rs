@@ -60,10 +60,65 @@ pub struct ReplayService {
     index: Arc<RecordingIndex>,
 }
 
+/// The recording document a session's live preview should currently follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveDocument {
+    pub document_id: String,
+    pub tab_id: i64,
+    pub target_id: Option<String>,
+}
+
 impl ReplayService {
     #[must_use]
     pub fn new(recordings: Arc<RecordingStore>, index: Arc<RecordingIndex>) -> Arc<Self> {
         Arc::new(Self { recordings, index })
+    }
+
+    /// The document a session's live preview should follow: the most recently
+    /// active document the session owns, optionally pinned to one browser tab.
+    /// Returns None when the session has no recorded document yet. Resolution is
+    /// scoped to the session's own tab-ownership windows, so it cannot surface
+    /// another session's recording.
+    pub async fn live_document(
+        &self,
+        session_id: &str,
+        browser_tab_id: Option<i64>,
+    ) -> AppResult<Option<LiveDocument>> {
+        // stream_matches carries every window the session ever owned, including
+        // released ones, because replay reconstruction needs them. Live follow
+        // wants only the tab the session is currently driving, so an open claim
+        // (released_at IS NULL) is required; a fully released session yields None
+        // and the caller transitions the stream to idle.
+        let best = self
+            .index
+            .stream_matches(session_id)
+            .await?
+            .into_iter()
+            .filter(|row| row.released_at.is_none())
+            .filter(|row| browser_tab_id.is_none_or(|tab| row.tab_id == tab))
+            .max_by_key(|row| row.last_event_at);
+        Ok(best.map(|row| LiveDocument {
+            document_id: row.document_id,
+            tab_id: row.tab_id,
+            target_id: row.target_id,
+        }))
+    }
+
+    /// All committed rrweb events for one document, oldest first, for
+    /// bootstrapping a live preview.
+    /// A document's committed events with the committed byte length they were
+    /// read at, so a live subscriber forwards only batches past that cutoff.
+    pub async fn document_events_committed(
+        &self,
+        document_id: &str,
+    ) -> AppResult<(Vec<RecordedEvent>, i64)> {
+        self.recordings.read_committed(document_id).await
+    }
+
+    /// Batch ids already durably accepted for a document, so a live subscriber
+    /// can de-duplicate a forwarded batch against what its bootstrap captured.
+    pub async fn accepted_batch_ids(&self, document_id: &str) -> AppResult<Vec<String>> {
+        self.index.accepted_batch_ids(document_id).await
     }
 
     pub async fn read_session(&self, session_id: &str) -> AppResult<Vec<ReplayEvent>> {
@@ -395,6 +450,177 @@ mod tests {
         assert_eq!(meta.tabs.len(), 1);
         assert_eq!(meta.tabs[0].segments.len(), 2);
         assert!(!meta.complete);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_document_follows_newest_owned_tab_can_pin_and_never_leaks_sessions()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        // session-a owns tab 11 (older) and tab 12 (newest). session-b owns tab
+        // 13, whose newest event predates session-a's tab 12: a global max would
+        // wrongly pick tab 12, so returning tab 13 proves per-session scoping.
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ab",
+                11,
+                Some("target-a"),
+                &[event(100, "a")],
+                "batch-a",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ac",
+                12,
+                Some("target-b"),
+                &[event(200, "b")],
+                "batch-b",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ad",
+                13,
+                Some("target-c"),
+                &[event(150, "c")],
+                "batch-c",
+                false,
+            )
+            .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 11, Some("target-a"), 0, None)
+            .await?;
+        index
+            .insert_session_tab("session-a", "agent-a", 12, Some("target-b"), 0, None)
+            .await?;
+        index
+            .insert_session_tab("session-b", "agent-b", 13, Some("target-c"), 0, None)
+            .await?;
+        // Released ownership windows are historical, not live. Both tabs below
+        // have release timestamps at or after their events, so stream_matches
+        // still returns them for replay; only live follow must exclude them.
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789ae",
+                14,
+                Some("target-d"),
+                &[event(300, "d")],
+                "batch-d",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789af",
+                15,
+                Some("target-e"),
+                &[event(200, "e")],
+                "batch-e",
+                false,
+            )
+            .await?;
+        recordings
+            .append_batch(
+                "018f47a7-1c2b-7def-8123-0123456789b0",
+                16,
+                Some("target-f"),
+                &[event(100, "f")],
+                "batch-f",
+                false,
+            )
+            .await?;
+        // session-c: tab 14 released (newer event), tab 15 open (older event).
+        index
+            .insert_session_tab("session-c", "agent-c", 14, Some("target-d"), 0, Some(500))
+            .await?;
+        index
+            .insert_session_tab("session-c", "agent-c", 15, Some("target-e"), 0, None)
+            .await?;
+        // session-d: its only tab is released.
+        index
+            .insert_session_tab("session-d", "agent-d", 16, Some("target-f"), 0, Some(200))
+            .await?;
+        let replay = ReplayService::new(recordings, index);
+
+        // Auto-follow resolves to the most recently active owned document.
+        let Some(live) = replay.live_document("session-a", None).await? else {
+            anyhow::bail!("expected a live document");
+        };
+        assert_eq!(live.tab_id, 12);
+        assert_eq!(live.document_id, "018f47a7-1c2b-7def-8123-0123456789ac");
+
+        // Pinning follows the requested owned tab instead.
+        let Some(pinned) = replay.live_document("session-a", Some(11)).await? else {
+            anyhow::bail!("expected a pinned document");
+        };
+        assert_eq!(pinned.tab_id, 11);
+        assert_eq!(pinned.document_id, "018f47a7-1c2b-7def-8123-0123456789ab");
+
+        // Scoping: session-b sees only its own tab 13, never session-a's newer tab.
+        let Some(other) = replay.live_document("session-b", None).await? else {
+            anyhow::bail!("expected session-b's own document");
+        };
+        assert_eq!(other.tab_id, 13);
+
+        // An unknown session and an unowned tab both resolve to nothing.
+        assert!(
+            replay
+                .live_document("session-unknown", None)
+                .await?
+                .is_none()
+        );
+        assert!(replay.live_document("session-a", Some(99)).await?.is_none());
+
+        // Auto-follow skips the newer released tab 14 for the still-open tab 15.
+        let Some(open_only) = replay.live_document("session-c", None).await? else {
+            anyhow::bail!("expected the still-open tab");
+        };
+        assert_eq!(open_only.tab_id, 15);
+        // A fully released session resolves to nothing, so the SSE stream goes
+        // idle instead of replaying its former document.
+        assert!(replay.live_document("session-d", None).await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accepted_batch_ids_lists_every_committed_batch_for_a_document() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = Arc::new(RecordingIndex::new(
+            Database::open(dir.path().join(DATABASE_FILENAME)).await?,
+        ));
+        let recordings = RecordingStore::new(
+            dir.path().join("recordings"),
+            dir.path().join("replays"),
+            index.clone(),
+            10,
+            Duration::from_secs(1),
+        );
+        let doc = "018f47a7-1c2b-7def-8123-0123456789ab";
+        recordings
+            .append_batch(doc, 11, None, &[event(1, "a")], "batch-a", false)
+            .await?;
+        recordings
+            .append_batch(doc, 11, None, &[event(2, "b")], "batch-b", false)
+            .await?;
+        let replay = ReplayService::new(recordings, index);
+
+        let mut ids = replay.accepted_batch_ids(doc).await?;
+        ids.sort();
+        assert_eq!(ids, vec!["batch-a".to_string(), "batch-b".to_string()]);
+        assert!(replay.accepted_batch_ids("other-doc").await?.is_empty());
         Ok(())
     }
 }

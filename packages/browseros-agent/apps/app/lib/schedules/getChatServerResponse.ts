@@ -10,8 +10,8 @@ import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import {
-  findCloudChatProviderById,
-  resolveCloudChatProvider,
+  findChatProviderById,
+  resolveChatProvider,
 } from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
@@ -77,7 +77,7 @@ const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
   if (!providers?.length) return null
 
   const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveCloudChatProvider(providers, defaultProviderId)
+  return resolveChatProvider(providers, defaultProviderId)
 }
 
 const resolveProvider = async (
@@ -85,7 +85,7 @@ const resolveProvider = async (
 ): Promise<LlmProviderConfig> => {
   if (providerId) {
     const providers = await providersStorage.getValue()
-    const match = findCloudChatProviderById(providers ?? [], providerId)
+    const match = findChatProviderById(providers ?? [], providerId)
     if (match) return match
   }
   return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
@@ -225,9 +225,7 @@ async function parseUIMessageStream(
       try {
         const parsedEvent = JSON.parse(event.data) as UIMessageEvent
         processEvent(parsedEvent, state)
-      } catch {
-        // Ignore invalid JSON events
-      }
+      } catch {}
     },
   })
 

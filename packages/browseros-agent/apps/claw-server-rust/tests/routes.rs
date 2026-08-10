@@ -175,7 +175,6 @@ struct McpSseStream {
 }
 
 impl McpSseStream {
-    /// Opens the session's standalone SSE channel for server-initiated MCP requests.
     async fn open(router: &Router, session_id: &str) -> anyhow::Result<Self> {
         let request = Request::builder()
             .method("GET")
@@ -372,8 +371,6 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    // The complete catalog is advertised, including the run script tool and
-    // the locally implemented name_session tool.
     let listed: Vec<&str> = body["result"]["tools"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("tools not array"))?
@@ -385,6 +382,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         vec![
             "tabs",
             "tab_groups",
+            "history",
             "navigate",
             "snapshot",
             "diff",
@@ -1242,6 +1240,21 @@ async fn live_projection_filters_external_close() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn recording_live_stream_rejects_an_unknown_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    assert_eq!(
+        request_status(
+            &app.router,
+            "GET",
+            "/api/v1/sessions/does-not-exist/recording/live",
+        )
+        .await?,
+        StatusCode::NOT_FOUND,
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_projection_refreshes_metadata_and_preview_uses_current_target() -> anyhow::Result<()>
 {
     let mock = MockCdp::start().await?;
@@ -1495,11 +1508,11 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     let (status, headers, body) =
         request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
     assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
-    assert_eq!(body["result"]["serverInfo"]["name"], "browserclaw");
-    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserClaw");
+    assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
+    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
     assert!(
         body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserClaw — the browser for agents")
+            |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
         )
     );
     let session_id = headers

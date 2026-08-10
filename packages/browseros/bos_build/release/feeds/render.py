@@ -30,6 +30,7 @@ SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE_NS)
 
 GUPDATE_NS = "http://www.google.com/update2/response"
+_STRICT_DOTTED_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 
 BROWSER_APPCAST_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -333,6 +334,82 @@ def render_extensions_json(channel: str) -> str:
     ids = sorted(ext.extension_id for ext in EXTENSIONS if ext.in_update_feed)
     data = {"extensions": {ext_id: {"external_update_url": url} for ext_id in ids}}
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def is_canonical_extensions_json(content: str, channel: str) -> bool:
+    """Return whether content has the exact generated extension-config value."""
+    try:
+        document = json.loads(content, object_pairs_hook=_unique_json_object)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return document == json.loads(render_extensions_json(channel))
+
+
+def strict_extension_manifest_versions(
+    content: str,
+    *,
+    include_all_extensions: bool,
+) -> Optional[Dict[str, str]]:
+    """Return exact canonical app-id pins, or None for an unsafe manifest."""
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return None
+    if root.tag != f"{{{GUPDATE_NS}}}gupdate":
+        return None
+    if root.attrib != {"protocol": "2.0"} or (root.text or "").strip():
+        return None
+    if any((element.tail or "").strip() for element in root.iter()):
+        return None
+
+    expected = {
+        extension.extension_id: extension
+        for extension in EXTENSIONS
+        if include_all_extensions or extension.in_update_feed
+    }
+    apps = list(root)
+    if len(apps) != len(expected):
+        return None
+
+    versions: Dict[str, str] = {}
+    for app in apps:
+        if app.tag != f"{{{GUPDATE_NS}}}app" or set(app.attrib) != {"appid"}:
+            return None
+        if (app.text or "").strip():
+            return None
+        extension_id = app.get("appid", "")
+        extension = expected.get(extension_id)
+        if extension is None or extension_id in versions:
+            return None
+
+        children = list(app)
+        if len(children) != 1 or children[0].tag != f"{{{GUPDATE_NS}}}updatecheck":
+            return None
+        updatecheck = children[0]
+        if set(updatecheck.attrib) != {"codebase", "version"}:
+            return None
+        if list(updatecheck) or (updatecheck.text or "").strip():
+            return None
+
+        version = updatecheck.get("version", "")
+        if _STRICT_DOTTED_VERSION_RE.fullmatch(version) is None:
+            return None
+        if updatecheck.get("codebase") != extension.crx_url(version):
+            return None
+        versions[extension_id] = version
+
+    if set(versions) != set(expected):
+        return None
+    return versions
 
 
 def parse_dotted_version(version: str) -> Tuple[int, ...]:

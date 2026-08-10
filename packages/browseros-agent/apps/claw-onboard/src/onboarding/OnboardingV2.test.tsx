@@ -86,7 +86,7 @@ describe('OnboardingV2 shell', () => {
     expect(html).toContain('Set it up')
   })
 
-  // The screen must not read as a Chrome replacement: BrowserClaw is a
+  // The screen must not read as a Chrome replacement: BrowserOS neo is a
   // secondary browser whose user is an agent, not the person installing it.
   it('states the secondary-browser position rather than reselling the product', () => {
     const html = renderApp()
@@ -97,7 +97,7 @@ describe('OnboardingV2 shell', () => {
 
   it('renders the visual rail with the v2 quote and three feature blocks', () => {
     const html = renderApp()
-    expect(html).toContain('BrowserClaw')
+    expect(html).toContain('BrowserOS neo')
     expect(html).toContain('Not yours.')
     expect(html).toContain('Signed in as you.')
     expect(html).toContain('Watch every step.')
@@ -108,7 +108,7 @@ describe('OnboardingV2 shell', () => {
     const html = renderApp()
     expect(html).toContain('<main')
     expect(html).not.toContain('role="dialog"')
-    expect(html).not.toContain('Welcome to BrowserClaw')
+    expect(html).not.toContain('Welcome to BrowserOS neo')
     expect(html).not.toContain('#FF5F57')
   })
 

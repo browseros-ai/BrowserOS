@@ -196,36 +196,39 @@ const currentMigrationHistory = [
     hash: '34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52',
     createdAt: 1781916712443,
   },
+  {
+    tag: '0004_sparkling_carnage',
+    hash: '76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd',
+    createdAt: 1785893663690,
+  },
+  {
+    tag: '0005_yellow_riptide',
+    hash: '44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154',
+    createdAt: 1785900211901,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
 const currentSchemaStatements = [
   `
-    CREATE TABLE IF NOT EXISTS agent_definitions (
+    CREATE TABLE IF NOT EXISTS acp_agents (
       id text PRIMARY KEY NOT NULL,
       name text NOT NULL,
-      adapter text NOT NULL,
-      model_id text NOT NULL,
-      reasoning_effort text NOT NULL,
-      permission_mode text DEFAULT 'approve-all' NOT NULL,
-      session_key text NOT NULL,
-      pinned integer DEFAULT false NOT NULL,
-      adapter_config_json text,
+      type text NOT NULL,
+      model_id text,
+      reasoning_effort text,
+      working_directory text,
       created_at integer NOT NULL,
       updated_at integer NOT NULL
     )
   `,
   `
-    CREATE UNIQUE INDEX IF NOT EXISTS agent_definitions_session_key_unique
-    ON agent_definitions (session_key)
+    CREATE INDEX IF NOT EXISTS acp_agents_updated_at_idx
+    ON acp_agents (updated_at)
   `,
   `
-    CREATE INDEX IF NOT EXISTS agent_definitions_updated_at_idx
-    ON agent_definitions (updated_at)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS agent_definitions_adapter_updated_at_idx
-    ON agent_definitions (adapter, updated_at)
+    CREATE INDEX IF NOT EXISTS acp_agents_type_updated_at_idx
+    ON acp_agents (type, updated_at)
   `,
   `
     CREATE TABLE IF NOT EXISTS oauth_tokens (
@@ -243,45 +246,6 @@ const currentSchemaStatements = [
   `
     CREATE INDEX IF NOT EXISTS oauth_tokens_browseros_id_idx
     ON oauth_tokens (browseros_id)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS produced_files (
-      id text PRIMARY KEY NOT NULL,
-      agent_definition_id text NOT NULL,
-      session_key text NOT NULL,
-      turn_id text NOT NULL,
-      turn_prompt text NOT NULL,
-      path text NOT NULL,
-      size integer NOT NULL,
-      mtime_ms integer NOT NULL,
-      created_at integer NOT NULL,
-      detected_by text DEFAULT 'diff' NOT NULL,
-      FOREIGN KEY (agent_definition_id)
-        REFERENCES agent_definitions(id)
-        ON UPDATE no action
-        ON DELETE cascade
-    )
-  `,
-  `
-    CREATE UNIQUE INDEX IF NOT EXISTS produced_files_agent_path_unique
-    ON produced_files (agent_definition_id, path)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS produced_files_agent_created_idx
-    ON produced_files (agent_definition_id, created_at)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS produced_files_turn_idx
-    ON produced_files (turn_id)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS produced_files_session_idx
-    ON produced_files (session_key)
-  `,
-  `
-    UPDATE agent_definitions
-    SET adapter_config_json = NULL
-    WHERE adapter = 'hermes' AND adapter_config_json IS NOT NULL
   `,
   `
     CREATE TABLE IF NOT EXISTS __drizzle_migrations (

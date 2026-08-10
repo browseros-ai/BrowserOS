@@ -17,8 +17,23 @@ export { compiledBinaryPath, compileProductBinaries } from './compile'
 export { loadBuildConfig } from './config'
 export { getTargetRules, loadManifest } from './manifest'
 export { writeArtifactMetadata } from './metadata'
-export { runProdResourceBuild } from './orchestrator'
-export { createR2Client, joinObjectKey, uploadFileToObject } from './r2'
+export {
+  recoverVersionedTargets,
+  runCompiledResourceBuild,
+  runProdResourceBuild,
+} from './orchestrator'
+export type {
+  ImmutableObjectIdentity,
+  ImmutableUploadOptions,
+  ImmutableUploadResult,
+} from './r2'
+export {
+  createR2Client,
+  joinObjectKey,
+  recoverImmutableFileFromObject,
+  uploadFileToObject,
+  uploadImmutableFileToObject,
+} from './r2'
 export {
   stageCompiledArtifact,
   stagedBinaryName,
@@ -26,6 +41,7 @@ export {
 } from './stage'
 export { resolveTargets } from './targets'
 export type {
+  ArtifactMetadataIdentity,
   AssetBuildArgs,
   AssetBuildProductDescriptor,
   BuildArgs,
@@ -35,7 +51,10 @@ export type {
   BuildTarget,
   CompiledServerBinary,
   ProductBuildSpec,
+  ProductCompiler,
+  ProductVersionSource,
   R2Config,
+  ResourceBuildProductDescriptor,
   ResourceManifest,
   ResourceRule,
   StagedArtifact,

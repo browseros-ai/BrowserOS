@@ -51,11 +51,11 @@ describe('POST /acpx/probe', () => {
       agentInfo: { name: 'claude' },
       protocolVersion: 1,
     }
-    const res = await call({ agentId: 'claude' })
+    const res = await call({ type: 'claude' })
     expect(res.status).toBe(200)
     const payload = (await res.json()) as { models: { id: string }[] }
     expect(payload.models[0]?.id).toBe('sonnet')
-    expect(lastInput).toEqual({ agentId: 'claude' })
+    expect(lastInput).toEqual({ type: 'claude' })
   })
 
   it('returns 200 with a populated error field when the probe reports a probe-level failure', async () => {
@@ -67,7 +67,7 @@ describe('POST /acpx/probe', () => {
       protocolVersion: 0,
       error: { code: 'spawn_failed', message: 'binary not found' },
     }
-    const res = await call({ agentId: 'codex' })
+    const res = await call({ type: 'codex' })
     expect(res.status).toBe(200)
     const payload = (await res.json()) as { error?: { code: string } }
     expect(payload.error?.code).toBe('spawn_failed')
@@ -75,7 +75,7 @@ describe('POST /acpx/probe', () => {
 
   it('returns 500 when the wrapper throws (unrecoverable)', async () => {
     nextProbeError = new Error('boom')
-    const res = await call({ agentId: 'claude' })
+    const res = await call({ type: 'claude' })
     expect(res.status).toBe(500)
     const payload = (await res.json()) as {
       error?: { code: string; message: string }
@@ -84,26 +84,14 @@ describe('POST /acpx/probe', () => {
     expect(payload.error?.message).toContain('boom')
   })
 
-  it('rejects an empty body where neither agentId nor command is set', async () => {
+  it('requires a supported agent type', async () => {
     const res = await call({})
     expect(res.status).toBe(400)
-  })
-
-  it('accepts a command-only request for acp-custom', async () => {
-    nextProbeResult = {
-      models: [{ id: 'default' }],
-      reasoning: null,
-      supportsConfigOption: false,
-      agentInfo: null,
-      protocolVersion: 1,
-    }
-    const res = await call({ command: 'my-bin acp', cwd: '/tmp/x' })
-    expect(res.status).toBe(200)
-    expect(lastInput).toEqual({ command: 'my-bin acp', cwd: '/tmp/x' })
+    expect((await call({ type: 'acp-custom' })).status).toBe(400)
   })
 
   it('rejects an out-of-range timeout', async () => {
-    const res = await call({ agentId: 'claude', timeoutMs: 100 })
+    const res = await call({ type: 'claude', timeoutMs: 100 })
     expect(res.status).toBe(400)
   })
 })

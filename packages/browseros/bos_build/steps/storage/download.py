@@ -28,6 +28,59 @@ from ...lib.r2 import (
 ARTIFACT_ZIP_DOWNLOAD = "artifact_zip"
 ARTIFACT_METADATA_NAME = "artifact-metadata.json"
 COPY_CHUNK_SIZE = 1024 * 1024
+RESOURCE_VERSION_FAMILIES = (
+    (("artifacts", "server"), "browseros_server_resource_version"),
+    (
+        ("claw-server-rust", "prod-resources"),
+        "browserclaw_server_resource_version",
+    ),
+    (
+        ("claw-onboard", "prod-resources"),
+        "browserclaw_onboard_resource_version",
+    ),
+)
+
+
+def resolve_resource_key(r2_key: str, context: Context) -> str:
+    """Resolve a latest resource key to an exact release version."""
+    parts = r2_key.split("/")
+
+    for prefix, env_property in RESOURCE_VERSION_FAMILIES:
+        version = getattr(context.env, env_property)
+        if not version or tuple(parts[: len(prefix)]) != prefix:
+            continue
+
+        expected_prefix = "/".join((*prefix, "latest"))
+        if len(parts) <= len(prefix) + 1:
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected "
+                f"{expected_prefix}/<artifact>"
+            )
+        if parts[len(prefix)] != "latest":
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected latest selector"
+            )
+
+        artifact_parts = parts[len(prefix) + 1 :]
+        if any(part in ("", ".", "..") for part in artifact_parts):
+            raise ValueError(
+                f"Malformed resource key {r2_key!r}; expected "
+                f"{expected_prefix}/<artifact>"
+            )
+        if (
+            version != version.strip()
+            or version in (".", "..")
+            or "/" in version
+            or "\\" in version
+        ):
+            raise ValueError(
+                f"Invalid resource version override {version!r}; "
+                "expected one safe path component"
+            )
+
+        return "/".join((*prefix, version, *artifact_parts))
+
+    return r2_key
 
 
 def extract_artifact_zip(archive_path: Path, destination: Path) -> list[Path]:
@@ -284,6 +337,7 @@ class DownloadResourcesModule(Step):
         bucket = context.env.r2_bucket
 
         for op in filtered_ops:
+            op = {**op, "r2_key": resolve_resource_key(op["r2_key"], context)}
             name = op.get("name", "Unnamed")
             destination = op["destination"]
             dest_path = context.root_dir / destination

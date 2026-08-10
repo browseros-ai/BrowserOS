@@ -60,7 +60,7 @@ def _release_metadata(
     run_id: str = "123",
     run_attempt: str = "1",
 ) -> dict:
-    prefix = "BrowserClaw" if product == "browserclaw" else "BrowserOS"
+    prefix = "BrowserOS_neo" if product == "browserclaw" else "BrowserOS"
     return {
         "product": product,
         "version": version,
@@ -126,6 +126,22 @@ class ReleaseContractTest(unittest.TestCase):
                 workflow_run_attempt="1",
             )
 
+    def test_one_run_accepts_platforms_from_different_rerun_attempts(self):
+        self.metadata["win"]["workflow_run_attempt"] = "2"
+
+        selected = validate_release_metadata(
+            self.metadata,
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="all",
+            macos_arch="universal",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+        )
+
+        self.assertEqual(selected["linux"]["workflow_run_attempt"], "1")
+        self.assertEqual(selected["win"]["workflow_run_attempt"], "2")
+
     def test_missing_or_extra_artifact_keys_are_rejected(self):
         del self.metadata["win"]["artifacts"]["x64_zip"]
         self.metadata["win"]["artifacts"]["arm64_zip"] = {
@@ -160,7 +176,7 @@ class ReleaseContractTest(unittest.TestCase):
             get_product_descriptor("browserclaw"),
         )
 
-        self.assertIn("## BrowserClaw v0.49.0", notes)
+        self.assertIn("## BrowserOS neo v0.49.0", notes)
         self.assertNotIn("## BrowserOS v", notes)
 
 
@@ -185,18 +201,18 @@ BROWSEROS_DOWNLOAD_GOLDEN = {
 
 BROWSERCLAW_DOWNLOAD_GOLDEN = {
     "macos": {
-        "arm64": "download/BrowserClaw-arm64.dmg",
-        "x64": "download/BrowserClaw-x86_64.dmg",
-        "universal": "download/BrowserClaw.dmg",
+        "arm64": "download/BrowserOS_neo-arm64.dmg",
+        "x64": "download/BrowserOS_neo-x86_64.dmg",
+        "universal": "download/BrowserOS_neo.dmg",
     },
     "win": {
-        "x64_installer": "download/BrowserClaw_installer.exe",
+        "x64_installer": "download/BrowserOS_neo_installer.exe",
     },
     "linux": {
-        "x64_appimage": "download/BrowserClaw.AppImage",
-        "x64_deb": "download/BrowserClaw.deb",
-        "arm64_appimage": "download/BrowserClaw-arm64.AppImage",
-        "arm64_deb": "download/BrowserClaw-arm64.deb",
+        "x64_appimage": "download/BrowserOS_neo.AppImage",
+        "x64_deb": "download/BrowserOS_neo.deb",
+        "arm64_appimage": "download/BrowserOS_neo-arm64.AppImage",
+        "arm64_deb": "download/BrowserOS_neo-arm64.deb",
     },
 }
 
@@ -259,7 +275,12 @@ class ListAllVersionsTest(unittest.TestCase):
     def test_paginates_truncated_listings(self):
         prefix = "releases/browseros/"
         client = _FakeR2Client(
-            {prefix: [_page(prefix, ["0.29.0"], next_token=1), _page(prefix, ["0.31.0"])]}
+            {
+                prefix: [
+                    _page(prefix, ["0.29.0"], next_token=1),
+                    _page(prefix, ["0.31.0"]),
+                ]
+            }
         )
 
         with mock.patch.object(common, "get_r2_client", return_value=client):

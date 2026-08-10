@@ -36,6 +36,9 @@ pub enum Error {
     #[error("Invalid MCP server spec: {reason}")]
     InvalidServerSpec { reason: String },
 
+    #[error("MCP server migration verification failed: {reason}")]
+    MigrationVerification { reason: String },
+
     #[error("Invalid managed skill spec: {reason}")]
     InvalidSkillSpec { reason: String },
 

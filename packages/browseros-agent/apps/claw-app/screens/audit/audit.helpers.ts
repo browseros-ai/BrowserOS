@@ -21,9 +21,9 @@ const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: 'long',
 })
 
-/** `WEDNESDAY, 2 JULY` style label used as an audit-list day divider. */
+/** `Wednesday, July 2` style label used as an audit-list day band. */
 export function formatDayHeading(ts: number): string {
-  return DAY_HEADING_FORMATTER.format(new Date(ts)).toUpperCase()
+  return DAY_HEADING_FORMATTER.format(new Date(ts))
 }
 
 /** Local calendar-day equality (year + month + date), timezone-aware. */

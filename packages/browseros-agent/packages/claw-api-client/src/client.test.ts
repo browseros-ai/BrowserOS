@@ -71,7 +71,7 @@ function responseFor(request: Request): Response {
     })
   }
   if (pathname.endsWith('/recordings/events')) {
-    return Response.json({ accepted: 1 })
+    return Response.json({ accepted: 1, stop: false })
   }
   if (pathname.includes('/connections/')) {
     return Response.json({
@@ -171,7 +171,7 @@ describe('ClawApiClient', () => {
         xRecordingHasGap: true,
         body: ndjson,
       }),
-    ).resolves.toEqual({ accepted: 1 })
+    ).resolves.toEqual({ accepted: 1, stop: false })
     await expect(
       client.downloadRecordingEvents({ sessionId: 'session / one' }),
     ).resolves.toBe('{"type":2}\n')

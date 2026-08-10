@@ -10,6 +10,7 @@ from unittest import mock
 
 from ...core.context import Context
 from ...core.step import ValidationError
+from ...lib.paths import get_package_root
 from ...products.browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
 from ..feeds.render import ExistingAppcast, SignedArtifact, render_server_appcast
 from ..feeds.spec import server_feed
@@ -48,7 +49,7 @@ class BundleDerivationTest(unittest.TestCase):
 
         self.assertEqual(
             module.artifact_key("darwin-arm64"),
-            "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
+            "artifacts/server/0.0.9/browseros-server-resources-darwin-arm64.zip",
         )
         self.assertEqual(
             module.zip_filename("darwin_arm64"),
@@ -62,7 +63,7 @@ class BundleDerivationTest(unittest.TestCase):
 
         self.assertEqual(
             module.artifact_key("darwin-arm64"),
-            "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
+            "claw-server-rust/prod-resources/0.0.9/browseros-claw-server-rust-resources-darwin-arm64.zip",
         )
         self.assertEqual(
             module.zip_filename("darwin_arm64"),
@@ -83,16 +84,20 @@ class BundleDerivationTest(unittest.TestCase):
 
         signer.assert_called_once_with(resources, ctx.env, BROWSERCLAW_SERVER_BUNDLE)
 
-    def test_appcast_staging_paths_per_bundle(self):
-        self.assertEqual(get_appcast_path("alpha").name, "appcast-server.alpha.xml")
-        self.assertEqual(get_appcast_path("prod").name, "appcast-server.xml")
+    def test_appcast_staging_paths_share_updates_server_home(self):
+        root = get_package_root().parent.parent / "updates" / "server"
+
         self.assertEqual(
-            get_appcast_path("prod", "browserclaw-server").name,
-            "appcast-claw-server.xml",
+            get_appcast_path("alpha"), root / "appcast-server.alpha.xml"
+        )
+        self.assertEqual(get_appcast_path("prod"), root / "appcast-server.xml")
+        self.assertEqual(
+            get_appcast_path("prod", "browserclaw-server"),
+            root / "appcast-claw-server.xml",
         )
         self.assertEqual(
-            get_appcast_path("alpha", "browserclaw-server").name,
-            "appcast-claw-server.alpha.xml",
+            get_appcast_path("alpha", "browserclaw-server"),
+            root / "appcast-claw-server.alpha.xml",
         )
 
     def test_validate_rejects_product_without_server_bundle(self):
@@ -111,6 +116,22 @@ class BundleDerivationTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValidationError, "nope"):
+            module.validate(ctx)
+
+    def test_validate_requires_the_finalized_release_sha(self):
+        module = ServerOTAModule(version="0.0.9", channel="alpha")
+        ctx = cast(
+            Context,
+            SimpleNamespace(
+                env=SimpleNamespace(
+                    macos_certificate_name="cert",
+                    code_sign_tool_path="tool",
+                    has_r2_config=lambda: True,
+                )
+            ),
+        )
+
+        with self.assertRaisesRegex(ValidationError, "release SHA"):
             module.validate(ctx)
 
 
@@ -166,7 +187,6 @@ class PromoteContentTest(unittest.TestCase):
         )
         self.assertNotIn("(Alpha)", promoted)
         self.assertNotIn("appcast-server.alpha.xml", promoted)
-        # Payload facts survive the re-render.
         self.assertIn("<sparkle:version>0.0.9</sparkle:version>", promoted)
         self.assertIn("Thu, 16 Apr 2026 18:58:59 +0000", promoted)
         self.assertIn("ALPHASIG==", promoted)

@@ -183,14 +183,8 @@ jobs:
             commit -m "chore(release): build v$VERSION [skip ci]"
 
           safe_target_ref="${TARGET_REF//[^A-Za-z0-9._-]/-}"
-          branch="bot/nightly-macos-version-${safe_target_ref}-v${VERSION}"
-          expected_sha="$(git ls-remote --heads origin "$branch" | awk '{print $1}')"
-          if [ -n "$expected_sha" ]; then
-            git push --force-with-lease="refs/heads/$branch:$expected_sha" \
-              origin "HEAD:refs/heads/$branch"
-          else
-            git push origin "HEAD:refs/heads/$branch"
-          fi
+          branch="bot/nightly-macos-version-${safe_target_ref}-v${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git push origin "HEAD:refs/heads/$branch"
 
           pr_url="$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
@@ -256,58 +250,43 @@ jobs:
         with:
           bun-version: "1.3.6"
 
-      - name: Stage BrowserOS nightly resources
-        env:
-          BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
-        run: |
-          set -euo pipefail
-          agent_root="$BROWSEROS_REPO/packages/browseros-agent"
-          browseros_root="$BROWSEROS_REPO/packages/browseros"
-
-          cd "$agent_root"
-          bun ci
-          bun scripts/build/server.ts --target=darwin-arm64 --ci
-          bun scripts/build/claw-onboard.ts --ci
-
-          cd "$browseros_root"
-          AGENT_ROOT="$agent_root" BROWSEROS_ROOT="$browseros_root" uv run python - <<'PY'
-          import os
-          import shutil
-          from pathlib import Path
-
-          from bos_build.steps.storage.download import extract_artifact_zip
-
-          agent_root = Path(os.environ["AGENT_ROOT"])
-          browseros_root = Path(os.environ["BROWSEROS_ROOT"])
-          artifacts = [
-              (
-                  agent_root / "dist/prod/server/browseros-server-resources-darwin-arm64.zip",
-                  browseros_root / "resources/binaries/browseros_server/darwin-arm64",
-              ),
-              (
-                  agent_root / "dist/prod/claw-onboard/browseros-claw-onboard-resources.zip",
-                  browseros_root / "resources/binaries/browseros_claw_onboard",
-              ),
-          ]
-
-          for archive, destination in artifacts:
-              if not archive.is_file():
-                  raise SystemExit(f"Missing local server resource archive: {archive}")
-              if destination.exists():
-                  shutil.rmtree(destination)
-              extracted = extract_artifact_zip(archive, destination)
-              print(f"Staged {len(extracted)} file(s) from {archive.name}")
-          PY
-
       - name: Build BrowserOS (macOS arm64)
         env:
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
+          BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
+          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
+          GRAPHQL_SCHEMA_PATH: apps/app/schema/graphql.schema.json
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          NODE_ENV: production
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           UPLOAD_TO_R2: ${{ steps.build_inputs.outputs.upload_to_r2 }}
+          VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
+          VITE_PUBLIC_POSTHOG_HOST: ${{ secrets.VITE_PUBLIC_POSTHOG_HOST }}
+          VITE_PUBLIC_POSTHOG_KEY: ${{ secrets.VITE_PUBLIC_POSTHOG_KEY }}
+          VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"
-          flags=(--profile nightly-macos --product browseros --arch arm64)
+          flags=(
+            --profile nightly-macos
+            --product browseros
+            --arch arm64
+            --source-sha "$(git rev-parse HEAD)"
+          )
           if [ "$UPLOAD_TO_R2" != "true" ]; then
             flags+=(--no-upload)
           fi

@@ -57,21 +57,40 @@ export default defineContentScript({
     })
 
     let recorderActive = false
+    let stopRecording: (() => void) | null = null
     chrome.runtime.onMessage.addListener((message) => {
       const recorderMessage = message as { type?: unknown }
-      if (recorderMessage.type !== 'recorder-resnapshot' || !recorderActive) {
+      if (recorderMessage.type === 'recorder-resnapshot') {
+        if (recorderActive) {
+          try {
+            rrweb.record.takeFullSnapshot()
+          } catch (error) {
+            console.warn('[browseros-claw replay] resnapshot failed', error)
+          }
+        }
         return false
       }
-      try {
-        rrweb.record.takeFullSnapshot()
-      } catch (error) {
-        console.warn('[browseros-claw replay] resnapshot failed', error)
+      // The session that owned this tab has ended: stop recording so the tab is
+      // not recorded through the cleanup grace. Events after release never enter
+      // any replay window, so nothing worth keeping is lost.
+      if (recorderMessage.type === 'recorder-stop') {
+        recorderActive = false
+        if (stopRecording) {
+          try {
+            stopRecording()
+          } catch (error) {
+            console.warn('[browseros-claw replay] stop failed', error)
+          }
+          stopRecording = null
+        }
+        buffer.close()
+        return false
       }
       return false
     })
 
     try {
-      const stopRecording = rrweb.record({
+      const stop = rrweb.record({
         maskInputOptions: { password: true },
         sampling: {
           mousemove: false,
@@ -82,7 +101,8 @@ export default defineContentScript({
         recordCanvas: false,
         emit: buffer.emit,
       })
-      recorderActive = typeof stopRecording === 'function'
+      stopRecording = typeof stop === 'function' ? stop : null
+      recorderActive = stopRecording !== null
     } catch (error) {
       console.warn('[browseros-claw replay] rrweb.record threw', error)
       buffer.close()

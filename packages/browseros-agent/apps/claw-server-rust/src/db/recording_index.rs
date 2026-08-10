@@ -176,6 +176,18 @@ impl RecordingIndex {
         )
     }
 
+    /// Every batch id already durably accepted for a document, so a live
+    /// subscriber can skip forwarding a batch its bootstrap already captured.
+    pub async fn accepted_batch_ids(&self, document_id: &str) -> AppResult<Vec<String>> {
+        Ok(RecordingBatches::find()
+            .select_only()
+            .column(recording_batches::Column::BatchId)
+            .filter(recording_batches::Column::DocumentId.eq(document_id))
+            .into_tuple::<String>()
+            .all(self.db.connection())
+            .await?)
+    }
+
     /// Committed byte length of the document's on-disk replay file (0 when the
     /// stream does not exist yet or predates the file migration).
     pub async fn committed_payload_bytes(&self, document_id: &str) -> AppResult<i64> {

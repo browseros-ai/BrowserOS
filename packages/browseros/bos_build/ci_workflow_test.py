@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -44,6 +45,13 @@ def git_bash_path() -> str:
 
 
 class ChromiumBuildWorkflowTest(unittest.TestCase):
+    REMOVED_RESOURCE_INPUTS = {
+        "browseros_server_version",
+        "browserclaw_server_version",
+        "browserclaw_onboard_version",
+        "bundled_extensions_manifest_url",
+    }
+
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         workflow_path = WORKFLOW_DIR / workflow_name
         return yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
@@ -59,7 +67,168 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             if step.get("name") == GIT_BOOTSTRAP_STEP
         )
 
-    def test_git_bootstrap_is_windows_only_and_immediately_after_checkout(self):
+    def test_build_workflow_exposes_source_and_published_resource_modes(self):
+        workflow = self.load_workflow("build-browseros.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        self.assertEqual(inputs["resource-mode"]["default"], "published")
+        self.assertEqual(inputs["candidate-sha"]["default"], "")
+        self.assertEqual(inputs["prepared-resources-artifact"]["default"], "")
+        self.assertEqual(inputs["lane-artifact-name"]["default"], "")
+        self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+
+        validate = next(
+            step for step in self.build_steps() if step.get("name") == "Validate inputs"
+        )
+        self.assertIn("source mode requires a full candidate-sha", validate["run"])
+        self.assertIn(
+            "source mode requires prepared-resources-artifact", validate["run"]
+        )
+
+    def test_source_lane_checks_out_and_verifies_exact_candidate(self):
+        steps = self.build_steps()
+        checkout = next(
+            step
+            for step in steps
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        verify = next(
+            step
+            for step in steps
+            if step.get("name") == "Verify exact candidate checkout"
+        )
+
+        self.assertEqual(
+            checkout["with"]["ref"],
+            "${{ inputs.candidate-sha || inputs.ref || github.sha }}",
+        )
+        self.assertEqual(verify["if"], "inputs.resource-mode == 'source'")
+        self.assertIn('git rev-parse HEAD)', verify["run"])
+
+    def test_source_lane_downloads_common_resources_and_emits_attestation(self):
+        steps = self.build_steps()
+        download = next(
+            step
+            for step in steps
+            if step.get("name") == "Download prepared common resources"
+        )
+        build_step = next(
+            step
+            for step in steps
+            if step.get("name") == "Build ${{ inputs.product }}"
+        )
+        upload = next(
+            step for step in steps if step.get("name") == "Upload lane manifest"
+        )
+
+        self.assertEqual(download["uses"], "actions/download-artifact@v8")
+        self.assertEqual(
+            download["with"]["name"], "${{ inputs.prepared-resources-artifact }}"
+        )
+        for value in (
+            '--resource-mode "${{ inputs.resource-mode }}"',
+            '--prepared-resources "$RUNNER_TEMP/prepared-resources"',
+            '--lane-manifest "$RUNNER_TEMP/lane-manifest.json"',
+            'uv run browseros build "${args[@]}"',
+        ):
+            self.assertIn(value, build_step["run"])
+        self.assertEqual(upload["if"], "inputs.resource-mode == 'source'")
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+
+    def test_reusable_platform_workflows_forward_source_contract(self):
+        for workflow_name in ("release-linux.yml", "release-windows.yml"):
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                triggers = workflow.get("on", workflow.get(True))
+                inputs = triggers["workflow_call"]["inputs"]
+                dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+                build_with = workflow["jobs"]["build"]["with"]
+
+                self.assertEqual(inputs["resource_mode"]["default"], "published")
+                self.assertTrue(
+                    {"resource_mode", "candidate_sha", "prepared_resources_artifact"}.isdisjoint(
+                        dispatch_inputs
+                    )
+                )
+                self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+                self.assertEqual(
+                    build_with["resource-mode"],
+                    "${{ inputs.resource_mode || 'published' }}",
+                )
+                self.assertEqual(
+                    build_with["candidate-sha"],
+                    "${{ inputs.candidate_sha || '' }}",
+                )
+                self.assertEqual(
+                    build_with["prepared-resources-artifact"],
+                    "${{ inputs.prepared_resources_artifact || '' }}",
+                )
+                self.assertEqual(build_with["arch"], "x64")
+
+    def test_persistent_macos_lane_uses_one_source_build(self):
+        workflow = self.load_workflow("release-macos.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+        steps = workflow["jobs"]["build"]["steps"]
+        build_step = next(
+            step
+            for step in steps
+            if step.get("name") == "Build selected products"
+        )
+        sync = next(
+            step for step in steps if step.get("name") == "Sync build repo to exact ref"
+        )
+        download = next(
+            step
+            for step in steps
+            if step.get("name") == "Download prepared common resources"
+        )
+        upload = next(
+            step for step in steps if step.get("name") == "Upload lane manifest"
+        )
+
+        self.assertEqual(inputs["arch"]["default"], "universal")
+        self.assertEqual(inputs["resource_mode"]["default"], "published")
+        self.assertTrue(
+            {"resource_mode", "candidate_sha", "prepared_resources_artifact"}.isdisjoint(
+                dispatch_inputs
+            )
+        )
+        self.assertTrue(self.REMOVED_RESOURCE_INPUTS.isdisjoint(inputs))
+        self.assertIn('git checkout --detach "$CANDIDATE_SHA"', sync["run"])
+        self.assertIn('git rev-parse HEAD)', sync["run"])
+        self.assertEqual(download["uses"], "actions/download-artifact@v8")
+        self.assertEqual(build_step["run"].count("uv run browseros build"), 1)
+        for value in (
+            "--resource-mode",
+            "--prepared-resources",
+            "--lane-manifest",
+        ):
+            self.assertIn(value, build_step["run"])
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+
+    def test_browser_lanes_do_not_receive_extension_build_secrets(self):
+        secret_names = (
+            "BROWSEROS_AGENT_V2_KEY",
+            "BROWSERCLAW_KEY",
+            "VITE_PUBLIC_SENTRY_DSN",
+            "VITE_PUBLIC_POSTHOG_KEY",
+            "VITE_CLAW_POSTHOG_KEY",
+            "SENTRY_AUTH_TOKEN",
+        )
+        for workflow_name in (
+            "build-browseros.yml",
+            "release-linux.yml",
+            "release-windows.yml",
+            "release-macos.yml",
+        ):
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow_name):
+                for secret_name in secret_names:
+                    self.assertNotIn(secret_name, text)
+
+    def test_git_bootstrap_follows_candidate_checkout_and_verification(self):
         steps = self.build_steps()
         checkout_index = next(
             index
@@ -71,8 +240,14 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             for index, step in enumerate(steps)
             if step.get("name") == GIT_BOOTSTRAP_STEP
         )
+        verify_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Verify exact candidate checkout"
+        )
 
-        self.assertEqual(bootstrap_index, checkout_index + 1)
+        self.assertEqual(verify_index, checkout_index + 1)
+        self.assertEqual(bootstrap_index, verify_index + 1)
         self.assertEqual(
             steps[bootstrap_index]["if"],
             "runner.os == 'Windows'",
@@ -147,7 +322,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         )
         self.assertIn('export GIT_CONFIG_GLOBAL="$git_config"', script)
         self.assertIn(
-            "printf 'GIT_CONFIG_GLOBAL=%s\\n' \"$git_config\" >> \"$GITHUB_ENV\"",
+            'printf \'GIT_CONFIG_GLOBAL=%s\\n\' "$git_config" >> "$GITHUB_ENV"',
             script,
         )
         self.assertNotIn("GIT_CONFIG_NOSYSTEM", script)
@@ -426,9 +601,13 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                 check=True,
                 env=bash_env,
             )
-            _, config_path = github_env.read_text(encoding="utf-8").strip().split(
-                "=",
-                maxsplit=1,
+            _, config_path = (
+                github_env.read_text(encoding="utf-8")
+                .strip()
+                .split(
+                    "=",
+                    maxsplit=1,
+                )
             )
             native_env = os.environ.copy()
             native_env.update(
@@ -544,10 +723,20 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
 
 class ReleaseIntegrityWorkflowTest(unittest.TestCase):
-    RELEASE_WORKFLOWS = (
-        ("release-browseros.yml", "browseros", ""),
-        ("release-browserclaw.yml", "browserclaw", "-claw"),
-    )
+    RELEASES = {
+        "release-browseros.yml": {
+            "product": "browseros",
+            "extension_secret": "BROWSEROS_AGENT_V2_KEY",
+            "other_extension_secret": "BROWSERCLAW_KEY",
+            "components": {"server", "agent"},
+        },
+        "release-browserclaw.yml": {
+            "product": "browserclaw",
+            "extension_secret": "BROWSERCLAW_KEY",
+            "other_extension_secret": "BROWSEROS_AGENT_V2_KEY",
+            "components": {"claw-server-rust", "browserclaw"},
+        },
+    }
 
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         path = WORKFLOW_DIR / workflow_name
@@ -555,667 +744,311 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def named_step(
         self,
-        workflow_name: str,
+        workflow: dict[str, object],
         job_name: str,
         step_name: str,
     ) -> dict[str, object]:
-        workflow = self.load_workflow(workflow_name)
         return next(
             step
             for step in workflow["jobs"][job_name]["steps"]
             if step.get("name") == step_name
         )
 
-    def run_shell(
-        self,
-        script: str,
-        *,
-        env: dict[str, str],
-        cwd: Path,
-    ) -> subprocess.CompletedProcess[str]:
-        resolved_env = os.environ.copy()
-        resolved_env.update(env)
-        return subprocess.run(
-            [git_bash_path(), "-c", script],
-            cwd=cwd,
-            env=resolved_env,
-            capture_output=True,
-            text=True,
-        )
+    def test_full_releases_have_no_optional_dispatch_surface(self):
+        for workflow_name in self.RELEASES:
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                triggers = workflow.get("on", workflow.get(True))
+                self.assertIsNone(triggers["workflow_dispatch"])
+                self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
+                self.assertEqual(workflow["permissions"], {})
 
-    def workflow_env(self, root: Path, product: str) -> dict[str, str]:
-        output = root / "github-output"
-        summary = root / "github-summary"
-        calls = root / "uv-calls"
-        runner_temp = root / "runner-temp"
-        runner_temp.mkdir()
-        return {
-            "EXTENSION_NAME": (
-                "browserclaw" if product == "browserclaw" else "agent"
-            ),
-            "EXTENSIONS_VERSION": "1.2.3",
-            "FAKE_APPCAST_RC": "0",
-            "FAKE_EXTENSIONS_RC": "0",
-            "FAKE_UV_CALLS": str(calls),
-            "GITHUB_OUTPUT": str(output),
-            "GITHUB_RUN_ATTEMPT": "2",
-            "GITHUB_RUN_ID": "30418029456",
-            "GITHUB_REPOSITORY": "browseros-ai/BrowserOS",
-            "GITHUB_SHA": "a" * 40,
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "GITHUB_WORKSPACE": str(root),
-            "INPUT_EXTENSIONS": "skip",
-            "INPUT_GITHUB_RELEASE_DRAFT": "true",
-            "INPUT_MACOS_ARCH": "universal",
-            "INPUT_PLATFORMS": "all",
-            "INPUT_UPLOAD_TO_R2": "true",
-            "PRODUCT": product,
-            "PRODUCT_LABEL": (
-                "BrowserClaw" if product == "browserclaw" else "BrowserOS"
-            ),
-            "RUNNER_TEMP": str(runner_temp),
-            "VERSION": "0.49.0",
+    def test_candidate_freezes_default_branch_and_uses_python_lifecycle(self):
+        for workflow_name, config in self.RELEASES.items():
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                candidate = workflow["jobs"]["candidate"]
+                checkout = next(
+                    step
+                    for step in candidate["steps"]
+                    if str(step.get("uses", "")).startswith("actions/checkout@")
+                )
+                ensure = self.named_step(
+                    workflow, "candidate", "Create or recover candidate"
+                )
+                upload = self.named_step(
+                    workflow, "candidate", "Upload candidate record"
+                )
+
+                self.assertEqual(
+                    candidate["concurrency"]["group"],
+                    "release-component-allocation",
+                )
+                self.assertEqual(
+                    candidate["permissions"],
+                    {"contents": "write", "pull-requests": "write"},
+                )
+                self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+                self.assertEqual(checkout["with"]["fetch-depth"], 0)
+                for token in (
+                    "release candidate ensure",
+                    f"--product {config['product']}",
+                    '--parent-sha "$GITHUB_SHA"',
+                    "--default-branch",
+                    "--dispatch-ref",
+                    "--github-summary",
+                ):
+                    self.assertIn(token, ensure["run"])
+                self.assertIn(
+                    f"release-candidate-{config['product']}-",
+                    candidate["outputs"]["candidate_artifact"],
+                )
+                self.assertTrue(upload["with"]["overwrite"])
+                self.assertEqual(upload["with"]["retention-days"], 30)
+
+    def test_candidate_products_own_only_their_versioned_components(self):
+        from bos_build.release.components import components_for_candidate
+
+        for config in self.RELEASES.values():
+            components = {
+                component.id
+                for component in components_for_candidate(config["product"])
+            }
+            self.assertEqual(components, config["components"])
+            self.assertNotIn("claw-onboard", components)
+
+    def test_common_resources_are_recoverable_and_candidate_bound(self):
+        for workflow_name, config in self.RELEASES.items():
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                common = workflow["jobs"]["common"]
+                checkout = next(
+                    step
+                    for step in common["steps"]
+                    if str(step.get("uses", "")).startswith("actions/checkout@")
+                )
+                recover = self.named_step(
+                    workflow, "common", "Recover prepared common resources"
+                )
+                prepare = self.named_step(
+                    workflow, "common", "Prepare or validate common resources"
+                )
+                upload = self.named_step(
+                    workflow, "common", "Upload prepared common resources"
+                )
+
+                self.assertEqual(common["needs"], "candidate")
+                self.assertEqual(
+                    common["permissions"],
+                    {"actions": "read", "contents": "read"},
+                )
+                self.assertEqual(
+                    checkout["with"]["ref"],
+                    "${{ needs.candidate.outputs.candidate_sha }}",
+                )
+                self.assertIn("actions/artifacts?name=$ARTIFACT_NAME", recover["run"])
+                self.assertIn("gh run download", recover["run"])
+                self.assertIn("release resources prepare", prepare["run"])
+                self.assertIn('--candidate "$RUNNER_TEMP/candidate/candidate.json"', prepare["run"])
+                self.assertIn(
+                    config["extension_secret"],
+                    prepare["env"],
+                )
+                self.assertNotIn(config["other_extension_secret"], prepare["env"])
+                self.assertEqual(
+                    upload["with"]["name"],
+                    "${{ needs.candidate.outputs.common_artifact }}",
+                )
+                self.assertTrue(upload["with"]["overwrite"])
+                self.assertEqual(upload["with"]["retention-days"], 30)
+
+    def test_full_release_matrix_is_fixed_and_uses_source_mode(self):
+        lanes = {
+            "linux": ("release-linux.yml", None),
+            "windows": ("release-windows.yml", None),
+            "macos": ("release-macos.yml", "universal"),
         }
-
-    def install_fake_uv(self, root: Path) -> Path:
-        fake_bin = root / "fake-bin"
-        fake_bin.mkdir(exist_ok=True)
-        uv = fake_bin / "uv"
-        uv.write_text(
-            """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$FAKE_UV_CALLS"
-if [[ "$*" == *"release appcast"* ]]; then
-  if [ "$FAKE_APPCAST_RC" -ne 0 ]; then
-    exit "$FAKE_APPCAST_RC"
-  fi
-  for file in $FAKE_APPCAST_FILES; do
-    mkdir -p bos_build/config/appcast
-    printf '<rss/>\\n' > "bos_build/config/appcast/$file"
-  done
-elif [[ "$*" == *"release extensions"* ]]; then
-  if [ "$FAKE_EXTENSIONS_RC" -ne 0 ]; then
-    exit "$FAKE_EXTENSIONS_RC"
-  fi
-  for file in $FAKE_EXTENSION_FILES; do
-    mkdir -p ../../updates/extensions
-    printf '<feed/>\\n' > "../../updates/extensions/$file"
-  done
-fi
-""",
-            encoding="utf-8",
-        )
-        uv.chmod(0o755)
-        return fake_bin
-
-    def install_fake_gh(self, root: Path) -> Path:
-        fake_bin = root / "fake-bin"
-        fake_bin.mkdir(exist_ok=True)
-        gh = fake_bin / "gh"
-        gh.write_text(
-            """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$FAKE_GH_CALLS"
-if [ "$1" = "api" ] && [[ "$*" == *"/releases/tags/"* ]]; then
-  printf '%s\\n' "$FAKE_RELEASE_PROBE"
-  exit "$FAKE_RELEASE_RC"
-fi
-if [ "$1" = "api" ] && [[ "$*" == *"/commits/"* ]]; then
-  printf '%s\\n' "$FAKE_TAG_PROBE"
-  exit "$FAKE_TAG_RC"
-fi
-""",
-            encoding="utf-8",
-        )
-        gh.chmod(0o755)
-        return fake_bin
-
-    def api_probe(self, status: int, body: str) -> str:
-        return f"HTTP/2.0 {status} Status\nContent-Type: application/json\n\n{body}"
-
-    def run_stage_script(
-        self,
-        workflow_name: str,
-        product: str,
-        appcast_files: list[str],
-        *,
-        appcast_rc: int = 0,
-        extensions: str = "skip",
-        extension_files: list[str] | None = None,
-        extensions_rc: int = 0,
-        platforms: str = "all",
-        upload_to_r2: bool = True,
-    ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
-        script = self.named_step(
-            workflow_name,
-            "stage_updates",
-            "Render staged update feeds",
-        )["run"]
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        root = Path(temp.name)
-        workdir = root / "packages" / "browseros"
-        workdir.mkdir(parents=True)
-        fake_bin = self.install_fake_uv(root)
-        env = self.workflow_env(root, product)
-        extension_files = extension_files or []
-        env.update(
-            {
-                "FAKE_APPCAST_FILES": " ".join(appcast_files),
-                "FAKE_APPCAST_RC": str(appcast_rc),
-                "FAKE_EXTENSION_FILES": " ".join(extension_files),
-                "FAKE_EXTENSIONS_RC": str(extensions_rc),
-                "INPUT_EXTENSIONS": extensions,
-                "INPUT_PLATFORMS": platforms,
-                "INPUT_UPLOAD_TO_R2": str(upload_to_r2).lower(),
-                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            }
-        )
-        return self.run_shell(script, env=env, cwd=workdir), root, env
-
-    def run_finalize_script(
-        self,
-        workflow_name: str,
-        product: str,
-        *,
-        release_probe: str,
-        release_rc: int,
-        tag_probe: str = "",
-        tag_rc: int = 1,
-    ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, str]]:
-        script = self.named_step(
-            workflow_name,
-            "finalize",
-            "Create or refresh draft GitHub release",
-        )["run"]
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        root = Path(temp.name)
-        workdir = root / "packages" / "browseros"
-        workdir.mkdir(parents=True)
-        fake_bin = self.install_fake_uv(root)
-        self.install_fake_gh(root)
-        env = self.workflow_env(root, product)
-        env.update(
-            {
-                "FAKE_APPCAST_FILES": "",
-                "FAKE_EXTENSION_FILES": "",
-                "FAKE_GH_CALLS": str(root / "gh-calls"),
-                "FAKE_RELEASE_PROBE": release_probe,
-                "FAKE_RELEASE_RC": str(release_rc),
-                "FAKE_TAG_PROBE": tag_probe,
-                "FAKE_TAG_RC": str(tag_rc),
-                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            }
-        )
-        return self.run_shell(script, env=env, cwd=workdir), root, env
-
-    def test_literal_stage_scripts_emit_exact_three_appcasts_for_all_universal(self):
-        for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
-            expected = [
-                f"appcast{infix}.xml",
-                f"appcast{infix}-x86_64.xml",
-                f"appcast{infix}-win.xml",
-            ]
-            with self.subTest(workflow=workflow_name):
-                result, root, env = self.run_stage_script(
-                    workflow_name,
-                    product,
-                    expected,
-                )
-
-                self.assertEqual(
-                    result.returncode,
-                    0,
-                    msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
-                )
-                staged = sorted(
-                    path.name
-                    for path in (root / "staged-update-feeds").rglob("*.xml")
-                )
-                self.assertEqual(staged, sorted(expected))
-                self.assertIn(
-                    "has_files=true",
-                    Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8"),
-                )
-                call = Path(env["FAKE_UV_CALLS"]).read_text(encoding="utf-8")
-                for token in (
-                    "--platforms all",
-                    "--macos-arch universal",
-                    f"--source-sha {'a' * 40}",
-                    "--workflow-run-id 30418029456",
-                    "--workflow-run-attempt 2",
-                ):
-                    self.assertIn(token, call)
-
-    def test_literal_stage_scripts_fail_on_command_error_or_missing_output(self):
-        for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
-            expected = [
-                f"appcast{infix}.xml",
-                f"appcast{infix}-x86_64.xml",
-                f"appcast{infix}-win.xml",
-            ]
-            for label, files, rc in (
-                ("command", expected, 19),
-                ("missing", expected[:-1], 0),
-            ):
-                with self.subTest(workflow=workflow_name, failure=label):
-                    result, _, _ = self.run_stage_script(
-                        workflow_name,
-                        product,
-                        files,
-                        appcast_rc=rc,
-                    )
-                    self.assertNotEqual(
-                        result.returncode,
-                        0,
-                        msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
-                    )
-
-    def test_literal_stage_scripts_fail_on_extension_error_or_missing_output(self):
-        extension_files = [
-            "update-manifest.alpha.xml",
-            "extensions.alpha.json",
-            "bundled-manifest.xml",
-        ]
-        for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
-            appcast_files = [
-                f"appcast{infix}.xml",
-                f"appcast{infix}-x86_64.xml",
-                f"appcast{infix}-win.xml",
-            ]
-            for label, files, rc in (
-                ("command", extension_files, 23),
-                ("missing", extension_files[:-1], 0),
-            ):
-                with self.subTest(workflow=workflow_name, failure=label):
-                    result, _, _ = self.run_stage_script(
-                        workflow_name,
-                        product,
-                        appcast_files,
-                        extensions="alpha",
-                        extension_files=files,
-                        extensions_rc=rc,
-                    )
-                    self.assertNotEqual(
-                        result.returncode,
-                        0,
-                        msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
-                    )
-
-    def test_literal_stage_gates_skip_linux_without_feed_surface(self):
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            script = self.named_step(
-                workflow_name,
-                "stage_updates",
-                "Evaluate staged feed gate",
-            )["run"]
-            with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                output = root / "output"
-                env = {
-                    **self.workflow_env(root, product),
-                    "GITHUB_OUTPUT": str(output),
-                    "INPUT_PLATFORMS": "linux",
-                    "INPUT_EXTENSIONS": "skip",
-                    "INPUT_INCLUDE_SERVERS": "false",
-                    "INPUT_UPLOAD_TO_R2": "true",
-                    "PREFLIGHT_RESULT": "success",
-                    "ONBOARD_RESULT": "skipped",
-                    "SERVER_RESULT": "skipped",
-                    "LINUX_RESULT": "success",
-                    "WINDOWS_RESULT": "skipped",
-                    "MACOS_RESULT": "skipped",
-                    "EXTENSIONS_RESULT": "skipped",
-                }
-                result = self.run_shell(script, env=env, cwd=root)
-                gate = output.read_text(encoding="utf-8")
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("should_stage=false", gate)
-            self.assertIn("no browser appcast or extension feed", gate)
-
-    def test_linux_extension_only_staging_ignores_browser_r2_switch(self):
-        extension_files = [
-            "update-manifest.alpha.xml",
-            "extensions.alpha.json",
-            "bundled-manifest.xml",
-        ]
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            gate_script = self.named_step(
-                workflow_name,
-                "stage_updates",
-                "Evaluate staged feed gate",
-            )["run"]
-            with self.subTest(workflow=workflow_name), tempfile.TemporaryDirectory() as tmp:
-                gate_root = Path(tmp)
-                gate_output = gate_root / "output"
-                gate_env = {
-                    **self.workflow_env(gate_root, product),
-                    "GITHUB_OUTPUT": str(gate_output),
-                    "INPUT_PLATFORMS": "linux",
-                    "INPUT_EXTENSIONS": "alpha",
-                    "INPUT_INCLUDE_SERVERS": "false",
-                    "INPUT_UPLOAD_TO_R2": "false",
-                    "PREFLIGHT_RESULT": "success",
-                    "ONBOARD_RESULT": "skipped",
-                    "SERVER_RESULT": "skipped",
-                    "LINUX_RESULT": "success",
-                    "WINDOWS_RESULT": "skipped",
-                    "MACOS_RESULT": "skipped",
-                    "EXTENSIONS_RESULT": "success",
-                }
-                gate_result = self.run_shell(
-                    gate_script,
-                    env=gate_env,
-                    cwd=gate_root,
-                )
-                gate = gate_output.read_text(encoding="utf-8")
-
-            self.assertEqual(gate_result.returncode, 0, gate_result.stderr)
-            self.assertIn("should_stage=true", gate)
-
-            result, root, env = self.run_stage_script(
-                workflow_name,
-                product,
-                [],
-                extensions="alpha",
-                extension_files=extension_files,
-                platforms="linux",
-                upload_to_r2=False,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
-            )
-            staged = sorted(
-                path.name
-                for path in (root / "staged-update-feeds").rglob("*")
-                if path.is_file()
-            )
-            self.assertEqual(staged, sorted(extension_files))
-            calls = Path(env["FAKE_UV_CALLS"]).read_text(encoding="utf-8")
-            self.assertNotIn("release appcast", calls)
-            self.assertIn("release extensions", calls)
-            summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
-            self.assertIn("Browser artifact promotion skipped", summary)
-
-    def test_partial_stage_summary_preserves_promotion_contract(self):
-        for workflow_name, product, infix in self.RELEASE_WORKFLOWS:
-            expected = [f"appcast{infix}-win.xml"]
-            with self.subTest(workflow=workflow_name):
-                result, _, env = self.run_stage_script(
-                    workflow_name,
-                    product,
-                    expected,
-                    platforms="windows",
-                )
-
-                self.assertEqual(
-                    result.returncode,
-                    0,
-                    msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
-                )
-                summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(
-                    encoding="utf-8"
-                )
-                self.assertIn("--platform win", summary)
-                self.assertIn(
-                    "release publish --version 0.49.0 "
-                    f"--product {product} --platform win "
-                    "--macos-arch universal "
-                    f"--source-sha {'a' * 40} "
-                    "--workflow-run-id 30418029456 "
-                    "--workflow-run-attempt 2",
-                    summary,
-                )
-                for token in (
-                    "--platforms windows",
-                    "--macos-arch universal",
-                    f"--source-sha {'a' * 40}",
-                    "--workflow-run-id 30418029456",
-                    "--workflow-run-attempt 2",
-                    "--publish",
-                ):
-                    self.assertIn(token, summary)
-
-    def test_literal_finalize_gates_require_successful_staging(self):
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            script = self.named_step(
-                workflow_name,
-                "finalize",
-                "Evaluate draft release gate",
-            )["run"]
-            for stage_result, expected in (("failure", "false"), ("success", "true")):
-                with self.subTest(
-                    workflow=workflow_name,
-                    stage_result=stage_result,
-                ), tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    output = root / "output"
-                    env = {
-                        **self.workflow_env(root, product),
-                        "GITHUB_OUTPUT": str(output),
-                        "INPUT_PLATFORMS": "linux",
-                        "INPUT_INCLUDE_SERVERS": "false",
-                        "INPUT_UPLOAD_TO_R2": "true",
-                        "PREFLIGHT_RESULT": "success",
-                        "ONBOARD_RESULT": "skipped",
-                        "SERVER_RESULT": "skipped",
-                        "LINUX_RESULT": "success",
-                        "WINDOWS_RESULT": "skipped",
-                        "MACOS_RESULT": "skipped",
-                        "EXTENSIONS_RESULT": "skipped",
-                        "STAGE_UPDATES_RESULT": stage_result,
-                    }
-                    result = self.run_shell(script, env=env, cwd=root)
-
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    gate = output.read_text(encoding="utf-8")
-                    self.assertIn(f"should_create={expected}", gate)
-                    if stage_result == "failure":
-                        self.assertIn("staged feed result is failure", gate)
-
-    def test_finalize_release_inspection_and_tag_target_fail_closed(self):
-        sha = "a" * 40
-        other_sha = "b" * 40
-        cases = (
-            (
-                "inspection-error",
-                self.api_probe(500, '{"message":"server error"}'),
-                1,
-                "",
-                1,
-                "Could not inspect release",
-            ),
-            (
-                "published",
-                self.api_probe(
-                    200,
-                    f'{{"draft":false,"target_commitish":"{sha}"}}',
-                ),
-                0,
-                "",
-                1,
-                "not a draft",
-            ),
-            (
-                "tag-mismatch",
-                self.api_probe(
-                    200,
-                    f'{{"draft":true,"target_commitish":"{sha}"}}',
-                ),
-                0,
-                self.api_probe(200, f'{{"sha":"{other_sha}"}}'),
-                0,
-                "not workflow SHA",
-            ),
-            (
-                "orphaned-tag-mismatch",
-                self.api_probe(404, '{"message":"Not Found"}'),
-                1,
-                self.api_probe(200, f'{{"sha":"{other_sha}"}}'),
-                0,
-                "not workflow SHA",
-            ),
-            (
-                "unrelated-tag-lookup-error",
-                self.api_probe(404, '{"message":"Not Found"}'),
-                1,
-                self.api_probe(422, '{"message":"Validation Failed"}'),
-                1,
-                "Could not resolve release tag",
-            ),
-        )
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            for label, release, release_rc, tag, tag_rc, error in cases:
-                with self.subTest(workflow=workflow_name, failure=label):
-                    result, root, _ = self.run_finalize_script(
-                        workflow_name,
-                        product,
-                        release_probe=release,
-                        release_rc=release_rc,
-                        tag_probe=tag,
-                        tag_rc=tag_rc,
-                    )
-
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(error, result.stdout + result.stderr)
-                    self.assertFalse((root / "uv-calls").exists())
-
-    def test_finalize_accepts_verified_absence_or_matching_draft_target(self):
-        sha = "a" * 40
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            expected_tag = (
-                "browserclaw/v0.49.0"
-                if product == "browserclaw"
-                else "v0.49.0"
-            )
-            missing_tag = self.api_probe(
-                422,
-                f'{{"message":"No commit found for SHA: {expected_tag}"}}',
-            )
-            cases = (
-                (
-                    "absent",
-                    self.api_probe(404, '{"message":"Not Found"}'),
-                    1,
-                    missing_tag,
-                    1,
-                ),
-                (
-                    "matching-draft",
-                    self.api_probe(
-                        200,
-                        f'{{"draft":true,"target_commitish":"{sha}"}}',
-                    ),
-                    0,
-                    self.api_probe(200, f'{{"sha":"{sha}"}}'),
-                    0,
-                ),
-                (
-                    "matching-untagged-draft",
-                    self.api_probe(
-                        200,
-                        f'{{"draft":true,"target_commitish":"{sha}"}}',
-                    ),
-                    0,
-                    missing_tag,
-                    1,
-                ),
-            )
-            for label, release, release_rc, tag, tag_rc in cases:
-                with self.subTest(workflow=workflow_name, state=label):
-                    result, root, env = self.run_finalize_script(
-                        workflow_name,
-                        product,
-                        release_probe=release,
-                        release_rc=release_rc,
-                        tag_probe=tag,
-                        tag_rc=tag_rc,
-                    )
-
+        for workflow_name, config in self.RELEASES.items():
+            workflow = self.load_workflow(workflow_name)
+            jobs = workflow["jobs"]
+            for job_name, (called_workflow, arch) in lanes.items():
+                with self.subTest(workflow=workflow_name, lane=job_name):
+                    job = jobs[job_name]
+                    self.assertNotIn("if", job)
+                    self.assertEqual(set(job["needs"]), {"candidate", "common"})
                     self.assertEqual(
-                        result.returncode,
-                        0,
-                        msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+                        job["uses"], f"./.github/workflows/{called_workflow}"
                     )
-                    uv_calls = Path(env["FAKE_UV_CALLS"]).read_text(
-                        encoding="utf-8"
+                    self.assertEqual(job["with"]["products"], config["product"])
+                    self.assertEqual(job["with"]["resource_mode"], "source")
+                    self.assertIs(job["with"]["upload_to_r2"], True)
+                    self.assertEqual(
+                        job["with"]["candidate_sha"],
+                        "${{ needs.candidate.outputs.candidate_sha }}",
                     )
-                    for token in (
-                        "release github create",
-                        "--version 0.49.0",
-                        "--draft",
-                        f"--product {product}",
-                        "--platforms all",
-                        "--macos-arch universal",
-                        f"--source-sha {sha}",
-                        "--workflow-run-id 30418029456",
-                        "--workflow-run-attempt 2",
-                        f"--target {sha}",
-                    ):
-                        self.assertIn(token, uv_calls)
-                    gh_calls = (root / "gh-calls").read_text(encoding="utf-8")
-                    expected_tag_uri = expected_tag.replace("/", "%2F")
-                    self.assertIn(
-                        f"/releases/tags/{expected_tag_uri}",
-                        gh_calls,
+                    self.assertEqual(
+                        job["with"]["prepared_resources_artifact"],
+                        "${{ needs.candidate.outputs.common_artifact }}",
                     )
-                    self.assertNotIn("release edit", gh_calls)
+                    if job_name == "windows":
+                        self.assertIs(job["with"]["sign"], True)
+                    if arch is not None:
+                        self.assertEqual(job["with"]["arch"], arch)
 
-    def test_finalize_never_retargets_an_untagged_draft(self):
-        for workflow_name, product, _ in self.RELEASE_WORKFLOWS:
-            expected_tag = (
-                "browserclaw/v0.49.0"
-                if product == "browserclaw"
-                else "v0.49.0"
-            )
-            missing_tag = self.api_probe(
-                422,
-                f'{{"message":"No commit found for SHA: {expected_tag}"}}',
-            )
+                    serialized_secrets = yaml.safe_dump(job["secrets"])
+                    self.assertNotEqual(job["secrets"], "inherit")
+                    if job_name == "linux":
+                        self.assertNotIn("ESIGNER_", serialized_secrets)
+                        self.assertNotIn("MACOS_", serialized_secrets)
+                        self.assertNotIn("SPARKLE_PRIVATE_KEY", serialized_secrets)
+                    elif job_name == "windows":
+                        self.assertIn("ESIGNER_USERNAME", serialized_secrets)
+                        self.assertNotIn("MACOS_", serialized_secrets)
+                    else:
+                        self.assertIn("MACOS_CERTIFICATE_NAME", serialized_secrets)
+                        self.assertNotIn("ESIGNER_", serialized_secrets)
 
-            result, root, _ = self.run_finalize_script(
-                workflow_name,
-                product,
-                release_probe=self.api_probe(
-                    200,
-                    '{"draft":true,"target_commitish":"old"}',
-                ),
-                release_rc=0,
-                tag_probe=missing_tag,
-                tag_rc=1,
-            )
+    def test_gate_merge_and_finalization_are_strictly_ordered(self):
+        for workflow_name, config in self.RELEASES.items():
+            with self.subTest(workflow=workflow_name):
+                workflow = self.load_workflow(workflow_name)
+                jobs = workflow["jobs"]
+                self.assertEqual(
+                    jobs["gate"]["permissions"],
+                    {"actions": "read", "contents": "read"},
+                )
+                self.assertEqual(
+                    jobs["merge"]["permissions"],
+                    {
+                        "actions": "read",
+                        "contents": "write",
+                        "pull-requests": "write",
+                    },
+                )
+                self.assertEqual(
+                    jobs["finalize"]["permissions"],
+                    {"actions": "read", "contents": "write"},
+                )
+                self.assertEqual(
+                    set(jobs["gate"]["needs"]),
+                    {"candidate", "linux", "windows", "macos"},
+                )
+                gate = self.named_step(
+                    workflow, "gate", "Validate complete native matrix"
+                )
+                self.assertIn("release browser gate", gate["run"])
+                self.assertIn('ne 3', gate["run"])
+                lane_download = self.named_step(
+                    workflow, "gate", "Download lane manifests"
+                )
+                self.assertEqual(
+                    lane_download["with"]["pattern"],
+                    f"lane-{config['product']}-*",
+                )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "Refusing to retarget a draft",
-                result.stdout + result.stderr,
-            )
-            self.assertFalse((root / "uv-calls").exists())
-            gh_calls = (root / "gh-calls").read_text(encoding="utf-8")
-            self.assertNotIn("release edit", gh_calls)
+                self.assertEqual(set(jobs["merge"]["needs"]), {"candidate", "gate"})
+                merge = self.named_step(workflow, "merge", "Merge exact candidate")
+                self.assertIn("release candidate merge", merge["run"])
+                self.assertIn("--github-summary", merge["run"])
+                merged_upload = self.named_step(
+                    workflow, "merge", "Upload merged candidate record"
+                )
+                self.assertTrue(merged_upload["with"]["overwrite"])
 
-    def test_release_workflows_pin_source_and_draft_to_workflow_sha(self):
-        reusable = (WORKFLOW_DIR / "build-browseros.yml").read_text(
-            encoding="utf-8"
+                self.assertEqual(
+                    set(jobs["finalize"]["needs"]),
+                    {"candidate", "gate", "merge"},
+                )
+                finalize = self.named_step(
+                    workflow, "finalize", "Create or refresh browser draft"
+                )
+                self.assertIn("release browser finalize", finalize["run"])
+                self.assertIn("--preview-dir", finalize["run"])
+                self.assertIn("--github-summary", finalize["run"])
+                preview = self.named_step(
+                    workflow, "finalize", "Upload finalization previews"
+                )
+                self.assertIn(
+                    f"release-finalization-{config['product']}-",
+                    preview["with"]["name"],
+                )
+
+    def test_all_component_allocators_share_one_preparation_lock(self):
+        workflows = (
+            "release-browseros.yml",
+            "release-browserclaw.yml",
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-extensions.yml",
         )
-        self.assertIn("ref: ${{ inputs.ref || github.sha }}", reusable)
+        for workflow_name in workflows:
+            workflow = self.load_workflow(workflow_name)
+            job_name = "candidate" if "candidate" in workflow["jobs"] else "prepare"
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(
+                    workflow["jobs"][job_name]["concurrency"]["group"],
+                    "release-component-allocation",
+                )
 
-        for workflow_name, _, _ in self.RELEASE_WORKFLOWS:
-            workflow = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
-            self.assertNotIn("github.ref_name", workflow)
-            self.assertNotIn("ref: ${{ github.ref }}", workflow)
-            self.assertIn('actual_target" != "$GITHUB_SHA"', workflow)
-            self.assertIn('release_status" = "404"', workflow)
-            self.assertIn('--target "$GITHUB_SHA"', workflow)
-
-        browserclaw = (WORKFLOW_DIR / "release-browserclaw.yml").read_text(
-            encoding="utf-8"
+    def test_full_workflows_have_no_component_publication_choreography(self):
+        removed = (
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-extensions.yml",
+            "defer_finalize",
+            "release.plan",
+            "release publish",
+            "release appcast",
+            "release extensions",
+            "browseros_server_version",
+            "browserclaw_server_version",
+            "browserclaw_onboard_version",
+            "bundled_extensions_manifest_url",
         )
-        self.assertIn('echo "browserclaw/v$major.$minor.$build"', browserclaw)
+        for workflow_name in self.RELEASES:
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow_name):
+                for token in removed:
+                    self.assertNotIn(token, text)
+
+    def test_extension_build_secrets_exist_only_in_common_producer(self):
+        extension_secrets = {
+            "BROWSEROS_AGENT_V2_KEY",
+            "BROWSERCLAW_KEY",
+            "VITE_PUBLIC_SENTRY_DSN",
+            "VITE_PUBLIC_POSTHOG_KEY",
+            "VITE_CLAW_POSTHOG_KEY",
+            "SENTRY_AUTH_TOKEN",
+        }
+        for workflow_name in self.RELEASES:
+            workflow = self.load_workflow(workflow_name)
+            common_env = self.named_step(
+                workflow, "common", "Prepare or validate common resources"
+            )["env"]
+            for job_name, job in workflow["jobs"].items():
+                if job_name == "common" or "steps" not in job:
+                    continue
+                serialized = yaml.safe_dump(job)
+                with self.subTest(workflow=workflow_name, job=job_name):
+                    for secret in extension_secrets:
+                        if secret in common_env:
+                            self.assertNotIn(secret, serialized)
+
+    def test_macos_product_artifact_globs_do_not_overlap(self):
+        workflow = self.load_workflow("release-macos.yml")
+        upload_steps = {
+            step["name"]: step
+            for step in workflow["jobs"]["build"]["steps"]
+            if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+        }
+        browseros_path = upload_steps["Upload BrowserOS DMG artifact"]["with"]["path"]
+        neo_path = upload_steps["Upload BrowserOS neo DMG artifact"]["with"]["path"]
+
+        self.assertIn("/BrowserOS_*.dmg\n!", browseros_path)
+        self.assertIn("/BrowserOS_neo_*.dmg", browseros_path)
+        self.assertTrue(neo_path.endswith("/BrowserOS_neo_*.dmg"))
 
     def test_top_level_release_changes_trigger_build_system_tests(self):
         workflow = self.load_workflow("bos-build-tests.yml")
@@ -1223,6 +1056,143 @@ fi
         paths = triggers["pull_request"]["paths"]
         self.assertIn(".github/workflows/release-browseros.yml", paths)
         self.assertIn(".github/workflows/release-browserclaw.yml", paths)
+
+
+class NightlyWorkflowTest(unittest.TestCase):
+    NIGHTLIES = {
+        "nightly-browseros.yml": {
+            "product": "browseros",
+            "build_step": "Build BrowserOS (macOS arm64)",
+            "extension_secret": "BROWSEROS_AGENT_V2_KEY",
+            "server_secret": "BROWSEROS_CONFIG_URL",
+            "tag": "nightly-browseros",
+        },
+        "nightly-browserclaw.yml": {
+            "product": "browserclaw",
+            "build_step": "Build BrowserOS neo (macOS arm64)",
+            "extension_secret": "BROWSERCLAW_KEY",
+            "server_secret": "CLAW_POSTHOG_KEY",
+            "tag": "nightly-browserclaw",
+        },
+    }
+
+    def load_workflow(self, workflow_name: str) -> dict[str, object]:
+        path = WORKFLOW_DIR / workflow_name
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_nightlies_use_one_source_mode_build_without_inline_staging(self):
+        removed = (
+            "scripts/build/server.ts",
+            "claw-server-rust-local.sh",
+            "extract_artifact_zip",
+            "Stage BrowserOS",
+            "release candidate",
+            "release component",
+        )
+        for workflow_name, config in self.NIGHTLIES.items():
+            workflow = self.load_workflow(workflow_name)
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            build = next(
+                step
+                for step in workflow["jobs"]["build"]["steps"]
+                if step.get("name") == config["build_step"]
+            )
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(text.count("uv run browseros build"), 1)
+                for token in removed:
+                    self.assertNotIn(token, text)
+                for token in (
+                    "--profile nightly-macos",
+                    f"--product {config['product']}",
+                    "--arch arm64",
+                    '--source-sha "$(git rev-parse HEAD)"',
+                ):
+                    self.assertIn(token, build["run"])
+                self.assertIn(config["extension_secret"], build["env"])
+                self.assertIn(config["server_secret"], build["env"])
+                self.assertIn("SPARKLE_PRIVATE_KEY", build["env"])
+                self.assertIn("R2_SECRET_ACCESS_KEY", build["env"])
+
+    def test_nightlies_preserve_browser_version_and_rolling_release_behavior(self):
+        for workflow_name, config in self.NIGHTLIES.items():
+            workflow = self.load_workflow(workflow_name)
+            steps = workflow["jobs"]["build"]["steps"]
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            rolling = next(
+                step for step in steps if step.get("name", "").startswith("Update rolling")
+            )
+            with self.subTest(workflow=workflow_name):
+                self.assertIn(config["tag"], rolling["run"])
+                self.assertIn("gh release create", rolling["run"])
+                self.assertIn("actions/upload-artifact@v7", text)
+                self.assertNotIn("Cargo.lock", text)
+                self.assertNotIn("bun.lock", text)
+                self.assertNotIn("release candidate", text)
+
+    def test_nightly_profile_prepares_common_and_server_once(self):
+        from bos_build.core.planner import load_profile, plan
+
+        profile = load_profile(
+            REPO_ROOT
+            / "packages/browseros/bos_build/profiles/nightly-macos.yaml"
+        ).switches
+        for product in ("browseros", "browserclaw"):
+            switches = replace(profile, product=product).resolved()
+            steps = plan(switches, "arm64", "macos")
+            with self.subTest(product=product):
+                self.assertEqual(steps.count("prepare_common_resources"), 1)
+                self.assertEqual(steps.count("prepare_server_resources"), 1)
+                self.assertNotIn("download_resources", steps)
+
+
+class ReleaseDocumentationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        docs = REPO_ROOT / "packages/browseros/bos_build"
+        cls.readme = (docs / "README.md").read_text(encoding="utf-8")
+        cls.release = (docs / "docs/release-ci.md").read_text(encoding="utf-8")
+        cls.nightly = (docs / "docs/nightly-macos-ci.md").read_text(
+            encoding="utf-8"
+        )
+        cls.warp = (docs / "docs/warpbuild-ci.md").read_text(encoding="utf-8")
+
+    def test_release_runbook_covers_source_and_recovery_commands(self):
+        for token in (
+            "browseros release candidate ensure",
+            "browseros release resources prepare",
+            "--prepared-resources",
+            "--resource-mode source",
+            'gh run rerun "$RUN_ID" --failed',
+            "browseros release browser finalize",
+            "--resource-mode published",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
+
+    def test_runbooks_state_native_host_and_publication_boundaries(self):
+        for token in (
+            "One machine cannot produce the complete signed release matrix",
+            "Linux x64",
+            "Windows x64",
+            "macOS arm64, universal plan",
+            "Component OTA remains a separate operation",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
+        self.assertIn("resource_mode: source", self.nightly)
+        self.assertIn("resource-mode=source", self.warp)
+
+    def test_primary_docs_do_not_describe_retired_resource_staging(self):
+        text = "\n".join((self.readme, self.release, self.nightly, self.warp))
+        for token in (
+            "bundle_local_extensions",
+            "extensions_version",
+            "include_servers",
+            "Stage BrowserOS nightly resources",
+            "claw-server-rust-local.sh",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
 
 
 class ChromiumGitRunbookTest(unittest.TestCase):

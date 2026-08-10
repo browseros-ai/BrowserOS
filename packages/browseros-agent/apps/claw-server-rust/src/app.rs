@@ -12,7 +12,7 @@ use crate::{
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
         profiles::ProfileService,
-        recordings::{RecordingIngestService, RecordingStore},
+        recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
         replay::ReplayService,
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
@@ -32,6 +32,7 @@ pub struct AppState {
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
+    pub live_recordings: Arc<LiveRecordingBus>,
     pub replay: Arc<ReplayService>,
     pub screenshots: Arc<ScreenshotService>,
     pub tab_activity: Arc<TabActivityService>,
@@ -108,8 +109,13 @@ impl AppState {
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
             BrowserService::new(config.cdp_port, sessions.ownership(), tab_registry.clone());
-        let recording_ingest =
-            RecordingIngestService::new(recordings.clone(), browser.clone(), tab_registry.clone());
+        let live_recordings = LiveRecordingBus::new();
+        let recording_ingest = RecordingIngestService::new(
+            recordings.clone(),
+            browser.clone(),
+            tab_registry.clone(),
+            live_recordings.clone(),
+        );
         let tab_activity = Arc::new(TabActivityService::default());
         let visuals = SessionVisualService::new(
             sessions.clone(),
@@ -148,6 +154,7 @@ impl AppState {
             session_tabs,
             recordings,
             recording_ingest,
+            live_recordings,
             replay,
             screenshots,
             tab_activity,

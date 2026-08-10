@@ -1,3 +1,2 @@
 preset: release
-download: false
-bundle_local_extensions: true
+resource_mode: source

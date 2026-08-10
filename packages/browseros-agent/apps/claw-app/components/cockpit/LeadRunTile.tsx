@@ -1,6 +1,5 @@
 import { ArrowUpRight } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
-import { AgentDot } from '@/components/audit/AgentDot'
 import { cn } from '@/lib/utils'
 import {
   type TaskSummary,
@@ -12,26 +11,31 @@ import {
   formatDuration,
   formatRelative,
 } from '@/screens/audit/audit.helpers'
+import {
+  type ActivityCardCaptionTone,
+  activityCardCaptionTones,
+} from './activityCardTone'
 
 interface LeadRunTileProps {
   task: TaskSummary
   now: number
   className?: string
+  captionTone?: ActivityCardCaptionTone
 }
 
 /**
  * Lead-story tile for the cockpit editorial layout.
  *
- * Split into two zones so the caption never has to fight the
- * screenshot for legibility: the top ~62% is the raw screenshot,
- * the bottom ~38% is a solid dark caption block carrying the
- * session meta in white. The transition between the two is a
- * short gradient fade so the seam does not read as a hard line.
- *
- * Hover raises a tiny arrow chip in the top-right corner as the
- * only affordance. Whole tile is a link.
+ * Cyanotype lead tile: captured session media in a quiet well over
+ * a tone-switchable caption. The new-tab default is the light tone;
+ * hover previews can retain the saturated blue treatment.
  */
-export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
+export function LeadRunTile({
+  task,
+  now,
+  className,
+  captionTone = 'light',
+}: LeadRunTileProps) {
   const isLive = task.status === 'live'
   const isFailed = task.status === 'failed'
   const isStopped = task.status === 'cancelled'
@@ -44,11 +48,11 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
       state={{ from: location.pathname }}
       data-testid={`lead-tile-${task.sessionId}`}
       className={cn(
-        'group relative flex flex-col overflow-hidden rounded-[18px] border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40',
+        'group relative flex flex-col overflow-hidden rounded-[9px] border border-cyanotype-border bg-card transition-[border-color,box-shadow] duration-150 hover:border-cyanotype-blue hover:shadow-sm',
         className,
       )}
     >
-      <div className="relative flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden border-cyanotype-border border-b bg-cyanotype-well">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
             src={taskScreenshotUrl(
@@ -62,11 +66,11 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
             className="absolute inset-0 h-full w-full object-cover object-top"
           />
         ) : screenshotId !== null ? (
-          <div className="absolute inset-0 animate-pulse bg-card-tint" />
+          <div className="absolute inset-0 animate-pulse bg-cyanotype-hover" />
         ) : (
           <LeadNoShotComposition task={task} />
         )}
-        <span className="pointer-events-none absolute top-3 right-3 flex size-8 items-center justify-center rounded-full bg-white/85 text-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
+        <span className="pointer-events-none absolute top-3 right-3 flex size-8 items-center justify-center rounded-full bg-white/85 text-cyanotype-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
           <ArrowUpRight className="size-4" />
         </span>
       </div>
@@ -76,6 +80,7 @@ export function LeadRunTile({ task, now, className }: LeadRunTileProps) {
         isLive={isLive}
         isFailed={isFailed}
         isStopped={isStopped}
+        tone={captionTone}
       />
     </NavLink>
   )
@@ -87,77 +92,67 @@ function Caption({
   isLive,
   isFailed,
   isStopped,
+  tone,
 }: {
   task: TaskSummary
   now: number
   isLive: boolean
   isFailed: boolean
   isStopped: boolean
+  tone: ActivityCardCaptionTone
 }) {
+  const toneClasses = activityCardCaptionTones[tone]
   return (
-    <div className="flex flex-col gap-1 bg-ink-deep px-5 py-3 text-white">
-      <div className="flex items-center gap-3 font-mono text-[10.5px] text-white/80 uppercase tracking-[0.08em]">
-        <span className="inline-flex items-center gap-1.5">
-          <AgentDot slug={task.slug} />
-          <span className="text-white">{task.label}</span>
-        </span>
-        {isLive && (
-          <span className="inline-flex items-center gap-1.5 text-[#8fb4ff]">
-            <span
-              aria-hidden
-              className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff] shadow-[0_0_8px_hsl(221_100%_78%/0.6)]"
-            />
-            LIVE
-          </span>
-        )}
+    <div
+      className={cn(
+        'relative flex flex-col gap-[7px] px-5 pt-4 pb-[18px]',
+        toneClasses.surface,
+      )}
+      data-caption-tone={tone}
+    >
+      <div className="flex items-center gap-2 font-medium text-[11.5px] leading-[14px]">
+        <span className="truncate">{task.label}</span>
         {isFailed && (
-          <span className="inline-flex items-center gap-1.5 text-red-400">
-            <span
-              aria-hidden
-              className="inline-block size-1.5 rounded-full bg-red-400"
-            />
+          <span className="rounded-full bg-red-tint px-2 py-0.5 font-bold text-[10px] text-cyanotype-error">
             FAILED
           </span>
         )}
-        {isStopped && (
-          <span className="inline-flex items-center gap-1.5 text-white/65">
-            <span
-              aria-hidden
-              className="inline-block size-1.5 rounded-full bg-white/50"
-            />
-            STOPPED
-          </span>
-        )}
+        {isStopped && <span className={toneClasses.subdued}>STOPPED</span>}
       </div>
-      <h2 className="truncate font-semibold text-[17px] text-white leading-tight tracking-tight md:text-[19px]">
+      <h2 className="truncate font-bold text-[22px] leading-[1.2] tracking-[-0.02em]">
         {task.name}
       </h2>
-      <p className="font-mono text-[11.5px] text-white/70 tabular-nums">
-        {formatDuration(task.durationMs)}{' '}
-        <span className="text-white/40">·</span> {task.dispatchCount} tool
-        {task.dispatchCount === 1 ? '' : 's'}{' '}
-        <span className="text-white/40">·</span>{' '}
+      <p
+        className={cn(
+          'text-[11.5px] tabular-nums leading-[1.5]',
+          isLive && 'pr-16',
+        )}
+      >
+        {formatDuration(task.durationMs)} · {task.dispatchCount} tool
+        {task.dispatchCount === 1 ? '' : 's'} ·{' '}
         {isLive
           ? 'running now'
           : `started ${formatRelative(task.startedAt, now)}`}
       </p>
-      <p className="truncate font-mono text-[11px] text-white/55">
+      <p
+        className={cn('truncate text-[11px] leading-[1.5]', isLive && 'pr-16')}
+      >
         {abbreviateSequence(task.toolSequence)}
       </p>
+      {isLive && (
+        <span className="absolute right-3 bottom-4 rounded-full bg-cyanotype-live px-2.5 py-[3px] font-semibold text-[11px] text-cyanotype-live-ink leading-[14px]">
+          Live
+        </span>
+      )}
     </div>
   )
 }
 
-/**
- * When the lead session has no screenshot yet the top zone becomes
- * a theme-following wash with the tool sequence rendered as large
- * mono type. The absence of an image becomes a design opportunity.
- */
 function LeadNoShotComposition({ task }: { task: TaskSummary }) {
   const verbs = task.toolSequence.slice(0, 5)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-accent-tint via-secondary to-muted">
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 p-8 font-mono text-[30px] text-ink/12 leading-[1.05] tracking-tight md:text-[38px]">
+    <div className="absolute inset-0 bg-cyanotype-well">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-1 p-8 text-[30px] text-cyanotype-ink/12 leading-[1.05] tracking-tight md:text-[38px]">
         {verbs.map((verb, idx) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: tool sequence is stable-ordered per session, not a reorderable list

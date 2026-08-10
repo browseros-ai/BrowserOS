@@ -142,6 +142,20 @@ function createContractSession(): BrowserSession {
           ],
         }
       }
+      if (method === 'History.getRecent') {
+        return {
+          entries: [
+            {
+              id: 'history-1',
+              url: 'https://example.com/history',
+              title: 'History',
+              lastVisitTime: 1_785_456_000_000,
+              visitCount: 2,
+              typedCount: 1,
+            },
+          ],
+        }
+      }
       if (
         method === 'Browser.createTabGroup' ||
         method === 'Browser.addTabsToGroup' ||
@@ -213,6 +227,7 @@ describe('browser tool structured contract', () => {
           action: 'close',
           groupId: 'group-1',
         }),
+        history: await call('history', { maxResults: 1 }),
         navigate: await call('navigate', {
           page: 1,
           action: 'url',
@@ -272,6 +287,7 @@ describe('browser tool structured contract', () => {
         'tab_groups.update': ['group'],
         'tab_groups.ungroup': ['count', 'pageIds'],
         'tab_groups.close': ['groupId'],
+        history: ['count', 'entries'],
         navigate: ['page', 'url'],
         snapshot: ['contentLength', 'page', 'tokenEstimate', 'writtenToFile'],
         diff: ['added', 'changed', 'removed'],

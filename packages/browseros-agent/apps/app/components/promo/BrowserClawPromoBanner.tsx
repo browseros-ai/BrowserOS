@@ -19,12 +19,12 @@ export const BrowserClawPromoBannerCard: FC<{
   <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md">
     <img
       src={BrowserClawLogo}
-      alt="BrowserClaw"
+      alt="BrowserOS neo"
       className="h-10 w-10 shrink-0 rounded-lg"
     />
     <div className="min-w-0 flex-1">
       <p className="flex items-center gap-2 font-semibold text-sm">
-        Meet BrowserClaw — the browser for AI agents
+        Meet BrowserOS neo — the browser for AI agents
       </p>
       <p className="text-muted-foreground text-xs">
         A new product from the BrowserOS team — free, open source, and ready to

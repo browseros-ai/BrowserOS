@@ -1,6 +1,6 @@
 # browseros-dogfood
 
-Internal BrowserOS dogfooding CLI for running BrowserOS or BrowserClaw against a copied BrowserOS profile.
+Internal BrowserOS dogfooding CLI for running BrowserOS or BrowserOS neo against a copied BrowserOS profile.
 
 ## What It Does
 
@@ -11,9 +11,9 @@ High level:
 - You point it at a BrowserOS repo clone used for alpha dogfooding.
 - It tracks a configured branch for that clone and switches to it before builds and update commands.
 - It imports your normal BrowserOS profile into a target-specific dogfood profile.
-- It keeps BrowserOS and BrowserClaw state separate from your normal app state and from each other.
+- It keeps BrowserOS and BrowserOS neo state separate from your normal app state and from each other.
 - For BrowserOS, it builds the local extension, starts the local server, and launches the installed BrowserOS app with the alpha Dock icon against them.
-- For BrowserClaw, it starts the BrowserClaw WXT app and standalone Claw server against the installed BrowserClaw app, falling back to BrowserOS when BrowserClaw is not installed.
+- For BrowserOS neo, it starts the BrowserOS neo WXT app and standalone Claw server against the installed BrowserOS neo app, falling back to BrowserOS when BrowserOS neo is not installed.
 - It does not auto-pull on `start`; you choose when to update the checkout.
 
 ## Requirements
@@ -22,7 +22,7 @@ High level:
 - Go.
 - Bun.
 - Rust/Cargo for the BrowserClaw server.
-- BrowserOS installed at `/Applications/BrowserOS.app`; BrowserClaw optionally installed at `/Applications/BrowserClaw.app`.
+- BrowserOS installed at `/Applications/BrowserOS.app`; BrowserOS neo optionally installed at `/Applications/BrowserOS neo.app`.
 - A separate BrowserOS monorepo checkout for alpha dogfood.
 
 ## Install
@@ -55,7 +55,7 @@ browseros-dogfood --claw init
 
 - `Repo path`: the full path to the root BrowserOS git repo clone.
 - `Branch`: the branch dogfood should track. It defaults to the selected repo's current branch, or `main`.
-- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`; Claw start resolves to BrowserClaw at launch time when available.
+- `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`; Claw start resolves to BrowserOS neo at launch time when available.
 - `Source profile`: your main installed BrowserOS profile.
 
 Use a separate clone for the repo path. This clone is what `browseros-dogfood` uses to run alpha dogfood builds, so ideally it is not the same checkout you use for actual dev work. Give the full root repo path, for example `/Users/you/code/browseros-alpha`.
@@ -94,16 +94,16 @@ browseros-dogfood --claw stop
 - `pull` switches to the configured branch and updates the configured repo for the next sync start.
 - `restart --pull` switches to the configured branch, updates the configured repo, rebuilds, and restarts when new changes land upstream.
 - `logs` prints log file paths; `logs tail` follows background dogfood, browser/app, and server logs.
-- BrowserOS and BrowserClaw use separate locks, sockets, state files, profiles, and logs.
+- BrowserOS and BrowserOS neo use separate locks, sockets, state files, profiles, and logs.
 
 ## State And Profile Safety
 
 `browseros-dogfood` keeps alpha dogfood separate from normal BrowserOS:
 
 - BrowserOS state, including the local server state and VM data, lives under `~/.browseros-dogfood`.
-- BrowserClaw state lives under `~/.browseros-claw-dogfood`.
+- BrowserOS neo state lives under `~/.browseros-claw-dogfood`.
 - The imported BrowserOS dogfood profile lives under `~/.config/browseros-dogfood/browseros/profile`.
-- The imported BrowserClaw dogfood profile lives under `~/.config/browseros-dogfood/claw/profile`.
+- The imported BrowserOS neo dogfood profile lives under `~/.config/browseros-dogfood/claw/profile`.
 - Your installed BrowserOS profile is only used as the source import. It is not where alpha dogfood runs.
 - Installed extensions, extension-specific settings/state, and extension-owned IndexedDB data are copied so dogfood sessions keep extension setup close to your normal profile.
 - Cache and broad site storage directories are not copied.

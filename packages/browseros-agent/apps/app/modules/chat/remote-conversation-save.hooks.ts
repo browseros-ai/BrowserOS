@@ -108,6 +108,7 @@ export function useRemoteConversationSave() {
 
   return {
     isLoggedIn: !!userId,
+    userId,
     saveConversation,
     resetConversation,
     markMessagesAsSaved,

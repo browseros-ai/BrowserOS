@@ -1,4 +1,4 @@
-//! Canonical BrowserClaw HTTP API and shared request middleware.
+//! Canonical BrowserOS neo HTTP API and shared request middleware.
 
 use super::mcp::streamable_http_service;
 use crate::{
@@ -20,6 +20,7 @@ use ulid::Ulid;
 pub(crate) mod audit;
 mod cockpit;
 mod connections;
+mod live;
 mod previews;
 mod recordings;
 mod replay;
@@ -70,6 +71,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/sessions/{session_id}/recording/events",
             get(replay::download_events),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/recording/live",
+            get(live::live),
         )
         .route(
             "/api/v1/recordings/events",
@@ -162,7 +167,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
             CanonicalError::new(
                 StatusCode::FORBIDDEN,
                 "forbidden",
-                "recording ingest is restricted to BrowserClaw",
+                "recording ingest is restricted to BrowserOS neo",
                 Some(&request_id),
             )
             .into_response()

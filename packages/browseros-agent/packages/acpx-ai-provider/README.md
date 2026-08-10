@@ -42,13 +42,13 @@ spawn config.
 {
   "dependencies": {
     "@browseros/acpx-ai-provider": "workspace:*",
-    "acpx": "^0.12.0",
+    "acpx": "^0.13.0",
     "ai": "6.0.230"
   }
 }
 ```
 
-`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6, `acpx` ≥ 0.6.
+`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6 and `acpx` 0.13.x.
 
 ## Quickstart
 
@@ -103,7 +103,7 @@ createAcpxProvider({
   stateDir: '~/.acpx',             // session store location
   mcpServers: [/* … */],
   agentRegistryOverrides: {
-    'my-agent': 'node ./bin/my-agent.js --acp',
+    'my-agent': ['node', './bin/my-agent.js', '--acp'],
   },
   // advanced: inject a pre-built runtime (testing, multi-provider sharing)
   runtime: customRuntime,
@@ -125,10 +125,10 @@ through `agentRegistryOverrides`:
 const provider = createAcpxProvider({
   agent: 'my-acp-server',
   agentRegistryOverrides: {
-    'my-acp-server': './bin/my-acp-server --stdio',
+    'my-acp-server': ['./bin/my-acp-server', '--stdio'],
     // anything that produces an ACP-over-stdio process is fine:
-    //   'my-acp-server': 'node ./script.js --acp',
-    //   'my-acp-server': 'npx @my-org/acp-adapter@1.2.3',
+    //   'my-acp-server': ['node', './script.js', '--acp'],
+    //   'my-acp-server': ['npx', '@my-org/acp-adapter@1.2.3'],
   },
 })
 ```

@@ -93,6 +93,26 @@ class EnvConfig:
         return os.environ.get("PYTHONPATH")
 
     @property
+    def browseros_server_resource_version(self) -> Optional[str]:
+        """Exact BrowserOS server resource version for release builds."""
+        return os.environ.get("BROWSEROS_SERVER_RESOURCE_VERSION")
+
+    @property
+    def browserclaw_server_resource_version(self) -> Optional[str]:
+        """Exact BrowserClaw server resource version for release builds."""
+        return os.environ.get("BROWSERCLAW_SERVER_RESOURCE_VERSION")
+
+    @property
+    def browserclaw_onboard_resource_version(self) -> Optional[str]:
+        """Exact BrowserClaw onboarding resource version for release builds."""
+        return os.environ.get("BROWSERCLAW_ONBOARD_RESOURCE_VERSION")
+
+    @property
+    def bundled_extensions_manifest_url(self) -> Optional[str]:
+        """Run-scoped bundled extension manifest URL for release builds."""
+        return os.environ.get("BUNDLED_EXTENSIONS_MANIFEST_URL")
+
+    @property
     def depot_tools_win_toolchain(self) -> str:
         """Windows depot_tools toolchain setting (0 = use system toolchain)"""
         return os.environ.get("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")

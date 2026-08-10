@@ -1,6 +1,5 @@
 import { ArrowUpRight } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
-import { AgentDot } from '@/components/audit/AgentDot'
 import { cn } from '@/lib/utils'
 import {
   type TaskSummary,
@@ -8,23 +7,28 @@ import {
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 import { formatDuration, formatRelative } from '@/screens/audit/audit.helpers'
+import {
+  type ActivityCardCaptionTone,
+  activityCardCaptionTones,
+} from './activityCardTone'
 
 interface SupportingTileProps {
   task: TaskSummary
   now: number
   className?: string
+  captionTone?: ActivityCardCaptionTone
 }
 
 /**
- * Supporting tile in the cockpit editorial bento. Mirrors the
- * lead's split-zone structure (visual on top, dark caption block
- * at the bottom) at a smaller scale so all four supporting cells
- * share the lead's visual language. Two variants driven by data:
- * with-screenshot fills the top zone with the captured image;
- * without-screenshot renders the tool sequence as a small
- * typographic composition in place of the image.
+ * Cyanotype supporting tile. Mirrors the lead's captured-media well
+ * and tone-switchable caption at a compact scale.
  */
-export function SupportingTile({ task, now, className }: SupportingTileProps) {
+export function SupportingTile({
+  task,
+  now,
+  className,
+  captionTone = 'light',
+}: SupportingTileProps) {
   const isLive = task.status === 'live'
   const isStopped = task.status === 'cancelled'
   const screenshotId = task.latestScreenshotId ?? null
@@ -36,11 +40,11 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
       state={{ from: location.pathname }}
       data-testid={`support-tile-${task.sessionId}`}
       className={cn(
-        'group relative flex flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40',
+        'group relative flex min-h-[216px] flex-col overflow-hidden rounded-[9px] border border-cyanotype-border bg-card transition-[border-color,box-shadow] duration-150 hover:border-cyanotype-blue hover:shadow-sm md:min-h-0',
         className,
       )}
     >
-      <div className="relative flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden border-cyanotype-border border-b bg-cyanotype-well">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
             src={taskScreenshotUrl(
@@ -54,15 +58,21 @@ export function SupportingTile({ task, now, className }: SupportingTileProps) {
             className="absolute inset-0 h-full w-full object-cover object-top"
           />
         ) : screenshotId !== null ? (
-          <div className="absolute inset-0 animate-pulse bg-card-tint" />
+          <div className="absolute inset-0 animate-pulse bg-cyanotype-hover" />
         ) : (
           <NoShotComposition task={task} />
         )}
-        <span className="pointer-events-none absolute top-2.5 right-2.5 flex size-6 items-center justify-center rounded-full bg-white/85 text-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
+        <span className="pointer-events-none absolute top-2.5 right-2.5 flex size-6 items-center justify-center rounded-full bg-white/85 text-cyanotype-ink opacity-0 shadow-sm backdrop-blur-md transition-[opacity,transform] duration-200 group-hover:-translate-y-0.5 group-hover:opacity-100">
           <ArrowUpRight className="size-3.5" />
         </span>
       </div>
-      <Caption task={task} now={now} isLive={isLive} isStopped={isStopped} />
+      <Caption
+        task={task}
+        now={now}
+        isLive={isLive}
+        isStopped={isStopped}
+        tone={captionTone}
+      />
     </NavLink>
   )
 }
@@ -72,43 +82,37 @@ function Caption({
   now,
   isLive,
   isStopped,
+  tone,
 }: {
   task: TaskSummary
   now: number
   isLive: boolean
   isStopped: boolean
+  tone: ActivityCardCaptionTone
 }) {
+  const toneClasses = activityCardCaptionTones[tone]
   return (
-    <div className="flex flex-col gap-0.5 bg-ink-deep px-3.5 py-2 text-white">
-      <div className="flex items-center gap-2 font-mono text-[9.5px] text-white/75 uppercase tracking-[0.08em]">
-        <AgentDot slug={task.slug} />
-        <span className="truncate text-white/95">{task.label}</span>
+    <div
+      className={cn(
+        'flex flex-col gap-[7px] px-5 pt-4 pb-[18px]',
+        toneClasses.surface,
+      )}
+      data-caption-tone={tone}
+    >
+      <div className="flex items-center gap-2 font-medium text-[11.5px] leading-[14px]">
+        <span className="truncate">{task.label}</span>
         {isLive && (
-          <span className="inline-flex items-center gap-1 text-[#8fb4ff]">
-            <span
-              aria-hidden
-              className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-[#8fb4ff]"
-            />
+          <span className="rounded-full bg-cyanotype-live px-2 py-0.5 font-semibold text-[10px] text-cyanotype-live-ink">
             LIVE
           </span>
         )}
-        {isStopped && (
-          <span className="inline-flex items-center gap-1 text-white/60">
-            <span
-              aria-hidden
-              className="inline-block size-1.5 rounded-full bg-white/45"
-            />
-            STOPPED
-          </span>
-        )}
+        {isStopped && <span className={toneClasses.subdued}>STOPPED</span>}
       </div>
-      <h3 className="truncate font-semibold text-[12.5px] text-white leading-tight">
+      <h3 className="truncate font-bold text-[16px] leading-5 tracking-[-0.02em]">
         {task.name}
       </h3>
-      <p className="font-mono text-[10.5px] text-white/65 tabular-nums">
-        {formatDuration(task.durationMs)}{' '}
-        <span className="text-white/35">·</span> {task.dispatchCount}t{' '}
-        <span className="text-white/35">·</span>{' '}
+      <p className="text-[11.5px] tabular-nums leading-[14px]">
+        {formatDuration(task.durationMs)} · {task.dispatchCount}t ·{' '}
         {formatRelative(task.startedAt, now)}
       </p>
     </div>
@@ -116,11 +120,10 @@ function Caption({
 }
 
 function NoShotComposition({ task }: { task: TaskSummary }) {
-  // The wash follows the theme: pale in light mode, deep in dark mode.
   const verbs = task.toolSequence.slice(0, 4)
   return (
-    <div className="absolute inset-0 bg-gradient-to-br from-accent-tint via-secondary to-muted">
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-0.5 pl-4 font-mono text-[14px] text-ink/18 leading-tight tracking-tight">
+    <div className="absolute inset-0 bg-cyanotype-well">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-0.5 pl-4 text-[14px] text-cyanotype-ink/18 leading-tight tracking-tight">
         {verbs.map((verb, idx) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: tool sequence is stable-ordered per session, not a reorderable list

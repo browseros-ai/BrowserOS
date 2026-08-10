@@ -20,8 +20,17 @@ use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+const VERSION_MARKER: &str = concat!(
+    "browseros-claw-server-version=",
+    env!("CARGO_PKG_VERSION"),
+    ";"
+);
+const POSTHOG_KEY_MARKER: Option<&str> = option_env!("CLAW_POSTHOG_KEY_MARKER");
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    std::hint::black_box(VERSION_MARKER);
+    std::hint::black_box(POSTHOG_KEY_MARKER);
     let (config_path, stdio_mode) = match Cli::parse_action() {
         CliAction::Version => {
             writeln!(io::stdout().lock(), "{VERSION}")?;
@@ -178,10 +187,7 @@ async fn ready_after<T, E>(
     Ok(running)
 }
 
-/// On the very first launch, register BrowserClaw in every detected harness so
-/// the user does not have to connect each one by hand. Runs once, guarded by a
-/// marker in the BrowserClaw dir; an existing install is seeded without sweeping
-/// so a returning user's manual disconnects are preserved.
+/// Auto-connects harnesses once while preserving existing user choices.
 async fn run_first_launch_auto_connect(state: &AppState) {
     use claw_server_rust::services::first_run;
     if first_run::is_first_run_connect_done(&state.config.browserclaw_dir).await {
@@ -213,6 +219,19 @@ async fn run_first_launch_auto_connect(state: &AppState) {
 }
 
 async fn heal_boot_config(state: &AppState) {
+    match state
+        .harness
+        .migrate_browseros_identity(&state.config.public_mcp_url())
+        .await
+    {
+        Ok(outcome) => info!(
+            migrated = outcome.migrated,
+            skipped = outcome.skipped,
+            failed = outcome.failed,
+            "completed BrowserOS MCP identity migration"
+        ),
+        Err(err) => error!(error = %err, "BrowserOS MCP identity migration failed"),
+    }
     run_first_launch_auto_connect(state).await;
     // Re-point every connected agent at the current canonical URL first (the
     // proxy port may have moved on this app launch), then repair any config
