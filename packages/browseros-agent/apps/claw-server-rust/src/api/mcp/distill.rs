@@ -156,6 +156,20 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, Di
             .as_deref()
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default();
+        // Never distill a flow that navigated to a credential-bearing URL: it
+        // would bake an OAuth code, token, session id, or secret into a reusable
+        // helper that readHelper exposes and later runs replay.
+        let nav_url = match row.tool_name.as_str() {
+            "pages.newPage" => args.first(),
+            "nav.goto" => args.get(1),
+            _ => None,
+        };
+        if nav_url
+            .and_then(Value::as_str)
+            .is_some_and(url_has_sensitive_param)
+        {
+            return None;
+        }
         if row.tool_name == "pages.newPage" {
             new_pages += 1;
             let Some(url) = args.first().and_then(Value::as_str) else {
@@ -255,6 +269,50 @@ fn is_search_key(key: &str) -> bool {
         key,
         "q" | "k" | "query" | "search" | "s" | "term" | "keyword" | "keywords" | "field-keywords"
     )
+}
+
+/// Whether a URL carries a credential-bearing query parameter (an OAuth code,
+/// token, session id, signature, or secret) that must never be baked into a
+/// reusable helper. Case-insensitive on the parameter name; over-skips rather
+/// than risk persisting a secret.
+fn url_has_sensitive_param(url: &str) -> bool {
+    let Some((_, query)) = url.split_once('?') else {
+        return false;
+    };
+    query.split(['&', ';']).any(|pair| {
+        let key = pair
+            .split('=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        matches!(
+            key.as_str(),
+            "token"
+                | "access_token"
+                | "id_token"
+                | "refresh_token"
+                | "code"
+                | "state"
+                | "session"
+                | "sid"
+                | "sig"
+                | "signature"
+                | "auth"
+                | "authorization"
+                | "secret"
+                | "client_secret"
+                | "password"
+                | "passwd"
+                | "pwd"
+                | "api_key"
+                | "apikey"
+                | "jwt"
+                | "otp"
+                | "nonce"
+        ) || key.ends_with("_token")
+            || key.ends_with("_secret")
+    })
 }
 
 fn json_string(value: &str) -> String {
@@ -671,6 +729,29 @@ mod tests {
             inputs.get("field1").map(String::as_str),
             Some("input value")
         );
+    }
+
+    #[test]
+    fn does_not_distill_a_flow_that_navigates_to_a_credentialed_url() {
+        // An OAuth-callback-style newPage carries code + state; distilling would
+        // bake the secret into the helper.
+        let oauth = [
+            child(
+                "pages.newPage",
+                json!(["https://example.com/callback?code=abc123&state=xyz"]),
+            ),
+            child("wait", json!([3, { "text": "ok", "timeout": 5000 }])),
+        ];
+        assert!(distill_source(&oauth).is_none());
+        // A token on a nav.goto is caught too.
+        let reset = [
+            child(
+                "nav.goto",
+                json!([3, "https://example.com/reset?token=SECRET"]),
+            ),
+            child("input.click", json!([3, "e5"])),
+        ];
+        assert!(distill_source(&reset).is_none());
     }
 
     #[test]
