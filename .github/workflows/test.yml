@@ -1,5 +1,9 @@
 name: Tests
 
+# A discover job computes which suites a change touches (via Turbo) and runs
+# only those, so unaffected suites are never spun up. Suites map from affected
+# packages in packages/browseros-agent/ci/affected-suites.ts; a gate job rolls
+# up pass/skip and the summary job posts the sticky per-suite table.
 on:
   pull_request:
     types:
@@ -18,9 +22,46 @@ permissions:
 env:
   BROWSEROS_APPIMAGE_URL: https://files.browseros.com/download/BrowserOS.AppImage
 
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  discover:
+    name: Tests / discover
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    outputs:
+      matrix: ${{ steps.affected.outputs.matrix }}
+      has_any: ${{ steps.affected.outputs.has_any }}
+      all_suites: ${{ steps.affected.outputs.all_suites }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history so Turbo's --affected has the merge base; a shallow
+          # checkout would silently mark every package changed.
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Compute affected suites
+        id: affected
+        env:
+          BROWSEROS_AFFECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+        run: bun run ci/affected-suites.ts
+
   test:
     name: Tests / ${{ matrix.suite }}
+    needs: discover
+    if: needs.discover.outputs.has_any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.needs_rust && 45 || 20 }}
     defaults:
@@ -28,67 +69,7 @@ jobs:
         working-directory: packages/browseros-agent
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - suite: server-agent
-            command: (cd apps/server && bun run test:agent)
-            junit_path: test-results/server-agent.xml
-            needs_browser: false
-          - suite: server-api
-            command: (cd apps/server && bun run test:api)
-            junit_path: test-results/server-api.xml
-            needs_browser: true
-          - suite: server-tools
-            command: (cd apps/server && bun run test:tools)
-            junit_path: test-results/server-tools.xml
-            needs_browser: true
-          - suite: server-browser
-            command: (cd apps/server && bun run test:browser)
-            junit_path: test-results/server-browser.xml
-            needs_browser: false
-          - suite: server-integration
-            command: (cd apps/server && bun run test:integration)
-            junit_path: test-results/server-integration.xml
-            needs_browser: true
-          - suite: server-lib
-            command: (cd apps/server && bun run test:lib)
-            junit_path: test-results/server-lib.xml
-            needs_browser: false
-          - suite: server-root
-            command: (cd apps/server && bun run test:root)
-            junit_path: test-results/server-root.xml
-            needs_browser: false
-          - suite: agent
-            command: (cd apps/app && bun run test)
-            junit_path: test-results/agent.xml
-            needs_browser: false
-          - suite: claw-app
-            command: (cd apps/claw-app && bun run test)
-            junit_path: test-results/claw-app.xml
-            needs_browser: false
-          - suite: claw-onboard
-            command: (cd apps/claw-onboard && bun run test)
-            junit_path: test-results/claw-onboard.xml
-            needs_browser: false
-          - suite: build
-            command: bun run ./scripts/run-bun-test.ts ./scripts/build
-            junit_path: test-results/build.xml
-            needs_browser: false
-          - suite: claw-server-rust
-            command: bun run ./scripts/run-cargo-test.ts test --workspace --locked
-            junit_path: test-results/claw-server-rust.xml
-            needs_browser: false
-            needs_rust: true
-          - suite: claw-server-rust-quality
-            command: cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings
-            junit_path: test-results/claw-server-rust-quality.xml
-            needs_browser: false
-            needs_rust: true
-          - suite: claw-mcp
-            command: bun run test:claw-mcp-contract
-            junit_path: test-results/claw-mcp.xml
-            needs_browser: true
-            needs_rust: true
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
 
     steps:
       - name: Checkout code
@@ -240,9 +221,20 @@ jobs:
             exit 1
           fi
 
+  gate:
+    name: Tests / gate
+    needs: [discover, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every suite to pass or be skipped
+        run: |
+          echo 'needs = ${{ toJSON(needs) }}'
+          jq -e 'to_entries | all(.value.result == "success" or .value.result == "skipped")' <<< '${{ toJSON(needs) }}'
+
   comment:
-    name: PR test summary
-    needs: test
+    name: Tests / summary
+    needs: [discover, test]
     if: >-
       always()
       && github.event_name == 'pull_request'
@@ -260,28 +252,26 @@ jobs:
           pattern: junit-*
 
       - name: Build comment body
+        env:
+          ALL_SUITES: ${{ needs.discover.outputs.all_suites }}
         run: |
           python3 <<'PY'
-          import glob, os, xml.etree.ElementTree as ET
+          import glob, json, os, xml.etree.ElementTree as ET
 
           run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           marker = "<!-- browseros-agent-tests-summary -->"
+          all_suites = json.loads(os.environ.get("ALL_SUITES") or "[]")
 
-          suites = []
+          ran = {}
           failed_cases = []
-          total_tests = total_failed = total_skipped = 0
-
           for xml_path in sorted(glob.glob("junit/junit-*/*.xml")):
               suite_name = os.path.basename(os.path.dirname(xml_path)).removeprefix("junit-")
               try:
                   root = ET.parse(xml_path).getroot()
               except ET.ParseError:
-                  suites.append({"name": suite_name, "passed": 0, "failed": 1, "skipped": 0, "total": 1})
-                  total_tests += 1
-                  total_failed += 1
+                  ran[suite_name] = (0, 1, 0, 1)
                   failed_cases.append((suite_name, "(could not parse junit XML)"))
                   continue
-
               testsuites = root.findall("testsuite") if root.tag == "testsuites" else [root]
               s_tests = s_fail = s_err = s_skip = 0
               for ts in testsuites:
@@ -293,55 +283,57 @@ jobs:
                       if tc.find("failure") is not None or tc.find("error") is not None:
                           cls = tc.get("classname") or ""
                           name = tc.get("name") or "(unnamed)"
-                          label = f"{cls} > {name}" if cls else name
-                          failed_cases.append((suite_name, label))
-
+                          failed_cases.append((suite_name, f"{cls} > {name}" if cls else name))
               s_failed = s_fail + s_err
               s_passed = max(s_tests - s_failed - s_skip, 0)
-              suites.append({"name": suite_name, "passed": s_passed, "failed": s_failed, "skipped": s_skip, "total": s_tests})
-              total_tests += s_tests
-              total_failed += s_failed
-              total_skipped += s_skip
+              ran[suite_name] = (s_passed, s_failed, s_skip, s_tests)
 
-          total_passed = max(total_tests - total_failed - total_skipped, 0)
+          total_passed = sum(v[0] for v in ran.values())
+          total_failed = sum(v[1] for v in ran.values())
+          total_tests = sum(v[3] for v in ran.values())
+          order = all_suites or sorted(ran)
+          n_total = len(order)
+          n_ran = len(ran)
+          n_skipped = max(n_total - n_ran, 0)
 
-          if total_tests == 0:
-              header = "## :warning: No test results were produced"
-          elif total_failed == 0:
-              header = f"## :white_check_mark: Tests passed — {total_passed}/{total_tests}"
+          if total_failed:
+              header = f"## :x: Tests failed: {total_failed}/{total_tests} failed"
+          elif n_ran == 0:
+              header = "## :white_check_mark: No suites affected by this change"
           else:
-              header = f"## :x: Tests failed — {total_failed}/{total_tests} failed"
+              header = f"## :white_check_mark: Tests passed: {total_passed}/{total_tests}"
 
-          lines = [marker, header, ""]
+          lines = [marker, header, "",
+                   f"Ran {n_ran} of {n_total} suites ({n_skipped} not affected by this change).", ""]
+          lines.append("| Suite | Passed | Failed | Skipped |")
+          lines.append("|-------|--------|--------|---------|")
           gate_suites = []
-          if suites:
-              lines.append("| Suite | Passed | Failed | Skipped |")
-              lines.append("|-------|--------|--------|---------|")
-              for s in suites:
-                  if s["failed"] > 0:
-                      icon, passed_cell = ":x:", f"{s['passed']}/{s['total']}"
-                  elif s["total"] == 0:
-                      # Ran clean but emitted no JUnit counts (a lint/format gate).
+          for name in order:
+              if name in ran:
+                  passed, failed, skipped, total = ran[name]
+                  if failed > 0:
+                      icon, passed_cell = ":x:", f"{passed}/{total}"
+                  elif total == 0:
                       icon, passed_cell = ":white_check_mark:", "passed"
-                      gate_suites.append(s["name"])
+                      gate_suites.append(name)
                   else:
-                      icon, passed_cell = ":white_check_mark:", f"{s['passed']}/{s['total']}"
-                  lines.append(f"| {icon} `{s['name']}` | {passed_cell} | {s['failed']} | {s['skipped']} |")
-              if gate_suites:
-                  lines += ["", "> `passed` = ran successfully but emits no JUnit counts (a lint/format gate)."]
-
+                      icon, passed_cell = ":white_check_mark:", f"{passed}/{total}"
+                  lines.append(f"| {icon} `{name}` | {passed_cell} | {failed} | {skipped} |")
+              else:
+                  lines.append(f"| :fast_forward: `{name}` | n/a | n/a | not affected |")
+          if gate_suites:
+              lines += ["", "> `passed` = ran successfully but emits no JUnit counts (a lint/format gate)."]
           if failed_cases:
               lines += ["", "<details open>", "<summary><b>Failed tests</b></summary>", ""]
               for suite_name, label in failed_cases[:50]:
-                  lines.append(f"- **{suite_name}** — `{label}`")
+                  lines.append(f"- **{suite_name}** `{label}`")
               if len(failed_cases) > 50:
-                  lines.append(f"- …and {len(failed_cases) - 50} more")
+                  lines.append(f"- ...and {len(failed_cases) - 50} more")
               lines += ["", "</details>"]
-
           lines += ["", f"[View workflow run]({run_url})"]
 
-          with open("comment.md", "w") as f:
-              f.write("\n".join(lines) + "\n")
+          with open("comment.md", "w") as fp:
+              fp.write("\n".join(lines) + "\n")
           PY
 
       - name: Upsert sticky PR comment
@@ -357,7 +349,7 @@ jobs:
             const triggerSha = context.payload.pull_request.head.sha;
             const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
             if (pr.head.sha !== triggerSha) {
-              core.info(`PR head has moved (${pr.head.sha} vs ${triggerSha}) — skipping stale comment.`);
+              core.info(`PR head has moved (${pr.head.sha} vs ${triggerSha}), skipping stale comment.`);
               return;
             }
 

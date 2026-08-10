@@ -1,6 +1,6 @@
 /**
  * Computes which CI test suites are affected by a change, for the dynamic
- * matrix in `.github/workflows/test-affected.yml`.
+ * matrix in `.github/workflows/test.yml`.
  *
  * Turbo detects affected JS + Rust workspace packages (dependents included);
  * this maps those packages, plus a couple of path signals for things that are
