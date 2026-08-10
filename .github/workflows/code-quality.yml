@@ -24,13 +24,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Biome
-        uses: biomejs/setup-biome@v2
-        with:
-          version: 2.5.0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
+      # Run Biome through the repo's own lint script (bunx @biomejs/biome) so CI
+      # uses the exact same Biome as local `bun run lint`, instead of a version
+      # pinned separately in a setup action that drifts from package.json.
       - name: Run Biome
-        run: biome ci .
+        run: bun run lint
 
   typecheck:
     name: runner / Typecheck
