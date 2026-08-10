@@ -53,7 +53,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Start Turbo remote cache (GitHub Actions cache)
-        uses: rharkor/caching-for-turbo@v2
+        uses: rharkor/caching-for-turbo@v2.5.1
 
       - name: Install dependencies
         run: bun ci
