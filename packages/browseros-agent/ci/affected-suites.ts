@@ -222,13 +222,24 @@ function readChangedFiles(base: string): string[] {
 function main(): void {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: CI-only base ref passed by the workflow.
   const base = process.env.BROWSEROS_AFFECTED_BASE ?? ''
-  const packages = readAffectedPackages()
-  const changed = readChangedFiles(base)
-  const suites = computeAffectedSuites(packages, changed)
+
+  let suites: SuiteConfig[]
+  let summary: string
+  if (base) {
+    const packages = readAffectedPackages()
+    const changed = readChangedFiles(base)
+    suites = computeAffectedSuites(packages, changed)
+    summary = `packages=[${packages.map((p) => p.name).join(', ') || '-'}] suites=[${suites.map((s) => s.suite).join(', ') || '-'}]`
+  } else {
+    // No base ref (e.g. a workflow_dispatch run, which has no PR base): fail
+    // safe to the full matrix so a manual run never reports green with zero
+    // coverage.
+    suites = Object.values(SUITES)
+    summary = `no base ref, running the full matrix (${suites.length} suites)`
+  }
+
   const matrix = { include: suites }
   const hasAny = suites.length > 0
-
-  const summary = `packages=[${packages.map((p) => p.name).join(', ') || '-'}] suites=[${suites.map((s) => s.suite).join(', ') || '-'}]`
   console.error(`[affected-suites] ${summary}`)
 
   const githubOutput = process.env.GITHUB_OUTPUT
