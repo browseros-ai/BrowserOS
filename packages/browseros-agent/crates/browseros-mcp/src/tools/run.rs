@@ -48,7 +48,7 @@ Observe / act (refs eN come from a snapshot's text/refs):
 Read / wait / capture:
   browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   browser.grep(pageId, { pattern })  -> matching lines as a STRING
-  browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready (default is a timed pause of `value` ms). There is no `ms` option; a plain pause is { value: 3000 }.
+  browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready. For content that loads in, wait on the thing itself with { for: "selector" } (or { for: "text" }); it resolves the moment it appears - e.g. await browser.wait(3, { for: "selector", value: 'div[data-component-type="s-search-result"]' }). Use { value: ms } only for a plain fixed pause. setTimeout(fn, ms) and `await sleep(ms)` also work for a fixed pause. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
   browser.screenshot(pageId) / evaluate(pageId, { code } | { func }) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
@@ -66,6 +66,15 @@ Do the whole task in as few run calls as possible: loop over all the items in on
 const BOOTSTRAP_JS: &str = r#"
 (() => {
   const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+
+  // Timers: the runtime is a bare engine, so bridge setTimeout/sleep to a real
+  // async sleep. For content that loads in, prefer browser.wait({ for: 'selector' }).
+  globalThis.sleep = (ms) => __browserosSleep(Number(ms) || 0);
+  globalThis.setTimeout = (fn, ms) => {
+    __browserosSleep(Number(ms) || 0).then(() => { if (typeof fn === 'function') fn(); });
+    return 0;
+  };
+  globalThis.clearTimeout = () => {};
 
   function safeStringify(value) {
     if (value === undefined) return 'undefined';
@@ -552,9 +561,20 @@ fn install_globals<'js>(
     let push_log = move |ctx: Ctx<'js>, line: String| {
         push_log(&logs, line).map_err(|message| Exception::throw_message(&ctx, &message))
     };
+    // Backs the JS setTimeout/sleep shims: the runtime is a bare rquickjs engine
+    // with no timers, so bridge a fixed pause to a real async sleep. Capped to the
+    // run budget; the run deadline still bounds total wall time.
+    let sleep_bridge = move |_ctx: Ctx<'js>, ms: f64| async move {
+        let capped = ms.max(0.0).min(MAX_TIMEOUT_MS as f64) as u64;
+        tokio::time::sleep(Duration::from_millis(capped)).await;
+    };
     let globals = ctx.globals();
     globals
         .set("__browserosCall", Func::from(Async(call_bridge)))
+        .catch(ctx)
+        .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?;
+    globals
+        .set("__browserosSleep", Func::from(Async(sleep_bridge)))
         .catch(ctx)
         .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?;
     globals
@@ -1584,6 +1604,21 @@ mod tests {
                 ("pages.getInfo".to_string(), true),
             ]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settimeout_and_sleep_shims_resolve() -> anyhow::Result<()> {
+        // The runtime is a bare engine with no native timers; the bootstrap
+        // bridges setTimeout/sleep to a real async sleep, so the model's natural
+        // `await new Promise(r => setTimeout(r, ms))` idiom resolves instead of
+        // throwing `setTimeout is not defined`.
+        let result = run_tool(
+            "await new Promise((r) => setTimeout(r, 5)); await sleep(5); return 'ok';",
+            None,
+        )
+        .await?;
+        assert!(!result.is_error);
         Ok(())
     }
 
