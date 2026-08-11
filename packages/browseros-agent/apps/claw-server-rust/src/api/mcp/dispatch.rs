@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{distill, effects, guards, helper_runtime, observers},
+    api::mcp::{effects, guards, helper_runtime, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -206,16 +206,14 @@ const EFFECTS: &[NamedToolEffect] = &[
     },
 ];
 
-const OBSERVERS: &[NamedToolObserver] = &[
-    NamedToolObserver {
-        name: "audit",
-        run: observers::audit::apply,
-    },
-    NamedToolObserver {
-        name: "distill",
-        run: distill::distill,
-    },
-];
+// The distiller (auto-capture of a successful run into a candidate helper) is
+// intentionally not wired. Self-healing keeps its agent-driven surface
+// (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
+// auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
+const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
+    name: "audit",
+    run: observers::audit::apply,
+}];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -1113,7 +1111,7 @@ mod tests {
                 .iter()
                 .map(|observer| observer.name)
                 .collect::<Vec<_>>(),
-            ["audit", "distill"]
+            ["audit"]
         );
     }
 
