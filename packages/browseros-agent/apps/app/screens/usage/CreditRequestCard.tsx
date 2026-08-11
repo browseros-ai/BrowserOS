@@ -1,7 +1,6 @@
 import { Gift } from 'lucide-react'
 import { type ChangeEvent, type FC, type FormEvent, useState } from 'react'
 import ProductHuntLogo from '@/assets/producthunt.svg'
-import { openProductHuntFocused } from '@/components/promo/ProductHuntBanner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,6 +9,8 @@ import {
   DISCORD_HANDLE_MAX_LENGTH,
   useSubmitCreditRequest,
 } from './credit-request.hooks'
+
+const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ph'
 
 export interface CreditRequestCardProps {
   browserosId?: string
@@ -28,7 +29,7 @@ export const CreditRequestCard: FC<CreditRequestCardProps> = ({
   const handle = discordHandle.trim()
 
   const handleOpenProductHunt = () => {
-    openProductHuntFocused()
+    chrome.tabs.create({ url: PRODUCT_HUNT_URL })
   }
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {

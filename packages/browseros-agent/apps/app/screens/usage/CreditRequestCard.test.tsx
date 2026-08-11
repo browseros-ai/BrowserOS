@@ -33,11 +33,6 @@ mock.module('@/assets/producthunt.svg', () => ({
   default: 'producthunt.svg',
 }))
 
-mock.module('@/components/promo/ProductHuntBanner', () => ({
-  PRODUCT_HUNT_URL: 'https://bit.ly/browseros-ph',
-  openProductHuntFocused: () => {},
-}))
-
 mock.module('./credit-request.hooks', () => ({
   DISCORD_HANDLE_MAX_LENGTH: 64,
   useSubmitCreditRequest: () => submission,
