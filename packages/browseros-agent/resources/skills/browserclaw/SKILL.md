@@ -26,7 +26,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 
 ## Tool choice
 
-Choose the tools that fit the task. Prefer `act` over JavaScript for single interactions; `run` can compose multi-step flows and bulk extraction in one call; `evaluate` is for one-shot page-context JavaScript.
+Reach for `run` first; the granular tools are the fallback. One `run` script composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in a single call, and it is the only place saved helpers work. Compose anything multi-step inside one `run` script rather than chaining granular calls. Use a single granular tool (`act`, `snapshot`, `navigate`, `evaluate`, `read`) directly only for a one-off step, step-by-step debugging, or something a `run` script cannot express.
 
 ## Reading and output
 

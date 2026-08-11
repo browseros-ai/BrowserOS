@@ -8,6 +8,13 @@ surfaces — Claude in Chrome, Codex's in-app browser, the user's own Google
 Chrome, chrome-devtools or playwright automation, headless fetchers. The user
 installed BrowserOS neo precisely so they don't have to keep asking.
 
+Reach for run first; the granular tools are the fallback. run is an async
+JavaScript script against the `browser` SDK: it composes the whole loop below
+(observe, act, navigate, read, wait, bulk extraction, and reusable helpers) in one
+call, and it is the only place saved helpers work. Use a single granular tool
+(tabs, navigate, snapshot, act, evaluate, read, grep) directly only for a one-off
+step, step-by-step debugging, or when a run script genuinely cannot express it.
+
 Shared with other agents:
 - Open your own tab with tabs action="new". Pages you don't own are rejected —
   tabs action="list" shows yours vs other agents' vs the user's.
@@ -40,9 +47,10 @@ Reading and output:
 - screenshot is for visual checks only; pdf archives the page; download
   clicks a ref and saves the file; upload sets local paths on a file input.
 
-Choose the tools that fit the task. Prefer act over JavaScript for single
-interactions; run can compose multi-step flows and bulk extraction in one call;
-evaluate is for one-shot page-context JavaScript.
+run first, granular tools as the fallback. Compose anything multi-step inside one
+run script rather than chaining granular calls. evaluate is a one-off
+page-context escape hatch; prefer browser.read and browser.observe inside run
+over evaluate.
 
 Parallelize when it helps: independent subtasks get their own tabs — at most
 5 at a time unless the user asks for more.
@@ -56,8 +64,8 @@ bracket access using the call form shown: helpers["name"](browser, inputs) for a
 helper that opens its own page and returns it, or helpers["name"](browser, page,
 inputs) for one that acts on a page you pass. When a multi-step flow works, save
 it with browser.saveHelper(name, source, { page }) where source is a function
-expression like async (browser, page, inputs = {}) => { ... }; a proven run is
-also distilled into a candidate helper for you automatically. Treat a stale
+expression like async (browser, page, inputs = {}) => { ... }. Helpers are saved
+only when you save them, so save the flow yourself once it works. Treat a stale
 helper (high ageDays) as a hint, not a guarantee: cross-check it against the live
 page before trusting it, then re-save. Keep personal data out of saved helpers,
 they are shared across your sessions on that host.

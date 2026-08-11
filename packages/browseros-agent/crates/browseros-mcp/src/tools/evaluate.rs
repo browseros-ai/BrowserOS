@@ -18,6 +18,7 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
+Prefer `run` for multi-step work; reach for evaluate only as a fallback for a one-off page-context read or script. \
 Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
 Provide `code` (an async body; use `return` to read a value) or `func` (a function \
 expression like `() => {...}` that gets invoked). Return a value to read it back.";

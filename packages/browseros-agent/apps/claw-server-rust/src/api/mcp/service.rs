@@ -635,7 +635,7 @@ mod tests {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
-        assert!(instructions.contains("run can compose multi-step flows"));
+        assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
             "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
         ));
