@@ -20,6 +20,11 @@
 **/node_modules/
 **/.turbo/
 
+# Non-bun lock files (the repo standardizes on bun; only bun.lock is tracked)
+**/package-lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+
 
 
 nxtscape-cli-access.json
