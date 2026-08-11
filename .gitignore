@@ -18,6 +18,7 @@
 **/releases/
 **/.wrangler/
 **/node_modules/
+**/.turbo/
 
 
 
