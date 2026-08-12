@@ -52,6 +52,7 @@ import {
   prepareSidepanelSendMessagesRequest,
   toProviderOption,
 } from './chat-session-request'
+import { restoreServerConversation } from './chat-session-restore'
 import type { ChatMode } from './chat-types'
 import { addContentFilterNotice } from './content-filter-notice'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
@@ -525,19 +526,31 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       }
       setRestoredConversationId(conversationIdParam)
       setSearchParams({}, { replace: true })
-    } else {
-      const restoreFromServer = async () => {
-        const conversation = await fetchServerConversation(conversationIdParam)
-        if (conversation) {
-          setConversationId(
-            conversation.id as ReturnType<typeof crypto.randomUUID>,
-          )
-          setMessages(conversation.messages)
-        }
+      return
+    }
+
+    let cancelled = false
+    void restoreServerConversation({
+      conversationId: conversationIdParam,
+      fetchConversation: fetchServerConversation,
+      isCancelled: () => cancelled,
+      onRestore: (conversation) => {
+        setConversationId(
+          conversation.id as ReturnType<typeof crypto.randomUUID>,
+        )
+        setMessages(conversation.messages)
+      },
+      onError: (error) =>
+        sentry.captureException(error, {
+          extra: { conversationId: conversationIdParam },
+        }),
+      onSettled: () => {
         setRestoredConversationId(conversationIdParam)
         setSearchParams({}, { replace: true })
-      }
-      restoreFromServer()
+      },
+    })
+    return () => {
+      cancelled = true
     }
   }, [conversationIdParam, remoteConversationData, isLoggedIn])
 
