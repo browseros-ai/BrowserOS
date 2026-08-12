@@ -1,5 +1,5 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8085218c5 100644
+index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..87ef7f4cd21ca22ace21b13ac05d82f08d0b45f1 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -482,13 +482,11 @@ inline constexpr char kDeskAPIThirdPartyAllowlist[] =
@@ -50,21 +50,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8
  
  // Profile avatar and name
  inline constexpr char kProfileAvatarIndex[] = "profile.avatar_index";
-@@ -1232,13 +1228,6 @@ inline constexpr char kProjectsPanelPinnedToTabstrip[] =
- inline constexpr char kEverythingMenuPinnedToTabstrip[] =
-     "everything_menu.pinned_to_tabstrip";
- 
--// Boolean indicating whether the one-time migration for
--// kEverythingMenuPinnedToTabstrip has been completed. This sets the pinned
--// state for the button to true for users who have used vertical tab strip
--// before the migration happened.
--inline constexpr char kEverythingMenuPinnedToTabstripMigrationComplete[] =
--    "everything_menu.pinned_to_tabstrip_migration_complete";
--
- // Boolean determining whether vertical tabs are enabled.
- inline constexpr char kVerticalTabsEnabled[] = "vertical_tabs.enabled";
- 
-@@ -2274,12 +2263,6 @@ inline constexpr char kDeviceRobotAnyApiRefreshTokenV2[] =
+@@ -2274,12 +2270,6 @@ inline constexpr char kDeviceRobotAnyApiRefreshTokenV2[] =
  inline constexpr char kDeviceRefreshTokenAnyApiIsV3Used[] =
      "device_refresh_token_is_v3_used.any-api";
  
@@ -77,7 +63,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8
  #endif  // BUILDFLAG(IS_CHROMEOS)
  
  // String which specifies where to store the disk cache.
-@@ -2287,7 +2270,6 @@ inline constexpr char kDiskCacheDir[] = "browser.disk_cache_dir";
+@@ -2287,7 +2277,6 @@ inline constexpr char kDiskCacheDir[] = "browser.disk_cache_dir";
  // Pref name for the policy specifying the maximal cache size.
  inline constexpr char kDiskCacheSize[] = "browser.disk_cache_size";
  
@@ -85,7 +71,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8
  // Pref name for the policy controlling whether to enable Media Router.
  inline constexpr char kEnableMediaRouter[] = "media_router.enable_media_router";
  #if !BUILDFLAG(IS_ANDROID)
-@@ -2423,7 +2405,6 @@ inline constexpr char kPreviousIsolationState[] = "isolation_state.previous";
+@@ -2423,7 +2412,6 @@ inline constexpr char kPreviousIsolationState[] = "isolation_state.previous";
  inline constexpr char kHardwareAccelerationModePrevious[] =
      "hardware_acceleration_mode_previous";
  
@@ -93,7 +79,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8
  #if !BUILDFLAG(IS_ANDROID)
  // A boolean where true means that the browser has previously attempted to
  // enable autoupdate and failed, so the next out-of-date browser start should
-@@ -2958,7 +2939,6 @@ inline constexpr char kOriginAgentClusterDefaultEnabled[] =
+@@ -2958,7 +2946,6 @@ inline constexpr char kOriginAgentClusterDefaultEnabled[] =
  inline constexpr char kSCTAuditingHashdanceReportCount[] =
      "sct_auditing.hashdance_report_count";
  
@@ -101,7 +87,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..3be60cfa56f71a3b82727cf2b51420f8
  #if !BUILDFLAG(IS_ANDROID)
  // An integer count of how many times the user has seen the memory saver mode
  // page action chip in the expanded size. While the feature was renamed to
-@@ -3262,6 +3242,18 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+@@ -3262,6 +3249,18 @@ inline constexpr char kCpuPerformanceTierOverride[] =
  // Value indicating that the CPU performance tier has not been overridden.
  inline constexpr int kCpuPerformanceTierOverrideNone = -1;
  
