@@ -13,6 +13,11 @@ on:
       - ready_for_review
     paths:
       - .github/workflows/test.yml
+      - .github/workflows/build-browseros.yml
+      - .github/workflows/nightly-browser*.yml
+      - .github/workflows/publish-server-ota.yml
+      - .github/workflows/release-*.yml
+      - .github/workflows/reserve-nightly-browser-version.yml
       - packages/browseros-agent/**
   workflow_dispatch:
 

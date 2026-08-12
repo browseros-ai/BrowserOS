@@ -42,8 +42,11 @@ function initFixture() {
   const remote = join(root, 'remote.git')
   const source = join(root, 'source')
   const competitor = join(root, 'competitor')
+  const wrapperDir = join(root, 'bin')
+  const prHead = join(root, 'pr-head')
 
   mkdirSync(source)
+  mkdirSync(wrapperDir)
   mustRun(root, ['git', 'init', '--bare', '--initial-branch=main', remote])
   mustRun(source, ['git', 'init', '--initial-branch=main'])
   configureGit(source)
@@ -63,11 +66,99 @@ function initFixture() {
   mustRun(root, ['git', 'clone', remote, competitor])
   configureGit(competitor)
 
-  return { root, remote, source, competitor }
+  const realGit = mustRun(repoRoot, ['which', 'git'])
+  const gh = join(wrapperDir, 'gh')
+  writeFileSync(
+    gh,
+    [
+      '#!/bin/sh',
+      'set -eu',
+      'command_name="$1"',
+      'subcommand="$2"',
+      'shift 2',
+      'case "$command_name:$subcommand" in',
+      '  pr:create)',
+      '    head=""',
+      '    while [ "$#" -gt 0 ]; do',
+      '      case "$1" in',
+      '        --head) head="$2"; shift 2 ;;',
+      '        *) shift ;;',
+      '      esac',
+      '    done',
+      '    printf "%s\\n" "$head" > "$SNAPSHOT_PR_HEAD_FILE"',
+      '    echo "https://example.test/pull/1"',
+      '    ;;',
+      '  pr:merge)',
+      `    if [ -n "\${SNAPSHOT_MERGE_FAILURE_FILE:-}" ] && [ ! -e "$SNAPSHOT_MERGE_FAILURE_FILE" ]; then`,
+      '      : > "$SNAPSHOT_MERGE_FAILURE_FILE"',
+      '      exit 1',
+      '    fi',
+      '    head="$(cat "$SNAPSHOT_PR_HEAD_FILE")"',
+      '    expected_head=""',
+      '    while [ "$#" -gt 0 ]; do',
+      '      case "$1" in',
+      '        --match-head-commit) expected_head="$2"; shift 2 ;;',
+      '        *) shift ;;',
+      '      esac',
+      '    done',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" fetch origin "+refs/heads/*:refs/remotes/origin/*"',
+      '    test "$expected_head" = "$("$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" rev-parse "origin/$head")"',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" checkout -B main origin/main',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" merge --squash "origin/$head"',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" commit -m "merge snapshot PR"',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" push origin HEAD:main',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" push origin --delete "$head" >/dev/null 2>&1 || true',
+      '    ;;',
+      '  pr:view)',
+      '    json=""',
+      '    while [ "$#" -gt 0 ]; do',
+      '      case "$1" in',
+      '        --json) json="$2"; shift 2 ;;',
+      '        *) shift ;;',
+      '      esac',
+      '    done',
+      '    case "$json" in',
+      '      state)',
+      '        head="$(cat "$SNAPSHOT_PR_HEAD_FILE")"',
+      '        if "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" ls-remote --exit-code --heads origin "$head" >/dev/null 2>&1; then',
+      '          echo "OPEN"',
+      '        else',
+      '          echo "MERGED"',
+      '        fi',
+      '        ;;',
+      '      mergeCommit) "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" rev-parse HEAD ;;',
+      '      *) exit 2 ;;',
+      '    esac',
+      '    ;;',
+      '  pr:close)',
+      '    head="$(cat "$SNAPSHOT_PR_HEAD_FILE")"',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" push origin --delete "$head" >/dev/null 2>&1 || true',
+      '    ;;',
+      '  *) exit 2 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+  )
+  chmodSync(gh, 0o755)
+
+  return { root, remote, source, competitor, wrapperDir, prHead, realGit }
+}
+
+function scriptEnv(fixture: ReturnType<typeof initFixture>) {
+  return {
+    GH_TOKEN: 'test-token',
+    GITHUB_REPOSITORY: 'test/repo',
+    GITHUB_RUN_ATTEMPT: '1',
+    GITHUB_RUN_ID: '123',
+    PATH: `${fixture.wrapperDir}:${process.env.PATH}`,
+    SNAPSHOT_MERGE_REPO: fixture.competitor,
+    SNAPSHOT_PR_HEAD_FILE: fixture.prHead,
+    SNAPSHOT_REAL_GIT: fixture.realGit,
+  }
 }
 
 describe('commit-update-snapshot', () => {
-  it('rebases and retries when an unrelated snapshot wins the first push', () => {
+  it('preserves an unrelated snapshot committed before the PR merge', () => {
     const fixture = initFixture()
     try {
       writeFileSync(
@@ -93,11 +184,8 @@ describe('commit-update-snapshot', () => {
         'snapshot competing claw feed',
       ])
 
-      const realGit = mustRun(repoRoot, ['which', 'git'])
-      const wrapperDir = join(fixture.root, 'bin')
-      const wrapper = join(wrapperDir, 'git')
+      const wrapper = join(fixture.wrapperDir, 'git')
       const marker = join(fixture.root, 'raced')
-      mkdirSync(wrapperDir)
       writeFileSync(
         wrapper,
         `#!/bin/sh
@@ -118,20 +206,19 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
         fixture.source,
         [
           script,
-          'updates/server/appcast-server.alpha.xml',
           'main',
           'snapshot BrowserOS server alpha 1.2.3',
+          'updates/server/appcast-server.alpha.xml',
         ],
         {
-          PATH: `${wrapperDir}:${process.env.PATH}`,
+          ...scriptEnv(fixture),
           SNAPSHOT_RACE_MARKER: marker,
           SNAPSHOT_RACE_REPO: fixture.competitor,
-          SNAPSHOT_REAL_GIT: realGit,
         },
       )
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
-      expect(result.stdout).toContain('Snapshot push rejected; retrying')
+      expect(result.stdout).toContain('Snapshot PR merged')
       expect(
         mustRun(fixture.root, [
           'git',
@@ -157,16 +244,58 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
     const fixture = initFixture()
     try {
       const before = mustRun(fixture.remote, ['git', 'rev-parse', 'main'])
-      const result = run(fixture.source, [
-        script,
-        'updates/server/appcast-server.alpha.xml',
-        'main',
-        'snapshot BrowserOS server alpha 1.2.3',
-      ])
+      const result = run(
+        fixture.source,
+        [
+          script,
+          'main',
+          'snapshot BrowserOS server alpha 1.2.3',
+          'updates/server/appcast-server.alpha.xml',
+        ],
+        scriptEnv(fixture),
+      )
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
-      expect(result.stdout).toContain('Snapshot already current')
+      expect(result.stdout).toContain('Snapshots already current')
       expect(mustRun(fixture.remote, ['git', 'rev-parse', 'main'])).toBe(before)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it('retries a transient pull request merge failure', () => {
+    const fixture = initFixture()
+    try {
+      writeFileSync(
+        join(fixture.source, 'updates/server/appcast-server.alpha.xml'),
+        'server-new\n',
+      )
+      const result = run(
+        fixture.source,
+        [
+          script,
+          'main',
+          'snapshot BrowserOS server alpha 1.2.3',
+          'updates/server/appcast-server.alpha.xml',
+        ],
+        {
+          ...scriptEnv(fixture),
+          SNAPSHOT_MERGE_FAILURE_FILE: join(fixture.root, 'merge-failed-once'),
+          SNAPSHOT_MERGE_POLL_SECONDS: '0',
+        },
+      )
+
+      expect(result.code, result.stderr || result.stdout).toBe(0)
+      expect(result.stdout).toContain('Snapshot PR is not merged yet (1/6)')
+      expect(result.stdout).toContain('Snapshot PR merged')
+      expect(
+        mustRun(fixture.root, [
+          'git',
+          `--git-dir=${fixture.remote}`,
+          'show',
+          'main:updates/server/appcast-server.alpha.xml',
+        ]),
+      ).toBe('server-new')
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }
@@ -175,23 +304,68 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
   it('rejects paths outside updates and missing snapshots', () => {
     const fixture = initFixture()
     try {
-      const outside = run(fixture.source, [
-        script,
-        'README.md',
-        'main',
-        'invalid snapshot',
-      ])
-      const missing = run(fixture.source, [
-        script,
-        'updates/server/missing.xml',
-        'main',
-        'missing snapshot',
-      ])
+      const outside = run(
+        fixture.source,
+        [script, 'main', 'invalid snapshot', 'README.md'],
+        scriptEnv(fixture),
+      )
+      const missing = run(
+        fixture.source,
+        [script, 'main', 'missing snapshot', 'updates/server/missing.xml'],
+        scriptEnv(fixture),
+      )
 
       expect(outside.code).not.toBe(0)
       expect(outside.stderr).toContain('must be under updates/')
       expect(missing.code).not.toBe(0)
       expect(missing.stderr).toContain('Snapshot does not exist')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it('merges multiple feed files atomically through one pull request', () => {
+    const fixture = initFixture()
+    try {
+      writeFileSync(
+        join(fixture.source, 'updates/server/appcast-server.alpha.xml'),
+        'server-new\n',
+      )
+      writeFileSync(
+        join(fixture.source, 'updates/server/appcast-claw-server.alpha.xml'),
+        'claw-new\n',
+      )
+
+      const result = run(
+        fixture.source,
+        [
+          script,
+          'main',
+          'snapshot both feeds',
+          'updates/server/appcast-server.alpha.xml',
+          'updates/server/appcast-claw-server.alpha.xml',
+        ],
+        scriptEnv(fixture),
+      )
+
+      expect(result.code, result.stderr || result.stdout).toBe(0)
+      expect(
+        mustRun(fixture.remote, ['git', 'rev-list', '--count', 'main']),
+      ).toBe('2')
+      expect(
+        mustRun(fixture.remote, [
+          'git',
+          'show',
+          'main:updates/server/appcast-server.alpha.xml',
+        ]),
+      ).toBe('server-new')
+      expect(
+        mustRun(fixture.remote, [
+          'git',
+          'show',
+          'main:updates/server/appcast-claw-server.alpha.xml',
+        ]),
+      ).toBe('claw-new')
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }

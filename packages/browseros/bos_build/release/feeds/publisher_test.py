@@ -108,9 +108,7 @@ def _browserclaw_appcast(sparkle_version="10000.0.47.0.2"):
 
 
 def _legacy_browserclaw_appcast(sparkle_version="10000.0.47.0.2"):
-    return _browserclaw_appcast(sparkle_version).replace(
-        "BrowserOS neo", "BrowserClaw"
-    )
+    return _browserclaw_appcast(sparkle_version).replace("BrowserOS neo", "BrowserClaw")
 
 
 def _empty_mac_appcast():
@@ -1133,12 +1131,12 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual((spec.kind, spec.channel), ("extensions", "alpha"))
         self.assertEqual(
             set(extract_manifest_versions(manifest).values()),
-            {"0.0.123.0", "54.0.0.0", "0.1.7.0"},
+            {"0.0.124.0", "54.0.0.0", "0.2.0.3"},
         )
         original = manifest.replace("</gupdate>", "  </app>\n</gupdate>")
         self.assertEqual(
             hashlib.sha256(original.encode()).hexdigest(),
-            "e5fa3c6cde0ae05f2e15d1c52139094c4e1c738a01b9b3d63106ac255ca8357d",
+            "a9f5c22a6ab5201efa05fc790bb4b6332daa9799fe632d8b240d65830b68bde8",
         )
 
     def test_browserclaw_snapshots_use_current_product_title(self):

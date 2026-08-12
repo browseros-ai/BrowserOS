@@ -94,6 +94,7 @@ describe('release-extensions workflow', () => {
   it('builds and attaches the immutable CRX before optional finalization', () => {
     const build = section('  build:', '  preflight_alpha:')
     expect(build).toContain('browseros ext release')
+    expect(build).toContain('bun-version: "1.3.6"')
     expect(build).toContain('--source-sha "$RELEASE_SHA"')
     expect(build).toContain('gh release upload')
     expect(build).toContain('needs.prepare.outputs.version')
@@ -183,17 +184,12 @@ describe('release-extensions workflow', () => {
     expect(publish).toContain(
       "needs.preflight_alpha.outputs.should_publish == 'true'",
     )
-    expect(publish).toContain(
-      'git fetch origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"',
-    )
-    expect(publish).toContain('git rev-parse "origin/$DEFAULT_BRANCH"')
-    expect(publish).toContain('Default branch moved during feed generation')
-    expect(publish).toContain('git add -- "$' + '{paths[@]}"')
-    expect(publish).not.toContain('git add -A')
-    expect(publish).toContain('git push origin "HEAD:$DEFAULT_BRANCH"')
-    expect(publish).not.toContain('git rebase')
+    expect(publish).toContain('commit-update-snapshot.sh')
+    expect(publish).toContain('"$DEFAULT_BRANCH"')
+    expect(publish).toContain('"$' + '{paths[@]}"')
+    expect(publish).not.toContain('git push origin "HEAD:$DEFAULT_BRANCH"')
     expect(publish).not.toContain('--force')
-    expect(publish.indexOf('git push origin')).toBeLessThan(
+    expect(publish.indexOf('commit-update-snapshot.sh')).toBeLessThan(
       publish.indexOf('browseros release feeds publish-local'),
     )
 
@@ -226,20 +222,21 @@ describe('release-extensions workflow', () => {
     )
   })
 
-  it('forwards BrowserClaw PostHog values to the common producer', () => {
-    const start = browserClawWorkflow.indexOf('  common:')
-    const end = browserClawWorkflow.indexOf('  linux:', start)
+  it('forwards BrowserClaw extension secrets to its dedicated release', () => {
+    const start = browserClawWorkflow.indexOf('  extension:')
+    const end = browserClawWorkflow.indexOf('  components:', start)
     expect(start).toBeGreaterThanOrEqual(0)
     expect(end).toBeGreaterThan(start)
-    const common = browserClawWorkflow.slice(start, end)
+    const extension = browserClawWorkflow.slice(start, end)
 
-    expect(common).toContain(
-      `VITE_CLAW_POSTHOG_KEY: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_KEY }}`,
+    expect(extension).toContain(
+      'uses: ./.github/workflows/release-extensions.yml',
     )
-    expect(common).toContain(
-      `VITE_CLAW_POSTHOG_HOST: ${'$'}{{ secrets.VITE_CLAW_POSTHOG_HOST }}`,
+    expect(extension).toContain('extension: browserclaw')
+    expect(extension).toContain('secrets: inherit')
+    expect(browserClawWorkflow).not.toContain(
+      'browseros release resources prepare',
     )
-    expect(common).toContain('browseros release resources prepare')
   })
 
   it('keeps extension build secrets out of native browser lanes', () => {

@@ -101,6 +101,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  release: {
+    suite: 'release',
+    command: 'bun run ./scripts/run-bun-test.ts ./scripts/release',
+    junit_path: 'test-results/release.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   'claw-server-rust': {
     suite: 'claw-server-rust',
     command: 'bun run ./scripts/run-cargo-test.ts test --workspace --locked',
@@ -197,8 +204,26 @@ export function computeAffectedSuites(
   }
 
   // Path signals for things that are not workspace packages.
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}scripts/`)))
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}scripts/`) &&
+        !f.startsWith(`${AGENT}scripts/release/`),
+    )
+  )
     keys.add('build')
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}scripts/release/`) ||
+        f === '.github/workflows/build-browseros.yml' ||
+        f.startsWith('.github/workflows/nightly-browser') ||
+        f === '.github/workflows/publish-server-ota.yml' ||
+        f === '.github/workflows/reserve-nightly-browser-version.yml' ||
+        f.startsWith('.github/workflows/release-'),
+    )
+  )
+    keys.add('release')
   if (
     changedFiles.some(
       (f) =>
@@ -240,7 +265,6 @@ function readChangedFiles(base: string): string[] {
 }
 
 function main(): void {
-  // biome-ignore lint/suspicious/noUndeclaredEnvVars: CI-only base ref passed by the workflow.
   const base = process.env.BROWSEROS_AFFECTED_BASE ?? ''
 
   let suites: SuiteConfig[]
@@ -262,6 +286,7 @@ function main(): void {
   const hasAny = suites.length > 0
   console.error(`[affected-suites] ${summary}`)
 
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub injects this output path outside Turbo tasks.
   const githubOutput = process.env.GITHUB_OUTPUT
   if (githubOutput) {
     appendFileSync(githubOutput, `matrix=${JSON.stringify(matrix)}\n`)

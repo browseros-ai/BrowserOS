@@ -124,6 +124,7 @@ describe('release-server workflow', () => {
     expect(dispatch).toContain('default: true')
     expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('pull-requests: write')
     expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
     expect(ota).toContain('product: browseros')
     expect(ota).toContain(

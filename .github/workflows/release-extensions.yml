@@ -124,16 +124,19 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release-extensions-and-feeds
   cancel-in-progress: false
+  queue: max
 
 jobs:
   prepare:
     concurrency:
       group: release-component-allocation
       cancel-in-progress: false
+      queue: max
     runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 20
     outputs:
@@ -289,11 +292,12 @@ jobs:
               echo "Built from the selected external extension branch." > "$notes"
             fi
 
-            release="$(gh release view "$TAG" --json isDraft,targetCommitish 2>/dev/null || true)"
-            if [ -n "$release" ]; then
-              is_draft="$(jq -r '.isDraft' <<< "$release")"
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              tag_uri="$(jq -rn --arg value "$TAG" '$value | @uri')"
+              release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
+              is_draft="$(jq -r '.draft' <<< "$release")"
               if [ "$is_draft" = "true" ]; then
-                target="$(jq -r '.targetCommitish' <<< "$release")"
+                target="$(jq -r '.target_commitish' <<< "$release")"
                 tag_matches=false
                 if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
                   if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
@@ -367,6 +371,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
 
       - name: Stamp in-repository extension version
         if: ${{ inputs.extension == 'agent' || inputs.extension == 'browserclaw' }}
@@ -581,7 +587,8 @@ jobs:
           for NAME in $NAMES; do
             TAG="ext-${NAME}/v${VERSION}"
             asset="${NAME}-${VERSION}.crx"
-            release="$(gh release view "$TAG" --json assets,isDraft,targetCommitish)"
+            tag_uri="$(jq -rn --arg value "$TAG" '$value | @uri')"
+            release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
             if ! jq -e --arg asset "$asset" \
               '([.assets[].name] | sort) == [$asset]' <<< "$release" >/dev/null; then
               echo "::error::$TAG must contain exactly the prepared asset $asset"
@@ -594,7 +601,7 @@ jobs:
               echo "::error::GitHub release asset does not match canonical R2 object: $TAG/$asset"
               exit 1
             fi
-            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            is_draft="$(jq -r '.draft' <<< "$release")"
             tag_exists=false
             if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
               if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
@@ -605,7 +612,7 @@ jobs:
               tag_exists=true
             fi
             if [ "$is_draft" = "true" ]; then
-              target="$(jq -r '.targetCommitish' <<< "$release")"
+              target="$(jq -r '.target_commitish' <<< "$release")"
               if [ "$target" != "$RELEASE_SHA" ] && [ "$tag_exists" != "true" ]; then
                 echo "::error::Draft $TAG is not prepared for $RELEASE_SHA"
                 exit 1
@@ -668,6 +675,10 @@ jobs:
       - finalize
     if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
     runs-on: warp-ubuntu-2404-x64-4x
+    concurrency:
+      group: release-feed-snapshots
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -704,9 +715,10 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
 
-      - name: Commit tracked alpha feed snapshots
+      - name: Persist exact alpha feed snapshots
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           paths=(
@@ -714,22 +726,10 @@ jobs:
             updates/extensions/extensions.alpha.json
             updates/extensions/bundled-manifest.xml
           )
-          git add -- "${paths[@]}"
-          base_sha="$(git rev-parse HEAD)"
-          git fetch origin "$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          remote_sha="$(git rev-parse "origin/$DEFAULT_BRANCH")"
-          if [ "$base_sha" != "$remote_sha" ]; then
-            echo "::error::Default branch moved during feed generation; rerun the release finalization"
-            exit 1
-          fi
-          if git diff --cached --quiet; then
-            echo "Tracked alpha feed snapshots already match"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(release): update extension alpha feeds to ${VERSION}"
-          git push origin "HEAD:$DEFAULT_BRANCH"
+          packages/browseros-agent/scripts/release/commit-update-snapshot.sh \
+            "$DEFAULT_BRANCH" \
+            "chore(release): update extension alpha feeds to ${VERSION}" \
+            "${paths[@]}"
 
       - name: Publish committed alpha feeds
         working-directory: packages/browseros
@@ -745,3 +745,87 @@ jobs:
             extensions/extensions.alpha.json \
             extensions/bundled-manifest.xml \
             --publish
+
+  reflect-version:
+    needs:
+      - prepare
+      - finalize
+      - publish_alpha
+    if: ${{ always() && needs.prepare.result == 'success' && needs.finalize.result == 'success' && (needs.publish_alpha.result == 'success' || needs.publish_alpha.result == 'skipped') }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      NAMES: ${{ needs.prepare.outputs.names }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Reflect released extension versions on main
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE" fetch origin "$DEFAULT_BRANCH" --no-tags
+          git -C "$GITHUB_WORKSPACE" checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+
+          paths=()
+          for name in $NAMES; do
+            case "$name" in
+              agent) manifest="packages/browseros-agent/apps/app/package.json" ;;
+              browserclaw) manifest="packages/browseros-agent/apps/claw-app/package.json" ;;
+              *) continue ;;
+            esac
+            current="$(jq -er '.version' "$GITHUB_WORKSPACE/$manifest")"
+            if [ "$current" != "$VERSION" ]; then
+              newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
+              if [ "$newest" = "$current" ]; then
+                echo "$name is already newer than released version $VERSION"
+                continue
+              fi
+            fi
+            uv run browseros release component stamp --component "$name" --version "$VERSION"
+            paths+=("$manifest" "packages/browseros-agent/bun.lock")
+          done
+
+          if [ "${#paths[@]}" -eq 0 ] || git -C "$GITHUB_WORKSPACE" diff --quiet -- "${paths[@]}"; then
+            echo "Extension source versions already match the release"
+            exit 0
+          fi
+
+          scope="${{ inputs.extension }}"
+          branch="chore-bump-${scope}-extension-v${VERSION}"
+          if git -C "$GITHUB_WORKSPACE" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
+            if [ -z "$pr" ]; then
+              gh pr create \
+                --title "chore: bump ${scope} extension version to ${VERSION}" \
+                --body "Reflects the published extension release at version ${VERSION}." \
+                --base "$DEFAULT_BRANCH" \
+                --head "$branch"
+            fi
+            gh pr merge "$branch" --squash --auto
+            exit 0
+          fi
+
+          git -C "$GITHUB_WORKSPACE" config user.name "github-actions[bot]"
+          git -C "$GITHUB_WORKSPACE" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$GITHUB_WORKSPACE" checkout -b "$branch"
+          git -C "$GITHUB_WORKSPACE" add -- "${paths[@]}"
+          git -C "$GITHUB_WORKSPACE" commit -m "chore: bump ${scope} extension version to ${VERSION}"
+          git -C "$GITHUB_WORKSPACE" push origin "$branch"
+          gh pr create \
+            --title "chore: bump ${scope} extension version to ${VERSION}" \
+            --body "Reflects the published extension release at version ${VERSION}." \
+            --base "$DEFAULT_BRANCH" \
+            --head "$branch"
+          gh pr merge "$branch" --squash --auto

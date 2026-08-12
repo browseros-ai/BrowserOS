@@ -33,6 +33,42 @@ def _run_gh(command: List[str], runner: CommandRunner) -> str:
     return result.stdout.strip()
 
 
+def list_github_releases(
+    repo: str,
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> List[Mapping[str, object]]:
+    """List every GitHub release with stable REST field names normalized."""
+    pages = json.loads(
+        _run_gh(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{repo}/releases?per_page=100",
+            ],
+            runner,
+        )
+        or "[]"
+    )
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        raise RuntimeError("GitHub release response must contain arrays of pages")
+    releases: List[Mapping[str, object]] = []
+    for page in pages:
+        for release in page:
+            if not isinstance(release, dict):
+                raise RuntimeError("GitHub release response contains an invalid entry")
+            releases.append(
+                {
+                    "tagName": release.get("tag_name"),
+                    "isDraft": release.get("draft"),
+                    "targetCommitish": release.get("target_commitish"),
+                }
+            )
+    return releases
+
+
 def list_pull_requests(
     repo: str,
     *,
@@ -246,22 +282,15 @@ def github_release_tag(version: str, product_id: str) -> str:
 
 def inspect_github_release(tag: str, repo: str) -> Dict:
     """Read a release or raise; callers must never treat API failure as absence."""
-    result = subprocess.run(
-        [
-            "gh",
-            "release",
-            "view",
-            tag,
-            "--repo",
-            repo,
-            "--json",
-            "isDraft,assets,targetCommitish",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
+    tag_uri = quote(tag, safe="")
+    document = json.loads(
+        _run_gh(
+            ["gh", "api", f"repos/{repo}/releases/tags/{tag_uri}"],
+            subprocess.run,
+        )
     )
-    document = json.loads(result.stdout)
+    if not isinstance(document, dict):
+        raise RuntimeError("GitHub release response must be an object")
     assets = {}
     for asset in document.get("assets", []):
         if not isinstance(asset, dict) or not asset.get("name"):
@@ -274,9 +303,12 @@ def inspect_github_release(tag: str, repo: str) -> Dict:
             "sha256": sha256,
             "size": asset.get("size"),
         }
-    document["assets"] = list(assets)
-    document["asset_metadata"] = assets
-    return document
+    return {
+        "isDraft": document.get("draft"),
+        "targetCommitish": document.get("target_commitish"),
+        "assets": list(assets),
+        "asset_metadata": assets,
+    }
 
 
 def resolve_github_tag_target(tag: str, repo: str) -> Optional[str]:
@@ -520,13 +552,15 @@ class GithubModule(Step):
                 for artifact in release["artifacts"].values()
             }
 
-        log_info(f"\n{'='*60}")
+        log_info(f"\n{'=' * 60}")
         log_info(f"Creating GitHub Release: {tag}")
-        log_info(f"{'='*60}")
+        log_info(f"{'=' * 60}")
 
         for platform, release in metadata.items():
             artifacts = release.get("artifacts", {})
-            log_info(f"  {PLATFORM_DISPLAY_NAMES[platform]}: {len(artifacts)} artifact(s)")
+            log_info(
+                f"  {PLATFORM_DISPLAY_NAMES[platform]}: {len(artifacts)} artifact(s)"
+            )
 
         log_info(f"  Repo: {repo}")
         log_info(f"  Draft: {self.draft}")
@@ -657,13 +691,21 @@ class GithubModule(Step):
             sparkle_version = release.get("sparkle_version", "")
             build_date = release.get("build_date", "")
 
-            arch_to_file = {"arm64": "appcast.xml", "x64": "appcast-x86_64.xml", "universal": "appcast.xml"}
+            arch_to_file = {
+                "arm64": "appcast.xml",
+                "x64": "appcast-x86_64.xml",
+                "universal": "appcast.xml",
+            }
 
             for arch in ["arm64", "x64", "universal"]:
                 if arch in release.get("artifacts", {}):
                     artifact = release["artifacts"][arch]
                     log_info(f"\n{arch_to_file[arch]} ({arch}):")
-                    print(generate_appcast_item(artifact, tag_version, sparkle_version, build_date))
+                    print(
+                        generate_appcast_item(
+                            artifact, tag_version, sparkle_version, build_date
+                        )
+                    )
 
-        log_info(f"\n{'='*60}")
+        log_info(f"\n{'=' * 60}")
         log_success(f"Release {tag} complete!")

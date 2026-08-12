@@ -72,6 +72,14 @@ class StandaloneReleaseTest(unittest.TestCase):
         self.assertEqual(record.reservation, "create")
         self.assertEqual(operations.synced, ["main"])
 
+    def test_schedule_uses_the_called_workflow_checkout(self) -> None:
+        operations = FakeOperations()
+
+        record = resolve_standalone_release(_request(event_name="schedule"), operations)
+
+        self.assertEqual(record.release_sha, SOURCE_SHA)
+        self.assertEqual(record.tag, "agent-server/v0.0.127")
+
     def test_skips_tags_and_open_candidate_reservations(self) -> None:
         operations = FakeOperations()
         operations.records = [
@@ -201,9 +209,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
             pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",
         )
         body = (
-            "<!-- browseros-release-candidate-v1\n"
-            f"{candidate.to_json().strip()}\n"
-            "-->"
+            f"<!-- browseros-release-candidate-v1\n{candidate.to_json().strip()}\n-->"
         )
         with tempfile.TemporaryDirectory() as tmp:
             operations = GitComponentReleaseOperations(
@@ -231,6 +237,10 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                             "isCrossRepository": False,
                         }
                     ],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=[],
                 ),
                 mock.patch(
                     "bos_build.release.component_release.GitHubCandidateBackend.validate_candidate"

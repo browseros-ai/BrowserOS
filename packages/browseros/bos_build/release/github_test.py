@@ -4,10 +4,13 @@
 import json
 import subprocess
 import unittest
+from unittest import mock
 
 from bos_build.release.github import (
     create_pull_request,
     edit_pull_request_body,
+    inspect_github_release,
+    list_github_releases,
     list_pull_requests,
     merge_pull_request,
 )
@@ -80,6 +83,86 @@ class PullRequestAdapterTest(unittest.TestCase):
         self.assertIn("--squash", command)
         self.assertEqual(command[-2:], ["--match-head-commit", "2" * 40])
         self.assertNotIn("--delete-branch", command)
+
+
+class ReleaseAdapterTest(unittest.TestCase):
+    def test_lists_paginated_releases_with_normalized_fields(self) -> None:
+        runner = RecordingRunner(
+            stdout=json.dumps(
+                [
+                    [
+                        {
+                            "tag_name": "agent-server/v0.0.128",
+                            "draft": False,
+                            "target_commitish": "1" * 40,
+                        }
+                    ],
+                    [
+                        {
+                            "tag_name": "ext-agent/v0.0.124.0",
+                            "draft": True,
+                            "target_commitish": "2" * 40,
+                        }
+                    ],
+                ]
+            )
+        )
+
+        releases = list_github_releases("browseros-ai/BrowserOS", runner=runner)
+
+        self.assertEqual(
+            releases,
+            [
+                {
+                    "tagName": "agent-server/v0.0.128",
+                    "isDraft": False,
+                    "targetCommitish": "1" * 40,
+                },
+                {
+                    "tagName": "ext-agent/v0.0.124.0",
+                    "isDraft": True,
+                    "targetCommitish": "2" * 40,
+                },
+            ],
+        )
+        command = runner.calls[0][0]
+        self.assertEqual(command[:4], ["gh", "api", "--paginate", "--slurp"])
+        self.assertEqual(
+            command[-1], "repos/browseros-ai/BrowserOS/releases?per_page=100"
+        )
+
+    def test_inspects_release_through_rest_with_encoded_tag(self) -> None:
+        response = {
+            "draft": True,
+            "target_commitish": "1" * 40,
+            "assets": [
+                {
+                    "name": "BrowserOS.dmg",
+                    "size": 42,
+                    "digest": "sha256:" + "a" * 64,
+                }
+            ],
+        }
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(response), stderr=""
+        )
+        with mock.patch(
+            "bos_build.release.github.subprocess.run", return_value=completed
+        ) as runner:
+            release = inspect_github_release(
+                "ext-agent/v0.0.124.0", "browseros-ai/BrowserOS"
+            )
+
+        self.assertEqual(release["isDraft"], True)
+        self.assertEqual(release["targetCommitish"], "1" * 40)
+        self.assertEqual(release["assets"], ["BrowserOS.dmg"])
+        self.assertEqual(release["asset_metadata"]["BrowserOS.dmg"]["sha256"], "a" * 64)
+        command = runner.call_args.args[0]
+        self.assertEqual(command[:2], ["gh", "api"])
+        self.assertEqual(
+            command[-1],
+            "repos/browseros-ai/BrowserOS/releases/tags/ext-agent%2Fv0.0.124.0",
+        )
 
 
 if __name__ == "__main__":

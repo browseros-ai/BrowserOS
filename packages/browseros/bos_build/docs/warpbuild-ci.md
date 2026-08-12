@@ -120,9 +120,9 @@ Only dispatch one when you intentionally want to spend Azure compute time.
 `release-linux.yml` and `release-windows.yml` build one matrix entry per
 selected product (`browseros`, `browserclaw`, or `all`) and call
 `.github/workflows/build-browseros.yml` with `profile=release-ci`. Full product
-releases set `resource-mode=source`, pass the exact candidate SHA and prepared
-common-resource artifact, and always build one product. Standalone wrapper
-dispatches default to `published` for intentional released-resource builds.
+releases set `resource-mode=published`, pass the frozen dispatch SHA, and build
+one product after its server and extension workflows publish their `latest`
+resources. Standalone wrapper dispatches use the same published-resource path.
 Linux is unsigned. Windows follows the caller's `sign` input.
 
 The reusable workflow performs the per-platform recipe:
@@ -149,9 +149,9 @@ The reusable workflow performs the per-platform recipe:
    revalidates depot_tools, then runs `gclient sync -D --no-history
    --shallow`, exactly what the git_setup module runs.
 7. Save the cache (only when the restore missed, i.e. first run per pin).
-8. In source mode, download and validate the candidate-bound common-resource
-   artifact. Set up Bun for the BrowserOS server or the native Rust target for
-   the BrowserOS neo server.
+8. In source mode, download and validate the prepared common-resource artifact.
+   Set up Bun for the BrowserOS server or the native Rust target for the
+   BrowserOS neo server.
 9. Invoke `uv run browseros build` once with the selected profile, product,
    architecture, resource mode, Chromium path, signing/upload switches, and
    prepared directory. `bos_build` builds the native server, stages validated
@@ -240,16 +240,16 @@ gh workflow run release-windows.yml \
   -f sign=false \
   -f upload_to_r2=false
 
-# Full source-built matrices start only from the product orchestrators.
+# Full releases publish components before building the native matrices.
 gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
-Manual wrapper dispatches are published-mode only. Source mode is available
-through `workflow_call` because its prepared-resource artifact belongs to the
-parent full-release run. Retry a failed full-release lane with
-`gh run rerun <run-id> --failed` so it keeps the same candidate and artifact
-namespace.
+Manual wrapper dispatches and signed nightlies use published mode. Source mode
+remains available through `workflow_call` for specialized prepared-source
+builds. Retry a failed full-release lane with
+`gh run rerun <run-id> --failed` so it retains the original source SHA and run
+ID. Successful lanes from an earlier rerun attempt remain valid.
 
 The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next run is cold again for that version. To force a fresh

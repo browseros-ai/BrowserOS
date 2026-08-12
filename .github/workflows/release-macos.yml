@@ -63,6 +63,21 @@ on:
         required: false
         type: string
         default: ""
+      server_version:
+        description: "Exact published product server version"
+        required: false
+        type: string
+        default: ""
+      extension_version:
+        description: "Exact published product extension version"
+        required: false
+        type: string
+        default: ""
+      onboarding_version:
+        description: "Exact published onboarding resource version"
+        required: false
+        type: string
+        default: ""
     secrets:
       R2_ACCOUNT_ID:
         required: false
@@ -98,13 +113,13 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: macos-build
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: [self-hosted, macOS, ARM64, browseros-builder]
+    concurrency:
+      group: macos-build
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 1200
     env:
       BROWSEROS_REPO: ${{ vars.BROWSEROS_REPO_PATH }}
@@ -120,6 +135,9 @@ jobs:
           PRODUCTS: ${{ inputs.products }}
           REF: ${{ inputs.ref }}
           RESOURCE_MODE: ${{ inputs.resource_mode }}
+          SERVER_VERSION: ${{ inputs.server_version }}
+          EXTENSION_VERSION: ${{ inputs.extension_version }}
+          ONBOARDING_VERSION: ${{ inputs.onboarding_version }}
           UPLOAD_TO_R2: ${{ inputs.upload_to_r2 }}
         run: |
           set -euo pipefail
@@ -163,7 +181,13 @@ jobs:
               ;;
           esac
           case "$resource_mode" in
-            published) ;;
+            published)
+              if { [ -n "$SERVER_VERSION" ] || [ -n "$EXTENSION_VERSION" ] || [ -n "$ONBOARDING_VERSION" ]; } && \
+                { [ -z "$SERVER_VERSION" ] || [ -z "$EXTENSION_VERSION" ] || [ -z "$ONBOARDING_VERSION" ]; }; then
+                echo "::error::published component pins require server, extension, and onboarding versions"
+                exit 1
+              fi
+              ;;
             source)
               if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
                 echo "::error::source mode requires a full candidate_sha"
@@ -198,6 +222,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Sync build repo to exact ref
+        id: sync
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           RESOURCE_MODE: ${{ steps.inputs.outputs.resource_mode }}
@@ -214,6 +239,9 @@ jobs:
             git checkout --detach "$CANDIDATE_SHA"
             git reset --hard "$CANDIDATE_SHA"
             test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          elif [[ "$TARGET_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            git cat-file -e "$TARGET_REF^{commit}"
+            git checkout --detach "$TARGET_REF"
           elif git show-ref --verify --quiet "refs/remotes/origin/$TARGET_REF"; then
             git checkout -B "$TARGET_REF" "origin/$TARGET_REF"
             git reset --hard "origin/$TARGET_REF"
@@ -221,6 +249,8 @@ jobs:
             git fetch origin "$TARGET_REF"
             git checkout --detach FETCH_HEAD
           fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$TARGET_REF^{commit}")"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@v8.3.2
 
@@ -258,10 +288,40 @@ jobs:
           version="$(uv run python bos_build/scripts/bump_version.py --mode none)"
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Remove stale selected-product DMGs
+        env:
+          BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
+          PRODUCT_IDS: ${{ steps.inputs.outputs.product_ids }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          release_dir="$BROWSEROS_REPO/packages/browseros/releases/$VERSION"
+          if [ ! -d "$release_dir" ]; then
+            exit 0
+          fi
+          for product in $PRODUCT_IDS; do
+            case "$product" in
+              browseros)
+                find "$release_dir" -maxdepth 1 -type f \
+                  -name 'BrowserOS_*.dmg' ! -name 'BrowserOS_neo_*.dmg' -delete
+                ;;
+              browserclaw)
+                find "$release_dir" -maxdepth 1 -type f \
+                  -name 'BrowserOS_neo_*.dmg' -delete
+                ;;
+            esac
+          done
+
       - name: Build selected products
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
         env:
+          BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.sync.outputs.source_sha }}
+          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browseros' && inputs.server_version || '' }}
+          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browserclaw' && inputs.server_version || '' }}
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
           BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension_version && format('{0}/updates/extensions/bundled-manifest.xml', steps.inputs.outputs.browseros_repo) || '' }}
+          BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}

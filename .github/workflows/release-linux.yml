@@ -47,6 +47,21 @@ on:
         required: false
         type: string
         default: ""
+      server_version:
+        description: "Exact published product server version"
+        required: false
+        type: string
+        default: ""
+      extension_version:
+        description: "Exact published product extension version"
+        required: false
+        type: string
+        default: ""
+      onboarding_version:
+        description: "Exact published onboarding resource version"
+        required: false
+        type: string
+        default: ""
     secrets:
       R2_ACCOUNT_ID:
         required: false
@@ -71,6 +86,7 @@ permissions:
 concurrency:
   group: release-linux
   cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:
@@ -189,6 +205,9 @@ jobs:
       candidate-sha: ${{ inputs.candidate_sha || '' }}
       prepared-resources-artifact: ${{ inputs.prepared_resources_artifact || '' }}
       ref: ${{ inputs.ref || '' }}
+      server-version: ${{ inputs.server_version || '' }}
+      extension-version: ${{ inputs.extension_version || '' }}
+      onboarding-version: ${{ inputs.onboarding_version || '' }}
     secrets:
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

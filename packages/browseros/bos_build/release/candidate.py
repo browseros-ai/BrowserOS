@@ -21,6 +21,7 @@ from .components import (
 from .github import (
     create_pull_request,
     edit_pull_request_body,
+    list_github_releases,
     list_pull_requests,
     merge_pull_request,
 )
@@ -140,7 +141,9 @@ class CandidateBackend(Protocol):
 
     def is_clean(self) -> bool: ...
 
-    def find_candidate(self, product: str, parent_sha: str) -> CandidateRecord | None: ...
+    def find_candidate(
+        self, product: str, parent_sha: str
+    ) -> CandidateRecord | None: ...
 
     def discover_allocations(self, product: str) -> Sequence[AllocationRecord]: ...
 
@@ -258,9 +261,7 @@ def merge_candidate(
     if pull_request.state == "merged":
         if not pull_request.merge_sha:
             raise ValueError("Merged candidate pull request has no merge commit")
-        if not backend.merge_commit_matches_candidate(
-            record, pull_request.merge_sha
-        ):
+        if not backend.merge_commit_matches_candidate(record, pull_request.merge_sha):
             raise ValueError("Merged candidate commit does not match the candidate")
         return replace(record, state="merged", merge_sha=pull_request.merge_sha)
     if pull_request.state != "open":
@@ -268,7 +269,9 @@ def merge_candidate(
     if not pull_request.mergeable:
         raise ValueError("Candidate pull request is not mergeable")
     if backend.default_branch_contains_versions(record):
-        raise ValueError("Candidate component versions were superseded on the default branch")
+        raise ValueError(
+            "Candidate component versions were superseded on the default branch"
+        )
     merge_sha = backend.merge_pull_request(
         record.pull_request_number, record.candidate_sha
     )
@@ -368,9 +371,7 @@ class GitHubCandidateBackend:
         versions: Mapping[str, str],
     ) -> None:
         changed: set[Path] = set()
-        versioned_components = {
-            spec.id for spec in components_for_candidate(product)
-        }
+        versioned_components = {spec.id for spec in components_for_candidate(product)}
         for component, version in versions.items():
             if component in versioned_components:
                 changed.update(stamp_component(worktree, component, version))
@@ -383,7 +384,9 @@ class GitHubCandidateBackend:
             raise ValueError("Candidate commit contains unexpected files")
 
     def _expected_candidate_tree(self, record: CandidateRecord) -> str:
-        with tempfile.TemporaryDirectory(prefix="browseros-candidate-check-") as temp_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="browseros-candidate-check-"
+        ) as temp_dir:
             worktree = Path(temp_dir) / "repo"
             self._git("worktree", "add", "--detach", str(worktree), record.parent_sha)
             try:
@@ -397,9 +400,7 @@ class GitHubCandidateBackend:
                         raise ValueError(
                             f"Candidate {component} version does not match its metadata"
                         )
-                browser_version = load_semantic_version(
-                    worktree / "packages/browseros"
-                )
+                browser_version = load_semantic_version(worktree / "packages/browseros")
                 if browser_version != record.browser_version:
                     raise ValueError(
                         "Candidate browser version does not match its metadata"
@@ -503,9 +504,7 @@ class GitHubCandidateBackend:
     def find_candidate(self, product: str, parent_sha: str) -> CandidateRecord | None:
         branch = candidate_branch(product, parent_sha)
         matches = []
-        for pull_request in list_pull_requests(
-            self.repo, state="all", head=branch
-        ):
+        for pull_request in list_pull_requests(self.repo, state="all", head=branch):
             record = candidate_record_from_pull_request(pull_request, self.repo)
             if record is None:
                 continue
@@ -515,7 +514,9 @@ class GitHubCandidateBackend:
             if head_sha != record.candidate_sha:
                 raise ValueError("Candidate branch head no longer matches its record")
             if pull_request.get("baseRefName") != record.default_branch:
-                raise ValueError("Candidate pull request base no longer matches its record")
+                raise ValueError(
+                    "Candidate pull request base no longer matches its record"
+                )
             state = "merged" if pull_request.get("mergedAt") else "open"
             if pull_request.get("state") == "CLOSED" and state != "merged":
                 state = "closed"
@@ -548,7 +549,9 @@ class GitHubCandidateBackend:
         for tag in self._git("tag", "--list").splitlines():
             for spec in specs:
                 prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
-                prefix = next((value for value in prefixes if tag.startswith(value)), "")
+                prefix = next(
+                    (value for value in prefixes if tag.startswith(value)), ""
+                )
                 if not prefix:
                     continue
                 version = tag[len(prefix) :]
@@ -569,28 +572,7 @@ class GitHubCandidateBackend:
                 except (ValueError, subprocess.CalledProcessError):
                     continue
 
-        result = subprocess.run(
-            [
-                "gh",
-                "release",
-                "list",
-                "--repo",
-                self.repo,
-                "--limit",
-                "1000",
-                "--json",
-                "tagName,isDraft,targetCommitish",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        releases = json.loads(result.stdout or "[]")
-        if not isinstance(releases, list):
-            raise RuntimeError("GitHub release response must be an array")
-        for release in releases:
-            if not isinstance(release, dict):
-                continue
+        for release in list_github_releases(self.repo):
             tag = release.get("tagName")
             if not isinstance(tag, str):
                 continue
@@ -758,9 +740,7 @@ class GitHubCandidateBackend:
         if spec.manifest_path.suffix == ".json":
             document = json.loads(content)
             return str(document["version"])
-        match = re.search(
-            r'(?ms)^\[package\]\s*$.*?^version\s*=\s*"([^"]+)"', content
-        )
+        match = re.search(r'(?ms)^\[package\]\s*$.*?^version\s*=\s*"([^"]+)"', content)
         if match is None:
             raise ValueError(f"Missing version in {spec.manifest_path} at {ref}")
         return match.group(1)

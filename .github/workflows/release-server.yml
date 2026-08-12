@@ -83,6 +83,7 @@ permissions:
 concurrency:
   group: release-server
   cancel-in-progress: false
+  queue: max
 
 jobs:
   prepare:
@@ -90,6 +91,7 @@ jobs:
     concurrency:
       group: release-component-allocation
       cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -200,8 +202,10 @@ jobs:
           set -euo pipefail
           title="BrowserOS Server - v$VERSION"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
-            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            tag_uri="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"
+            release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
+            is_draft="$(jq -r '.draft' <<< "$release")"
+            target="$(jq -r '.target_commitish' <<< "$release")"
             if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
               echo "::error::$RELEASE_TAG is not a reusable draft for $RELEASE_SHA"
               exit 1
@@ -334,15 +338,16 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          release="$(gh release view "$RELEASE_TAG" --json assets,isDraft,targetCommitish)"
+          tag_uri="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"
+          release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
           asset_count="$(jq '[.assets[] | select(.name | test("^browseros-server-resources-(darwin-arm64|darwin-x64|linux-arm64|linux-x64|windows-x64)\\.zip$"))] | length' <<< "$release")"
           if [ "$asset_count" -ne 5 ]; then
             echo "::error::Expected 5 draft assets, found $asset_count"
             exit 1
           fi
           if [ "$RESERVATION" != "tag" ]; then
-            is_draft="$(jq -r '.isDraft' <<< "$release")"
-            target="$(jq -r '.targetCommitish' <<< "$release")"
+            is_draft="$(jq -r '.draft' <<< "$release")"
+            target="$(jq -r '.target_commitish' <<< "$release")"
             if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
               echo "::error::$RELEASE_TAG is not the prepared draft for $RELEASE_SHA"
               exit 1
@@ -446,6 +451,7 @@ jobs:
     if: ${{ needs.finalize.result == 'success' && github.event_name != 'push' && inputs.publish_ota == true }}
     permissions:
       contents: write
+      pull-requests: write
     uses: ./.github/workflows/publish-server-ota.yml
     with:
       product: browseros
@@ -458,7 +464,8 @@ jobs:
     needs:
       - prepare
       - finalize
-    if: ${{ needs.finalize.result == 'success' }}
+      - publish-ota
+    if: ${{ always() && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -485,6 +492,14 @@ jobs:
           branch="chore-bump-server-v${VERSION}"
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+          current="$(jq -er '.version' "$package_json")"
+          if [ "$current" != "$VERSION" ]; then
+            newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
+            if [ "$newest" = "$current" ]; then
+              echo "Server source is already newer than released version $VERSION"
+              exit 0
+            fi
+          fi
           uv run --directory packages/browseros browseros release component stamp \
             --component server \
             --version "$VERSION"

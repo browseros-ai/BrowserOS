@@ -67,6 +67,21 @@ on:
         required: false
         type: string
         default: ""
+      server-version:
+        description: "Exact published product server version"
+        required: false
+        type: string
+        default: ""
+      extension-version:
+        description: "Exact published product extension version"
+        required: false
+        type: string
+        default: ""
+      onboarding-version:
+        description: "Exact published onboarding resource version"
+        required: false
+        type: string
+        default: ""
       artifact-name:
         description: "Optional upload artifact name override"
         required: false
@@ -130,6 +145,9 @@ jobs:
           PREPARED_ARTIFACT: ${{ inputs.prepared-resources-artifact }}
           PRODUCT: ${{ inputs.product }}
           RESOURCE_MODE: ${{ inputs.resource-mode }}
+          SERVER_VERSION: ${{ inputs.server-version }}
+          EXTENSION_VERSION: ${{ inputs.extension-version }}
+          ONBOARDING_VERSION: ${{ inputs.onboarding-version }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
@@ -163,6 +181,12 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$RESOURCE_MODE" = "published" ] && \
+            { [ -n "$SERVER_VERSION" ] || [ -n "$EXTENSION_VERSION" ] || [ -n "$ONBOARDING_VERSION" ]; } && \
+            { [ -z "$SERVER_VERSION" ] || [ -z "$EXTENSION_VERSION" ] || [ -z "$ONBOARDING_VERSION" ]; }; then
+            echo "::error::published component pins require server, extension, and onboarding versions"
+            exit 1
+          fi
 
       - uses: actions/checkout@v7
         with:
@@ -200,6 +224,10 @@ jobs:
           test "$(git config --global --get core.fscache)" = true
           test "$(git config --global --get core.preloadindex)" = true
           test "$(git config --global --get depot-tools.allowGlobalGitConfig)" = true
+
+      - name: Record build source
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # v8.x.y releases exist but astral-sh publishes no floating `v8`
       # major tag - `@v8` is unresolvable and kills the job in Set up job.
@@ -359,6 +387,12 @@ jobs:
       - name: Build ${{ inputs.product }}
         working-directory: packages/browseros
         env:
+          BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server-version || '' }}
+          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server-version || '' }}
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
+          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension-version && format('{0}/updates/extensions/bundled-manifest.xml', github.workspace) || '' }}
+          BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension-version }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

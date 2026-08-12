@@ -15,7 +15,7 @@ from .components import (
     normalize_component_version,
     resolve_standalone_version,
 )
-from .github import list_pull_requests
+from .github import list_github_releases, list_pull_requests
 
 
 @dataclass(frozen=True)
@@ -84,8 +84,7 @@ class ComponentReleaseOperations(Protocol):
 
 def _version_key(component: str, version: str) -> tuple[int, ...]:
     return tuple(
-        int(part)
-        for part in normalize_component_version(component, version).split(".")
+        int(part) for part in normalize_component_version(component, version).split(".")
     )
 
 
@@ -95,7 +94,12 @@ def resolve_standalone_release(
     additional_allocations: Sequence[AllocationRecord] = (),
 ) -> StandaloneReleaseRecord:
     """Resolve one source-bound standalone component release."""
-    if request.event_name not in {"push", "workflow_dispatch", "workflow_call"}:
+    if request.event_name not in {
+        "push",
+        "schedule",
+        "workflow_dispatch",
+        "workflow_call",
+    }:
         raise ValueError(f"Unsupported release event: {request.event_name}")
     if not request.default_branch:
         raise ValueError("default_branch is required")
@@ -123,9 +127,7 @@ def resolve_standalone_release(
         requested = request.requested_version
         version = requested or operations.read_version(request.component, release_sha)
 
-    if not operations.is_default_branch_ancestor(
-        release_sha, request.default_branch
-    ):
+    if not operations.is_default_branch_ancestor(release_sha, request.default_branch):
         raise ValueError(
             f"Release commit {release_sha} is not reachable from "
             f"{operations.remote}/{request.default_branch}"
@@ -295,28 +297,7 @@ class GitComponentReleaseOperations:
                 )
             )
 
-        result = subprocess.run(
-            [
-                "gh",
-                "release",
-                "list",
-                "--repo",
-                self.repo,
-                "--limit",
-                "1000",
-                "--json",
-                "tagName,isDraft,targetCommitish",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        releases = json.loads(result.stdout or "[]")
-        if not isinstance(releases, list):
-            raise RuntimeError("GitHub release response must be an array")
-        for release in releases:
-            if not isinstance(release, dict):
-                continue
+        for release in list_github_releases(self.repo):
             tag = release.get("tagName")
             if not isinstance(tag, str) or not tag.startswith(spec.tag_prefix):
                 continue

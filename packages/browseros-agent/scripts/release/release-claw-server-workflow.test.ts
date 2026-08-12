@@ -161,6 +161,7 @@ describe('release-claw-server workflow', () => {
     expect(ota).toContain('- finalize')
     expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('pull-requests: write')
     expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
     expect(ota).toContain('product: browserclaw')
     expect(ota).toContain(
