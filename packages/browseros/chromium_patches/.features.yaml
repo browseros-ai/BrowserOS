@@ -444,7 +444,7 @@ features:
     description: "series: ungoogled-chromium manifest v2 extensions support"
     files:
       - chrome/browser/extensions/api/developer_private/extension_info_generator.cc
-      - chrome/browser/extensions/manifest_v2_experiment_manager.cc
+      - extensions/browser/manifest_v2_handler.cc
       - chrome/browser/ui/webui/extensions/extensions_ui.cc
       - extensions/common/extension.cc
 
