@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
-index 597bd5bfdcbbfbdcb553639ba24ff01d463ee11e..2bf1f18642288671739c60fca75c392582a78a4d 100644
+index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1a0a7010b 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
 @@ -41,6 +41,8 @@
@@ -11,7 +11,7 @@ index 597bd5bfdcbbfbdcb553639ba24ff01d463ee11e..2bf1f18642288671739c60fca75c3925
  #include "chrome/browser/extensions/startup_helper.h"
  #include "chrome/browser/first_run/first_run.h"
  #include "chrome/browser/lifetime/browser_shutdown.h"
-@@ -474,6 +476,49 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
+@@ -476,6 +478,49 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
  
@@ -61,7 +61,7 @@ index 597bd5bfdcbbfbdcb553639ba24ff01d463ee11e..2bf1f18642288671739c60fca75c3925
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -712,6 +757,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -714,6 +759,26 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
  
    if (!IsSilentLaunchEnabled(command_line, profile)) {

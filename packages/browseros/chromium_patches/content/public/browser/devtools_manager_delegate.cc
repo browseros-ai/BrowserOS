@@ -1,8 +1,8 @@
 diff --git a/content/public/browser/devtools_manager_delegate.cc b/content/public/browser/devtools_manager_delegate.cc
-index 02e70247e20fd..098273cc00bdd 100644
+index 8257dd01a79e617ff12554fd6cf5d32dc1abaf50..b01dc69a65c4f03ad3f0edcf2eb1229840e03933 100644
 --- a/content/public/browser/devtools_manager_delegate.cc
 +++ b/content/public/browser/devtools_manager_delegate.cc
-@@ -57,6 +57,12 @@ std::optional<bool> DevToolsManagerDelegate::ShouldReportAsTabTarget(
+@@ -62,6 +62,12 @@ std::optional<bool> DevToolsManagerDelegate::ShouldReportAsTabTarget(
    return std::nullopt;
  }
  

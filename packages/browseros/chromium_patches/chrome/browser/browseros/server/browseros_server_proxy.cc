@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_proxy.cc b/chrome/browser/browseros/server/browseros_server_proxy.cc
 new file mode 100644
-index 0000000000000..557eedb4779c4
+index 0000000000000000000000000000000000000000..e66ec726cc6d8c796ecede86b9776402aa632f2e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_proxy.cc
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,650 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -110,7 +110,8 @@ index 0000000000000..557eedb4779c4
 +    backend_socket_ = std::make_unique<net::TCPClientSocket>(
 +        net::AddressList::CreateFromIPAddress(net::IPAddress::IPv4Localhost(),
 +                                              backend_port_),
-+        nullptr, nullptr, nullptr, net::NetLogSource());
++        nullptr, nullptr, nullptr, net::NetLogSource(),
++        net::handles::kInvalidNetworkHandle);
 +    int result = backend_socket_->Connect(
 +        base::BindOnce(&Connection::OnConnected, base::Unretained(this)));
 +    if (result != net::ERR_IO_PENDING) {

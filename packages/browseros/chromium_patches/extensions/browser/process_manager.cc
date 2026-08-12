@@ -1,16 +1,16 @@
 diff --git a/extensions/browser/process_manager.cc b/extensions/browser/process_manager.cc
-index b80e711ccdeae..790a4d60b32c2 100644
+index 1afe62cde9895117d0049613902688ca1e71e82d..95e9c0df388d67b9862f8f770966411805bad8f7 100644
 --- a/extensions/browser/process_manager.cc
 +++ b/extensions/browser/process_manager.cc
-@@ -21,6 +21,7 @@
+@@ -23,6 +23,7 @@
  #include "base/time/time.h"
  #include "base/trace_event/trace_event.h"
  #include "base/uuid.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
+ #include "components/back_forward_cache/back_forward_cache_disable.h"
+ #include "components/back_forward_cache/disabled_reason_id.h"
  #include "content/public/browser/browser_context.h"
- #include "content/public/browser/browser_task_traits.h"
- #include "content/public/browser/browser_thread.h"
-@@ -80,7 +81,7 @@ ExtensionId GetExtensionID(content::RenderFrameHost* render_frame_host) {
+@@ -84,7 +85,7 @@ ExtensionId GetExtensionID(content::RenderFrameHost* render_frame_host) {
  bool IsFrameInExtensionHost(ExtensionHost* extension_host,
                              content::RenderFrameHost* render_frame_host) {
    return content::WebContents::FromRenderFrameHost(render_frame_host) ==
@@ -19,7 +19,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  // Incognito profiles use this process manager. It is mostly a shim that decides
-@@ -102,8 +103,8 @@ class IncognitoProcessManager : public ProcessManager {
+@@ -106,8 +107,8 @@ class IncognitoProcessManager : public ProcessManager {
                              const GURL& url) override;
  };
  
@@ -30,7 +30,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    if (BackgroundInfo::HasPersistentBackgroundPage(extension)) {
      manager->CreateBackgroundHost(extension,
                                    BackgroundInfo::GetBackgroundURL(extension));
-@@ -227,8 +228,9 @@ void ProcessManager::Shutdown() {
+@@ -231,8 +232,9 @@ void ProcessManager::Shutdown() {
    DCHECK(background_hosts_.empty());
    content::DevToolsAgentHost::RemoveObserver(this);
  
@@ -41,9 +41,9 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  void ProcessManager::RegisterRenderFrameHost(
-@@ -243,8 +245,9 @@ void ProcessManager::RegisterRenderFrameHost(
-   // UnregisterRenderFrame.
-   AcquireLazyKeepaliveCountForFrame(render_frame_host);
+@@ -252,8 +254,9 @@ void ProcessManager::RegisterRenderFrameHost(
+       back_forward_cache::DisabledReason(
+           back_forward_cache::DisabledReasonId::kExtensionFrame));
  
 -  for (auto& observer : observer_list_)
 +  for (auto& observer : observer_list_) {
@@ -52,7 +52,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  void ProcessManager::UnregisterRenderFrameHost(
-@@ -257,15 +260,17 @@ void ProcessManager::UnregisterRenderFrameHost(
+@@ -266,15 +269,17 @@ void ProcessManager::UnregisterRenderFrameHost(
      ReleaseLazyKeepaliveCountForFrame(render_frame_host);
      all_extension_frames_.erase(frame);
  
@@ -72,7 +72,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    return result;
  }
  
-@@ -307,9 +312,10 @@ bool ProcessManager::CreateBackgroundHost(const Extension* extension,
+@@ -316,9 +321,10 @@ bool ProcessManager::CreateBackgroundHost(const Extension* extension,
    // Don't create hosts if the embedder doesn't allow it.
    ProcessManagerDelegate* delegate =
        ExtensionsBrowserClient::Get()->GetProcessManagerDelegate();
@@ -85,7 +85,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  
    // Don't create multiple background hosts for an extension.
    if (GetBackgroundHostForExtension(extension->id())) {
-@@ -357,15 +363,17 @@ void ProcessManager::MaybeCreateStartupBackgroundHosts() {
+@@ -366,15 +372,17 @@ void ProcessManager::MaybeCreateStartupBackgroundHosts() {
    ProcessManagerDelegate* delegate =
        ExtensionsBrowserClient::Get()->GetProcessManagerDelegate();
    if (delegate &&
@@ -105,7 +105,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  
    CreateStartupBackgroundHosts();
    startup_background_hosts_created_ = true;
-@@ -494,8 +502,9 @@ void ProcessManager::DecrementLazyKeepaliveCount(
+@@ -505,8 +513,9 @@ bool ProcessManager::DecrementLazyKeepaliveCount(
  void ProcessManager::NotifyExtensionProcessTerminated(
      const Extension* extension) {
    DCHECK(extension);
@@ -116,7 +116,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  ProcessManager::ActivitiesMultiset ProcessManager::GetLazyKeepaliveActivities(
-@@ -537,8 +546,8 @@ void ProcessManager::OnSuspendAck(const ExtensionId& extension_id) {
+@@ -548,8 +557,8 @@ void ProcessManager::OnSuspendAck(const ExtensionId& extension_id) {
  void ProcessManager::NetworkRequestStarted(
      content::RenderFrameHost* render_frame_host,
      uint64_t request_id) {
@@ -127,7 +127,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    if (!host || !IsFrameInExtensionHost(host, render_frame_host)) {
      return;
    }
-@@ -651,10 +660,11 @@ void ProcessManager::OnExtensionUnloaded(BrowserContext* browser_context,
+@@ -662,10 +671,11 @@ void ProcessManager::OnExtensionUnloaded(BrowserContext* browser_context,
  void ProcessManager::CreateStartupBackgroundHosts() {
    DCHECK(!startup_background_hosts_created_);
    for (const scoped_refptr<const Extension>& extension :
@@ -141,7 +141,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    }
  }
  
-@@ -663,8 +673,9 @@ void ProcessManager::OnBackgroundHostCreated(ExtensionHost* host) {
+@@ -674,8 +684,9 @@ void ProcessManager::OnBackgroundHostCreated(ExtensionHost* host) {
    background_hosts_.insert(host);
    host->AddObserver(this);
  
@@ -152,7 +152,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  void ProcessManager::CloseBackgroundHost(ExtensionHost* host) {
-@@ -675,8 +686,9 @@ void ProcessManager::CloseBackgroundHost(ExtensionHost* host) {
+@@ -686,8 +697,9 @@ void ProcessManager::CloseBackgroundHost(ExtensionHost* host) {
    // |host| should deregister itself from our structures.
    CHECK(!background_hosts_.contains(host));
  
@@ -163,7 +163,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  void ProcessManager::AcquireLazyKeepaliveCountForFrame(
-@@ -732,7 +744,6 @@ base::Uuid ProcessManager::IncrementServiceWorkerKeepaliveCount(
+@@ -743,7 +755,6 @@ base::Uuid ProcessManager::IncrementServiceWorkerKeepaliveCount(
  
    base::Uuid request_uuid = base::Uuid::GenerateRandomV4();
  
@@ -171,7 +171,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    content::ServiceWorkerContext* service_worker_context =
        util::GetServiceWorkerContextForExtensionId(extension->id(),
                                                    browser_context_);
-@@ -934,8 +945,9 @@ void ProcessManager::UnregisterExtension(const ExtensionId& extension_id) {
+@@ -969,8 +980,9 @@ void ProcessManager::UnregisterExtension(const ExtensionId& extension_id) {
      content::RenderFrameHost* host = it->first;
      if (GetExtensionID(host) == extension_id) {
        all_extension_frames_.erase(it++);
@@ -182,7 +182,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
      } else {
        ++it;
      }
-@@ -959,6 +971,16 @@ void ProcessManager::StartTrackingServiceWorkerRunningInstance(
+@@ -994,6 +1006,16 @@ void ProcessManager::StartTrackingServiceWorkerRunningInstance(
    all_running_extension_workers_.Add(worker_id, browser_context_);
    worker_context_ids_[worker_id] = base::Uuid::GenerateRandomV4();
  
@@ -199,7 +199,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    // Observe the RenderProcessHost for cleaning up on process shutdown.
    bool inserted = worker_process_to_extension_ids_[worker_id.render_process_id]
                        .insert(worker_id.extension_id)
-@@ -971,8 +993,9 @@ void ProcessManager::StartTrackingServiceWorkerRunningInstance(
+@@ -1006,8 +1028,9 @@ void ProcessManager::StartTrackingServiceWorkerRunningInstance(
        // These will be cleaned up in RenderProcessExited().
        process_observations_.AddObservation(render_process_host);
      }
@@ -210,7 +210,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
    }
  }
  
-@@ -1009,9 +1032,10 @@ void ProcessManager::RenderProcessExited(
+@@ -1044,9 +1067,10 @@ void ProcessManager::RenderProcessExited(
  #if DCHECK_IS_ON()
    // Sanity check: No worker entry should exist for any |extension_id| running
    // inside the RenderProcessHost that died.
@@ -222,7 +222,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  #endif
    worker_process_to_extension_ids_.erase(iter);
  }
-@@ -1046,10 +1070,22 @@ void ProcessManager::StopTrackingServiceWorkerRunningInstance(
+@@ -1081,10 +1105,22 @@ void ProcessManager::StopTrackingServiceWorkerRunningInstance(
      return;
    }
  
@@ -246,7 +246,7 @@ index b80e711ccdeae..790a4d60b32c2 100644
  }
  
  // TODO(crbug.com/40936639): Deduplicate this method with it's other overload
-@@ -1147,8 +1183,9 @@ bool IncognitoProcessManager::CreateBackgroundHost(const Extension* extension,
+@@ -1193,8 +1229,9 @@ bool IncognitoProcessManager::CreateBackgroundHost(const Extension* extension,
                                                     const GURL& url) {
    if (IncognitoInfo::IsSplitMode(extension)) {
      if (ExtensionsBrowserClient::Get()->IsExtensionIncognitoEnabled(

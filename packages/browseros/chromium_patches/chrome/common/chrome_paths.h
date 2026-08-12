@@ -1,8 +1,8 @@
 diff --git a/chrome/common/chrome_paths.h b/chrome/common/chrome_paths.h
-index 9b3e9be1f14c1..401ef81129ecf 100644
+index e36249713bfd5c254a322c3c55fd31d129937fab..c921498ec328004f82b0661a2e84826ef8d49843 100644
 --- a/chrome/common/chrome_paths.h
 +++ b/chrome/common/chrome_paths.h
-@@ -131,6 +131,9 @@ enum {
+@@ -126,6 +126,9 @@ enum {
    DIR_OPTIMIZATION_GUIDE_PREDICTION_MODELS,  // Directory where verified models
                                               // downloaded by the Optimization
                                               // Guide are stored.

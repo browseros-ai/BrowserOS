@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel_helper.cc b/chrome/browser/ui/views/side_panel/side_panel_helper.cc
-index 66a681c25a00b..0d7b58fa29f32 100644
+index 414f120c64b5143b2dd9ee85d09be4012622715d..abaae1f7c5a2a3d7610b0e2f38262c96c63fbb0a 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel_helper.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel_helper.cc
 @@ -18,6 +18,7 @@
@@ -10,17 +10,17 @@ index 66a681c25a00b..0d7b58fa29f32 100644
  #include "chrome/browser/ui/webui_browser/webui_browser.h"
  #include "components/history_clusters/core/features.h"
  #include "components/history_clusters/core/history_clusters_service.h"
-@@ -48,6 +49,13 @@ void SidePanelHelper::PopulateGlobalEntries(
+@@ -49,6 +50,13 @@ void SidePanelHelper::PopulateGlobalEntries(
          ->CreateAndRegisterEntry(window_registry);
    }
  
 +  // Add third-party LLM panel.
 +  if (base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel)) {
-+    browser->browser_window_features()
-+        ->third_party_llm_panel_coordinator()
++    browser->GetFeatures()
++        .third_party_llm_panel_coordinator()
 +        ->CreateAndRegisterEntry(window_registry);
 +  }
 +
    // Add history clusters.
-   if (HistoryClustersSidePanelCoordinator::IsSupported(browser->profile()) &&
+   if (HistoryClustersSidePanelCoordinator::IsSupported(browser->GetProfile()) &&
        !HistorySidePanelCoordinator::IsSupported()) {

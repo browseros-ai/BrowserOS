@@ -1,13 +1,13 @@
 diff --git a/chrome/browser/extensions/api/debugger/debugger_api.cc b/chrome/browser/extensions/api/debugger/debugger_api.cc
-index 43449cdb81723..90af18743b2af 100644
+index a1f857db0ac96f4d6d3de30b2f0390be35f1e188..96d4a9c8aa5203bf87a7d2f9b74d7f0a255f3132 100644
 --- a/chrome/browser/extensions/api/debugger/debugger_api.cc
 +++ b/chrome/browser/extensions/api/debugger/debugger_api.cc
-@@ -476,7 +476,7 @@ bool ExtensionDevToolsClientHost::Attach() {
-   const bool suppress_infobar =
+@@ -516,7 +516,7 @@ bool ExtensionDevToolsClientHost::Attach() {
+   const bool suppress_warning =
        base::CommandLine::ForCurrentProcess()->HasSwitch(
            ::switches::kSilentDebuggerExtensionAPI) ||
 -      Manifest::IsPolicyLocation(extension_->location());
 +      Manifest::IsPolicyLocation(extension_->location()) || true;
  
-   if (!suppress_infobar) {
-     subscription_ = ExtensionDevToolsInfoBarDelegate::Create(
+   if (!suppress_warning) {
+ #if BUILDFLAG(IS_ANDROID)

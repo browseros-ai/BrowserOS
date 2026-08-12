@@ -1,8 +1,8 @@
 diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
-index eb5c136381779..f47dd4a811905 100644
+index 3128f3ac6df25aa259f6f854a0ca48c017097dcc..b1de4450f3619e8d549251b8ff32150068fb3b29 100644
 --- a/components/os_crypt/common/BUILD.gn
 +++ b/components/os_crypt/common/BUILD.gn
-@@ -2,12 +2,20 @@
+@@ -2,10 +2,18 @@
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
  
@@ -10,9 +10,7 @@ index eb5c136381779..f47dd4a811905 100644
 +import("//chrome/browser/browseros/buildflags.gni")
 +
  source_set("switches") {
-   sources = [
-     "os_crypt_switches.h",
-   ]
+   sources = [ "os_crypt_switches.h" ]
  }
  
 +buildflag_header("browseros_product_buildflags") {
@@ -23,7 +21,7 @@ index eb5c136381779..f47dd4a811905 100644
  if (is_apple) {
    source_set("keychain_password_mac") {
      sources = [
-@@ -15,6 +23,7 @@ if (is_apple) {
+@@ -13,6 +21,7 @@ if (is_apple) {
        "keychain_password_mac.mm",
      ]
      deps = [
@@ -31,7 +29,7 @@ index eb5c136381779..f47dd4a811905 100644
        "//base",
        "//build:branding_buildflags",
        "//crypto",
-@@ -28,6 +37,7 @@ source_set("unit_tests") {
+@@ -26,6 +35,7 @@ source_set("unit_tests") {
      sources = [ "keychain_password_mac_unittest.mm" ]
      deps = [
        ":keychain_password_mac",

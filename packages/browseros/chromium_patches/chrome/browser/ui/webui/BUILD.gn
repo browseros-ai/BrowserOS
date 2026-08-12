@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
-index 0cccaa551b871..8b0e1ded36f1b 100644
+index 9ad30f708e9cb4ff2d2bc853513631464e268593..54d35b5071c97a90282c1a71dd1f7463f8537242 100644
 --- a/chrome/browser/ui/webui/BUILD.gn
 +++ b/chrome/browser/ui/webui/BUILD.gn
-@@ -46,6 +46,7 @@ source_set("configs") {
-   deps = [
+@@ -54,6 +54,7 @@ source_set("configs") {
+     ":signin_internals_ui",
      ":webui",
      "//chrome/browser/actor/ui:actor_overlay",
 +    "//chrome/browser/browseros/onboarding",
      "//chrome/browser/contextual_tasks:ui",
      "//chrome/browser/glic",
-     "//chrome/browser/optimization_guide",
+     "//chrome/browser/glic:impl",

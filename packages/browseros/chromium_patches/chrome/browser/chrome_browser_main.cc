@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index a8ebab6e15ac1..725dce9fa19de 100644
+index a32949ed044f1aa5f32919182dc190c641460840..70a117a3f4caaa75e6193f1f04e3415121779ae9 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -10,6 +10,7 @@
@@ -10,7 +10,7 @@ index a8ebab6e15ac1..725dce9fa19de 100644
  #include "base/base_switches.h"
  #include "base/check.h"
  #include "base/command_line.h"
-@@ -1280,6 +1281,43 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+@@ -1296,6 +1297,43 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
    }
  #endif
  
@@ -54,7 +54,7 @@ index a8ebab6e15ac1..725dce9fa19de 100644
  #if BUILDFLAG(IS_MAC)
  #if defined(ARCH_CPU_X86_64)
    // The use of Rosetta to run the x64 version of Chromium on Arm is neither
-@@ -1887,6 +1925,12 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+@@ -1894,6 +1932,12 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
      g_browser_process->CreateDevToolsAutoOpener();
    }
  
@@ -67,7 +67,7 @@ index a8ebab6e15ac1..725dce9fa19de 100644
    // Needs to be done before PostProfileInit, since the SODA Installer setup is
    // called inside PostProfileInit and depends on it.
    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-@@ -2175,6 +2219,11 @@ void ChromeBrowserMainParts::PostMainMessageLoopRun() {
+@@ -2192,6 +2236,11 @@ void ChromeBrowserMainParts::PostMainMessageLoopRun() {
      chrome_extra_part->PostMainMessageLoopRun();
    }
  

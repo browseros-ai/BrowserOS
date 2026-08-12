@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/prefs/BUILD.gn b/chrome/browser/prefs/BUILD.gn
-index 8d26ff42799fa..d58b216558c93 100644
+index 36a8ca6c9195fe794155fb964e70d5f19ac2a35a..eec2d4e963264b041cd2fec3473008e6815fd798 100644
 --- a/chrome/browser/prefs/BUILD.gn
 +++ b/chrome/browser/prefs/BUILD.gn
 @@ -60,6 +60,7 @@ source_set("impl") {
@@ -8,5 +8,5 @@ index 8d26ff42799fa..d58b216558c93 100644
      ":util",
 +    "//chrome/browser/browseros/core:prefs",
      "//chrome/browser:browser_process",
-     "//chrome/browser:flags",
-     "//chrome/browser/autocomplete:aim_eligibility_service",
+     "//chrome/browser:browser_process_impl",
+     "//chrome/browser:chrome_content_browser_client",

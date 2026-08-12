@@ -1,8 +1,8 @@
 diff --git a/chrome/installer/util/util_constants.h b/chrome/installer/util/util_constants.h
-index f7805daf50a3a1d5868d0d5311e5bec65b44f5e3..92681ed94b34c8361e94ac03708fc629f0243a70 100644
+index ce173b497ab460a260ac4717802bf893be932c70..55f88899a3147a23a77827269e1d283bd1e9c468 100644
 --- a/chrome/installer/util/util_constants.h
 +++ b/chrome/installer/util/util_constants.h
-@@ -194,6 +194,7 @@ extern const char kRotateDeviceTrustKey[];
+@@ -196,6 +196,7 @@ extern const char kRotateDeviceTrustKey[];
  extern const char kRunAsAdmin[];
  extern const char kSelfDestruct[];
  extern const char kShowEula[];

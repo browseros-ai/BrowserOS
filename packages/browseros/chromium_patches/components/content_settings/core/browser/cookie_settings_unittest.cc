@@ -1,8 +1,8 @@
 diff --git a/components/content_settings/core/browser/cookie_settings_unittest.cc b/components/content_settings/core/browser/cookie_settings_unittest.cc
-index 54dab8169a5d4..e059eda7f01a5 100644
+index af3602048602eaccbd5b928b24003c750c6f015a..9a61bc67c85ef187454b81aa58c3576a44b1a1a1 100644
 --- a/components/content_settings/core/browser/cookie_settings_unittest.cc
 +++ b/components/content_settings/core/browser/cookie_settings_unittest.cc
-@@ -641,6 +641,8 @@ TEST_P(CookieSettingsTestP, CookiesBlockThirdParty) {
+@@ -611,6 +611,8 @@ TEST_P(CookieSettingsTestP, CookiesBlockThirdParty) {
  }
  
  TEST_F(CookieSettingsTest, CookiesControlsDefault) {

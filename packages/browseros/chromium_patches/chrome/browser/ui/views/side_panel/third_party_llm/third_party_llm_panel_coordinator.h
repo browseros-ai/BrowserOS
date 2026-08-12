@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h
 new file mode 100644
-index 0000000000000..1b30c5d723c09
+index 0000000000000000000000000000000000000000..63a28755a5cd19044e912166731e52b63cb4735f
 --- /dev/null
 +++ b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.h
 @@ -0,0 +1,236 @@
@@ -20,7 +20,7 @@ index 0000000000000..1b30c5d723c09
 +#include "base/scoped_multi_source_observation.h"
 +#include "base/scoped_observation.h"
 +#include "base/timer/timer.h"
-+#include "chrome/browser/ui/browser_list_observer.h"
++#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 +#include "chrome/browser/profiles/profile_observer.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "content/public/browser/media_stream_request.h"
@@ -40,8 +40,8 @@ index 0000000000000..1b30c5d723c09
 +class Image;
 +}  // namespace gfx
 +
-+class BrowserList;
 +class Profile;
++class ProfileBrowserCollection;
 +class SidePanelEntryScope;
 +class SidePanelRegistry;
 +class TabStripModel;
@@ -83,7 +83,7 @@ index 0000000000000..1b30c5d723c09
 +// ThirdPartyLlmPanelCoordinator handles the creation and registration of the
 +// third-party LLM SidePanelEntry.
 +class ThirdPartyLlmPanelCoordinator
-+    : public BrowserListObserver,
++    : public BrowserCollectionObserver,
 +      public ProfileObserver,
 +      public content::WebContentsDelegate,
 +      public content::WebContentsObserver,
@@ -136,8 +136,8 @@ index 0000000000000..1b30c5d723c09
 +  // views::ViewObserver:
 +  void OnViewIsDeleting(views::View* observed_view) override;
 +
-+  // BrowserListObserver:
-+  void OnBrowserRemoved(Browser* browser) override;
++  // BrowserCollectionObserver:
++  void OnBrowserClosed(BrowserWindowInterface* browser) override;
 +
 +  // ProfileObserver:
 +  void OnProfileWillBeDestroyed(Profile* profile) override;
@@ -226,8 +226,8 @@ index 0000000000000..1b30c5d723c09
 +      view_observation_{this};
 +
 +  // Observer registrations for early cleanup notifications
-+  base::ScopedObservation<BrowserList, BrowserListObserver>
-+      browser_list_observation_{this};
++  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
++      browser_collection_observation_{this};
 +  base::ScopedObservation<Profile, ProfileObserver>
 +      profile_observation_{this};
 +

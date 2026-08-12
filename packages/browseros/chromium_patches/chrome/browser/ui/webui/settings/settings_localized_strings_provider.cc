@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-index a0c5ecb6455e6..96ac12ff84666 100644
+index d21c249464c61a17e6087f65d0b18ecf090b1e5f..f035506fb25ff715fc573525d526c4f00b5ac89b 100644
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -13,6 +13,7 @@
+@@ -14,6 +14,7 @@
  #include "base/strings/escape.h"
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/utf_string_conversions.h"
@@ -10,7 +10,7 @@ index a0c5ecb6455e6..96ac12ff84666 100644
  #include "build/branding_buildflags.h"
  #include "build/build_config.h"
  #include "build/buildflag.h"
-@@ -337,6 +338,10 @@ void AddAboutStrings(content::WebUIDataSource* html_source, Profile* profile) {
+@@ -345,6 +346,10 @@ void AddAboutStrings(content::WebUIDataSource* html_source, Profile* profile) {
    std::u16string browser_version = VersionUI::GetAnnotatedVersionStringForUi();
  
    html_source->AddString("aboutBrowserVersion", browser_version);
@@ -21,7 +21,7 @@ index a0c5ecb6455e6..96ac12ff84666 100644
    html_source->AddString(
        "aboutProductCopyright",
        base::i18n::MessageFormatter::FormatWithNumberedArgs(
-@@ -1059,6 +1064,8 @@ void AddImportDataStrings(content::WebUIDataSource* html_source) {
+@@ -1136,6 +1141,8 @@ void AddImportDataStrings(content::WebUIDataSource* html_source) {
        {"importCommit", IDS_SETTINGS_IMPORT_COMMIT},
        {"noProfileFound", IDS_SETTINGS_IMPORT_NO_PROFILE_FOUND},
        {"importSuccess", IDS_SETTINGS_IMPORT_SUCCESS},

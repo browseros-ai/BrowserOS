@@ -1,15 +1,20 @@
 diff --git a/chrome/browser/ui/views/side_panel/BUILD.gn b/chrome/browser/ui/views/side_panel/BUILD.gn
-index 555a27ca0c171..39c81946c74d4 100644
+index 7fcad1f0628fc181d7fe9320ab98a06880734989..a57b2ec737c87dd34333446d2f132bc5f21d35eb 100644
 --- a/chrome/browser/ui/views/side_panel/BUILD.gn
 +++ b/chrome/browser/ui/views/side_panel/BUILD.gn
-@@ -56,8 +56,14 @@ source_set("side_panel") {
-     "side_panel_toolbar_pinning_controller.h",
-     "side_panel_web_ui_view.cc",
-     "side_panel_web_ui_view.h",
+@@ -11,6 +11,8 @@ source_set("side_panel") {
+   sources = [
+     "bookmarks/bookmarks_side_panel_coordinator.cc",
+     "bookmarks/bookmarks_side_panel_coordinator.h",
 +    "browseros_simple_page_extractor.cc",
 +    "browseros_simple_page_extractor.h",
-     "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.cc",
+     "comments/comments_side_panel_coordinator.cc",
+     "comments/comments_side_panel_coordinator.h",
+     "customize_chrome/customize_chrome_utils.cc",
+@@ -58,11 +60,17 @@ source_set("side_panel") {
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h",
+     "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.cc",
+     "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.h",
 +    "third_party_llm/third_party_llm_panel_coordinator.cc",
 +    "third_party_llm/third_party_llm_panel_coordinator.h",
 +    "third_party_llm/third_party_llm_view.cc",
@@ -17,12 +22,10 @@ index 555a27ca0c171..39c81946c74d4 100644
    ]
    public_deps = [
      "//base",
-@@ -76,6 +82,8 @@ source_set("side_panel") {
-     "//chrome/browser/ui/webui/side_panel/customize_chrome",
-     "//chrome/common",
-     "//chrome/common/read_anything:mojo_bindings",
+     "//chrome/browser:browser_public_dependencies",
+     "//chrome/browser:primitives",
 +    "//chrome/browser/browseros/core:prefs",
 +    "//chrome/browser/browseros/metrics",
-     "//components/omnibox/browser",
-     "//components/prefs",
-     "//components/search_engines",
+     "//chrome/browser/history_clusters",
+     "//chrome/browser/optimization_guide",
+     "//chrome/browser/profiles:profile",

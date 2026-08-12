@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
-index 644ad6ad58039..55149fc87cc2f 100644
+index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe972775caee 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
 +++ b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
 @@ -18,6 +18,7 @@
@@ -10,7 +10,7 @@ index 644ad6ad58039..55149fc87cc2f 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/browser_actions.h"
-@@ -171,6 +172,9 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
+@@ -173,6 +174,9 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
    // Initialize the pinned action buttons.
    action_view_controller_ = std::make_unique<views::ActionViewController>();
    model_->MaybeMigrateExistingPinnedStates();
@@ -20,7 +20,7 @@ index 644ad6ad58039..55149fc87cc2f 100644
    UpdateViews();
  }
  
-@@ -294,6 +298,16 @@ void PinnedToolbarActionsContainer::UpdateAllIcons() {
+@@ -296,6 +300,16 @@ void PinnedToolbarActionsContainer::UpdateAllIcons() {
    }
  }
  
@@ -37,7 +37,7 @@ index 644ad6ad58039..55149fc87cc2f 100644
  void PinnedToolbarActionsContainer::AddedToWidget() {
    OnThemeChanged();
  }
-@@ -409,6 +423,10 @@ void PinnedToolbarActionsContainer::OnActionsChanged() {
+@@ -411,6 +425,10 @@ void PinnedToolbarActionsContainer::OnActionsChanged() {
    drop_weak_ptr_factory_.InvalidateWeakPtrs();
  }
  
@@ -48,9 +48,9 @@ index 644ad6ad58039..55149fc87cc2f 100644
  void PinnedToolbarActionsContainer::WriteDragDataForView(
      View* sender,
      const gfx::Point& press_pt,
-@@ -854,6 +872,14 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
+@@ -868,6 +886,14 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
    action_view_controller_->CreateActionViewRelationship(
-       button.get(), GetActionItemFor(id)->GetAsWeakPtr());
+       button.get(), action_item->GetAsWeakPtr());
  
 +  // Set high priority for BrowserOS actions to ensure they're always visible
 +  if (browseros::IsBrowserOSAction(id)) {
