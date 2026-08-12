@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/devtools/chrome_devtools_session.h b/chrome/browser/devtools/chrome_devtools_session.h
-index bac525f420dee..52d94ea97d9ee 100644
+index 59232dff240078b5d9d0d1dea7dddff3be512796..9786024c9020906cb3235f3393173c4124971422 100644
 --- a/chrome/browser/devtools/chrome_devtools_session.h
 +++ b/chrome/browser/devtools/chrome_devtools_session.h
-@@ -21,10 +21,12 @@ class DevToolsAgentHostClientChannel;
- }  // namespace content
+@@ -22,10 +22,12 @@ class DevToolsAgentHostClientChannel;
  
+ class AdsHandler;
  class AutofillHandler;
 +class BookmarksHandler;
  class EmulationHandler;
@@ -15,9 +15,9 @@ index bac525f420dee..52d94ea97d9ee 100644
  class PWAHandler;
  class SecurityHandler;
  class StorageHandler;
-@@ -66,10 +68,12 @@ class ChromeDevToolsSession : public protocol::FrontendChannel {
- 
+@@ -61,10 +63,12 @@ class ChromeDevToolsSession : public protocol::FrontendChannel {
    protocol::UberDispatcher dispatcher_;
+   std::unique_ptr<AdsHandler> ads_handler_;
    std::unique_ptr<AutofillHandler> autofill_handler_;
 +  std::unique_ptr<BookmarksHandler> bookmarks_handler_;
    std::unique_ptr<ExtensionsHandler> extensions_handler_;

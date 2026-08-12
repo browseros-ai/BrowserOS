@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/profiles/profile_management_flow_controller.cc b/chrome/browser/ui/views/profiles/profile_management_flow_controller.cc
-index b97220b8d91e6..6a1d1f2f237db 100644
+index 850d2e5f48c04011be8b8f26b7f8c24c3e50b79d..d6d56c5adc4e4a4ab94c02bf272089ebddaff9b6 100644
 --- a/chrome/browser/ui/views/profiles/profile_management_flow_controller.cc
 +++ b/chrome/browser/ui/views/profiles/profile_management_flow_controller.cc
 @@ -4,6 +4,9 @@
@@ -12,7 +12,7 @@ index b97220b8d91e6..6a1d1f2f237db 100644
  #include "base/check_is_test.h"
  #include "base/functional/bind.h"
  #include "base/functional/callback.h"
-@@ -176,18 +179,21 @@ void ProfileManagementFlowController::FinishFlowAndRunInBrowser(
+@@ -200,18 +203,21 @@ void ProfileManagementFlowController::FinishFlowAndRunInBrowser(
              .Then(std::move(post_host_cleared_callback.value()));
    }
  

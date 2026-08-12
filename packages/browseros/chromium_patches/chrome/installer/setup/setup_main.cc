@@ -1,8 +1,8 @@
 diff --git a/chrome/installer/setup/setup_main.cc b/chrome/installer/setup/setup_main.cc
-index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28f5ddc9ae 100644
+index 97841efd285583af1485a3fb75fee5b120b74d59..cb1d5ec7712d5b64e29e4654641980bee5219c84 100644
 --- a/chrome/installer/setup/setup_main.cc
 +++ b/chrome/installer/setup/setup_main.cc
-@@ -47,7 +47,6 @@
+@@ -50,7 +50,6 @@
  #include "base/task/single_thread_task_executor.h"
  #include "base/threading/platform_thread.h"
  #include "base/time/time.h"
@@ -10,7 +10,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
  #include "base/values.h"
  #include "base/version.h"
  #include "base/win/current_module.h"
-@@ -69,6 +68,7 @@
+@@ -72,6 +71,7 @@
  #include "chrome/install_static/install_details.h"
  #include "chrome/install_static/install_util.h"
  #include "chrome/installer/setup/brand_behaviors.h"
@@ -18,7 +18,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
  #include "chrome/installer/setup/configure_app_container_sandbox.h"
  #include "chrome/installer/setup/downgrade_cleanup.h"
  #include "chrome/installer/setup/install.h"
-@@ -1196,12 +1196,55 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
+@@ -1287,12 +1287,55 @@ bool HandleNonInstallCmdLineOptions(installer::ModifyParams& modify_params,
  
  namespace installer {
  
@@ -74,7 +74,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
  
    // Create a temp folder where we will unpack Chrome archive. If it fails,
    // then we are doomed, so return immediately and no cleanup is required.
-@@ -1211,21 +1254,30 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
+@@ -1302,15 +1345,23 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
                                             &unpack_path)) {
      installer_state.WriteInstallerResult(
          TEMP_DIR_FAILED, IDS_INSTALL_TEMP_DIR_FAILED_BASE, nullptr);
@@ -98,8 +98,9 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
    InstallStatus install_status = UNKNOWN_STATUS;
 +  int failure_msg_base = IDS_INSTALL_FAILED_BASE;
    base::FilePath src_path(unpack_path.Append(kInstallSourceChromeDir));
+   std::optional<uint32_t> src_size_kb;
    std::unique_ptr<base::Version> installer_version(
-       GetMaxVersionFromArchiveDir(src_path));
+@@ -1318,6 +1369,7 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
    if (!installer_version.get()) {
      LOG(ERROR) << "Did not find any valid version in installer.";
      install_status = INVALID_ARCHIVE;
@@ -107,7 +108,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
      installer_state.WriteInstallerResult(
          install_status, IDS_INSTALL_INVALID_ARCHIVE_BASE, nullptr);
    } else {
-@@ -1241,6 +1293,7 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
+@@ -1332,6 +1384,7 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
          int message_id = IDS_INSTALL_HIGHER_VERSION_BASE;
          proceed_with_installation = false;
          install_status = HIGHER_VERSION_EXISTS;
@@ -115,7 +116,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
          installer_state.WriteInstallerResult(install_status, message_id,
                                               nullptr);
        }
-@@ -1280,6 +1333,8 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
+@@ -1374,6 +1427,8 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
            install_msg_base = 0;
          }
        }
@@ -124,7 +125,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
  
        installer_state.SetStage(FINISHING);
  
-@@ -1296,10 +1351,13 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
+@@ -1390,10 +1445,13 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
  
        if (install_status == FIRST_INSTALL_SUCCESS) {
          VLOG(1) << "First install successful.";
@@ -138,7 +139,7 @@ index accfea57a58b7ade93a5f25ec200cfc5293c76a9..545f3430710b615d91b60dafcf715f28
          if (!system_install && !do_not_launch_chrome) {
            LaunchChromeBrowser(installer_state.target_path());
          }
-@@ -1352,6 +1410,9 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
+@@ -1448,6 +1506,9 @@ InstallStatus InstallProductsHelper(InstallationState& original_state,
    // temp_path's dtor will take care of deleting or scheduling itself for
    // deletion at reboot when this scope closes.
    VLOG(1) << "Deleting temporary directory " << temp_path.path().value();

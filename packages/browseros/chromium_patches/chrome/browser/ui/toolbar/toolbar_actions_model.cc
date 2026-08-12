@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/toolbar_actions_model.cc b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
-index d4f8091fffc0e..b0f72561e3a2f 100644
+index 4e9859be11c4cdf3fd3884bd2d8af8cc463b79d6..131ae57597108956bfe6617162a976e6b54646ad 100644
 --- a/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 @@ -18,6 +18,7 @@
@@ -10,7 +10,7 @@ index d4f8091fffc0e..b0f72561e3a2f 100644
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
-@@ -389,6 +390,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
+@@ -409,6 +410,11 @@ bool ToolbarActionsModel::IsActionPinned(const ActionId& action_id) const {
  }
  
  bool ToolbarActionsModel::IsActionForcePinned(const ActionId& action_id) const {
@@ -22,7 +22,7 @@ index d4f8091fffc0e..b0f72561e3a2f 100644
    auto* management =
        extensions::ExtensionManagementFactory::GetForBrowserContext(profile_);
    return management->GetForcePinnedList().contains(action_id);
-@@ -634,6 +640,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
+@@ -637,6 +643,14 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
                           return !std::ranges::contains(pinned, id);
                         });
  

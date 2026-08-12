@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/extension_context_menu_model.cc b/chrome/browser/extensions/extension_context_menu_model.cc
-index 1e3ccdabbab2a..e2e9be67b6fc4 100644
+index 94417bcccd3ae41a9c9e781336e595be27c2391d..ab50329ef8988a9b6506a76cf8583575729968fb 100644
 --- a/chrome/browser/extensions/extension_context_menu_model.cc
 +++ b/chrome/browser/extensions/extension_context_menu_model.cc
 @@ -15,6 +15,7 @@
@@ -10,7 +10,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  #include "chrome/browser/extensions/context_menu_matcher.h"
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
-@@ -92,13 +93,15 @@ namespace {
+@@ -93,13 +94,15 @@ namespace {
  // Returns true if the given |item| is of the given |type|.
  bool MenuItemMatchesAction(const std::optional<ActionInfo::Type> action_type,
                             const MenuItem* item) {
@@ -28,7 +28,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
    if (contexts.Contains(MenuItem::PAGE_ACTION) &&
        (*action_type == ActionInfo::Type::kPage)) {
      return true;
-@@ -390,11 +393,13 @@ void ExtensionContextMenuModel::Init(const Extension* extension,
+@@ -391,11 +394,13 @@ void ExtensionContextMenuModel::Init(const Extension* extension,
  
  bool ExtensionContextMenuModel::IsCommandIdChecked(int command_id) const {
    const Extension* extension = GetExtension();
@@ -44,7 +44,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    if (command_id == PAGE_ACCESS_RUN_ON_CLICK ||
        command_id == PAGE_ACCESS_RUN_ON_SITE ||
-@@ -410,11 +415,13 @@ bool ExtensionContextMenuModel::IsCommandIdChecked(int command_id) const {
+@@ -415,11 +420,13 @@ bool ExtensionContextMenuModel::IsCommandIdChecked(int command_id) const {
  
  bool ExtensionContextMenuModel::IsCommandIdVisible(int command_id) const {
    const Extension* extension = GetExtension();
@@ -60,7 +60,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    // Items added by Chrome to the menu are always visible.
    return true;
-@@ -422,11 +429,13 @@ bool ExtensionContextMenuModel::IsCommandIdVisible(int command_id) const {
+@@ -427,11 +434,13 @@ bool ExtensionContextMenuModel::IsCommandIdVisible(int command_id) const {
  
  bool ExtensionContextMenuModel::IsCommandIdEnabled(int command_id) const {
    const Extension* extension = GetExtension();
@@ -76,7 +76,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    switch (command_id) {
      case HOME_PAGE:
-@@ -502,8 +511,9 @@ void ExtensionContextMenuModel::RecordUkmForExtension(
+@@ -507,8 +516,9 @@ void ExtensionContextMenuModel::RecordUkmForExtension(
  void ExtensionContextMenuModel::ExecuteCommand(int command_id,
                                                 int event_flags) {
    const Extension* extension = GetExtension();
@@ -87,7 +87,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    if (ContextMenuMatcher::IsExtensionsCustomCommandId(command_id)) {
      DCHECK(extension_items_);
-@@ -829,7 +839,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
+@@ -838,7 +848,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
  
    // Controls section.
    bool has_options_page = OptionsPageInfo::HasOptionsPage(extension);
@@ -98,7 +98,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
    if (can_show_icon_in_toolbar || has_options_page || can_uninstall_extension) {
      AddSeparator(ui::NORMAL_SEPARATOR);
    }
-@@ -893,8 +905,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
+@@ -906,8 +918,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
    std::optional<ActionInfo::Type> action_type;
    extension_action_ =
        ExtensionActionManager::Get(profile_)->GetExtensionAction(*extension);
@@ -109,7 +109,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    extension_items_ = std::make_unique<ContextMenuMatcher>(
        profile_, this, this,
-@@ -919,8 +932,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
+@@ -932,8 +945,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
      AddSeparator(ui::NORMAL_SEPARATOR);
    }
  
@@ -120,7 +120,7 @@ index 1e3ccdabbab2a..e2e9be67b6fc4 100644
  
    if (!is_component_) {
      if (IsExtensionRequiredByPolicy(extension, profile_)) {
-@@ -1005,8 +1019,9 @@ const Extension* ExtensionContextMenuModel::GetExtension() const {
+@@ -1022,8 +1036,9 @@ const Extension* ExtensionContextMenuModel::GetExtension() const {
  void ExtensionContextMenuModel::AppendExtensionItems() {
    MenuManager* menu_manager = MenuManager::Get(profile_);
    if (!menu_manager ||  // Null in unit tests

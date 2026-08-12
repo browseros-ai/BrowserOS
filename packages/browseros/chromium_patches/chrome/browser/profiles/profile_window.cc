@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/profiles/profile_window.cc b/chrome/browser/profiles/profile_window.cc
-index 4f381722b30a9..a760ac732f10e 100644
+index c13b772bc2eae7e744e53374733b7d40595dd78c..6881556779f7a8e4f656e863229d338a3f8ff6c3 100644
 --- a/chrome/browser/profiles/profile_window.cc
 +++ b/chrome/browser/profiles/profile_window.cc
 @@ -6,6 +6,9 @@
@@ -22,7 +22,7 @@ index 4f381722b30a9..a760ac732f10e 100644
    DCHECK(profile);
    TRACE_EVENT1("browser", "FindOrCreateNewWindowForProfile", "profile_path",
                 profile->GetPath());
-@@ -103,6 +107,7 @@ void FindOrCreateNewWindowForProfile(
+@@ -104,6 +108,7 @@ void FindOrCreateNewWindowForProfile(
    base::RecordAction(UserMetricsAction("NewWindow"));
    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
    StartupBrowserCreator browser_creator;
@@ -30,7 +30,7 @@ index 4f381722b30a9..a760ac732f10e 100644
  
  #if !BUILDFLAG(IS_CHROMEOS)
    if (open_command_line_urls) {
-@@ -129,6 +134,18 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
+@@ -130,6 +135,18 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
                                   bool is_new_profile,
                                   bool open_command_line_urls,
                                   Profile* profile) {
@@ -49,7 +49,7 @@ index 4f381722b30a9..a760ac732f10e 100644
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
    TRACE_EVENT1("browser", "OpenBrowserWindowForProfile", "profile_path",
                 profile->GetPath().AsUTF8Unsafe());
-@@ -197,7 +214,8 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
+@@ -199,7 +216,8 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
    // Passing true for |always_create| means we won't duplicate the code that
    // tries to find a browser.
    profiles::FindOrCreateNewWindowForProfile(

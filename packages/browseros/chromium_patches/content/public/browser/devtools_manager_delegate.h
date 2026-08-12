@@ -1,8 +1,8 @@
 diff --git a/content/public/browser/devtools_manager_delegate.h b/content/public/browser/devtools_manager_delegate.h
-index e6e5ba7be2551..969c9a49db8cc 100644
+index f08399ea042217b4c72d0a5cb4d71067ced65a87..d27be9caa801a0e927f2b250a728eb22aada2db6 100644
 --- a/content/public/browser/devtools_manager_delegate.h
 +++ b/content/public/browser/devtools_manager_delegate.h
-@@ -91,6 +91,14 @@ class CONTENT_EXPORT DevToolsManagerDelegate {
+@@ -100,6 +100,14 @@ class CONTENT_EXPORT DevToolsManagerDelegate {
    virtual std::optional<bool> ShouldReportAsTabTarget(
        WebContents* web_contents);
  

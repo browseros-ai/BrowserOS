@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..ea477521a09d7
+index 0000000000000000000000000000000000000000..48b91d06d84497e06ad66d191ecd4fa1bb044c41
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,347 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -27,9 +27,9 @@ index 0000000000000..ea477521a09d7
 +#include "chrome/browser/infobars/confirm_infobar_creator.h"
 +#include "chrome/browser/platform_util.h"
 +#include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/ui/browser.h"
-+#include "chrome/browser/ui/browser_finder.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 +#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/toasts/api/toast_id.h"
@@ -276,7 +276,10 @@ index 0000000000000..ea477521a09d7
 +  }
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
-+  Browser* browser = chrome::FindLastActiveWithProfile(profile);
++  ProfileBrowserCollection* browser_collection =
++      ProfileBrowserCollection::GetForProfile(profile);
++  BrowserWindowInterface* browser =
++      browser_collection ? browser_collection->GetLastActiveBrowser() : nullptr;
 +  if (!browser) {
 +    return RespondNow(Error("No active browser window"));
 +  }
@@ -311,13 +314,16 @@ index 0000000000000..ea477521a09d7
 +  }
 +
 +  Profile* profile = Profile::FromBrowserContext(browser_context());
-+  Browser* browser = chrome::FindLastActiveWithProfile(profile);
++  ProfileBrowserCollection* browser_collection =
++      ProfileBrowserCollection::GetForProfile(profile);
++  BrowserWindowInterface* browser =
++      browser_collection ? browser_collection->GetLastActiveBrowser() : nullptr;
 +  if (!browser) {
 +    return RespondNow(Error("No active browser window"));
 +  }
 +
 +  content::WebContents* contents =
-+      browser->tab_strip_model()->GetActiveWebContents();
++      browser->GetTabStripModel()->GetActiveWebContents();
 +  if (!contents) {
 +    return RespondNow(Error("No active tab"));
 +  }

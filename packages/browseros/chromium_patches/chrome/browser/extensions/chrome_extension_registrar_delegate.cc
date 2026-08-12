@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/chrome_extension_registrar_delegate.cc b/chrome/browser/extensions/chrome_extension_registrar_delegate.cc
-index 7d18f147508d6..26ae243f550f4 100644
+index ed0e71e24734cd358ed19750872ed1ea0942a6eb..c78cb415182b6d1503a4837daccdd89e100008a9 100644
 --- a/chrome/browser/extensions/chrome_extension_registrar_delegate.cc
 +++ b/chrome/browser/extensions/chrome_extension_registrar_delegate.cc
-@@ -12,6 +12,7 @@
+@@ -13,6 +13,7 @@
  #include "base/metrics/histogram_functions.h"
  #include "base/metrics/histogram_macros.h"
  #include "base/notimplemented.h"
@@ -10,7 +10,7 @@ index 7d18f147508d6..26ae243f550f4 100644
  #include "chrome/browser/extensions/component_loader.h"
  #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
  #include "chrome/browser/extensions/data_deleter.h"
-@@ -257,7 +258,17 @@ void ChromeExtensionRegistrarDelegate::PostUninstallExtension(
+@@ -258,7 +259,17 @@ void ChromeExtensionRegistrarDelegate::PostUninstallExtension(
      }
    }
  
@@ -29,7 +29,7 @@ index 7d18f147508d6..26ae243f550f4 100644
  }
  
  void ChromeExtensionRegistrarDelegate::DoLoadExtensionForReload(
-@@ -323,6 +334,13 @@ bool ChromeExtensionRegistrarDelegate::CanDisableExtension(
+@@ -324,6 +335,13 @@ bool ChromeExtensionRegistrarDelegate::CanDisableExtension(
      return true;
    }
  

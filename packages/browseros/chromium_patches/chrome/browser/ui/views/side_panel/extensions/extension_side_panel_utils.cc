@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
-index 2523e8b9aa62c..1aa3248eee572 100644
+index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..9971318d2be74e056fef279dde179f15181bc810 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 @@ -4,6 +4,7 @@
@@ -10,8 +10,8 @@ index 2523e8b9aa62c..1aa3248eee572 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -211,4 +212,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
-       ExtensionSidePanelCoordinator::GetPanelType());
+@@ -200,4 +201,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+   contextual_registry->ResetActiveEntry();
  }
  
 +bool IsContextualExtensionSidePanelOpen(BrowserWindowInterface* browser_window,
@@ -38,7 +38,7 @@ index 2523e8b9aa62c..1aa3248eee572 100644
 +  // this extension's entry.
 +  if (is_active_tab) {
 +    SidePanelUI* side_panel_ui = browser_window->GetFeatures().side_panel_ui();
-+    bool is_showing = side_panel_ui->IsSidePanelShowing(SidePanelEntry::PanelType::kContent);
++    bool is_showing = side_panel_ui->IsSidePanelShowing();
 +    LOG(INFO) << "browseros: side_panel is_showing=" << is_showing;
 +    if (!is_showing) {
 +      return false;
@@ -84,7 +84,7 @@ index 2523e8b9aa62c..1aa3248eee572 100644
 +
 +  // Check if this extension's contextual panel is currently showing.
 +  bool is_currently_open = false;
-+  if (is_active_tab && side_panel_ui->IsSidePanelShowing(SidePanelEntry::PanelType::kContent)) {
++  if (is_active_tab && side_panel_ui->IsSidePanelShowing()) {
 +    is_currently_open = IsKeyActiveInRegistry(contextual_registry, extension_key);
 +  }
 +
@@ -110,8 +110,8 @@ index 2523e8b9aa62c..1aa3248eee572 100644
 +
 +  if (!should_open) {
 +    LOG(INFO) << "browseros: Closing contextual panel";
-+    side_panel_ui->Close(SidePanelEntry::PanelType::kContent);
-+    contextual_registry->ResetActiveEntryFor(SidePanelEntry::PanelType::kContent);
++    side_panel_ui->Close();
++    contextual_registry->ResetActiveEntry();
 +    return false;
 +  } else {
 +    LOG(INFO) << "browseros: Opening contextual panel";

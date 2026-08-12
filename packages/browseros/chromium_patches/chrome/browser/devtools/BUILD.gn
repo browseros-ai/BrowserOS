@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
-index 47c0377453e1e60b3d7aaef7944f0f0d88ddc535..8cae2250ed1996f4c27fbaaab52775cfca6668fb 100644
+index 265dba91f9c7963b45158b37d0f1ccc8a39bd6d0..bf734690fbfcc94415e0ae22b9b66ac6816efbdc 100644
 --- a/chrome/browser/devtools/BUILD.gn
 +++ b/chrome/browser/devtools/BUILD.gn
-@@ -34,6 +34,10 @@ if (enable_devtools_frontend) {
+@@ -37,6 +37,10 @@ if (enable_devtools_frontend) {
      "protocol/emulation.h",
      "protocol/page.cc",
      "protocol/page.h",
@@ -13,7 +13,7 @@ index 47c0377453e1e60b3d7aaef7944f0f0d88ddc535..8cae2250ed1996f4c27fbaaab52775cf
      "protocol/pwa.cc",
      "protocol/pwa.h",
      "protocol/security.cc",
-@@ -387,7 +391,10 @@ static_library("devtools") {
+@@ -399,7 +403,10 @@ static_library("devtools") {
        "//components/media_router/browser",
        "//components/media_router/common/mojom:media_router",
        "//components/payments/content",
@@ -24,8 +24,8 @@ index 47c0377453e1e60b3d7aaef7944f0f0d88ddc535..8cae2250ed1996f4c27fbaaab52775cf
        "//components/security_state/content",
        "//components/subresource_filter/content/browser",
        "//components/web_package",
-@@ -401,8 +408,12 @@ static_library("devtools") {
-     sources += [
+@@ -419,8 +426,12 @@ static_library("devtools") {
+       "protocol/ads_handler.h",
        "protocol/autofill_handler.cc",
        "protocol/autofill_handler.h",
 +      "protocol/bookmarks_handler.cc",

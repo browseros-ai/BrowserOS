@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
-index 06fbe5a802929..2bf65856933bc 100644
+index 074cfef37f0b0956dcddcfe4813bee1cdc275467..6bacca205623e11debd535131a15acb8af335edc 100644
 --- a/chrome/browser/extensions/external_provider_impl.cc
 +++ b/chrome/browser/extensions/external_provider_impl.cc
 @@ -30,6 +30,8 @@
@@ -11,7 +11,7 @@ index 06fbe5a802929..2bf65856933bc 100644
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_migrator.h"
  #include "chrome/browser/extensions/external_component_loader.h"
-@@ -920,6 +922,40 @@ void ExternalProviderImpl::CreateExternalProviders(
+@@ -922,6 +924,40 @@ void ExternalProviderImpl::CreateExternalProviders(
      provider_list->push_back(std::move(initial_external_extensions_provider));
    }
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS)

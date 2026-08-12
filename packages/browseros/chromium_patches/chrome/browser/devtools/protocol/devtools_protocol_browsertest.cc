@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406ccd52432e 100644
+index c7a4d458d226f4eb4ca60c77172a1b59f8c4381c..f1012dddfbd158860f5070fda09e7d12e448406f 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 @@ -21,6 +21,7 @@
@@ -18,7 +18,7 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
  #include "chrome/browser/preloading/preloading_prefs.h"
  #include "chrome/browser/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations_mixin.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -41,6 +43,8 @@
+@@ -42,6 +44,8 @@
  #include "components/content_settings/core/browser/cookie_settings.h"
  #include "components/content_settings/core/common/pref_names.h"
  #include "components/custom_handlers/protocol_handler_registry.h"
@@ -28,22 +28,45 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
  #include "components/infobars/core/infobar.h"
  #include "components/infobars/core/infobar_delegate.h"
 @@ -89,6 +93,7 @@
+ #include "chrome/browser/sessions/session_service_test_helper.h"
  #include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_commands.h"
- #include "chrome/browser/ui/browser_finder.h"
 +#include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
  #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
  #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
- #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
-@@ -2121,6 +2126,215 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
-   SendCommandSync("Target.getTargets");
-   EXPECT_EQ(2u, result()->FindList("targetInfos")->size());
+@@ -388,8 +393,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
+ }
+ 
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+-// On ChromeOS and MacOS, the tabs are not backgrounded and unloaded in the same way as
+-// on other platforms.
++// On ChromeOS and MacOS, the tabs are not backgrounded and unloaded in the same
++// way as on other platforms.
+ #define MAYBE_AutoAttachToUnloadedTab DISABLED_AutoAttachToUnloadedTab
+ #else
+ #define MAYBE_AutoAttachToUnloadedTab AutoAttachToUnloadedTab
+@@ -1076,8 +1081,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
+   net::SSLCipherSuiteToStrings(&page_key_exchange_str, &page_cipher, &page_mac,
+                                &is_aead, &is_tls13, page_cipher_suite);
+   std::string page_key_exchange;
+-  if (page_key_exchange_str)
++  if (page_key_exchange_str) {
+     page_key_exchange = page_key_exchange_str;
++  }
+ 
+   const char* page_key_exchange_group =
+       SSL_get_curve_name(entry->GetSSL().key_exchange_group);
+@@ -2232,6 +2238,216 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+   EXPECT_EQ(group_id.ToString(),
+             *second_get_target_info_data.FindString("tabGroupId"));
  }
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 +                       BrowserCreateWindowRejectsHiddenWithoutSideEffects) {
 +  AttachToBrowserTarget();
-+  const size_t initial_browser_count = chrome::GetTotalBrowserCount();
++  const size_t initial_browser_count =
++      GlobalBrowserCollection::GetInstance()->GetSize();
 +
 +  SendCommandSync(
 +      "Browser.createWindow",
@@ -53,12 +76,14 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
 +  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
 +  EXPECT_EQ("Hidden windows are no longer supported.",
 +            *error()->FindString("message"));
-+  EXPECT_EQ(initial_browser_count, chrome::GetTotalBrowserCount());
++  EXPECT_EQ(initial_browser_count,
++            GlobalBrowserCollection::GetInstance()->GetSize());
 +}
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, BrowserCloseWindowClosesOnce) {
 +  AttachToBrowserTarget();
-+  const size_t initial_browser_count = chrome::GetTotalBrowserCount();
++  const size_t initial_browser_count =
++      GlobalBrowserCollection::GetInstance()->GetSize();
 +
 +  const base::DictValue* result = SendCommandSync(
 +      "Browser.createWindow", base::DictValue().Set("url", "about:blank"));
@@ -67,27 +92,27 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
 +  ASSERT_TRUE(window);
 +  const std::optional<int> window_id = window->FindInt("windowId");
 +  ASSERT_TRUE(window_id.has_value());
-+  ASSERT_EQ(initial_browser_count + 1, chrome::GetTotalBrowserCount());
++  ASSERT_EQ(initial_browser_count + 1,
++            GlobalBrowserCollection::GetInstance()->GetSize());
 +
 +  ui_test_utils::BrowserDestroyedObserver observer;
 +  SendCommandSync("Browser.closeWindow",
 +                  base::DictValue().Set("windowId", *window_id));
 +  ASSERT_FALSE(error());
 +  observer.Wait();
-+  EXPECT_EQ(initial_browser_count, chrome::GetTotalBrowserCount());
++  EXPECT_EQ(initial_browser_count,
++            GlobalBrowserCollection::GetInstance()->GetSize());
 +}
 +
-+IN_PROC_BROWSER_TEST_F(
-+    DevToolsProtocolTest,
-+    BrowserSetWindowVisibilityRejectsHideWithoutMutation) {
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserSetWindowVisibilityRejectsHideWithoutMutation) {
 +  AttachToBrowserTarget();
 +  ASSERT_TRUE(browser()->window()->IsVisible());
 +
-+  SendCommandSync(
-+      "Browser.setWindowVisibility",
-+      base::DictValue()
-+          .Set("windowId", browser()->session_id().id())
-+          .Set("visible", false));
++  SendCommandSync("Browser.setWindowVisibility",
++                  base::DictValue()
++                      .Set("windowId", browser()->session_id().id())
++                      .Set("visible", false));
 +
 +  ASSERT_TRUE(error());
 +  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
@@ -102,11 +127,10 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
 +  const int window_id = browser()->session_id().id();
 +
 +  const base::DictValue* result = SendCommandSync(
-+      "Browser.setWindowVisibility",
-+      base::DictValue()
-+          .Set("windowId", window_id)
-+          .Set("visible", true)
-+          .Set("activate", false));
++      "Browser.setWindowVisibility", base::DictValue()
++                                         .Set("windowId", window_id)
++                                         .Set("visible", true)
++                                         .Set("activate", false));
 +
 +  ASSERT_TRUE(result);
 +  ASSERT_FALSE(error());
@@ -152,8 +176,7 @@ index 6a3a8ba7d79978dfd618056fe23f31fe4696c375..1910213b6b81c583aff4c5fbf172406c
 +  const std::optional<int> tab_id = tabs->front().GetDict().FindInt("tabId");
 +  ASSERT_TRUE(tab_id.has_value());
 +
-+  SendCommandSync("Browser.showTab",
-+                  base::DictValue().Set("tabId", *tab_id));
++  SendCommandSync("Browser.showTab", base::DictValue().Set("tabId", *tab_id));
 +
 +  ASSERT_TRUE(error());
 +  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));

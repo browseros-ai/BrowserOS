@@ -1,12 +1,20 @@
 diff --git a/components/vector_icons/BUILD.gn b/components/vector_icons/BUILD.gn
-index 7db6d4d0799db..1768431b24e87 100644
+index d6d391fa6bac330c5a96d5cc5dad767d4c7fb175..6f7691c6ff403b67ff0dc5b8cbf3105c1d16ff3c 100644
 --- a/components/vector_icons/BUILD.gn
 +++ b/components/vector_icons/BUILD.gn
-@@ -56,6 +56,7 @@ if (current_toolchain == default_toolchain) {
-       "certificate.icon",
-       "certificate_off.icon",
+@@ -91,6 +91,7 @@ if (current_toolchain == default_toolchain) {
+       "certificate_old.icon",
        "chat.icon",
+       "chat_old.icon",
 +      "chat_orange.icon",
        "chat_spark.icon",
-       "check_circle.icon",
-       "checklist.icon",
+       "chat_spark_old.icon",
+       "check_circle_filled.icon",
+@@ -527,7 +528,6 @@ if (current_toolchain == default_toolchain) {
+ 
+     if (is_chrome_branded) {
+       sources += [
+-        "google_chrome/audio_spark.icon",
+         "google_chrome/google_agentspace_monochrome_logo.icon",
+         "google_chrome/google_agentspace_monochrome_logo_25.icon",
+         "google_chrome/google_calendar.icon",
