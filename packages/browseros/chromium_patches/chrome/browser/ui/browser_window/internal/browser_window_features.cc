@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_window/internal/browser_window_features.cc b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-index c2d47effffd2298e037a090dc3ad22ecd9315dbd..34ef13a8cc02a445a17575fc826f1324cd8cc2ad 100644
+index c2d47effffd2298e037a090dc3ad22ecd9315dbd..a2d6ffe4f9e583952bb82292afce8c2824149321 100644
 --- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 @@ -149,6 +149,7 @@
@@ -23,12 +23,3 @@ index c2d47effffd2298e037a090dc3ad22ecd9315dbd..34ef13a8cc02a445a17575fc826f1324
    translate_bubble_controller_ =
        GetUserDataFactory().CreateInstance<TranslateBubbleController>(
            *browser, browser, browser_actions_->root_action_item());
-@@ -622,7 +629,7 @@ void BrowserWindowFeatures::Init(BrowserWindowInterface* browser) {
-   //   CloseButtonController depends on VerticalTabStripStateController.
-   //   CloseButtonController depends on ImmersiveModeController.
-   // TODO(crbug.com/481268779): Pass these dependencies explicitly.
--  if (contextual_tasks::IsContextualTasksUIEnabled()) {
-+  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
-     contextual_tasks_browser_controller_ =
-         GetUserDataFactory()
-             .CreateInstance<contextual_tasks::ContextualTasksBrowserController>(

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..f50c441b9550dc397f700f7b9a559bb91fe85542 100644
+index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..4b342702574ce41bd1e47eeeb65c1ce9411e5766 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
 @@ -21,17 +21,21 @@
@@ -149,15 +149,6 @@ index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..f50c441b9550dc397f700f7b9a559bb9
    if (HistorySidePanelCoordinator::IsSupported()) {
      root_action_item_->AddChild(
          SidePanelAction(SidePanelEntryId::kHistory, IDS_HISTORY_TITLE,
-@@ -532,7 +626,7 @@ void BrowserActions::InitializeSidePanelActions() {
-             .Build());
-   }
- 
--  if (contextual_tasks::IsContextualTasksUIEnabled()) {
-+  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
-     root_action_item_->AddChild(
-         actions::ActionItem::Builder(
-             base::BindRepeating(
 @@ -3540,9 +3634,8 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
                [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                   actions::ActionInvocationContext context) {

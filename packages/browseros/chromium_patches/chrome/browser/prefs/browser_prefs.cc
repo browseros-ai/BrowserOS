@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 48394ef7d6093b50a3c8906c2227c02ea7a6e5e8..853c0c836c86d8ea581709d1dbb64ead9482b924 100644
+index 48394ef7d6093b50a3c8906c2227c02ea7a6e5e8..4392987f682aab3a45a66c808d5dccaea0daf9c1 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
 @@ -24,6 +24,9 @@
@@ -48,15 +48,3 @@ index 48394ef7d6093b50a3c8906c2227c02ea7a6e5e8..853c0c836c86d8ea581709d1dbb64ead
  #if BUILDFLAG(IS_CHROMEOS)
  void RegisterSigninProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
                                  std::string_view country) {
-@@ -2671,11 +2682,6 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
-   syncer::ClearAccountKeyedPrefValue(
-       profile_prefs, autofill::prefs::kAutofillAiOptInStatus, {});
- 
--#if !BUILDFLAG(IS_ANDROID)
--  // Added 07/2026.
--  tabs::MigrateEverythingMenuPinnedToTabstripPref(profile_prefs);
--#endif
--
-   // Please don't delete the following line. It is used by PRESUBMIT.py.
-   // END_MIGRATE_OBSOLETE_PROFILE_PREFS
- 
