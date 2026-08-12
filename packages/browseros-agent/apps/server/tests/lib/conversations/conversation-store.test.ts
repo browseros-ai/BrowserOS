@@ -86,23 +86,29 @@ describe('DbConversationStore', () => {
     expect(summaries[0].lastUserMessage).toBe('q2')
   })
 
-  test('appendAcpDisplay merges new messages and skips duplicate ids', async () => {
+  test('save persists agent metadata for acp display copies', async () => {
     const store = createStore()
-    await store.appendAcpDisplay({
+    await store.save({
       id: CONVERSATION_ID,
       messages: [userMessage('u1', 'run this'), assistantMessage('a1', 'ok')],
       targetType: 'claude',
       agentId: 'agent-1',
     })
-    await store.appendAcpDisplay({
+    // A later ACP turn overwrites with the full in-memory thread.
+    await store.save({
       id: CONVERSATION_ID,
-      messages: [assistantMessage('a1', 'ok'), userMessage('u2', 'next')],
+      messages: [
+        userMessage('u1', 'run this'),
+        assistantMessage('a1', 'ok'),
+        userMessage('u2', 'next'),
+      ],
       targetType: 'claude',
       agentId: 'agent-1',
     })
 
     const detail = await store.get(CONVERSATION_ID)
     expect(detail?.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2'])
+    expect(detail?.targetType).toBe('claude')
     expect(detail?.agentId).toBe('agent-1')
   })
 

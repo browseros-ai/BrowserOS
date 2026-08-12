@@ -924,3 +924,178 @@ describe('ChatService single-rebuild reconciliation', () => {
     )
   })
 })
+
+describe('ChatService history persistence', () => {
+  beforeEach(() => {
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'openai',
+      model: 'gpt-5',
+      apiKey: 'test-key',
+    }))
+  })
+
+  function persistenceBrowser() {
+    return {
+      resolveTabIds: mock(async () => new Map<number, number>()),
+      closePage: mock(async () => {}),
+    }
+  }
+
+  function browserOsRequest(
+    conversationId: string,
+    historyMode: 'local' | 'cloud',
+  ) {
+    return {
+      target: BROWSEROS_TARGET,
+      conversationId,
+      message: 'hello',
+      isScheduledTask: false,
+      mode: 'agent',
+      origin: 'sidepanel',
+      historyMode,
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+      },
+    } as never
+  }
+
+  it('hydrates from and persists to the store in local mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => ({
+        id: 'stored',
+        messages: [
+          {
+            id: 'old',
+            role: 'user',
+            parts: [{ type: 'text', text: 'earlier' }],
+          },
+        ],
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+    const conversationId = crypto.randomUUID()
+
+    await service.processMessage(
+      browserOsRequest(conversationId, 'local'),
+      new AbortController().signal,
+    )
+
+    expect(conversationStore.get).toHaveBeenCalledWith(conversationId)
+    expect(agent.messages[0]?.parts[0]?.text).toBe('earlier')
+    expect(conversationStore.save).toHaveBeenCalledTimes(1)
+    const saved = conversationStore.save.mock.calls.at(-1)?.[0] as
+      | { id: string; targetType: string }
+      | undefined
+    expect(saved?.id).toBe(conversationId)
+    expect(saved?.targetType).toBe('browseros')
+  })
+
+  it('never touches the store and seeds from previousConversation in cloud mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => null),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      {
+        ...browserOsRequest(crypto.randomUUID(), 'cloud'),
+        previousConversation: [{ role: 'user', content: 'from client' }],
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(conversationStore.get).not.toHaveBeenCalled()
+    expect(conversationStore.save).not.toHaveBeenCalled()
+    expect(agent.messages.some((m) => m.parts[0]?.text === 'from client')).toBe(
+      true,
+    )
+  })
+
+  it('ignores a stored record whose target is not browseros in local mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => ({
+        id: 'stored',
+        messages: [
+          {
+            id: 'foreign',
+            role: 'user',
+            parts: [{ type: 'text', text: 'acp history' }],
+          },
+        ],
+        targetType: 'claude',
+        agentId: 'some-agent',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      browserOsRequest(crypto.randomUUID(), 'local'),
+      new AbortController().signal,
+    )
+
+    expect(
+      agent.messages.every((m) => m.parts[0]?.text !== 'acp history'),
+    ).toBe(true)
+  })
+})
