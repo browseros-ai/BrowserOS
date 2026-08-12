@@ -58,11 +58,17 @@ const SUMMARY_COLUMNS = {
 const MAX_SNIPPET_CHARS = 200
 
 export class DbConversationStore implements ConversationStore {
-  private readonly db: BrowserOsDatabase
+  private readonly injectedDb?: BrowserOsDatabase
   private writeQueue: Promise<unknown> = Promise.resolve()
 
   constructor(options: { db?: BrowserOsDatabase } = {}) {
-    this.db = options.db ?? getDb()
+    this.injectedDb = options.db
+  }
+
+  // Resolve the shared handle lazily: routes (and this store) are constructed at
+  // registration time, which can precede initializeDb().
+  private get db(): BrowserOsDatabase {
+    return this.injectedDb ?? getDb()
   }
 
   async list(): Promise<ConversationSummary[]> {
