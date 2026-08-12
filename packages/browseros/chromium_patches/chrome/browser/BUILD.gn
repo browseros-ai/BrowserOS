@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index bfc8555485593dc25c72fa74f20a70ce70ea6598..60196c2dacd2e3a9d6db81a2b6d3c4fc15c882f0 100644
+index bfc8555485593dc25c72fa74f20a70ce70ea6598..8c479f2beba1027310cf11cc458bfea1c4a58f81 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -13,6 +13,7 @@ import("//build/config/python.gni")
@@ -19,15 +19,13 @@ index bfc8555485593dc25c72fa74f20a70ce70ea6598..60196c2dacd2e3a9d6db81a2b6d3c4fc
      "ENABLE_UPDATER=$enable_updater",
      "ENABLE_UPDATE_NOTIFICATIONS=$enable_update_notifications",
      "USE_MINIKIN_HYPHENATION=$use_minikin_hyphenation",
-@@ -1552,6 +1555,27 @@ source_set("core") {
+@@ -1552,6 +1555,25 @@ source_set("core") {
      ]
    }
  
 +  if (is_mac && enable_sparkle) {
-+    sources += [
-+      "mac/sparkle_glue.h",
-+      "mac/sparkle_glue.mm",
-+    ]
++    sources += [ "mac/sparkle_glue.mm" ]
++    deps += [ "//chrome/browser/mac:sparkle_glue_headers" ]
 +
 +    # Headers config for compilation (linking handled by chrome_framework)
 +    public_configs = [ "//third_party/sparkle:sparkle_link_framework" ]
@@ -47,7 +45,7 @@ index bfc8555485593dc25c72fa74f20a70ce70ea6598..60196c2dacd2e3a9d6db81a2b6d3c4fc
    if (!is_win && !is_android) {
      sources += [
        "certificate_viewer_stub.cc",
-@@ -2076,6 +2100,7 @@ source_set("browser") {
+@@ -2076,6 +2098,7 @@ source_set("browser") {
      "//chrome/browser/bookmarks",
      "//chrome/browser/bookmarks:impl",
      "//chrome/browser/breadcrumbs",
