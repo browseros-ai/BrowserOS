@@ -16,6 +16,7 @@ import { requireTrustedAppOrigin } from '../utils/request-auth'
 import { createAcpxProbeRoutes } from './acpx-probe'
 import { createAgentRoutes } from './agents'
 import { createChatRoutes } from './chat'
+import { createConversationRoutes } from './conversations'
 import { createCreditsRoutes } from './credits'
 import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
@@ -115,6 +116,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         }),
       )
       .route('/agents', protectedAppRoutes(resolvedAgentRoutes))
+      .route('/conversations', protectedAppRoutes(createConversationRoutes()))
   )
 }
 

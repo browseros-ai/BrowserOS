@@ -43,6 +43,13 @@
       "when": 1785900211901,
       "tag": "0005_yellow_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786538823114,
+      "tag": "0006_add_conversations",
+      "breakpoints": true
     }
   ]
 }
