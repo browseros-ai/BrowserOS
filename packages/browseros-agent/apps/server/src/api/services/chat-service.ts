@@ -32,6 +32,11 @@ import {
 import type { AcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { DbAcpAgentStore } from '../../lib/agents/storage/acp-agent-store'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
+import {
+  type ConversationStore,
+  DbConversationStore,
+  type SaveConversationInput,
+} from '../../lib/conversations/conversation-store'
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
 import type { ServerActivity } from '../services/server-activity'
@@ -60,6 +65,7 @@ export interface ChatServiceDeps {
   activity?: ServerActivity
   acpAgentStore?: Pick<AcpAgentStore, 'get'>
   acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'close'>
+  conversationStore?: Pick<ConversationStore, 'get' | 'save'>
 }
 
 export class ChatService {
@@ -67,10 +73,12 @@ export class ChatService {
   private acpRuntime: Pick<AcpAgentRuntime, 'stream' | 'close'> | undefined
   private readonly acpMessages = new Map<string, UIMessage[]>()
   private readonly acpConversationAgents = new Map<string, string>()
+  private conversationStore: Pick<ConversationStore, 'get' | 'save'> | undefined
 
   constructor(private deps: ChatServiceDeps) {
     this.acpAgentStore = deps.acpAgentStore
     this.acpRuntime = deps.acpRuntime
+    this.conversationStore = deps.conversationStore
   }
 
   async processMessage(
@@ -261,19 +269,32 @@ export class ChatService {
       sessionStore.set(request.conversationId, session)
     }
 
-    if (isNewSession && request.previousConversation?.length) {
-      for (const msg of request.previousConversation) {
-        if (!msg.content.trim()) continue
-        session.agent.messages.push({
-          id: crypto.randomUUID(),
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          parts: [{ type: 'text', text: msg.content }],
+    if (isNewSession) {
+      if (request.historyMode === 'local') {
+        const stored = await this.getConversationStore().get(
+          request.conversationId,
+        )
+        if (stored?.messages.length) {
+          session.agent.messages = stored.messages
+          logger.info('Hydrated conversation history from database', {
+            conversationId: request.conversationId,
+            messageCount: stored.messages.length,
+          })
+        }
+      } else if (request.previousConversation?.length) {
+        for (const msg of request.previousConversation) {
+          if (!msg.content.trim()) continue
+          session.agent.messages.push({
+            id: crypto.randomUUID(),
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            parts: [{ type: 'text', text: msg.content }],
+          })
+        }
+        logger.info('Injected previous conversation history', {
+          conversationId: request.conversationId,
+          messageCount: request.previousConversation.length,
         })
       }
-      logger.info('Injected previous conversation history', {
-        conversationId: request.conversationId,
-        messageCount: request.previousConversation.length,
-      })
     }
 
     const messageContext = request.isScheduledTask
@@ -337,6 +358,15 @@ export class ChatService {
           conversationId: request.conversationId,
           totalMessages: session.agent.messages.length,
         })
+
+        if (request.historyMode === 'local') {
+          await this.persistConversation({
+            id: request.conversationId,
+            messages: session.agent.messages,
+            targetType: 'browseros',
+            origin: request.origin,
+          })
+        }
 
         if (session.scheduledPageId) {
           const pageId = session.scheduledPageId
@@ -409,11 +439,7 @@ export class ChatService {
     const historyKey = `${agent.id}:${request.conversationId}`
     const history: UIMessage[] =
       this.acpMessages.get(historyKey) ??
-      (request.previousConversation ?? []).map((message) => ({
-        id: crypto.randomUUID(),
-        role: message.role,
-        parts: [{ type: 'text' as const, text: message.content }],
-      }))
+      (await this.loadAcpDisplayHistory(request))
     const priorHistoryLength = history.length
     const messageId = crypto.randomUUID()
     const files = (request.attachments ?? []).map((attachment) => ({
@@ -453,11 +479,18 @@ export class ChatService {
       messages: promptMessages,
       browserContext,
       abortSignal,
-      onFinish: ({ messages }) => {
+      onFinish: async ({ messages }) => {
         const existingIds = new Set(history.map((message) => message.id))
         history.push(
           ...messages.filter((message) => !existingIds.has(message.id)),
         )
+        await this.persistConversation({
+          id: request.conversationId,
+          messages: history,
+          targetType: agent.type,
+          origin: request.origin,
+          agentId: agent.id,
+        })
       },
     }
     let stream: ReadableStream<UIMessageChunk>
@@ -498,6 +531,49 @@ export class ChatService {
       resourcesDir: this.deps.resourcesDir,
     })
     return this.acpRuntime
+  }
+
+  private getConversationStore(): Pick<ConversationStore, 'get' | 'save'> {
+    this.conversationStore ??= new DbConversationStore()
+    return this.conversationStore
+  }
+
+  // Best-effort: a persistence failure must not fail an already-streamed turn.
+  private async persistConversation(
+    input: SaveConversationInput,
+  ): Promise<void> {
+    try {
+      await this.getConversationStore().save(input)
+    } catch (error) {
+      logger.warn('Failed to persist conversation history', {
+        conversationId: input.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ACP continuity lives in acpx; SQLite holds a display copy. On a cold turn
+  // (e.g. after a restart) re-seed from that copy before falling back to the
+  // client-supplied history.
+  private async loadAcpDisplayHistory(
+    request: AcpChatRequest,
+  ): Promise<UIMessage[]> {
+    try {
+      const stored = await this.getConversationStore().get(
+        request.conversationId,
+      )
+      if (stored?.messages.length) return stored.messages
+    } catch (error) {
+      logger.warn('Failed to load ACP display history', {
+        conversationId: request.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return (request.previousConversation ?? []).map((message) => ({
+      id: crypto.randomUUID(),
+      role: message.role,
+      parts: [{ type: 'text' as const, text: message.content }],
+    }))
   }
 
   private closeScheduledPage(pageId: number, conversationId: string): void {

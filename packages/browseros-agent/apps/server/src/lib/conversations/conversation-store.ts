@@ -40,7 +40,6 @@ export interface ConversationStore {
   list(): Promise<ConversationSummary[]>
   get(id: string): Promise<ConversationDetail | null>
   save(input: SaveConversationInput): Promise<ConversationSummary>
-  appendAcpDisplay(input: SaveConversationInput): Promise<ConversationSummary>
   delete(id: string): Promise<boolean>
 }
 
@@ -92,24 +91,6 @@ export class DbConversationStore implements ConversationStore {
 
   async save(input: SaveConversationInput): Promise<ConversationSummary> {
     return this.withWriteLock(async () => this.upsert(input, input.messages))
-  }
-
-  /**
-   * Display-only copy for ACP conversations: acpx owns real continuity, so the
-   * blob is a merge of prior and incoming messages keyed by id.
-   */
-  async appendAcpDisplay(
-    input: SaveConversationInput,
-  ): Promise<ConversationSummary> {
-    return this.withWriteLock(async () => {
-      const existing = this.db
-        .select({ messages: conversations.messages })
-        .from(conversations)
-        .where(eq(conversations.id, input.id))
-        .get()
-      const merged = mergeById(existing?.messages ?? [], input.messages)
-      return this.upsert(input, merged)
-    })
   }
 
   async delete(id: string): Promise<boolean> {
@@ -193,17 +174,6 @@ function toSummary(row: SummaryFields): ConversationSummary {
 
 function toDetail(row: ConversationRow): ConversationDetail {
   return { ...toSummary(row), messages: row.messages }
-}
-
-function mergeById(prior: UIMessage[], incoming: UIMessage[]): UIMessage[] {
-  const seen = new Set(prior.map((message) => message.id))
-  const merged = [...prior]
-  for (const message of incoming) {
-    if (seen.has(message.id)) continue
-    merged.push(message)
-    seen.add(message.id)
-  }
-  return merged
 }
 
 function extractLastUserText(messages: UIMessage[]): string | undefined {

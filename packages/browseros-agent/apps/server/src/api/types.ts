@@ -62,6 +62,11 @@ const ChatInputSchema = z.object({
     })
     .optional(),
   previousConversation: PreviousConversationSchema,
+  // 'local': the server owns history in SQLite (load + persist). 'cloud': the
+  // client owns history (logged-in cloud sync or incognito); the server stays
+  // stateless and persists nothing. Defaults to 'cloud' so existing clients are
+  // unchanged until they opt into server-owned history.
+  historyMode: z.enum(['local', 'cloud']).optional().default('cloud'),
   attachments: z
     .array(
       z.object({

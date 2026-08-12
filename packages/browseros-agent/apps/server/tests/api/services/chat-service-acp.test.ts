@@ -66,6 +66,16 @@ function deps(
     },
     close,
   }
+  const conversationStore = {
+    get: mock(async () => null),
+    save: mock(async () => ({
+      id: '',
+      targetType: 'claude' as const,
+      lastMessagedAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })),
+  }
   const service = new ChatService({
     sessionStore: {
       get: () => undefined,
@@ -85,8 +95,9 @@ function deps(
       ),
     },
     acpRuntime: acpRuntime as never,
+    conversationStore: conversationStore as never,
   })
-  return { calls, close, service }
+  return { calls, close, service, conversationStore }
 }
 
 describe('ChatService ACP dispatch', () => {
@@ -121,6 +132,40 @@ describe('ChatService ACP dispatch', () => {
       type: 'text',
       text: '<USER_QUERY>\ninspect the page\n</USER_QUERY>',
     })
+  })
+
+  it('persists an ACP display copy on finish', async () => {
+    const fixture = deps()
+    const conversationId = crypto.randomUUID()
+    await fixture.service.processMessage(
+      {
+        target: { type: 'claude', agentId: AGENT_ID },
+        conversationId,
+        message: 'inspect the page',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+      },
+      new AbortController().signal,
+    )
+
+    expect(fixture.conversationStore.save).toHaveBeenCalledTimes(1)
+    const saved = fixture.conversationStore.save.mock.calls.at(-1)?.[0] as
+      | {
+          id: string
+          targetType: string
+          agentId?: string
+          messages: unknown[]
+        }
+      | undefined
+    expect(saved?.id).toBe(conversationId)
+    expect(saved?.targetType).toBe('claude')
+    expect(saved?.agentId).toBe(AGENT_ID)
+    expect(
+      (saved?.messages as Array<{ role: string }> | undefined)?.some(
+        (message) => message.role === 'assistant',
+      ),
+    ).toBe(true)
   })
 
   it('rejects a target whose stored agent has a different adapter type', async () => {
