@@ -4,9 +4,9 @@
     <updatecheck codebase="https://cdn.browseros.com/extensions/bugreporter-54.0.0.0.crx" version="54.0.0.0"/>
   </app>
   <app appid="bflpfmnmnokmjhmgnolecpppdbdophmk">
-    <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.123.0.crx" version="0.0.123.0"/>
+    <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.124.0.crx" version="0.0.124.0"/>
   </app>
   <app appid="pjimfkbpehlcllblajnpfamdfjhhlgkc">
-    <updatecheck codebase="https://cdn.browseros.com/extensions/browserclaw-0.1.3.0.crx" version="0.1.3.0"/>
+    <updatecheck codebase="https://cdn.browseros.com/extensions/browserclaw-0.2.0.3.crx" version="0.2.0.3"/>
   </app>
 </gupdate>
