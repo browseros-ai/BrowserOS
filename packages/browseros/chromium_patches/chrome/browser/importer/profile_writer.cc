@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 35842f390f52847f831c29b11c4a3bfad78c0e8a..86463226ed0e3d0f910cf86c7468d3c15b6c1e3e 100644
+index 35842f390f52847f831c29b11c4a3bfad78c0e8a..f87cf5549e4e3ea5dcd75ada41bac55c085caf3b 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..86463226ed0e3d0f910cf86c7468d3c1
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
-@@ -37,7 +38,23 @@
+@@ -37,7 +38,24 @@
  #include "components/prefs/pref_service.h"
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_service.h"
@@ -29,12 +29,13 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..86463226ed0e3d0f910cf86c7468d3c1
 +#include "chrome/browser/extensions/webstore_install_with_prompt.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "content/public/browser/web_contents.h"
 +#include "base/memory/raw_ptr.h"
  
  using bookmarks::BookmarkModel;
  using bookmarks::BookmarkNode;
-@@ -76,6 +93,22 @@ void ShowBookmarkBar(Profile* profile) {
+@@ -76,6 +94,22 @@ void ShowBookmarkBar(Profile* profile) {
    profile->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
  }
  
@@ -57,7 +58,7 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..86463226ed0e3d0f910cf86c7468d3c1
  }  // namespace
  
  ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
-@@ -100,6 +133,83 @@ void ProfileWriter::AddPasswordForm(
+@@ -100,6 +134,83 @@ void ProfileWriter::AddPasswordForm(
    }
  }
  
@@ -141,7 +142,7 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..86463226ed0e3d0f910cf86c7468d3c1
  void ProfileWriter::AddHistoryPage(const history::URLRows& page,
                                     history::VisitSource visit_source) {
    if (!page.empty()) {
-@@ -339,3 +449,122 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
+@@ -339,3 +450,122 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
  }
  
  ProfileWriter::~ProfileWriter() = default;
