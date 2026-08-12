@@ -115,6 +115,7 @@ features:
       - chrome/app/app-Info.plist
       - chrome/browser/BUILD.gn
       - chrome/browser/buildflags.gni
+      - chrome/browser/mac/BUILD.gn
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.h
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.mm
       - chrome/browser/mac/sparkle_glue.h
