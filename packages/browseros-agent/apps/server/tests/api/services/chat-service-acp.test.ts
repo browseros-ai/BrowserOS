@@ -168,6 +168,42 @@ describe('ChatService ACP dispatch', () => {
     ).toBe(true)
   })
 
+  it('ignores a stored display copy that belongs to a different agent', async () => {
+    const fixture = deps()
+    fixture.conversationStore.get.mockImplementation(async () => ({
+      id: 'shared',
+      messages: [
+        {
+          id: 'foreign',
+          role: 'user',
+          parts: [{ type: 'text', text: 'other agent secret' }],
+        },
+      ],
+      targetType: 'claude',
+      agentId: 'a-different-agent',
+      lastMessagedAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    }))
+
+    await fixture.service.processMessage(
+      {
+        target: { type: 'claude', agentId: AGENT_ID },
+        conversationId: crypto.randomUUID(),
+        message: 'my message',
+        isScheduledTask: false,
+        mode: 'agent',
+        origin: 'sidepanel',
+      },
+      new AbortController().signal,
+    )
+
+    // The foreign history must not reach the runtime; only the current turn.
+    const sent = fixture.calls[0]?.messages ?? []
+    expect(sent).toHaveLength(1)
+    expect(JSON.stringify(sent)).not.toContain('other agent secret')
+  })
+
   it('rejects a target whose stored agent has a different adapter type', async () => {
     const fixture = deps({ agent: acpAgent('codex') })
     const response = await fixture.service.processMessage(

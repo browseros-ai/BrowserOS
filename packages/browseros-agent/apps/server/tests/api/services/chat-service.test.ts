@@ -1050,4 +1050,52 @@ describe('ChatService history persistence', () => {
       true,
     )
   })
+
+  it('ignores a stored record whose target is not browseros in local mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => ({
+        id: 'stored',
+        messages: [
+          {
+            id: 'foreign',
+            role: 'user',
+            parts: [{ type: 'text', text: 'acp history' }],
+          },
+        ],
+        targetType: 'claude',
+        agentId: 'some-agent',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      browserOsRequest(crypto.randomUUID(), 'local'),
+      new AbortController().signal,
+    )
+
+    expect(
+      agent.messages.every((m) => m.parts[0]?.text !== 'acp history'),
+    ).toBe(true)
+  })
 })

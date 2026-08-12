@@ -274,7 +274,9 @@ export class ChatService {
         const stored = await this.getConversationStore().get(
           request.conversationId,
         )
-        if (stored?.messages.length) {
+        // Only reuse a record this target owns; a conversationId shared with an
+        // ACP agent must not bleed its history into the BrowserOS agent.
+        if (stored?.messages.length && stored.targetType === 'browseros') {
           session.agent.messages = stored.messages
           logger.info('Hydrated conversation history from database', {
             conversationId: request.conversationId,
@@ -439,7 +441,7 @@ export class ChatService {
     const historyKey = `${agent.id}:${request.conversationId}`
     const history: UIMessage[] =
       this.acpMessages.get(historyKey) ??
-      (await this.loadAcpDisplayHistory(request))
+      (await this.loadAcpDisplayHistory(agent.id, request))
     const priorHistoryLength = history.length
     const messageId = crypto.randomUUID()
     const files = (request.attachments ?? []).map((attachment) => ({
@@ -556,13 +558,18 @@ export class ChatService {
   // (e.g. after a restart) re-seed from that copy before falling back to the
   // client-supplied history.
   private async loadAcpDisplayHistory(
+    agentId: string,
     request: AcpChatRequest,
   ): Promise<UIMessage[]> {
     try {
       const stored = await this.getConversationStore().get(
         request.conversationId,
       )
-      if (stored?.messages.length) return stored.messages
+      // Only reuse the display copy when it belongs to this agent; the in-memory
+      // key is agent-scoped, so a shared conversationId must not cross agents.
+      if (stored?.messages.length && stored.agentId === agentId) {
+        return stored.messages
+      }
     } catch (error) {
       logger.warn('Failed to load ACP display history', {
         conversationId: request.conversationId,
