@@ -6,7 +6,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        InitializeRequestParams, InitializeResult, ServerCapabilities,
+        InitializeRequestParams, InitializeResult, ProtocolVersion, ServerCapabilities,
     },
     serve_server,
     service::{NotificationContext, RequestContext},
@@ -17,6 +17,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -100,10 +101,23 @@ impl Drop for ProbeService {
     }
 }
 
+// Mirrors the claw-server's production legacy pin so the serving proof below
+// exercises the same override.
+const LEGACY_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2025_11_25,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2024_11_05,
+];
+
 impl ServerHandler for ProbeService {
     fn get_info(&self) -> InitializeResult {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("probe", "0.0.0"))
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(LEGACY_PROTOCOL_VERSIONS)
     }
 
     async fn initialize(
@@ -261,6 +275,48 @@ fn initialize_request(id: i64, client_name: &str) -> Value {
             }
         }
     })
+}
+
+#[tokio::test]
+async fn legacy_pin_does_not_agree_to_the_modern_revision() -> anyhow::Result<()> {
+    // Proof that rmcp consults supported_protocol_versions(): an initialize that
+    // requests 2026-07-28 is not agreed to. The pinned server negotiates down to a
+    // legacy revision instead of echoing the modern one, so a client never ends up
+    // on the stateless modern lifecycle this handler cannot track.
+    let state = ProbeState::new();
+    let service = streamable_service(state);
+
+    let (status, _headers, response) = post_json(
+        &service,
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": { "name": "modern", "version": "1" }
+            }
+        }),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::OK);
+    let negotiated = response["result"]["protocolVersion"]
+        .as_str()
+        .unwrap_or_default();
+    assert_ne!(
+        negotiated, "2026-07-28",
+        "server must not agree to the modern revision: {response:?}"
+    );
+    assert!(
+        LEGACY_PROTOCOL_VERSIONS
+            .iter()
+            .any(|v| v.as_str() == negotiated),
+        "expected a pinned legacy version, got {negotiated:?}: {response:?}"
+    );
+    Ok(())
 }
 
 #[tokio::test]
