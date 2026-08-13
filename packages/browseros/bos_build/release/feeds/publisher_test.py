@@ -1131,12 +1131,12 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual((spec.kind, spec.channel), ("extensions", "alpha"))
         self.assertEqual(
             set(extract_manifest_versions(manifest).values()),
-            {"0.0.130.0", "54.0.0.0", "0.2.5.0"},
+            {"0.0.131.0", "54.0.0.0", "0.2.6.0"},
         )
         original = manifest.replace("</gupdate>", "  </app>\n</gupdate>")
         self.assertEqual(
             hashlib.sha256(original.encode()).hexdigest(),
-            "7e55c16285e602abb2dde22922679fd05bb7b9c8662a5b8cc68def343334002d",
+            "fc21e4747c904a7f74e9bfec17197e18349a596e2b8653356a1c8a9dfaaba219",
         )
 
     def test_browserclaw_snapshots_use_current_product_title(self):

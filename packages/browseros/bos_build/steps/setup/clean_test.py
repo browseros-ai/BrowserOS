@@ -8,6 +8,7 @@ from unittest import mock
 
 from . import clean
 from ...core.context import Context
+from ...core.products import get_product_descriptor
 from ...core.step import ValidationError
 from ...lib.testing import MockBrowserOSRoot, MockChromium, make_context
 
@@ -68,6 +69,62 @@ class CleanExecuteTest(unittest.TestCase):
 
             with mock.patch.object(clean, "run_command"):
                 clean.CleanModule().execute(ctx)
+
+    def test_single_arch_clean_keeps_other_arch_output(self):
+        with (
+            tempfile.TemporaryDirectory() as chromium_tmp,
+            tempfile.TemporaryDirectory() as root_tmp,
+        ):
+            chromium = MockChromium(Path(chromium_tmp))
+            root = MockBrowserOSRoot(Path(root_tmp))
+            ctx = make_context(chromium, root, architecture="x64")
+            x64_out = chromium.with_out_dir("x64")
+            arm64_out = chromium.with_out_dir("arm64")
+
+            with mock.patch.object(clean, "run_command"):
+                clean.CleanModule().execute(ctx)
+
+            self.assertFalse(x64_out.exists())
+            self.assertTrue(arm64_out.exists())
+
+    def test_universal_clean_removes_same_product_arch_outputs_only(self):
+        with (
+            tempfile.TemporaryDirectory() as chromium_tmp,
+            tempfile.TemporaryDirectory() as root_tmp,
+        ):
+            chromium = MockChromium(Path(chromium_tmp))
+            root = MockBrowserOSRoot(Path(root_tmp))
+
+            for product, other_product in (
+                ("browseros", "browserclaw"),
+                ("browserclaw", "browseros"),
+            ):
+                with self.subTest(product=product):
+                    arm64_out = chromium.with_out_dir("arm64", product=product)
+                    x64_out = chromium.with_out_dir("x64", product=product)
+                    other_arm64_out = chromium.with_out_dir(
+                        "arm64", product=other_product
+                    )
+                    other_x64_out = chromium.with_out_dir(
+                        "x64", product=other_product
+                    )
+
+                    ctx = Context(
+                        root_dir=root.root,
+                        chromium_src=chromium.src,
+                        architecture="arm64",
+                        plan_architectures=("universal",),
+                        build_type="release",
+                        product=get_product_descriptor(product),
+                    )
+
+                    with mock.patch.object(clean, "run_command"):
+                        clean.CleanModule().execute(ctx)
+
+                    self.assertFalse(arm64_out.exists())
+                    self.assertFalse(x64_out.exists())
+                    self.assertTrue(other_arm64_out.exists())
+                    self.assertTrue(other_x64_out.exists())
 
 
 class CleanPruneOrphanBinariesTest(unittest.TestCase):

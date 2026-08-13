@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Clean module for BrowserOS build system"""
 
+from pathlib import Path
+
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import run_command, log_info, log_success, log_warning, safe_rmtree
 from ..storage.download import managed_binary_families
+
+UNIVERSAL_INPUT_ARCHITECTURES = ("arm64", "x64")
 
 
 @step("clean", phase="setup")
@@ -20,10 +24,13 @@ class CleanModule(Step):
     def execute(self, ctx: Context) -> None:
         log_info("🧹 Cleaning build artifacts...")
 
-        out_path = ctx.chromium_src / ctx.out_dir
-        if out_path.exists():
+        for out_path in self._output_dirs(ctx):
+            if not out_path.exists():
+                continue
             safe_rmtree(out_path)
-            log_success("Cleaned build directory")
+            log_success(
+                f"Cleaned build directory: {out_path.relative_to(ctx.chromium_src)}"
+            )
 
         log_info("\n🔀 Resetting git branch and removing tracked files...")
         self._git_reset(ctx)
@@ -33,6 +40,29 @@ class CleanModule(Step):
 
         log_info("\n🧹 Pruning orphaned resource binaries...")
         self._prune_orphan_binary_families(ctx)
+
+    def _output_dirs(self, ctx: Context) -> tuple[Path, ...]:
+        architectures = (
+            UNIVERSAL_INPUT_ARCHITECTURES
+            if "universal" in ctx.plan_architectures
+            else (ctx.architecture,)
+        )
+        dirs: list[Path] = []
+        seen: set[Path] = set()
+        for architecture in architectures:
+            out_ctx = Context(
+                root_dir=ctx.root_dir,
+                chromium_src=ctx.chromium_src,
+                architecture=architecture,
+                build_type=ctx.build_type,
+                product=ctx.product,
+            )
+            out_path = out_ctx.chromium_src / out_ctx.out_dir
+            if out_path in seen:
+                continue
+            dirs.append(out_path)
+            seen.add(out_path)
+        return tuple(dirs)
 
     def _prune_orphan_binary_families(self, ctx: Context) -> None:
         """Remove resources/binaries/<family> dirs the download config no longer lists.
