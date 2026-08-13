@@ -93,12 +93,12 @@ describe('HTTP Server Integration Tests', () => {
       console.log(`Found ${result.tools.length} tools`)
     })
 
-    it('calls browser_list_tabs tool successfully', async () => {
+    it('calls the tabs tool successfully', async () => {
       assert.ok(mcpClient, 'MCP client should be connected')
 
       const result = await mcpClient.callTool({
-        name: 'browser_list_tabs',
-        arguments: {},
+        name: 'tabs',
+        arguments: { action: 'list' },
       })
 
       assert.ok(result.content, 'Should return content')
@@ -108,13 +108,9 @@ describe('HTTP Server Integration Tests', () => {
         (item) => item.type === 'text' && typeof item.text === 'string',
       )
       assert.ok(textContent, 'Should include text content')
-      console.log('browser_list_tabs content:', textContent?.text ?? '')
+      console.log('tabs content:', textContent?.text ?? '')
       assert.ok(textContent.text, 'Response should contain text')
-      console.log(
-        'browser_list_tabs returned:',
-        result.content.length,
-        'content items',
-      )
+      console.log('tabs returned:', result.content.length, 'content items')
     })
 
     it('handles invalid tool name gracefully', async () => {
