@@ -1,6 +1,5 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { McpServer } from '@modelcontextprotocol/server'
 import { BROWSER_MCP_INSTRUCTIONS } from './mcp-prompt'
 import {
   type BrowserToolDefaults,
@@ -28,14 +27,9 @@ export function createBrowserMcpServer(
       version: options.version,
     },
     {
-      capabilities: { logging: {} },
       instructions: options.instructions ?? BROWSER_MCP_INSTRUCTIONS,
     },
   )
-
-  server.server.setRequestHandler(SetLevelRequestSchema, () => {
-    return {}
-  })
 
   registerBrowserTools(
     server,

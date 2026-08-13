@@ -1,6 +1,5 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ZodRawShape } from 'zod'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { executeTool } from './framework'
 import {
   type BrowserOutputFileAccess,
@@ -12,8 +11,8 @@ type RegisterFn = (
   name: string,
   config: {
     description: string
-    inputSchema?: ZodRawShape
-    outputSchema?: ZodRawShape
+    inputSchema?: unknown
+    outputSchema?: unknown
     annotations?: Record<string, unknown>
   },
   handler: (
@@ -133,8 +132,8 @@ export function registerBrowserTools(
       tool.name,
       {
         description: tool.description,
-        inputSchema: tool.input.shape,
-        ...(tool.output && { outputSchema: tool.output.shape }),
+        inputSchema: tool.input,
+        ...(tool.output && { outputSchema: tool.output }),
         ...(tool.annotations && {
           annotations: tool.annotations as Record<string, unknown>,
         }),

@@ -10,8 +10,8 @@
  */
 
 import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { z } from 'zod'
+import type { McpServer } from '@modelcontextprotocol/server'
+import type { z } from 'zod/v4'
 import { logger } from '../../lib/logger'
 import { shouldLogToolRegistration } from '../registration-log-sampling'
 import { buildFilesystemToolSet } from './build-toolset'
@@ -30,7 +30,7 @@ interface AiSdkToolLike {
 
 type McpRegisterFn = (
   name: string,
-  config: { description: string; inputSchema: z.ZodRawShape },
+  config: { description: string; inputSchema: unknown },
   handler: (
     args: Record<string, unknown>,
     extra?: { signal?: AbortSignal },
@@ -104,7 +104,7 @@ export function registerFilesystemMcpTools(
       name,
       {
         description: tool.description ?? '',
-        inputSchema: tool.inputSchema.shape,
+        inputSchema: tool.inputSchema,
       },
       async (args, extra) => {
         const startTime = performance.now()

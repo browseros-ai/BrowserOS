@@ -50,11 +50,34 @@ describe('createBrowserMcpServer', () => {
       BROWSER_TOOLS.map((tool) => tool.name),
     )
     expect(server.server._capabilities).toEqual({
-      logging: {},
       tools: { listChanged: true },
     })
     expect(server.server._instructions).toBe(BROWSER_MCP_INSTRUCTIONS)
-    expect(server.server._requestHandlers.has('logging/setLevel')).toBe(true)
+    expect(server.server._requestHandlers.has('logging/setLevel')).toBe(false)
+  })
+
+  it('exposes a real JSON input schema for tools/list', () => {
+    const server = createBrowserMcpServer({
+      name: 'browseros_mcp',
+      title: 'BrowserOS MCP server',
+      version: '1.2.3',
+      browserSession: { pages: {} } as unknown as BrowserSession,
+    }) as unknown as {
+      toolInputSchemaJson(name: string): Record<string, unknown> | undefined
+    }
+
+    const schema = server.toolInputSchemaJson('tabs') as {
+      type?: string
+      properties?: Record<string, unknown>
+    }
+
+    expect(schema?.type).toBe('object')
+    expect(Object.keys(schema?.properties ?? {}).sort()).toEqual([
+      'action',
+      'background',
+      'page',
+      'url',
+    ])
   })
 
   it('passes defaults and registration hooks through to browser tools', async () => {

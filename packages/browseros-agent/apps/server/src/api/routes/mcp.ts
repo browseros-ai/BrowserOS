@@ -5,9 +5,8 @@
  */
 
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { StreamableHTTPTransport } from '@hono/mcp'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import { Hono } from 'hono'
-import { HTTPException } from 'hono/http-exception'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -20,8 +19,10 @@ export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
 
 type CreateMcpServerFn = typeof createMcpServer
 type CreateMcpTransportFn = (
-  options: ConstructorParameters<typeof StreamableHTTPTransport>[0],
-) => InstanceType<typeof StreamableHTTPTransport>
+  options: ConstructorParameters<
+    typeof WebStandardStreamableHTTPServerTransport
+  >[0],
+) => InstanceType<typeof WebStandardStreamableHTTPServerTransport>
 
 interface McpRouteDeps {
   version: string
@@ -77,7 +78,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   const makeMcpServer = deps.createMcpServer ?? createMcpServer
   const makeMcpTransport =
     deps.createMcpTransport ??
-    ((options) => new StreamableHTTPTransport(options))
+    ((options) => new WebStandardStreamableHTTPServerTransport(options))
 
   app.get('/', (c) =>
     c.json({
@@ -110,8 +111,9 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
     logger.debug('MCP request received', logContext)
 
-    // Per-request server + transport: no shared state, no race conditions,
-    // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
+    // Per-request server + transport: no shared state, no race conditions, no
+    // ID collisions. This is also the stateless (sessionless) model the
+    // 2026-07-28 era expects; legacy requests are still served per-request.
     const mcpServer = makeMcpServer({
       version: deps.version,
       browserSession: deps.browserSession,
@@ -130,19 +132,13 @@ export function createMcpRoutes(deps: McpRouteDeps) {
     try {
       await mcpServer.connect(transport)
       logger.debug('MCP request transport connected', logContext)
-      const response = await transport.handleRequest(c)
+      const response = await transport.handleRequest(c.req.raw)
       logger.debug('MCP request handled', {
         ...logContext,
         status: response?.status,
       })
       return response
     } catch (error) {
-      // @hono/mcp signals HTTP-level problems (unacceptable Accept/Content-Type,
-      // unsupported MCP-Protocol-Version, parse errors) by throwing HTTPException.
-      // Surface those with their real 4xx status instead of masking them as a 500.
-      if (error instanceof HTTPException) {
-        return error.getResponse()
-      }
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('scopeId', scopeId)
