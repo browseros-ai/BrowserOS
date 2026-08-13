@@ -165,31 +165,46 @@ impl SkillService {
             return Err(AppError::conflict("a skill with this name already exists"));
         }
 
-        let content = render_skill_markdown(
-            &input.name,
-            &input.description,
-            &input.steps,
-            &input.learned_notes,
-        );
-        let body_path = self.write_body(&input.name, &content).await?;
-        let spec = SkillSpec::new(input.name.as_str(), content)
+        let CreateSkill {
+            name,
+            description,
+            site,
+            steps,
+            learned_notes,
+            origin,
+            source_session_id,
+        } = input;
+        let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
+        // The agent install happens before the row lands, so a failure after it
+        // rolls the side effects back to avoid an install with no persisted row.
+        let body_path = self.write_body(&name, &content).await?;
+        let spec = SkillSpec::new(name.as_str(), content)
             .map_err(|error| AppError::bad_request(error.to_string()))?;
-        let linked = self.harness.install_skill(spec).await?;
+        let linked = match self.harness.install_skill(spec).await {
+            Ok(linked) => linked,
+            Err(error) => {
+                self.rollback_skill(&name).await;
+                return Err(error);
+            }
+        };
 
         let now = now_ms();
         let model = skills::Model {
-            name: input.name,
-            description: input.description,
-            site: input.site,
-            origin: input.origin.as_str().to_owned(),
-            source_session_id: input.source_session_id,
+            name: name.clone(),
+            description,
+            site,
+            origin: origin.as_str().to_owned(),
+            source_session_id,
             version: 1,
             body_path,
             linked_agents_json: linked_agents_json(&linked),
             created_at: now,
             updated_at: now,
         };
-        self.repo.insert(model.clone()).await?;
+        if let Err(error) = self.repo.insert(model.clone()).await {
+            self.rollback_skill(&name).await;
+            return Err(error);
+        }
         Ok(SkillView {
             model,
             linked_agents: linked.into_iter().collect(),
@@ -200,9 +215,12 @@ impl SkillService {
     pub async fn update(&self, name: &str, input: UpdateSkill) -> AppResult<SkillDetailView> {
         let mut model = self.require(name).await?;
         let mut relinked: Option<BTreeSet<AgentId>> = None;
+        let mut previous_body: Option<String> = None;
+        let body_path = model.body_path.clone();
 
         if let Some(body) = input.body {
-            self.write_body_at(&model.body_path, &body).await?;
+            previous_body = Some(self.read_body(&body_path).await);
+            self.write_body_at(&body_path, &body).await?;
             let spec = SkillSpec::new(name, body)
                 .map_err(|error| AppError::bad_request(error.to_string()))?;
             relinked = Some(self.harness.install_skill(spec).await?);
@@ -220,24 +238,35 @@ impl SkillService {
             model.linked_agents_json = linked_agents_json(linked);
         }
         model.updated_at = now_ms();
-        self.repo.update(model).await?;
+        if let Err(error) = self.repo.update(model).await {
+            // The durable row was not written, so restore the on-disk body and
+            // relink it, keeping the file and agents consistent with the row.
+            if let Some(previous) = previous_body {
+                let _ = self.write_body_at(&body_path, &previous).await;
+                if let Ok(spec) = SkillSpec::new(name, previous) {
+                    let _ = self.harness.install_skill(spec).await;
+                }
+            }
+            return Err(error);
+        }
         self.get(name).await
     }
 
     pub async fn delete(&self, name: &str) -> AppResult<()> {
         self.require(name).await?;
         self.harness.uninstall_skill(name).await?;
-        let skill_dir = self.skills_dir.join(name);
-        if let Err(error) = tokio::fs::remove_dir_all(&skill_dir).await
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(AppError::Io {
-                path: Some(skill_dir),
-                source: error,
-            });
-        }
         self.repo.delete(name).await?;
+        // The canonical file is now orphaned; removing it is best-effort so a
+        // filesystem hiccup cannot resurrect an already-deleted skill.
+        let _ = tokio::fs::remove_dir_all(self.skills_dir.join(name)).await;
         Ok(())
+    }
+
+    /// Best-effort removal of a skill's side effects (agent installs and the
+    /// canonical file) after a failed create, so nothing is left without a row.
+    async fn rollback_skill(&self, name: &str) {
+        let _ = self.harness.uninstall_skill(name).await;
+        let _ = tokio::fs::remove_dir_all(self.skills_dir.join(name)).await;
     }
 
     async fn require(&self, name: &str) -> AppResult<skills::Model> {
@@ -316,6 +345,11 @@ fn render_skill_markdown(
     steps: &[String],
     learned_notes: &[String],
 ) -> String {
+    // JSON is a subset of YAML, so a JSON-encoded string is a valid, correctly
+    // escaped YAML scalar. This keeps descriptions with newlines, colons, or
+    // other YAML-sensitive characters from corrupting the frontmatter. The name
+    // is already constrained to `[a-z0-9-]`, so it stays a plain scalar.
+    let description = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
     let mut out =
         format!("---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\n---\n");
     if !steps.is_empty() {

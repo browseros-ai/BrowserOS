@@ -196,3 +196,29 @@ async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    let (status, _) = request(
+        &app.router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({
+            "name": "tricky-desc",
+            "description": "Reply within 24h: keep it brief\nthen stop"
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let content =
+        std::fs::read_to_string(app.root.join("skills").join("tricky-desc").join("SKILL.md"))?;
+    // The description is emitted as a quoted scalar, so a raw newline or colon
+    // cannot break the frontmatter block.
+    assert!(content.contains(r#"description: "Reply within 24h: keep it brief\nthen stop""#));
+    assert_eq!(content.matches("---").count(), 2);
+
+    Ok(())
+}
