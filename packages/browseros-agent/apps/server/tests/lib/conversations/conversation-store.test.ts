@@ -112,6 +112,19 @@ describe('DbConversationStore', () => {
     expect(detail?.agentId).toBe('agent-1')
   })
 
+  test('save preserves an explicit lastMessagedAt for imports', async () => {
+    const store = createStore()
+    await store.save({
+      id: CONVERSATION_ID,
+      messages: [userMessage('u1', 'legacy')],
+      targetType: 'browseros',
+      lastMessagedAt: 12345,
+    })
+
+    const summaries = await store.list()
+    expect(summaries[0]?.lastMessagedAt).toBe(12345)
+  })
+
   test('delete removes the record', async () => {
     const store = createStore()
     await store.save({

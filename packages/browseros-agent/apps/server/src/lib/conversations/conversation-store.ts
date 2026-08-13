@@ -34,6 +34,8 @@ export interface SaveConversationInput {
   targetType: ConversationTargetType
   origin?: string
   agentId?: string
+  /** Preserve an original timestamp when importing legacy conversations. */
+  lastMessagedAt?: number
 }
 
 export interface ConversationStore {
@@ -124,7 +126,7 @@ export class DbConversationStore implements ConversationStore {
       origin: input.origin ?? null,
       targetType: input.targetType,
       agentId: input.agentId ?? null,
-      lastMessagedAt: now,
+      lastMessagedAt: input.lastMessagedAt ?? now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }

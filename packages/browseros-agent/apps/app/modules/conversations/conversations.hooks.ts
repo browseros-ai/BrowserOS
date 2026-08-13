@@ -4,7 +4,7 @@ import { removeConversationExecutionHistory } from '@/lib/execution-history/stor
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 
-const SERVER_CONVERSATIONS_QUERY_KEY = 'server-conversations'
+export const SERVER_CONVERSATIONS_QUERY_KEY = 'server-conversations'
 
 export interface ServerConversationSummary {
   id: string
@@ -56,6 +56,27 @@ export async function fetchServerConversation(
   }
   const { conversation } = (await response.json()) as ConversationDetailResponse
   return { id: conversation.id, messages: conversation.messages }
+}
+
+export async function importServerConversation(conversation: {
+  id: string
+  messages: UIMessage[]
+  lastMessagedAt: number
+}): Promise<void> {
+  const response = await fetch(
+    await conversationsUrl(`/${encodeURIComponent(conversation.id)}`),
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: conversation.messages,
+        lastMessagedAt: conversation.lastMessagedAt,
+      }),
+    },
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to import conversation (${response.status})`)
+  }
 }
 
 export async function deleteServerConversation(

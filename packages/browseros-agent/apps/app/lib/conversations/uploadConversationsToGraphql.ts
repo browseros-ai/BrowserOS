@@ -1,7 +1,7 @@
 import { execute } from '@/lib/graphql/execute'
 import { sessionStorage } from '../auth/sessionStorage'
 import { sentry } from '../sentry/sentry'
-import { type Conversation, conversationStorage } from './conversationStorage'
+import type { Conversation } from './conversationStorage'
 import {
   BulkCreateConversationMessagesDocument,
   ConversationExistsDocument,
@@ -102,19 +102,4 @@ export async function uploadConversations(
   }
 
   return uploadedIds
-}
-
-/**
- * Uploads local conversations and drains the ones that reached the cloud from
- * `local:conversations`.
- */
-export async function uploadConversationsToGraphql(
-  conversations: Conversation[],
-): Promise<void> {
-  const uploadedIds = await uploadConversations(conversations)
-
-  if (uploadedIds.length > 0) {
-    const remaining = conversations.filter((c) => !uploadedIds.includes(c.id))
-    conversationStorage.setValue(remaining)
-  }
 }

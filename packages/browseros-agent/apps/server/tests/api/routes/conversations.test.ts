@@ -5,6 +5,7 @@ import type {
   ConversationDetail,
   ConversationStore,
   ConversationSummary,
+  SaveConversationInput,
 } from '../../../src/lib/conversations/conversation-store'
 
 const CONVERSATION_ID = '00000000-0000-4000-8000-000000000001'
@@ -63,6 +64,32 @@ describe('conversation routes', () => {
         .status,
     ).toBe(404)
   })
+
+  it('imports a conversation via put, preserving lastMessagedAt', async () => {
+    const store = new MemoryConversationStore([])
+    const routes = createConversationRoutes({ store })
+
+    const response = await routes.request(`/${CONVERSATION_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+        ],
+        lastMessagedAt: 42,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      conversation: {
+        id: CONVERSATION_ID,
+        lastMessagedAt: 42,
+        targetType: 'browseros',
+      },
+    })
+    expect((await store.get(CONVERSATION_ID))?.messages).toHaveLength(1)
+  })
 })
 
 function detail(id: string, lastUserMessage: string): ConversationDetail {
@@ -85,7 +112,7 @@ function detail(id: string, lastUserMessage: string): ConversationDetail {
 }
 
 class MemoryConversationStore
-  implements Pick<ConversationStore, 'list' | 'get' | 'delete'>
+  implements Pick<ConversationStore, 'list' | 'get' | 'delete' | 'save'>
 {
   private readonly byId = new Map<string, ConversationDetail>()
 
@@ -100,6 +127,23 @@ class MemoryConversationStore
 
   async get(id: string): Promise<ConversationDetail | null> {
     return this.byId.get(id) ?? null
+  }
+
+  async save(input: SaveConversationInput): Promise<ConversationSummary> {
+    const timestamp = input.lastMessagedAt ?? 1
+    const conversation: ConversationDetail = {
+      id: input.id,
+      messages: input.messages,
+      targetType: input.targetType,
+      origin: input.origin,
+      agentId: input.agentId,
+      lastUserMessage: undefined,
+      lastMessagedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    this.byId.set(input.id, conversation)
+    return conversation
   }
 
   async delete(id: string): Promise<boolean> {
