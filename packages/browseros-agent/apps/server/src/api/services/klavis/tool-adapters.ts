@@ -5,7 +5,7 @@
  */
 
 import type { JSONValue } from '@ai-sdk/provider'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult } from '@modelcontextprotocol/client'
 import { fromJsonSchema, type McpServer } from '@modelcontextprotocol/server'
 import type { ToolSet } from 'ai'
 import { z } from 'zod'
