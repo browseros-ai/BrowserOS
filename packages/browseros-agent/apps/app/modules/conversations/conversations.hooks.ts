@@ -79,7 +79,8 @@ export async function importServerConversation(conversation: {
   }
 }
 
-export async function deleteServerConversation(
+/** Deletes only the server row (tolerating 404); leaves execution history. */
+export async function deleteServerConversationRow(
   conversationId: string,
 ): Promise<void> {
   const response = await fetch(
@@ -89,6 +90,12 @@ export async function deleteServerConversation(
   if (!response.ok && response.status !== 404) {
     throw new Error(`Failed to delete conversation (${response.status})`)
   }
+}
+
+export async function deleteServerConversation(
+  conversationId: string,
+): Promise<void> {
+  await deleteServerConversationRow(conversationId)
   await removeConversationExecutionHistory(conversationId)
 }
 
