@@ -7,6 +7,7 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
@@ -136,6 +137,12 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       })
       return response
     } catch (error) {
+      // @hono/mcp signals HTTP-level problems (unacceptable Accept/Content-Type,
+      // unsupported MCP-Protocol-Version, parse errors) by throwing HTTPException.
+      // Surface those with their real 4xx status instead of masking them as a 500.
+      if (error instanceof HTTPException) {
+        return error.getResponse()
+      }
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('scopeId', scopeId)
