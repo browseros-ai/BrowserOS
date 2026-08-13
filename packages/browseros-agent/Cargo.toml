@@ -26,7 +26,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 sha2 = "0.10"
 jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
 toml_edit = "0.22"
-rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
 axum = "0.8"
 http = "1"
