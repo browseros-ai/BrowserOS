@@ -16,7 +16,7 @@ from .components import (
     resolve_standalone_version,
 )
 from .github import list_github_releases, list_pull_requests
-from .r2_allocations import discover_r2_component_allocations
+from .r2_allocations import discover_r2_component_allocation
 
 
 @dataclass(frozen=True)
@@ -80,9 +80,11 @@ class ComponentReleaseOperations(Protocol):
 
     def is_default_branch_ancestor(self, sha: str, default_branch: str) -> bool: ...
 
-    def allocations(
-        self, component: str, source_sha: str = ""
-    ) -> Sequence[AllocationRecord]: ...
+    def allocations(self, component: str) -> Sequence[AllocationRecord]: ...
+
+    def resource_allocation(
+        self, component: str, version: str, source_sha: str
+    ) -> AllocationRecord | None: ...
 
 
 def _version_key(component: str, version: str) -> tuple[int, ...]:
@@ -136,17 +138,28 @@ def resolve_standalone_release(
             f"{operations.remote}/{request.default_branch}"
         )
 
-    allocations = (
-        *operations.allocations(request.component, release_sha),
+    allocations = [
+        *operations.allocations(request.component),
         *additional_allocations,
-    )
-    resolved = resolve_standalone_version(
-        component_id=request.component,
-        committed_version=version,
-        allocations=allocations,
-        requested_version=requested,
-        source_sha=release_sha,
-    )
+    ]
+    probed_versions = set()
+    while True:
+        resolved = resolve_standalone_version(
+            component_id=request.component,
+            committed_version=version,
+            allocations=allocations,
+            requested_version=requested,
+            source_sha=release_sha,
+        )
+        if resolved in probed_versions:
+            break
+        probed_versions.add(resolved)
+        resource = operations.resource_allocation(
+            request.component, resolved, release_sha
+        )
+        if resource is None:
+            break
+        allocations.append(resource)
     tag = f"{spec.tag_prefix}{resolved}"
     tag_state = operations.tag_state(tag)
     if tag_state is not None:
@@ -281,9 +294,7 @@ class GitComponentReleaseOperations:
         )
         return result.returncode == 0
 
-    def allocations(
-        self, component: str, source_sha: str = ""
-    ) -> Sequence[AllocationRecord]:
+    def allocations(self, component: str) -> Sequence[AllocationRecord]:
         spec = component_by_id(component)
         allocations = []
         prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
@@ -358,14 +369,17 @@ class GitComponentReleaseOperations:
                     reference=record.branch,
                 )
             )
-        if self.r2_client is not None:
-            allocations.extend(
-                discover_r2_component_allocations(
-                    self.r2_client,
-                    self.r2_bucket,
-                    component,
-                    source_sha,
-                    tuple(allocations),
-                )
-            )
         return tuple(allocations)
+
+    def resource_allocation(
+        self, component: str, version: str, source_sha: str
+    ) -> AllocationRecord | None:
+        if self.r2_client is None:
+            return None
+        return discover_r2_component_allocation(
+            self.r2_client,
+            self.r2_bucket,
+            component,
+            version,
+            source_sha,
+        )

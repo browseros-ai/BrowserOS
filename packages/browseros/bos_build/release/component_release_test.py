@@ -29,6 +29,8 @@ class FakeOperations:
         self.tags = {}
         self.ancestor = True
         self.synced = []
+        self.resource_records = {}
+        self.resource_probes = []
 
     def sync(self, default_branch: str) -> None:
         self.synced.append(default_branch)
@@ -45,8 +47,12 @@ class FakeOperations:
     def is_default_branch_ancestor(self, sha: str, default_branch: str) -> bool:
         return self.ancestor
 
-    def allocations(self, component: str, source_sha: str = ""):
+    def allocations(self, component: str):
         return self.records
+
+    def resource_allocation(self, component: str, version: str, source_sha: str):
+        self.resource_probes.append((component, version, source_sha))
+        return self.resource_records.get(version)
 
 
 def _request(**overrides) -> StandaloneReleaseRequest:
@@ -122,6 +128,98 @@ class StandaloneReleaseTest(unittest.TestCase):
 
         self.assertEqual(record.version, "0.0.128")
         self.assertEqual(record.reservation, "reuse")
+
+    def test_probes_only_resolved_versions_until_one_is_unoccupied(self) -> None:
+        operations = FakeOperations()
+        operations.records = [
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        ]
+        operations.resource_records = {
+            "0.0.128": AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.128",
+            ),
+            "0.0.129": AllocationRecord(
+                component="server",
+                version="0.0.129",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.129",
+            ),
+        }
+
+        record = resolve_standalone_release(_request(), operations)
+
+        self.assertEqual(record.version, "0.0.130")
+        self.assertEqual(
+            operations.resource_probes,
+            [
+                ("server", "0.0.128", SOURCE_SHA),
+                ("server", "0.0.129", SOURCE_SHA),
+                ("server", "0.0.130", SOURCE_SHA),
+            ],
+        )
+
+    def test_matching_resource_binding_preserves_source_bound_retry(self) -> None:
+        operations = FakeOperations()
+        operations.records = [
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        ]
+        operations.resource_records = {
+            "0.0.128": AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        }
+
+        record = resolve_standalone_release(_request(), operations)
+
+        self.assertEqual(record.version, "0.0.128")
+        self.assertEqual(record.reservation, "reuse")
+        self.assertEqual(
+            operations.resource_probes,
+            [("server", "0.0.128", SOURCE_SHA)],
+        )
+
+    def test_explicit_version_rejects_conflicting_resource_binding(self) -> None:
+        operations = FakeOperations()
+        operations.resource_records = {
+            "0.0.129": AllocationRecord(
+                component="server",
+                version="0.0.129",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.129",
+            )
+        }
+
+        with self.assertRaisesRegex(ValueError, "already allocated"):
+            resolve_standalone_release(
+                _request(requested_version="0.0.129"), operations
+            )
+
+        self.assertEqual(
+            operations.resource_probes,
+            [("server", "0.0.129", SOURCE_SHA)],
+        )
 
     def test_tag_push_requires_annotated_source_bound_tag(self) -> None:
         operations = FakeOperations()
@@ -244,9 +342,13 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                     return_value=releases,
                 ),
             ):
-                allocations = operations.allocations("server", SOURCE_SHA)
+                operations.allocations("server")
+                resource = operations.resource_allocation(
+                    "server", "0.0.130", SOURCE_SHA
+                )
 
-        resource = next(record for record in allocations if record.kind == "resource")
+        self.assertIsNotNone(resource)
+        assert resource is not None
         self.assertTrue(resource.reusable)
         self.assertEqual(resource.source_sha, SOURCE_SHA)
         client.head_object.assert_called_once_with(Bucket="browseros", Key=key)

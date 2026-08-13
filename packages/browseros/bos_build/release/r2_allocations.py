@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Discover component versions occupied by immutable R2 objects."""
+"""Probe component versions for immutable R2 objects."""
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping
 
 from .components import (
     AllocationRecord,
@@ -60,27 +60,18 @@ def _family(component: str) -> ResourceFamily | None:
 def _resource_objects(
     client,
     bucket: str,
-    component: str,
     family: ResourceFamily,
-) -> dict[str, list[_R2Object]]:
-    prefix = f"{family.component}/"
-    targets = {family.filename(target): target for target in family.targets}
-    result: dict[str, list[_R2Object]] = {}
+    version: str,
+) -> list[_R2Object]:
+    prefix = f"{family.component}/{version}/"
+    targets = {family.version_key(version, target): target for target in family.targets}
+    result = []
     for item in _list_objects(client, bucket, prefix):
         key = str(item.get("Key", ""))
-        relative = key.removeprefix(prefix)
-        parts = relative.split("/")
-        if len(parts) != 2 or parts[0] == "latest":
-            continue
-        raw_version, filename = parts
-        target = targets.get(filename)
+        target = targets.get(key)
         if target is None:
             continue
-        try:
-            version = normalize_component_version(component, raw_version)
-        except ValueError:
-            continue
-        result.setdefault(version, []).append(
+        result.append(
             _R2Object(
                 key,
                 {
@@ -98,19 +89,15 @@ def _extension_objects(
     client,
     bucket: str,
     component: str,
-) -> dict[str, list[_R2Object]]:
-    prefix = f"extensions/{component}-"
-    result: dict[str, list[_R2Object]] = {}
+    version: str,
+) -> list[_R2Object]:
+    prefix = f"extensions/{component}-{version}.crx"
+    result = []
     for item in _list_objects(client, bucket, prefix):
         key = str(item.get("Key", ""))
-        if not key.startswith(prefix) or not key.endswith(".crx"):
+        if key != prefix:
             continue
-        raw_version = key[len(prefix) : -len(".crx")]
-        try:
-            version = normalize_component_version(component, raw_version)
-        except ValueError:
-            continue
-        result.setdefault(version, []).append(
+        result.append(
             _R2Object(
                 key,
                 {
@@ -124,16 +111,17 @@ def _extension_objects(
     return result
 
 
-def _objects_by_version(
+def _version_objects(
     client,
     bucket: str,
     component: str,
-) -> dict[str, list[_R2Object]]:
+    version: str,
+) -> list[_R2Object]:
     family = _family(component)
     if family is not None:
-        return _resource_objects(client, bucket, component, family)
+        return _resource_objects(client, bucket, family, version)
     if component in _EXTENSION_COMPONENTS:
-        return _extension_objects(client, bucket, component)
+        return _extension_objects(client, bucket, component, version)
     raise ValueError(f"Immutable R2 allocations are not defined for {component}")
 
 
@@ -161,48 +149,33 @@ def _matches_source_binding(
     ) and bool(_SHA256_RE.fullmatch(metadata.get("sha256", "")))
 
 
-def _version_key(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
-
-
-def discover_r2_component_allocations(
+def discover_r2_component_allocation(
     client,
     bucket: str,
     component: str,
+    version: str,
     source_sha: str,
-    existing_allocations: Sequence[AllocationRecord],
-) -> tuple[AllocationRecord, ...]:
-    """Return one blocking record per occupied immutable component version."""
+) -> AllocationRecord | None:
+    """Probe one component version for an immutable R2 allocation."""
     if not bucket:
         raise ValueError("R2 bucket is required for immutable allocation discovery")
-    objects_by_version = _objects_by_version(client, bucket, component)
-    retry_versions = {
-        normalize_component_version(component, record.version)
-        for record in existing_allocations
-        if record.component == component
-        and record.reusable
-        and source_sha
-        and record.source_sha == source_sha
-    }
+    normalized = normalize_component_version(component, version)
+    objects = _version_objects(client, bucket, component, normalized)
+    if not objects:
+        return None
     canonical_prefix = component_by_id(component).tag_prefix
-    records = []
-    for version in sorted(objects_by_version, key=_version_key):
-        objects = objects_by_version[version]
-        reusable = version in retry_versions and all(
-            _matches_source_binding(client, bucket, obj, source_sha) for obj in objects
-        )
-        records.append(
-            AllocationRecord(
-                component=component,
-                version=version,
-                kind="resource",
-                source_sha=source_sha if reusable else "",
-                reference=(
-                    f"{canonical_prefix}{version}"
-                    if reusable
-                    else f"r2://{bucket}/{objects[0].key}"
-                ),
-                reusable=reusable,
-            )
-        )
-    return tuple(records)
+    reusable = bool(source_sha) and all(
+        _matches_source_binding(client, bucket, obj, source_sha) for obj in objects
+    )
+    return AllocationRecord(
+        component=component,
+        version=normalized,
+        kind="resource",
+        source_sha=source_sha if reusable else "",
+        reference=(
+            f"{canonical_prefix}{normalized}"
+            if reusable
+            else f"r2://{bucket}/{objects[0].key}"
+        ),
+        reusable=reusable,
+    )

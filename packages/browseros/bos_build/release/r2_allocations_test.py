@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Tests for immutable R2 component allocation discovery."""
+"""Tests for immutable R2 component allocation probes."""
 
 import unittest
 
-from bos_build.release.components import AllocationRecord
-from bos_build.release.r2_allocations import discover_r2_component_allocations
+from bos_build.release.r2_allocations import discover_r2_component_allocation
 
 
 SOURCE_SHA = "1" * 40
@@ -28,51 +27,47 @@ class FakeR2Client:
         return {"Metadata": self.metadata[Key]}
 
 
-def _draft(component: str, version: str, tag: str) -> AllocationRecord:
-    return AllocationRecord(
-        component=component,
-        version=version,
-        kind="release",
-        source_sha=SOURCE_SHA,
-        reference=tag,
-        reusable=True,
-    )
-
-
 class R2AllocationDiscoveryTest(unittest.TestCase):
-    def test_each_supported_component_lists_only_its_immutable_namespace(self) -> None:
+    def test_each_supported_component_probes_only_the_requested_version(self) -> None:
         cases = {
-            "server": "artifacts/server/",
-            "claw-server-rust": "claw-server-rust/prod-resources/",
-            "claw-onboard": "claw-onboard/prod-resources/",
-            "agent": "extensions/agent-",
-            "browserclaw": "extensions/browserclaw-",
+            "server": ("0.0.130", "artifacts/server/0.0.130/"),
+            "claw-server-rust": (
+                "0.0.30",
+                "claw-server-rust/prod-resources/0.0.30/",
+            ),
+            "claw-onboard": (
+                "0.0.20",
+                "claw-onboard/prod-resources/0.0.20/",
+            ),
+            "agent": ("0.0.42.0", "extensions/agent-0.0.42.0.crx"),
+            "browserclaw": (
+                "0.0.9.0",
+                "extensions/browserclaw-0.0.9.0.crx",
+            ),
         }
-        for component, prefix in cases.items():
-            client = FakeR2Client(
-                {None: {"Contents": [], "IsTruncated": False}}, {}
-            )
+        for component, (version, prefix) in cases.items():
+            client = FakeR2Client({None: {"Contents": [], "IsTruncated": False}}, {})
             with self.subTest(component=component):
-                allocations = discover_r2_component_allocations(
-                    client, "browseros", component, SOURCE_SHA, ()
+                allocation = discover_r2_component_allocation(
+                    client, "browseros", component, version, SOURCE_SHA
                 )
-                self.assertEqual(allocations, ())
+                self.assertIsNone(allocation)
                 self.assertEqual(
                     client.list_calls,
                     [{"Bucket": "browseros", "Prefix": prefix}],
                 )
 
-    def test_server_objects_block_stale_versions_and_reuse_matching_retries(
+    def test_server_probe_ignores_out_of_band_versions_and_blocks_mismatch(
         self,
     ) -> None:
         stale_key = "artifacts/server/0.0.129/browseros-server-resources-linux-x64.zip"
-        retry_key = (
-            "artifacts/server/0.0.130/browseros-server-resources-darwin-arm64.zip"
+        out_of_band_key = (
+            "artifacts/server/99.0.0/browseros-server-resources-linux-x64.zip"
         )
         client = FakeR2Client(
             {
                 None: {
-                    "Contents": [{"Key": stale_key}, {"Key": retry_key}],
+                    "Contents": [{"Key": stale_key}, {"Key": out_of_band_key}],
                     "IsTruncated": False,
                 }
             },
@@ -84,56 +79,50 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
                     "target": "linux-x64",
                     "version": "0.0.129",
                 },
-                retry_key: {
+            },
+        )
+
+        allocation = discover_r2_component_allocation(
+            client, "browseros", "server", "0.0.129", SOURCE_SHA
+        )
+
+        self.assertIsNotNone(allocation)
+        assert allocation is not None
+        self.assertEqual(allocation.version, "0.0.129")
+        self.assertFalse(allocation.reusable)
+        self.assertEqual(allocation.kind, "resource")
+        self.assertEqual(client.head_calls, [("browseros", stale_key)])
+        self.assertEqual(
+            client.list_calls,
+            [{"Bucket": "browseros", "Prefix": "artifacts/server/0.0.129/"}],
+        )
+
+    def test_partial_server_retry_reuses_exact_source_binding(self) -> None:
+        key = "artifacts/server/0.0.130/browseros-server-resources-darwin-arm64.zip"
+        client = FakeR2Client(
+            {None: {"Contents": [{"Key": key}], "IsTruncated": False}},
+            {
+                key: {
                     "component": "artifacts/server",
                     "release-sha": SOURCE_SHA,
                     "sha256": SHA256,
                     "target": "darwin-arm64",
                     "version": "0.0.130",
-                },
+                }
             },
         )
 
-        allocations = discover_r2_component_allocations(
-            client,
-            "browseros",
-            "server",
-            SOURCE_SHA,
-            (
-                _draft("server", "0.0.129", "agent-server/v0.0.129"),
-                _draft("server", "0.0.130", "agent-server/v0.0.130"),
-            ),
+        allocation = discover_r2_component_allocation(
+            client, "browseros", "server", "0.0.130", SOURCE_SHA
         )
 
-        self.assertEqual(
-            [record.version for record in allocations], ["0.0.129", "0.0.130"]
-        )
-        self.assertFalse(allocations[0].reusable)
-        self.assertEqual(allocations[0].kind, "resource")
-        self.assertTrue(allocations[1].reusable)
-        self.assertEqual(allocations[1].source_sha, SOURCE_SHA)
-        self.assertEqual(allocations[1].reference, "agent-server/v0.0.130")
-        self.assertEqual(
-            client.head_calls,
-            [("browseros", stale_key), ("browseros", retry_key)],
-        )
+        self.assertIsNotNone(allocation)
+        assert allocation is not None
+        self.assertTrue(allocation.reusable)
+        self.assertEqual(allocation.source_sha, SOURCE_SHA)
+        self.assertEqual(allocation.reference, "agent-server/v0.0.130")
 
-    def test_occupied_versions_without_a_matching_draft_do_not_need_heads(self) -> None:
-        key = "artifacts/server/0.0.200/browseros-server-resources-linux-x64.zip"
-        client = FakeR2Client(
-            {None: {"Contents": [{"Key": key}], "IsTruncated": False}},
-            {},
-        )
-
-        allocations = discover_r2_component_allocations(
-            client, "browseros", "server", SOURCE_SHA, ()
-        )
-
-        self.assertEqual(len(allocations), 1)
-        self.assertFalse(allocations[0].reusable)
-        self.assertEqual(client.head_calls, [])
-
-    def test_extension_listing_paginates_and_validates_source_binding(self) -> None:
+    def test_extension_probe_paginates_and_validates_source_binding(self) -> None:
         key = "extensions/agent-0.0.42.0.crx"
         client = FakeR2Client(
             {
@@ -158,23 +147,20 @@ class R2AllocationDiscoveryTest(unittest.TestCase):
             },
         )
 
-        allocations = discover_r2_component_allocations(
-            client,
-            "browseros",
-            "agent",
-            SOURCE_SHA,
-            (_draft("agent", "0.0.42.0", "ext-agent/v0.0.42.0"),),
+        allocation = discover_r2_component_allocation(
+            client, "browseros", "agent", "0.0.42.0", SOURCE_SHA
         )
 
-        self.assertEqual(len(allocations), 1)
-        self.assertTrue(allocations[0].reusable)
+        self.assertIsNotNone(allocation)
+        assert allocation is not None
+        self.assertTrue(allocation.reusable)
         self.assertEqual(
             client.list_calls,
             [
-                {"Bucket": "browseros", "Prefix": "extensions/agent-"},
+                {"Bucket": "browseros", "Prefix": key},
                 {
                     "Bucket": "browseros",
-                    "Prefix": "extensions/agent-",
+                    "Prefix": key,
                     "ContinuationToken": "next",
                 },
             ],
