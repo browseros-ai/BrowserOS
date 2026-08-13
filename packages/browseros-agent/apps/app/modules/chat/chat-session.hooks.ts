@@ -831,6 +831,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     setLiked({})
     setDisliked({})
     setRestoredConversationId(null)
+    // Clearing the restore param also cancels any in-flight logged-out restore
+    // (via the restore effect's cleanup), so a stale response can't revive the
+    // old conversation over this new blank session.
+    setSearchParams({}, { replace: true })
     resetRemoteConversation()
   }
 
