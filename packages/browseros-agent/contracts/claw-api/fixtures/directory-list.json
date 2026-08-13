@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "name": "news-brief",
+      "category": "RESEARCH",
+      "description": "Briefs you on any topic by scraping live news in parallel tabs, cross-checking sources, delivering a themed brief.",
+      "installs": 388,
+      "sourceRepo": "browseros-ai/skills",
+      "updatedAt": 1786000000000
+    },
+    {
+      "name": "seo-geo-audit",
+      "category": "QA",
+      "description": "Audits a live page's classic SEO plus how quotable it is for AI answer engines. Read-only.",
+      "installs": 231,
+      "sourceRepo": "browseros-ai/skills",
+      "updatedAt": 1786000000000
+    }
+  ],
+  "sourceRepo": "browseros-ai/skills",
+  "updatedAt": 1786000000000
+}

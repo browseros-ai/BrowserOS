@@ -20,7 +20,154 @@ impl MigratorTrait for Migrator {
             Box::new(m0011_use_session_durations_for_efficiency::Migration),
             Box::new(m0012_recording_payload_files::Migration),
             Box::new(m0013_add_parent_dispatch_id::Migration),
+            Box::new(m0014_add_skills_and_runs::Migration),
         ]
+    }
+}
+
+mod m0014_add_skills_and_runs {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0014_add_skills_and_runs"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .create_table(
+                    Table::create()
+                        .table(Skills::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(Skills::Name)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(Skills::Description).string().not_null())
+                        .col(ColumnDef::new(Skills::Site).string())
+                        .col(ColumnDef::new(Skills::Origin).string().not_null())
+                        .col(ColumnDef::new(Skills::SourceSessionId).string())
+                        .col(ColumnDef::new(Skills::Version).big_integer().not_null())
+                        .col(ColumnDef::new(Skills::BodyPath).string().not_null())
+                        .col(ColumnDef::new(Skills::LinkedAgentsJson).string().not_null())
+                        .col(ColumnDef::new(Skills::CreatedAt).big_integer().not_null())
+                        .col(ColumnDef::new(Skills::UpdatedAt).big_integer().not_null())
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_table(
+                    Table::create()
+                        .table(SkillRuns::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(SkillRuns::Id)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(SkillRuns::SkillName).string().not_null())
+                        .col(ColumnDef::new(SkillRuns::SessionId).string().not_null())
+                        .col(
+                            ColumnDef::new(SkillRuns::RunNumber)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(ColumnDef::new(SkillRuns::AgentId).string().not_null())
+                        .col(ColumnDef::new(SkillRuns::Tokens).big_integer())
+                        .col(ColumnDef::new(SkillRuns::DurationMs).big_integer())
+                        .col(ColumnDef::new(SkillRuns::ToolCount).big_integer())
+                        .col(ColumnDef::new(SkillRuns::Clean).boolean().not_null())
+                        .col(ColumnDef::new(SkillRuns::ErroredTool).string())
+                        .col(
+                            ColumnDef::new(SkillRuns::CreatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("skill_runs_skill_name_idx")
+                        .table(SkillRuns::Table)
+                        .col(SkillRuns::SkillName)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("skill_runs_session_idx")
+                        .table(SkillRuns::Table)
+                        .col(SkillRuns::SessionId)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("skill_runs_skill_run_number_idx")
+                        .table(SkillRuns::Table)
+                        .col(SkillRuns::SkillName)
+                        .col(SkillRuns::RunNumber)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(SkillRuns::Table).if_exists().to_owned())
+                .await?;
+            manager
+                .drop_table(Table::drop().table(Skills::Table).if_exists().to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum Skills {
+        Table,
+        Name,
+        Description,
+        Site,
+        Origin,
+        SourceSessionId,
+        Version,
+        BodyPath,
+        LinkedAgentsJson,
+        CreatedAt,
+        UpdatedAt,
+    }
+
+    #[derive(DeriveIden)]
+    enum SkillRuns {
+        Table,
+        Id,
+        SkillName,
+        SessionId,
+        RunNumber,
+        AgentId,
+        Tokens,
+        DurationMs,
+        ToolCount,
+        Clean,
+        ErroredTool,
+        CreatedAt,
     }
 }
 
