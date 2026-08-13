@@ -34,12 +34,21 @@ export interface SaveConversationInput {
   targetType: ConversationTargetType
   origin?: string
   agentId?: string
+  /** Preserve an original timestamp when importing legacy conversations. */
+  lastMessagedAt?: number
 }
 
 export interface ConversationStore {
   list(): Promise<ConversationSummary[]>
   get(id: string): Promise<ConversationDetail | null>
   save(input: SaveConversationInput): Promise<ConversationSummary>
+  /**
+   * Insert only when the conversation is absent; returns null if a row already
+   * exists. Used for legacy import so a newer server row is never overwritten.
+   */
+  insertIfAbsent(
+    input: SaveConversationInput,
+  ): Promise<ConversationSummary | null>
   delete(id: string): Promise<boolean>
 }
 
@@ -93,6 +102,20 @@ export class DbConversationStore implements ConversationStore {
     return this.withWriteLock(async () => this.upsert(input, input.messages))
   }
 
+  async insertIfAbsent(
+    input: SaveConversationInput,
+  ): Promise<ConversationSummary | null> {
+    return this.withWriteLock(async () => {
+      const existing = this.db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, input.id))
+        .get()
+      if (existing) return null
+      return this.upsert(input, input.messages)
+    })
+  }
+
   async delete(id: string): Promise<boolean> {
     return this.withWriteLock(async () => {
       const existing = this.db
@@ -124,7 +147,7 @@ export class DbConversationStore implements ConversationStore {
       origin: input.origin ?? null,
       targetType: input.targetType,
       agentId: input.agentId ?? null,
-      lastMessagedAt: now,
+      lastMessagedAt: input.lastMessagedAt ?? now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
