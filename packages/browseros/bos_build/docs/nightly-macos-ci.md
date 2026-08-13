@@ -131,7 +131,7 @@ Only the final browser job joins the shared `macos-build` concurrency group.
 `queue: max` retains up to 100 pending browser jobs in FIFO order instead of
 letting a newer run replace an older pending one. Server and extension jobs run
 before the Mac lock is requested. Full releases and both nightlies share this
-lock, so they cannot mutate the persistent checkout simultaneously.
+lock.
 
 Run the Mac runner in the logged-in GUI user's session. Codesign and
 `xcrun notarytool` need that user's keychain; daemon or SSH-only sessions
@@ -140,7 +140,8 @@ commonly fail with `User interaction not allowed`.
 The machine needs:
 
 - A persistent BrowserOS checkout.
-- A persistent Chromium `src` checkout at the repository pin.
+- A persistent pristine Chromium `src` checkout at the repository pin, used
+  only as the APFS clone base.
 - `uv`, `gh`, depot_tools, Xcode tools, and Chrome.
 - The macOS signing identity and notarization credentials.
 - Enough disk for Chromium outputs and DMGs.
@@ -150,11 +151,19 @@ Set these repository variables:
 | Variable | Meaning |
 | --- | --- |
 | `BROWSEROS_REPO_PATH` | Absolute path to the persistent BrowserOS checkout |
-| `BROWSEROS_CHROMIUM_SRC` | Absolute path to Chromium `src` |
+| `BROWSEROS_CHROMIUM_SRC` | Absolute path to the warm pristine Chromium base `src` |
 
 Component, R2, signing, and notarization credentials come from GitHub Actions
 secrets. `SLACK_WEBHOOK_URL` is optional and receives failures after the Mac job
 has started.
+
+Before each signed browser build, `.github/scripts/macos-chromium-workspace.sh`
+validates the base checkout and creates a run/attempt-specific APFS
+copy-on-write clone of the whole gclient root under
+`../browseros-ci-apfs-workspaces/`. `bos_build` receives the clone's `src`, so
+cleaning, patching, compiling, signing, packaging, and universal merge outputs
+stay inside the disposable workspace. Cleanup runs with `if: always()`, and the
+next setup reaps abandoned owned workspaces from killed jobs.
 
 ## Troubleshooting
 
@@ -170,6 +179,11 @@ extension manifest were published.
 
 `User interaction not allowed`: run the runner as the logged-in GUI user and
 verify `MACOS_KEYCHAIN_PASSWORD` and the signing identity.
+
+APFS workspace setup fails: confirm the base checkout is on APFS, the helper can
+create a same-volume `browseros-ci-apfs-workspaces` sibling directory, the base
+`src` is at `packages/browseros/CHROMIUM_VERSION`, and the base has no
+BrowserOS output directories or tracked patch/resource changes.
 
 No browser version commit: inspect the hosted `Reserve new browser version on
 main` job. It requires `contents: write` and `pull-requests: write`, plus branch

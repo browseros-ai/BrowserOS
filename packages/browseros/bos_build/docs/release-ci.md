@@ -185,6 +185,9 @@ matching signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses
 repository variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus
-the signing and notarization secrets on the persistent builder. Runner labels,
-cache behavior, and queue recovery are documented in `warpbuild-ci.md`;
-persistent macOS setup is in `nightly-macos-ci.md`.
+the signing and notarization secrets on the persistent builder.
+`BROWSEROS_CHROMIUM_SRC` is the pristine APFS clone base; the release build
+runs against a disposable copy-on-write workspace and cleans it under
+`if: always()`. Runner labels, cache behavior, and queue recovery are
+documented in `warpbuild-ci.md`; persistent macOS setup is in
+`nightly-macos-ci.md`.

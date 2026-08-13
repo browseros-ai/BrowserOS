@@ -197,6 +197,12 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.3.2
 
+      - name: Setup disposable Chromium workspace
+        id: chromium_workspace
+        working-directory: ${{ steps.build_inputs.outputs.browseros_repo }}
+        shell: bash
+        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.build_inputs.outputs.chromium_src }}"
+
       - name: Verify reserved browser version
         id: version
         env:
@@ -242,7 +248,7 @@ jobs:
           BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ needs.reserve.outputs.onboarding_version }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ steps.build_inputs.outputs.browseros_repo }}/updates/extensions/bundled-manifest.xml
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ needs.extension.outputs.version }}
-          CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
+          CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.chromium_src }}
           MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
           MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
@@ -270,6 +276,18 @@ jobs:
             flags+=(--no-upload)
           fi
           uv run browseros build "${flags[@]}" --chromium-src "$CHROMIUM_SRC"
+
+      - name: Clean up disposable Chromium workspace
+        if: always()
+        env:
+          MACOS_CHROMIUM_WORKSPACE_STATE_PATH: ${{ steps.chromium_workspace.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.build_inputs.outputs.browseros_repo }}/.github/scripts/macos-chromium-workspace.sh"
+          if [ -f "$script" ]; then
+            bash "$script" cleanup
+          fi
 
       - name: Clean up macOS signing keychain
         if: always()
