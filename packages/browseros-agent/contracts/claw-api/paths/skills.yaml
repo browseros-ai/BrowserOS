@@ -1,0 +1,177 @@
+collection:
+  get:
+    operationId: listSkills
+    description: Every skill the user has, newest activity first.
+    responses:
+      '200':
+        description: The user's skills.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillList
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  post:
+    operationId: createSkill
+    description: Create a skill by hand. Writes SKILL.md and links it into the requested agents.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/skills.yaml#/SkillCreate
+    responses:
+      '201':
+        description: The created skill.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/Skill
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '409':
+        $ref: ../responses.yaml#/Conflict
+      '500':
+        $ref: ../responses.yaml#/InternalError
+item:
+  get:
+    operationId: getSkill
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    responses:
+      '200':
+        description: The skill, its SKILL.md body, and its recent runs.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillDetail
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  put:
+    operationId: updateSkill
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/skills.yaml#/SkillUpdate
+    responses:
+      '200':
+        description: The updated skill.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillDetail
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  delete:
+    operationId: deleteSkill
+    description: Delete the skill and unlink it from every registered agent directory.
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    responses:
+      '204':
+        description: The skill was deleted.
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+runs:
+  get:
+    operationId: listSkillRuns
+    description: Run history for a skill, newest first, cursor-paginated.
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+      - name: cursor
+        in: query
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          default: 25
+    responses:
+      '200':
+        description: A cursor-paginated page of runs.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillRunList
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+directory:
+  get:
+    operationId: listDirectory
+    description: The first-party catalog of installable skills, sourced from a trusted remote repo.
+    parameters:
+      - name: category
+        in: query
+        schema:
+          type: string
+      - name: search
+        in: query
+        schema:
+          type: string
+    responses:
+      '200':
+        description: The catalog.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/DirectorySkillList
+      '500':
+        $ref: ../responses.yaml#/InternalError
+directoryItem:
+  get:
+    operationId: getDirectorySkill
+    description: A single catalog entry with its SKILL.md body, for preview before install.
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    responses:
+      '200':
+        description: The catalog entry and its SKILL.md body.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/DirectorySkillDetail
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+directoryAdd:
+  post:
+    operationId: addDirectorySkill
+    description: Install a catalog skill. Writes SKILL.md, links it into the connected agents, and records it as a skill.
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    responses:
+      '201':
+        description: The installed skill.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/Skill
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '409':
+        $ref: ../responses.yaml#/Conflict
+      '500':
+        $ref: ../responses.yaml#/InternalError

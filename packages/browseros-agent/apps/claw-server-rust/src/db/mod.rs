@@ -221,6 +221,8 @@ mod tests {
             "recording_payloads",
             "recording_batches",
             "session_efficiency_stats",
+            "skills",
+            "skill_runs",
             "seaql_migrations",
         ] {
             assert!(names.contains(table), "missing table {table}");
@@ -247,6 +249,9 @@ mod tests {
             "recording_streams_tab_time_idx",
             "recording_streams_retention_idx",
             "session_efficiency_stats_ended_at_idx",
+            "skill_runs_skill_name_idx",
+            "skill_runs_session_idx",
+            "skill_runs_skill_run_number_idx",
         ] {
             assert!(names.contains(index), "missing index {index}");
         }
@@ -319,7 +324,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 13);
+        assert_eq!(migrations.len(), 14);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -372,6 +377,10 @@ mod tests {
             migrations[12].try_get::<String>("", "version")?,
             "m0013_add_parent_dispatch_id"
         );
+        assert_eq!(
+            migrations[13].try_get::<String>("", "version")?,
+            "m0014_add_skills_and_runs"
+        );
         Ok(())
     }
 
@@ -411,7 +420,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 13);
+        assert_eq!(migration_count, 14);
         conn.close().await?;
         Ok(())
     }
@@ -475,7 +484,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 13);
+        assert_eq!(migrations.len(), 14);
         assert_eq!(
             migrations
                 .iter()
@@ -498,7 +507,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 13);
+        assert_eq!(migration_count, 14);
         Ok(())
     }
 
@@ -634,7 +643,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 13);
+        assert_eq!(migrations.len(), 14);
         Ok(())
     }
 

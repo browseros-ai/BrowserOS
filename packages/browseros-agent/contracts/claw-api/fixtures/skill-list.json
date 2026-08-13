@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "name": "masason-email-sweep",
+      "description": "Check the Masason inbox for new deadlines and draft what is owed",
+      "site": "mail.google.com",
+      "origin": "agent",
+      "sourceSessionId": "sess_a1b2c3",
+      "version": 4,
+      "linkedAgents": ["Claude Code", "Codex"],
+      "runCount": 17,
+      "cleanRunCount": 17,
+      "firstRunTokens": 41200,
+      "latestRunTokens": 14600,
+      "lastRunAt": 1786000000000,
+      "createdAt": 1785000000000,
+      "updatedAt": 1786000000000
+    }
+  ]
+}
