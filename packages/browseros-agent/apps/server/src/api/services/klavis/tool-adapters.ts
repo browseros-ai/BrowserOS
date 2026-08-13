@@ -5,10 +5,11 @@
  */
 
 import type { JSONValue } from '@ai-sdk/provider'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { fromJsonSchema, type McpServer } from '@modelcontextprotocol/server'
 import type { ToolSet } from 'ai'
 import { z } from 'zod'
+import { zodToJsonSchema } from 'zod-to-json-schema'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
 import { findConnector, getConnectorCatalogDescription } from './catalog'
@@ -230,6 +231,20 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   return toolSet
 }
 
+// Stopgap: Klavis tool schemas are still Zod v3 (they flow through the Strata
+// client, which is migrated separately). v2 registerTool derives a tools/list
+// JSON schema only from Zod v4, so bridge the v3 raw shape through JSON.
+// Replaced once the client migration passes the remote JSON schema straight to
+// fromJsonSchema.
+function toV2InputSchema(rawShape: z.ZodRawShape) {
+  // The bridged value is a StandardSchemaWithJSON; type it as a raw shape so
+  // registerTool's overload and handler typing resolve as before. At runtime
+  // v2 accepts the real object via the Standard Schema path.
+  return fromJsonSchema(
+    zodToJsonSchema(z.object(rawShape)) as never,
+  ) as unknown as Record<string, never>
+}
+
 export function registerKlavisTools(
   mcpServer: McpServer,
   deps: KlavisToolAdapterDeps,
@@ -239,7 +254,9 @@ export function registerKlavisTools(
     {
       description:
         'Check or list BrowserOS managed app connectors before using Strata MCP tools. Omit server_name to see available, selected, connected, and proxy status. With server_name, returns connected/auth URL status.',
-      inputSchema: connectorInputSchema(deps.catalog),
+      inputSchema: toV2InputSchema(
+        connectorInputSchema(deps.catalog) as z.ZodRawShape,
+      ),
     },
     async (args: Record<string, unknown>) => {
       const startTime = performance.now()
@@ -322,7 +339,7 @@ export function registerKlavisTools(
       strataTool.name,
       {
         description: strataTool.description,
-        inputSchema,
+        inputSchema: toV2InputSchema((inputSchema ?? {}) as z.ZodRawShape),
       },
       async (args: Record<string, unknown>) => {
         const startTime = performance.now()

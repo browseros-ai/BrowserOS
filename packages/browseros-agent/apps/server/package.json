@@ -76,9 +76,10 @@
     "@browseros/browser-mcp": "workspace:*",
     "@browseros/cdp-protocol": "workspace:*",
     "@browseros/shared": "workspace:*",
-    "@hono/mcp": "^0.3.1",
     "@hono/zod-validator": "^0.9.0",
+    "@modelcontextprotocol/hono": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@openrouter/ai-sdk-provider": "^2.10.0",
     "@sentry/bun": "^10.69.0",
     "acp-probe": "^0.0.2",
@@ -93,7 +94,8 @@
     "pino": "^9.14.0",
     "posthog-node": "^4.18.0",
     "zod": "^3.25.76",
-    "zod-from-json-schema": "^0.5.6"
+    "zod-from-json-schema": "^0.5.6",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/bun": "1.3.5",

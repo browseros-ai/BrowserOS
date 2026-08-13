@@ -1,5 +1,5 @@
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { clampTimeout, defineTool, errorResult, textResult } from './framework'
 import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'

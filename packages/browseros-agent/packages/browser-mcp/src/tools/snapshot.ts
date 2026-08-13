@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, textResult } from './framework'
 import { formatSnapshotResult } from './snapshot-format'
 

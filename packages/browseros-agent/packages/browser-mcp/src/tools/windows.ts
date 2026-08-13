@@ -1,5 +1,5 @@
 import type { WindowInfo } from '@browseros/browser-core/core/windows'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
 
 const ACTIONS = ['list', 'create', 'close', 'activate'] as const

@@ -1,7 +1,7 @@
 import type { ScreenshotCaptureOptions } from '@browseros/browser-core/core/screenshot'
 import type { Viewport } from '@browseros/cdp-protocol/domains/page'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool } from './framework'
 
 const DEFAULT_SCREENSHOT_FORMAT = 'jpeg'

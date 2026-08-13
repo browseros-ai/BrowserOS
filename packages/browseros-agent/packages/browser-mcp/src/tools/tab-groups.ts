@@ -1,5 +1,5 @@
 import type { TabGroup } from '@browseros/browser-core/tab-groups'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
 
 const TAB_GROUP_COLORS = [

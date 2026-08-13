@@ -1,5 +1,5 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   defineTool,
   errorResult,
