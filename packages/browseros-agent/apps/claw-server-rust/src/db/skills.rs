@@ -10,7 +10,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    QuerySelect, sea_query::OnConflict,
 };
 
 /// Database boundary for user skills and their run history.
@@ -38,18 +38,20 @@ impl SkillsRepository {
             .await?)
     }
 
-    pub async fn exists(&self, name: &str) -> AppResult<bool> {
-        Ok(Skills::find_by_id(name.to_owned())
-            .one(self.db.connection())
-            .await?
-            .is_some())
-    }
-
-    pub async fn insert(&self, model: skills::Model) -> AppResult<()> {
-        Skills::insert(into_active(model))
+    /// Insert a skill only if its name is free. Returns `true` when the row was
+    /// created and `false` when the name was already taken. The unique primary
+    /// key makes this an atomic reservation, including across processes sharing
+    /// the database.
+    pub async fn try_insert(&self, model: skills::Model) -> AppResult<bool> {
+        let inserted = Skills::insert(into_active(model))
+            .on_conflict(
+                OnConflict::column(skills::Column::Name)
+                    .do_nothing()
+                    .to_owned(),
+            )
             .exec_without_returning(self.db.connection())
             .await?;
-        Ok(())
+        Ok(inserted == 1)
     }
 
     pub async fn update(&self, model: skills::Model) -> AppResult<()> {
