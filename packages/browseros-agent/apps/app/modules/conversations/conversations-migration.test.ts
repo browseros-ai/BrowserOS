@@ -4,6 +4,7 @@ import type { Conversation } from '@/lib/conversations/conversationStorage'
 import {
   collectServerConversations,
   migrateLegacyConversations,
+  promoteServerConversations,
 } from './conversations-migration.helpers'
 
 function conversation(id: string): Conversation {
@@ -147,5 +148,52 @@ describe('collectServerConversations', () => {
     })
 
     expect(result.map((conversation) => conversation.id)).toEqual(['a'])
+  })
+})
+
+describe('promoteServerConversations', () => {
+  it('does nothing when the server has no conversations', async () => {
+    const upload = mock(async () => [])
+    const drain = mock(async () => {})
+
+    const result = await promoteServerConversations({
+      userId: 'u1',
+      collect: mock(async () => []),
+      upload,
+      drain,
+    })
+
+    expect(result).toEqual({ uploadedIds: [], allUploaded: true })
+    expect(upload).not.toHaveBeenCalled()
+    expect(drain).not.toHaveBeenCalled()
+  })
+
+  it('drains every conversation the cloud confirms', async () => {
+    const drain = mock((_id: string) => Promise.resolve())
+
+    const result = await promoteServerConversations({
+      userId: 'u1',
+      collect: mock(async () => [conversation('a'), conversation('b')]),
+      upload: mock(async () => ['a', 'b']),
+      drain,
+    })
+
+    expect(result).toEqual({ uploadedIds: ['a', 'b'], allUploaded: true })
+    expect(drain.mock.calls.map((call) => call[0]).sort()).toEqual(['a', 'b'])
+  })
+
+  it('keeps a failed conversation on the server and reports incomplete', async () => {
+    const drain = mock(async () => {})
+
+    const result = await promoteServerConversations({
+      userId: 'u1',
+      collect: mock(async () => [conversation('a'), conversation('b')]),
+      upload: mock(async () => ['a']),
+      drain,
+    })
+
+    expect(result).toEqual({ uploadedIds: ['a'], allUploaded: false })
+    expect(drain).toHaveBeenCalledTimes(1)
+    expect(drain).toHaveBeenCalledWith('a')
   })
 })

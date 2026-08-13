@@ -75,3 +75,39 @@ export async function collectServerConversations({
     (conversation): conversation is Conversation => conversation !== null,
   )
 }
+
+export interface PromoteServerConversationsOptions {
+  userId: string
+  collect: () => Promise<Conversation[]>
+  upload: (conversations: Conversation[], userId: string) => Promise<string[]>
+  drain: (id: string) => Promise<void>
+}
+
+export interface PromoteResult {
+  uploadedIds: string[]
+  allUploaded: boolean
+}
+
+/**
+ * Promotes the local server's (logged-out) history to the cloud, then drains
+ * only the conversations the cloud confirmed. Draining is what keeps a later
+ * sign-in under a different account from re-uploading someone else's retained
+ * history, and it leaves any failed conversation on the server for a retry.
+ */
+export async function promoteServerConversations({
+  userId,
+  collect,
+  upload,
+  drain,
+}: PromoteServerConversationsOptions): Promise<PromoteResult> {
+  const conversations = await collect()
+  if (conversations.length === 0) return { uploadedIds: [], allUploaded: true }
+
+  const uploadedIds = await upload(conversations, userId)
+  await Promise.all(uploadedIds.map((id) => drain(id)))
+
+  return {
+    uploadedIds,
+    allUploaded: uploadedIds.length === conversations.length,
+  }
+}

@@ -5,6 +5,7 @@ import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { uploadConversations } from '@/lib/conversations/uploadConversationsToGraphql'
 import { sentry } from '@/lib/sentry/sentry'
 import {
+  deleteServerConversationRow,
   fetchServerConversation,
   fetchServerConversations,
   importServerConversation,
@@ -13,6 +14,7 @@ import {
 import {
   collectServerConversations,
   migrateLegacyConversations,
+  promoteServerConversations,
 } from './conversations-migration.helpers'
 
 /**
@@ -61,32 +63,16 @@ export function useLegacyConversationMigration(): void {
   }, [userId, queryClient])
 }
 
-/**
- * Uploads the local server's (logged-out) conversations to the cloud so they
- * follow the user into their account. The server copy is kept (Decision 4);
- * `uploadConversations` is idempotent, so re-running only syncs the delta.
- * Returns how many conversations were considered.
- */
-export async function promoteServerConversationsToCloud(
-  userId: string,
-): Promise<number> {
-  const conversations = await collectServerConversations({
-    listSummaries: fetchServerConversations,
-    loadDetail: fetchServerConversation,
-  })
-  if (conversations.length === 0) return 0
-  await uploadConversations(conversations, userId)
-  return conversations.length
-}
-
 // Module-scoped so the promote survives history remounts (once per sign-in, not
-// once per history open); reset when the user is absent so a re-sign-in
-// promotes again.
+// once per history open); reset when the user is absent, or when a promote does
+// not fully complete, so leftovers retry.
 let lastPromotedUserId: string | undefined
 
 /**
- * On sign-in, promote server-held (logged-out) history to the cloud, then run
- * `onPromoted` (e.g. to refresh the cloud history list) when anything landed.
+ * On sign-in, promote server-held (logged-out) history to the cloud (draining
+ * each conversation the cloud confirms, so it cannot leak to a later sign-in),
+ * then run `onPromoted` (e.g. to refresh the cloud history list) when anything
+ * landed.
  */
 export function useSignInConversationPromote(onPromoted?: () => void): void {
   const { sessionInfo } = useSessionInfo()
@@ -101,9 +87,21 @@ export function useSignInConversationPromote(onPromoted?: () => void): void {
     lastPromotedUserId = userId
 
     let cancelled = false
-    promoteServerConversationsToCloud(userId)
-      .then((count) => {
-        if (!cancelled && count > 0) onPromoted?.()
+    promoteServerConversations({
+      userId,
+      collect: () =>
+        collectServerConversations({
+          listSummaries: fetchServerConversations,
+          loadDetail: fetchServerConversation,
+        }),
+      upload: uploadConversations,
+      drain: deleteServerConversationRow,
+    })
+      .then((result) => {
+        if (cancelled) return
+        // Leftovers stay on the server; let the next mount retry them.
+        if (!result.allUploaded) lastPromotedUserId = undefined
+        if (result.uploadedIds.length > 0) onPromoted?.()
       })
       .catch((error) => {
         lastPromotedUserId = undefined
