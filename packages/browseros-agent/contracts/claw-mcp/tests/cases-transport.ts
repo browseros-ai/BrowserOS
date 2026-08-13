@@ -19,6 +19,7 @@ const EXPECTED_TOOLS = [
   'pdf',
   'read',
   'run',
+  'save_skill',
   'screenshot',
   'snapshot',
   'tab_groups',
