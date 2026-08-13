@@ -97,6 +97,10 @@ on:
         required: false
       MACOS_CERTIFICATE_NAME:
         required: false
+      MACOS_CERTIFICATE_P12:
+        required: false
+      MACOS_CERTIFICATE_PWD:
+        required: false
       MACOS_KEYCHAIN_PASSWORD:
         required: false
       PROD_MACOS_NOTARIZATION_APPLE_ID:
@@ -312,6 +316,17 @@ jobs:
             esac
           done
 
+      - name: Import macOS signing certificate
+        id: macos_signing
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: bash .github/scripts/macos-signing-keychain.sh setup
+
       - name: Build selected products
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
         env:
@@ -324,6 +339,7 @@ jobs:
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
@@ -358,6 +374,18 @@ jobs:
             fi
             uv run browseros build "${args[@]}"
           done
+
+      - name: Clean up macOS signing keychain
+        if: always()
+        env:
+          MACOS_SIGNING_STATE_PATH: ${{ steps.macos_signing.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.inputs.outputs.browseros_repo }}/.github/scripts/macos-signing-keychain.sh"
+          if [ -f "$script" ]; then
+            bash "$script" cleanup
+          fi
 
       - name: Upload lane manifest
         if: steps.inputs.outputs.resource_mode == 'source'

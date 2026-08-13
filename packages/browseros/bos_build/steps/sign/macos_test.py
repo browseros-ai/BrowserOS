@@ -15,8 +15,11 @@ from . import macos as macos_module
 from .macos import (
     SERVER_RESOURCES_SOURCE_REL,
     MacOSSignModule,
+    check_environment,
     find_components_to_sign,
+    notarize_app,
     sign_component,
+    unlock_keychain,
     verify_server_resources_bundle,
     verify_signature,
 )
@@ -31,6 +34,13 @@ def _write_exec(path: Path) -> None:
 def _write_file(path: Path, content: str = "data\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def _env(**values):
+    env = type("Env", (), {})()
+    for name, value in values.items():
+        setattr(env, name, value)
+    return env
 
 
 class MacOSSignDiscoveryTest(unittest.TestCase):
@@ -285,6 +295,139 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             )
 
             MacOSSignModule()._verify_server_resources(app_path, ctx)
+
+
+class MacOSKeychainSelectionTest(unittest.TestCase):
+    def test_unlock_keychain_uses_configured_keychain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            keychain = Path(tmp) / "ci.keychain-db"
+            keychain.write_text("keychain")
+            calls = []
+            env = _env(
+                macos_keychain_path=str(keychain),
+                macos_keychain_password="password",
+            )
+
+            with mock.patch.object(
+                macos_module, "run_command", _fake_run_command(calls)
+            ):
+                unlock_keychain(env)
+
+            self.assertEqual(
+                calls[0],
+                ["security", "unlock-keychain", "-p", "password", str(keychain)],
+            )
+            self.assertEqual(calls[1][-1], str(keychain))
+
+    def test_unlock_keychain_requires_existing_configured_keychain(self):
+        env = _env(
+            macos_keychain_path="/tmp/missing-browseros-ci.keychain-db",
+            macos_keychain_password="password",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Configured keychain not found"):
+            unlock_keychain(env)
+
+    def test_check_environment_exposes_configured_keychain(self):
+        env = _env(
+            macos_certificate_name="Developer ID Application",
+            macos_notarization_apple_id="dev@example.com",
+            macos_notarization_team_id="TEAMID1234",
+            macos_notarization_password="notary-password",
+            macos_keychain_path="/tmp/browseros-ci.keychain-db",
+        )
+
+        ok, values = check_environment(env)
+
+        self.assertTrue(ok)
+        self.assertEqual(values["keychain_path"], "/tmp/browseros-ci.keychain-db")
+        self.assertEqual(values["keychain_profile"], "notarytool-profile")
+
+    def test_sign_component_passes_configured_keychain_to_codesign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            component = Path(tmp) / "tool"
+            component.write_bytes(b"not-macho")
+            keychain = Path(tmp) / "ci.keychain-db"
+            calls = []
+
+            with (
+                mock.patch.object(
+                    macos_module, "_run_probe", _fake_probe([], set(), macho=False)
+                ),
+                mock.patch.object(
+                    macos_module, "run_command", _fake_run_command(calls)
+                ),
+            ):
+                ok = sign_component(component, "Cert", keychain_path=keychain)
+
+            self.assertTrue(ok)
+            self.assertIn("--keychain", calls[0])
+            self.assertEqual(calls[0][calls[0].index("--keychain") + 1], str(keychain))
+
+    def test_notarize_app_uses_configured_keychain_for_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path = Path(tmp) / "BrowserOS.app"
+            app_path.mkdir()
+            keychain = Path(tmp) / "ci.keychain-db"
+            calls = []
+
+            def run(cmd, cwd=None, check=True):
+                calls.append(cmd)
+                if cmd[0] == "ditto":
+                    Path(cmd[-1]).write_text("zip")
+                if cmd[:3] == ["xcrun", "notarytool", "submit"]:
+                    return _completed(cmd, stdout="status: Accepted\n")
+                return _completed(cmd)
+
+            env_vars = {
+                "apple_id": "dev@example.com",
+                "team_id": "TEAMID1234",
+                "notarization_pwd": "notary-password",
+                "keychain_profile": "notarytool-profile",
+            }
+
+            with mock.patch.object(macos_module, "run_command", run):
+                self.assertTrue(
+                    notarize_app(app_path, Path(tmp), env_vars, keychain_path=keychain)
+                )
+
+            store = next(c for c in calls if c[:3] == ["xcrun", "notarytool", "store-credentials"])
+            submit = next(c for c in calls if c[:3] == ["xcrun", "notarytool", "submit"])
+            for cmd in (store, submit):
+                self.assertIn("--keychain", cmd)
+                self.assertEqual(cmd[cmd.index("--keychain") + 1], str(keychain))
+
+    def test_notarize_app_requires_profile_storage_for_configured_keychain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path = Path(tmp) / "BrowserOS.app"
+            app_path.mkdir()
+            keychain = Path(tmp) / "ci.keychain-db"
+            calls = []
+
+            def run(cmd, cwd=None, check=True):
+                calls.append(cmd)
+                if cmd[0] == "ditto":
+                    Path(cmd[-1]).write_text("zip")
+                    return _completed(cmd)
+                if cmd[:3] == ["xcrun", "notarytool", "store-credentials"]:
+                    return _completed(cmd, returncode=1)
+                raise AssertionError(f"unexpected command: {cmd}")
+
+            env_vars = {
+                "apple_id": "dev@example.com",
+                "team_id": "TEAMID1234",
+                "notarization_pwd": "notary-password",
+                "keychain_profile": "notarytool-profile",
+            }
+
+            with mock.patch.object(macos_module, "run_command", run):
+                self.assertFalse(
+                    notarize_app(app_path, Path(tmp), env_vars, keychain_path=keychain)
+                )
+
+            self.assertFalse(
+                any(c[:3] == ["xcrun", "notarytool", "submit"] for c in calls)
+            )
 
 
 def _completed(cmd, returncode=0, stdout=""):

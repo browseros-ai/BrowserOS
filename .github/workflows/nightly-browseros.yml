@@ -222,6 +222,17 @@ jobs:
               -name 'BrowserOS_*.dmg' ! -name 'BrowserOS_neo_*.dmg' -delete
           fi
 
+      - name: Import macOS signing certificate
+        id: macos_signing
+        working-directory: ${{ steps.build_inputs.outputs.browseros_repo }}
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: bash .github/scripts/macos-signing-keychain.sh setup
+
       - name: Build BrowserOS (macOS arm64)
         env:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.build_inputs.outputs.source_sha }}
@@ -233,6 +244,7 @@ jobs:
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ needs.extension.outputs.version }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
           MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
@@ -258,6 +270,18 @@ jobs:
             flags+=(--no-upload)
           fi
           uv run browseros build "${flags[@]}" --chromium-src "$CHROMIUM_SRC"
+
+      - name: Clean up macOS signing keychain
+        if: always()
+        env:
+          MACOS_SIGNING_STATE_PATH: ${{ steps.macos_signing.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.build_inputs.outputs.browseros_repo }}/.github/scripts/macos-signing-keychain.sh"
+          if [ -f "$script" ]; then
+            bash "$script" cleanup
+          fi
 
       - name: Upload DMG artifact
         if: ${{ always() && steps.version.outputs.version != '' }}

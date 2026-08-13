@@ -128,33 +128,58 @@ def run_command(
     return utils_run_command(cmd, cwd=cwd, check=check)
 
 
-def unlock_keychain(env: Optional[EnvConfig] = None) -> None:
-    """Unlock the login keychain for non-interactive sessions (SSH, launchd).
+def get_macos_keychain_path(env: Optional[EnvConfig] = None) -> Optional[Path]:
+    """Return the explicitly configured macOS signing keychain."""
+    value = env.macos_keychain_path if env else os.environ.get("MACOS_KEYCHAIN_PATH")
+    if not value:
+        return None
+    return Path(value).expanduser()
 
-    Without this, codesign and notarytool fail with errSecInternalComponent
-    or 'User interaction is not allowed' when running over SSH.
-    """
-    keychain_path = Path.home() / "Library" / "Keychains" / "login.keychain-db"
-    password = env.macos_keychain_password if env else os.environ.get("MACOS_KEYCHAIN_PASSWORD")
+
+def unlock_keychain(env: Optional[EnvConfig] = None) -> None:
+    """Unlock the configured signing keychain."""
+    configured_keychain = get_macos_keychain_path(env)
+    keychain_path = (
+        configured_keychain
+        if configured_keychain
+        else Path.home() / "Library" / "Keychains" / "login.keychain-db"
+    )
+    password = (
+        env.macos_keychain_password
+        if env
+        else os.environ.get("MACOS_KEYCHAIN_PASSWORD")
+    )
 
     if not password:
+        if configured_keychain:
+            raise RuntimeError(
+                "MACOS_KEYCHAIN_PASSWORD is required when MACOS_KEYCHAIN_PATH is set"
+            )
         log_warning("MACOS_KEYCHAIN_PASSWORD not set — keychain may be locked (will fail over SSH)")
         return
 
     if not keychain_path.exists():
+        if configured_keychain:
+            raise RuntimeError(f"Configured keychain not found at {keychain_path}")
         log_warning(f"Keychain not found at {keychain_path}")
         return
 
-    log_info("🔓 Unlocking login keychain...")
-    run_command(
+    log_info(f"🔓 Unlocking macOS signing keychain: {keychain_path}")
+    unlock_result = run_command(
         ["security", "unlock-keychain", "-p", password, str(keychain_path)],
         check=False,
     )
     # Prevent auto-lock during long signing + notarization runs
-    run_command(
+    settings_result = run_command(
         ["security", "set-keychain-settings", "-t", "3600", str(keychain_path)],
         check=False,
     )
+    if configured_keychain and unlock_result.returncode != 0:
+        raise RuntimeError(f"Failed to unlock configured keychain: {keychain_path}")
+    if configured_keychain and settings_result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to update configured keychain settings: {keychain_path}"
+        )
 
 
 @step(
@@ -185,15 +210,21 @@ class MacOSSignModule(Step):
         log_info(f"🚀 Starting signing process for {ctx.product.display_name}...")
         log_info("=" * 70)
 
-        unlock_keychain(ctx.env)
-
         app_path = ctx.get_app_path()
         env_ok, env_vars = check_environment(ctx.env)
+        if not env_ok:
+            raise RuntimeError("Signing environment not configured")
+        unlock_keychain(ctx.env)
 
         self._verify_server_resources(app_path, ctx)
         self._stamp_update_versions(app_path, ctx)
         self._clear_extended_attributes(app_path)
-        self._sign_all_components(app_path, env_vars["certificate_name"], ctx)
+        self._sign_all_components(
+            app_path,
+            env_vars["certificate_name"],
+            ctx,
+            env_vars["keychain_path"],
+        )
         self._verify_signature(app_path, ctx)
         self._notarize(app_path, env_vars, ctx)
 
@@ -242,8 +273,20 @@ class MacOSSignModule(Step):
         log_info("🧹 Clearing extended attributes...")
         run_command(["xattr", "-cs", str(app_path)])
 
-    def _sign_all_components(self, app_path: Path, certificate_name: str, ctx: Context) -> None:
-        if not sign_all_components(app_path, certificate_name, ctx.root_dir, ctx):
+    def _sign_all_components(
+        self,
+        app_path: Path,
+        certificate_name: str,
+        ctx: Context,
+        keychain_path: str = "",
+    ) -> None:
+        if not sign_all_components(
+            app_path,
+            certificate_name,
+            ctx.root_dir,
+            ctx,
+            Path(keychain_path) if keychain_path else None,
+        ):
             raise RuntimeError("Failed to sign all components")
 
     def _verify_signature(self, app_path: Path, ctx: Optional[Context] = None) -> None:
@@ -251,8 +294,17 @@ class MacOSSignModule(Step):
             raise RuntimeError("Signature verification failed")
 
     def _notarize(self, app_path: Path, env_vars: Dict[str, str], ctx: Context) -> None:
-        if not notarize_app(app_path, ctx.root_dir, env_vars, ctx):
+        keychain_path = env_vars.get("keychain_path", "")
+        if not notarize_app(
+            app_path,
+            ctx.root_dir,
+            env_vars,
+            ctx,
+            Path(keychain_path) if keychain_path else None,
+        ):
             raise RuntimeError("Notarization failed")
+
+
 def check_signing_environment(env: Optional[EnvConfig] = None) -> bool:
     """Check if all required environment variables are set for signing (early check)
 
@@ -300,10 +352,14 @@ def check_environment(env: Optional[EnvConfig] = None) -> Tuple[bool, Dict[str, 
         "apple_id": env.macos_notarization_apple_id or "",
         "team_id": env.macos_notarization_team_id or "",
         "notarization_pwd": env.macos_notarization_password or "",
+        "keychain_path": str(get_macos_keychain_path(env) or ""),
+        "keychain_profile": "notarytool-profile",
     }
 
     missing = []
     for key, value in env_vars.items():
+        if key in {"keychain_path", "keychain_profile"}:
+            continue
         if not value:
             env_name = {
                 "certificate_name": "MACOS_CERTIFICATE_NAME",
@@ -562,8 +618,12 @@ def _codesign_cmd(
     identifier: Optional[str] = None,
     options: Optional[str] = None,
     entitlements: Optional[Path] = None,
+    keychain_path: Optional[Path] = None,
 ) -> List[str]:
     cmd = ["codesign", "--sign", certificate_name, "--force", "--timestamp"]
+
+    if keychain_path:
+        cmd.extend(["--keychain", str(keychain_path)])
 
     if identifier:
         cmd.extend(["--identifier", identifier])
@@ -585,6 +645,7 @@ def sign_fat_component_per_slice(
     identifier: Optional[str] = None,
     options: Optional[str] = None,
     entitlements: Optional[Path] = None,
+    keychain_path: Optional[Path] = None,
 ) -> bool:
     """Sign each slice as a thin file and lipo them back together."""
     try:
@@ -598,7 +659,12 @@ def sign_fat_component_per_slice(
                 )
                 run_command(
                     _codesign_cmd(
-                        thin, certificate_name, identifier, options, entitlements
+                        thin,
+                        certificate_name,
+                        identifier,
+                        options,
+                        entitlements,
+                        keychain_path,
                     )
                 )
                 thin_paths.append(thin)
@@ -621,6 +687,7 @@ def sign_component(
     identifier: Optional[str] = None,
     options: Optional[str] = None,
     entitlements: Optional[Path] = None,
+    keychain_path: Optional[Path] = None,
 ) -> bool:
     """Sign a single component"""
     asymmetric_archs = find_asymmetric_info_plist_archs(component_path)
@@ -636,12 +703,18 @@ def sign_component(
             identifier,
             options,
             entitlements,
+            keychain_path,
         )
 
     try:
         run_command(
             _codesign_cmd(
-                component_path, certificate_name, identifier, options, entitlements
+                component_path,
+                certificate_name,
+                identifier,
+                options,
+                entitlements,
+                keychain_path,
             )
         )
         return True
@@ -655,6 +728,7 @@ def sign_all_components(
     certificate_name: str,
     root_dir: Path,
     ctx: Optional[Context] = None,
+    keychain_path: Optional[Path] = None,
 ) -> bool:
     """Sign all components in the correct order (bottom-up)"""
     log_info("🔍 Discovering components to sign...")
@@ -681,7 +755,9 @@ def sign_all_components(
     for xpc in components["xpc_services"]:
         identifier = get_identifier_for_component(xpc, base_identifier)
         options = get_signing_options(xpc)
-        if not sign_component(xpc, certificate_name, identifier, options):
+        if not sign_component(
+            xpc, certificate_name, identifier, options, keychain_path=keychain_path
+        ):
             return False
 
     # 2. Sign nested apps (like Sparkle's Updater.app)
@@ -690,7 +766,13 @@ def sign_all_components(
         for nested_app in components["apps"]:
             identifier = get_identifier_for_component(nested_app, base_identifier)
             options = get_signing_options(nested_app)
-            if not sign_component(nested_app, certificate_name, identifier, options):
+            if not sign_component(
+                nested_app,
+                certificate_name,
+                identifier,
+                options,
+                keychain_path=keychain_path,
+            ):
                 return False
 
     # 3. Sign executables
@@ -717,7 +799,14 @@ def sign_all_components(
                             entitlements = ent_path
                             break
 
-            if not sign_component(exe, certificate_name, identifier, options, entitlements):
+            if not sign_component(
+                exe,
+                certificate_name,
+                identifier,
+                options,
+                entitlements,
+                keychain_path,
+            ):
                 return False
 
     # 4. Sign dylibs
@@ -725,7 +814,9 @@ def sign_all_components(
         log_info("\n🔏 Signing dynamic libraries...")
         for dylib in components["dylibs"]:
             identifier = get_identifier_for_component(dylib, base_identifier)
-            if not sign_component(dylib, certificate_name, identifier):
+            if not sign_component(
+                dylib, certificate_name, identifier, keychain_path=keychain_path
+            ):
                 return False
 
     # 5. Sign helper apps
@@ -759,7 +850,12 @@ def sign_all_components(
                         break
 
             if not sign_component(
-                helper, certificate_name, identifier, options, entitlements
+                helper,
+                certificate_name,
+                identifier,
+                options,
+                entitlements,
+                keychain_path,
             ):
                 return False
 
@@ -772,7 +868,9 @@ def sign_all_components(
         )
         for framework in frameworks_sorted:
             identifier = get_identifier_for_component(framework, base_identifier)
-            if not sign_component(framework, certificate_name, identifier):
+            if not sign_component(
+                framework, certificate_name, identifier, keychain_path=keychain_path
+            ):
                 return False
 
     # 7. Sign main executable
@@ -796,7 +894,9 @@ def sign_all_components(
         )
         return False
 
-    if not sign_component(main_exe, certificate_name, main_identifier):
+    if not sign_component(
+        main_exe, certificate_name, main_identifier, keychain_path=keychain_path
+    ):
         return False
 
     # 8. Finally sign the app bundle
@@ -848,6 +948,9 @@ def sign_all_components(
         "--requirements",
         requirements,
     ]
+
+    if keychain_path:
+        cmd.extend(["--keychain", str(keychain_path)])
 
     if entitlements:
         cmd.extend(["--entitlements", str(entitlements)])
@@ -902,6 +1005,7 @@ def notarize_app(
     root_dir: Path,
     env_vars: Dict[str, str],
     ctx: Optional[Context] = None,
+    keychain_path: Optional[Path] = None,
 ) -> bool:
     """Notarize the application"""
     log_info("\n📤 Preparing for notarization...")
@@ -918,21 +1022,27 @@ def notarize_app(
 
     # Store credentials
     log_info("🔑 Storing notarization credentials...")
-    store_result = run_command(
-        [
-            "xcrun",
-            "notarytool",
-            "store-credentials",
-            "notarytool-profile",
-            "--apple-id",
-            env_vars["apple_id"],
-            "--team-id",
-            env_vars["team_id"],
-            "--password",
-            env_vars["notarization_pwd"],
-        ],
-        check=False,
-    )
+    profile = env_vars.get("keychain_profile", "notarytool-profile")
+    store_cmd = [
+        "xcrun",
+        "notarytool",
+        "store-credentials",
+        profile,
+        "--apple-id",
+        env_vars["apple_id"],
+        "--team-id",
+        env_vars["team_id"],
+        "--password",
+        env_vars["notarization_pwd"],
+    ]
+    if keychain_path:
+        store_cmd.extend(["--keychain", str(keychain_path)])
+    store_result = run_command(store_cmd, check=False)
+
+    if keychain_path and store_result.returncode != 0:
+        log_error("Failed to store notarization credentials in configured keychain")
+        notarize_zip.unlink(missing_ok=True)
+        return False
 
     # Submit for notarization — if store-credentials failed, pass creds
     # directly to avoid depending on the keychain profile.
@@ -945,9 +1055,11 @@ def notarize_app(
             "submit",
             str(notarize_zip),
             "--keychain-profile",
-            "notarytool-profile",
+            profile,
             "--wait",
         ]
+        if keychain_path:
+            submit_cmd.extend(["--keychain", str(keychain_path)])
     else:
         log_warning("Keychain profile unavailable — passing credentials directly")
         submit_cmd = [
@@ -981,7 +1093,7 @@ def notarize_app(
             if "id:" in line:
                 submission_id = line.split("id:")[1].strip().split()[0]
                 log_info(
-                    f'Get detailed logs with: xcrun notarytool log {submission_id} --keychain-profile "notarytool-profile"'
+                    f'Get detailed logs with: xcrun notarytool log {submission_id} --keychain-profile "{profile}"'
                 )
                 break
         return False
@@ -1028,8 +1140,6 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
     log_info(f"🚀 Starting signing process for {ctx.product.display_name}...")
     log_info("=" * 70)
 
-    unlock_keychain(ctx.env if ctx else None)
-
     # Error tracking similar to bash script
     error_count = 0
     error_messages = []
@@ -1041,9 +1151,13 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
         log_error(msg)
 
     # Check environment
-    env_ok, env_vars = check_environment()
+    env_ok, env_vars = check_environment(ctx.env if ctx else None)
     if not env_ok:
         return False
+    unlock_keychain(ctx.env if ctx else None)
+    keychain_path = (
+        Path(env_vars["keychain_path"]) if env_vars["keychain_path"] else None
+    )
 
     # Setup app path
     app_path = ctx.get_app_path()
@@ -1077,7 +1191,11 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
 
         # Sign all components
         if not sign_all_components(
-            app_path, env_vars["certificate_name"], ctx.root_dir, ctx
+            app_path,
+            env_vars["certificate_name"],
+            ctx.root_dir,
+            ctx,
+            keychain_path,
         ):
             return False
 
@@ -1086,7 +1204,7 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
             return False
 
         # Notarize app
-        if not notarize_app(app_path, ctx.root_dir, env_vars, ctx):
+        if not notarize_app(app_path, ctx.root_dir, env_vars, ctx, keychain_path):
             return False
 
         # Create and notarize DMG if requested
@@ -1107,7 +1225,9 @@ def sign_app(ctx: Context, create_dmg: bool = True) -> bool:
                 certificate_name=env_vars["certificate_name"],
                 volume_name=ctx.product.mac.dmg_volume_name,
                 pkg_dmg_path=pkg_dmg_path,
-                keychain_profile="notarytool-profile",
+                keychain_profile=env_vars["keychain_profile"],
+                keychain_path=keychain_path,
+                notarization_env=env_vars,
             ):
                 log_error("DMG creation/notarization failed")
                 return False

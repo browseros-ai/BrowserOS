@@ -11,6 +11,7 @@ on:
       - "packages/browseros/pyproject.toml"
       - "packages/browseros/uv.lock"
       - "tools/release_secrets/**"
+      - ".github/scripts/macos-signing-keychain.sh"
       - ".github/workflows/bos-build-tests.yml"
       - ".github/workflows/build-browseros.yml"
       - ".github/workflows/nightly-browserclaw.yml"

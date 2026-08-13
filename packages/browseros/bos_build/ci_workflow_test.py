@@ -16,6 +16,7 @@ from bos_build.steps.source import provision
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+MACOS_SIGNING_HELPER = REPO_ROOT / ".github" / "scripts" / "macos-signing-keychain.sh"
 GIT_BOOTSTRAP_STEP = "Configure Git for depot_tools"
 EXPECTED_GIT_CONFIG = {
     "core.autocrlf": "false",
@@ -229,6 +230,61 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         ):
             self.assertIn(value, build_step["run"])
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
+
+    def test_macos_release_sets_up_ci_keychain_before_build_and_cleans_up(self):
+        workflow = self.load_workflow("release-macos.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        secrets = triggers["workflow_call"]["secrets"]
+        steps = workflow["jobs"]["build"]["steps"]
+        setup_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Import macOS signing certificate"
+        )
+        build_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Build selected products"
+        )
+        cleanup_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Clean up macOS signing keychain"
+        )
+        upload_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Upload BrowserOS DMG artifact"
+        )
+        setup = steps[setup_index]
+        build = steps[build_index]
+        cleanup = steps[cleanup_index]
+
+        self.assertIn("MACOS_CERTIFICATE_P12", secrets)
+        self.assertIn("MACOS_CERTIFICATE_PWD", secrets)
+        self.assertLess(setup_index, build_index)
+        self.assertLess(build_index, cleanup_index)
+        self.assertLess(cleanup_index, upload_index)
+        self.assertEqual(setup["id"], "macos_signing")
+        self.assertIn("macos-signing-keychain.sh setup", setup["run"])
+        for name in (
+            "MACOS_CERTIFICATE_NAME",
+            "MACOS_CERTIFICATE_P12",
+            "MACOS_CERTIFICATE_PWD",
+            "MACOS_KEYCHAIN_PASSWORD",
+        ):
+            self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
+        self.assertEqual(
+            build["env"]["MACOS_KEYCHAIN_PATH"],
+            "${{ steps.macos_signing.outputs.keychain_path }}",
+        )
+        self.assertEqual(cleanup["if"], "always()")
+        self.assertEqual(
+            cleanup["env"]["MACOS_SIGNING_STATE_PATH"],
+            "${{ steps.macos_signing.outputs.state_path }}",
+        )
+        self.assertIn("macos-signing-keychain.sh", cleanup["run"])
+        self.assertIn(" cleanup", cleanup["run"])
 
     def test_reusable_browser_build_records_the_checked_out_source(self):
         workflow = self.load_workflow("build-browseros.yml")
@@ -736,6 +792,16 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertIn(
             ".github/workflows/build-browseros.yml",
+            pull_request_paths,
+        )
+
+    def test_macos_signing_helper_changes_trigger_build_system_tests(self):
+        test_workflow = self.load_workflow("bos-build-tests.yml")
+        triggers = test_workflow.get("on", test_workflow.get(True))
+        pull_request_paths = triggers["pull_request"]["paths"]
+
+        self.assertIn(
+            ".github/scripts/macos-signing-keychain.sh",
             pull_request_paths,
         )
 
@@ -1264,6 +1330,59 @@ class NightlyWorkflowTest(unittest.TestCase):
                     "${{ needs.reserve.outputs.onboarding_version }}",
                 )
 
+    def test_nightlies_setup_ci_keychain_before_build_and_cleanup_always(self):
+        for workflow_name, config in self.NIGHTLIES.items():
+            workflow = self.load_workflow(workflow_name)
+            steps = workflow["jobs"]["build"]["steps"]
+            setup_index = next(
+                index
+                for index, step in enumerate(steps)
+                if step.get("name") == "Import macOS signing certificate"
+            )
+            build_index = next(
+                index
+                for index, step in enumerate(steps)
+                if step.get("name") == config["build_step"]
+            )
+            cleanup_index = next(
+                index
+                for index, step in enumerate(steps)
+                if step.get("name") == "Clean up macOS signing keychain"
+            )
+            upload_index = next(
+                index
+                for index, step in enumerate(steps)
+                if step.get("name") == "Upload DMG artifact"
+            )
+            setup = steps[setup_index]
+            build = steps[build_index]
+            cleanup = steps[cleanup_index]
+
+            with self.subTest(workflow=workflow_name):
+                self.assertLess(setup_index, build_index)
+                self.assertLess(build_index, cleanup_index)
+                self.assertLess(cleanup_index, upload_index)
+                self.assertEqual(setup["id"], "macos_signing")
+                self.assertIn("macos-signing-keychain.sh setup", setup["run"])
+                for name in (
+                    "MACOS_CERTIFICATE_NAME",
+                    "MACOS_CERTIFICATE_P12",
+                    "MACOS_CERTIFICATE_PWD",
+                    "MACOS_KEYCHAIN_PASSWORD",
+                ):
+                    self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
+                self.assertEqual(
+                    build["env"]["MACOS_KEYCHAIN_PATH"],
+                    "${{ steps.macos_signing.outputs.keychain_path }}",
+                )
+                self.assertEqual(cleanup["if"], "always()")
+                self.assertEqual(
+                    cleanup["env"]["MACOS_SIGNING_STATE_PATH"],
+                    "${{ steps.macos_signing.outputs.state_path }}",
+                )
+                self.assertIn("macos-signing-keychain.sh", cleanup["run"])
+                self.assertIn(" cleanup", cleanup["run"])
+
     def test_nightlies_publish_rolling_release_after_the_build(self):
         for workflow_name, config in self.NIGHTLIES.items():
             workflow = self.load_workflow(workflow_name)
@@ -1386,6 +1505,235 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertIn(".github/workflows/nightly-browseros.yml", paths)
         self.assertIn(".github/workflows/nightly-browserclaw.yml", paths)
         self.assertIn(".github/workflows/reserve-nightly-browser-version.yml", paths)
+
+
+@unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
+class MacOSSigningKeychainHelperTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.runner_temp = self.root / "runner"
+        self.runner_temp.mkdir()
+        self.bin_dir = self.root / "bin"
+        self.bin_dir.mkdir()
+        self.security_log = self.root / "security.log"
+        self.github_env = self.root / "github_env"
+        self.github_output = self.root / "github_output"
+        self.original_keychain = self.root / "login.keychain-db"
+        self.original_default = self.original_keychain
+        self._write_fake_security()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_fake_security(self):
+        security = self.bin_dir / "security"
+        security.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$SECURITY_LOG"
+cmd="$1"
+shift || true
+last="${@: -1}"
+case "$cmd" in
+  list-keychains)
+    if [[ " $* " == *" -s "* ]]; then
+      exit 0
+    fi
+    printf '"%s"\\n' "$ORIGINAL_KEYCHAIN"
+    if [ -n "${EXTRA_KEYCHAIN:-}" ]; then
+      printf '"%s"\\n' "$EXTRA_KEYCHAIN"
+    fi
+    ;;
+  default-keychain)
+    if [[ " $* " == *" -s "* ]]; then
+      exit 0
+    fi
+    printf '"%s"\\n' "$ORIGINAL_DEFAULT_KEYCHAIN"
+    ;;
+  create-keychain)
+    touch "$last"
+    ;;
+  delete-keychain)
+    rm -f "$last"
+    ;;
+  import)
+    if [ "${SECURITY_FAIL_IMPORT:-}" = "1" ]; then
+      exit 42
+    fi
+    ;;
+  find-identity)
+    printf '  1) ABC "%s"\\n' "$MACOS_CERTIFICATE_NAME"
+    ;;
+  unlock-keychain|set-keychain-settings|set-key-partition-list|show-keychain-info|lock-keychain)
+    ;;
+esac
+"""
+        )
+        security.chmod(0o755)
+
+    def _env(self, **overrides):
+        env = os.environ.copy()
+        env.update(
+            {
+                "GITHUB_ENV": str(self.github_env),
+                "GITHUB_OUTPUT": str(self.github_output),
+                "GITHUB_RUN_ATTEMPT": "4",
+                "GITHUB_RUN_ID": "123",
+                "MACOS_CERTIFICATE_NAME": "Developer ID Application",
+                "MACOS_CERTIFICATE_P12": "ZmFrZS1wMTI=",
+                "MACOS_CERTIFICATE_PWD": "p12-password",
+                "MACOS_KEYCHAIN_PASSWORD": "keychain-password",
+                "ORIGINAL_DEFAULT_KEYCHAIN": str(self.original_default),
+                "ORIGINAL_KEYCHAIN": str(self.original_keychain),
+                "PATH": f"{self.bin_dir}{os.pathsep}{env['PATH']}",
+                "RUNNER_TEMP": str(self.runner_temp),
+                "SECURITY_LOG": str(self.security_log),
+            }
+        )
+        env.update(overrides)
+        return env
+
+    def _run_helper(self, command, **env_overrides):
+        return subprocess.run(
+            ["bash", str(MACOS_SIGNING_HELPER), command],
+            capture_output=True,
+            env=self._env(**env_overrides),
+            text=True,
+        )
+
+    def _outputs(self):
+        values = {}
+        for line in self.github_output.read_text(encoding="utf-8").splitlines():
+            name, value = line.split("=", 1)
+            values[name] = value
+        return values
+
+    def test_setup_imports_p12_and_cleanup_restores_keychain_state(self):
+        result = self._run_helper("setup")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        outputs = self._outputs()
+        keychain_path = Path(outputs["keychain_path"])
+        state_path = Path(outputs["state_path"])
+        cert_path = self.runner_temp / "browseros-signing-cert-123-4.p12"
+
+        self.assertTrue(keychain_path.exists())
+        self.assertTrue(state_path.exists())
+        self.assertFalse(cert_path.exists())
+        self.assertIn(
+            f"MACOS_KEYCHAIN_PATH={keychain_path}",
+            self.github_env.read_text(encoding="utf-8"),
+        )
+
+        cleanup = self._run_helper(
+            "cleanup",
+            MACOS_SIGNING_STATE_PATH=str(state_path),
+        )
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
+
+        log = self.security_log.read_text(encoding="utf-8")
+        self.assertIn(f"import {self.runner_temp}", log)
+        self.assertIn("set-key-partition-list", log)
+        self.assertIn(f"find-identity -v -p codesigning {keychain_path}", log)
+        self.assertIn(
+            f"list-keychains -d user -s {keychain_path} {self.original_keychain}",
+            log,
+        )
+        self.assertIn(
+            f"default-keychain -d user -s {self.original_keychain}",
+            log,
+        )
+        self.assertFalse(keychain_path.exists())
+        self.assertFalse(state_path.exists())
+
+    def test_setup_failure_cleans_partial_keychain_and_certificate(self):
+        result = self._run_helper("setup", SECURITY_FAIL_IMPORT="1")
+
+        self.assertNotEqual(result.returncode, 0)
+        keychain_path = self.runner_temp / "browseros-ci-signing-123-4.keychain-db"
+        cert_path = self.runner_temp / "browseros-signing-cert-123-4.p12"
+        state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
+        log = self.security_log.read_text(encoding="utf-8")
+
+        self.assertIn(f"lock-keychain {keychain_path}", log)
+        self.assertIn(f"delete-keychain {keychain_path}", log)
+        self.assertFalse(keychain_path.exists())
+        self.assertFalse(cert_path.exists())
+        self.assertFalse(state_path.exists())
+
+    def test_setup_rejects_unowned_state_path(self):
+        unowned_state_path = self.root / "outside-state.env"
+
+        result = self._run_helper(
+            "setup",
+            MACOS_SIGNING_STATE_PATH=str(unowned_state_path),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Unexpected macOS signing state path",
+            result.stdout + result.stderr,
+        )
+        self.assertFalse(unowned_state_path.exists())
+
+    def test_setup_first_cleans_previous_recorded_state(self):
+        old_keychain_path = self.runner_temp / "browseros-ci-signing-old-1.keychain-db"
+        old_cert_path = self.runner_temp / "browseros-signing-cert-old-1.p12"
+        old_originals_path = self.runner_temp / "browseros-ci-original-keychains-old-1.txt"
+        old_state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
+        old_original = self.root / "old-login.keychain-db"
+        old_keychain_path.write_text("old-keychain")
+        old_cert_path.write_text("old-cert")
+        old_originals_path.write_text(f"{old_original}\n", encoding="utf-8")
+        old_state_path.write_text(
+            "\n".join(
+                (
+                    f"cert_path={old_cert_path}",
+                    f"keychain_path={old_keychain_path}",
+                    f"original_default_keychain={old_original}",
+                    f"original_keychains_file={old_originals_path}",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self._run_helper("setup")
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        log = self.security_log.read_text(encoding="utf-8")
+        self.assertIn(f"lock-keychain {old_keychain_path}", log)
+        self.assertIn(f"delete-keychain {old_keychain_path}", log)
+        self.assertIn(f"default-keychain -d user -s {old_original}", log)
+        self.assertFalse(old_keychain_path.exists())
+        self.assertFalse(old_cert_path.exists())
+        self.assertFalse(old_originals_path.exists())
+        self.assertTrue(old_state_path.exists())
+
+    def test_setup_filters_stale_ci_keychains_from_restored_search_list(self):
+        stale_keychain = self.runner_temp / "browseros-ci-signing-stale-1.keychain-db"
+        stale_keychain.write_text("stale")
+
+        result = self._run_helper("setup", EXTRA_KEYCHAIN=str(stale_keychain))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        outputs = self._outputs()
+        cleanup = self._run_helper(
+            "cleanup",
+            MACOS_SIGNING_STATE_PATH=outputs["state_path"],
+        )
+
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
+        log = self.security_log.read_text(encoding="utf-8")
+        self.assertIn(f"delete-keychain {stale_keychain}", log)
+        self.assertNotIn(
+            f"list-keychains -d user -s {outputs['keychain_path']} {self.original_keychain} {stale_keychain}",
+            log,
+        )
+        self.assertNotIn(
+            f"list-keychains -d user -s {self.original_keychain} {stale_keychain}",
+            log,
+        )
+        self.assertFalse(stale_keychain.exists())
 
 
 class ReleaseDocumentationTest(unittest.TestCase):

@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_path="${MACOS_SIGNING_STATE_PATH:-${RUNNER_TEMP:-}/browseros-ci-signing-keychain-state.env}"
+
+owned_state_path() {
+  [ -n "${RUNNER_TEMP:-}" ] \
+    && [ "$1" = "$RUNNER_TEMP/browseros-ci-signing-keychain-state.env" ]
+}
+
+require_owned_state_path() {
+  if ! owned_state_path "$state_path"; then
+    echo "::error::Unexpected macOS signing state path: $state_path"
+    exit 1
+  fi
+}
+
+owned_keychain_path() {
+  case "$1" in
+    "$RUNNER_TEMP"/browseros-ci-signing-*.keychain-db) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+owned_cert_path() {
+  case "$1" in
+    "$RUNNER_TEMP"/browseros-signing-cert-*.p12) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+owned_keychains_file() {
+  case "$1" in
+    "$RUNNER_TEMP"/browseros-ci-original-keychains-*.txt) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_keychain_output() {
+  sed -e 's/^[[:space:]]*//' -e 's/^"//' -e 's/"$//'
+}
+
+require_env() {
+  local missing=()
+  local name
+  for name in "$@"; do
+    if [ -z "${!name:-}" ]; then
+      missing+=("$name")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "::error::Missing required secret(s): ${missing[*]}"
+    exit 1
+  fi
+}
+
+append_env() {
+  local path="$1"
+  local name="$2"
+  local value="$3"
+  if [ -n "$path" ]; then
+    printf '%s=%s\n' "$name" "$value" >> "$path"
+  fi
+}
+
+decode_certificate() {
+  local output="$1"
+  if printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$output" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s' "$MACOS_CERTIFICATE_P12" | base64 -D > "$output"
+}
+
+cleanup_after_setup_error() {
+  local status="$?"
+  cleanup_keychain || true
+  exit "$status"
+}
+
+setup_keychain() {
+  if [ -z "${RUNNER_TEMP:-}" ]; then
+    echo "::error::RUNNER_TEMP is required"
+    exit 1
+  fi
+  require_owned_state_path
+  cleanup_keychain
+  require_env \
+    MACOS_CERTIFICATE_NAME \
+    MACOS_CERTIFICATE_P12 \
+    MACOS_CERTIFICATE_PWD \
+    MACOS_KEYCHAIN_PASSWORD
+
+  local run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+  local cert_path="$RUNNER_TEMP/browseros-signing-cert-$run_tag.p12"
+  local keychain_path="$RUNNER_TEMP/browseros-ci-signing-$run_tag.keychain-db"
+  local original_keychains_file="$RUNNER_TEMP/browseros-ci-original-keychains-$run_tag.txt"
+  local listed_keychains_file="$RUNNER_TEMP/browseros-ci-listed-keychains-$run_tag.txt"
+  local original_default_keychain
+
+  security list-keychains -d user 2>/dev/null \
+    | normalize_keychain_output > "$listed_keychains_file" || : > "$listed_keychains_file"
+  : > "$original_keychains_file"
+  local listed_keychain
+  while IFS= read -r listed_keychain; do
+    if [ -z "$listed_keychain" ]; then
+      continue
+    fi
+    if owned_keychain_path "$listed_keychain"; then
+      security lock-keychain "$listed_keychain" >/dev/null 2>&1 || true
+      security delete-keychain "$listed_keychain" >/dev/null 2>&1 || rm -f "$listed_keychain"
+      continue
+    fi
+    printf '%s\n' "$listed_keychain" >> "$original_keychains_file"
+  done < "$listed_keychains_file"
+  rm -f "$listed_keychains_file"
+
+  original_default_keychain="$(
+    security default-keychain -d user 2>/dev/null \
+      | normalize_keychain_output || true
+  )"
+  if owned_keychain_path "$original_default_keychain"; then
+    security lock-keychain "$original_default_keychain" >/dev/null 2>&1 || true
+    security delete-keychain "$original_default_keychain" >/dev/null 2>&1 || rm -f "$original_default_keychain"
+    original_default_keychain=""
+  fi
+
+  {
+    printf 'cert_path=%s\n' "$cert_path"
+    printf 'keychain_path=%s\n' "$keychain_path"
+    printf 'original_default_keychain=%s\n' "$original_default_keychain"
+    printf 'original_keychains_file=%s\n' "$original_keychains_file"
+  } > "$state_path"
+
+  trap cleanup_after_setup_error ERR
+
+  rm -f "$cert_path"
+  security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
+  rm -f "$keychain_path"
+
+  decode_certificate "$cert_path"
+  security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+  security set-keychain-settings -lut 21600 "$keychain_path"
+  security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+  security import "$cert_path" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$keychain_path"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+
+  local search_keychains=("$keychain_path")
+  local original_keychain
+  while IFS= read -r original_keychain; do
+    if [ -n "$original_keychain" ]; then
+      search_keychains+=("$original_keychain")
+    fi
+  done < "$original_keychains_file"
+  security list-keychains -d user -s "${search_keychains[@]}"
+  security default-keychain -d user -s "$keychain_path"
+  security show-keychain-info "$keychain_path" >/dev/null
+
+  local identities
+  identities="$(security find-identity -v -p codesigning "$keychain_path")"
+  if ! grep -Fq "$MACOS_CERTIFICATE_NAME" <<< "$identities"; then
+    echo "::error::Imported keychain does not expose the configured macOS signing identity"
+    return 1
+  fi
+  rm -f "$cert_path"
+
+  append_env "${GITHUB_ENV:-}" MACOS_KEYCHAIN_PATH "$keychain_path"
+  append_env "${GITHUB_ENV:-}" MACOS_SIGNING_STATE_PATH "$state_path"
+  append_env "${GITHUB_OUTPUT:-}" keychain_path "$keychain_path"
+  append_env "${GITHUB_OUTPUT:-}" state_path "$state_path"
+  trap - ERR
+}
+
+cleanup_keychain() {
+  if [ -z "$state_path" ] || [ ! -f "$state_path" ]; then
+    return 0
+  fi
+  if ! owned_state_path "$state_path"; then
+    echo "::warning::Ignoring unexpected macOS signing state path: $state_path"
+    return 0
+  fi
+
+  local cert_path=""
+  local keychain_path=""
+  local original_default_keychain=""
+  local original_keychains_file=""
+  local state_line
+  while IFS= read -r state_line; do
+    case "$state_line" in
+      cert_path=*) cert_path="${state_line#cert_path=}" ;;
+      keychain_path=*) keychain_path="${state_line#keychain_path=}" ;;
+      original_default_keychain=*) original_default_keychain="${state_line#original_default_keychain=}" ;;
+      original_keychains_file=*) original_keychains_file="${state_line#original_keychains_file=}" ;;
+    esac
+  done < "$state_path"
+
+  local original_keychains=()
+  local original_keychain
+  if owned_keychains_file "$original_keychains_file" && [ -f "$original_keychains_file" ]; then
+    while IFS= read -r original_keychain; do
+      if [ -n "$original_keychain" ]; then
+        original_keychains+=("$original_keychain")
+      fi
+    done < "$original_keychains_file"
+  fi
+  if owned_keychains_file "$original_keychains_file" && [ -f "$original_keychains_file" ]; then
+    security list-keychains -d user -s "${original_keychains[@]}" || true
+  fi
+  if [ -n "$original_default_keychain" ]; then
+    security default-keychain -d user -s "$original_default_keychain" || true
+  elif [ "${#original_keychains[@]}" -gt 0 ]; then
+    security default-keychain -d user -s "${original_keychains[0]}" || true
+  fi
+
+  if owned_keychain_path "$keychain_path"; then
+    security lock-keychain "$keychain_path" >/dev/null 2>&1 || true
+    security delete-keychain "$keychain_path" >/dev/null 2>&1 || rm -f "$keychain_path"
+  fi
+  if owned_cert_path "$cert_path"; then
+    rm -f "$cert_path"
+  fi
+  if owned_keychains_file "$original_keychains_file"; then
+    rm -f "$original_keychains_file"
+  fi
+  rm -f "$state_path"
+}
+
+case "${1:-}" in
+  setup)
+    setup_keychain
+    ;;
+  cleanup)
+    cleanup_keychain
+    ;;
+  *)
+    echo "usage: $0 setup|cleanup" >&2
+    exit 2
+    ;;
+esac

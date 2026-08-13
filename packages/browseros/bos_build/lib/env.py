@@ -20,6 +20,8 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
         "ESIGNER_TOTP_SECRET",
         "GITHUB_TOKEN",
         "GH_TOKEN",
+        "MACOS_CERTIFICATE_P12",
+        "MACOS_CERTIFICATE_PWD",
         "MACOS_KEYCHAIN_PASSWORD",
         "POSTHOG_API_KEY",
         "PROD_MACOS_NOTARIZATION_PWD",
@@ -123,6 +125,11 @@ class EnvConfig:
     def macos_keychain_password(self) -> Optional[str]:
         """macOS login keychain password (used to unlock keychain on build servers)"""
         return os.environ.get("MACOS_KEYCHAIN_PASSWORD")
+
+    @property
+    def macos_keychain_path(self) -> Optional[str]:
+        """Explicit macOS signing keychain path."""
+        return os.environ.get("MACOS_KEYCHAIN_PATH")
 
     @property
     def code_sign_tool_path(self) -> Optional[str]:
