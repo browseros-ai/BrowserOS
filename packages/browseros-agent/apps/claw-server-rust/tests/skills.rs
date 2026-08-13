@@ -1,0 +1,198 @@
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
+use claw_server_rust::{AppState, build_router, config::Config};
+use serde_json::{Value, json};
+use std::{path::PathBuf, sync::Arc, time::Duration};
+use tempfile::TempDir;
+use tower::ServiceExt;
+
+struct TestApp {
+    router: Router,
+    _dir: TempDir,
+    root: PathBuf,
+}
+
+async fn test_app() -> anyhow::Result<TestApp> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("browserclaw");
+    let config = Arc::new(Config {
+        server_port: 9200,
+        cdp_port: 49361,
+        proxy_port: None,
+        resources_dir: dir.path().join("resources"),
+        browserclaw_dir: root.clone(),
+        session_idle: Duration::from_secs(300),
+        session_retention: Duration::from_secs(7_200),
+        session_sweep_interval: Duration::from_secs(60),
+        replay_retention_days: 7,
+        dev_mode: false,
+        auth_token: None,
+    });
+    let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+    Ok(TestApp {
+        router: build_router(state),
+        _dir: dir,
+        root,
+    })
+}
+
+async fn request(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> anyhow::Result<(StatusCode, Value)> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost");
+    let request_body = if let Some(body) = body {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+        Body::from(body.to_string())
+    } else {
+        Body::empty()
+    };
+    let response = router.clone().oneshot(builder.body(request_body)?).await?;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
+    Ok((status, value))
+}
+
+#[tokio::test]
+async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    let (status, list) = request(router, "GET", "/api/v1/skills", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"].as_array().map(Vec::len), Some(0));
+
+    let (status, created) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({
+            "name": "inbox-sweep",
+            "description": "Check the inbox and draft replies",
+            "site": "mail.google.com",
+            "steps": ["Open the inbox", "Draft replies", "Leave drafts unsent"],
+            "learnedNotes": ["Read the DOM snapshot, not screenshots"]
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "inbox-sweep");
+    assert_eq!(created["origin"], "manual");
+    assert_eq!(created["version"].as_i64(), Some(1));
+    assert_eq!(created["runCount"].as_i64(), Some(0));
+    assert_eq!(created["site"], "mail.google.com");
+
+    let skill_md = app.root.join("skills").join("inbox-sweep").join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.contains("name: inbox-sweep"));
+    assert!(content.contains("tools: browseros-neo"));
+    assert!(content.contains("## Steps"));
+    assert!(content.contains("Read the DOM snapshot, not screenshots"));
+
+    let (status, detail) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["skill"]["name"], "inbox-sweep");
+    assert!(
+        detail["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("name: inbox-sweep"))
+    );
+    assert_eq!(detail["runs"].as_array().map(Vec::len), Some(0));
+
+    let (_, list) = request(router, "GET", "/api/v1/skills", None).await?;
+    assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
+
+    let (status, runs) = request(router, "GET", "/api/v1/skills/inbox-sweep/runs", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs["items"].as_array().map(Vec::len), Some(0));
+
+    let (status, updated) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/inbox-sweep",
+        Some(json!({
+            "description": "Updated description",
+            "body": "---\nname: inbox-sweep\ndescription: Updated\ntools: browseros-neo\n---\n\n## Steps\n1. A brand new step\n"
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["skill"]["version"].as_i64(), Some(2));
+    assert_eq!(updated["skill"]["description"], "Updated description");
+    assert!(
+        updated["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("A brand new step"))
+    );
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.contains("A brand new step"));
+
+    let (status, _) = request(router, "DELETE", "/api/v1/skills/inbox-sweep", None).await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!app.root.join("skills").join("inbox-sweep").exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "Bad Name", "description": "invalid slug" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "browserclaw", "description": "reserved name" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "daily-brief", "description": "first" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "daily-brief", "description": "duplicate" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = request(router, "GET", "/api/v1/skills/missing", None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    Ok(())
+}

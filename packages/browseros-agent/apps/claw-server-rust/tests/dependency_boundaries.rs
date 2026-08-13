@@ -430,6 +430,7 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("recordings", "browser")
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")
+            | ("skills", "harness")
     )
 }
 

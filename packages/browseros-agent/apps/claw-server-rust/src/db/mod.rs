@@ -4,6 +4,7 @@ mod migration;
 pub mod recording_index;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
+pub mod skills;
 
 pub use audit_log::AuditLog;
 pub use recording_index::{
@@ -12,6 +13,7 @@ pub use recording_index::{
 };
 pub use session_efficiency_stats::SessionEfficiencyStatsRepository;
 pub use session_tabs::SessionTabLedger;
+pub use skills::SkillsRepository;
 
 use crate::error::{AppError, AppResult, IoPath};
 use migration::Migrator;
