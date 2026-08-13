@@ -12,6 +12,7 @@ from .candidate import GitHubCandidateBackend, candidate_record_from_pull_reques
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_version_from_package,
     normalize_component_version,
     resolve_standalone_version,
 )
@@ -267,7 +268,7 @@ class GitComponentReleaseOperations:
             value = match.group(1) if match else None
         if not isinstance(value, str):
             raise ValueError(f"Missing version in {spec.manifest_path} at {ref}")
-        return normalize_component_version(component, value)
+        return component_version_from_package(component, value)
 
     def tag_state(self, tag: str) -> TagState | None:
         result = subprocess.run(

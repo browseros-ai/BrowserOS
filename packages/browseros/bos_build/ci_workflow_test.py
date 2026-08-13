@@ -1338,8 +1338,7 @@ class NightlyWorkflowTest(unittest.TestCase):
             'git merge-base --is-ancestor "$TRIGGER_SHA" origin/main',
             "bump_version.py --mode offset+build",
             "gh pr create",
-            "gh pr merge",
-            "--match-head-commit",
+            "merge-release-pr.sh",
             "'.mergeCommit.oid // \"\"'",
             'test "$merged_version" = "$version"',
             "onboarding_version=\"$(jq -er '.version' packages/browseros-agent/apps/claw-onboard/package.json)\"",
@@ -1356,6 +1355,14 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertEqual(
             reserve_workflow["permissions"],
             {"contents": "write", "pull-requests": "write"},
+        )
+        merge_helper = (
+            REPO_ROOT / "packages/browseros-agent/scripts/release/merge-release-pr.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('--match-head-commit "$expected_head"', merge_helper)
+        self.assertLess(
+            merge_helper.index('gh "${merge_args[@]}"'),
+            merge_helper.index('gh "${merge_args[@]}" --auto'),
         )
 
     def test_nightly_profile_downloads_published_resources_once(self):

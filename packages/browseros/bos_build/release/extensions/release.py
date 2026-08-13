@@ -432,13 +432,10 @@ class ExtensionReleaseModule(Step):
                 chrome_binary=chrome,
                 stamp_version=True,
             )
-            if isinstance(spec.source, InRepoSource):
-                touched = spec.manifest_path
-                if spec.env:
-                    touched += f" and {spec.env_dir or '.'}/.env"
+            if isinstance(spec.source, InRepoSource) and spec.env:
                 log_warning(
-                    f"stamped {touched} in the working tree — "
-                    "revert them if this was a local test run"
+                    f"wrote {spec.env_dir or '.'}/.env in the working tree — "
+                    "remove it if this was a local test run"
                 )
             upload_bound_extension_crx(
                 client,

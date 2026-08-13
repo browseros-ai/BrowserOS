@@ -788,7 +788,7 @@ jobs:
               browserclaw) manifest="packages/browseros-agent/apps/claw-app/package.json" ;;
               *) continue ;;
             esac
-            current="$(jq -er '.version' "$GITHUB_WORKSPACE/$manifest")"
+            current="$(uv run browseros release component read --component "$name")"
             if [ "$current" != "$VERSION" ]; then
               newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
               if [ "$newest" = "$current" ]; then
@@ -808,15 +808,16 @@ jobs:
           scope="${{ inputs.extension }}"
           branch="chore-bump-${scope}-extension-v${VERSION}"
           if git -C "$GITHUB_WORKSPACE" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
-            if [ -z "$pr" ]; then
-              gh pr create \
+            pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+            if [ -z "$pr_url" ]; then
+              pr_url="$(gh pr create \
                 --title "chore: bump ${scope} extension version to ${VERSION}" \
                 --body "Reflects the published extension release at version ${VERSION}." \
                 --base "$DEFAULT_BRANCH" \
-                --head "$branch"
+                --head "$branch")"
             fi
-            gh pr merge "$branch" --squash --auto
+            head_sha="$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')"
+            "$GITHUB_WORKSPACE/packages/browseros-agent/scripts/release/merge-release-pr.sh" "$pr_url" "$head_sha"
             exit 0
           fi
 
@@ -825,10 +826,11 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout -b "$branch"
           git -C "$GITHUB_WORKSPACE" add -- "${paths[@]}"
           git -C "$GITHUB_WORKSPACE" commit -m "chore: bump ${scope} extension version to ${VERSION}"
+          head_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           git -C "$GITHUB_WORKSPACE" push origin "$branch"
-          gh pr create \
+          pr_url="$(gh pr create \
             --title "chore: bump ${scope} extension version to ${VERSION}" \
             --body "Reflects the published extension release at version ${VERSION}." \
             --base "$DEFAULT_BRANCH" \
-            --head "$branch"
-          gh pr merge "$branch" --squash --auto
+            --head "$branch")"
+          "$GITHUB_WORKSPACE/packages/browseros-agent/scripts/release/merge-release-pr.sh" "$pr_url" "$head_sha"

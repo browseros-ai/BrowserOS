@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
+from ..components import component_version_from_package, normalize_component_version
 from .crx import pack_crx
-from .specs import ExtensionSpec
+from .specs import ExtensionSpec, InRepoSource
 from .workspace import (
     require_env,
     resolve_source,
@@ -80,12 +81,23 @@ def build_extension_crx(
         branch_override=branch_override,
     )
     manifest_path = source_root / spec.manifest_path
-    if stamp_version:
+    in_repo = isinstance(spec.source, InRepoSource)
+    if stamp_version and not in_repo:
         update_manifest_version(manifest_path, version)
-    elif _manifest_version(manifest_path) != version:
-        raise ValueError(
-            f"Extension '{spec.name}' source version does not match requested version {version}"
+    elif not stamp_version:
+        source_version = _manifest_version(manifest_path)
+        expected = (
+            normalize_component_version(spec.name, version) if in_repo else version
         )
+        actual = (
+            component_version_from_package(spec.name, source_version)
+            if in_repo
+            else source_version
+        )
+        if actual != expected:
+            raise ValueError(
+                f"Extension '{spec.name}' source version does not match requested version {version}"
+            )
     if spec.env:
         env_dir = source_root / spec.env_dir if spec.env_dir else source_root
         write_env_file(env_dir, spec.env, required_names=spec.required_env)
@@ -94,7 +106,10 @@ def build_extension_crx(
     run_command(spec.build, source_root)
 
     dist_path = source_root / spec.dist_path
-    manifest = json.loads((dist_path / "manifest.json").read_text(encoding="utf-8"))
+    built_manifest_path = dist_path / "manifest.json"
+    if in_repo:
+        update_manifest_version(built_manifest_path, version)
+    manifest = json.loads(built_manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise RuntimeError(f"Extension output manifest must be an object: {dist_path}")
     _validate_built_manifest(spec, manifest, dist_path, version)

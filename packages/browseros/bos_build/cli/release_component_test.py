@@ -179,6 +179,29 @@ class ComponentReleaseCliTest(unittest.TestCase):
             self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.128")
             self.assertIn('"version": "0.0.128"', lockfile.read_text())
 
+    def test_read_decodes_semver_safe_chrome_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "packages/browseros-agent/apps/app/package.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"version": "0.0.126+7"}))
+
+            result = runner.invoke(
+                app,
+                [
+                    "release",
+                    "component",
+                    "read",
+                    "--component",
+                    "agent",
+                    "--repo-root",
+                    str(root),
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(result.output.strip(), "0.0.126.7")
+
 
 if __name__ == "__main__":
     unittest.main()

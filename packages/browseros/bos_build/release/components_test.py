@@ -8,6 +8,7 @@ from pathlib import Path
 
 from bos_build.release.components import (
     AllocationRecord,
+    read_component_version,
     components_for_candidate,
     resolve_candidate_versions,
     resolve_standalone_version,
@@ -276,9 +277,34 @@ class ComponentStampingTest(unittest.TestCase):
             changed = stamp_component(root, "agent", "0.0.101.0")
 
             self.assertEqual(changed, (app, lock))
-            self.assertEqual(json.loads(app.read_text())["version"], "0.0.101.0")
-            self.assertIn('"version": "0.0.101.0"', lock.read_text())
+            self.assertEqual(json.loads(app.read_text())["version"], "0.0.101")
+            self.assertIn('"version": "0.0.101"', lock.read_text())
             self.assertIn(before_server, lock.read_text())
+            self.assertEqual(read_component_version(root, "agent"), "0.0.101.0")
+
+    def test_chrome_build_component_uses_semver_build_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = root / "packages/browseros-agent/apps/app/package.json"
+            lock = root / "packages/browseros-agent/bun.lock"
+            app.parent.mkdir(parents=True)
+            app.write_text(json.dumps({"version": "0.0.100"}))
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(
+                "{\n"
+                '  "workspaces": {\n'
+                '    "apps/app": {\n'
+                '      "version": "0.0.100",\n'
+                "    },\n"
+                "  },\n"
+                "}\n"
+            )
+
+            stamp_component(root, "agent", "0.0.101.7")
+
+            self.assertEqual(json.loads(app.read_text())["version"], "0.0.101+7")
+            self.assertIn('"version": "0.0.101+7"', lock.read_text())
+            self.assertEqual(read_component_version(root, "agent"), "0.0.101.7")
 
     def test_cargo_component_updates_only_matching_package_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -290,6 +290,18 @@ class StandaloneReleaseTest(unittest.TestCase):
 
 
 class ComponentAllocationDiscoveryTest(unittest.TestCase):
+    def test_read_version_decodes_semver_safe_chrome_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp), "browseros-ai/BrowserOS"
+            )
+            with mock.patch.object(
+                operations, "_git", return_value='{"version":"0.0.126+7"}'
+            ):
+                version = operations.read_version("agent", "origin/main")
+
+        self.assertEqual(version, "0.0.126.7")
+
     def test_r2_retry_uses_requested_source_with_older_release_history(self) -> None:
         key = "artifacts/server/0.0.130/browseros-server-resources-linux-x64.zip"
         client = mock.MagicMock()

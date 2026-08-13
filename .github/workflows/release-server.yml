@@ -508,11 +508,12 @@ jobs:
             --version "$VERSION"
           if git diff --quiet -- "$package_json" "$lock"; then exit 0; fi
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
-            if [ -z "$pr" ]; then
-              gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch"
+            pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+            if [ -z "$pr_url" ]; then
+              pr_url="$(gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch")"
             fi
-            gh pr merge "$branch" --squash --auto
+            head_sha="$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')"
+            packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -520,6 +521,7 @@ jobs:
           git checkout -b "$branch"
           git add "$package_json" "$lock"
           git commit -m "chore: bump server version to ${VERSION}"
+          head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"
-          gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch"
-          gh pr merge "$branch" --squash --auto
+          pr_url="$(gh pr create --title "chore: bump server version to ${VERSION}" --body "Reflects the published agent-server/v${VERSION} resources." --base "$DEFAULT_BRANCH" --head "$branch")"
+          packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"

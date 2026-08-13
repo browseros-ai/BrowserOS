@@ -13,6 +13,9 @@ AllocationKind = Literal["tag", "release", "candidate", "resource"]
 
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _CHROME_RE = re.compile(r"^\d+(?:\.\d+){0,3}$")
+_CHROME_PACKAGE_RE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+(0|[1-9]\d*))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,30 @@ def increment_component_version(component_id: str, version: str) -> str:
     if len(parts) == 4:
         parts[3] = 0
     return ".".join(str(part) for part in parts)
+
+
+def component_package_version(component_id: str, version: str) -> str:
+    """Encode a release version for its source package manifest."""
+    normalized = normalize_component_version(component_id, version)
+    if component_by_id(component_id).version_scheme == "semver":
+        return normalized
+    major, minor, patch, build = normalized.split(".")
+    base = f"{major}.{minor}.{patch}"
+    return base if build == "0" else f"{base}+{build}"
+
+
+def component_version_from_package(component_id: str, version: str) -> str:
+    """Decode a source package version into its release identity."""
+    if component_by_id(component_id).version_scheme == "semver":
+        return normalize_component_version(component_id, version)
+    match = _CHROME_PACKAGE_RE.fullmatch(version)
+    if match is not None:
+        major, minor, patch, build = match.groups()
+        return normalize_component_version(
+            component_id,
+            f"{major}.{minor}.{patch}.{build or '0'}",
+        )
+    return normalize_component_version(component_id, version)
 
 
 def _version_key(component_id: str, version: str) -> tuple[int, ...]:
@@ -336,7 +363,7 @@ def read_component_version(repo_root: Path, component_id: str) -> str:
         version = match.group(1) if match else None
     if not isinstance(version, str):
         raise ValueError(f"Missing version in {path}")
-    return normalize_component_version(component_id, version)
+    return component_version_from_package(component_id, version)
 
 
 def _stamp_json_manifest(path: Path, version: str) -> None:
@@ -411,8 +438,9 @@ def stamp_component(repo_root: Path, component_id: str, version: str) -> tuple[P
     manifest = repo_root / spec.manifest_path
     lockfile = repo_root / spec.lockfile_path
     if manifest.suffix == ".json":
-        _stamp_json_manifest(manifest, normalized)
-        _stamp_bun_lock(lockfile, spec.workspace_path, normalized)
+        package_version = component_package_version(component_id, normalized)
+        _stamp_json_manifest(manifest, package_version)
+        _stamp_bun_lock(lockfile, spec.workspace_path, package_version)
     else:
         manifest.write_text(
             _replace_package_version(

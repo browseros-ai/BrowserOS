@@ -926,15 +926,16 @@ jobs:
           if git diff --quiet -- "$cargo_toml" "$lock"; then exit 0; fi
 
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
-            if [ -z "$pr" ]; then
-              gh pr create \
+            pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+            if [ -z "$pr_url" ]; then
+              pr_url="$(gh pr create \
                 --title "chore: bump Claw server version to ${VERSION}" \
                 --body "Reflects the published claw-server/v${VERSION} resources." \
                 --base "$DEFAULT_BRANCH" \
-                --head "$branch"
+                --head "$branch")"
             fi
-            gh pr merge "$branch" --squash --auto
+            head_sha="$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')"
+            packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"
             exit 0
           fi
 
@@ -943,10 +944,11 @@ jobs:
           git checkout -b "$branch"
           git add "$cargo_toml" "$lock"
           git commit -m "chore: bump Claw server version to ${VERSION}"
+          head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"
-          gh pr create \
+          pr_url="$(gh pr create \
             --title "chore: bump Claw server version to ${VERSION}" \
             --body "Reflects the published claw-server/v${VERSION} resources." \
             --base "$DEFAULT_BRANCH" \
-            --head "$branch"
-          gh pr merge "$branch" --squash --auto
+            --head "$branch")"
+          packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"

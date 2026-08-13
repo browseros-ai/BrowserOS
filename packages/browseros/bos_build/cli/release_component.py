@@ -19,7 +19,11 @@ from ..release.component_release import (
     StandaloneReleaseRequest,
     resolve_standalone_release,
 )
-from ..release.components import AllocationRecord, stamp_component
+from ..release.components import (
+    AllocationRecord,
+    read_component_version,
+    stamp_component,
+)
 from ..release.extensions.specs import spec_by_name
 from ..release.feeds.render import extract_manifest_versions
 
@@ -171,6 +175,19 @@ def stamp(
                 {"changed": [str(path) for path in changed]}, sort_keys=True
             )
         )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        log_error(str(exc))
+        raise typer.Exit(1)
+
+
+@app.command("read")
+def read(
+    component: str = typer.Option(..., "--component"),
+    repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
+) -> None:
+    """Read the normalized release identity from source."""
+    try:
+        typer.echo(read_component_version(_repo_root(repo_root), component))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         log_error(str(exc))
         raise typer.Exit(1)

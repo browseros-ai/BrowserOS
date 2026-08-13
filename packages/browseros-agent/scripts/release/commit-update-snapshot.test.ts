@@ -44,6 +44,7 @@ function initFixture() {
   const competitor = join(root, 'competitor')
   const wrapperDir = join(root, 'bin')
   const prHead = join(root, 'pr-head')
+  const prHeadSha = join(root, 'pr-head-sha')
 
   mkdirSync(source)
   mkdirSync(wrapperDir)
@@ -86,6 +87,7 @@ function initFixture() {
       '      esac',
       '    done',
       '    printf "%s\\n" "$head" > "$SNAPSHOT_PR_HEAD_FILE"',
+      '    "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" ls-remote --heads origin "$head" | cut -f1 > "$SNAPSHOT_PR_HEAD_SHA_FILE"',
       '    echo "https://example.test/pull/1"',
       '    ;;',
       '  pr:merge)',
@@ -118,6 +120,17 @@ function initFixture() {
       '      esac',
       '    done',
       '    case "$json" in',
+      '      state,mergeStateStatus,headRefOid,isDraft,statusCheckRollup)',
+      '        head="$(cat "$SNAPSHOT_PR_HEAD_FILE")"',
+      '        if "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" ls-remote --exit-code --heads origin "$head" >/dev/null 2>&1; then',
+      '          state="OPEN"',
+      '          head_sha="$("$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" ls-remote --heads origin "$head" | cut -f1)"',
+      '        else',
+      '          state="MERGED"',
+      '          head_sha="$(cat "$SNAPSHOT_PR_HEAD_SHA_FILE")"',
+      '        fi',
+      '        printf \'{"state":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","isDraft":false,"statusCheckRollup":[]}\\n\' "$state" "$head_sha"',
+      '        ;;',
       '      state)',
       '        head="$(cat "$SNAPSHOT_PR_HEAD_FILE")"',
       '        if "$SNAPSHOT_REAL_GIT" -C "$SNAPSHOT_MERGE_REPO" ls-remote --exit-code --heads origin "$head" >/dev/null 2>&1; then',
@@ -141,7 +154,16 @@ function initFixture() {
   )
   chmodSync(gh, 0o755)
 
-  return { root, remote, source, competitor, wrapperDir, prHead, realGit }
+  return {
+    root,
+    remote,
+    source,
+    competitor,
+    wrapperDir,
+    prHead,
+    prHeadSha,
+    realGit,
+  }
 }
 
 function scriptEnv(fixture: ReturnType<typeof initFixture>) {
@@ -153,6 +175,7 @@ function scriptEnv(fixture: ReturnType<typeof initFixture>) {
     PATH: `${fixture.wrapperDir}:${process.env.PATH}`,
     SNAPSHOT_MERGE_REPO: fixture.competitor,
     SNAPSHOT_PR_HEAD_FILE: fixture.prHead,
+    SNAPSHOT_PR_HEAD_SHA_FILE: fixture.prHeadSha,
     SNAPSHOT_REAL_GIT: fixture.realGit,
   }
 }
@@ -286,7 +309,6 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
       )
 
       expect(result.code, result.stderr || result.stdout).toBe(0)
-      expect(result.stdout).toContain('Snapshot PR is not merged yet (1/6)')
       expect(result.stdout).toContain('Snapshot PR merged')
       expect(
         mustRun(fixture.root, [

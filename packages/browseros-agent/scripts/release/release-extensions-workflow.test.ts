@@ -89,6 +89,13 @@ describe('release-extensions workflow', () => {
     const publish = section('- name: Publish private drafts')
     expect(publish).toContain("--json isDraft --jq '.isDraft'")
     expect(publish).toContain('Release $TAG is already published')
+
+    const reflection = section('  reflect-version:')
+    expect(reflection).toContain('browseros release component read')
+    expect(reflection).toContain('browseros release component stamp')
+    expect(reflection).toContain('merge-release-pr.sh')
+    expect(reflection).toContain('headRefOid')
+    expect(reflection).not.toContain('--squash --auto')
   })
 
   it('builds and attaches the immutable CRX before optional finalization', () => {

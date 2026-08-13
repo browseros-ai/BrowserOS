@@ -22,6 +22,7 @@ if ! git check-ref-format --branch "$branch" >/dev/null; then
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 for snapshot_path in "${snapshot_paths[@]}"; do
   case "$snapshot_path" in
     updates/*) ;;
@@ -104,29 +105,17 @@ for attempt in 1 2 3 4 5; do
   fi
 
   merge_sha=""
-  for merge_try in 1 2 3 4 5 6; do
-    gh pr merge "$pr_url" \
+  if RELEASE_PR_MERGE_POLL_SECONDS="${SNAPSHOT_MERGE_POLL_SECONDS:-5}" \
+    "$script_dir/merge-release-pr.sh" \
+      "$pr_url" \
+      "$head_sha" \
+      "$commit_message" \
+      "Automated release snapshot update."; then
+    merge_sha="$(gh pr view "$pr_url" \
       --repo "$GITHUB_REPOSITORY" \
-      --squash \
-      --auto \
-      --delete-branch \
-      --match-head-commit "$head_sha" \
-      --subject "$commit_message" \
-      --body "Automated release snapshot update." || true
-    state="$(gh pr view "$pr_url" \
-      --repo "$GITHUB_REPOSITORY" \
-      --json state \
-      --jq '.state' 2>/dev/null || true)"
-    if [ "$state" = "MERGED" ]; then
-      merge_sha="$(gh pr view "$pr_url" \
-        --repo "$GITHUB_REPOSITORY" \
-        --json mergeCommit \
-        --jq '.mergeCommit.oid // ""')"
-      break
-    fi
-    echo "Snapshot PR is not merged yet ($merge_try/6)"
-    sleep "${SNAPSHOT_MERGE_POLL_SECONDS:-5}"
-  done
+      --json mergeCommit \
+      --jq '.mergeCommit.oid // ""')"
+  fi
 
   if [[ "$merge_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
     git -C "$worktree" fetch origin \

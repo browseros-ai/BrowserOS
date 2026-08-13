@@ -189,5 +189,8 @@ describe('release-claw-server workflow', () => {
     expect(reflection).toContain('Cargo.lock')
     expect(reflection).toContain('git config user.name "github-actions[bot]"')
     expect(reflection).toContain('gh pr create')
+    expect(reflection).toContain('merge-release-pr.sh')
+    expect(reflection).toContain('headRefOid')
+    expect(reflection).not.toContain('--squash --auto')
   })
 })
