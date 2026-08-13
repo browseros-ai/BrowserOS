@@ -26,6 +26,19 @@ class _CompileStep(Step):
     produces = ["built_app"]
 
 
+class _SignStep(Step):
+    name = "sign_macos"
+    produces = ["signed_app"]
+
+
+class _ChromiumReplaceStep(Step):
+    name = "chromium_replace"
+
+
+class _StringReplacesStep(Step):
+    name = "string_replaces"
+
+
 class ResumeCheckpointTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -68,7 +81,11 @@ class ResumeCheckpointTest(unittest.TestCase):
             capture_output=True,
         )
 
-    def _context(self, resume_from: str = "sign_macos") -> Context:
+    def _context(
+        self,
+        resume_from: str = "sign_macos",
+        plan: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
+    ) -> Context:
         ctx = Context(
             root_dir=self.browseros.root,
             chromium_src=self.chromium.src,
@@ -78,7 +95,7 @@ class ResumeCheckpointTest(unittest.TestCase):
         )
         ctx.resume_state = make_resume_state(
             ctx,
-            self.plan,
+            plan or self.plan,
             resume_from=resume_from,
             strict=True,
         )
@@ -143,6 +160,55 @@ class ResumeCheckpointTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ResumeValidationError, "exact component pins"):
             validate_resume_before_execution([(resumed, ("sign_macos",))])
+
+    def test_sliced_resume_checkpoint_records_full_plan(self):
+        plan = (("x64", ("compile", "sign_macos", "package")),)
+        ctx = self._context(resume_from="sign_macos", plan=plan)
+        app = ctx.get_app_path()
+        app.parent.mkdir(parents=True)
+        app.write_bytes(b"browser")
+        ctx.artifact_registry.add("built_app", app)
+        write_step_checkpoint(ctx, _CompileStep(), plan[0][1])
+        ctx.artifact_registry.add("signed_app", app)
+        write_step_checkpoint(ctx, _SignStep(), ("sign_macos", "package"))
+
+        document = json.loads(
+            checkpoint_path(ctx, "sign_macos").read_text(encoding="utf-8")
+        )
+        self.assertEqual(document["run_steps"], list(plan[0][1]))
+        resumed = self._context(resume_from="package", plan=plan)
+
+        validate_resume_before_execution([(resumed, ("package",))])
+
+    def test_later_chromium_mutation_checkpoint_supersedes_earlier_digest(self):
+        plan = (("x64", ("chromium_replace", "string_replaces", "configure")),)
+        ctx = self._context(resume_from="configure", plan=plan)
+        target = self.chromium.src / "chrome" / "browser" / "browseros" / "patched.cc"
+        target.parent.mkdir(parents=True)
+        target.write_text("first")
+        write_step_checkpoint(ctx, _ChromiumReplaceStep(), plan[0][1])
+        target.write_text("second")
+        write_step_checkpoint(ctx, _StringReplacesStep(), plan[0][1])
+        resumed = self._context(resume_from="configure", plan=plan)
+
+        validate_resume_before_execution([(resumed, ("configure",))])
+
+    def test_latest_chromium_mutation_checkpoint_still_detects_stale_tree(self):
+        plan = (("x64", ("chromium_replace", "string_replaces", "configure")),)
+        ctx = self._context(resume_from="configure", plan=plan)
+        target = self.chromium.src / "chrome" / "browser" / "browseros" / "patched.cc"
+        target.parent.mkdir(parents=True)
+        target.write_text("first")
+        write_step_checkpoint(ctx, _ChromiumReplaceStep(), plan[0][1])
+        target.write_text("second")
+        write_step_checkpoint(ctx, _StringReplacesStep(), plan[0][1])
+        target.write_text("stale")
+        resumed = self._context(resume_from="configure", plan=plan)
+
+        with self.assertRaisesRegex(
+            ResumeValidationError, "Chromium mutation digest mismatch"
+        ):
+            validate_resume_before_execution([(resumed, ("configure",))])
 
 
 if __name__ == "__main__":

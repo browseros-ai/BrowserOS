@@ -25,6 +25,14 @@ CONTRACT_SCHEMA = "browseros-build-resume-contract-v1"
 CHECKPOINT_ROOT = ".browseros_resume"
 _HASH_CHUNK_SIZE = 1024 * 1024
 _CHROMIUM_MUTATION_EXCLUDES = ("out", "chrome/VERSION")
+_CHROMIUM_MUTATION_STEPS = frozenset(
+    {
+        "chromium_replace",
+        "string_replaces",
+        "series_patches",
+        "patches",
+    }
+)
 
 
 class ResumeValidationError(ValueError):
@@ -108,8 +116,15 @@ def validate_resume_before_execution(
         state.full_arch_plans, state.resume_from
     ):
         ctx = contexts.get(arch) or _context_for_arch(base_ctx, arch)
+        latest_mutation = _latest_mutation_step(completed_steps)
         for step_name in completed_steps:
-            checkpoint = _validated_checkpoint(ctx, step_name, state)
+            checkpoint = _validated_checkpoint(
+                ctx,
+                step_name,
+                state,
+                validate_chromium_mutation=step_name == latest_mutation
+                or step_name not in _CHROMIUM_MUTATION_STEPS,
+            )
             if arch in contexts:
                 _restore_registry(contexts[arch], checkpoint)
 
@@ -175,6 +190,9 @@ def write_step_checkpoint(
     if state is None or not state.enabled:
         return
     step_name = step.name or step.__class__.__name__
+    recorded_steps = _steps_for_arch(state.full_arch_plans, ctx.architecture)
+    if not recorded_steps:
+        recorded_steps = tuple(run_steps)
     document = {
         "schema": CHECKPOINT_SCHEMA,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -186,7 +204,7 @@ def write_step_checkpoint(
         "platform": get_platform(),
         "out_dir": ctx.out_dir,
         "step": step_name,
-        "run_steps": list(run_steps),
+        "run_steps": list(recorded_steps),
         "chromium_checkout": _chromium_checkout_identity(ctx),
         "registry": _registry_entries(ctx, step),
         "snapshots": _step_snapshots(ctx, step_name),
@@ -416,12 +434,7 @@ def _step_snapshots(ctx: Context, step_name: str) -> list[dict[str, Any]]:
             "bundled_extensions",
             ctx.chromium_src / "chrome/browser/browseros/bundled_extensions",
         )
-    elif step_name in {
-        "chromium_replace",
-        "string_replaces",
-        "series_patches",
-        "patches",
-    }:
+    elif step_name in _CHROMIUM_MUTATION_STEPS:
         digest = _chromium_mutation_digest(ctx)
         if digest:
             snapshots.append({"kind": "chromium_mutation", **digest})
@@ -448,6 +461,8 @@ def _validated_checkpoint(
     ctx: Context,
     step_name: str,
     state: ResumeState,
+    *,
+    validate_chromium_mutation: bool = True,
 ) -> Mapping[str, Any]:
     path = checkpoint_path(ctx, step_name)
     try:
@@ -473,7 +488,12 @@ def _validated_checkpoint(
     for entry in document.get("registry", []):
         _validate_registry_entry(ctx.architecture, step_name, entry)
     for snapshot in document.get("snapshots", []):
-        _validate_snapshot(ctx.architecture, step_name, snapshot)
+        _validate_snapshot(
+            ctx.architecture,
+            step_name,
+            snapshot,
+            validate_chromium_mutation=validate_chromium_mutation,
+        )
     return document
 
 
@@ -540,7 +560,13 @@ def _validate_registry_entry(arch: str, step_name: str, entry: Any) -> None:
         raise _mismatch(arch, step_name, "registry entry kind is unsupported")
 
 
-def _validate_snapshot(arch: str, step_name: str, snapshot: Any) -> None:
+def _validate_snapshot(
+    arch: str,
+    step_name: str,
+    snapshot: Any,
+    *,
+    validate_chromium_mutation: bool,
+) -> None:
     if not isinstance(snapshot, dict):
         raise _mismatch(arch, step_name, "snapshot is invalid")
     if snapshot.get("kind") == "path":
@@ -553,6 +579,8 @@ def _validate_snapshot(arch: str, step_name: str, snapshot: Any) -> None:
         )
         return
     if snapshot.get("kind") == "chromium_mutation":
+        if not validate_chromium_mutation:
+            return
         current = _chromium_mutation_digest_for_root(
             Path(str(snapshot.get("root", "")))
         )
@@ -631,6 +659,13 @@ def _completed_steps_before(
             return completed
         completed.append((arch, tuple(steps)))
     return completed
+
+
+def _latest_mutation_step(completed_steps: Sequence[str]) -> str:
+    for step_name in reversed(completed_steps):
+        if step_name in _CHROMIUM_MUTATION_STEPS:
+            return step_name
+    return ""
 
 
 def _steps_for_arch(
