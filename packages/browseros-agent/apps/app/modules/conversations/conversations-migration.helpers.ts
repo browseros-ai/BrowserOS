@@ -1,3 +1,4 @@
+import type { UIMessage } from 'ai'
 import type { Conversation } from '@/lib/conversations/conversationStorage'
 
 export interface MigrateLegacyConversationsOptions {
@@ -40,4 +41,37 @@ export async function migrateLegacyConversations({
     }
   }
   return migrated
+}
+
+export interface CollectServerConversationsOptions {
+  listSummaries: () => Promise<Array<{ id: string; lastMessagedAt: number }>>
+  loadDetail: (
+    id: string,
+  ) => Promise<{ id: string; messages: UIMessage[] } | null>
+}
+
+/**
+ * Reads every server conversation with its messages, shaped for a cloud upload.
+ * Drops any conversation deleted between the list and its detail fetch.
+ */
+export async function collectServerConversations({
+  listSummaries,
+  loadDetail,
+}: CollectServerConversationsOptions): Promise<Conversation[]> {
+  const summaries = await listSummaries()
+  const details = await Promise.all(
+    summaries.map(async (summary) => {
+      const detail = await loadDetail(summary.id)
+      return detail
+        ? {
+            id: detail.id,
+            messages: detail.messages,
+            lastMessagedAt: summary.lastMessagedAt,
+          }
+        : null
+    }),
+  )
+  return details.filter(
+    (conversation): conversation is Conversation => conversation !== null,
+  )
 }

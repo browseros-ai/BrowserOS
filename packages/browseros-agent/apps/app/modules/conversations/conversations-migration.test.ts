@@ -1,7 +1,10 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { UIMessage } from 'ai'
 import type { Conversation } from '@/lib/conversations/conversationStorage'
-import { migrateLegacyConversations } from './conversations-migration.helpers'
+import {
+  collectServerConversations,
+  migrateLegacyConversations,
+} from './conversations-migration.helpers'
 
 function conversation(id: string): Conversation {
   const messages: UIMessage[] = [
@@ -96,5 +99,53 @@ describe('migrateLegacyConversations', () => {
     ).toEqual([])
     expect(importToServer).not.toHaveBeenCalled()
     expect(uploadToCloud).not.toHaveBeenCalled()
+  })
+})
+
+describe('collectServerConversations', () => {
+  it('pairs each summary with its detail and carries lastMessagedAt', async () => {
+    const listSummaries = mock(async () => [
+      { id: 'a', lastMessagedAt: 10 },
+      { id: 'b', lastMessagedAt: 20 },
+    ])
+    const loadDetail = mock(async (id: string) => ({
+      id,
+      messages: [{ id: `${id}-m`, role: 'user', parts: [] }] as UIMessage[],
+    }))
+
+    const result = await collectServerConversations({
+      listSummaries,
+      loadDetail,
+    })
+
+    expect(result).toEqual([
+      {
+        id: 'a',
+        lastMessagedAt: 10,
+        messages: [{ id: 'a-m', role: 'user', parts: [] }],
+      },
+      {
+        id: 'b',
+        lastMessagedAt: 20,
+        messages: [{ id: 'b-m', role: 'user', parts: [] }],
+      },
+    ])
+  })
+
+  it('drops a conversation deleted before its detail loaded', async () => {
+    const listSummaries = mock(async () => [
+      { id: 'a', lastMessagedAt: 10 },
+      { id: 'gone', lastMessagedAt: 5 },
+    ])
+    const loadDetail = mock(async (id: string) =>
+      id === 'gone' ? null : { id, messages: [] as UIMessage[] },
+    )
+
+    const result = await collectServerConversations({
+      listSummaries,
+      loadDetail,
+    })
+
+    expect(result.map((conversation) => conversation.id)).toEqual(['a'])
   })
 })
