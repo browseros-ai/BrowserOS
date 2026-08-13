@@ -82,6 +82,7 @@ describe('conversation routes', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
+      imported: true,
       conversation: {
         id: CONVERSATION_ID,
         lastMessagedAt: 42,
@@ -89,6 +90,26 @@ describe('conversation routes', () => {
       },
     })
     expect((await store.get(CONVERSATION_ID))?.messages).toHaveLength(1)
+  })
+
+  it('does not overwrite an existing conversation on import', async () => {
+    const store = new MemoryConversationStore([
+      detail(CONVERSATION_ID, 'newer'),
+    ])
+    const routes = createConversationRoutes({ store })
+
+    const response = await routes.request(`/${CONVERSATION_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: 'legacy', role: 'user', parts: [] }],
+        lastMessagedAt: 1,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ imported: false })
+    expect((await store.get(CONVERSATION_ID))?.messages[0]?.id).toBe('u1')
   })
 })
 
@@ -112,7 +133,11 @@ function detail(id: string, lastUserMessage: string): ConversationDetail {
 }
 
 class MemoryConversationStore
-  implements Pick<ConversationStore, 'list' | 'get' | 'delete' | 'save'>
+  implements
+    Pick<
+      ConversationStore,
+      'list' | 'get' | 'save' | 'insertIfAbsent' | 'delete'
+    >
 {
   private readonly byId = new Map<string, ConversationDetail>()
 
@@ -144,6 +169,13 @@ class MemoryConversationStore
     }
     this.byId.set(input.id, conversation)
     return conversation
+  }
+
+  async insertIfAbsent(
+    input: SaveConversationInput,
+  ): Promise<ConversationSummary | null> {
+    if (this.byId.has(input.id)) return null
+    return this.save(input)
   }
 
   async delete(id: string): Promise<boolean> {

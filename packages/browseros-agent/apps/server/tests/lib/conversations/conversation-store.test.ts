@@ -125,6 +125,28 @@ describe('DbConversationStore', () => {
     expect(summaries[0]?.lastMessagedAt).toBe(12345)
   })
 
+  test('insertIfAbsent inserts when absent and skips when present', async () => {
+    const store = createStore()
+
+    expect(
+      await store.insertIfAbsent({
+        id: CONVERSATION_ID,
+        messages: [userMessage('u1', 'hi')],
+        targetType: 'browseros',
+      }),
+    ).not.toBeNull()
+    expect(
+      await store.insertIfAbsent({
+        id: CONVERSATION_ID,
+        messages: [userMessage('u2', 'again')],
+        targetType: 'browseros',
+      }),
+    ).toBeNull()
+
+    const detail = await store.get(CONVERSATION_ID)
+    expect(detail?.messages.map((message) => message.id)).toEqual(['u1'])
+  })
+
   test('delete removes the record', async () => {
     const store = createStore()
     await store.save({

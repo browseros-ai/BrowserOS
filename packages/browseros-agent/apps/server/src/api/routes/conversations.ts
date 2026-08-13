@@ -17,7 +17,7 @@ import { ConversationIdParamSchema } from '../utils/validation'
 
 type ConversationRouteStore = Pick<
   ConversationStore,
-  'list' | 'get' | 'delete' | 'save'
+  'list' | 'get' | 'delete' | 'insertIfAbsent'
 >
 
 const ImportConversationSchema = z.object({
@@ -55,7 +55,9 @@ export function createConversationRoutes(
       async (c) => {
         const { conversationId } = c.req.valid('param')
         const body = c.req.valid('json')
-        const conversation = await store.save({
+        // Import must never clobber a newer server row for the same id, so this
+        // is insert-if-absent, not an upsert.
+        const conversation = await store.insertIfAbsent({
           id: conversationId,
           messages: body.messages,
           targetType: body.targetType ?? 'browseros',
@@ -63,7 +65,7 @@ export function createConversationRoutes(
           agentId: body.agentId,
           lastMessagedAt: body.lastMessagedAt,
         })
-        return c.json({ conversation })
+        return c.json({ conversation, imported: conversation !== null })
       },
     )
     .delete(
