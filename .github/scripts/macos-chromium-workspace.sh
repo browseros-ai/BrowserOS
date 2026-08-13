@@ -323,8 +323,7 @@ setup_workspace() {
   [ "$(basename "$base_src")" = "src" ] || die "Persistent Chromium path must point to src: $base_src"
   base_root="$(resolve_existing_dir "$base_src/..")" \
     || die "Could not resolve Chromium gclient root from $base_src"
-  version_file="${version_file:-$(default_version_file)}"
-  verify_base "$version_file"
+  [ -f "$base_root/.gclient" ] || die "Chromium base root is missing .gclient: $base_root"
 
   base_parent="$(resolve_existing_dir "$base_root/..")"
   workspace_parent="$base_parent/$workspace_parent_name"
@@ -337,6 +336,8 @@ setup_workspace() {
 
   tag="$(run_tag)"
   reap_stale_workspaces "$workspace_parent" "$tag" "$base_root"
+  version_file="${version_file:-$(default_version_file)}"
+  verify_base "$version_file"
 
   workspace_root="$workspace_parent/$workspace_prefix$tag"
   workspace_src="$workspace_root/src"

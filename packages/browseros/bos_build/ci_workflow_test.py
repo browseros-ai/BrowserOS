@@ -1868,6 +1868,26 @@ esac
         self.assertTrue(Path(self._outputs()["workspace_root"]).exists())
         self.assertTrue(self.base_root.exists())
 
+    def test_setup_reaps_stale_workspaces_before_dirty_base_failure(self):
+        parent = self._workspace_parent()
+        parent.mkdir()
+        stale = self._workspace_root("old-1")
+        stale.mkdir()
+        (stale / "src").mkdir()
+        self._write_workspace_marker(stale, tag="old-1")
+
+        result = self._run_helper(
+            "setup",
+            self.base_src,
+            GIT_STATUS=" M chrome/app/generated_resources.grd\n",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tracked changes", result.stderr + result.stdout)
+        self.assertFalse(stale.exists())
+        self.assertFalse(self._workspace_root().exists())
+        self.assertTrue(self.base_root.exists())
+
     def test_cleanup_ignores_unsafe_state_target(self):
         state_path = self._state_path()
         state_path.write_text(
