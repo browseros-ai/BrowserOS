@@ -16,6 +16,7 @@ from .components import (
     resolve_standalone_version,
 )
 from .github import list_github_releases, list_pull_requests
+from .r2_allocations import discover_r2_component_allocations
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,9 @@ class ComponentReleaseOperations(Protocol):
 
     def is_default_branch_ancestor(self, sha: str, default_branch: str) -> bool: ...
 
-    def allocations(self, component: str) -> Sequence[AllocationRecord]: ...
+    def allocations(
+        self, component: str, source_sha: str = ""
+    ) -> Sequence[AllocationRecord]: ...
 
 
 def _version_key(component: str, version: str) -> tuple[int, ...]:
@@ -133,7 +136,10 @@ def resolve_standalone_release(
             f"{operations.remote}/{request.default_branch}"
         )
 
-    allocations = (*operations.allocations(request.component), *additional_allocations)
+    allocations = (
+        *operations.allocations(request.component, release_sha),
+        *additional_allocations,
+    )
     resolved = resolve_standalone_version(
         component_id=request.component,
         committed_version=version,
@@ -193,10 +199,15 @@ class GitComponentReleaseOperations:
         repo_root: Path,
         repo: str,
         remote: str = "origin",
+        *,
+        r2_client=None,
+        r2_bucket: str = "",
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.repo = repo
         self.remote = remote
+        self.r2_client = r2_client
+        self.r2_bucket = r2_bucket
 
     def _git(self, *args: str, check: bool = True) -> str:
         result = subprocess.run(
@@ -270,7 +281,9 @@ class GitComponentReleaseOperations:
         )
         return result.returncode == 0
 
-    def allocations(self, component: str) -> Sequence[AllocationRecord]:
+    def allocations(
+        self, component: str, source_sha: str = ""
+    ) -> Sequence[AllocationRecord]:
         spec = component_by_id(component)
         allocations = []
         prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
@@ -308,7 +321,7 @@ class GitComponentReleaseOperations:
             except ValueError:
                 continue
             tag_identity = self.tag_state(tag)
-            source_sha = (
+            release_source_sha = (
                 tag_identity.target_sha
                 if tag_identity is not None
                 else str(release.get("targetCommitish", ""))
@@ -318,7 +331,7 @@ class GitComponentReleaseOperations:
                     component=component,
                     version=version,
                     kind="release",
-                    source_sha=source_sha,
+                    source_sha=release_source_sha,
                     reference=tag,
                     reusable=release.get("isDraft") is True,
                     public=release.get("isDraft") is False,
@@ -343,6 +356,16 @@ class GitComponentReleaseOperations:
                     source_sha=record.candidate_sha,
                     candidate_id=record.branch,
                     reference=record.branch,
+                )
+            )
+        if self.r2_client is not None:
+            allocations.extend(
+                discover_r2_component_allocations(
+                    self.r2_client,
+                    self.r2_bucket,
+                    component,
+                    source_sha,
+                    tuple(allocations),
                 )
             )
         return tuple(allocations)

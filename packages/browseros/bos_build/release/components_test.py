@@ -164,6 +164,64 @@ class ComponentPlanningTest(unittest.TestCase):
             "0.0.127",
         )
 
+    def test_standalone_does_not_reuse_a_draft_with_conflicting_resources(self) -> None:
+        allocations = (
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha="1" * 40,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            ),
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.128",
+            ),
+        )
+
+        self.assertEqual(
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=allocations,
+                source_sha="1" * 40,
+            ),
+            "0.0.129",
+        )
+
+    def test_standalone_reuses_a_draft_with_matching_resources(self) -> None:
+        allocations = (
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha="1" * 40,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            ),
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                source_sha="1" * 40,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            ),
+        )
+
+        self.assertEqual(
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=allocations,
+                source_sha="1" * 40,
+            ),
+            "0.0.128",
+        )
+
     def test_standalone_rejects_versions_older_than_public_history(self) -> None:
         allocations = (
             AllocationRecord(

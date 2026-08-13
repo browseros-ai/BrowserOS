@@ -117,6 +117,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           REF_NAME: ${{ github.ref_name }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
@@ -128,6 +132,7 @@ jobs:
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
             --release-ref HEAD \
+            --r2-allocations \
             --repo "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT" \
             --github-summary "$GITHUB_STEP_SUMMARY"

@@ -1005,6 +1005,28 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             1,
         )
 
+    def test_component_resolvers_include_immutable_r2_allocations(self):
+        jobs = (
+            ("release-server.yml", "prepare", "Resolve release"),
+            ("release-claw-server.yml", "prepare", "Resolve release"),
+            ("release-claw-onboard.yml", "prepare", "Resolve release"),
+            ("release-extensions.yml", "prepare", "Resolve extension release"),
+        )
+        for workflow_name, job_name, step_name in jobs:
+            workflow = self.load_workflow(workflow_name)
+            step = self.named_step(workflow, job_name, step_name)
+            with self.subTest(workflow=workflow_name):
+                self.assertIn("--r2-allocations", step["run"])
+                for name in (
+                    "R2_ACCOUNT_ID",
+                    "R2_ACCESS_KEY_ID",
+                    "R2_SECRET_ACCESS_KEY",
+                    "R2_BUCKET",
+                ):
+                    self.assertEqual(
+                        step["env"][name], f"${{{{ secrets.{name} }}}}"
+                    )
+
     def test_feed_snapshot_writers_share_a_retained_queue(self):
         jobs = (
             ("publish-server-ota.yml", "publish"),

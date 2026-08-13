@@ -205,6 +205,10 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EXTENSION: ${{ inputs.extension }}
           GH_TOKEN: ${{ github.token }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -216,6 +220,7 @@ jobs:
               --default-branch "$DEFAULT_BRANCH"
               --requested-version "$REQUESTED_VERSION"
               --release-ref HEAD
+              --r2-allocations
               --repo "$GITHUB_REPOSITORY"
               --github-output "$GITHUB_OUTPUT"
               --github-summary "$GITHUB_STEP_SUMMARY"

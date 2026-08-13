@@ -9,7 +9,7 @@ from typing import Literal, Mapping, Sequence
 
 
 VersionScheme = Literal["semver", "chrome"]
-AllocationKind = Literal["tag", "release", "candidate"]
+AllocationKind = Literal["tag", "release", "candidate", "resource"]
 
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _CHROME_RE = re.compile(r"^\d+(?:\.\d+){0,3}$")
@@ -281,16 +281,28 @@ def resolve_standalone_version(
             return require_not_older(requested)
         raise ValueError(f"{component_id} version {requested} is already allocated")
 
-    reusable = [
-        record
+    reusable_versions = {
+        normalize_component_version(component_id, record.version)
         for record in records
         if record.reusable and source_sha and record.source_sha == source_sha
-    ]
-    if reusable:
-        return require_not_older(max(
-            (normalize_component_version(component_id, record.version) for record in reusable),
-            key=lambda version: _version_key(component_id, version),
-        ))
+    }
+    for reusable_version in sorted(
+        reusable_versions,
+        key=lambda version: _version_key(component_id, version),
+        reverse=True,
+    ):
+        resources = [
+            record
+            for record in records
+            if record.kind == "resource"
+            and normalize_component_version(component_id, record.version)
+            == reusable_version
+        ]
+        if resources and not all(
+            record.reusable and record.source_sha == source_sha for record in resources
+        ):
+            continue
+        return require_not_older(reusable_version)
 
     committed = normalize_component_version(component_id, committed_version)
     blocked = {

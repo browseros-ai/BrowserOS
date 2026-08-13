@@ -45,7 +45,7 @@ class FakeOperations:
     def is_default_branch_ancestor(self, sha: str, default_branch: str) -> bool:
         return self.ancestor
 
-    def allocations(self, component: str):
+    def allocations(self, component: str, source_sha: str = ""):
         return self.records
 
 
@@ -192,6 +192,65 @@ class StandaloneReleaseTest(unittest.TestCase):
 
 
 class ComponentAllocationDiscoveryTest(unittest.TestCase):
+    def test_r2_retry_uses_requested_source_with_older_release_history(self) -> None:
+        key = "artifacts/server/0.0.130/browseros-server-resources-linux-x64.zip"
+        client = mock.MagicMock()
+        client.list_objects_v2.return_value = {
+            "Contents": [{"Key": key}],
+            "IsTruncated": False,
+        }
+        client.head_object.return_value = {
+            "Metadata": {
+                "component": "artifacts/server",
+                "release-sha": SOURCE_SHA,
+                "sha256": "a" * 64,
+                "target": "linux-x64",
+                "version": "0.0.130",
+            }
+        }
+        releases = [
+            {
+                "tagName": "agent-server/v0.0.130",
+                "isDraft": True,
+                "targetCommitish": SOURCE_SHA,
+            },
+            {
+                "tagName": "agent-server/v0.0.129",
+                "isDraft": False,
+                "targetCommitish": "2" * 40,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp),
+                "browseros-ai/BrowserOS",
+                r2_client=client,
+                r2_bucket="browseros",
+            )
+            with (
+                mock.patch.object(operations, "_git", return_value=""),
+                mock.patch(
+                    "bos_build.release.component_release.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=1, stdout="", stderr=""
+                    ),
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_pull_requests",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=releases,
+                ),
+            ):
+                allocations = operations.allocations("server", SOURCE_SHA)
+
+        resource = next(record for record in allocations if record.kind == "resource")
+        self.assertTrue(resource.reusable)
+        self.assertEqual(resource.source_sha, SOURCE_SHA)
+        client.head_object.assert_called_once_with(Bucket="browseros", Key=key)
+
     def test_open_browser_candidate_is_discovered_as_a_reservation(self) -> None:
         candidate = CandidateRecord(
             product="browseros",
