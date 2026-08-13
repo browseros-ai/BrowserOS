@@ -18,16 +18,33 @@ function fixture() {
   const bin = join(root, 'gh')
   const state = join(root, 'state')
   const calls = join(root, 'calls')
+  const viewCalls = join(root, 'view-calls')
   writeFileSync(state, 'OPEN')
   writeFileSync(calls, '')
+  writeFileSync(viewCalls, '')
   writeFileSync(
     bin,
     `#!/bin/sh
 set -eu
 case "$1:$2" in
   pr:view)
-    printf '{"state":"%s","mergeStateStatus":"%s","headRefOid":"%s","isDraft":false,"statusCheckRollup":[]}\n' \
-      "$(cat "$MERGE_TEST_STATE")" "${'$'}{MERGE_TEST_MERGE_STATE:-CLEAN}" "${'$'}{MERGE_TEST_HEAD}"
+    printf '%s\n' "$*" >> "$MERGE_TEST_VIEW_CALLS"
+    count="$(wc -l < "$MERGE_TEST_VIEW_CALLS" | tr -d ' ')"
+    case ",${'$'}{MERGE_TEST_FAIL_VIEW_CALLS:-}," in
+      *,"$count",*)
+        echo "transient gh pr view failure" >&2
+        exit 1
+        ;;
+    esac
+    case ",${'$'}{MERGE_TEST_BAD_JSON_VIEW_CALLS:-}," in
+      *,"$count",*)
+        printf '{not-json'
+        exit 0
+        ;;
+    esac
+    printf '{"state":"%s","mergeStateStatus":"%s","headRefOid":"%s","isDraft":%s,"statusCheckRollup":%s}\n' \
+      "$(cat "$MERGE_TEST_STATE")" "${'$'}{MERGE_TEST_MERGE_STATE:-CLEAN}" "${'$'}{MERGE_TEST_HEAD}" \
+      "${'$'}{MERGE_TEST_DRAFT:-false}" "${'$'}{MERGE_TEST_STATUS_CHECK_ROLLUP:-[]}"
     ;;
   pr:merge)
     printf '%s\n' "$*" >> "$MERGE_TEST_CALLS"
@@ -42,7 +59,7 @@ esac
 `,
   )
   chmodSync(bin, 0o755)
-  return { root, state, calls }
+  return { root, state, calls, viewCalls }
 }
 
 function run(
@@ -57,6 +74,7 @@ function run(
       MERGE_TEST_CALLS: test.calls,
       MERGE_TEST_HEAD: head,
       MERGE_TEST_STATE: test.state,
+      MERGE_TEST_VIEW_CALLS: test.viewCalls,
       PATH: `${test.root}:${process.env.PATH}`,
       RELEASE_PR_MERGE_POLL_SECONDS: '0',
       ...env,
@@ -96,6 +114,74 @@ describe('merge-release-pr', () => {
     }
   })
 
+  it('retries a transient pre-merge pull request inspection failure', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_FAIL_VIEW_CALLS: '1',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      expect(result.stdout).toContain('not ready yet (1/2)')
+      expect(readFileSync(test.calls, 'utf8').trim().split('\n')).toHaveLength(
+        1,
+      )
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('retries malformed pre-merge pull request inspection JSON', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_BAD_JSON_VIEW_CALLS: '1',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      expect(result.stdout).toContain('not ready yet (1/2)')
+      expect(readFileSync(test.calls, 'utf8').trim().split('\n')).toHaveLength(
+        1,
+      )
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('retries a transient post-merge pull request inspection failure', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_FAIL_VIEW_CALLS: '2',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      expect(result.stdout).toContain('not ready yet (1/2)')
+      expect(readFileSync(test.calls, 'utf8').trim().split('\n')).toHaveLength(
+        1,
+      )
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('retries malformed post-merge pull request inspection JSON', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_BAD_JSON_VIEW_CALLS: '2',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      expect(result.stdout).toContain('not ready yet (1/2)')
+      expect(readFileSync(test.calls, 'utf8').trim().split('\n')).toHaveLength(
+        1,
+      )
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a changed pull request head', () => {
     const test = fixture()
     try {
@@ -105,6 +191,61 @@ describe('merge-release-pr', () => {
       expect(result.status).not.toBe(0)
       expect(result.stderr).toContain('Release PR head changed')
       expect(readFileSync(test.calls, 'utf8')).toBe('')
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses drafts without retrying merge attempts', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_DRAFT: 'true',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('Release PR is still a draft')
+      expect(readFileSync(test.calls, 'utf8')).toBe('')
+      expect(
+        readFileSync(test.viewCalls, 'utf8').trim().split('\n'),
+      ).toHaveLength(1)
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses dirty pull requests without retrying merge attempts', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_MERGE_STATE: 'DIRTY',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('Release PR cannot merge')
+      expect(readFileSync(test.calls, 'utf8')).toBe('')
+      expect(
+        readFileSync(test.viewCalls, 'utf8').trim().split('\n'),
+      ).toHaveLength(1)
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses failed checks without retrying merge attempts', () => {
+    const test = fixture()
+    try {
+      const result = run(test, {
+        MERGE_TEST_STATUS_CHECK_ROLLUP:
+          '[{"__typename":"CheckRun","conclusion":"FAILURE"}]',
+        RELEASE_PR_MERGE_ATTEMPTS: '2',
+      })
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('failed_checks=1')
+      expect(readFileSync(test.calls, 'utf8')).toBe('')
+      expect(
+        readFileSync(test.viewCalls, 'utf8').trim().split('\n'),
+      ).toHaveLength(1)
     } finally {
       rmSync(test.root, { recursive: true, force: true })
     }

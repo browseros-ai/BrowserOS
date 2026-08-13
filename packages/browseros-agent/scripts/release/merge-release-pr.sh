@@ -37,10 +37,42 @@ inspect_pr() {
     --json state,mergeStateStatus,headRefOid,isDraft,statusCheckRollup
 }
 
-verify_head() {
-  local details="$1"
+details=""
+state=""
+is_draft=""
+merge_state=""
+failed_checks=""
+
+read_inspection() {
+  local phase="$1"
   local actual_head
-  actual_head="$(jq -er '.headRefOid' <<<"$details")"
+  local parsed
+  if ! details="$(inspect_pr)"; then
+    echo "Release PR inspection failed $phase: $pr" >&2
+    return 1
+  fi
+  if ! parsed="$(jq -er '
+    if ((.state | type) == "string")
+      and ((.headRefOid | type) == "string")
+      and ((.isDraft | type) == "boolean")
+      and ((.mergeStateStatus | type) == "string")
+    then [
+      .state,
+      .headRefOid,
+      (.isDraft | tostring),
+      .mergeStateStatus,
+      ([.statusCheckRollup[]? | select(
+        (.__typename == "CheckRun" and ((.conclusion // "") | test("^(FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED)$"))) or
+        (.__typename == "StatusContext" and ((.state // "") | test("^(FAILURE|ERROR)$")))
+      )] | length | tostring)
+    ] | @tsv
+    else error("missing pull request fields")
+    end
+  ' <<<"$details")"; then
+    echo "Release PR inspection was not parseable $phase: $pr" >&2
+    return 1
+  fi
+  IFS=$'\t' read -r state actual_head is_draft merge_state failed_checks <<<"$parsed"
   if [ "$actual_head" != "$expected_head" ]; then
     echo "Release PR head changed: expected $expected_head, found $actual_head" >&2
     exit 1
@@ -62,9 +94,14 @@ if [ -n "$body" ]; then
 fi
 
 for ((attempt = 1; attempt <= attempts; attempt++)); do
-  details="$(inspect_pr)"
-  state="$(jq -er '.state' <<<"$details")"
-  verify_head "$details"
+  if ! read_inspection "before merge"; then
+    if [ "$attempt" -lt "$attempts" ]; then
+      echo "Release PR is not ready yet ($attempt/$attempts)"
+      sleep "$poll_seconds"
+      continue
+    fi
+    break
+  fi
   if [ "$state" = "MERGED" ]; then
     echo "Release PR merged: $pr"
     exit 0
@@ -74,16 +111,11 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
     exit 1
   fi
 
-  if [ "$(jq -r '.isDraft' <<<"$details")" = "true" ]; then
+  if [ "$is_draft" = "true" ]; then
     echo "Release PR is still a draft: $pr" >&2
     exit 1
   fi
 
-  merge_state="$(jq -er '.mergeStateStatus' <<<"$details")"
-  failed_checks="$(jq '[.statusCheckRollup[]? | select(
-    (.__typename == "CheckRun" and ((.conclusion // "") | test("^(FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED)$"))) or
-    (.__typename == "StatusContext" and ((.state // "") | test("^(FAILURE|ERROR)$")))
-  )] | length' <<<"$details")"
   if [ "$merge_state" = "DIRTY" ] || [ "$failed_checks" -gt 0 ]; then
     echo "Release PR cannot merge: state=$merge_state, failed_checks=$failed_checks" >&2
     exit 1
@@ -93,9 +125,14 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
     gh "${merge_args[@]}" --auto || true
   fi
 
-  details="$(inspect_pr)"
-  state="$(jq -er '.state' <<<"$details")"
-  verify_head "$details"
+  if ! read_inspection "after merge"; then
+    if [ "$attempt" -lt "$attempts" ]; then
+      echo "Release PR is not ready yet ($attempt/$attempts)"
+      sleep "$poll_seconds"
+      continue
+    fi
+    break
+  fi
   if [ "$state" = "MERGED" ]; then
     echo "Release PR merged: $pr"
     exit 0
