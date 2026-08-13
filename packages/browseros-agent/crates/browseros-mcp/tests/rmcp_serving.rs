@@ -5,7 +5,7 @@ use axum::{
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, Implementation,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
         InitializeRequestParams, InitializeResult, ServerCapabilities,
     },
     serve_server,
@@ -138,7 +138,7 @@ impl ServerHandler for ProbeService {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let session_id = session_id_from_request_context(&context);
         self.state
             .push(self.instance(), "call_tool", session_id.clone(), None)
@@ -147,7 +147,8 @@ impl ServerHandler for ProbeService {
             "{}:{}",
             request.name,
             session_id.unwrap_or_else(|| "missing".to_string())
-        ))]))
+        ))])
+        .into())
     }
 }
 

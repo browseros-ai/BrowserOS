@@ -19,14 +19,15 @@ use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation,
-        InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        PaginatedRequestParams, ServerCapabilities, Tool, ToolAnnotations,
+        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, Tool, ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -289,6 +290,18 @@ impl Drop for ClawMcpService {
     }
 }
 
+// Pin the claw-server to legacy protocol versions across the rmcp 3.x bump.
+// rmcp 3.x advertises 2026-07-28 by default, but the sessionless (modern) state
+// model is not in place yet: advertising it now would let modern clients
+// negotiate a stateless session this handler cannot track. Lifted once the
+// handle-based session model lands.
+const LEGACY_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2025_11_25,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2024_11_05,
+];
+
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -297,6 +310,10 @@ impl ServerHandler for ClawMcpService {
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
             .with_instructions(BROWSERCLAW_MCP_INSTRUCTIONS)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(LEGACY_PROTOCOL_VERSIONS)
     }
 
     async fn initialize(
@@ -338,7 +355,7 @@ impl ServerHandler for ClawMcpService {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session && tool_index.is_none() {
@@ -406,6 +423,7 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await
+        .map(Into::into)
     }
 }
 
@@ -514,6 +532,16 @@ mod tests {
     use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    #[test]
+    fn legacy_protocol_pin_excludes_the_modern_revision() {
+        // Behavior-neutral bump: rmcp 3.x's default advertises 2026-07-28, but the
+        // sessionless state model is not in place yet, so the claw-server pins to
+        // legacy versions. Lifted with the handle-based session model.
+        assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
+        assert!(!LEGACY_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
+        assert!(LEGACY_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
+    }
 
     fn usage_session() -> Arc<Session> {
         Session::new(
