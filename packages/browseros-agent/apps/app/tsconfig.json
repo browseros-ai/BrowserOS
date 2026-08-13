@@ -4,6 +4,9 @@
     "types": ["chrome", "bun"],
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
+    // wxt 0.21's generated base turns on noUncheckedIndexedAccess and verbatimModuleSyntax; opt back out until the codebase adopts them deliberately (verbatim needs codegen's useTypeImports for the generated graphql client).
+    "noUncheckedIndexedAccess": false,
+    "verbatimModuleSyntax": false,
     "paths": {
       "@/*": ["./*"],
       "@browseros/shared/*": ["../../packages/shared/src/*"]
