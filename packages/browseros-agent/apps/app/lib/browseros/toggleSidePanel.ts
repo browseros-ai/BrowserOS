@@ -126,6 +126,13 @@ export async function ensureSidePanelRuntimeStateLoaded(): Promise<void> {
 async function openTabSidePanel({
   tabId,
 }: SidePanelTarget): Promise<SidePanelToggleResult> {
+  if (
+    typeof chrome.sidePanel.browserosIsOpen !== 'function' ||
+    typeof chrome.sidePanel.browserosToggle !== 'function'
+  ) {
+    await chrome.sidePanel.open({ tabId })
+    return { opened: true }
+  }
   const isAlreadyOpen = await chrome.sidePanel.browserosIsOpen({ tabId })
   if (isAlreadyOpen) {
     return { opened: true }
@@ -136,6 +143,10 @@ async function openTabSidePanel({
 async function toggleTabSidePanel({
   tabId,
 }: SidePanelTarget): Promise<SidePanelToggleResult> {
+  if (typeof chrome.sidePanel.browserosToggle !== 'function') {
+    await chrome.sidePanel.open({ tabId })
+    return { opened: true }
+  }
   return await chrome.sidePanel.browserosToggle({ tabId })
 }
 
@@ -153,6 +164,9 @@ async function toggleWindowSidePanel(
   target: SidePanelTarget,
 ): Promise<SidePanelToggleResult> {
   if (openWindowSidePanelIds.has(target.windowId)) {
+    if (typeof chrome.sidePanel.close !== 'function') {
+      return { opened: true }
+    }
     await chrome.sidePanel.close({ windowId: target.windowId })
     rememberWindowSidePanelClosed(target.windowId)
     return { opened: false }
@@ -165,13 +179,13 @@ export function registerSidePanelOpenStateListeners(): void {
   if (sidePanelOpenStateListenersRegistered) return
   sidePanelOpenStateListenersRegistered = true
 
-  chrome.sidePanel.onOpened.addListener((info) => {
+  chrome.sidePanel.onOpened?.addListener((info) => {
     if (info.tabId === undefined) {
       rememberWindowSidePanelOpen(info.windowId)
     }
   })
 
-  chrome.sidePanel.onClosed.addListener((info) => {
+  chrome.sidePanel.onClosed?.addListener((info) => {
     if (info.tabId === undefined) {
       rememberWindowSidePanelClosed(info.windowId)
     }
