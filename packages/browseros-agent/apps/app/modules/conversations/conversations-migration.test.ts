@@ -3,6 +3,7 @@ import type { UIMessage } from 'ai'
 import type { Conversation } from '@/lib/conversations/conversationStorage'
 import {
   collectServerConversations,
+  createSerialRunner,
   migrateLegacyConversations,
   promoteServerConversations,
 } from './conversations-migration.helpers'
@@ -195,5 +196,41 @@ describe('promoteServerConversations', () => {
     expect(result).toEqual({ uploadedIds: ['a'], allUploaded: false })
     expect(drain).toHaveBeenCalledTimes(1)
     expect(drain).toHaveBeenCalledWith('a')
+  })
+})
+
+describe('createSerialRunner', () => {
+  it('runs tasks one at a time', async () => {
+    const run = createSerialRunner()
+    const order: string[] = []
+
+    const first = run(async () => {
+      order.push('1-start')
+      await Promise.resolve()
+      order.push('1-end')
+    })
+    const second = run(async () => {
+      order.push('2-start')
+      order.push('2-end')
+    })
+    await Promise.all([first, second])
+
+    expect(order).toEqual(['1-start', '1-end', '2-start', '2-end'])
+  })
+
+  it('runs the next task even when the previous one rejects', async () => {
+    const run = createSerialRunner()
+    const ran: string[] = []
+
+    const first = run(async () => {
+      throw new Error('boom')
+    })
+    const second = run(async () => {
+      ran.push('second')
+    })
+
+    await expect(first).rejects.toThrow('boom')
+    await second
+    expect(ran).toEqual(['second'])
   })
 })

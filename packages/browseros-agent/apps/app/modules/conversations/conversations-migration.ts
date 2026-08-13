@@ -13,6 +13,7 @@ import {
 } from './conversations.hooks'
 import {
   collectServerConversations,
+  createSerialRunner,
   migrateLegacyConversations,
   promoteServerConversations,
 } from './conversations-migration.helpers'
@@ -67,6 +68,9 @@ export function useLegacyConversationMigration(): void {
 // once per history open); reset when the user is absent, or when a promote does
 // not fully complete, so leftovers retry.
 let lastPromotedUserId: string | undefined
+// Serialize so an account switch cannot run two promotions over the same
+// undrained server rows concurrently (which could upload them into two accounts).
+const runPromoteExclusive = createSerialRunner()
 
 /**
  * On sign-in, promote server-held (logged-out) history to the cloud (draining
@@ -87,21 +91,24 @@ export function useSignInConversationPromote(onPromoted?: () => void): void {
     lastPromotedUserId = userId
 
     let cancelled = false
-    promoteServerConversations({
-      userId,
-      collect: () =>
-        collectServerConversations({
-          listSummaries: fetchServerConversations,
-          loadDetail: fetchServerConversation,
-        }),
-      upload: uploadConversations,
-      drain: deleteServerConversationRow,
-    })
+    runPromoteExclusive(() =>
+      promoteServerConversations({
+        userId,
+        collect: () =>
+          collectServerConversations({
+            listSummaries: fetchServerConversations,
+            loadDetail: fetchServerConversation,
+          }),
+        upload: uploadConversations,
+        drain: deleteServerConversationRow,
+      }),
+    )
       .then((result) => {
-        if (cancelled) return
-        // Leftovers stay on the server; let the next mount retry them.
+        // Reset the guard whenever the promote did not fully complete, even if
+        // this effect was cancelled, so leftovers are retried and never linger
+        // leak-eligible. Only the UI refresh is gated on cancellation.
         if (!result.allUploaded) lastPromotedUserId = undefined
-        if (result.uploadedIds.length > 0) onPromoted?.()
+        if (!cancelled && result.uploadedIds.length > 0) onPromoted?.()
       })
       .catch((error) => {
         lastPromotedUserId = undefined
