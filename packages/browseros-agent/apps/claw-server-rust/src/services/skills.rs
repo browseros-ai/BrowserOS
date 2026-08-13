@@ -14,6 +14,7 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::Mutex;
 
 /// The embedded product skill owns this directory name; user skills may not
 /// reuse it or they would clobber the managed BrowserOS skill.
@@ -87,6 +88,10 @@ pub struct SkillService {
     repo: SkillsRepository,
     harness: Arc<HarnessService>,
     skills_dir: PathBuf,
+    /// Serializes mutations so the disk, the harness, and the row stay
+    /// consistent, and so a get-then-create decision cannot race a
+    /// concurrent create of the same new name.
+    mutate: Mutex<()>,
 }
 
 impl SkillService {
@@ -96,6 +101,7 @@ impl SkillService {
             repo,
             harness,
             skills_dir,
+            mutate: Mutex::new(()),
         }
     }
 
@@ -153,6 +159,11 @@ impl SkillService {
     }
 
     pub async fn create(&self, input: CreateSkill) -> AppResult<SkillView> {
+        let _guard = self.mutate.lock().await;
+        self.create_locked(input).await
+    }
+
+    async fn create_locked(&self, input: CreateSkill) -> AppResult<SkillView> {
         if !is_valid_skill_name(&input.name) {
             return Err(AppError::bad_request(
                 "skill name must contain only lowercase letters, digits, and hyphens",
@@ -161,10 +172,6 @@ impl SkillService {
         if RESERVED_SKILL_NAMES.contains(&input.name.as_str()) {
             return Err(AppError::conflict("skill name is reserved"));
         }
-        if self.repo.exists(&input.name).await? {
-            return Err(AppError::conflict("a skill with this name already exists"));
-        }
-
         let CreateSkill {
             name,
             description,
@@ -175,44 +182,87 @@ impl SkillService {
             source_session_id,
         } = input;
         let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
-        // The agent install happens before the row lands, so a failure after it
-        // rolls the side effects back to avoid an install with no persisted row.
-        let body_path = self.write_body(&name, &content).await?;
-        let spec = SkillSpec::new(name.as_str(), content)
-            .map_err(|error| AppError::bad_request(error.to_string()))?;
-        let linked = match self.harness.install_skill(spec).await {
+        let model = self.new_skill_model(&name, description, site, origin, source_session_id);
+        self.try_install_new(&name, &content, model)
+            .await?
+            .ok_or_else(|| AppError::conflict("a skill with this name already exists"))
+    }
+
+    /// Reserve the name with an atomic insert, then write the canonical file and
+    /// link it into the connected agents. The unique primary key arbitrates
+    /// across processes, so a concurrent create of the same new name loses the
+    /// insert and returns `Ok(None)` without touching any files or installs. A
+    /// failure after a won reservation rolls the row and side effects back.
+    async fn try_install_new(
+        &self,
+        name: &str,
+        content: &str,
+        mut model: skills::Model,
+    ) -> AppResult<Option<SkillView>> {
+        if !self.repo.try_insert(model.clone()).await? {
+            return Ok(None);
+        }
+        let linked = match self.write_and_install(name, content).await {
             Ok(linked) => linked,
             Err(error) => {
-                self.rollback_skill(&name).await;
+                let _ = self.repo.delete(name).await;
+                self.rollback_skill(name).await;
                 return Err(error);
             }
         };
+        model.linked_agents_json = linked_agents_json(&linked);
+        self.repo.update(model.clone()).await?;
+        Ok(Some(SkillView {
+            model,
+            linked_agents: linked.into_iter().collect(),
+            stats: RunStats::default(),
+        }))
+    }
 
+    async fn write_and_install(&self, name: &str, content: &str) -> AppResult<BTreeSet<AgentId>> {
+        self.write_body(name, content).await?;
+        let spec = SkillSpec::new(name, content.to_string())
+            .map_err(|error| AppError::bad_request(error.to_string()))?;
+        self.harness.install_skill(spec).await
+    }
+
+    fn new_skill_model(
+        &self,
+        name: &str,
+        description: String,
+        site: Option<String>,
+        origin: SkillOrigin,
+        source_session_id: Option<String>,
+    ) -> skills::Model {
         let now = now_ms();
-        let model = skills::Model {
-            name: name.clone(),
+        skills::Model {
+            name: name.to_string(),
             description,
             site,
             origin: origin.as_str().to_owned(),
             source_session_id,
             version: 1,
-            body_path,
-            linked_agents_json: linked_agents_json(&linked),
+            body_path: self.canonical_body_path(name),
+            linked_agents_json: "[]".to_string(),
             created_at: now,
             updated_at: now,
-        };
-        if let Err(error) = self.repo.insert(model.clone()).await {
-            self.rollback_skill(&name).await;
-            return Err(error);
         }
-        Ok(SkillView {
-            model,
-            linked_agents: linked.into_iter().collect(),
-            stats: RunStats::default(),
-        })
+    }
+
+    fn canonical_body_path(&self, name: &str) -> String {
+        self.skills_dir
+            .join(name)
+            .join("SKILL.md")
+            .to_string_lossy()
+            .into_owned()
     }
 
     pub async fn update(&self, name: &str, input: UpdateSkill) -> AppResult<SkillDetailView> {
+        let _guard = self.mutate.lock().await;
+        self.update_locked(name, input).await
+    }
+
+    async fn update_locked(&self, name: &str, input: UpdateSkill) -> AppResult<SkillDetailView> {
         let mut model = self.require(name).await?;
         let mut relinked: Option<BTreeSet<AgentId>> = None;
         let mut previous_body: Option<String> = None;
@@ -252,7 +302,62 @@ impl SkillService {
         self.get(name).await
     }
 
+    /// Create the skill if its name is free, otherwise rewrite the existing
+    /// skill's body from the same inputs. Idempotent on name; this is what the
+    /// agent-facing MCP tool calls so re-authoring a task updates it in place.
+    pub async fn upsert(&self, input: CreateSkill) -> AppResult<SkillView> {
+        let _guard = self.mutate.lock().await;
+        if !is_valid_skill_name(&input.name) {
+            return Err(AppError::bad_request(
+                "skill name must contain only lowercase letters, digits, and hyphens",
+            ));
+        }
+        if RESERVED_SKILL_NAMES.contains(&input.name.as_str()) {
+            return Err(AppError::conflict("skill name is reserved"));
+        }
+        let CreateSkill {
+            name,
+            description,
+            site,
+            steps,
+            learned_notes,
+            origin,
+            source_session_id,
+        } = input;
+        let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
+        let model = self.new_skill_model(
+            &name,
+            description.clone(),
+            site.clone(),
+            origin,
+            source_session_id,
+        );
+        // Reserve atomically; if the name is already taken (this run lost the
+        // insert or the skill pre-existed), fall through to an in-place update.
+        match self.try_install_new(&name, &content, model).await? {
+            Some(view) => Ok(view),
+            None => {
+                let detail = self
+                    .update_locked(
+                        &name,
+                        UpdateSkill {
+                            description: Some(description),
+                            site,
+                            body: Some(content),
+                        },
+                    )
+                    .await?;
+                Ok(detail.view)
+            }
+        }
+    }
+
     pub async fn delete(&self, name: &str) -> AppResult<()> {
+        let _guard = self.mutate.lock().await;
+        self.delete_locked(name).await
+    }
+
+    async fn delete_locked(&self, name: &str) -> AppResult<()> {
         self.require(name).await?;
         self.harness.uninstall_skill(name).await?;
         self.repo.delete(name).await?;

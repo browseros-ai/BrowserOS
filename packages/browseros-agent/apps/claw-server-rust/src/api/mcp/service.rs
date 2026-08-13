@@ -12,7 +12,10 @@ use crate::{
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
-    services::sessions::Session,
+    services::{
+        sessions::Session,
+        skills::{CreateSkill, SkillOrigin},
+    },
 };
 use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult, catalog};
 use rmcp::{
@@ -43,6 +46,8 @@ const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
+const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
+const SAVE_SKILL_DESCRIPTION: &str = "Save the current repeatable browser task as a BrowserOS neo skill so it can be re-run by name later. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. Call again with the same name to update it in place.";
 
 /// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
 /// server session, which records its end and begins retained-group handling.
@@ -50,6 +55,7 @@ pub struct ClawMcpService {
     state: AppState,
     catalog: Arc<Vec<ToolDef>>,
     name_session_tool: Tool,
+    save_skill_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -76,6 +82,7 @@ impl ClawMcpService {
             state,
             catalog: Arc::new(catalog()),
             name_session_tool: name_session_tool(),
+            save_skill_tool: save_skill_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -94,6 +101,7 @@ impl ClawMcpService {
             .map(ToolDef::to_mcp_tool)
             .collect::<Vec<_>>();
         tools.push(self.name_session_tool.clone());
+        tools.push(self.save_skill_tool.clone());
         tools
     }
 
@@ -142,6 +150,48 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: NAME_SESSION_TOOL_NAME,
+                raw_args,
+                result: &result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    async fn call_save_skill(&self, started: &StartedSession, raw_args: &Value) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
+        let session_id = started.session.id().as_str().to_string();
+        let result = match parse_save_skill(raw_args, session_id) {
+            Ok(input) => match self.state.skills.upsert(input).await {
+                Ok(view) => ToolResult::text(format!("saved skill /{}", view.model.name), None),
+                Err(error) => ToolResult::error(error.to_string()),
+            },
+            Err(message) => ToolResult::error(message),
+        };
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: SAVE_SKILL_TOOL_NAME,
                 raw_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -330,6 +380,9 @@ impl ServerHandler for ClawMcpService {
         if name == NAME_SESSION_TOOL_NAME {
             return Some(self.name_session_tool.clone());
         }
+        if name == SAVE_SKILL_TOOL_NAME {
+            return Some(self.save_skill_tool.clone());
+        }
         self.find_tool_index(name)
             .map(|index| self.catalog[index].to_mcp_tool())
     }
@@ -340,8 +393,9 @@ impl ServerHandler for ClawMcpService {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
+        let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
         let tool_index = self.find_tool_index(&request.name);
-        if !is_name_session && tool_index.is_none() {
+        if !is_name_session && !is_save_skill && tool_index.is_none() {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         }
         let raw_args = request
@@ -357,6 +411,8 @@ impl ServerHandler for ClawMcpService {
 
         let result = if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
+        } else if is_save_skill {
+            Ok(self.call_save_skill(&started, &raw_args).await)
         } else {
             let Some(tool_index) = tool_index else {
                 unreachable!("catalog tool was validated before session resolution");
@@ -475,6 +531,77 @@ fn name_session_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
+}
+
+fn save_skill_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+            "description": { "type": "string" },
+            "steps": { "type": "array", "items": { "type": "string" } },
+            "learnedNotes": { "type": "array", "items": { "type": "string" } },
+            "site": { "type": "string" }
+        },
+        "required": ["name", "description"]
+    }) else {
+        unreachable!();
+    };
+    Tool::new(SAVE_SKILL_TOOL_NAME, SAVE_SKILL_DESCRIPTION, input_schema).with_annotations(
+        ToolAnnotations::with_title("Save skill")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(true),
+    )
+}
+
+fn parse_save_skill(raw_args: &Value, session_id: String) -> Result<CreateSkill, String> {
+    let name = raw_args
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("name must be a non-empty string")?
+        .to_string();
+    let description = raw_args
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("description must be a non-empty string")?
+        .to_string();
+    let steps = parse_string_array(raw_args.get("steps"), "steps")?;
+    let learned_notes = parse_string_array(raw_args.get("learnedNotes"), "learnedNotes")?;
+    let site = raw_args
+        .get("site")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Ok(CreateSkill {
+        name,
+        description,
+        site,
+        steps,
+        learned_notes,
+        origin: SkillOrigin::Agent,
+        source_session_id: Some(session_id),
+    })
+}
+
+fn parse_string_array(value: Option<&Value>, field: &str) -> Result<Vec<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{field} entries must be strings"))
+            })
+            .collect(),
+        Some(_) => Err(format!("{field} must be an array of strings")),
+    }
 }
 
 fn clean_client_field(value: &str, fallback: &str) -> String {
@@ -664,9 +791,11 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
+        expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         assert_eq!(names, expected);
         assert!(names.contains(&"run".to_string()));
         assert!(names.contains(&"name_session".to_string()));
+        assert!(names.contains(&"save_skill".to_string()));
         Ok(())
     }
 
@@ -707,6 +836,124 @@ mod tests {
                     .idempotent(true)
             )
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_skill_is_registered_locally_with_annotations() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let listed = service
+            .listed_tools()
+            .into_iter()
+            .find(|tool| tool.name == SAVE_SKILL_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("save_skill missing from list"))?;
+        let fetched = service
+            .get_tool(SAVE_SKILL_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("save_skill missing from get_tool"))?;
+
+        assert_eq!(listed, fetched);
+        assert_eq!(listed.description.as_deref(), Some(SAVE_SKILL_DESCRIPTION));
+        assert_eq!(
+            listed.annotations,
+            Some(
+                ToolAnnotations::with_title("Save skill")
+                    .read_only(false)
+                    .destructive(false)
+                    .idempotent(true)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_save_skill_reads_and_defaults_arguments() -> anyhow::Result<()> {
+        let input = parse_save_skill(
+            &json!({
+                "name": "  inbox-sweep  ",
+                "description": "  Check the inbox  ",
+                "steps": ["Open the inbox", "Draft replies"]
+            }),
+            "sess_123".to_string(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        assert_eq!(input.name, "inbox-sweep");
+        assert_eq!(input.description, "Check the inbox");
+        assert_eq!(input.steps, vec!["Open the inbox", "Draft replies"]);
+        assert!(input.learned_notes.is_empty());
+        assert_eq!(input.site, None);
+        assert_eq!(input.source_session_id.as_deref(), Some("sess_123"));
+
+        assert!(parse_save_skill(&json!({ "description": "x" }), String::new()).is_err());
+        assert!(parse_save_skill(&json!({ "name": "x" }), String::new()).is_err());
+        assert!(
+            parse_save_skill(
+                &json!({ "name": "x", "description": "d", "steps": [1, 2] }),
+                String::new()
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_skill_authors_then_updates_a_user_skill() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = StartedSession {
+            session: session.clone(),
+            agent_label: "codex".to_string(),
+        };
+
+        service
+            .call_save_skill(
+                &started,
+                &json!({
+                    "name": "inbox-sweep",
+                    "description": "Check the inbox",
+                    "steps": ["Open the inbox", "Draft replies"],
+                    "learnedNotes": ["Read the DOM snapshot, not screenshots"],
+                    "site": "mail.google.com"
+                }),
+            )
+            .await;
+
+        let created = call.state.skills.get("inbox-sweep").await?;
+        assert_eq!(created.view.model.origin, "agent");
+        assert_eq!(
+            created.view.model.source_session_id.as_deref(),
+            Some(session.id().as_str())
+        );
+        assert_eq!(created.view.model.version, 1);
+        assert!(created.body.contains("Open the inbox"));
+        assert!(
+            created
+                .body
+                .contains("Read the DOM snapshot, not screenshots")
+        );
+        assert!(created.body.contains("tools: browseros-neo"));
+
+        // Same name again updates in place and bumps the version.
+        service
+            .call_save_skill(
+                &started,
+                &json!({
+                    "name": "inbox-sweep",
+                    "description": "Check the inbox and reply",
+                    "steps": ["Open the inbox", "Draft and send"]
+                }),
+            )
+            .await;
+        let updated = call.state.skills.get("inbox-sweep").await?;
+        assert_eq!(updated.view.model.version, 2);
+        assert_eq!(updated.view.model.description, "Check the inbox and reply");
+        assert!(updated.body.contains("Draft and send"));
+
         Ok(())
     }
 
