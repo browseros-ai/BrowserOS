@@ -14,6 +14,7 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::Mutex;
 
 /// The embedded product skill owns this directory name; user skills may not
 /// reuse it or they would clobber the managed BrowserOS skill.
@@ -87,6 +88,10 @@ pub struct SkillService {
     repo: SkillsRepository,
     harness: Arc<HarnessService>,
     skills_dir: PathBuf,
+    /// Serializes mutations so the disk, the harness, and the row stay
+    /// consistent, and so a get-then-create decision cannot race a
+    /// concurrent create of the same new name.
+    mutate: Mutex<()>,
 }
 
 impl SkillService {
@@ -96,6 +101,7 @@ impl SkillService {
             repo,
             harness,
             skills_dir,
+            mutate: Mutex::new(()),
         }
     }
 
@@ -153,6 +159,11 @@ impl SkillService {
     }
 
     pub async fn create(&self, input: CreateSkill) -> AppResult<SkillView> {
+        let _guard = self.mutate.lock().await;
+        self.create_locked(input).await
+    }
+
+    async fn create_locked(&self, input: CreateSkill) -> AppResult<SkillView> {
         if !is_valid_skill_name(&input.name) {
             return Err(AppError::bad_request(
                 "skill name must contain only lowercase letters, digits, and hyphens",
@@ -213,6 +224,11 @@ impl SkillService {
     }
 
     pub async fn update(&self, name: &str, input: UpdateSkill) -> AppResult<SkillDetailView> {
+        let _guard = self.mutate.lock().await;
+        self.update_locked(name, input).await
+    }
+
+    async fn update_locked(&self, name: &str, input: UpdateSkill) -> AppResult<SkillDetailView> {
         let mut model = self.require(name).await?;
         let mut relinked: Option<BTreeSet<AgentId>> = None;
         let mut previous_body: Option<String> = None;
@@ -256,6 +272,7 @@ impl SkillService {
     /// skill's body from the same inputs. Idempotent on name; this is what the
     /// agent-facing MCP tool calls so re-authoring a task updates it in place.
     pub async fn upsert(&self, input: CreateSkill) -> AppResult<SkillView> {
+        let _guard = self.mutate.lock().await;
         if !is_valid_skill_name(&input.name) {
             return Err(AppError::bad_request(
                 "skill name must contain only lowercase letters, digits, and hyphens",
@@ -265,7 +282,7 @@ impl SkillService {
             return Err(AppError::conflict("skill name is reserved"));
         }
         if self.repo.get(&input.name).await?.is_none() {
-            return self.create(input).await;
+            return self.create_locked(input).await;
         }
         let CreateSkill {
             name,
@@ -277,7 +294,7 @@ impl SkillService {
         } = input;
         let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
         let detail = self
-            .update(
+            .update_locked(
                 &name,
                 UpdateSkill {
                     description: Some(description),
@@ -290,6 +307,11 @@ impl SkillService {
     }
 
     pub async fn delete(&self, name: &str) -> AppResult<()> {
+        let _guard = self.mutate.lock().await;
+        self.delete_locked(name).await
+    }
+
+    async fn delete_locked(&self, name: &str) -> AppResult<()> {
         self.require(name).await?;
         self.harness.uninstall_skill(name).await?;
         self.repo.delete(name).await?;

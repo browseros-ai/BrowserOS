@@ -3,7 +3,11 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::{AppState, build_router, config::Config};
+use claw_server_rust::{
+    AppState, build_router,
+    config::Config,
+    services::skills::{CreateSkill, SkillOrigin},
+};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tempfile::TempDir;
@@ -13,6 +17,7 @@ struct TestApp {
     router: Router,
     _dir: TempDir,
     root: PathBuf,
+    state: AppState,
 }
 
 async fn test_app() -> anyhow::Result<TestApp> {
@@ -33,9 +38,10 @@ async fn test_app() -> anyhow::Result<TestApp> {
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     Ok(TestApp {
-        router: build_router(state),
+        router: build_router(state.clone()),
         _dir: dir,
         root,
+        state,
     })
 }
 
@@ -219,6 +225,41 @@ async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()
     // cannot break the frontmatter block.
     assert!(content.contains(r#"description: "Reply within 24h: keep it brief\nthen stop""#));
     assert_eq!(content.matches("---").count(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let skills = app.state.skills.clone();
+    let input = |description: &str| CreateSkill {
+        name: "race-skill".to_string(),
+        description: description.to_string(),
+        site: None,
+        steps: vec!["Do the thing".to_string()],
+        learned_notes: vec![],
+        origin: SkillOrigin::Agent,
+        source_session_id: None,
+    };
+
+    let (first, second) = tokio::join!(skills.upsert(input("A")), skills.upsert(input("B")));
+    // Both calls settle without error: one creates, the other updates in place;
+    // neither call's rollback removes the other's installed skill.
+    first?;
+    second?;
+
+    let detail = skills.get("race-skill").await?;
+    assert!(
+        app.root
+            .join("skills")
+            .join("race-skill")
+            .join("SKILL.md")
+            .exists()
+    );
+    assert!(detail.body.contains("Do the thing"));
+    // A create followed by an update leaves the skill at version 2.
+    assert_eq!(detail.view.model.version, 2);
 
     Ok(())
 }
