@@ -5,9 +5,11 @@
  */
 
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import {
+  type CallToolResult,
+  Client,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client'
 import { jsonSchemaObjectToZodRawShape } from 'zod-from-json-schema'
 import type { KlavisClient } from './client'
 import type { KlavisStrataCache } from './strata-cache'

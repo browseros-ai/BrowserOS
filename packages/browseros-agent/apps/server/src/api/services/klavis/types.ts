@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, Tool } from '@modelcontextprotocol/client'
 
 export interface ConnectorCatalogItem {
   name: string
