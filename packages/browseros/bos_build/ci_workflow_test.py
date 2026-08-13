@@ -1296,6 +1296,7 @@ class NightlyWorkflowTest(unittest.TestCase):
             for step in reserve_workflow["jobs"]["reserve"]["steps"]
             if step.get("name") == "Reserve the next version on main"
         )
+        self.assertEqual(reserve_step["env"]["GH_TOKEN"], "${{ github.token }}")
         for token in (
             'git merge-base --is-ancestor "$TRIGGER_SHA" origin/main',
             "bump_version.py --mode offset+build",
