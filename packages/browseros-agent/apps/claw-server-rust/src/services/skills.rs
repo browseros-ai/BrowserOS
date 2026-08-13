@@ -252,6 +252,43 @@ impl SkillService {
         self.get(name).await
     }
 
+    /// Create the skill if its name is free, otherwise rewrite the existing
+    /// skill's body from the same inputs. Idempotent on name; this is what the
+    /// agent-facing MCP tool calls so re-authoring a task updates it in place.
+    pub async fn upsert(&self, input: CreateSkill) -> AppResult<SkillView> {
+        if !is_valid_skill_name(&input.name) {
+            return Err(AppError::bad_request(
+                "skill name must contain only lowercase letters, digits, and hyphens",
+            ));
+        }
+        if RESERVED_SKILL_NAMES.contains(&input.name.as_str()) {
+            return Err(AppError::conflict("skill name is reserved"));
+        }
+        if self.repo.get(&input.name).await?.is_none() {
+            return self.create(input).await;
+        }
+        let CreateSkill {
+            name,
+            description,
+            site,
+            steps,
+            learned_notes,
+            ..
+        } = input;
+        let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
+        let detail = self
+            .update(
+                &name,
+                UpdateSkill {
+                    description: Some(description),
+                    site,
+                    body: Some(content),
+                },
+            )
+            .await?;
+        Ok(detail.view)
+    }
+
     pub async fn delete(&self, name: &str) -> AppResult<()> {
         self.require(name).await?;
         self.harness.uninstall_skill(name).await?;
