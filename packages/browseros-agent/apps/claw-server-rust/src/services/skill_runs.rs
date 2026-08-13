@@ -4,12 +4,13 @@ use crate::{
         audit_log::{TaskStatus, TaskSummary},
         entities::skill_runs,
     },
-    error::AppResult,
+    error::{AppError, AppResult},
 };
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::Mutex;
 use tracing::warn;
 use ulid::Ulid;
 
@@ -20,16 +21,28 @@ use ulid::Ulid;
 pub struct SkillRunService {
     repo: SkillsRepository,
     audit_log: Arc<AuditLog>,
+    /// Serializes projection so concurrent finalizers of the same skill cannot
+    /// read the same max run number and assign duplicate run numbers.
+    finalize_lock: Mutex<()>,
 }
 
 impl SkillRunService {
     #[must_use]
     pub fn new(repo: SkillsRepository, audit_log: Arc<AuditLog>) -> Self {
-        Self { repo, audit_log }
+        Self {
+            repo,
+            audit_log,
+            finalize_lock: Mutex::new(()),
+        }
     }
 
     /// Tie the current session to a skill; completion turns this into a run row.
+    /// Rejects a name that does not resolve to a saved skill so a typo or stale
+    /// name never records a run for a skill that does not exist.
     pub async fn mark(&self, session_id: &str, skill_name: &str) -> AppResult<()> {
+        if self.repo.get(skill_name).await?.is_none() {
+            return Err(AppError::not_found("skill not found"));
+        }
         self.repo
             .upsert_mark(session_id, skill_name, now_ms())
             .await
@@ -49,9 +62,16 @@ impl SkillRunService {
     /// Project one completed, marked session into a run row. Idempotent: a
     /// session records at most one run. Returns whether a new run was recorded.
     pub async fn finalize(&self, session_id: &str) -> AppResult<bool> {
+        let _guard = self.finalize_lock.lock().await;
         let Some(mark) = self.repo.get_mark(session_id).await? else {
             return Ok(false);
         };
+        // The skill may have been deleted between the mark and completion; drop
+        // the mark rather than record a run for a skill that no longer exists.
+        if self.repo.get(&mark.skill_name).await?.is_none() {
+            self.repo.delete_mark(session_id).await?;
+            return Ok(false);
+        }
         let Some(task) = self.audit_log.get_task_summary(session_id).await? else {
             return Ok(false);
         };

@@ -341,6 +341,59 @@ async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn mark_rejects_unknown_skill_and_finalize_skips_a_deleted_one() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+
+    // A name that does not resolve to a saved skill is rejected at mark time.
+    assert!(
+        state
+            .skill_runs
+            .mark("some-session", "not-a-skill")
+            .await
+            .is_err()
+    );
+
+    // A skill deleted between the mark and completion records no run.
+    state
+        .skills
+        .create(CreateSkill {
+            name: "brief".to_string(),
+            description: "Daily brief".to_string(),
+            site: None,
+            steps: vec![],
+            learned_notes: vec![],
+            origin: SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+    state
+        .audit_log
+        .record_session_start(
+            "gone-sess",
+            "convo-run",
+            "codex",
+            "codex/brief",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("gone-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("gone-sess", "closed", None)
+        .await?;
+    state.skill_runs.mark("gone-sess", "brief").await?;
+    state.skills.delete("brief").await?;
+    assert!(!state.skill_runs.finalize("gone-sess").await?);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Result<()> {
     let app = test_app().await?;
     let skills = app.state.skills.clone();
