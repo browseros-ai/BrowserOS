@@ -2,7 +2,9 @@ use crate::{
     analytics::{AnalyticsService, AnalyticsSink},
     api::http,
     config::Config,
-    db::{AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger},
+    db::{
+        AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger, SkillsRepository,
+    },
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
     services::{
@@ -17,6 +19,7 @@ use crate::{
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
         sessions::Sessions,
+        skills::SkillService,
     },
     storage::JsonStore,
 };
@@ -38,6 +41,7 @@ pub struct AppState {
     pub tab_activity: Arc<TabActivityService>,
     pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
+    pub skills: Arc<SkillService>,
     pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
@@ -86,6 +90,11 @@ impl AppState {
             home_dir,
             skill,
             analytics_sink.clone(),
+        ));
+        let skills = Arc::new(SkillService::new(
+            SkillsRepository::new(database.clone()),
+            harness.clone(),
+            config.browserclaw_dir.join("skills"),
         ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
@@ -160,6 +169,7 @@ impl AppState {
             tab_activity,
             tab_registry,
             harness,
+            skills,
             analytics,
             profiles,
             sessions,
