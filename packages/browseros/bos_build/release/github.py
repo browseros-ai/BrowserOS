@@ -282,10 +282,18 @@ def github_release_tag(version: str, product_id: str) -> str:
 
 def inspect_github_release(tag: str, repo: str) -> Dict:
     """Read a release or raise; callers must never treat API failure as absence."""
-    tag_uri = quote(tag, safe="")
     document = json.loads(
         _run_gh(
-            ["gh", "api", f"repos/{repo}/releases/tags/{tag_uri}"],
+            [
+                "gh",
+                "release",
+                "view",
+                tag,
+                "--repo",
+                repo,
+                "--json",
+                "isDraft,targetCommitish,assets",
+            ],
             subprocess.run,
         )
     )
@@ -304,8 +312,8 @@ def inspect_github_release(tag: str, repo: str) -> Dict:
             "size": asset.get("size"),
         }
     return {
-        "isDraft": document.get("draft"),
-        "targetCommitish": document.get("target_commitish"),
+        "isDraft": document.get("isDraft"),
+        "targetCommitish": document.get("targetCommitish"),
         "assets": list(assets),
         "asset_metadata": assets,
     }

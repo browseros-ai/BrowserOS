@@ -188,10 +188,9 @@ jobs:
           title="BrowserOS neo Onboarding - v$VERSION"
           release_sha="${{ steps.release.outputs.release_sha }}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            tag_uri="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"
-            release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
-            is_draft="$(jq -r '.draft' <<< "$release")"
-            target="$(jq -r '.target_commitish' <<< "$release")"
+            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
             if [ "$is_draft" != "true" ] || [ "$target" != "$release_sha" ]; then
               echo "::error::$RELEASE_TAG is not a reusable draft for $release_sha"
               exit 1
@@ -289,16 +288,15 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          tag_uri="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"
-          release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_uri")"
+          release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
           asset_count="$(jq '[.assets[] | select(.name == "browseros-claw-onboard-resources.zip")] | length' <<< "$release")"
           if [ "$asset_count" -ne 1 ]; then
             echo "::error::Expected onboarding draft asset, found $asset_count"
             exit 1
           fi
           if [ "$RESERVATION" != "tag" ]; then
-            is_draft="$(jq -r '.draft' <<< "$release")"
-            target="$(jq -r '.target_commitish' <<< "$release")"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
             if [ "$is_draft" != "true" ] || [ "$target" != "$RELEASE_SHA" ]; then
               echo "::error::$RELEASE_TAG is not the prepared draft for $RELEASE_SHA"
               exit 1

@@ -958,6 +958,21 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     "max",
                 )
 
+    def test_component_workflows_inspect_private_drafts_with_release_cli(self):
+        for workflow_name in (
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-claw-onboard.yml",
+            "release-extensions.yml",
+        ):
+            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow_name):
+                self.assertNotIn("releases/tags/", text)
+                self.assertGreaterEqual(
+                    text.count("--json isDraft,targetCommitish,assets"),
+                    2,
+                )
+
     def test_release_critical_concurrency_groups_retain_pending_runs(self):
         for workflow_name in (
             "release-browseros.yml",

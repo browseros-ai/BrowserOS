@@ -131,10 +131,10 @@ class ReleaseAdapterTest(unittest.TestCase):
             command[-1], "repos/browseros-ai/BrowserOS/releases?per_page=100"
         )
 
-    def test_inspects_release_through_rest_with_encoded_tag(self) -> None:
+    def test_inspects_draft_release_through_release_cli(self) -> None:
         response = {
-            "draft": True,
-            "target_commitish": "1" * 40,
+            "isDraft": True,
+            "targetCommitish": "1" * 40,
             "assets": [
                 {
                     "name": "BrowserOS.dmg",
@@ -158,11 +158,9 @@ class ReleaseAdapterTest(unittest.TestCase):
         self.assertEqual(release["assets"], ["BrowserOS.dmg"])
         self.assertEqual(release["asset_metadata"]["BrowserOS.dmg"]["sha256"], "a" * 64)
         command = runner.call_args.args[0]
-        self.assertEqual(command[:2], ["gh", "api"])
-        self.assertEqual(
-            command[-1],
-            "repos/browseros-ai/BrowserOS/releases/tags/ext-agent%2Fv0.0.124.0",
-        )
+        self.assertEqual(command[:3], ["gh", "release", "view"])
+        self.assertEqual(command[3], "ext-agent/v0.0.124.0")
+        self.assertEqual(command[-2:], ["--json", "isDraft,targetCommitish,assets"])
 
 
 if __name__ == "__main__":
