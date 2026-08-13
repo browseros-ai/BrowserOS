@@ -10,7 +10,20 @@ from unittest import mock
 from . import universal
 from .universal import UNIVERSAL_ARCHITECTURES, MergeUniversalModule
 from ...core.context import Context
-from ...core.step import ValidationError, all_steps
+from ...core.resume import ResumeState, checkpoint_path, write_step_checkpoint
+from ...core.step import Step, ValidationError, all_steps
+
+
+UNIVERSAL_FULL_PLAN = (
+    ("arm64", ("compile", "sign_macos", "package_macos")),
+    ("x64", ("compile", "sign_macos", "package_macos")),
+    ("universal", ("merge_universal", "sign_macos")),
+)
+
+
+class _SignStep(Step):
+    name = "sign_macos"
+    produces = ["signed_app"]
 
 
 def _universal_ctx(chromium_src: Path) -> Context:
@@ -65,6 +78,68 @@ class ValidateTest(MergeUniversalTestBase):
     def test_passes_when_both_arch_apps_exist(self):
         self._create_arch_apps()
         MergeUniversalModule().validate(self.ctx)
+
+
+class ProvenanceTest(MergeUniversalTestBase):
+    def _state(self, digest: str = "candidate") -> ResumeState:
+        return ResumeState(
+            full_arch_plans=UNIVERSAL_FULL_PLAN,
+            resume_from=None,
+            candidate={"schema": "test"},
+            candidate_digest=digest,
+        )
+
+    def _arch_ctx(self, arch: str, state: ResumeState) -> Context:
+        ctx = Context(
+            root_dir=self.ctx.root_dir,
+            chromium_src=self.ctx.chromium_src,
+            architecture=arch,
+            build_type=self.ctx.build_type,
+            product=self.ctx.product,
+        )
+        ctx.resume_state = state
+        return ctx
+
+    def _write_arch_checkpoints(self, state: ResumeState) -> None:
+        self.ctx.resume_state = state
+        for arch, steps in UNIVERSAL_FULL_PLAN[:2]:
+            arch_ctx = self._arch_ctx(arch, state)
+            app = _arch_app(self.ctx, arch)
+            app.mkdir(parents=True, exist_ok=True)
+            arch_ctx.artifact_registry.add("signed_app", app)
+            write_step_checkpoint(arch_ctx, _SignStep(), steps)
+
+    def test_valid_arch_provenance_passes(self):
+        self._write_arch_checkpoints(self._state())
+
+        MergeUniversalModule().validate(self.ctx)
+
+    def test_candidate_mismatch_fails(self):
+        self._write_arch_checkpoints(self._state("old"))
+        self.ctx.resume_state = self._state("new")
+
+        with self.assertRaisesRegex(ValidationError, "candidate"):
+            MergeUniversalModule().validate(self.ctx)
+
+    def test_architecture_mismatch_fails(self):
+        state = self._state()
+        self._write_arch_checkpoints(state)
+        path = checkpoint_path(self.ctx, "sign_macos", "x64")
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["architecture"] = "arm64"
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValidationError, "architecture mismatch"):
+            MergeUniversalModule().validate(self.ctx)
+
+    def test_modified_arch_app_fails(self):
+        self._write_arch_checkpoints(self._state())
+        changed = _arch_app(self.ctx, "x64") / "Contents" / "stale"
+        changed.parent.mkdir(parents=True, exist_ok=True)
+        changed.write_text("old")
+
+        with self.assertRaisesRegex(ValidationError, "checksum mismatch"):
+            MergeUniversalModule().validate(self.ctx)
 
 
 class ExecuteTest(MergeUniversalTestBase):
