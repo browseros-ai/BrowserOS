@@ -250,17 +250,28 @@ impl ClawMcpService {
         Ok(started)
     }
 
-    /// Modern stateless path. Resolves the handle-carried session without touching
-    /// `self.lifecycle`, so the per-request service `Drop` never reaps it; idle
-    /// sweeping owns cleanup instead. A client-supplied handle with no live session
-    /// is minted under that id so continuity survives idle reaps and restarts.
-    async fn ensure_modern_session(&self, handle: SessionId) -> Result<StartedSession, McpError> {
+    /// Modern stateless path. Reuses a live server-minted handle; any absent or
+    /// unrecognized handle mints a fresh server-generated handle rather than being
+    /// honored, so a caller cannot choose or seed a session id and concurrent calls
+    /// never mint the same id. Does not touch `self.lifecycle`, so the per-request
+    /// service `Drop` never reaps it; idle sweeping owns cleanup.
+    async fn resolve_modern_session(
+        &self,
+        provided: Option<SessionId>,
+    ) -> Result<(StartedSession, SessionId), McpError> {
         let client = ClientInfo {
             name: "agent".to_string(),
             version: "unknown".to_string(),
             title: None,
         };
-        self.start_session_in_store(handle, client).await
+        if let Some(handle) = provided
+            && let Some(session) = self.state.sessions.lookup(&handle).await
+        {
+            return Ok((started_session_from(session, &client), handle));
+        }
+        let handle = SessionId::new(Uuid::new_v4().to_string());
+        let started = self.start_session_in_store(handle.clone(), client).await?;
+        Ok((started, handle))
     }
 
     async fn learn_session_from_request(
@@ -400,9 +411,7 @@ impl ServerHandler for ClawMcpService {
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
         let (started, session_handle) = if modern {
-            let handle =
-                provided_handle.unwrap_or_else(|| SessionId::new(Uuid::new_v4().to_string()));
-            let started = self.ensure_modern_session(handle.clone()).await?;
+            let (started, handle) = self.resolve_modern_session(provided_handle).await?;
             (started, Some(handle))
         } else {
             (self.learn_session_from_request(&context).await?, None)
@@ -684,31 +693,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modern_session_handle_is_reused_across_calls() -> anyhow::Result<()> {
+    async fn modern_session_reuses_returned_handles_and_never_honors_client_ids()
+    -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
 
-        let handle = SessionId::new("modern-handle-1");
-        let first = service
-            .ensure_modern_session(handle.clone())
+        let (first, minted) = service
+            .resolve_modern_session(None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let second = service
-            .ensure_modern_session(handle.clone())
+
+        let (again, reused) = service
+            .resolve_modern_session(Some(minted.clone()))
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(reused.to_string(), minted.to_string());
         assert_eq!(
-            first.session.id().to_string(),
-            second.session.id().to_string()
+            again.session.id().to_string(),
+            first.session.id().to_string()
         );
 
-        let other = service
-            .ensure_modern_session(SessionId::new("modern-handle-2"))
+        let client_chosen = SessionId::new("client-picked-id");
+        let (other, other_handle) = service
+            .resolve_modern_session(Some(client_chosen.clone()))
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(other_handle.to_string(), client_chosen.to_string());
         assert_ne!(
-            first.session.id().to_string(),
-            other.session.id().to_string()
+            other.session.id().to_string(),
+            first.session.id().to_string()
         );
         Ok(())
     }
