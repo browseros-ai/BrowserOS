@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "claw-server-rust"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "anyhow",
  "axum",
