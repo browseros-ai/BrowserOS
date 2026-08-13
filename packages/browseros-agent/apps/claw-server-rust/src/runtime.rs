@@ -155,6 +155,23 @@ impl AppRuntime {
                     }
                 }),
             },
+            BackgroundTask {
+                name: "skill run reconciliation",
+                handle: tokio::spawn({
+                    let skill_runs = state.skill_runs.clone();
+                    async move {
+                        match skill_runs.reconcile().await {
+                            Ok(recorded) if recorded > 0 => {
+                                info!(recorded, "reconciled skill run projections");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                warn!(error = %error, "skill run reconciliation failed");
+                            }
+                        }
+                    }
+                }),
+            },
         ];
         Self { state, tasks }
     }

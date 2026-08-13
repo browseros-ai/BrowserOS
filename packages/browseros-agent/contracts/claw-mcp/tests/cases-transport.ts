@@ -14,6 +14,7 @@ const EXPECTED_TOOLS = [
   'evaluate',
   'grep',
   'history',
+  'mark_skill_run',
   'name_session',
   'navigate',
   'pdf',

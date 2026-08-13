@@ -48,6 +48,8 @@ const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small low
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "Save the current repeatable browser task as a BrowserOS neo skill so it can be re-run by name later. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. Call again with the same name to update it in place.";
+const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
+const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 
 /// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
 /// server session, which records its end and begins retained-group handling.
@@ -56,6 +58,7 @@ pub struct ClawMcpService {
     catalog: Arc<Vec<ToolDef>>,
     name_session_tool: Tool,
     save_skill_tool: Tool,
+    mark_skill_run_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -83,6 +86,7 @@ impl ClawMcpService {
             catalog: Arc::new(catalog()),
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
+            mark_skill_run_tool: mark_skill_run_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -102,6 +106,7 @@ impl ClawMcpService {
             .collect::<Vec<_>>();
         tools.push(self.name_session_tool.clone());
         tools.push(self.save_skill_tool.clone());
+        tools.push(self.mark_skill_run_tool.clone());
         tools
     }
 
@@ -192,6 +197,52 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: SAVE_SKILL_TOOL_NAME,
+                raw_args,
+                result: &result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    async fn call_mark_skill_run(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+    ) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
+        let session_id = started.session.id().as_str().to_string();
+        let result = match parse_skill_name(raw_args) {
+            Ok(name) => match self.state.skill_runs.mark(&session_id, &name).await {
+                Ok(()) => ToolResult::text(format!("recording this run of /{name}"), None),
+                Err(error) => ToolResult::error(error.to_string()),
+            },
+            Err(message) => ToolResult::error(message),
+        };
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: MARK_SKILL_RUN_TOOL_NAME,
                 raw_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -383,6 +434,9 @@ impl ServerHandler for ClawMcpService {
         if name == SAVE_SKILL_TOOL_NAME {
             return Some(self.save_skill_tool.clone());
         }
+        if name == MARK_SKILL_RUN_TOOL_NAME {
+            return Some(self.mark_skill_run_tool.clone());
+        }
         self.find_tool_index(name)
             .map(|index| self.catalog[index].to_mcp_tool())
     }
@@ -394,8 +448,9 @@ impl ServerHandler for ClawMcpService {
     ) -> Result<CallToolResult, McpError> {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
+        let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let tool_index = self.find_tool_index(&request.name);
-        if !is_name_session && !is_save_skill && tool_index.is_none() {
+        if !is_name_session && !is_save_skill && !is_mark_skill_run && tool_index.is_none() {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         }
         let raw_args = request
@@ -413,6 +468,8 @@ impl ServerHandler for ClawMcpService {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
             Ok(self.call_save_skill(&started, &raw_args).await)
+        } else if is_mark_skill_run {
+            Ok(self.call_mark_skill_run(&started, &raw_args).await)
         } else {
             let Some(tool_index) = tool_index else {
                 unreachable!("catalog tool was validated before session resolution");
@@ -553,6 +610,39 @@ fn save_skill_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
+}
+
+fn mark_skill_run_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+        },
+        "required": ["name"]
+    }) else {
+        unreachable!();
+    };
+    Tool::new(
+        MARK_SKILL_RUN_TOOL_NAME,
+        MARK_SKILL_RUN_DESCRIPTION,
+        input_schema,
+    )
+    .with_annotations(
+        ToolAnnotations::with_title("Mark skill run")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(true),
+    )
+}
+
+fn parse_skill_name(raw_args: &Value) -> Result<String, String> {
+    raw_args
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "name must be a non-empty string".to_string())
 }
 
 fn parse_save_skill(raw_args: &Value, session_id: String) -> Result<CreateSkill, String> {
@@ -792,10 +882,12 @@ mod tests {
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
+        expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
         assert_eq!(names, expected);
         assert!(names.contains(&"run".to_string()));
         assert!(names.contains(&"name_session".to_string()));
         assert!(names.contains(&"save_skill".to_string()));
+        assert!(names.contains(&"mark_skill_run".to_string()));
         Ok(())
     }
 
@@ -858,6 +950,36 @@ mod tests {
             listed.annotations,
             Some(
                 ToolAnnotations::with_title("Save skill")
+                    .read_only(false)
+                    .destructive(false)
+                    .idempotent(true)
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mark_skill_run_is_registered_locally_with_annotations() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let listed = service
+            .listed_tools()
+            .into_iter()
+            .find(|tool| tool.name == MARK_SKILL_RUN_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("mark_skill_run missing from list"))?;
+        let fetched = service
+            .get_tool(MARK_SKILL_RUN_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("mark_skill_run missing from get_tool"))?;
+
+        assert_eq!(listed, fetched);
+        assert_eq!(
+            listed.description.as_deref(),
+            Some(MARK_SKILL_RUN_DESCRIPTION)
+        );
+        assert_eq!(
+            listed.annotations,
+            Some(
+                ToolAnnotations::with_title("Mark skill run")
                     .read_only(false)
                     .destructive(false)
                     .idempotent(true)
