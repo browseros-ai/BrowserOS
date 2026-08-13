@@ -251,6 +251,28 @@ check_no_browseros_outputs() {
   [ -z "$found" ] || die "Persistent Chromium base contains BrowserOS output state: $found; remove BrowserOS out dirs from the base before rerunning"
 }
 
+check_git_repo_clean() {
+  local repo="$1"
+  local status
+
+  status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+  [ -z "$status" ] || die "Persistent Chromium base has tracked or untracked changes in $repo; reset the warm base checkout before rerunning"
+}
+
+check_nested_git_repos_clean() {
+  local git_meta repo
+
+  while IFS= read -r git_meta; do
+    repo="$(resolve_existing_dir "$(dirname "$git_meta")")" || continue
+    [ "$repo" != "$base_src" ] || continue
+    check_git_repo_clean "$repo"
+  done < <(
+    find "$base_root" \
+      \( -path "$base_src/out" -o -path "$base_src/out/*" \) -prune -o \
+      -name .git -print -prune
+  )
+}
+
 verify_cow_clone_support() {
   local parent="$1"
   local probe_dir="$parent/.browseros-ci-apfs-probe-$(run_tag)-$$"
@@ -273,7 +295,7 @@ verify_cow_clone_support() {
 
 verify_base() {
   local version_file="$1"
-  local pin_head status
+  local pin_head
 
   [ -f "$base_root/.gclient" ] || die "Chromium base root is missing .gclient: $base_root"
   [ -e "$base_src/.git" ] || die "Chromium base src is missing .git: $base_src"
@@ -287,8 +309,8 @@ verify_base() {
   [ "$base_head" = "$pin_head" ] \
     || die "Chromium base HEAD $base_head does not match pinned $chromium_version ($pin_head); refresh the warm base checkout before rerunning"
 
-  status="$(git -C "$base_src" status --porcelain=v1 --untracked-files=no)"
-  [ -z "$status" ] || die "Persistent Chromium base has tracked changes; reset the warm base checkout before rerunning"
+  check_git_repo_clean "$base_src"
+  check_nested_git_repos_clean
   check_no_browseros_outputs "$base_src"
 }
 

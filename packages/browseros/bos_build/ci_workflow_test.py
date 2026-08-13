@@ -1696,7 +1696,9 @@ fi
             """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GIT_LOG"
+repo=""
 if [ "${1:-}" = "-C" ]; then
+  repo="$2"
   shift 2
 fi
 cmd="${1:-}"
@@ -1717,7 +1719,13 @@ case "$cmd" in
     esac
     ;;
   status)
-    printf '%b' "${GIT_STATUS:-}"
+    if [ -n "${GIT_DIRTY_REPO:-}" ]; then
+      if [ "$repo" = "$GIT_DIRTY_REPO" ]; then
+        printf '%b' "${GIT_DIRTY_STATUS:- M nested-change\\n}"
+      fi
+    else
+      printf '%b' "${GIT_STATUS:-}"
+    fi
     ;;
 esac
 """
@@ -1883,7 +1891,7 @@ esac
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked changes", result.stderr + result.stdout)
+        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
         self.assertFalse(stale.exists())
         self.assertFalse(self._workspace_root().exists())
         self.assertTrue(self.base_root.exists())
@@ -1971,7 +1979,35 @@ esac
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked changes", result.stderr + result.stdout)
+        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
+        self.assertFalse(self._workspace_root().exists())
+
+    def test_setup_fails_when_base_has_untracked_changes(self):
+        result = self._run_helper(
+            "setup",
+            self.base_src,
+            GIT_STATUS="?? chrome/browser/browseros/generated_resources.grd\n",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
+        self.assertFalse(self._workspace_root().exists())
+
+    def test_setup_fails_when_nested_gclient_repo_has_changes(self):
+        nested_repo = self.base_src / "third_party" / "v8"
+        nested_repo.mkdir(parents=True)
+        (nested_repo / ".git").mkdir()
+
+        result = self._run_helper(
+            "setup",
+            self.base_src,
+            GIT_DIRTY_REPO=str(nested_repo.resolve()),
+            GIT_DIRTY_STATUS=" M src/builtins/generated.cc\n",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(nested_repo.resolve()), result.stderr + result.stdout)
+        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
         self.assertFalse(self._workspace_root().exists())
 
     def test_setup_fails_when_base_has_browseros_output_dirs(self):
