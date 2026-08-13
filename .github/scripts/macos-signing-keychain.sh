@@ -36,6 +36,13 @@ owned_keychains_file() {
   esac
 }
 
+owned_smoke_path() {
+  case "$1" in
+    "$RUNNER_TEMP"/browseros-ci-codesign-smoke-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 normalize_keychain_output() {
   sed -e 's/^[[:space:]]*//' -e 's/^"//' -e 's/"$//'
 }
@@ -71,6 +78,63 @@ decode_certificate() {
   printf '%s' "$MACOS_CERTIFICATE_P12" | base64 -D > "$output"
 }
 
+resolve_codesigning_identity() {
+  local keychain_path="$1"
+  local identities
+  local line
+  local identity_sha1
+  local identity_name
+  local match_count=0
+  local resolved_sha1=""
+
+  identities="$(security find-identity -v -p codesigning "$keychain_path")"
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]{40})[[:space:]]+\"(.*)\"[[:space:]]*$ ]]; then
+      identity_sha1="${BASH_REMATCH[1]}"
+      identity_name="${BASH_REMATCH[2]}"
+      if [ "$identity_name" = "$MACOS_CERTIFICATE_NAME" ]; then
+        match_count=$((match_count + 1))
+        resolved_sha1="$identity_sha1"
+      fi
+    fi
+  done <<< "$identities"
+
+  case "$match_count" in
+    0)
+      echo "::error::Imported keychain does not expose the configured macOS signing identity" >&2
+      return 1
+      ;;
+    1)
+      printf '%s\n' "$resolved_sha1"
+      ;;
+    *)
+      echo "::error::Imported keychain exposes multiple matching macOS signing identities" >&2
+      return 1
+      ;;
+  esac
+}
+
+smoke_codesign_identity() {
+  local keychain_path="$1"
+  local codesign_identity="$2"
+  local smoke_path="$3"
+
+  rm -f "$smoke_path"
+  cp /usr/bin/true "$smoke_path"
+  chmod u+w "$smoke_path"
+  if ! codesign --sign "$codesign_identity" --force --timestamp=none --keychain "$keychain_path" "$smoke_path"; then
+    echo "::error::macOS signing identity failed disposable codesign smoke check" >&2
+    rm -f "$smoke_path"
+    return 1
+  fi
+  if ! codesign --verify --verbose=2 "$smoke_path"; then
+    echo "::error::Disposable macOS codesign smoke verification failed" >&2
+    rm -f "$smoke_path"
+    return 1
+  fi
+  rm -f "$smoke_path"
+}
+
 cleanup_after_setup_error() {
   local status="$?"
   cleanup_keychain || true
@@ -95,6 +159,7 @@ setup_keychain() {
   local keychain_path="$RUNNER_TEMP/browseros-ci-signing-$run_tag.keychain-db"
   local original_keychains_file="$RUNNER_TEMP/browseros-ci-original-keychains-$run_tag.txt"
   local listed_keychains_file="$RUNNER_TEMP/browseros-ci-listed-keychains-$run_tag.txt"
+  local smoke_path="$RUNNER_TEMP/browseros-ci-codesign-smoke-$run_tag"
   local original_default_keychain
 
   security list-keychains -d user 2>/dev/null \
@@ -129,6 +194,7 @@ setup_keychain() {
     printf 'keychain_path=%s\n' "$keychain_path"
     printf 'original_default_keychain=%s\n' "$original_default_keychain"
     printf 'original_keychains_file=%s\n' "$original_keychains_file"
+    printf 'smoke_path=%s\n' "$smoke_path"
   } > "$state_path"
 
   trap cleanup_after_setup_error ERR
@@ -155,16 +221,18 @@ setup_keychain() {
   security default-keychain -d user -s "$keychain_path"
   security show-keychain-info "$keychain_path" >/dev/null
 
-  local identities
-  identities="$(security find-identity -v -p codesigning "$keychain_path")"
-  if ! grep -Fq "$MACOS_CERTIFICATE_NAME" <<< "$identities"; then
-    echo "::error::Imported keychain does not expose the configured macOS signing identity"
+  local codesign_identity
+  codesign_identity="$(resolve_codesigning_identity "$keychain_path")"
+  if ! smoke_codesign_identity "$keychain_path" "$codesign_identity" "$smoke_path"; then
+    cleanup_keychain || true
     return 1
   fi
   rm -f "$cert_path"
 
+  append_env "${GITHUB_ENV:-}" MACOS_CERTIFICATE_NAME "$codesign_identity"
   append_env "${GITHUB_ENV:-}" MACOS_KEYCHAIN_PATH "$keychain_path"
   append_env "${GITHUB_ENV:-}" MACOS_SIGNING_STATE_PATH "$state_path"
+  append_env "${GITHUB_OUTPUT:-}" codesign_identity "$codesign_identity"
   append_env "${GITHUB_OUTPUT:-}" keychain_path "$keychain_path"
   append_env "${GITHUB_OUTPUT:-}" state_path "$state_path"
   trap - ERR
@@ -183,6 +251,7 @@ cleanup_keychain() {
   local keychain_path=""
   local original_default_keychain=""
   local original_keychains_file=""
+  local smoke_path=""
   local state_line
   while IFS= read -r state_line; do
     case "$state_line" in
@@ -190,6 +259,7 @@ cleanup_keychain() {
       keychain_path=*) keychain_path="${state_line#keychain_path=}" ;;
       original_default_keychain=*) original_default_keychain="${state_line#original_default_keychain=}" ;;
       original_keychains_file=*) original_keychains_file="${state_line#original_keychains_file=}" ;;
+      smoke_path=*) smoke_path="${state_line#smoke_path=}" ;;
     esac
   done < "$state_path"
 
@@ -217,6 +287,9 @@ cleanup_keychain() {
   fi
   if owned_cert_path "$cert_path"; then
     rm -f "$cert_path"
+  fi
+  if owned_smoke_path "$smoke_path"; then
+    rm -f "$smoke_path"
   fi
   if owned_keychains_file "$original_keychains_file"; then
     rm -f "$original_keychains_file"

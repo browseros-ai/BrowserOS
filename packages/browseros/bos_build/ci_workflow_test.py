@@ -278,6 +278,10 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             build["env"]["MACOS_KEYCHAIN_PATH"],
             "${{ steps.macos_signing.outputs.keychain_path }}",
         )
+        self.assertEqual(
+            build["env"]["MACOS_CERTIFICATE_NAME"],
+            "${{ steps.macos_signing.outputs.codesign_identity }}",
+        )
         self.assertEqual(cleanup["if"], "always()")
         self.assertEqual(
             cleanup["env"]["MACOS_SIGNING_STATE_PATH"],
@@ -1375,6 +1379,10 @@ class NightlyWorkflowTest(unittest.TestCase):
                     build["env"]["MACOS_KEYCHAIN_PATH"],
                     "${{ steps.macos_signing.outputs.keychain_path }}",
                 )
+                self.assertEqual(
+                    build["env"]["MACOS_CERTIFICATE_NAME"],
+                    "${{ steps.macos_signing.outputs.codesign_identity }}",
+                )
                 self.assertEqual(cleanup["if"], "always()")
                 self.assertEqual(
                     cleanup["env"]["MACOS_SIGNING_STATE_PATH"],
@@ -1517,11 +1525,14 @@ class MacOSSigningKeychainHelperTest(unittest.TestCase):
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
         self.security_log = self.root / "security.log"
+        self.codesign_log = self.root / "codesign.log"
         self.github_env = self.root / "github_env"
         self.github_output = self.root / "github_output"
         self.original_keychain = self.root / "login.keychain-db"
         self.original_default = self.original_keychain
+        self.identity_sha1 = "0123456789abcdef0123456789abcdef01234567"
         self._write_fake_security()
+        self._write_fake_codesign()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -1563,7 +1574,14 @@ case "$cmd" in
     fi
     ;;
   find-identity)
-    printf '  1) ABC "%s"\\n' "$MACOS_CERTIFICATE_NAME"
+    if [ -n "${SECURITY_FIND_IDENTITIES:-}" ]; then
+      printf '%b' "$SECURITY_FIND_IDENTITIES"
+    else
+      printf '  1) %s "%s"\\n' "${SECURITY_IDENTITY_SHA1:-0123456789abcdef0123456789abcdef01234567}" "$MACOS_CERTIFICATE_NAME"
+      if [ -n "${SECURITY_EXTRA_IDENTITY_SHA1:-}" ]; then
+        printf '  2) %s "%s"\\n' "$SECURITY_EXTRA_IDENTITY_SHA1" "${SECURITY_EXTRA_IDENTITY_NAME:-$MACOS_CERTIFICATE_NAME}"
+      fi
+    fi
     ;;
   unlock-keychain|set-keychain-settings|set-key-partition-list|show-keychain-info|lock-keychain)
     ;;
@@ -1572,10 +1590,38 @@ esac
         )
         security.chmod(0o755)
 
+    def _write_fake_codesign(self):
+        codesign = self.bin_dir / "codesign"
+        codesign.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CODESIGN_LOG"
+signing_identity=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [ "${args[$i]}" = "--sign" ]; then
+    signing_identity="${args[$((i + 1))]}"
+  fi
+done
+if [ "${CODESIGN_FAIL_SIGN:-}" = "1" ] && [ -n "$signing_identity" ]; then
+  exit 45
+fi
+if [ "${CODESIGN_FAIL_VERIFY:-}" = "1" ] && [ "${1:-}" = "--verify" ]; then
+  exit 46
+fi
+if [ "${CODESIGN_REJECT_COMMON_NAME:-}" = "1" ] && [ "$signing_identity" = "$MACOS_CERTIFICATE_NAME" ]; then
+  printf '%s: ambiguous\\n' "$signing_identity" >&2
+  exit 47
+fi
+"""
+        )
+        codesign.chmod(0o755)
+
     def _env(self, **overrides):
         env = os.environ.copy()
         env.update(
             {
+                "CODESIGN_LOG": str(self.codesign_log),
                 "GITHUB_ENV": str(self.github_env),
                 "GITHUB_OUTPUT": str(self.github_output),
                 "GITHUB_RUN_ATTEMPT": "4",
@@ -1589,6 +1635,7 @@ esac
                 "PATH": f"{self.bin_dir}{os.pathsep}{env['PATH']}",
                 "RUNNER_TEMP": str(self.runner_temp),
                 "SECURITY_LOG": str(self.security_log),
+                "SECURITY_IDENTITY_SHA1": self.identity_sha1,
             }
         )
         env.update(overrides)
@@ -1616,14 +1663,16 @@ esac
         keychain_path = Path(outputs["keychain_path"])
         state_path = Path(outputs["state_path"])
         cert_path = self.runner_temp / "browseros-signing-cert-123-4.p12"
+        smoke_path = self.runner_temp / "browseros-ci-codesign-smoke-123-4"
 
+        self.assertEqual(outputs["codesign_identity"], self.identity_sha1)
         self.assertTrue(keychain_path.exists())
         self.assertTrue(state_path.exists())
         self.assertFalse(cert_path.exists())
-        self.assertIn(
-            f"MACOS_KEYCHAIN_PATH={keychain_path}",
-            self.github_env.read_text(encoding="utf-8"),
-        )
+        env_lines = self.github_env.read_text(encoding="utf-8").splitlines()
+        self.assertIn(f"MACOS_CERTIFICATE_NAME={self.identity_sha1}", env_lines)
+        self.assertIn(f"MACOS_KEYCHAIN_PATH={keychain_path}", env_lines)
+        self.assertFalse(smoke_path.exists())
 
         cleanup = self._run_helper(
             "cleanup",
@@ -1643,7 +1692,75 @@ esac
             f"default-keychain -d user -s {self.original_keychain}",
             log,
         )
+        codesign_log = self.codesign_log.read_text(encoding="utf-8")
+        self.assertIn(
+            f"--sign {self.identity_sha1} --force --timestamp=none --keychain {keychain_path} {smoke_path}",
+            codesign_log,
+        )
+        self.assertIn(f"--verify --verbose=2 {smoke_path}", codesign_log)
         self.assertFalse(keychain_path.exists())
+        self.assertFalse(state_path.exists())
+
+    def test_setup_uses_fingerprint_when_common_name_is_duplicated(self):
+        result = self._run_helper("setup", CODESIGN_REJECT_COMMON_NAME="1")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        outputs = self._outputs()
+        self.assertEqual(outputs["codesign_identity"], self.identity_sha1)
+        self.assertNotIn("ambiguous", result.stderr + result.stdout)
+
+        cleanup = self._run_helper(
+            "cleanup",
+            MACOS_SIGNING_STATE_PATH=outputs["state_path"],
+        )
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
+
+    def test_setup_rejects_missing_matching_identity(self):
+        result = self._run_helper(
+            "setup",
+            SECURITY_FIND_IDENTITIES=(
+                f'  1) {self.identity_sha1} "Developer ID Application Extra"\\n'
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "does not expose the configured macOS signing identity",
+            result.stderr + result.stdout,
+        )
+        keychain_path = self.runner_temp / "browseros-ci-signing-123-4.keychain-db"
+        cert_path = self.runner_temp / "browseros-signing-cert-123-4.p12"
+        state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
+        self.assertFalse(keychain_path.exists())
+        self.assertFalse(cert_path.exists())
+        self.assertFalse(state_path.exists())
+
+    def test_setup_rejects_multiple_matching_identities(self):
+        result = self._run_helper(
+            "setup",
+            SECURITY_EXTRA_IDENTITY_SHA1="fedcba9876543210fedcba9876543210fedcba98",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "multiple matching macOS signing identities",
+            result.stderr + result.stdout,
+        )
+        keychain_path = self.runner_temp / "browseros-ci-signing-123-4.keychain-db"
+        state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
+        self.assertFalse(keychain_path.exists())
+        self.assertFalse(state_path.exists())
+
+    def test_setup_failure_cleans_smoke_target(self):
+        result = self._run_helper("setup", CODESIGN_FAIL_SIGN="1")
+
+        self.assertNotEqual(result.returncode, 0)
+        keychain_path = self.runner_temp / "browseros-ci-signing-123-4.keychain-db"
+        cert_path = self.runner_temp / "browseros-signing-cert-123-4.p12"
+        smoke_path = self.runner_temp / "browseros-ci-codesign-smoke-123-4"
+        state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
+        self.assertFalse(keychain_path.exists())
+        self.assertFalse(cert_path.exists())
+        self.assertFalse(smoke_path.exists())
         self.assertFalse(state_path.exists())
 
     def test_setup_failure_cleans_partial_keychain_and_certificate(self):

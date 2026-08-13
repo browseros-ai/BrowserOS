@@ -343,11 +343,12 @@ class MacOSKeychainSelectionTest(unittest.TestCase):
         self.assertEqual(values["keychain_path"], "/tmp/browseros-ci.keychain-db")
         self.assertEqual(values["keychain_profile"], "notarytool-profile")
 
-    def test_sign_component_passes_configured_keychain_to_codesign(self):
+    def test_sign_component_passes_fingerprint_and_keychain_to_codesign(self):
         with tempfile.TemporaryDirectory() as tmp:
             component = Path(tmp) / "tool"
             component.write_bytes(b"not-macho")
             keychain = Path(tmp) / "ci.keychain-db"
+            fingerprint = "0123456789abcdef0123456789abcdef01234567"
             calls = []
 
             with (
@@ -358,9 +359,10 @@ class MacOSKeychainSelectionTest(unittest.TestCase):
                     macos_module, "run_command", _fake_run_command(calls)
                 ),
             ):
-                ok = sign_component(component, "Cert", keychain_path=keychain)
+                ok = sign_component(component, fingerprint, keychain_path=keychain)
 
             self.assertTrue(ok)
+            self.assertEqual(calls[0][calls[0].index("--sign") + 1], fingerprint)
             self.assertIn("--keychain", calls[0])
             self.assertEqual(calls[0][calls[0].index("--keychain") + 1], str(keychain))
 

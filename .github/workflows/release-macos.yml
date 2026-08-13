@@ -338,7 +338,7 @@ jobs:
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension_version && format('{0}/updates/extensions/bundled-manifest.xml', steps.inputs.outputs.browseros_repo) || '' }}
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
-          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
           MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}

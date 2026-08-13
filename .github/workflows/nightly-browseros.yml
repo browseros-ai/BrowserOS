@@ -243,7 +243,7 @@ jobs:
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ steps.build_inputs.outputs.browseros_repo }}/updates/extensions/bundled-manifest.xml
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ needs.extension.outputs.version }}
           CHROMIUM_SRC: ${{ steps.build_inputs.outputs.chromium_src }}
-          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
           MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
