@@ -368,6 +368,44 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
 
         self.assertNotIn("claw-onboard", observed)
 
+    def test_merged_candidate_retry_decodes_chrome_package_version(self) -> None:
+        for package_version, release_version in (
+            ("0.0.101", "0.0.101.0"),
+            ("0.0.101+7", "0.0.101.7"),
+        ):
+            with self.subTest(package_version=package_version):
+                record = replace(
+                    self.record,
+                    component_versions={
+                        **self.record.component_versions,
+                        "agent": release_version,
+                    },
+                )
+
+                def version_at_ref(component: str, ref: str) -> str:
+                    if component == "agent":
+                        return package_version
+                    return record.component_versions[component]
+
+                with (
+                    patch.object(self.backend, "_git"),
+                    patch.object(
+                        self.backend,
+                        "_version_at_ref",
+                        side_effect=version_at_ref,
+                    ),
+                    patch(
+                        "bos_build.release.candidate.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0),
+                    ),
+                ):
+                    self.assertTrue(
+                        self.backend.merge_commit_matches_candidate(
+                            record,
+                            "3" * 40,
+                        )
+                    )
+
 
 class CandidateMergeTest(unittest.TestCase):
     def setUp(self) -> None:

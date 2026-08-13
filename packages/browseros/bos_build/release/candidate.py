@@ -13,6 +13,7 @@ from ..lib.versions import load_semantic_version
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_version_from_package,
     components_for_candidate,
     read_component_version,
     resolve_candidate_versions,
@@ -783,7 +784,10 @@ class GitHubCandidateBackend:
         if ancestor.returncode != 0:
             return False
         return all(
-            self._version_at_ref(spec.id, merge_sha)
+            component_version_from_package(
+                spec.id,
+                self._version_at_ref(spec.id, merge_sha),
+            )
             == record.component_versions.get(spec.id)
             for spec in components_for_candidate(record.product)
         )
