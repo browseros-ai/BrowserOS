@@ -278,6 +278,22 @@ impl SkillService {
             body,
         } = input;
 
+        // A raw body and structured fields are two representations of the same
+        // file; accepting both would silently persist one and discard the other.
+        if body.is_some() && (steps.is_some() || learned_notes.is_some()) {
+            return Err(AppError::bad_request(
+                "provide either a raw body or structured steps/learnedNotes, not both",
+            ));
+        }
+        // A structured edit replaces both sections at once, so both must be sent
+        // together; otherwise the omitted section would be silently erased. An
+        // explicit empty array clears a section.
+        if steps.is_some() != learned_notes.is_some() {
+            return Err(AppError::bad_request(
+                "steps and learnedNotes must be provided together",
+            ));
+        }
+
         // The description that the rendered/patched frontmatter must carry: the
         // incoming value if present, otherwise the one already stored.
         let effective_description = description
@@ -302,6 +318,7 @@ impl SkillService {
         } else if description.is_some() {
             let current = self.read_body(&body_path).await;
             Some(sync_frontmatter_description(
+                name,
                 &current,
                 &effective_description,
             ))
@@ -520,22 +537,28 @@ fn render_skill_markdown(
 /// Rewrite the `description:` line inside a SKILL.md frontmatter block so the
 /// on-disk file matches the stored description, leaving the rest of the body
 /// untouched. The description is JSON-encoded to stay a valid YAML scalar, the
-/// same way `render_skill_markdown` emits it. A body without a leading `---`
-/// frontmatter fence is returned unchanged.
-fn sync_frontmatter_description(body: &str, description: &str) -> String {
+/// same way `render_skill_markdown` emits it. A body with no `---` frontmatter
+/// fence (a raw body written without one) gets a fresh frontmatter block
+/// prepended so the description is always present in the file.
+fn sync_frontmatter_description(name: &str, body: &str, description: &str) -> String {
     let encoded = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
     let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
-    if lines.first().map(|line| line.trim_end()) != Some("---") {
-        return body.to_string();
-    }
-    let Some(closing) = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim_end() == "---")
-        .map(|(index, _)| index)
-    else {
-        return body.to_string();
+    let closing = lines
+        .first()
+        .map(|line| line.trim_end())
+        .filter(|first| *first == "---")
+        .and_then(|_| {
+            lines
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, line)| line.trim_end() == "---")
+                .map(|(index, _)| index)
+        });
+    let Some(closing) = closing else {
+        let front =
+            format!("---\nname: {name}\ndescription: {encoded}\ntools: {SKILL_TOOLS}\n---\n\n");
+        return format!("{front}{body}");
     };
     let description_line = lines
         .iter_mut()

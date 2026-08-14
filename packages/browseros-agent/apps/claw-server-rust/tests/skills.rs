@@ -245,6 +245,98 @@ async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::R
 }
 
 #[tokio::test]
+async fn skill_update_rejects_ambiguous_field_combinations() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "inbox-sweep", "description": "First", "steps": ["Old step"] })),
+    )
+    .await?;
+
+    // A raw body plus structured fields is ambiguous: reject it rather than
+    // silently discard one representation.
+    let (status, _) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/inbox-sweep",
+        Some(json!({
+            "body": "---\nname: inbox-sweep\ndescription: X\ntools: browseros-neo\n---\n",
+            "steps": ["New step"],
+            "learnedNotes": []
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Only one of the two structured sections would silently erase the other.
+    let (status, _) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/inbox-sweep",
+        Some(json!({ "steps": ["New step"] })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The original steps survive both rejected updates.
+    let (_, detail) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    assert!(
+        detail["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("Old step"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_description_edit_adds_frontmatter_to_a_raw_body() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "raw-note", "description": "First" })),
+    )
+    .await?;
+
+    // Store a raw body that has no frontmatter fence.
+    let (status, _) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/raw-note",
+        Some(json!({ "body": "Just prose, no frontmatter\n" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+
+    // A description-only edit must still land in the file: a frontmatter block
+    // is prepended so linked agents read the new description.
+    let (status, _) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/raw-note",
+        Some(json!({ "description": "Now described" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+
+    let skill_md = app.root.join("skills").join("raw-note").join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.starts_with("---\nname: raw-note\n"));
+    assert!(content.contains(r#"description: "Now described""#));
+    assert!(content.contains("Just prose, no frontmatter"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
     let app = test_app().await?;
     let router = &app.router;
