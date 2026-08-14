@@ -70,10 +70,11 @@
     "@types/chrome": "^0.2.5",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@wxt-dev/module-react": "^1.1.5",
+    "@wxt-dev/module-react": "^1.2.2",
     "linkedom": "^0.18.13",
     "serve": "^14.2.6",
     "tailwindcss": "^4.1.17",
-    "wxt": "^0.21.3"
+    "web-ext": "^9.2.0",
+    "wxt": "^0.21.4"
   }
 }
