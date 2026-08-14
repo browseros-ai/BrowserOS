@@ -2,8 +2,8 @@ use crate::{
     db::{
         Database,
         entities::{
-            prelude::{SkillRuns, Skills},
-            skill_runs, skills,
+            prelude::{SkillRunMarks, SkillRuns, Skills, ToolDispatches},
+            skill_run_marks, skill_runs, skills, tool_dispatches,
         },
     },
     error::AppResult,
@@ -103,6 +103,97 @@ impl SkillsRepository {
             .all(self.db.connection())
             .await?)
     }
+
+    pub async fn max_run_number(&self, name: &str) -> AppResult<Option<i64>> {
+        Ok(SkillRuns::find()
+            .filter(skill_runs::Column::SkillName.eq(name))
+            .order_by_desc(skill_runs::Column::RunNumber)
+            .one(self.db.connection())
+            .await?
+            .map(|row| row.run_number))
+    }
+
+    /// Insert a run row unless the session already recorded one. The unique
+    /// session index makes this idempotent; returns whether this call inserted.
+    pub async fn insert_run_if_absent(&self, model: skill_runs::Model) -> AppResult<bool> {
+        let inserted = SkillRuns::insert(skill_runs::ActiveModel {
+            id: Set(model.id),
+            skill_name: Set(model.skill_name),
+            session_id: Set(model.session_id),
+            run_number: Set(model.run_number),
+            agent_id: Set(model.agent_id),
+            tokens: Set(model.tokens),
+            duration_ms: Set(model.duration_ms),
+            tool_count: Set(model.tool_count),
+            clean: Set(model.clean),
+            errored_tool: Set(model.errored_tool),
+            created_at: Set(model.created_at),
+        })
+        .on_conflict(
+            OnConflict::column(skill_runs::Column::SessionId)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(self.db.connection())
+        .await?;
+        Ok(inserted == 1)
+    }
+
+    /// The first tool in a session whose dispatch recorded an error (used for a
+    /// not-clean run's `errored_tool`).
+    pub async fn first_errored_tool(&self, session_id: &str) -> AppResult<Option<String>> {
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?;
+        Ok(rows
+            .into_iter()
+            .find(|row| dispatch_is_error(row.result_meta.as_deref()))
+            .map(|row| row.tool_name))
+    }
+
+    pub async fn upsert_mark(&self, session_id: &str, skill_name: &str, now: i64) -> AppResult<()> {
+        SkillRunMarks::insert(skill_run_marks::ActiveModel {
+            session_id: Set(session_id.to_owned()),
+            skill_name: Set(skill_name.to_owned()),
+            created_at: Set(now),
+        })
+        .on_conflict(
+            OnConflict::column(skill_run_marks::Column::SessionId)
+                .update_column(skill_run_marks::Column::SkillName)
+                .to_owned(),
+        )
+        .exec_without_returning(self.db.connection())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_mark(&self, session_id: &str) -> AppResult<Option<skill_run_marks::Model>> {
+        Ok(SkillRunMarks::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?)
+    }
+
+    pub async fn all_marks(&self) -> AppResult<Vec<skill_run_marks::Model>> {
+        Ok(SkillRunMarks::find().all(self.db.connection()).await?)
+    }
+
+    pub async fn delete_mark(&self, session_id: &str) -> AppResult<()> {
+        SkillRunMarks::delete_by_id(session_id.to_owned())
+            .exec(self.db.connection())
+            .await?;
+        Ok(())
+    }
+}
+
+fn dispatch_is_error(result_meta: Option<&str>) -> bool {
+    result_meta
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .is_some_and(|value| {
+            value.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+                && value.get("cancelled").and_then(serde_json::Value::as_bool) != Some(true)
+        })
 }
 
 fn into_active(model: skills::Model) -> skills::ActiveModel {

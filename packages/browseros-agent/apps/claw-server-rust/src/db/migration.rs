@@ -21,7 +21,113 @@ impl MigratorTrait for Migrator {
             Box::new(m0012_recording_payload_files::Migration),
             Box::new(m0013_add_parent_dispatch_id::Migration),
             Box::new(m0014_add_skills_and_runs::Migration),
+            Box::new(m0015_add_skill_run_marks::Migration),
         ]
+    }
+}
+
+mod m0015_add_skill_run_marks {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0015_add_skill_run_marks"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .create_table(
+                    Table::create()
+                        .table(SkillRunMarks::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(SkillRunMarks::SessionId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(SkillRunMarks::SkillName).string().not_null())
+                        .col(
+                            ColumnDef::new(SkillRunMarks::CreatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            // A session records at most one skill run, so make the session
+            // lookup unique. That lets run projection insert idempotently with
+            // ON CONFLICT, matching how session efficiency projects once.
+            manager
+                .drop_index(
+                    Index::drop()
+                        .name("skill_runs_session_idx")
+                        .table(SkillRuns::Table)
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .unique()
+                        .name("skill_runs_session_idx")
+                        .table(SkillRuns::Table)
+                        .col(SkillRuns::SessionId)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_index(
+                    Index::drop()
+                        .name("skill_runs_session_idx")
+                        .table(SkillRuns::Table)
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("skill_runs_session_idx")
+                        .table(SkillRuns::Table)
+                        .col(SkillRuns::SessionId)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(SkillRunMarks::Table)
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum SkillRunMarks {
+        Table,
+        SessionId,
+        SkillName,
+        CreatedAt,
+    }
+
+    #[derive(DeriveIden)]
+    enum SkillRuns {
+        Table,
+        SessionId,
     }
 }
 

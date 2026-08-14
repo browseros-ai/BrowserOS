@@ -5,6 +5,7 @@ pub mod recording_payloads;
 pub mod recording_streams;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
+pub mod skill_run_marks;
 pub mod skill_runs;
 pub mod skills;
 pub mod tab_claims;
@@ -20,6 +21,7 @@ pub mod prelude {
     pub use super::recording_streams::Entity as RecordingStreams;
     pub use super::session_efficiency_stats::Entity as SessionEfficiencyStats;
     pub use super::session_tabs::Entity as SessionTabs;
+    pub use super::skill_run_marks::Entity as SkillRunMarks;
     pub use super::skill_runs::Entity as SkillRuns;
     pub use super::skills::Entity as Skills;
     pub use super::tab_claims::Entity as TabClaims;

@@ -19,6 +19,7 @@ use crate::{
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
         sessions::Sessions,
+        skill_runs::SkillRunService,
         skills::SkillService,
     },
     storage::JsonStore,
@@ -42,6 +43,7 @@ pub struct AppState {
     pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
     pub skills: Arc<SkillService>,
+    pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
@@ -96,6 +98,10 @@ impl AppState {
             harness.clone(),
             config.browserclaw_dir.join("skills"),
         ));
+        let skill_runs = Arc::new(SkillRunService::new(
+            SkillsRepository::new(database.clone()),
+            audit_log.clone(),
+        ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
             database,
@@ -111,7 +117,9 @@ impl AppState {
         );
         sessions.set_completion_hook(Arc::new({
             let session_efficiency = session_efficiency.clone();
+            let skill_runs = skill_runs.clone();
             move |session_id| {
+                skill_runs.spawn_finalize(session_id.clone());
                 let _ = session_efficiency.queue_finalize(session_id);
             }
         }));
@@ -170,6 +178,7 @@ impl AppState {
             tab_registry,
             harness,
             skills,
+            skill_runs,
             analytics,
             profiles,
             sessions,

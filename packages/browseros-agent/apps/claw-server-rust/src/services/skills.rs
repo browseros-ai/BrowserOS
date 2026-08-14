@@ -455,13 +455,15 @@ fn render_skill_markdown(
     // other YAML-sensitive characters from corrupting the frontmatter. The name
     // is already constrained to `[a-z0-9-]`, so it stays a plain scalar.
     let description = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
-    let mut out =
-        format!("---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\n---\n");
-    if !steps.is_empty() {
-        out.push_str("\n## Steps\n");
-        for (index, step) in steps.iter().enumerate() {
-            out.push_str(&format!("{}. {}\n", index + 1, step));
-        }
+    let mut out = format!(
+        "---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\n---\n\n## Steps\n"
+    );
+    // Every run marks itself so BrowserOS neo records the run and its cost.
+    out.push_str(&format!(
+        "1. Call the mark_skill_run tool with name: {name} so this run is recorded.\n"
+    ));
+    for (index, step) in steps.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n", index + 2, step));
     }
     if !learned_notes.is_empty() {
         out.push_str("\n## Learned from past runs\n");

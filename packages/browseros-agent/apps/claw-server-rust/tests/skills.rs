@@ -6,6 +6,8 @@ use axum::{
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
+    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    ids::DispatchId,
     services::skills::{CreateSkill, SkillOrigin},
 };
 use serde_json::{Value, json};
@@ -225,6 +227,168 @@ async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()
     // cannot break the frontmatter block.
     assert!(content.contains(r#"description: "Reply within 24h: keep it brief\nthen stop""#));
     assert_eq!(content.matches("---").count(), 2);
+
+    Ok(())
+}
+
+fn dispatch(session_id: &str, tool: &str, is_error: bool) -> RecordToolDispatchInput {
+    RecordToolDispatchInput {
+        agent_id: "convo-run".to_string(),
+        slug: "codex".to_string(),
+        agent_label: "codex/inbox".to_string(),
+        session_id: session_id.to_string(),
+        tool_name: tool.to_string(),
+        page_id: None,
+        tab_id: None,
+        target_id: None,
+        url: None,
+        title: None,
+        args_json: bounded_args_json(&json!({})),
+        result_meta: result_meta(is_error, false, &json!({}), 0),
+        duration_ms: 100,
+        created_at: None,
+        dispatch_id: DispatchId::new(),
+        parent_dispatch_id: None,
+        tool_input_token_estimate: 10,
+        tool_output_token_estimate: 20,
+        token_estimator_version: 1,
+    }
+}
+
+#[tokio::test]
+async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+
+    state
+        .skills
+        .create(CreateSkill {
+            name: "inbox-sweep".to_string(),
+            description: "Check the inbox".to_string(),
+            site: None,
+            steps: vec!["Read the inbox".to_string()],
+            learned_notes: vec![],
+            origin: SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+
+    // A completed session with one clean dispatch and one that errored.
+    state
+        .audit_log
+        .record_session_start(
+            "run-sess",
+            "convo-run",
+            "codex",
+            "codex/inbox",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("run-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("run-sess", "act", true))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("run-sess", "closed", None)
+        .await?;
+
+    state.skill_runs.mark("run-sess", "inbox-sweep").await?;
+    assert!(state.skill_runs.finalize("run-sess").await?);
+    // Projecting again is a no-op.
+    assert!(!state.skill_runs.finalize("run-sess").await?);
+
+    let detail = state.skills.get("inbox-sweep").await?;
+    assert_eq!(detail.runs.len(), 1);
+    let run = &detail.runs[0];
+    assert_eq!(run.run_number, 1);
+    assert_eq!(run.tool_count, Some(2));
+    assert_eq!(run.tokens, Some(60));
+    assert!(!run.clean);
+    assert_eq!(run.errored_tool.as_deref(), Some("act"));
+    assert_eq!(detail.view.stats.run_count, 1);
+    assert_eq!(detail.view.stats.clean_run_count, 0);
+
+    // A completed but unmarked session records nothing.
+    state
+        .audit_log
+        .record_session_start(
+            "plain-sess",
+            "convo-run",
+            "codex",
+            "codex/plain",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("plain-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("plain-sess", "closed", None)
+        .await?;
+    assert!(!state.skill_runs.finalize("plain-sess").await?);
+    assert_eq!(state.skills.get("inbox-sweep").await?.runs.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mark_rejects_unknown_skill_and_finalize_skips_a_deleted_one() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+
+    // A name that does not resolve to a saved skill is rejected at mark time.
+    assert!(
+        state
+            .skill_runs
+            .mark("some-session", "not-a-skill")
+            .await
+            .is_err()
+    );
+
+    // A skill deleted between the mark and completion records no run.
+    state
+        .skills
+        .create(CreateSkill {
+            name: "brief".to_string(),
+            description: "Daily brief".to_string(),
+            site: None,
+            steps: vec![],
+            learned_notes: vec![],
+            origin: SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+    state
+        .audit_log
+        .record_session_start(
+            "gone-sess",
+            "convo-run",
+            "codex",
+            "codex/brief",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("gone-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("gone-sess", "closed", None)
+        .await?;
+    state.skill_runs.mark("gone-sess", "brief").await?;
+    state.skills.delete("brief").await?;
+    assert!(!state.skill_runs.finalize("gone-sess").await?);
 
     Ok(())
 }
