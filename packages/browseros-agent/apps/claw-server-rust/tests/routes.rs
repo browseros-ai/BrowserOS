@@ -1107,6 +1107,19 @@ async fn historical_sessions_reconcile_stored_live_status() -> anyhow::Result<()
         assert_eq!(status, StatusCode::OK);
         assert_eq!(detail["session"]["status"], expected_status);
     }
+
+    let (status, done) =
+        request_json(&app.router, "GET", "/api/v1/sessions?status=done", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        done["items"].as_array().map(|items| {
+            items
+                .iter()
+                .map(|item| item["sessionId"].as_str())
+                .collect::<Vec<_>>()
+        }),
+        Some(vec![Some(disconnected.id().as_str())])
+    );
     Ok(())
 }
 
