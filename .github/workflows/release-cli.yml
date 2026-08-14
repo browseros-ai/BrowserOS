@@ -69,7 +69,7 @@ jobs:
         run: make release VERSION=${{ steps.release.outputs.version }} POSTHOG_API_KEY=${{ secrets.POSTHOG_API_KEY }}
 
       - name: Install dependencies
-        run: bun install
+        run: bun ci
         working-directory: packages/browseros-agent
 
       - name: Upload to CDN
