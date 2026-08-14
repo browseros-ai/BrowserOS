@@ -73,7 +73,7 @@ export function SavedStatsBand({ runningCount, stats }: SavedStatsBandProps) {
 
       {WINDOWS.map((windowDefinition) => (
         <TabsContent
-          className="flex min-w-0 flex-col items-stretch gap-6 rounded-[9px] border border-cyanotype-border bg-card px-7 py-6 shadow-card md:flex-row md:items-center md:gap-8"
+          className="flex min-w-0 flex-col items-stretch gap-5 rounded-[9px] border border-cyanotype-border bg-card px-5 py-4 shadow-card md:flex-row md:items-center md:gap-6"
           data-saved-stats-card
           key={windowDefinition.key}
           value={windowDefinition.key}
@@ -110,29 +110,29 @@ function SavedStatsPanel({
   return (
     <>
       <div className="min-w-0 flex-[2]" data-stats-primary>
-        <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2">
+        <div className="mb-3 flex flex-wrap items-end gap-x-3 gap-y-2">
           <div>
             <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
               Tokens saved · {windowDefinition.valueLabel}
             </div>
             <div
-              className="font-extrabold text-[46px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.03em]"
+              className="font-extrabold text-[32px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.03em]"
               data-stat="tokens-saved"
             >
               {formatCompact(visibleSavings)}
             </div>
           </div>
           <div
-            className="inline-flex items-baseline gap-1.5 rounded-full border border-cyanotype-border bg-cyanotype-well px-3 py-1"
+            className="inline-flex items-baseline gap-1.5 rounded-full bg-green-tint px-2.5 py-1"
             data-savings-pill
           >
             <span
-              className="font-extrabold text-[14px] text-cyanotype-blue tabular-nums leading-4"
+              className="font-bold text-[13px] text-green tabular-nums leading-4"
               data-stat="percentage"
             >
               {Math.round(savingsRatio * 100)}%
             </span>
-            <span className="text-[12px] text-cyanotype-blue leading-4">
+            <span className="text-[12px] text-green leading-4">
               fewer tokens
             </span>
           </div>
@@ -141,7 +141,7 @@ function SavedStatsPanel({
         {/* Keep both labels outside the bounded track so no ratio can overlap
             or clip them. */}
         <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-semibold text-[12px] text-cyanotype-blue leading-4">
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-semibold text-[12px] text-cyanotype-soft leading-4">
             used{' '}
             <span className="tabular-nums" data-stat="browserclaw-tokens">
               {formatCompact(windowStats.browserClawTokenEstimate)}
@@ -157,17 +157,17 @@ function SavedStatsPanel({
 
         <div
           aria-hidden
-          className="relative h-3 min-w-0 overflow-hidden rounded-full bg-cyanotype-well shadow-[inset_0_0_0_1px_var(--color-cyanotype-border)]"
+          className="relative h-2 min-w-0 overflow-hidden rounded-full bg-cyanotype-well"
           data-budget-track
         >
           <div
-            className="absolute inset-y-0 left-0 rounded-full bg-cyanotype-blue transition-[width] duration-300 motion-reduce:transition-none"
+            className="absolute inset-y-0 left-0 rounded-full bg-green transition-[width] duration-300 motion-reduce:transition-none"
             data-used-fill
             style={{ width: `${usedRatio * 100}%` }}
           />
         </div>
         <p
-          className="mt-2.5 text-[12px] text-cyanotype-soft leading-4"
+          className="mt-2 text-[12px] text-cyanotype-soft leading-4"
           data-saved-stats-caption
         >
           compact DOM &amp; tool responses instead of a screenshot per call
@@ -186,7 +186,7 @@ function SavedStatsPanel({
             Human time saved
           </div>
           <div
-            className="font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
+            className="font-extrabold text-[22px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
             data-stat="human-time"
           >
             {formatHumanTime(windowStats.humanTimeSavedMs)}
@@ -197,7 +197,7 @@ function SavedStatsPanel({
             Sessions · tool calls
           </div>
           <div
-            className="min-w-0 max-w-full break-all font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
+            className="min-w-0 max-w-full break-all font-extrabold text-[22px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
             data-session-tool-metrics
           >
             <span data-stat="sessions">

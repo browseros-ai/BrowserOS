@@ -2,7 +2,7 @@ export function CockpitHero() {
   return (
     <header>
       <h1
-        className="flex flex-wrap items-baseline gap-[9px] pt-1 font-extrabold font-sans text-[36px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]"
+        className="flex flex-wrap items-baseline gap-[9px] pt-1 font-extrabold font-sans text-[28px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]"
         data-cockpit-hero
       >
         <span data-cockpit-hero-segment="lead">What are your agents</span>{' '}

@@ -46,8 +46,8 @@ export function ProductHuntBannerCard({
           We&apos;re live on Product Hunt today 🎉
         </p>
         <p className="text-muted-foreground text-xs">
-          An upvote or comment would mean a lot &mdash; it helps us keep
-          BrowserOS free and supported.
+          An upvote or comment would mean a lot. It helps keep BrowserOS free
+          and supported.
         </p>
       </div>
       <Button

@@ -288,10 +288,10 @@ describe('SavedStatsBand', () => {
       'rounded-[9px]',
       'border-cyanotype-border',
       'bg-card',
-      'px-7',
-      'py-6',
+      'px-5',
+      'py-4',
       'shadow-card',
-      'md:gap-8',
+      'md:gap-6',
     ])
     expectClasses(primary, ['min-w-0', 'flex-[2]'])
     expectClasses(divider, [
@@ -304,35 +304,30 @@ describe('SavedStatsBand', () => {
     expectClasses(secondary, ['min-w-0', 'flex-1', 'gap-5'])
     expectClasses(savedValue, [
       'font-extrabold',
-      'text-[46px]',
+      'text-[32px]',
       'text-cyanotype-ink',
       'leading-none',
       'tracking-[-0.03em]',
     ])
     expectClasses(savingsPill, [
       'rounded-full',
-      'border-cyanotype-border',
-      'bg-cyanotype-well',
-      'px-3',
+      'bg-green-tint',
+      'px-2.5',
       'py-1',
     ])
-    expectClasses(percentage, [
-      'font-extrabold',
-      'text-[14px]',
-      'text-cyanotype-blue',
-    ])
+    expectClasses(percentage, ['font-bold', 'text-[13px]', 'text-green'])
     expectClasses(usedLabel, [
       'font-semibold',
       'text-[12px]',
-      'text-cyanotype-blue',
+      'text-cyanotype-soft',
     ])
     expectClasses(comparisonLabel, ['text-[12px]', 'text-cyanotype-muted'])
-    expectClasses(track, ['h-3', 'rounded-full', 'bg-cyanotype-well'])
-    expectClasses(fill, ['rounded-full', 'bg-cyanotype-blue'])
-    expectClasses(caption, ['mt-2.5', 'text-[12px]', 'text-cyanotype-soft'])
+    expectClasses(track, ['h-2', 'rounded-full', 'bg-cyanotype-well'])
+    expectClasses(fill, ['rounded-full', 'bg-green'])
+    expectClasses(caption, ['mt-2', 'text-[12px]', 'text-cyanotype-soft'])
     expectClasses(humanTime, [
       'font-extrabold',
-      'text-[28px]',
+      'text-[22px]',
       'tracking-[-0.02em]',
     ])
     expectClasses(sessionMetrics, [
@@ -340,7 +335,7 @@ describe('SavedStatsBand', () => {
       'max-w-full',
       'break-all',
       'font-extrabold',
-      'text-[28px]',
+      'text-[22px]',
       'tracking-[-0.02em]',
     ])
     expect(usedLabel?.textContent).toBe('used 100')

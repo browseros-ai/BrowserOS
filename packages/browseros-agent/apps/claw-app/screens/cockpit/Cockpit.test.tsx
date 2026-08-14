@@ -241,7 +241,7 @@ describe('Cockpit (v2)', () => {
       'pt-1',
       'font-sans',
       'font-extrabold',
-      'text-[36px]',
+      'text-[28px]',
       'text-cyanotype-ink',
       'leading-[1.15]',
       'tracking-[-0.025em]',
