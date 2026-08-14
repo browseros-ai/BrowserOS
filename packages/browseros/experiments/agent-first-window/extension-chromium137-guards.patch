@@ -1,0 +1,190 @@
+From b15d1feaf6c3d4d7ef4c6a8cef91890b9f03e0b7 Mon Sep 17 00:00:00 2001
+From: felarof99 <nithin.sonti@gmail.com>
+Date: Wed, 12 Aug 2026 23:40:29 -0700
+Subject: [PATCH] fix(agent): support Chromium 137 side panel APIs
+
+---
+ .../toggleSidePanel.no-on-closed.test.ts      | 32 +++++++++++++++++++
+ .../toggleSidePanel.no-on-opened.test.ts      | 32 +++++++++++++++++++
+ .../app/lib/browseros/toggleSidePanel.test.ts | 31 ++++++++++++++++++
+ .../apps/app/lib/browseros/toggleSidePanel.ts | 18 +++++++++--
+ 4 files changed, 111 insertions(+), 2 deletions(-)
+ create mode 100644 packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-closed.test.ts
+ create mode 100644 packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-opened.test.ts
+
+diff --git a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-closed.test.ts b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-closed.test.ts
+new file mode 100644
+index 000000000..699960275
+--- /dev/null
++++ b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-closed.test.ts
+@@ -0,0 +1,32 @@
++import { expect, it, mock } from 'bun:test'
++
++mock.module('./sidePanelOpenStateStorage', () => ({
++  sidePanelPerWindowStorage: {
++    getValue: async () => false,
++    setValue: async () => {},
++  },
++  openWindowSidePanelIdsStorage: {
++    getValue: async () => [],
++    setValue: async () => {},
++  },
++}))
++
++it('registers onOpened when Chromium does not expose onClosed', async () => {
++  let openListenerRegistrations = 0
++  globalThis.chrome = {
++    sidePanel: {
++      onOpened: {
++        addListener: () => {
++          openListenerRegistrations += 1
++        },
++      },
++    },
++  } as unknown as typeof chrome
++
++  const { registerSidePanelOpenStateListeners } = await import(
++    './toggleSidePanel'
++  )
++
++  expect(() => registerSidePanelOpenStateListeners()).not.toThrow()
++  expect(openListenerRegistrations).toBe(1)
++})
+diff --git a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-opened.test.ts b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-opened.test.ts
+new file mode 100644
+index 000000000..d76bc1042
+--- /dev/null
++++ b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.no-on-opened.test.ts
+@@ -0,0 +1,32 @@
++import { expect, it, mock } from 'bun:test'
++
++mock.module('./sidePanelOpenStateStorage', () => ({
++  sidePanelPerWindowStorage: {
++    getValue: async () => false,
++    setValue: async () => {},
++  },
++  openWindowSidePanelIdsStorage: {
++    getValue: async () => [],
++    setValue: async () => {},
++  },
++}))
++
++it('registers onClosed when Chromium does not expose onOpened', async () => {
++  let closeListenerRegistrations = 0
++  globalThis.chrome = {
++    sidePanel: {
++      onClosed: {
++        addListener: () => {
++          closeListenerRegistrations += 1
++        },
++      },
++    },
++  } as unknown as typeof chrome
++
++  const { registerSidePanelOpenStateListeners } = await import(
++    './toggleSidePanel'
++  )
++
++  expect(() => registerSidePanelOpenStateListeners()).not.toThrow()
++  expect(closeListenerRegistrations).toBe(1)
++})
+diff --git a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.test.ts b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.test.ts
+index 583927d39..44c90bb85 100644
+--- a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.test.ts
++++ b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.test.ts
+@@ -204,6 +204,37 @@ describe('side panel scope routing', () => {
+     expect(closeCalls).toEqual([])
+   })
+ 
++  it('falls back to the standard open API when BrowserOS tab open APIs are unavailable', async () => {
++    Reflect.deleteProperty(chrome.sidePanel, 'browserosIsOpen')
++
++    const result = await openSidePanel({ tabId: 7, windowId: 3 })
++
++    expect(result).toEqual({ opened: true })
++    expect(openCalls).toEqual([{ tabId: 7 }])
++    expect(browserosToggleCalls).toEqual([])
++  })
++
++  it('falls back to the standard open API when BrowserOS tab toggle is unavailable', async () => {
++    Reflect.deleteProperty(chrome.sidePanel, 'browserosToggle')
++
++    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
++
++    expect(result).toEqual({ opened: true })
++    expect(openCalls).toEqual([{ tabId: 7 }])
++  })
++
++  it('keeps an open window panel open when Chromium cannot close it', async () => {
++    storedSidePanelPerWindow = true
++    storedOpenWindowIds = [3]
++    await refreshSidePanelRuntimeState()
++    Reflect.deleteProperty(chrome.sidePanel, 'close')
++
++    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
++
++    expect(result).toEqual({ opened: true })
++    expect(closeCalls).toEqual([])
++  })
++
+   it('refreshes the cached scope from extension storage outside the click path', async () => {
+     storedSidePanelPerWindow = true
+ 
+diff --git a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.ts b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.ts
+index 164761ed4..c2a10afa7 100644
+--- a/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.ts
++++ b/packages/browseros-agent/apps/app/lib/browseros/toggleSidePanel.ts
+@@ -126,6 +126,13 @@ export async function ensureSidePanelRuntimeStateLoaded(): Promise<void> {
+ async function openTabSidePanel({
+   tabId,
+ }: SidePanelTarget): Promise<SidePanelToggleResult> {
++  if (
++    typeof chrome.sidePanel.browserosIsOpen !== 'function' ||
++    typeof chrome.sidePanel.browserosToggle !== 'function'
++  ) {
++    await chrome.sidePanel.open({ tabId })
++    return { opened: true }
++  }
+   const isAlreadyOpen = await chrome.sidePanel.browserosIsOpen({ tabId })
+   if (isAlreadyOpen) {
+     return { opened: true }
+@@ -136,6 +143,10 @@ async function openTabSidePanel({
+ async function toggleTabSidePanel({
+   tabId,
+ }: SidePanelTarget): Promise<SidePanelToggleResult> {
++  if (typeof chrome.sidePanel.browserosToggle !== 'function') {
++    await chrome.sidePanel.open({ tabId })
++    return { opened: true }
++  }
+   return await chrome.sidePanel.browserosToggle({ tabId })
+ }
+ 
+@@ -153,6 +164,9 @@ async function toggleWindowSidePanel(
+   target: SidePanelTarget,
+ ): Promise<SidePanelToggleResult> {
+   if (openWindowSidePanelIds.has(target.windowId)) {
++    if (typeof chrome.sidePanel.close !== 'function') {
++      return { opened: true }
++    }
+     await chrome.sidePanel.close({ windowId: target.windowId })
+     rememberWindowSidePanelClosed(target.windowId)
+     return { opened: false }
+@@ -165,13 +179,13 @@ export function registerSidePanelOpenStateListeners(): void {
+   if (sidePanelOpenStateListenersRegistered) return
+   sidePanelOpenStateListenersRegistered = true
+ 
+-  chrome.sidePanel.onOpened.addListener((info) => {
++  chrome.sidePanel.onOpened?.addListener((info) => {
+     if (info.tabId === undefined) {
+       rememberWindowSidePanelOpen(info.windowId)
+     }
+   })
+ 
+-  chrome.sidePanel.onClosed.addListener((info) => {
++  chrome.sidePanel.onClosed?.addListener((info) => {
+     if (info.tabId === undefined) {
+       rememberWindowSidePanelClosed(info.windowId)
+     }
+-- 
+2.55.0
+

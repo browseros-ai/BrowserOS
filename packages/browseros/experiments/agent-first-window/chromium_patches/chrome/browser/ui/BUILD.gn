@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index bf0e13928f08e65e7ee138261cd7bb67e18aaf24..5353d5ac96395c4f97fc7a6060cdcb7580a68d7a 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4078,6 +4078,8 @@ static_library("ui") {
+       "views/find_bar_view.h",
+       "views/flying_indicator.cc",
+       "views/flying_indicator.h",
++      "views/frame/agent_pane_view.cc",
++      "views/frame/agent_pane_view.h",
+       "views/frame/app_menu_button.cc",
+       "views/frame/app_menu_button.h",
+       "views/frame/app_menu_button_observer.h",

@@ -1,0 +1,12 @@
+diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
+index 7af6e83dedf57dc5cad9bbc571bd75794a56b435..8ac622a386c813af1db9484a9399b1beb6b31a3c 100644
+--- a/tools/metrics/histograms/metadata/extensions/enums.xml
++++ b/tools/metrics/histograms/metadata/extensions/enums.xml
+@@ -2829,6 +2829,7 @@ Called by update_extension_histograms.py.-->
+   <int value="1944" label="BROWSER_OS_SCROLLDOWN"/>
+   <int value="1945" label="BROWSER_OS_SCROLLTONODE"/>
+   <int value="1946" label="BROWSER_OS_SENDKEYS"/>
++  <int value="1958" label="BROWSER_OS_TOGGLEAGENTSPLIT"/>
+ </enum>
+ 
+ <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->

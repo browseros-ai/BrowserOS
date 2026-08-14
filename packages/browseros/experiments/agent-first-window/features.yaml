@@ -1,0 +1,36 @@
+version: "1.0"
+
+# Feature registry for the agent-first window experiment.
+# Same shape as chromium_patches/.features.yaml, kept separate on purpose:
+# these patches are generated against Chromium 137.0.7232.69, while the
+# main patch set targets 151. They must not be merged into it as-is.
+
+features:
+  agent-first-window:
+    description: "feat: agent-first window with the browser docked right"
+    files:
+      - chrome/app/chrome_command_ids.h
+      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/global_keyboard_shortcuts_mac.mm
+      - chrome/browser/ui/BUILD.gn
+      - chrome/browser/ui/browser_command_controller.cc
+      - chrome/browser/ui/views/accelerator_table.cc
+      - chrome/browser/ui/views/frame/agent_pane_view.cc
+      - chrome/browser/ui/views/frame/agent_pane_view.h
+      - chrome/browser/ui/views/frame/browser_frame_mac.mm
+      - chrome/browser/ui/views/frame/browser_view.cc
+      - chrome/browser/ui/views/frame/browser_view.h
+      - chrome/browser/ui/views/frame/browser_view_layout.cc
+      - chrome/browser/ui/views/frame/browser_view_layout.h
+      - chrome/browser/ui/views/frame/browser_view_layout_delegate.h
+      - chrome/browser/ui/views/frame/browser_view_layout_unittest.cc
+
+  agent-first-window-js-toggle:
+    description: "feat: chrome.browserOS.toggleAgentSplit for the agent UI"
+    files:
+      - chrome/browser/extensions/api/browser_os/browser_os_api.cc
+      - chrome/browser/extensions/api/browser_os/browser_os_api.h
+      - chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
+      - chrome/common/extensions/api/browser_os.idl
+      - extensions/browser/extension_function_histogram_value.h
+      - tools/metrics/histograms/metadata/extensions/enums.xml

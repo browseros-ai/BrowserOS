@@ -1,0 +1,1237 @@
+diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
+index 353b1ca1e9f25..a2ad4ff41e7ab 100644
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -293,6 +293,7 @@
+ #define IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL  40296
+ #define IDC_CYCLE_THIRD_PARTY_LLM_PROVIDER  40297
+ #define IDC_OPEN_CLASH_OF_GPTS               40298
++#define IDC_TOGGLE_AGENT_SPLIT               40299
+ 
+ // Spell-check
+ // Insert any additional suggestions before _LAST; these have to be consecutive.
+diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
+index e42df6740460c..50b6d8e61e1f9 100644
+--- a/chrome/browser/extensions/browseros_extension_constants.h
++++ b/chrome/browser/extensions/browseros_extension_constants.h
+@@ -17,6 +17,10 @@ namespace browseros {
+ inline constexpr char kAISidePanelExtensionId[] =
+     "djhdjhlnljbjgejbndockeedocneiaei";
+ 
++// Current BrowserOS agent extension ID.
++inline constexpr char kAgentV2ExtensionId[] =
++    "bflpfmnmnokmjhmgnolecpppdbdophmk";
++
+ // Bug Reporter Extension ID
+ inline constexpr char kBugReporterExtensionId[] =
+     "adlpneommgkgeanpaekgoaolcpncohkf";
+@@ -46,6 +50,7 @@ inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
+     {kAISidePanelExtensionId, "BrowserOS", true, true},
+     {kBugReporterExtensionId, "BrowserOS/bug-reporter", true, false},
+     {kControllerExtensionId, "BrowserOS/controller", false, false},
++    {kAgentV2ExtensionId, "BrowserOS", false, false},
+ };
+ 
+ // Allowlist of BrowserOS extension IDs that are permitted to be installed.
+@@ -54,6 +59,7 @@ inline constexpr const char* kAllowedExtensions[] = {
+     kBrowserOSExtensions[0].id,
+     kBrowserOSExtensions[1].id,
+     kBrowserOSExtensions[2].id,
++    kBrowserOSExtensions[3].id,
+ };
+ 
+ inline constexpr size_t kBrowserOSExtensionsCount =
+diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
+index 56da23fd6d745..dd4c8e00b1d0b 100644
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -148,6 +148,7 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       {true,  true,  false, false, kVK_ANSI_L,            IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL},
+       {true,  true,  false, false, kVK_ANSI_Semicolon,   IDC_CYCLE_THIRD_PARTY_LLM_PROVIDER},
+       {true,  true,  false, false, kVK_ANSI_U,            IDC_OPEN_CLASH_OF_GPTS},
++      {true,  true,  false, false, kVK_ANSI_E,            IDC_TOGGLE_AGENT_SPLIT},
+       {true,  true,  false, false, kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
+       {true,  false, false, true,  kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
+       {true,  false, false, true,  kVK_DownArrow,         IDC_FOCUS_NEXT_PANE},
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index bf0e13928f08e..5353d5ac96395 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4078,6 +4078,8 @@ static_library("ui") {
+       "views/find_bar_view.h",
+       "views/flying_indicator.cc",
+       "views/flying_indicator.h",
++      "views/frame/agent_pane_view.cc",
++      "views/frame/agent_pane_view.h",
+       "views/frame/app_menu_button.cc",
+       "views/frame/app_menu_button.h",
+       "views/frame/app_menu_button_observer.h",
+diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
+index 52f78a5a46584..68b26e420cdb9 100644
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -65,6 +65,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
+ #include "chrome/browser/ui/ui_features.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
+ #include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+ #include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+@@ -939,6 +940,12 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
+         coordinator->Show();
+       }
+       break;
++    case IDC_TOGGLE_AGENT_SPLIT:
++      if (auto* browser_view =
++              BrowserView::GetBrowserViewForBrowser(browser_)) {
++        browser_view->ToggleAgentSplit();
++      }
++      break;
+     case IDC_SHOW_APP_MENU:
+       base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
+       ShowAppMenu(browser_);
+@@ -1583,6 +1590,7 @@ void BrowserCommandController::InitCommandState() {
+                                         base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel));
+   command_updater_.UpdateCommandEnabled(IDC_OPEN_CLASH_OF_GPTS,
+                                         base::FeatureList::IsEnabled(features::kClashOfGpts));
++  command_updater_.UpdateCommandEnabled(IDC_TOGGLE_AGENT_SPLIT, normal_window);
+ 
+   if (browser_->is_type_normal()) {
+     // Reading list commands.
+diff --git a/chrome/browser/ui/views/accelerator_table.cc b/chrome/browser/ui/views/accelerator_table.cc
+index 80af2177736e3..befed98df6189 100644
+--- a/chrome/browser/ui/views/accelerator_table.cc
++++ b/chrome/browser/ui/views/accelerator_table.cc
+@@ -155,6 +155,8 @@ const AcceleratorMapping kAcceleratorMap[] = {
+      IDC_SHOW_THIRD_PARTY_LLM_SIDE_PANEL},
+     {ui::VKEY_U, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_OPEN_CLASH_OF_GPTS},
++    {ui::VKEY_E, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
++     IDC_TOGGLE_AGENT_SPLIT},
+ 
+ // Platform-specific key maps.
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/ui/views/frame/agent_pane_view.cc b/chrome/browser/ui/views/frame/agent_pane_view.cc
+new file mode 100644
+index 0000000000000..ba72fbce5e7d6
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/agent_pane_view.cc
+@@ -0,0 +1,274 @@
++// Copyright 2026 The BrowserOS Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/agent_pane_view.h"
++
++#include <algorithm>
++#include <memory>
++
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/i18n/rtl.h"
++#include "base/logging.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/extensions/browseros_extension_constants.h"
++#include "chrome/browser/extensions/extension_view_host.h"
++#include "chrome/browser/extensions/extension_view_host_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/views/extensions/extension_view_views.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "content/public/browser/browser_context.h"
++#include "extensions/common/extension.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/views/background.h"
++#include "ui/views/controls/button/image_button.h"
++#include "ui/views/controls/button/image_button_factory.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/controls/resize_area.h"
++
++namespace {
++
++constexpr SkColor kAgentPaneBackground = SkColorSetRGB(0xEA, 0xEC, 0xF0);
++constexpr SkColor kAgentTitleBarBackground = SkColorSetRGB(0xDF, 0xE2, 0xE7);
++constexpr char kAgentHomePath[] = "app.html#/home";
++
++}  // namespace
++
++AgentPaneView::AgentPaneView(BrowserView* browser_view)
++    : browser_view_(browser_view) {
++  SetBackground(views::CreateSolidBackground(kAgentPaneBackground));
++
++  if (browser_view_) {
++    registry_observation_.Observe(
++        extensions::ExtensionRegistry::Get(browser_view_->GetProfile()));
++  }
++
++  // Create contents before interactive chrome so the resize area and toggle
++  // stay above the extension WebContents in both paint and event order.
++  EnsureContents();
++
++  drag_strip_ = AddChildView(std::make_unique<views::View>());
++  drag_strip_->SetBackground(
++      views::CreateSolidBackground(kAgentTitleBarBackground));
++
++  auto toggle_button = views::CreateVectorImageButtonWithNativeTheme(
++      base::BindRepeating(&AgentPaneView::ToggleBrowser,
++                          base::Unretained(this)),
++      kOpenInNewIcon, 16);
++  toggle_button->SetTooltipText(u"Show or hide browser");
++  toggle_button->SetPreferredSize(gfx::Size(28, 28));
++  toggle_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
++  toggle_button_ = AddChildView(std::move(toggle_button));
++
++  resize_area_ = AddChildView(std::make_unique<views::ResizeArea>(this));
++  SetShowResizeArea(false);
++}
++
++AgentPaneView::~AgentPaneView() {
++  registry_observation_.Reset();
++  DestroyExtensionContents();
++}
++
++void AgentPaneView::EnsureContents() {
++  if (contents_) {
++    return;
++  }
++
++  if (TryCreateExtensionContents()) {
++    return;
++  }
++
++  ShowPlaceholder();
++}
++
++bool AgentPaneView::TryCreateExtensionContents() {
++  if (!browser_view_ || host_) {
++    return false;
++  }
++
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(browser_view_->GetProfile())
++          ->enabled_extensions()
++          .GetByID(extensions::browseros::kAgentV2ExtensionId);
++  if (!extension) {
++    VLOG(1) << "AgentPaneView using placeholder; agent extension is not "
++               "enabled";
++    return false;
++  }
++
++  const GURL url = extension->GetResourceURL(kAgentHomePath);
++  host_ = extensions::ExtensionViewHostFactory::CreateSidePanelHost(
++      url, browser_view_->browser(), /*tab_interface=*/nullptr);
++  if (!host_) {
++    VLOG(1) << "AgentPaneView using placeholder; extension host creation "
++               "failed for "
++            << url;
++    return false;
++  }
++
++  host_->SetCloseHandler(base::BindOnce(
++      &AgentPaneView::HandleCloseExtensionHost, base::Unretained(this)));
++  host_observation_.Observe(host_.get());
++
++  auto extension_view = std::make_unique<ExtensionViewViews>(
++      browser_view_->GetProfile(), host_.get());
++  extension_view->SetVisible(true);
++  contents_ = AddChildViewAt(std::move(extension_view), 0);
++  VLOG(1) << "AgentPaneView created extension host url=" << url;
++  InvalidateLayout();
++  return true;
++}
++
++void AgentPaneView::ShowPlaceholder() {
++  CHECK(!contents_);
++
++  auto placeholder = std::make_unique<views::Label>(
++      u"BrowserOS agent extension not installed");
++  placeholder->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++  contents_ = AddChildViewAt(std::move(placeholder), 0);
++  InvalidateLayout();
++}
++
++void AgentPaneView::DestroyExtensionContents() {
++  if (!host_) {
++    return;
++  }
++
++  host_observation_.Reset();
++  if (contents_) {
++    RemoveChildViewT(contents_);
++    contents_ = nullptr;
++  }
++  host_.reset();
++}
++
++void AgentPaneView::HandleCloseExtensionHost(extensions::ExtensionHost* host) {
++  CHECK_EQ(host, host_.get());
++  DestroyExtensionContents();
++  ShowPlaceholder();
++}
++
++void AgentPaneView::SetShowResizeArea(bool show) {
++  resize_area_->SetVisible(show);
++}
++
++void AgentPaneView::RestoreFocus() {
++  toggle_button_->RequestFocus();
++}
++
++bool AgentPaneView::IsPointInDragStrip(const gfx::Point& point) const {
++  if (!bounds().Contains(point)) {
++    return false;
++  }
++
++  gfx::Point local_point(point.x() - x(), point.y() - y());
++  if (local_point.y() < 0 || local_point.y() >= kTitleBarHeight) {
++    return false;
++  }
++  if (toggle_button_ && toggle_button_->bounds().Contains(local_point)) {
++    return false;
++  }
++  return !resize_area_ || !resize_area_->GetVisible() ||
++         !resize_area_->bounds().Contains(local_point);
++}
++
++void AgentPaneView::Layout(PassKey) {
++  const gfx::Rect bounds = GetLocalBounds();
++  drag_strip_->SetBounds(bounds.x(), bounds.y(), bounds.width(),
++                         kTitleBarHeight);
++
++  const gfx::Size toggle_size = toggle_button_->GetPreferredSize();
++  toggle_button_->SetBounds(
++      std::max(bounds.x(), bounds.right() - toggle_size.width() - 8),
++      bounds.y() + (kTitleBarHeight - toggle_size.height()) / 2,
++      toggle_size.width(), toggle_size.height());
++
++  if (contents_) {
++    contents_->SetBounds(bounds.x(), bounds.y() + kTitleBarHeight,
++                         bounds.width(),
++                         std::max(0, bounds.height() - kTitleBarHeight));
++  }
++  if (resize_area_) {
++    resize_area_->SetBounds(bounds.right() - kResizeAreaWidth, bounds.y(),
++                            kResizeAreaWidth, bounds.height());
++  }
++}
++
++gfx::Size AgentPaneView::GetMinimumSize() const {
++  return gfx::Size(kMinimumWidth, kTitleBarHeight);
++}
++
++void AgentPaneView::OnResize(int resize_amount, bool done_resizing) {
++  if (width_at_resize_start_ < 0) {
++    width_at_resize_start_ = width();
++  }
++
++  // ResizeArea reports logical-direction deltas; the pane is physically fixed
++  // to the left, so undo that mirroring in RTL locales.
++  const int physical_resize_amount =
++      base::i18n::IsRTL() ? -resize_amount : resize_amount;
++  split_width_ =
++      std::max(kMinimumWidth, width_at_resize_start_ + physical_resize_amount);
++  if (done_resizing) {
++    width_at_resize_start_ = -1;
++  }
++  if (browser_view_) {
++    browser_view_->InvalidateLayout();
++  }
++}
++
++void AgentPaneView::ToggleBrowser() {
++  CHECK(browser_view_);
++  chrome::ExecuteCommand(browser_view_->browser(), IDC_TOGGLE_AGENT_SPLIT);
++}
++
++void AgentPaneView::OnExtensionHostDidStopFirstLoad(
++    const extensions::ExtensionHost* host) {
++  if (host == host_.get()) {
++    VLOG(1) << "AgentPaneView extension host loaded url="
++            << host->GetLastCommittedURL();
++  }
++}
++
++void AgentPaneView::OnExtensionLoaded(content::BrowserContext*,
++                                      const extensions::Extension* extension) {
++  if (extension->id() != extensions::browseros::kAgentV2ExtensionId || host_) {
++    return;
++  }
++
++  if (contents_) {
++    RemoveChildViewT(contents_);
++    contents_ = nullptr;
++  }
++  if (!TryCreateExtensionContents()) {
++    ShowPlaceholder();
++  }
++}
++
++void AgentPaneView::OnExtensionUnloaded(content::BrowserContext*,
++                                        const extensions::Extension* extension,
++                                        extensions::UnloadedExtensionReason) {
++  if (extension->id() != extensions::browseros::kAgentV2ExtensionId || !host_) {
++    return;
++  }
++
++  DestroyExtensionContents();
++  ShowPlaceholder();
++}
++
++void AgentPaneView::OnShutdown(extensions::ExtensionRegistry*) {
++  registry_observation_.Reset();
++  DestroyExtensionContents();
++  if (!contents_) {
++    ShowPlaceholder();
++  }
++}
++
++BEGIN_METADATA(AgentPaneView)
++END_METADATA
+diff --git a/chrome/browser/ui/views/frame/agent_pane_view.h b/chrome/browser/ui/views/frame/agent_pane_view.h
+new file mode 100644
+index 0000000000000..9b75938d25de4
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/agent_pane_view.h
+@@ -0,0 +1,114 @@
++// Copyright 2026 The BrowserOS Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_AGENT_PANE_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_AGENT_PANE_VIEW_H_
++
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "extensions/browser/extension_host_observer.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_registry_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/views/controls/resize_area_delegate.h"
++#include "ui/views/view.h"
++
++class BrowserView;
++
++namespace gfx {
++class Point;
++}
++
++namespace content {
++class BrowserContext;
++}
++
++namespace extensions {
++class Extension;
++class ExtensionHost;
++class ExtensionViewHost;
++enum class UnloadedExtensionReason;
++}  // namespace extensions
++
++namespace views {
++class ImageButton;
++class ResizeArea;
++}  // namespace views
++
++// The agent-primary surface embedded directly in BrowserView. It owns the
++// title strip, browser toggle, optional extension contents, and split resizer.
++class AgentPaneView : public views::View,
++                      public views::ResizeAreaDelegate,
++                      public extensions::ExtensionHostObserver,
++                      public extensions::ExtensionRegistryObserver {
++  METADATA_HEADER(AgentPaneView, views::View)
++
++ public:
++  static constexpr int kMinimumWidth = 320;
++  static constexpr int kTitleBarHeight = 36;
++  static constexpr int kResizeAreaWidth = 6;
++
++  // `browser_view` may be null only in BrowserViewLayout unit tests.
++  explicit AgentPaneView(BrowserView* browser_view);
++  AgentPaneView(const AgentPaneView&) = delete;
++  AgentPaneView& operator=(const AgentPaneView&) = delete;
++  ~AgentPaneView() override;
++
++  // Creates visible contents on first use. A placeholder is always available
++  // even when the BrowserOS agent extension cannot be loaded.
++  void EnsureContents();
++  void SetShowResizeArea(bool show);
++  void RestoreFocus();
++  int split_width() const { return split_width_; }
++
++  // Returns whether `point`, expressed in BrowserView coordinates, is inside
++  // the non-interactive portion of the pane's title strip.
++  bool IsPointInDragStrip(const gfx::Point& point) const;
++
++  // views::View:
++  void Layout(PassKey) override;
++  gfx::Size GetMinimumSize() const override;
++
++  // views::ResizeAreaDelegate:
++  void OnResize(int resize_amount, bool done_resizing) override;
++
++ private:
++  bool TryCreateExtensionContents();
++  void ShowPlaceholder();
++  void DestroyExtensionContents();
++  void HandleCloseExtensionHost(extensions::ExtensionHost* host);
++  void ToggleBrowser();
++
++  // extensions::ExtensionHostObserver:
++  void OnExtensionHostDidStopFirstLoad(
++      const extensions::ExtensionHost* host) override;
++
++  // extensions::ExtensionRegistryObserver:
++  void OnExtensionLoaded(content::BrowserContext* browser_context,
++                         const extensions::Extension* extension) override;
++  void OnExtensionUnloaded(content::BrowserContext* browser_context,
++                           const extensions::Extension* extension,
++                           extensions::UnloadedExtensionReason reason) override;
++  void OnShutdown(extensions::ExtensionRegistry* registry) override;
++
++  const raw_ptr<BrowserView> browser_view_;
++  raw_ptr<views::View> drag_strip_ = nullptr;
++  raw_ptr<views::ImageButton> toggle_button_ = nullptr;
++  raw_ptr<views::View> contents_ = nullptr;
++  raw_ptr<views::ResizeArea> resize_area_ = nullptr;
++  std::unique_ptr<extensions::ExtensionViewHost> host_;
++  base::ScopedObservation<extensions::ExtensionHost,
++                          extensions::ExtensionHostObserver>
++      host_observation_{this};
++  base::ScopedObservation<extensions::ExtensionRegistry,
++                          extensions::ExtensionRegistryObserver>
++      registry_observation_{this};
++  int split_width_ = 0;
++  int width_at_resize_start_ = -1;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_AGENT_PANE_VIEW_H_
+diff --git a/chrome/browser/ui/views/frame/browser_frame_mac.mm b/chrome/browser/ui/views/frame/browser_frame_mac.mm
+index 9f478e1478d41..2c4ffd4444d15 100644
+--- a/chrome/browser/ui/views/frame/browser_frame_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_frame_mac.mm
+@@ -156,6 +156,11 @@ void BrowserFrameMac::GetWindowFrameTitlebarHeight(
+   if (browser_view_ && browser_view_->frame() &&
+       browser_view_->frame()->GetFrameView()) {
+     *override_titlebar_height = true;
++    if (browser_view_->agent_window_mode() ==
++        BrowserView::AgentWindowMode::kAgentOnly) {
++      *titlebar_height = BrowserView::kAgentTitleBarHeight;
++      return;
++    }
+     *titlebar_height =
+         browser_view_->GetTabStripHeight() +
+         browser_view_->frame()->GetFrameView()->GetTopInset(true);
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 3c0e53b5ade77..91a24aeef71a5 100644
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -118,6 +118,7 @@
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+ #include "chrome/browser/ui/views/eye_dropper/eye_dropper.h"
+ #include "chrome/browser/ui/views/find_bar_host.h"
++#include "chrome/browser/ui/views/frame/agent_pane_view.h"
+ #include "chrome/browser/ui/views/frame/app_menu_button.h"
+ #include "chrome/browser/ui/views/frame/browser_frame.h"
+ #include "chrome/browser/ui/views/frame/browser_view_layout.h"
+@@ -817,8 +818,27 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
+     return browser_view_->IsToolbarVisible();
+   }
+ 
++  int GetAgentPaneWidth() const override {
++    switch (browser_view_->agent_window_mode()) {
++      case BrowserView::AgentWindowMode::kDisabled:
++        return 0;
++      case BrowserView::AgentWindowMode::kAgentOnly:
++        return browser_view_->width();
++      case BrowserView::AgentWindowMode::kSplit: {
++        const int stored_width = browser_view_->agent_pane()->split_width();
++        return stored_width > 0 ? stored_width : browser_view_->width() * 2 / 5;
++      }
++    }
++    NOTREACHED();
++  }
++
++  bool IsAgentPaneOnly() const override {
++    return browser_view_->agent_window_mode() ==
++           BrowserView::AgentWindowMode::kAgentOnly;
++  }
++
+   bool IsBookmarkBarVisible() const override {
+-    return browser_view_->IsBookmarkBarVisible();
++    return !IsAgentPaneOnly() && browser_view_->IsBookmarkBarVisible();
+   }
+ 
+   bool IsContentsSeparatorEnabled() const override {
+@@ -1113,6 +1133,11 @@ BrowserView::BrowserView(std::unique_ptr<Browser> browser)
+   side_panel_rounded_corner_ =
+       AddChildView(std::make_unique<SidePanelRoundedCorner>(this));
+ 
++  if (GetIsNormalType()) {
++    agent_pane_ = AddChildView(std::make_unique<AgentPaneView>(this));
++    agent_mode_ = AgentWindowMode::kAgentOnly;
++  }
++
+   // InfoBarContainer needs to be added as a child here for drop-shadow, but
+   // needs to come after toolbar in focus order (see EnsureFocusOrder()).
+   infobar_container_ =
+@@ -1229,6 +1254,7 @@ BrowserView::~BrowserView() {
+   right_aligned_side_panel_separator_ = nullptr;
+   left_aligned_side_panel_separator_ = nullptr;
+   side_panel_rounded_corner_ = nullptr;
++  agent_pane_ = nullptr;
+   toolbar_button_provider_ = nullptr;
+ 
+   // Child views maintain PrefMember attributes that point to
+@@ -1283,6 +1309,45 @@ BrowserView* BrowserView::GetBrowserViewForBrowser(const Browser* browser) {
+   return GetBrowserViewForNativeWindow(browser->window()->GetNativeWindow());
+ }
+ 
++void BrowserView::SetAgentWindowMode(AgentWindowMode mode) {
++  if (!agent_pane_ || agent_mode_ == mode) {
++    return;
++  }
++
++  agent_mode_ = mode;
++  agent_pane_->EnsureContents();
++  agent_pane_->SetShowResizeArea(mode == AgentWindowMode::kSplit);
++  InvalidateLayout();
++  if (frame_ && frame_->GetFrameView()) {
++    frame_->GetFrameView()->UpdateMinimumSize();
++  }
++  DeprecatedLayoutImmediately();
++  if (mode == AgentWindowMode::kAgentOnly) {
++    agent_pane_->RestoreFocus();
++  } else {
++    RestoreFocus();
++  }
++}
++
++void BrowserView::ToggleAgentSplit() {
++  if (agent_mode_ == AgentWindowMode::kSplit && GetActiveWebContents()) {
++    if ((browser_->HasFindBarController() &&
++         browser_->GetFindBarController()->find_bar()->IsFindBarVisible()) ||
++        IsDownloadShelfVisible()) {
++      return;
++    }
++    auto* modal_manager =
++        web_modal::WebContentsModalDialogManager::FromWebContents(
++            GetActiveWebContents());
++    if (modal_manager && modal_manager->IsDialogActive()) {
++      return;
++    }
++  }
++  SetAgentWindowMode(agent_mode_ == AgentWindowMode::kSplit
++                         ? AgentWindowMode::kAgentOnly
++                         : AgentWindowMode::kSplit);
++}
++
+ void BrowserView::SetDownloadShelfForTest(DownloadShelf* download_shelf) {
+   download_shelf_ = download_shelf;
+ }
+@@ -1326,6 +1391,11 @@ gfx::Size BrowserView::GetWebAppFrameToolbarPreferredSize() const {
+ 
+ #if BUILDFLAG(IS_MAC)
+ bool BrowserView::UsesImmersiveFullscreenMode() const {
++  // Milestone 1 does not support macOS immersive mode because it reparents
++  // top chrome into an overlay widget that spans the agent pane.
++  if (GetIsNormalType()) {
++    return false;
++  }
+   const bool is_pwa =
+       base::FeatureList::IsEnabled(features::kImmersiveFullscreenPWAs) &&
+       GetIsWebAppType();
+@@ -1335,6 +1405,9 @@ bool BrowserView::UsesImmersiveFullscreenMode() const {
+ }
+ 
+ bool BrowserView::UsesImmersiveFullscreenTabbedMode() const {
++  if (GetIsNormalType()) {
++    return false;
++  }
+   return (GetSupportsTabStrip() &&
+           base::FeatureList::IsEnabled(features::kImmersiveFullscreen) &&
+           base::FeatureList::IsEnabled(features::kImmersiveFullscreenTabs)) &&
+@@ -1360,6 +1433,10 @@ bool BrowserView::GetTabStripVisible() const {
+ }
+ 
+ bool BrowserView::ShouldDrawTabStrip() const {
++  if (agent_mode_ == AgentWindowMode::kAgentOnly) {
++    return false;
++  }
++
+   // Return false if this window does not normally display a tabstrip or if the
+   // tabstrip is currently hidden, e.g. because we're in fullscreen.
+   if (!browser_->SupportsWindowFeature(Browser::FEATURE_TABSTRIP)) {
+@@ -3286,6 +3363,10 @@ bool BrowserView::IsTabStripEditable() const {
+ }
+ 
+ bool BrowserView::IsToolbarVisible() const {
++  if (agent_mode_ == AgentWindowMode::kAgentOnly) {
++    return false;
++  }
++
+ #if BUILDFLAG(IS_MAC)
+   // Immersive full screen makes it possible to display the toolbar when
+   // kShowFullscreenToolbar is not set.
+@@ -4985,6 +5066,18 @@ int BrowserView::NonClientHitTest(const gfx::Point& point) {
+   views::View::ConvertPointToTarget(parent(), this,
+                                     &point_in_browser_view_coords);
+ 
++  if (agent_pane_ && agent_pane_->GetVisible() &&
++      agent_pane_->bounds().Contains(point_in_browser_view_coords) &&
++      point_in_browser_view_coords.y() <
++          agent_pane_->y() + AgentPaneView::kTitleBarHeight) {
++    // Let the non-client frame/AppKit resolve title-strip background to a
++    // draggable caption. Resolve controls here, before Chromium's full-width
++    // tab-strip shadow branch can misclassify them as draggable.
++    return agent_pane_->IsPointInDragStrip(point_in_browser_view_coords)
++               ? HTNOWHERE
++               : HTCLIENT;
++  }
++
+   // Check if the point is in the web_app_frame_toolbar_. Because this toolbar
+   // can entirely be within the window controls overlay area, this check needs
+   // to be done before the window controls overlay area check below.
+@@ -5248,7 +5341,7 @@ void BrowserView::AddedToWidget() {
+           infobar_container_, contents_container_,
+           left_aligned_side_panel_separator_, unified_side_panel_,
+           right_aligned_side_panel_separator_, side_panel_rounded_corner_,
+-          immersive_mode_controller_.get(), contents_separator_));
++          immersive_mode_controller_.get(), contents_separator_, agent_pane_));
+   browser_view_layout->SetUseBrowserContentMinimumSize(
+       ShouldUseBrowserContentMinimumSize());
+ 
+diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
+index 8a06d49d2abe1..d0643618557e6 100644
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -69,6 +69,7 @@
+ // view: http://dev.chromium.org/developers/design-documents/browser-window
+ 
+ class AccessibilityFocusHighlight;
++class AgentPaneView;
+ class BookmarkBarView;
+ class Browser;
+ class ContentsLayoutManager;
+@@ -148,6 +149,14 @@ class BrowserView : public BrowserWindow,
+   METADATA_HEADER(BrowserView, views::ClientView)
+ 
+  public:
++  enum class AgentWindowMode {
++    kDisabled,
++    kAgentOnly,
++    kSplit,
++  };
++
++  static constexpr int kAgentTitleBarHeight = 36;
++
+   explicit BrowserView(std::unique_ptr<Browser> browser);
+   BrowserView(const BrowserView&) = delete;
+   BrowserView& operator=(const BrowserView&) = delete;
+@@ -244,6 +253,12 @@ class BrowserView : public BrowserWindow,
+ 
+   SidePanel* unified_side_panel() { return unified_side_panel_; }
+ 
++  AgentWindowMode agent_window_mode() const { return agent_mode_; }
++  AgentPaneView* agent_pane() { return agent_pane_; }
++  const AgentPaneView* agent_pane() const { return agent_pane_; }
++  void SetAgentWindowMode(AgentWindowMode mode);
++  void ToggleAgentSplit();
++
+   void set_contents_border_widget(views::Widget* contents_border_widget) {
+     GetBrowserViewLayout()->set_contents_border_widget(contents_border_widget);
+   }
+@@ -1323,6 +1338,11 @@ class BrowserView : public BrowserWindow,
+   raw_ptr<views::View> left_aligned_side_panel_separator_ = nullptr;
+   raw_ptr<views::View> side_panel_rounded_corner_ = nullptr;
+ 
++  // BrowserOS agent-first window surface. Normal windows start with the agent
++  // filling the window and may toggle Chromium into a right-hand split.
++  raw_ptr<AgentPaneView> agent_pane_ = nullptr;
++  AgentWindowMode agent_mode_ = AgentWindowMode::kDisabled;
++
+   // Provides access to the toolbar buttons this browser view uses. Buttons may
+   // appear in a hosted app frame or in a tabbed UI toolbar.
+   raw_ptr<ToolbarButtonProvider> toolbar_button_provider_ = nullptr;
+diff --git a/chrome/browser/ui/views/frame/browser_view_layout.cc b/chrome/browser/ui/views/frame/browser_view_layout.cc
+index 39fc0f21ff96c..41042dc267ab2 100644
+--- a/chrome/browser/ui/views/frame/browser_view_layout.cc
++++ b/chrome/browser/ui/views/frame/browser_view_layout.cc
+@@ -25,6 +25,7 @@
+ #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
+ #include "chrome/browser/ui/views/download/download_shelf_view.h"
+ #include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
++#include "chrome/browser/ui/views/frame/agent_pane_view.h"
+ #include "chrome/browser/ui/views/frame/browser_non_client_frame_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view_layout_delegate.h"
+ #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
+@@ -63,6 +64,10 @@ namespace {
+ // of the omnibox.
+ const int kConstrainedWindowOverlap = 3;
+ 
++// The browser column remains large enough to keep its top chrome and contents
++// usable while the left agent pane is resized.
++constexpr int kAgentPaneMinBrowserWidth = 400;
++
+ // The normal clipping created by `View::Paint()` may not cover the bottom of
+ // the TopContainerView at certain scale factor because both of the position and
+ // the height might be roudned down. This function sets the clip path that
+@@ -204,7 +209,8 @@ BrowserViewLayout::BrowserViewLayout(
+     views::View* right_aligned_side_panel_separator,
+     views::View* side_panel_rounded_corner,
+     ImmersiveModeController* immersive_mode_controller,
+-    views::View* contents_separator)
++    views::View* contents_separator,
++    AgentPaneView* agent_pane)
+     : delegate_(std::move(delegate)),
+       browser_view_(browser_view),
+       window_scrim_(window_scrim),
+@@ -221,6 +227,7 @@ BrowserViewLayout::BrowserViewLayout(
+       side_panel_rounded_corner_(side_panel_rounded_corner),
+       immersive_mode_controller_(immersive_mode_controller),
+       contents_separator_(contents_separator),
++      agent_pane_(agent_pane),
+       tab_strip_(tab_strip),
+       dialog_host_(std::make_unique<WebContentsModalDialogHostViews>(this)) {}
+ 
+@@ -284,10 +291,14 @@ gfx::Size BrowserViewLayout::GetMinimumSize(const views::View* host) const {
+       toolbar_size.height() + bookmark_bar_size.height() +
+       infobar_container_size.height() + contents_size.height();
+ 
+-  const int min_width = std::max(
++  int min_width = std::max(
+       {tabstrip_size.width(), toolbar_size.width(), bookmark_bar_size.width(),
+        infobar_container_size.width(), contents_size.width()});
+ 
++  if (delegate_->GetAgentPaneWidth() > 0 && !delegate_->IsAgentPaneOnly()) {
++    min_width += AgentPaneView::kMinimumWidth + AgentPaneView::kResizeAreaWidth;
++  }
++
+   return gfx::Size(min_width, min_height);
+ }
+ 
+@@ -308,6 +319,27 @@ void BrowserViewLayout::Layout(views::View* browser_view) {
+     window_scrim_->SetBoundsRect(vertical_layout_rect_);
+   }
+ 
++  agent_pane_width_ = 0;
++  if (agent_pane_) {
++    const int total_width = vertical_layout_rect_.width();
++    const int requested_width = delegate_->GetAgentPaneWidth();
++    if (requested_width > 0 && total_width > 0) {
++      agent_pane_width_ =
++          delegate_->IsAgentPaneOnly()
++              ? total_width
++              : std::clamp(requested_width, AgentPaneView::kMinimumWidth,
++                           std::max(AgentPaneView::kMinimumWidth,
++                                    total_width - kAgentPaneMinBrowserWidth));
++    }
++    SetViewVisibility(agent_pane_, agent_pane_width_ > 0);
++    if (agent_pane_width_ > 0) {
++      agent_pane_->SetBounds(vertical_layout_rect_.x(),
++                             vertical_layout_rect_.y(), agent_pane_width_,
++                             vertical_layout_rect_.height());
++      vertical_layout_rect_.Inset(gfx::Insets().set_left(agent_pane_width_));
++    }
++  }
++
+   int top_inset = delegate_->GetTopInsetInBrowserView();
+   int top = LayoutTitleBarForWebApp(top_inset);
+   if (delegate_->ShouldLayoutTabStrip()) {
+@@ -481,6 +513,13 @@ int BrowserViewLayout::LayoutTabStripRegion(int top) {
+   gfx::Rect tab_strip_region_bounds(
+       delegate_->GetBoundsForTabStripRegionInBrowserView());
+ 
++  if (agent_pane_ && agent_pane_->GetVisible()) {
++    // The traffic lights sit over the agent pane. Reclaim their frame-provided
++    // inset and express this child in top_container_ coordinates.
++    tab_strip_region_bounds.set_x(0);
++    tab_strip_region_bounds.set_width(vertical_layout_rect_.width());
++  }
++
+   if (web_app_frame_toolbar_) {
+     tab_strip_region_bounds.Inset(gfx::Insets::TLBR(
+         0, 0, 0, web_app_frame_toolbar_->GetPreferredSize().width()));
+@@ -503,7 +542,7 @@ int BrowserViewLayout::LayoutWebUITabStrip(int top) {
+     return top;
+   }
+   webui_tab_strip_->SetBounds(
+-      vertical_layout_rect_.x(), top, vertical_layout_rect_.width(),
++      LeftEdgeFor(webui_tab_strip_), top, vertical_layout_rect_.width(),
+       webui_tab_strip_->GetHeightForWidth(vertical_layout_rect_.width()));
+   return webui_tab_strip_->bounds().bottom();
+ }
+@@ -514,8 +553,7 @@ int BrowserViewLayout::LayoutToolbar(int top) {
+   bool toolbar_visible = delegate_->IsToolbarVisible();
+   int height = toolbar_visible ? toolbar_->GetPreferredSize().height() : 0;
+   SetViewVisibility(toolbar_, toolbar_visible);
+-  toolbar_->SetBounds(vertical_layout_rect_.x(), top, browser_view_width,
+-                      height);
++  toolbar_->SetBounds(LeftEdgeFor(toolbar_), top, browser_view_width, height);
+   SetClipPathWithBottomAllowance(toolbar_);
+   return toolbar_->bounds().bottom();
+ }
+@@ -533,12 +571,12 @@ int BrowserViewLayout::LayoutBookmarkAndInfoBars(int top, int browser_view_y) {
+     SetViewVisibility(contents_separator_, true);
+     const int separator_height =
+         contents_separator_->GetPreferredSize().height();
+-    contents_separator_->SetBounds(vertical_layout_rect_.x(), top,
++    contents_separator_->SetBounds(LeftEdgeFor(contents_separator_), top,
+                                    vertical_layout_rect_.width(),
+                                    separator_height);
+     if (loading_bar_) {
+       SetViewVisibility(loading_bar_, true);
+-      loading_bar_->SetBounds(vertical_layout_rect_.x(), top - 2,
++      loading_bar_->SetBounds(LeftEdgeFor(loading_bar_), top - 2,
+                               vertical_layout_rect_.width(),
+                               separator_height + 2);
+       top_container_->ReorderChildView(loading_bar_,
+@@ -560,13 +598,14 @@ int BrowserViewLayout::LayoutBookmarkBar(int top) {
+     SetViewVisibility(bookmark_bar_, false);
+     // TODO(jamescook): Don't change the bookmark bar height when it is
+     // invisible, so we can use its height for layout even in that state.
+-    bookmark_bar_->SetBounds(0, top, browser_view_->width(), 0);
++    bookmark_bar_->SetBounds(LeftEdgeFor(bookmark_bar_), top,
++                             vertical_layout_rect_.width(), 0);
+     return top;
+   }
+ 
+   bookmark_bar_->SetInfoBarVisible(IsInfobarVisible());
+   int bookmark_bar_height = bookmark_bar_->GetPreferredSize().height();
+-  bookmark_bar_->SetBounds(vertical_layout_rect_.x(), top,
++  bookmark_bar_->SetBounds(LeftEdgeFor(bookmark_bar_), top,
+                            vertical_layout_rect_.width(), bookmark_bar_height);
+   SetClipPathWithBottomAllowance(bookmark_bar_);
+   if (!ui::IsPixelCanvasRecordingEnabled()) {
+@@ -587,6 +626,16 @@ int BrowserViewLayout::LayoutBookmarkBar(int top) {
+ }
+ 
+ int BrowserViewLayout::LayoutInfoBar(int top) {
++  if (delegate_->IsAgentPaneOnly()) {
++    // Keep the hidden height current so the first SPLIT layout offsets browser
++    // contents below an existing infobar instead of overlapping it for a frame.
++    infobar_container_->SetBounds(
++        LeftEdgeFor(infobar_container_), top, vertical_layout_rect_.width(),
++        infobar_container_->GetPreferredSize().height());
++    SetViewVisibility(infobar_container_, false);
++    return top;
++  }
++
+   // In immersive fullscreen or when top-chrome is fully hidden due to the page
+   // gesture scroll slide behavior, the infobar always starts near the top of
+   // the screen.
+@@ -604,15 +653,38 @@ int BrowserViewLayout::LayoutInfoBar(int top) {
+   infobar_top += delegate_->GetExtraInfobarOffset();
+   SetViewVisibility(infobar_container_, IsInfobarVisible());
+   infobar_container_->SetBounds(
+-      vertical_layout_rect_.x(), infobar_top, vertical_layout_rect_.width(),
++      LeftEdgeFor(infobar_container_), infobar_top,
++      vertical_layout_rect_.width(),
+       infobar_container_->GetPreferredSize().height());
+   return content_top;
+ }
+ 
++int BrowserViewLayout::LeftEdgeFor(const views::View* view) const {
++  return view && view->parent() == top_container_ ? 0
++                                                  : vertical_layout_rect_.x();
++}
++
+ void BrowserViewLayout::LayoutContentsContainerView(int top, int bottom) {
+   TRACE_EVENT0("ui", "BrowserViewLayout::LayoutContentsContainerView");
+   // |contents_container_| contains web page contents and devtools.
+   // See browser_view.h for details.
++  if (delegate_->IsAgentPaneOnly()) {
++    SetViewVisibility(contents_container_, false);
++    // Preserve the side-panel coordinator's visibility state so an open panel
++    // returns in SPLIT. Empty bounds keep it out of the agent-only surface.
++    if (unified_side_panel_) {
++      unified_side_panel_->SetBoundsRect(gfx::Rect());
++    }
++    if (left_aligned_side_panel_separator_) {
++      SetViewVisibility(left_aligned_side_panel_separator_, false);
++    }
++    if (right_aligned_side_panel_separator_) {
++      SetViewVisibility(right_aligned_side_panel_separator_, false);
++    }
++    SetViewVisibility(side_panel_rounded_corner_, false);
++    return;
++  }
++  SetViewVisibility(contents_container_, true);
+   gfx::Rect contents_container_bounds(vertical_layout_rect_.x(), top,
+                                       vertical_layout_rect_.width(),
+                                       std::max(0, bottom - top));
+@@ -705,7 +777,7 @@ void BrowserViewLayout::LayoutSidePanelView(
+     // to the ui direction, move `contents_container_bounds` after the side
+     // panel. Also leave space for the separator.
+     contents_container_bounds.set_x(
+-        side_panel_visible_width +
++        contents_container_bounds.x() + side_panel_visible_width +
+         side_panel_separator->GetPreferredSize().width());
+     side_panel_bounds.set_x(side_panel_bounds.x() - (side_panel_bounds.width() -
+                                                      side_panel_visible_width));
+@@ -778,7 +850,8 @@ void BrowserViewLayout::UpdateTopContainerBounds() {
+   // layout and we assume that this is the case.
+   height = std::max(height, delegate_->GetTopInsetInBrowserView());
+ 
+-  gfx::Rect top_container_bounds(vertical_layout_rect_.width(), height);
++  gfx::Rect top_container_bounds(vertical_layout_rect_.x(), 0,
++                                 vertical_layout_rect_.width(), height);
+ 
+   if (delegate_->IsTopControlsSlideBehaviorEnabled()) {
+     // If the top controls are fully hidden, then it's positioned outside the
+@@ -799,8 +872,12 @@ void BrowserViewLayout::UpdateTopContainerBounds() {
+ int BrowserViewLayout::LayoutDownloadShelf(int bottom) {
+   TRACE_EVENT0("ui", "BrowserViewLayout::LayoutDownloadShelf");
+   if (download_shelf_ && download_shelf_->GetVisible()) {
++    if (delegate_->IsAgentPaneOnly()) {
++      download_shelf_->SetBoundsRect(gfx::Rect());
++      return bottom;
++    }
+     const int height = download_shelf_->GetPreferredSize().height();
+-    download_shelf_->SetBounds(vertical_layout_rect_.x(), bottom - height,
++    download_shelf_->SetBounds(LeftEdgeFor(download_shelf_), bottom - height,
+                                vertical_layout_rect_.width(), height);
+     bottom -= height;
+   }
+diff --git a/chrome/browser/ui/views/frame/browser_view_layout.h b/chrome/browser/ui/views/frame/browser_view_layout.h
+index a4602bd1f5d01..9906200aa517a 100644
+--- a/chrome/browser/ui/views/frame/browser_view_layout.h
++++ b/chrome/browser/ui/views/frame/browser_view_layout.h
+@@ -15,6 +15,7 @@
+ #include "ui/views/layout/layout_manager.h"
+ 
+ class BookmarkBarView;
++class AgentPaneView;
+ class BrowserView;
+ class BrowserViewLayoutDelegate;
+ class ImmersiveModeController;
+@@ -63,7 +64,8 @@ class BrowserViewLayout : public views::LayoutManager {
+                     views::View* right_aligned_side_panel_separator,
+                     views::View* side_panel_rounded_corner,
+                     ImmersiveModeController* immersive_mode_controller,
+-                    views::View* contents_separator);
++                    views::View* contents_separator,
++                    AgentPaneView* agent_pane);
+ 
+   BrowserViewLayout(const BrowserViewLayout&) = delete;
+   BrowserViewLayout& operator=(const BrowserViewLayout&) = delete;
+@@ -133,6 +135,10 @@ class BrowserViewLayout : public views::LayoutManager {
+   int LayoutBookmarkBar(int top);
+   int LayoutInfoBar(int top);
+ 
++  // Returns the horizontal origin for a view in its current parent's
++  // coordinate space. Some top-chrome children reparent at runtime.
++  int LeftEdgeFor(const views::View* view) const;
++
+   // Layout the |contents_container_| view between the coordinates |top| and
+   // |bottom|. See browser_view.h for details of the relationship between
+   // |contents_container_| and other views.
+@@ -183,6 +189,7 @@ class BrowserViewLayout : public views::LayoutManager {
+   const raw_ptr<views::View> side_panel_rounded_corner_;
+   const raw_ptr<ImmersiveModeController> immersive_mode_controller_;
+   const raw_ptr<views::View> contents_separator_;
++  const raw_ptr<AgentPaneView> agent_pane_;
+ 
+   // These views are dynamically set.
+   raw_ptr<views::View> webui_tab_strip_ = nullptr;
+@@ -202,6 +209,7 @@ class BrowserViewLayout : public views::LayoutManager {
+   // BrowserView.
+   // TODO(jamescook): Remove this and just use browser_view_->GetLocalBounds().
+   gfx::Rect vertical_layout_rect_;
++  int agent_pane_width_ = 0;
+ 
+   // The host for use in positioning the web contents modal dialog.
+   std::unique_ptr<WebContentsModalDialogHostViews> dialog_host_;
+diff --git a/chrome/browser/ui/views/frame/browser_view_layout_delegate.h b/chrome/browser/ui/views/frame/browser_view_layout_delegate.h
+index 9f393a42d1655..3236e3a01d834 100644
+--- a/chrome/browser/ui/views/frame/browser_view_layout_delegate.h
++++ b/chrome/browser/ui/views/frame/browser_view_layout_delegate.h
+@@ -29,6 +29,8 @@ class BrowserViewLayoutDelegate {
+       views::Label& window_title_label) const = 0;
+   virtual int GetTopInsetInBrowserView() const = 0;
+   virtual bool IsToolbarVisible() const = 0;
++  virtual int GetAgentPaneWidth() const = 0;
++  virtual bool IsAgentPaneOnly() const = 0;
+   virtual bool IsBookmarkBarVisible() const = 0;
+   virtual bool IsContentsSeparatorEnabled() const = 0;
+   virtual ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() const = 0;
+diff --git a/chrome/browser/ui/views/frame/browser_view_layout_unittest.cc b/chrome/browser/ui/views/frame/browser_view_layout_unittest.cc
+index 5a8bec0aecd48..5354337f96bc9 100644
+--- a/chrome/browser/ui/views/frame/browser_view_layout_unittest.cc
++++ b/chrome/browser/ui/views/frame/browser_view_layout_unittest.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "base/containers/fixed_flat_set.h"
+ #include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/views/frame/agent_pane_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view_layout_delegate.h"
+ #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
+@@ -41,6 +42,13 @@ class MockBrowserViewLayoutDelegate : public BrowserViewLayoutDelegate {
+     should_draw_tab_strip_ = visible;
+   }
+   void set_toolbar_visible(bool visible) { toolbar_visible_ = visible; }
++  void set_agent_pane_width(int width) { agent_pane_width_ = width; }
++  void set_agent_pane_only(bool agent_pane_only) {
++    agent_pane_only_ = agent_pane_only;
++  }
++  void set_tab_strip_bounds(const gfx::Rect& bounds) {
++    tab_strip_bounds_ = bounds;
++  }
+   void set_bookmark_bar_visible(bool visible) {
+     bookmark_bar_visible_ = visible;
+   }
+@@ -58,7 +66,7 @@ class MockBrowserViewLayoutDelegate : public BrowserViewLayoutDelegate {
+   bool ShouldDrawTabStrip() const override { return should_draw_tab_strip_; }
+   bool GetBorderlessModeEnabled() const override { return false; }
+   gfx::Rect GetBoundsForTabStripRegionInBrowserView() const override {
+-    return gfx::Rect();
++    return tab_strip_bounds_;
+   }
+   gfx::Rect GetBoundsForWebAppFrameToolbarInBrowserView() const override {
+     return gfx::Rect();
+@@ -68,6 +76,8 @@ class MockBrowserViewLayoutDelegate : public BrowserViewLayoutDelegate {
+       views::Label& window_title_label) const override {}
+   int GetTopInsetInBrowserView() const override { return 0; }
+   bool IsToolbarVisible() const override { return toolbar_visible_; }
++  int GetAgentPaneWidth() const override { return agent_pane_width_; }
++  bool IsAgentPaneOnly() const override { return agent_pane_only_; }
+   bool IsBookmarkBarVisible() const override { return bookmark_bar_visible_; }
+   bool IsContentsSeparatorEnabled() const override {
+     return content_separator_enabled_;
+@@ -105,6 +115,9 @@ class MockBrowserViewLayoutDelegate : public BrowserViewLayoutDelegate {
+  private:
+   bool should_draw_tab_strip_ = true;
+   bool toolbar_visible_ = true;
++  int agent_pane_width_ = 0;
++  bool agent_pane_only_ = false;
++  gfx::Rect tab_strip_bounds_;
+   bool bookmark_bar_visible_ = true;
+   bool content_separator_enabled_ = true;
+   bool top_controls_slide_enabled_ = false;
+@@ -160,6 +173,7 @@ class BrowserViewLayoutTest : public ChromeViewsTestBase {
+         toolbar_(nullptr),
+         infobar_container_(nullptr),
+         contents_container_(nullptr),
++        agent_pane_(nullptr),
+         contents_web_view_(nullptr),
+         devtools_web_view_(nullptr) {}
+ 
+@@ -178,12 +192,16 @@ class BrowserViewLayoutTest : public ChromeViewsTestBase {
+   views::View* separator() { return separator_; }
+   InfoBarContainerView* infobar_container() { return infobar_container_; }
+   views::View* contents_container() { return contents_container_; }
++  AgentPaneView* agent_pane() { return agent_pane_; }
+ 
+   void SetUp() override {
+     ChromeViewsTestBase::SetUp();
+ 
+     browser_view_ = CreateFixedSizeView(gfx::Size(800, 600));
+ 
++    agent_pane_ = browser_view_->AddChildView(
++        std::make_unique<AgentPaneView>(/*browser_view=*/nullptr));
++
+     immersive_mode_controller_ =
+         std::make_unique<MockImmersiveModeController>();
+ 
+@@ -240,7 +258,7 @@ class BrowserViewLayoutTest : public ChromeViewsTestBase {
+         /*unified_side_panel=*/nullptr,
+         /*right_aligned_side_panel_separator=*/nullptr,
+         side_panel_rounded_corner_, immersive_mode_controller_.get(),
+-        separator_);
++        separator_, agent_pane_);
+     layout->set_webui_tab_strip(webui_tab_strip());
+     layout_ = layout.get();
+     browser_view_->SetLayoutManager(std::move(layout));
+@@ -277,6 +295,7 @@ class BrowserViewLayoutTest : public ChromeViewsTestBase {
+   raw_ptr<InfoBarContainerView> infobar_container_;
+   raw_ptr<views::View> side_panel_rounded_corner_;
+   raw_ptr<views::View> contents_container_;
++  raw_ptr<AgentPaneView> agent_pane_;
+   raw_ptr<views::View> contents_web_view_;
+   raw_ptr<views::View> devtools_web_view_;
+   raw_ptr<views::View> devtools_scrim_view_;
+@@ -333,6 +352,77 @@ TEST_F(BrowserViewLayoutTest, Layout) {
+   // TODO(jamescook): Tab strip and bookmark bar.
+ }
+ 
++TEST_F(BrowserViewLayoutTest, AgentOnlyPreservesBrowserContents) {
++  delegate()->set_agent_pane_width(800);
++  delegate()->set_agent_pane_only(true);
++  delegate()->set_should_draw_tab_strip(false);
++  delegate()->set_toolbar_visible(false);
++  delegate()->set_bookmark_bar_visible(false);
++  InvalidateAndRunScheduledLayoutOnBrowserView();
++
++  EXPECT_TRUE(agent_pane()->GetVisible());
++  EXPECT_EQ(gfx::Rect(0, 0, 800, 600), agent_pane()->bounds());
++  EXPECT_FALSE(contents_container()->GetVisible());
++
++  delegate()->set_agent_pane_width(320);
++  delegate()->set_agent_pane_only(false);
++  InvalidateAndRunScheduledLayoutOnBrowserView();
++
++  EXPECT_TRUE(contents_container()->GetVisible());
++  EXPECT_EQ(gfx::Rect(320, 0, 480, 600), contents_container()->bounds());
++}
++
++TEST_F(BrowserViewLayoutTest, SplitUsesRightColumnCoordinatesAndMinimumWidth) {
++  const int original_minimum_width =
++      layout()->GetMinimumSize(browser_view()).width();
++  delegate()->set_agent_pane_width(320);
++  delegate()->set_tab_strip_bounds(gfx::Rect(72, 0, 728, 30));
++
++  std::unique_ptr<views::View> download_shelf =
++      CreateFixedSizeView(gfx::Size(800, 50));
++  download_shelf->SetVisible(true);
++  layout()->set_download_shelf(download_shelf.get());
++  InvalidateAndRunScheduledLayoutOnBrowserView();
++
++  EXPECT_EQ(gfx::Rect(0, 0, 320, 600), agent_pane()->bounds());
++  EXPECT_EQ(320, top_container()->x());
++  EXPECT_EQ(480, top_container()->width());
++  EXPECT_EQ(0, tab_strip()->parent()->x());
++  EXPECT_EQ(480, tab_strip()->parent()->width());
++  EXPECT_EQ(0, toolbar()->x());
++  EXPECT_EQ(480, toolbar()->width());
++  EXPECT_EQ(0, separator()->x());
++  EXPECT_EQ(480, separator()->width());
++  EXPECT_EQ(320, infobar_container()->x());
++  EXPECT_EQ(480, infobar_container()->width());
++  EXPECT_EQ(320, contents_container()->x());
++  EXPECT_EQ(480, contents_container()->width());
++  EXPECT_EQ(gfx::Rect(320, 550, 480, 50), download_shelf->bounds());
++  EXPECT_EQ(original_minimum_width + AgentPaneView::kMinimumWidth +
++                AgentPaneView::kResizeAreaWidth,
++            layout()->GetMinimumSize(browser_view()).width());
++
++  webui_tab_strip()->SetVisible(true);
++  InvalidateAndRunScheduledLayoutOnBrowserView();
++  EXPECT_EQ(0, webui_tab_strip()->x());
++  EXPECT_EQ(480, webui_tab_strip()->width());
++  webui_tab_strip()->SetVisible(false);
++
++  // The coordinate helper must consult the current parent at layout time.
++  // BookmarkBarView performs this same reparenting in production.
++  browser_view()->AddChildView(top_container()->RemoveChildViewT(toolbar()));
++  InvalidateAndRunScheduledLayoutOnBrowserView();
++  EXPECT_EQ(320, toolbar()->x());
++  EXPECT_EQ(480, toolbar()->width());
++
++  agent_pane()->OnResize(-1000, /*done_resizing=*/true);
++  EXPECT_EQ(AgentPaneView::kMinimumWidth, agent_pane()->split_width());
++  agent_pane()->OnResize(80, /*done_resizing=*/true);
++  EXPECT_EQ(400, agent_pane()->split_width());
++
++  layout()->set_download_shelf(nullptr);
++}
++
+ TEST_F(BrowserViewLayoutTest, LayoutDownloadShelf) {
+   constexpr int kHeight = 50;
+   std::unique_ptr<views::View> download_shelf =

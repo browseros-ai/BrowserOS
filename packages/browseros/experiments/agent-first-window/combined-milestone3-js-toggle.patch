@@ -1,0 +1,118 @@
+diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
+index 0022c6e..9f0fce2 100644
+--- a/chrome/browser/extensions/api/browser_os/browser_os_api.cc
++++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/common/extensions/api/browser_os.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -1230,6 +1231,23 @@ void BrowserOSExecuteJavaScriptFunction::OnJavaScriptExecuted(base::Value result
+       browser_os::ExecuteJavaScript::Results::Create(result)));
+ }
+ 
++ExtensionFunction::ResponseAction BrowserOSToggleAgentSplitFunction::Run() {
++  content::WebContents* sender = GetSenderWebContents();
++  if (!sender) {
++    return RespondNow(Error("Could not find the calling extension page."));
++  }
++
++  BrowserView* browser_view = BrowserView::GetBrowserViewForNativeWindow(
++      sender->GetTopLevelNativeWindow());
++  if (!browser_view) {
++    return RespondNow(
++        Error("Could not find the browser window that owns the caller."));
++  }
++
++  browser_view->ToggleAgentSplit();
++  return RespondNow(NoArguments());
++}
++
+ // Implementation of BrowserOSClickCoordinatesFunction
+ ExtensionFunction::ResponseAction BrowserOSClickCoordinatesFunction::Run() {
+   std::optional<browser_os::ClickCoordinates::Params> params =
+diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
+index e4b1c5f..a7b5738 100644
+--- a/chrome/browser/extensions/api/browser_os/browser_os_api.h
++++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
+@@ -299,6 +299,20 @@ class BrowserOSExecuteJavaScriptFunction : public ExtensionFunction {
+   void OnJavaScriptExecuted(base::Value result);
+ };
+ 
++class BrowserOSToggleAgentSplitFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.toggleAgentSplit",
++                             BROWSER_OS_TOGGLEAGENTSPLIT)
++
++  BrowserOSToggleAgentSplitFunction() = default;
++
++ protected:
++  ~BrowserOSToggleAgentSplitFunction() override = default;
++
++  // ExtensionFunction:
++  ResponseAction Run() override;
++};
++
+ class BrowserOSClickCoordinatesFunction : public ExtensionFunction {
+  public:
+   DECLARE_EXTENSION_FUNCTION("browserOS.clickCoordinates", BROWSER_OS_CLICKCOORDINATES)
+@@ -328,4 +342,4 @@ class BrowserOSTypeAtCoordinatesFunction : public ExtensionFunction {
+ }  // namespace api
+ }  // namespace extensions
+ 
+-#endif  // CHROME_BROWSER_EXTENSIONS_API_BROWSER_OS_BROWSER_OS_API_H_
+\ No newline at end of file
++#endif  // CHROME_BROWSER_EXTENSIONS_API_BROWSER_OS_BROWSER_OS_API_H_
+diff --git a/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc b/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
+index 3666bf5..d0f992e 100644
+--- a/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
++++ b/chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
+@@ -29,6 +29,7 @@ void ChromeExtensionsBrowserAPIProvider::RegisterExtensionFunctions(
+   registry->RegisterFunction<api::BrowserOSInputTextFunction>();
+   registry->RegisterFunction<api::BrowserOSClearFunction>();
+   registry->RegisterFunction<api::BrowserOSExecuteJavaScriptFunction>();
++  registry->RegisterFunction<api::BrowserOSToggleAgentSplitFunction>();
+ 
+   // Generated APIs from Chrome.
+   api::ChromeGeneratedFunctionRegistry::RegisterAll(registry);
+diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
+index 36468c4..c84ad9f 100644
+--- a/chrome/common/extensions/api/browser_os.idl
++++ b/chrome/common/extensions/api/browser_os.idl
+@@ -331,6 +331,8 @@ namespace browserOS {
+         optional long tabId,
+         DOMString code,
+         ExecuteJavaScriptCallback callback);
++
++    // Toggles the browser attached to the calling agent extension window.
++    static void toggleAgentSplit(optional VoidCallback callback);
+   };
+ };
+-
+diff --git a/extensions/browser/extension_function_histogram_value.h b/extensions/browser/extension_function_histogram_value.h
+index 8045390..631bff3 100644
+--- a/extensions/browser/extension_function_histogram_value.h
++++ b/extensions/browser/extension_function_histogram_value.h
+@@ -2018,6 +2018,7 @@ enum HistogramValue {
+   BROWSER_OS_EXECUTEJAVASCRIPT = 1955,
+   BROWSER_OS_CLICKCOORDINATES = 1956,
+   BROWSER_OS_TYPEATCOORDINATES = 1957,
++  BROWSER_OS_TOGGLEAGENTSPLIT = 1958,
+   // Last entry: Add new entries above, then run:
+   // tools/metrics/histograms/update_extension_histograms.py
+   ENUM_BOUNDARY
+diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
+index 7af6e83..8ac622a 100644
+--- a/tools/metrics/histograms/metadata/extensions/enums.xml
++++ b/tools/metrics/histograms/metadata/extensions/enums.xml
+@@ -2829,6 +2829,7 @@ Called by update_extension_histograms.py.-->
+   <int value="1944" label="BROWSER_OS_SCROLLDOWN"/>
+   <int value="1945" label="BROWSER_OS_SCROLLTONODE"/>
+   <int value="1946" label="BROWSER_OS_SENDKEYS"/>
++  <int value="1958" label="BROWSER_OS_TOGGLEAGENTSPLIT"/>
+ </enum>
+ 
+ <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->

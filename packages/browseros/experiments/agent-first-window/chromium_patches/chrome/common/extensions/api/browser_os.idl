@@ -1,0 +1,14 @@
+diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
+index 36468c42af41ae78147758becdf9fbfd3dde06a2..c84ad9f084974ea445b83780b00db27e0cd4d000 100644
+--- a/chrome/common/extensions/api/browser_os.idl
++++ b/chrome/common/extensions/api/browser_os.idl
+@@ -331,6 +331,8 @@ namespace browserOS {
+         optional long tabId,
+         DOMString code,
+         ExecuteJavaScriptCallback callback);
++
++    // Toggles the browser attached to the calling agent extension window.
++    static void toggleAgentSplit(optional VoidCallback callback);
+   };
+ };
+-
