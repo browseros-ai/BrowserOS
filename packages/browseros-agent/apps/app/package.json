@@ -108,7 +108,8 @@
     "@wxt-dev/module-react": "^1.2.2",
     "lefthook": "^2.1.10",
     "tailwindcss": "^4.3.1",
-    "wxt": "^0.21.3"
+    "web-ext": "^9.2.0",
+    "wxt": "^0.21.4"
   },
   "trustedDependencies": [
     "esbuild"
