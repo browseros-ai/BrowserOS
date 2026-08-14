@@ -218,7 +218,7 @@ describe('createBrowserMcpServer', () => {
   })
 
   it('mints, echoes, and strips a session handle when sessionIdentity is on', async () => {
-    const events: Array<Record<string, unknown>> = []
+    const debugLogs: Array<{ msg: string; meta?: Record<string, unknown> }> = []
     const raw = createBrowserMcpServer({
       name: 'browseros_mcp',
       title: 'BrowserOS MCP server',
@@ -230,7 +230,10 @@ describe('createBrowserMcpServer', () => {
       } as unknown as BrowserSession,
       registration: {
         sessionIdentity: true,
-        onToolExecuted: (event) => events.push(event),
+        logger: {
+          debug: (msg: string, meta?: Record<string, unknown>) =>
+            debugLogs.push({ msg, meta }),
+        },
       },
     })
     const server = inspect(raw)
@@ -254,7 +257,11 @@ describe('createBrowserMcpServer', () => {
       ?.session
     expect(typeof mintedSession).toBe('string')
     expect(mintedSession).toHaveLength(36)
-    expect(events[0]?.session).toBe(mintedSession)
+    // The handle is attributed on the per-call log, not the aggregated metric.
+    const started = debugLogs.find(
+      (entry) => entry.msg === 'MCP browser tool started',
+    )
+    expect(started?.meta?.session).toBe(mintedSession)
 
     // A provided handle is echoed back unchanged.
     const reused = await server._registeredTools.tabs.handler({

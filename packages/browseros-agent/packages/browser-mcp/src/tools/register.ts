@@ -84,7 +84,6 @@ export interface BrowserToolExecutionEvent extends Record<string, unknown> {
   success: boolean
   source: string
   error_message?: string
-  session?: string
 }
 
 function summarizeBrowserToolArgs(
@@ -184,6 +183,7 @@ export function registerBrowserTools(
         const logBase = {
           toolName: tool.name,
           source,
+          ...sessionField,
         }
         const lifecycleEvent = {
           tool_name: tool.name,
@@ -211,7 +211,6 @@ export function registerBrowserTools(
             duration_ms: duration(),
             success: !result.isError,
             source,
-            ...sessionField,
           })
           const durationMs = duration()
           const errorSummary = result.isError
@@ -253,7 +252,6 @@ export function registerBrowserTools(
             success: false,
             error_message: errorText,
             source,
-            ...sessionField,
           })
           options.logger?.info?.('MCP browser tool threw', {
             ...logBase,
