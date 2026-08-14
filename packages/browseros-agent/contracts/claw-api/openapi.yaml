@@ -170,6 +170,8 @@ components:
       $ref: ./schemas/skills.yaml#/SkillRunList
     SkillDetail:
       $ref: ./schemas/skills.yaml#/SkillDetail
+    SkillTokenSavings:
+      $ref: ./schemas/skills.yaml#/SkillTokenSavings
     SkillCreate:
       $ref: ./schemas/skills.yaml#/SkillCreate
     SkillUpdate:

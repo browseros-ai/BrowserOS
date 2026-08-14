@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { Skill, SkillRun } from '@browseros/claw-api'
+import type { Skill, SkillRun, SkillTokenSavings } from '@browseros/claw-api'
 import { ArrowLeft, Check } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
@@ -26,7 +26,6 @@ import {
   formatRelativeTime,
   formatTokens,
   skillCommand,
-  tokenDeltaPercent,
 } from './skills.helpers'
 
 const AGENT_LABELS: Record<string, string> = {
@@ -40,8 +39,8 @@ function agentLabel(id: string): string {
   return AGENT_LABELS[id] ?? id
 }
 
-/** Task detail: the SKILL.md, whether it is getting cheaper and safe to leave
- *  alone, which agents it is linked into, and its run history. */
+/** Task detail: the SKILL.md, its token savings and success rate, which agents
+ *  it is linked into, and its run history. */
 export function SkillDetail() {
   const { detail, isLoading, isError } = useSkillDetailData()
   const navigate = useNavigate()
@@ -69,6 +68,7 @@ export function SkillDetail() {
           skill={detail.skill}
           body={detail.body}
           runs={detail.runs}
+          tokenSavings={detail.tokenSavings}
           onDeleted={() => navigate('/skills')}
         />
       )}
@@ -80,11 +80,13 @@ function DetailBody({
   skill,
   body,
   runs,
+  tokenSavings,
   onDeleted,
 }: {
   skill: Skill
   body: string
   runs: SkillRun[]
+  tokenSavings: SkillTokenSavings
   onDeleted: () => void
 }) {
   return (
@@ -118,8 +120,8 @@ function DetailBody({
       </header>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <GettingCheaperCard skill={skill} />
-        <SafeToLeaveCard skill={skill} />
+        <TokensSavedCard tokenSavings={tokenSavings} />
+        <SuccessRateCard skill={skill} />
         <LinkedIntoCard skill={skill} />
       </div>
 
@@ -146,89 +148,60 @@ function StatCard({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-/** Two bars comparing the first run's token cost to the latest run's. */
-function GettingCheaperCard({ skill }: { skill: Skill }) {
-  const { firstRunTokens, latestRunTokens } = skill
-  const delta = tokenDeltaPercent(firstRunTokens, latestRunTokens)
-  const max = Math.max(firstRunTokens ?? 0, latestRunTokens ?? 0, 1)
-
-  if (firstRunTokens === undefined || latestRunTokens === undefined) {
+/** Tokens this skill saved versus a screenshot-first agent, and what those
+ *  same runs would have cost in other browsers. */
+function TokensSavedCard({
+  tokenSavings,
+}: {
+  tokenSavings: SkillTokenSavings
+}) {
+  if (tokenSavings.measuredRunCount === 0) {
     return (
-      <StatCard title="Getting cheaper">
-        <p className="text-ink-3 text-sm">
-          Not enough runs to compare cost yet.
-        </p>
+      <StatCard title="Tokens saved">
+        <p className="text-ink-3 text-sm">No measured runs yet.</p>
       </StatCard>
     )
   }
-
+  const saved = Math.max(0, tokenSavings.saved)
   return (
-    <StatCard title="Getting cheaper">
-      <div className="flex flex-col gap-2">
-        <CostBar label="Run 1" tokens={firstRunTokens} max={max} muted />
-        <CostBar label="Latest" tokens={latestRunTokens} max={max} />
+    <StatCard title="Tokens saved">
+      <div className="flex items-baseline gap-1">
+        <span className="font-extrabold text-3xl text-ink tabular-nums">
+          {formatTokens(saved)}
+        </span>
+        <span className="text-ink-2 text-sm">tokens</span>
       </div>
-      {delta !== null && (
-        <p
-          className={cn(
-            'font-medium text-sm',
-            delta < 0 ? 'text-green' : delta > 0 ? 'text-red' : 'text-ink-2',
-          )}
-        >
-          {delta < 0
-            ? `${Math.abs(delta)}% cheaper than the first run`
-            : delta > 0
-              ? `${delta}% pricier than the first run`
-              : 'Same cost as the first run'}
-        </p>
-      )}
+      <p className="text-ink-2 text-sm">
+        <span className="tabular-nums">
+          {formatTokens(tokenSavings.otherBrowsers)}
+        </span>{' '}
+        tokens in other browsers
+      </p>
     </StatCard>
   )
 }
 
-function CostBar({
-  label,
-  tokens,
-  max,
-  muted = false,
-}: {
-  label: string
-  tokens: number
-  max: number
-  muted?: boolean
-}) {
-  const width = `${Math.max(4, Math.round((tokens / max) * 100))}%`
+/** How often the skill runs end to end without a tool error, color-coded. */
+function SuccessRateCard({ skill }: { skill: Skill }) {
+  const hasRuns = skill.runCount > 0
+  const percent = hasRuns
+    ? Math.round((skill.cleanRunCount / skill.runCount) * 100)
+    : 0
+  const colorClass = !hasRuns
+    ? 'text-ink-3'
+    : percent >= 90
+      ? 'text-green'
+      : percent >= 70
+        ? 'text-amber'
+        : 'text-red'
   return (
-    <div className="flex items-center gap-2">
-      <span className="w-12 shrink-0 text-[11px] text-ink-3">{label}</span>
-      <div className="h-4 flex-1 overflow-hidden rounded bg-card-tint">
-        <div
-          className={cn('h-full rounded', muted ? 'bg-ink-4' : 'bg-primary')}
-          style={{ width }}
-        />
-      </div>
-      <span className="w-12 shrink-0 text-right text-[11px] text-ink-2">
-        {formatTokens(tokens)}
-      </span>
-    </div>
-  )
-}
-
-/** Clean-run ratio: how often the skill ran end to end without a tool error. */
-function SafeToLeaveCard({ skill }: { skill: Skill }) {
-  const ratio =
-    skill.runCount > 0
-      ? Math.round((skill.cleanRunCount / skill.runCount) * 100)
-      : 0
-  return (
-    <StatCard title="Safe to leave alone">
+    <StatCard title="Success rate">
       <div className="flex items-baseline gap-1">
-        <span className="font-extrabold text-3xl text-ink">
-          {skill.runCount > 0 ? `${ratio}%` : 'not run'}
+        <span
+          className={cn('font-extrabold text-3xl tabular-nums', colorClass)}
+        >
+          {hasRuns ? `${percent}%` : 'not run'}
         </span>
-        {skill.runCount > 0 && (
-          <span className="text-ink-2 text-sm">clean</span>
-        )}
       </div>
       <p className="text-ink-2 text-sm">
         {skill.cleanRunCount} of {skill.runCount} runs finished without a tool

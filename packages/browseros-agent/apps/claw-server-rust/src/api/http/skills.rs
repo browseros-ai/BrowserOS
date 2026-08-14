@@ -2,7 +2,7 @@ use super::{error, internal};
 use crate::{
     AppState,
     db::entities::skill_runs,
-    error::{AppError, CanonicalError, RequestId},
+    error::{AppError, AppResult, CanonicalError, RequestId},
     services::skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
 };
 use axum::{
@@ -45,7 +45,10 @@ pub(super) async fn get(
         .get(&name)
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    Ok(Json(detail_to_dto(detail)))
+    let token_savings = skill_token_savings(&state, &detail.runs)
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    Ok(Json(detail_to_dto(detail, token_savings)))
 }
 
 pub(super) async fn create(
@@ -89,7 +92,10 @@ pub(super) async fn update(
         )
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    Ok(Json(detail_to_dto(detail)))
+    let token_savings = skill_token_savings(&state, &detail.runs)
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    Ok(Json(detail_to_dto(detail, token_savings)))
 }
 
 pub(super) async fn delete(
@@ -170,13 +176,35 @@ fn skill_to_dto(view: SkillView) -> Skill {
     skill
 }
 
-fn detail_to_dto(detail: SkillDetailView) -> SkillDetail {
+fn detail_to_dto(detail: SkillDetailView, token_savings: models::SkillTokenSavings) -> SkillDetail {
     let SkillDetailView { view, body, runs } = detail;
     SkillDetail::new(
         skill_to_dto(view),
         body,
         runs.into_iter().map(run_to_dto).collect(),
+        token_savings,
     )
+}
+
+/// Aggregates the token efficiency of the skill's run sessions into the detail
+/// DTO: how many tokens BrowserOS neo saved versus a screenshot-first agent,
+/// what those runs used, and what other browsers would have spent. Unmeasured
+/// runs contribute nothing and are excluded from `measuredRunCount`.
+async fn skill_token_savings(
+    state: &AppState,
+    runs: &[skill_runs::Model],
+) -> AppResult<models::SkillTokenSavings> {
+    let session_ids: Vec<String> = runs.iter().map(|run| run.session_id.clone()).collect();
+    let (window, measured_run_count) = state
+        .session_efficiency
+        .aggregate_for_sessions(&session_ids)
+        .await?;
+    Ok(models::SkillTokenSavings::new(
+        window.raw_token_savings_estimate,
+        window.screenshot_first_token_estimate,
+        window.browser_claw_token_estimate,
+        measured_run_count,
+    ))
 }
 
 fn run_to_dto(run: skill_runs::Model) -> SkillRun {

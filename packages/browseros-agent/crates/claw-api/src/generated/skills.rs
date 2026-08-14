@@ -195,14 +195,22 @@ pub struct SkillDetail {
     pub body: String,
     #[serde(rename = "runs")]
     pub runs: Vec<models::SkillRun>,
+    #[serde(rename = "tokenSavings")]
+    pub token_savings: Box<models::SkillTokenSavings>,
 }
 
 impl SkillDetail {
-    pub fn new(skill: models::Skill, body: String, runs: Vec<models::SkillRun>) -> SkillDetail {
+    pub fn new(
+        skill: models::Skill,
+        body: String,
+        runs: Vec<models::SkillRun>,
+        token_savings: models::SkillTokenSavings,
+    ) -> SkillDetail {
         SkillDetail {
             skill: Box::new(skill),
             body,
             runs,
+            token_savings: Box::new(token_savings),
         }
     }
 }
@@ -315,6 +323,38 @@ impl SkillRunList {
         SkillRunList {
             items,
             next_cursor: None,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillTokenSavings {
+    /// Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+    #[serde(rename = "saved")]
+    pub saved: i64,
+    /// Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+    #[serde(rename = "otherBrowsers")]
+    pub other_browsers: i64,
+    /// Tokens BrowserOS neo actually used across the measured runs.
+    #[serde(rename = "used")]
+    pub used: i64,
+    /// How many of the skill's runs had a measured efficiency projection.
+    #[serde(rename = "measuredRunCount")]
+    pub measured_run_count: i64,
+}
+
+impl SkillTokenSavings {
+    pub fn new(
+        saved: i64,
+        other_browsers: i64,
+        used: i64,
+        measured_run_count: i64,
+    ) -> SkillTokenSavings {
+        SkillTokenSavings {
+            saved,
+            other_browsers,
+            used,
+            measured_run_count,
         }
     }
 }
