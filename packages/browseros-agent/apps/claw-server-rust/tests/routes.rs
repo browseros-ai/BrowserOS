@@ -491,7 +491,13 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         tool["inputSchema"],
         json!({
             "type": "object",
-            "properties": { "name": { "type": "string", "maxLength": 64 } },
+            "properties": {
+                "name": { "type": "string", "maxLength": 64 },
+                "session": {
+                    "type": "string",
+                    "description": "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session."
+                }
+            },
             "required": ["name"]
         })
     );
