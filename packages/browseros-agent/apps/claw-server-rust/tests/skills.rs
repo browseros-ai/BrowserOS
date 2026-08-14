@@ -159,6 +159,92 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
 }
 
 #[tokio::test]
+async fn skill_structured_edit_re_renders_frontmatter_and_clears_site() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({
+            "name": "inbox-sweep",
+            "description": "First description",
+            "site": "mail.google.com",
+            "steps": ["Old step"]
+        })),
+    )
+    .await?;
+
+    let (status, updated) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/inbox-sweep",
+        Some(json!({
+            "description": "Second description",
+            "site": "",
+            "steps": ["New step"],
+            "learnedNotes": ["Prefer the DOM snapshot"]
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["skill"]["description"], "Second description");
+    assert_eq!(updated["skill"]["version"].as_i64(), Some(2));
+    // An empty site string clears the column, so it is omitted from the DTO.
+    assert!(updated["skill"]["site"].is_null());
+
+    // The on-disk frontmatter description tracks the column: agents reading the
+    // file see the new description, never the stale one.
+    let skill_md = app.root.join("skills").join("inbox-sweep").join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.contains(r#"description: "Second description""#));
+    assert!(!content.contains("First description"));
+    assert!(content.contains("New step"));
+    assert!(content.contains("Prefer the DOM snapshot"));
+    assert!(!content.contains("Old step"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({
+            "name": "daily-brief",
+            "description": "Old description",
+            "steps": ["Keep this step"]
+        })),
+    )
+    .await?;
+
+    let (status, updated) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/daily-brief",
+        Some(json!({ "description": "Fresh description" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["skill"]["description"], "Fresh description");
+
+    // Only the frontmatter description line changes; the body is preserved.
+    let skill_md = app.root.join("skills").join("daily-brief").join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.contains(r#"description: "Fresh description""#));
+    assert!(!content.contains("Old description"));
+    assert!(content.contains("Keep this step"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
     let app = test_app().await?;
     let router = &app.router;

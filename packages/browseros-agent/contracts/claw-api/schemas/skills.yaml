@@ -186,9 +186,20 @@ SkillUpdate:
       type: string
     site:
       type: string
+      description: Primary site the skill operates on. An empty string clears it.
+    steps:
+      type: array
+      items:
+        type: string
+      description: Replacement steps. Re-renders the SKILL.md from structured fields.
+    learnedNotes:
+      type: array
+      items:
+        type: string
+      description: Replacement learned notes. Re-renders the SKILL.md from structured fields.
     body:
       type: string
-      description: Replacement SKILL.md contents for a manual edit.
+      description: Replacement SKILL.md contents for a raw manual edit or agent authoring.
 DirectorySkill:
   type: object
   additionalProperties: false
