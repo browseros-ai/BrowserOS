@@ -1108,8 +1108,26 @@ async fn historical_sessions_reconcile_stored_live_status() -> anyhow::Result<()
         assert_eq!(detail["session"]["status"], expected_status);
     }
 
-    let (status, done) =
-        request_json(&app.router, "GET", "/api/v1/sessions?status=done", None).await?;
+    let (status, first_done_page) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=done&limit=1",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_done_page["items"], json!([]));
+    let next_cursor = first_done_page["nextCursor"]
+        .as_i64()
+        .ok_or_else(|| anyhow::anyhow!("filtered page dropped its cursor"))?;
+
+    let (status, done) = request_json(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions?status=done&limit=1&cursor={next_cursor}"),
+        None,
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         done["items"].as_array().map(|items| {
