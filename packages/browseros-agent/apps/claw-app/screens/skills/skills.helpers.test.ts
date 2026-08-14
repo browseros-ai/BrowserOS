@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   formatRelativeTime,
   formatTokens,
+  parseSkillBody,
   skillCommand,
   tokenDeltaPercent,
 } from './skills.helpers'
@@ -42,6 +43,46 @@ describe('tokenDeltaPercent', () => {
 
   it('is positive when the skill got pricier', () => {
     expect(tokenDeltaPercent(100, 150)).toBe(50)
+  })
+})
+
+describe('parseSkillBody', () => {
+  const body = [
+    '---',
+    'name: inbox-sweep',
+    'description: "Check the inbox"',
+    'tools: browseros-neo',
+    '---',
+    '',
+    '## Steps',
+    '1. Call the mark_skill_run tool with name: inbox-sweep so this run is recorded.',
+    '2. Open the inbox',
+    '3. Draft replies',
+    '',
+    '## Learned from past runs',
+    '- Read the DOM snapshot, not screenshots',
+    '- Leave drafts unsent',
+  ].join('\n')
+
+  it('extracts the user steps and drops the auto run-marking step', () => {
+    expect(parseSkillBody(body).steps).toEqual([
+      'Open the inbox',
+      'Draft replies',
+    ])
+  })
+
+  it('extracts the learned notes', () => {
+    expect(parseSkillBody(body).learnedNotes).toEqual([
+      'Read the DOM snapshot, not screenshots',
+      'Leave drafts unsent',
+    ])
+  })
+
+  it('returns empty arrays for a body with no sections', () => {
+    expect(parseSkillBody('just prose')).toEqual({
+      steps: [],
+      learnedNotes: [],
+    })
   })
 })
 

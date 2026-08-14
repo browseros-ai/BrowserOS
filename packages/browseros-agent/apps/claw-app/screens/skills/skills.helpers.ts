@@ -33,6 +33,47 @@ export function tokenDeltaPercent(
   return Math.round(((latest - first) / first) * 100)
 }
 
+/**
+ * Split a rendered SKILL.md into its editable structured fields so the edit
+ * form can pre-fill them. Reads the numbered `## Steps` and the bulleted
+ * `## Learned from past runs` sections. The auto-generated first step that
+ * records the run is dropped, since the server re-adds it on save.
+ */
+export function parseSkillBody(body: string): {
+  steps: string[]
+  learnedNotes: string[]
+} {
+  const steps: string[] = []
+  const learnedNotes: string[] = []
+  let section: 'steps' | 'learned' | null = null
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('## ')) {
+      const title = trimmed.slice(3).toLowerCase()
+      section = title.startsWith('steps')
+        ? 'steps'
+        : title.startsWith('learned')
+          ? 'learned'
+          : null
+      continue
+    }
+    if (section === 'steps') {
+      const match = line.match(/^\s*\d+\.\s+(.*)$/)
+      const step = match?.[1]?.trim()
+      if (step && !step.includes('mark_skill_run')) {
+        steps.push(step)
+      }
+    } else if (section === 'learned') {
+      const match = line.match(/^\s*-\s+(.*)$/)
+      const note = match?.[1]?.trim()
+      if (note) {
+        learnedNotes.push(note)
+      }
+    }
+  }
+  return { steps, learnedNotes }
+}
+
 /** A short "time ago" label from an epoch-ms timestamp. */
 export function formatRelativeTime(
   epochMs: number,

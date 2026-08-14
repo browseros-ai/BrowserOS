@@ -38,6 +38,7 @@ import {
   useSkills,
   useUpdateSkill,
 } from '@/modules/api/skills.hooks'
+import { parseSkillBody } from '@/screens/skills/skills.helpers'
 
 const createSchema = z.object({
   name: z
@@ -52,7 +53,8 @@ const createSchema = z.object({
 const editSchema = z.object({
   description: z.string().min(1, 'A one-line description is required'),
   site: z.string().optional(),
-  body: z.string().min(1, 'The SKILL.md body cannot be empty'),
+  steps: z.string().optional(),
+  learnedNotes: z.string().optional(),
 })
 
 function toLines(value: string | undefined): string[] {
@@ -246,9 +248,15 @@ function EditForm({
 }: EditProps & { onClose: () => void }) {
   const queryClient = useQueryClient()
   const update = useUpdateSkill()
+  const parsed = parseSkillBody(body)
   const form = useForm<z.infer<typeof editSchema>>({
     resolver: zodResolver(editSchema),
-    defaultValues: { description, site: site ?? '', body },
+    defaultValues: {
+      description,
+      site: site ?? '',
+      steps: parsed.steps.join('\n'),
+      learnedNotes: parsed.learnedNotes.join('\n'),
+    },
   })
 
   const onSubmit = form.handleSubmit((values) => {
@@ -258,8 +266,10 @@ function EditForm({
           name,
           body: {
             description: values.description,
-            site: trimmedOrUndefined(values.site),
-            body: values.body,
+            // An empty string clears the site; the field is always sent.
+            site: values.site?.trim() ?? '',
+            steps: toLines(values.steps),
+            learnedNotes: toLines(values.learnedNotes),
           },
         })
         .then(() => {
@@ -283,7 +293,7 @@ function EditForm({
         <DialogHeader>
           <DialogTitle>Edit {name}</DialogTitle>
           <DialogDescription>
-            Editing the SKILL.md re-links it into your agents.
+            Saving re-renders the SKILL.md and re-links it into your agents.
           </DialogDescription>
         </DialogHeader>
         <FormField
@@ -306,7 +316,7 @@ function EditForm({
             <FormItem>
               <FormLabel>Site</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input placeholder="Leave empty to clear" {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -314,12 +324,25 @@ function EditForm({
         />
         <FormField
           control={form.control}
-          name="body"
+          name="steps"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>SKILL.md</FormLabel>
+              <FormLabel>Steps</FormLabel>
               <FormControl>
-                <Textarea rows={12} className="font-mono text-xs" {...field} />
+                <Textarea rows={5} placeholder="One step per line" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="learnedNotes"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Learned notes</FormLabel>
+              <FormControl>
+                <Textarea rows={3} placeholder="One note per line" {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
