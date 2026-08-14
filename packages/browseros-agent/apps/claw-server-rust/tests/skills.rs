@@ -103,7 +103,11 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
     assert_eq!(created["runCount"].as_i64(), Some(0));
     assert_eq!(created["site"], "mail.google.com");
 
-    let skill_md = app.root.join("skills").join("neo-inbox-sweep").join("SKILL.md");
+    let skill_md = app
+        .root
+        .join("skills")
+        .join("neo-inbox-sweep")
+        .join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains("name: neo-inbox-sweep"));
     assert!(content.contains("tools: browseros-neo"));
@@ -123,7 +127,8 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
     let (_, list) = request(router, "GET", "/api/v1/skills", None).await?;
     assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
 
-    let (status, runs) = request(router, "GET", "/api/v1/skills/neo-inbox-sweep/runs", None).await?;
+    let (status, runs) =
+        request(router, "GET", "/api/v1/skills/neo-inbox-sweep/runs", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(runs["items"].as_array().map(Vec::len), Some(0));
 
@@ -196,7 +201,11 @@ async fn skill_structured_edit_re_renders_frontmatter_and_clears_site() -> anyho
 
     // The on-disk frontmatter description tracks the column: agents reading the
     // file see the new description, never the stale one.
-    let skill_md = app.root.join("skills").join("neo-inbox-sweep").join("SKILL.md");
+    let skill_md = app
+        .root
+        .join("skills")
+        .join("neo-inbox-sweep")
+        .join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains(r#"description: "Second description""#));
     assert!(!content.contains("First description"));
@@ -235,7 +244,11 @@ async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::R
     assert_eq!(updated["skill"]["description"], "Fresh description");
 
     // Only the frontmatter description line changes; the body is preserved.
-    let skill_md = app.root.join("skills").join("neo-daily-brief").join("SKILL.md");
+    let skill_md = app
+        .root
+        .join("skills")
+        .join("neo-daily-brief")
+        .join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains(r#"description: "Fresh description""#));
     assert!(!content.contains("Old description"));
@@ -327,7 +340,11 @@ async fn skill_description_edit_adds_frontmatter_to_a_raw_body() -> anyhow::Resu
     .await?;
     assert_eq!(status, StatusCode::OK);
 
-    let skill_md = app.root.join("skills").join("neo-raw-note").join("SKILL.md");
+    let skill_md = app
+        .root
+        .join("skills")
+        .join("neo-raw-note")
+        .join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.starts_with("---\nname: neo-raw-note\n"));
     assert!(content.contains(r#"description: "Now described""#));
@@ -403,8 +420,12 @@ async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()
     .await?;
     assert_eq!(status, StatusCode::CREATED);
 
-    let content =
-        std::fs::read_to_string(app.root.join("skills").join("neo-tricky-desc").join("SKILL.md"))?;
+    let content = std::fs::read_to_string(
+        app.root
+            .join("skills")
+            .join("neo-tricky-desc")
+            .join("SKILL.md"),
+    )?;
     // The description is emitted as a quoted scalar, so a raw newline or colon
     // cannot break the frontmatter block.
     assert!(content.contains(r#"description: "Reply within 24h: keep it brief\nthen stop""#));
