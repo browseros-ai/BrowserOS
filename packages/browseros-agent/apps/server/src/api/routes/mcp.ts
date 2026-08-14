@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
+import { rejectBrowserFetch } from '../middleware/reject-browser-fetch'
 import type { KlavisService } from '../services/klavis'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { ServerActivity } from '../services/server-activity'
@@ -75,6 +76,7 @@ export function parseManagedMcpServersHeader(
 /** Creates the Hono routes that expose BrowserOS as a request-scoped MCP server. */
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
+  app.use('/*', rejectBrowserFetch())
   const makeMcpServer = deps.createMcpServer ?? createMcpServer
   const makeMcpTransport =
     deps.createMcpTransport ??
