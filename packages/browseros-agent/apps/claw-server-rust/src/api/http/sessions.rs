@@ -206,7 +206,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         task.duration_ms.max(0),
         task.dispatch_count,
         task.tool_sequence,
-        contract_status(task.status),
+        contract_status(task.status, live.is_some()),
         task.error_count,
     );
     summary.profile_id = live
@@ -304,8 +304,9 @@ fn contract_live_tab(projection: LiveTabProjection) -> SessionBrowserTab {
     tab
 }
 
-fn contract_status(status: TaskStatus) -> SessionStatus {
+fn contract_status(status: TaskStatus, is_live: bool) -> SessionStatus {
     match status {
+        TaskStatus::Live if !is_live => SessionStatus::Done,
         TaskStatus::Live => SessionStatus::Live,
         TaskStatus::Done => SessionStatus::Done,
         TaskStatus::Failed => SessionStatus::Failed,
