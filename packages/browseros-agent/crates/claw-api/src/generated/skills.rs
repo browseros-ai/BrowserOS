@@ -323,9 +323,16 @@ impl SkillRunList {
 pub struct SkillUpdate {
     #[serde(rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Primary site the skill operates on. An empty string clears it.
     #[serde(rename = "site", skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
-    /// Replacement SKILL.md contents for a manual edit.
+    /// Replacement steps. Re-renders the SKILL.md from structured fields.
+    #[serde(rename = "steps", skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<String>>,
+    /// Replacement learned notes. Re-renders the SKILL.md from structured fields.
+    #[serde(rename = "learnedNotes", skip_serializing_if = "Option::is_none")]
+    pub learned_notes: Option<Vec<String>>,
+    /// Replacement SKILL.md contents for a raw manual edit or agent authoring.
     #[serde(rename = "body", skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
 }
@@ -335,6 +342,8 @@ impl SkillUpdate {
         SkillUpdate {
             description: None,
             site: None,
+            steps: None,
+            learned_notes: None,
             body: None,
         }
     }

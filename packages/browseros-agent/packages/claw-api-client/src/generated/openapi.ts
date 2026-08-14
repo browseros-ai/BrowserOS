@@ -819,8 +819,13 @@ export interface components {
     }
     SkillUpdate: {
       description?: string
+      /** @description Primary site the skill operates on. An empty string clears it. */
       site?: string
-      /** @description Replacement SKILL.md contents for a manual edit. */
+      /** @description Replacement steps. Re-renders the SKILL.md from structured fields. */
+      steps?: string[]
+      /** @description Replacement learned notes. Re-renders the SKILL.md from structured fields. */
+      learnedNotes?: string[]
+      /** @description Replacement SKILL.md contents for a raw manual edit or agent authoring. */
       body?: string
     }
     DirectorySkill: {

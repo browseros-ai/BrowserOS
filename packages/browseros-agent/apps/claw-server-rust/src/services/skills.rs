@@ -40,6 +40,8 @@ pub struct CreateSkill {
 pub struct UpdateSkill {
     pub description: Option<String>,
     pub site: Option<String>,
+    pub steps: Option<Vec<String>>,
+    pub learned_notes: Option<Vec<String>>,
     pub body: Option<String>,
 }
 
@@ -268,21 +270,77 @@ impl SkillService {
         let mut previous_body: Option<String> = None;
         let body_path = model.body_path.clone();
 
-        if let Some(body) = input.body {
+        let UpdateSkill {
+            description,
+            site,
+            steps,
+            learned_notes,
+            body,
+        } = input;
+
+        // A raw body and structured fields are two representations of the same
+        // file; accepting both would silently persist one and discard the other.
+        if body.is_some() && (steps.is_some() || learned_notes.is_some()) {
+            return Err(AppError::bad_request(
+                "provide either a raw body or structured steps/learnedNotes, not both",
+            ));
+        }
+        // A structured edit replaces both sections at once, so both must be sent
+        // together; otherwise the omitted section would be silently erased. An
+        // explicit empty array clears a section.
+        if steps.is_some() != learned_notes.is_some() {
+            return Err(AppError::bad_request(
+                "steps and learnedNotes must be provided together",
+            ));
+        }
+
+        // The description that the rendered/patched frontmatter must carry: the
+        // incoming value if present, otherwise the one already stored.
+        let effective_description = description
+            .clone()
+            .unwrap_or_else(|| model.description.clone());
+
+        // Decide what, if anything, to write to disk. A structured edit renders
+        // the whole SKILL.md so its frontmatter description can never drift from
+        // the stored column. A raw `body` is written verbatim (agent authoring
+        // or a manual override). A metadata-only description change patches just
+        // the frontmatter line so the file matches the new column without
+        // disturbing the rest of the body.
+        let rewrite: Option<String> = if steps.is_some() || learned_notes.is_some() {
+            Some(render_skill_markdown(
+                name,
+                &effective_description,
+                &steps.unwrap_or_default(),
+                &learned_notes.unwrap_or_default(),
+            ))
+        } else if let Some(raw) = body {
+            Some(raw)
+        } else if description.is_some() {
+            let current = self.read_body(&body_path).await;
+            Some(sync_frontmatter_description(
+                name,
+                &current,
+                &effective_description,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(content) = rewrite {
             previous_body = Some(self.read_body(&body_path).await);
-            self.write_body_at(&body_path, &body).await?;
-            let spec = SkillSpec::new(name, body)
+            self.write_body_at(&body_path, &content).await?;
+            let spec = SkillSpec::new(name, content)
                 .map_err(|error| AppError::bad_request(error.to_string()))?;
             relinked = Some(self.harness.install_skill(spec).await?);
             model.version += 1;
         }
-        if let Some(description) = input.description {
+        if let Some(description) = description {
             model.description = description;
         }
-        // A nullable `site` cannot be explicitly cleared through the current
-        // contract; clearing is deferred to a later contract revision.
-        if let Some(site) = input.site {
-            model.site = Some(site);
+        // An empty string clears the site; a non-empty value sets it; an absent
+        // value leaves it unchanged.
+        if let Some(site) = site {
+            model.site = (!site.is_empty()).then_some(site);
         }
         if let Some(linked) = &relinked {
             model.linked_agents_json = linked_agents_json(linked);
@@ -343,6 +401,8 @@ impl SkillService {
                         UpdateSkill {
                             description: Some(description),
                             site,
+                            steps: None,
+                            learned_notes: None,
                             body: Some(content),
                         },
                     )
@@ -470,6 +530,48 @@ fn render_skill_markdown(
         for note in learned_notes {
             out.push_str(&format!("- {note}\n"));
         }
+    }
+    out
+}
+
+/// Rewrite the `description:` line inside a SKILL.md frontmatter block so the
+/// on-disk file matches the stored description, leaving the rest of the body
+/// untouched. The description is JSON-encoded to stay a valid YAML scalar, the
+/// same way `render_skill_markdown` emits it. A body with no `---` frontmatter
+/// fence (a raw body written without one) gets a fresh frontmatter block
+/// prepended so the description is always present in the file.
+fn sync_frontmatter_description(name: &str, body: &str, description: &str) -> String {
+    let encoded = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    let closing = lines
+        .first()
+        .map(|line| line.trim_end())
+        .filter(|first| *first == "---")
+        .and_then(|_| {
+            lines
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, line)| line.trim_end() == "---")
+                .map(|(index, _)| index)
+        });
+    let Some(closing) = closing else {
+        let front =
+            format!("---\nname: {name}\ndescription: {encoded}\ntools: {SKILL_TOOLS}\n---\n\n");
+        return format!("{front}{body}");
+    };
+    let description_line = lines
+        .iter_mut()
+        .take(closing)
+        .skip(1)
+        .find(|line| line.trim_start().starts_with("description:"));
+    match description_line {
+        Some(line) => *line = format!("description: {encoded}"),
+        None => lines.insert(1, format!("description: {encoded}")),
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
     }
     out
 }
