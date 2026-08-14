@@ -807,6 +807,29 @@ export interface components {
       /** @description The raw SKILL.md contents. */
       body: string
       runs: components['schemas']['SkillRun'][]
+      tokenSavings: components['schemas']['SkillTokenSavings']
+    }
+    SkillTokenSavings: {
+      /**
+       * Format: int64
+       * @description Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+       */
+      saved: number
+      /**
+       * Format: int64
+       * @description Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+       */
+      otherBrowsers: number
+      /**
+       * Format: int64
+       * @description Tokens BrowserOS neo actually used across the measured runs.
+       */
+      used: number
+      /**
+       * Format: int64
+       * @description How many of the skill's runs had a measured efficiency projection.
+       */
+      measuredRunCount: number
     }
     SkillCreate: {
       name: string

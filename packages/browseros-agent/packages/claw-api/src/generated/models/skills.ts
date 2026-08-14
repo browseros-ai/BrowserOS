@@ -264,6 +264,12 @@ export interface SkillDetail {
      * @memberof SkillDetail
      */
     runs: Array<SkillRun>;
+    /**
+     *
+     * @type {SkillTokenSavings}
+     * @memberof SkillDetail
+     */
+    tokenSavings: SkillTokenSavings;
 }
 
 /**
@@ -383,6 +389,38 @@ export interface SkillRunList {
      * @memberof SkillRunList
      */
     nextCursor?: number;
+}
+
+/**
+ *
+ * @export
+ * @interface SkillTokenSavings
+ */
+export interface SkillTokenSavings {
+    /**
+     * Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+     * @type {number}
+     * @memberof SkillTokenSavings
+     */
+    saved: number;
+    /**
+     * Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+     * @type {number}
+     * @memberof SkillTokenSavings
+     */
+    otherBrowsers: number;
+    /**
+     * Tokens BrowserOS neo actually used across the measured runs.
+     * @type {number}
+     * @memberof SkillTokenSavings
+     */
+    used: number;
+    /**
+     * How many of the skill's runs had a measured efficiency projection.
+     * @type {number}
+     * @memberof SkillTokenSavings
+     */
+    measuredRunCount: number;
 }
 
 /**

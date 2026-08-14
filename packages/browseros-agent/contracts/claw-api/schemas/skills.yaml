@@ -142,7 +142,7 @@ SkillRunList:
 SkillDetail:
   type: object
   additionalProperties: false
-  required: [skill, body, runs]
+  required: [skill, body, runs, tokenSavings]
   properties:
     skill:
       $ref: '#/Skill'
@@ -153,6 +153,29 @@ SkillDetail:
       type: array
       items:
         $ref: '#/SkillRun'
+    tokenSavings:
+      $ref: '#/SkillTokenSavings'
+SkillTokenSavings:
+  type: object
+  additionalProperties: false
+  required: [saved, otherBrowsers, used, measuredRunCount]
+  properties:
+    saved:
+      type: integer
+      format: int64
+      description: Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+    otherBrowsers:
+      type: integer
+      format: int64
+      description: Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+    used:
+      type: integer
+      format: int64
+      description: Tokens BrowserOS neo actually used across the measured runs.
+    measuredRunCount:
+      type: integer
+      format: int64
+      description: How many of the skill's runs had a measured efficiency projection.
 SkillCreate:
   type: object
   additionalProperties: false
