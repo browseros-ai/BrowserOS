@@ -398,13 +398,25 @@ export interface SkillUpdate {
      */
     description?: string;
     /**
-     *
+     * Primary site the skill operates on. An empty string clears it.
      * @type {string}
      * @memberof SkillUpdate
      */
     site?: string;
     /**
-     * Replacement SKILL.md contents for a manual edit.
+     * Replacement steps. Re-renders the SKILL.md from structured fields.
+     * @type {Array<string>}
+     * @memberof SkillUpdate
+     */
+    steps?: Array<string>;
+    /**
+     * Replacement learned notes. Re-renders the SKILL.md from structured fields.
+     * @type {Array<string>}
+     * @memberof SkillUpdate
+     */
+    learnedNotes?: Array<string>;
+    /**
+     * Replacement SKILL.md contents for a raw manual edit or agent authoring.
      * @type {string}
      * @memberof SkillUpdate
      */

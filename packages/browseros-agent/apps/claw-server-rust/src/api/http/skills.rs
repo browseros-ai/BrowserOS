@@ -82,6 +82,8 @@ pub(super) async fn update(
             UpdateSkill {
                 description: body.description,
                 site: body.site,
+                steps: body.steps,
+                learned_notes: body.learned_notes,
                 body: body.body,
             },
         )
