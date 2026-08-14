@@ -1,11 +1,20 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { McpServer } from '@modelcontextprotocol/server'
+import {
+  McpServer,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from '@modelcontextprotocol/server'
 import { BROWSER_MCP_INSTRUCTIONS } from './mcp-prompt'
 import {
   type BrowserToolDefaults,
   type BrowserToolRegistrationOptions,
   registerBrowserTools,
 } from './register'
+
+// The SDK's default supportedProtocolVersions is legacy-only, so it never
+// registers server/discover and rejects 2026-07-28. Advertise the modern
+// revision (selectable only via server/discover) alongside the legacy list so
+// the endpoint serves both eras. The SDK does not export a modern-versions list.
+const MODERN_PROTOCOL_VERSION = '2026-07-28'
 
 export interface BrowserMcpServerOptions extends BrowserToolDefaults {
   name: string
@@ -28,6 +37,10 @@ export function createBrowserMcpServer(
     },
     {
       instructions: options.instructions ?? BROWSER_MCP_INSTRUCTIONS,
+      supportedProtocolVersions: [
+        MODERN_PROTOCOL_VERSION,
+        ...SUPPORTED_PROTOCOL_VERSIONS,
+      ],
     },
   )
 

@@ -8,7 +8,7 @@ type RegisteredTool = {
   description: string
   handler: (
     args: Record<string, unknown>,
-    extra?: { signal?: AbortSignal },
+    extra?: { mcpReq?: { signal?: AbortSignal } },
   ) => Promise<{
     content: unknown
     isError?: boolean
@@ -272,5 +272,26 @@ describe('createBrowserMcpServer', () => {
     expect((reused?.structuredContent as { session?: string })?.session).toBe(
       'agent-supplied-handle',
     )
+  })
+
+  it('threads the abort signal from extra.mcpReq.signal into the tool', async () => {
+    const server = inspect(
+      createBrowserMcpServer({
+        name: 'browseros_mcp',
+        title: 'BrowserOS MCP server',
+        version: '1.2.3',
+        browserSession: { pages: {} } as unknown as BrowserSession,
+      }),
+    )
+
+    // The signal is delivered where the v2 SDK actually puts it (mcpReq.signal),
+    // so `wait` aborts immediately instead of pausing. The previous top-level
+    // `extra.signal` read was always undefined and never reached the tool.
+    const result = await server._registeredTools.wait.handler(
+      { page: 1, for: 'time', value: 60000 },
+      { mcpReq: { signal: AbortSignal.abort() } },
+    )
+
+    expect(result?.isError).toBe(true)
   })
 })

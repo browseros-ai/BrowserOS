@@ -181,4 +181,16 @@ describe('createMcpRoutes', () => {
     expect(res.status).toBe(500)
     expect(body.error.code).toBe(-32603)
   })
+
+  it('rejects browser-originated requests carrying Sec-Fetch-Site', async () => {
+    const app = createTestMcpRoutes()
+
+    const blocked = await postMcp(app, { 'Sec-Fetch-Site': 'cross-site' })
+    const allowed = await postMcp(app)
+
+    expect(blocked.status).toBe(403)
+    const body = (await blocked.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('FORBIDDEN_BROWSER_REQUEST')
+    expect(allowed.status).toBe(200)
+  })
 })

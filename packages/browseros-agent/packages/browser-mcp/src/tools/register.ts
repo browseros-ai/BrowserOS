@@ -42,7 +42,7 @@ type RegisterFn = (
   },
   handler: (
     args: Record<string, unknown>,
-    extra?: { signal?: AbortSignal },
+    extra?: { mcpReq?: { signal?: AbortSignal } },
   ) => Promise<{
     content: unknown
     isError?: boolean
@@ -203,7 +203,7 @@ export function registerBrowserTools(
               executeTool(tool, toolArgs, {
                 session,
                 ...defaults,
-                signal: extra?.signal,
+                signal: extra?.mcpReq?.signal,
               }),
           )
           options.onToolExecuted?.({
