@@ -45,6 +45,7 @@ export function createMcpServer(deps: McpServiceDeps) {
     instructions: MCP_INSTRUCTIONS,
     registration: {
       includeStructuredContent: deps.includeStructuredContent ?? false,
+      sessionIdentity: true,
       logger,
       onToolExecutionStart: () => deps.activity?.beginMcpToolExecution(),
       onToolExecutionEnd: () => deps.activity?.endMcpToolExecution(),

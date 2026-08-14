@@ -216,4 +216,54 @@ describe('createBrowserMcpServer', () => {
       }),
     ])
   })
+
+  it('mints, echoes, and strips a session handle when sessionIdentity is on', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const raw = createBrowserMcpServer({
+      name: 'browseros_mcp',
+      title: 'BrowserOS MCP server',
+      version: '1.2.3',
+      browserSession: {
+        pages: {
+          newPage: async () => 42,
+        },
+      } as unknown as BrowserSession,
+      registration: {
+        sessionIdentity: true,
+        onToolExecuted: (event) => events.push(event),
+      },
+    })
+    const server = inspect(raw)
+
+    const schema = (
+      raw as unknown as {
+        toolInputSchemaJson(name: string): {
+          properties?: Record<string, unknown>
+        }
+      }
+    ).toolInputSchemaJson('tabs')
+    expect(Object.keys(schema?.properties ?? {})).toContain('session')
+
+    // No handle provided: the server mints one and returns it, and the tool
+    // still runs (the session key is stripped before the tool parses args).
+    const minted = await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://example.com',
+    })
+    const mintedSession = (minted?.structuredContent as { session?: string })
+      ?.session
+    expect(typeof mintedSession).toBe('string')
+    expect(mintedSession).toHaveLength(36)
+    expect(events[0]?.session).toBe(mintedSession)
+
+    // A provided handle is echoed back unchanged.
+    const reused = await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://example.com',
+      session: 'agent-supplied-handle',
+    })
+    expect((reused?.structuredContent as { session?: string })?.session).toBe(
+      'agent-supplied-handle',
+    )
+  })
 })
