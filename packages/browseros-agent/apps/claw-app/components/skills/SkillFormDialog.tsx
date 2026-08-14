@@ -38,7 +38,7 @@ import {
   useSkills,
   useUpdateSkill,
 } from '@/modules/api/skills.hooks'
-import { parseSkillBody } from '@/screens/skills/skills.helpers'
+import { neoName, parseSkillBody } from '@/screens/skills/skills.helpers'
 
 const createSchema = z.object({
   name: z
@@ -116,10 +116,11 @@ function CreateForm({ onClose }: { onClose: () => void }) {
   })
 
   const onSubmit = form.handleSubmit((values) => {
+    const name = neoName(values.name)
     void toast.promise(
       create
         .mutateAsync({
-          name: values.name,
+          name,
           description: values.description,
           site: trimmedOrUndefined(values.site),
           steps: toLines(values.steps),
@@ -131,7 +132,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
         }),
       {
         loading: 'Saving the task…',
-        success: `Saved /${values.name}`,
+        success: `Saved /${name}`,
         error: 'Could not save the task',
       },
     )
@@ -154,14 +155,21 @@ function CreateForm({ onClose }: { onClose: () => void }) {
             <FormItem>
               <FormLabel>Name</FormLabel>
               <FormControl>
-                <Input
-                  placeholder="inbox-sweep"
-                  className="font-mono"
-                  {...field}
-                />
+                <div className="flex h-9 w-full items-center overflow-hidden rounded-md border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                  <span className="flex h-full select-none items-center bg-card-tint px-2.5 font-mono text-ink-2 text-sm">
+                    neo-
+                  </span>
+                  <Input
+                    placeholder="inbox-sweep"
+                    className="h-full flex-1 rounded-none border-0 font-mono shadow-none focus-visible:ring-0"
+                    {...field}
+                  />
+                </div>
               </FormControl>
               <FormDescription>
-                Lowercase letters, digits, and hyphens. Used as the /command.
+                Saved as /{field.value ? neoName(field.value) : 'neo-<name>'} so
+                you can find it with /neo in your agent. Lowercase letters,
+                digits, and hyphens.
               </FormDescription>
               <FormMessage />
             </FormItem>

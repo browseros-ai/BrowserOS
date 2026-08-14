@@ -19,6 +19,11 @@ use tokio::sync::Mutex;
 /// The embedded product skill owns this directory name; user skills may not
 /// reuse it or they would clobber the managed BrowserOS skill.
 const RESERVED_SKILL_NAMES: [&str; 1] = ["browserclaw"];
+
+/// Every user- and agent-authored skill is namespaced under this prefix so its
+/// on-disk and linked-agent directory can never collide with a user's own
+/// skill, and so a user can list them all by typing `/neo` in their agent.
+const NEO_SKILL_PREFIX: &str = "neo-";
 const DEFAULT_RUN_LIMIT: u64 = 25;
 const MAX_RUN_LIMIT: u64 = 100;
 
@@ -166,16 +171,9 @@ impl SkillService {
     }
 
     async fn create_locked(&self, input: CreateSkill) -> AppResult<SkillView> {
-        if !is_valid_skill_name(&input.name) {
-            return Err(AppError::bad_request(
-                "skill name must contain only lowercase letters, digits, and hyphens",
-            ));
-        }
-        if RESERVED_SKILL_NAMES.contains(&input.name.as_str()) {
-            return Err(AppError::conflict("skill name is reserved"));
-        }
+        let name = normalized_skill_name(&input.name)?;
         let CreateSkill {
-            name,
+            name: _,
             description,
             site,
             steps,
@@ -365,16 +363,9 @@ impl SkillService {
     /// agent-facing MCP tool calls so re-authoring a task updates it in place.
     pub async fn upsert(&self, input: CreateSkill) -> AppResult<SkillView> {
         let _guard = self.mutate.lock().await;
-        if !is_valid_skill_name(&input.name) {
-            return Err(AppError::bad_request(
-                "skill name must contain only lowercase letters, digits, and hyphens",
-            ));
-        }
-        if RESERVED_SKILL_NAMES.contains(&input.name.as_str()) {
-            return Err(AppError::conflict("skill name is reserved"));
-        }
+        let name = normalized_skill_name(&input.name)?;
         let CreateSkill {
-            name,
+            name: _,
             description,
             site,
             steps,
@@ -504,6 +495,35 @@ fn is_valid_skill_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+/// Namespace a name under `neo-`. Idempotent: an already-prefixed name is
+/// returned unchanged, so an agent may pass either `weather` or `neo-weather`.
+pub(crate) fn neo_prefixed(name: &str) -> String {
+    if name.starts_with(NEO_SKILL_PREFIX) {
+        name.to_owned()
+    } else {
+        format!("{NEO_SKILL_PREFIX}{name}")
+    }
+}
+
+/// Validate a raw skill name and return its canonical `neo-`-prefixed form.
+fn normalized_skill_name(raw: &str) -> AppResult<String> {
+    if !is_valid_skill_name(raw) {
+        return Err(AppError::bad_request(
+            "skill name must contain only lowercase letters, digits, and hyphens",
+        ));
+    }
+    let name = neo_prefixed(raw);
+    if name.len() <= NEO_SKILL_PREFIX.len() {
+        return Err(AppError::bad_request(
+            "skill name must have a slug after the neo- prefix",
+        ));
+    }
+    if RESERVED_SKILL_NAMES.contains(&name.as_str()) {
+        return Err(AppError::conflict("skill name is reserved"));
+    }
+    Ok(name)
+}
+
 fn render_skill_markdown(
     name: &str,
     description: &str,
@@ -581,4 +601,34 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{neo_prefixed, normalized_skill_name};
+
+    #[test]
+    fn neo_prefixed_is_idempotent() {
+        assert_eq!(neo_prefixed("weather"), "neo-weather");
+        assert_eq!(neo_prefixed("neo-weather"), "neo-weather");
+        // Only a leading prefix is collapsed; an interior "neo-" is untouched.
+        assert_eq!(neo_prefixed("weather-neo-check"), "neo-weather-neo-check");
+    }
+
+    #[test]
+    fn normalized_skill_name_prefixes_and_validates() {
+        assert_eq!(
+            normalized_skill_name("weather").ok().as_deref(),
+            Some("neo-weather")
+        );
+        assert_eq!(
+            normalized_skill_name("neo-weather").ok().as_deref(),
+            Some("neo-weather")
+        );
+        // Charset is rejected before prefixing.
+        assert!(normalized_skill_name("Bad Name").is_err());
+        assert!(normalized_skill_name("").is_err());
+        // A bare prefix has no slug after neo-.
+        assert!(normalized_skill_name("neo-").is_err());
+    }
 }

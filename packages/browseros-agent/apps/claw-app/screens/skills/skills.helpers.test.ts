@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   formatRelativeTime,
   formatTokens,
+  neoName,
   parseSkillBody,
   skillCommand,
   tokenDeltaPercent,
@@ -10,6 +11,20 @@ import {
 describe('skillCommand', () => {
   it('prefixes the name with a slash', () => {
     expect(skillCommand('inbox-sweep')).toBe('/inbox-sweep')
+  })
+})
+
+describe('neoName', () => {
+  it('namespaces a bare suffix under neo-', () => {
+    expect(neoName('weather')).toBe('neo-weather')
+  })
+
+  it('does not double an over-typed neo- prefix', () => {
+    expect(neoName('neo-weather')).toBe('neo-weather')
+  })
+
+  it('leaves an interior neo- untouched', () => {
+    expect(neoName('weather-neo-check')).toBe('neo-weather-neo-check')
   })
 })
 

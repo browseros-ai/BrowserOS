@@ -6,6 +6,18 @@
  * Pure formatters for the Tasks list and detail. No React, no side effects.
  */
 
+/** Every skill is namespaced under this prefix so it never collides with a
+ *  user's own agent skills and the whole set autocompletes on `/neo`. */
+export const NEO_SKILL_PREFIX = 'neo-'
+
+/**
+ * The canonical, neo-namespaced name for a user-typed suffix. Mirrors the
+ * server: a bare suffix is prefixed, and an over-typed `neo-` is not doubled.
+ */
+export function neoName(suffix: string): string {
+  return `${NEO_SKILL_PREFIX}${suffix.replace(/^neo-/, '')}`
+}
+
 /** The command a user pastes into a coding agent to run a skill. */
 export function skillCommand(name: string): string {
   return `/${name}`

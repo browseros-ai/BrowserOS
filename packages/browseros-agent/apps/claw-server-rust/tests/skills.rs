@@ -88,7 +88,7 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
         "POST",
         "/api/v1/skills",
         Some(json!({
-            "name": "inbox-sweep",
+            "name": "neo-inbox-sweep",
             "description": "Check the inbox and draft replies",
             "site": "mail.google.com",
             "steps": ["Open the inbox", "Draft replies", "Leave drafts unsent"],
@@ -97,43 +97,43 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
     )
     .await?;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(created["name"], "inbox-sweep");
+    assert_eq!(created["name"], "neo-inbox-sweep");
     assert_eq!(created["origin"], "manual");
     assert_eq!(created["version"].as_i64(), Some(1));
     assert_eq!(created["runCount"].as_i64(), Some(0));
     assert_eq!(created["site"], "mail.google.com");
 
-    let skill_md = app.root.join("skills").join("inbox-sweep").join("SKILL.md");
+    let skill_md = app.root.join("skills").join("neo-inbox-sweep").join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
-    assert!(content.contains("name: inbox-sweep"));
+    assert!(content.contains("name: neo-inbox-sweep"));
     assert!(content.contains("tools: browseros-neo"));
     assert!(content.contains("## Steps"));
     assert!(content.contains("Read the DOM snapshot, not screenshots"));
 
-    let (status, detail) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    let (status, detail) = request(router, "GET", "/api/v1/skills/neo-inbox-sweep", None).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(detail["skill"]["name"], "inbox-sweep");
+    assert_eq!(detail["skill"]["name"], "neo-inbox-sweep");
     assert!(
         detail["body"]
             .as_str()
-            .is_some_and(|body| body.contains("name: inbox-sweep"))
+            .is_some_and(|body| body.contains("name: neo-inbox-sweep"))
     );
     assert_eq!(detail["runs"].as_array().map(Vec::len), Some(0));
 
     let (_, list) = request(router, "GET", "/api/v1/skills", None).await?;
     assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
 
-    let (status, runs) = request(router, "GET", "/api/v1/skills/inbox-sweep/runs", None).await?;
+    let (status, runs) = request(router, "GET", "/api/v1/skills/neo-inbox-sweep/runs", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(runs["items"].as_array().map(Vec::len), Some(0));
 
     let (status, updated) = request(
         router,
         "PUT",
-        "/api/v1/skills/inbox-sweep",
+        "/api/v1/skills/neo-inbox-sweep",
         Some(json!({
             "description": "Updated description",
-            "body": "---\nname: inbox-sweep\ndescription: Updated\ntools: browseros-neo\n---\n\n## Steps\n1. A brand new step\n"
+            "body": "---\nname: neo-inbox-sweep\ndescription: Updated\ntools: browseros-neo\n---\n\n## Steps\n1. A brand new step\n"
         })),
     )
     .await?;
@@ -148,12 +148,12 @@ async fn skill_crud_round_trips_and_writes_the_canonical_file() -> anyhow::Resul
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains("A brand new step"));
 
-    let (status, _) = request(router, "DELETE", "/api/v1/skills/inbox-sweep", None).await?;
+    let (status, _) = request(router, "DELETE", "/api/v1/skills/neo-inbox-sweep", None).await?;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    let (status, _) = request(router, "GET", "/api/v1/skills/neo-inbox-sweep", None).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(!app.root.join("skills").join("inbox-sweep").exists());
+    assert!(!app.root.join("skills").join("neo-inbox-sweep").exists());
 
     Ok(())
 }
@@ -168,7 +168,7 @@ async fn skill_structured_edit_re_renders_frontmatter_and_clears_site() -> anyho
         "POST",
         "/api/v1/skills",
         Some(json!({
-            "name": "inbox-sweep",
+            "name": "neo-inbox-sweep",
             "description": "First description",
             "site": "mail.google.com",
             "steps": ["Old step"]
@@ -179,7 +179,7 @@ async fn skill_structured_edit_re_renders_frontmatter_and_clears_site() -> anyho
     let (status, updated) = request(
         router,
         "PUT",
-        "/api/v1/skills/inbox-sweep",
+        "/api/v1/skills/neo-inbox-sweep",
         Some(json!({
             "description": "Second description",
             "site": "",
@@ -196,7 +196,7 @@ async fn skill_structured_edit_re_renders_frontmatter_and_clears_site() -> anyho
 
     // The on-disk frontmatter description tracks the column: agents reading the
     // file see the new description, never the stale one.
-    let skill_md = app.root.join("skills").join("inbox-sweep").join("SKILL.md");
+    let skill_md = app.root.join("skills").join("neo-inbox-sweep").join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains(r#"description: "Second description""#));
     assert!(!content.contains("First description"));
@@ -217,7 +217,7 @@ async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::R
         "POST",
         "/api/v1/skills",
         Some(json!({
-            "name": "daily-brief",
+            "name": "neo-daily-brief",
             "description": "Old description",
             "steps": ["Keep this step"]
         })),
@@ -227,7 +227,7 @@ async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::R
     let (status, updated) = request(
         router,
         "PUT",
-        "/api/v1/skills/daily-brief",
+        "/api/v1/skills/neo-daily-brief",
         Some(json!({ "description": "Fresh description" })),
     )
     .await?;
@@ -235,7 +235,7 @@ async fn skill_metadata_only_description_edit_patches_frontmatter() -> anyhow::R
     assert_eq!(updated["skill"]["description"], "Fresh description");
 
     // Only the frontmatter description line changes; the body is preserved.
-    let skill_md = app.root.join("skills").join("daily-brief").join("SKILL.md");
+    let skill_md = app.root.join("skills").join("neo-daily-brief").join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
     assert!(content.contains(r#"description: "Fresh description""#));
     assert!(!content.contains("Old description"));
@@ -253,7 +253,7 @@ async fn skill_update_rejects_ambiguous_field_combinations() -> anyhow::Result<(
         router,
         "POST",
         "/api/v1/skills",
-        Some(json!({ "name": "inbox-sweep", "description": "First", "steps": ["Old step"] })),
+        Some(json!({ "name": "neo-inbox-sweep", "description": "First", "steps": ["Old step"] })),
     )
     .await?;
 
@@ -262,9 +262,9 @@ async fn skill_update_rejects_ambiguous_field_combinations() -> anyhow::Result<(
     let (status, _) = request(
         router,
         "PUT",
-        "/api/v1/skills/inbox-sweep",
+        "/api/v1/skills/neo-inbox-sweep",
         Some(json!({
-            "body": "---\nname: inbox-sweep\ndescription: X\ntools: browseros-neo\n---\n",
+            "body": "---\nname: neo-inbox-sweep\ndescription: X\ntools: browseros-neo\n---\n",
             "steps": ["New step"],
             "learnedNotes": []
         })),
@@ -276,14 +276,14 @@ async fn skill_update_rejects_ambiguous_field_combinations() -> anyhow::Result<(
     let (status, _) = request(
         router,
         "PUT",
-        "/api/v1/skills/inbox-sweep",
+        "/api/v1/skills/neo-inbox-sweep",
         Some(json!({ "steps": ["New step"] })),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // The original steps survive both rejected updates.
-    let (_, detail) = request(router, "GET", "/api/v1/skills/inbox-sweep", None).await?;
+    let (_, detail) = request(router, "GET", "/api/v1/skills/neo-inbox-sweep", None).await?;
     assert!(
         detail["body"]
             .as_str()
@@ -302,7 +302,7 @@ async fn skill_description_edit_adds_frontmatter_to_a_raw_body() -> anyhow::Resu
         router,
         "POST",
         "/api/v1/skills",
-        Some(json!({ "name": "raw-note", "description": "First" })),
+        Some(json!({ "name": "neo-raw-note", "description": "First" })),
     )
     .await?;
 
@@ -310,7 +310,7 @@ async fn skill_description_edit_adds_frontmatter_to_a_raw_body() -> anyhow::Resu
     let (status, _) = request(
         router,
         "PUT",
-        "/api/v1/skills/raw-note",
+        "/api/v1/skills/neo-raw-note",
         Some(json!({ "body": "Just prose, no frontmatter\n" })),
     )
     .await?;
@@ -321,15 +321,15 @@ async fn skill_description_edit_adds_frontmatter_to_a_raw_body() -> anyhow::Resu
     let (status, _) = request(
         router,
         "PUT",
-        "/api/v1/skills/raw-note",
+        "/api/v1/skills/neo-raw-note",
         Some(json!({ "description": "Now described" })),
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
 
-    let skill_md = app.root.join("skills").join("raw-note").join("SKILL.md");
+    let skill_md = app.root.join("skills").join("neo-raw-note").join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md)?;
-    assert!(content.starts_with("---\nname: raw-note\n"));
+    assert!(content.starts_with("---\nname: neo-raw-note\n"));
     assert!(content.contains(r#"description: "Now described""#));
     assert!(content.contains("Just prose, no frontmatter"));
 
@@ -350,20 +350,24 @@ async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, _) = request(
+    // The embedded product skill occupies "browserclaw"; the neo- namespace
+    // neutralizes the old collision, so a user "browserclaw" now saves cleanly
+    // as "neo-browserclaw" instead of being rejected.
+    let (status, created) = request(
         router,
         "POST",
         "/api/v1/skills",
-        Some(json!({ "name": "browserclaw", "description": "reserved name" })),
+        Some(json!({ "name": "browserclaw", "description": "no longer collides" })),
     )
     .await?;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "neo-browserclaw");
 
     let (status, _) = request(
         router,
         "POST",
         "/api/v1/skills",
-        Some(json!({ "name": "daily-brief", "description": "first" })),
+        Some(json!({ "name": "neo-daily-brief", "description": "first" })),
     )
     .await?;
     assert_eq!(status, StatusCode::CREATED);
@@ -372,7 +376,7 @@ async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
         router,
         "POST",
         "/api/v1/skills",
-        Some(json!({ "name": "daily-brief", "description": "duplicate" })),
+        Some(json!({ "name": "neo-daily-brief", "description": "duplicate" })),
     )
     .await?;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -392,7 +396,7 @@ async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()
         "POST",
         "/api/v1/skills",
         Some(json!({
-            "name": "tricky-desc",
+            "name": "neo-tricky-desc",
             "description": "Reply within 24h: keep it brief\nthen stop"
         })),
     )
@@ -400,11 +404,60 @@ async fn skill_create_escapes_yaml_sensitive_descriptions() -> anyhow::Result<()
     assert_eq!(status, StatusCode::CREATED);
 
     let content =
-        std::fs::read_to_string(app.root.join("skills").join("tricky-desc").join("SKILL.md"))?;
+        std::fs::read_to_string(app.root.join("skills").join("neo-tricky-desc").join("SKILL.md"))?;
     // The description is emitted as a quoted scalar, so a raw newline or colon
     // cannot break the frontmatter block.
     assert!(content.contains(r#"description: "Reply within 24h: keep it brief\nthen stop""#));
     assert_eq!(content.matches("---").count(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_create_namespaces_a_bare_name_under_neo() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+
+    // A bare name is namespaced under neo- on the way in.
+    let (status, created) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({
+            "name": "weather",
+            "description": "Check today's weather",
+            "steps": ["Open the forecast", "Read the high and low"]
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "neo-weather");
+
+    // The canonical file lives under the prefixed name, and its frontmatter and
+    // the mark step both carry the prefixed name so a re-run marks correctly.
+    let skill_md = app.root.join("skills").join("neo-weather").join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    assert!(content.contains("name: neo-weather"));
+    assert!(content.contains("mark_skill_run tool with name: neo-weather"));
+    assert!(!app.root.join("skills").join("weather").exists());
+
+    // The read path is exact: the prefixed name resolves, the bare one does not.
+    let (status, _) = request(router, "GET", "/api/v1/skills/neo-weather", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = request(router, "GET", "/api/v1/skills/weather", None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Re-posting the already-prefixed name hits the same skill (a duplicate),
+    // never nesting into neo-neo-weather.
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(json!({ "name": "neo-weather", "description": "Now with the hourly view" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(!app.root.join("skills").join("neo-neo-weather").exists());
 
     Ok(())
 }
@@ -441,7 +494,7 @@ async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
     state
         .skills
         .create(CreateSkill {
-            name: "inbox-sweep".to_string(),
+            name: "neo-inbox-sweep".to_string(),
             description: "Check the inbox".to_string(),
             site: None,
             steps: vec!["Read the inbox".to_string()],
@@ -476,12 +529,12 @@ async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
         .record_session_end("run-sess", "closed", None)
         .await?;
 
-    state.skill_runs.mark("run-sess", "inbox-sweep").await?;
+    state.skill_runs.mark("run-sess", "neo-inbox-sweep").await?;
     assert!(state.skill_runs.finalize("run-sess").await?);
     // Projecting again is a no-op.
     assert!(!state.skill_runs.finalize("run-sess").await?);
 
-    let detail = state.skills.get("inbox-sweep").await?;
+    let detail = state.skills.get("neo-inbox-sweep").await?;
     assert_eq!(detail.runs.len(), 1);
     let run = &detail.runs[0];
     assert_eq!(run.run_number, 1);
@@ -513,7 +566,7 @@ async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
         .record_session_end("plain-sess", "closed", None)
         .await?;
     assert!(!state.skill_runs.finalize("plain-sess").await?);
-    assert_eq!(state.skills.get("inbox-sweep").await?.runs.len(), 1);
+    assert_eq!(state.skills.get("neo-inbox-sweep").await?.runs.len(), 1);
 
     Ok(())
 }
@@ -536,7 +589,7 @@ async fn mark_rejects_unknown_skill_and_finalize_skips_a_deleted_one() -> anyhow
     state
         .skills
         .create(CreateSkill {
-            name: "brief".to_string(),
+            name: "neo-brief".to_string(),
             description: "Daily brief".to_string(),
             site: None,
             steps: vec![],
@@ -564,8 +617,8 @@ async fn mark_rejects_unknown_skill_and_finalize_skips_a_deleted_one() -> anyhow
         .audit_log
         .record_session_end("gone-sess", "closed", None)
         .await?;
-    state.skill_runs.mark("gone-sess", "brief").await?;
-    state.skills.delete("brief").await?;
+    state.skill_runs.mark("gone-sess", "neo-brief").await?;
+    state.skills.delete("neo-brief").await?;
     assert!(!state.skill_runs.finalize("gone-sess").await?);
 
     Ok(())
@@ -576,7 +629,7 @@ async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Res
     let app = test_app().await?;
     let skills = app.state.skills.clone();
     let input = |description: &str| CreateSkill {
-        name: "race-skill".to_string(),
+        name: "neo-race-skill".to_string(),
         description: description.to_string(),
         site: None,
         steps: vec!["Do the thing".to_string()],
@@ -591,11 +644,11 @@ async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Res
     first?;
     second?;
 
-    let detail = skills.get("race-skill").await?;
+    let detail = skills.get("neo-race-skill").await?;
     assert!(
         app.root
             .join("skills")
-            .join("race-skill")
+            .join("neo-race-skill")
             .join("SKILL.md")
             .exists()
     );

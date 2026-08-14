@@ -47,7 +47,7 @@ const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
-const SAVE_SKILL_DESCRIPTION: &str = "Save the current repeatable browser task as a BrowserOS neo skill so it can be re-run by name later. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). Call again with the same name to update it in place.";
+const SAVE_SKILL_DESCRIPTION: &str = "Save the current repeatable browser task as a BrowserOS neo skill so it can be re-run by name later. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 
@@ -231,10 +231,15 @@ impl ClawMcpService {
         let started_at = StdInstant::now();
         let session_id = started.session.id().as_str().to_string();
         let result = match parse_skill_name(raw_args) {
-            Ok(name) => match self.state.skill_runs.mark(&session_id, &name).await {
-                Ok(()) => ToolResult::text(format!("recording this run of /{name}"), None),
-                Err(error) => ToolResult::error(error.to_string()),
-            },
+            Ok(name) => {
+                // Skills are namespaced under neo-; accept a bare name too so a
+                // run is still recorded if the agent drops the prefix.
+                let name = crate::services::skills::neo_prefixed(&name);
+                match self.state.skill_runs.mark(&session_id, &name).await {
+                    Ok(()) => ToolResult::text(format!("recording this run of /{name}"), None),
+                    Err(error) => ToolResult::error(error.to_string()),
+                }
+            }
             Err(message) => ToolResult::error(message),
         };
         if let Err(error) = record_local_tool_dispatch(
@@ -1045,7 +1050,7 @@ mod tests {
             )
             .await;
 
-        let created = call.state.skills.get("inbox-sweep").await?;
+        let created = call.state.skills.get("neo-inbox-sweep").await?;
         assert_eq!(created.view.model.origin, "agent");
         assert_eq!(
             created.view.model.source_session_id.as_deref(),
@@ -1071,10 +1076,53 @@ mod tests {
                 }),
             )
             .await;
-        let updated = call.state.skills.get("inbox-sweep").await?;
+        let updated = call.state.skills.get("neo-inbox-sweep").await?;
         assert_eq!(updated.view.model.version, 2);
         assert_eq!(updated.view.model.description, "Check the inbox and reply");
         assert!(updated.body.contains("Draft and send"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mark_skill_run_resolves_a_bare_name_to_the_neo_skill() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = StartedSession {
+            session: session.clone(),
+            agent_label: "codex".to_string(),
+        };
+
+        // Author a skill; it is stored under the neo- namespace.
+        service
+            .call_save_skill(
+                &started,
+                &json!({
+                    "name": "weather",
+                    "description": "Check the weather",
+                    "steps": ["Open the forecast"]
+                }),
+            )
+            .await;
+        assert!(call.state.skills.get("neo-weather").await.is_ok());
+
+        // Marking with the bare name resolves to the stored neo-weather, so the
+        // run is recorded rather than rejected as an unknown skill.
+        let bare = service
+            .call_mark_skill_run(&started, &json!({ "name": "weather" }))
+            .await;
+        assert_ne!(bare.is_error, Some(true));
+
+        // A name that resolves to no skill still errors.
+        let unknown = service
+            .call_mark_skill_run(&started, &json!({ "name": "not-a-skill" }))
+            .await;
+        assert_eq!(unknown.is_error, Some(true));
 
         Ok(())
     }
