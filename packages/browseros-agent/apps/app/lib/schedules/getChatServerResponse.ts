@@ -1,3 +1,4 @@
+import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
@@ -144,8 +145,11 @@ export async function getChatServerResponse(
   })
 
   if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    const reason = body ? chatErrorMessage(body) : ''
     throw new Error(
-      `Chat request failed: ${response.status} ${response.statusText}`,
+      reason ||
+        `Chat request failed: ${response.status} ${response.statusText}`,
     )
   }
 
@@ -192,10 +196,12 @@ function processEvent(event: UIMessageEvent, state: StreamParseState): void {
   } else if (event.type === 'tool-output-error') {
     const existingCall = state.toolCallsMap.get(event.toolCallId)
     if (existingCall) {
-      existingCall.error = event.errorText
+      // Run history renders these strings verbatim, so unwrap the envelope the
+      // server serializes into errorText.
+      existingCall.error = chatErrorMessage(event.errorText)
     }
   } else if (event.type === 'error') {
-    state.error = event.errorText
+    state.error = chatErrorMessage(event.errorText)
   } else if (event.type === 'finish') {
     state.receivedFinish = true
   }
