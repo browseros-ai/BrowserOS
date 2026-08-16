@@ -2,7 +2,7 @@
   "name": "@browseros/claw-app",
   "type": "module",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "WXT extension surface for BrowserClaw. React + shadcn (base-vega). Uses generated BrowserClaw API DTOs.",
   "scripts": {
     "dev": "bun --env-file=../../.env.development wxt",
