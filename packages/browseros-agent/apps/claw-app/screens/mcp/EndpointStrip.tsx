@@ -21,35 +21,25 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
   }
   return (
     <div className="space-y-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12px] text-cyanotype-muted">{label}</span>
-        {hasValue && (
-          <button
-            type="button"
-            onClick={copy}
-            aria-label={`Copy ${label}`}
-            className="group inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors hover:text-cyanotype-blue-hover"
-          >
-            {copied ? 'Copied ✓' : 'Copy'}
-            {!copied && (
-              <span
-                aria-hidden
-                className="font-mono text-[10.5px] text-ink-3 tracking-[0.08em] transition-transform group-hover:translate-x-0.5"
-              >
-                →
-              </span>
-            )}
-          </button>
-        )}
-      </div>
-      <div className="overflow-hidden rounded-9 bg-cyanotype-blue px-4 py-3">
+      <span className="text-[12px] text-cyanotype-muted">{label}</span>
+      <div className="flex items-center gap-3 overflow-hidden rounded-9 bg-ink-deep px-4 py-3 shadow-card">
         {hasValue ? (
-          <code
-            className="block truncate font-mono text-[12.5px] text-white/95"
-            title={value}
-          >
-            {value}
-          </code>
+          <>
+            <code
+              className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-white/90"
+              title={value}
+            >
+              {value}
+            </code>
+            <button
+              type="button"
+              onClick={copy}
+              aria-label={`Copy ${label}`}
+              className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              {copied ? 'Copied ✓' : 'Copy'}
+            </button>
+          </>
         ) : (
           <div className="h-[18px] w-full max-w-sm animate-pulse rounded bg-white/15" />
         )}

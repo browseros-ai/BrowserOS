@@ -41,9 +41,9 @@ const CELL_PADDING = 'px-2 py-2.5 first:pl-4 last:pr-4'
 
 /**
  * Audit ledger. Preserves the tanstack-table + shadcn Table primitives
- * and restyles them as a single bordered card: a cobalt header bar,
- * tinted day bands separating date groups, and hairline-separated rows
- * beneath. Rows are ordered LIVE-first then newest-first and are not
+ * and restyles them as a single bordered card: a quiet tinted header
+ * strip, tinted day bands separating date groups, and hairline-separated
+ * rows beneath. Rows are ordered LIVE-first then newest-first and are not
  * re-sortable — arbitrary column sorts would shred the day bands, and
  * the filter bar covers retrieval instead. On row hover, a fixed
  * top-right panel shows the session's screenshot preview.
@@ -214,8 +214,8 @@ export function Audit() {
 
 /**
  * White card the ledger sits in. `overflow-clip` is what rounds the
- * cobalt header bar's top corners and the last row's bottom corners —
- * neither element carries a radius of its own.
+ * header strip's top corners and the last row's bottom corners: neither
+ * element carries a radius of its own.
  */
 function LedgerCard({ children }: { children: ReactNode }) {
   return (
@@ -229,14 +229,14 @@ interface LedgerTableProps {
   table: ReturnType<typeof useReactTable<TaskSummary>>
 }
 
-/** Cobalt header bar. Labels only — the ledger is not operator-sortable. */
+/** Quiet header strip. Labels only: the ledger is not operator-sortable. */
 function LedgerHeader({ table }: LedgerTableProps) {
   return (
     <TableHeader>
       {table.getHeaderGroups().map((hg) => (
         <TableRow
           key={hg.id}
-          className="border-none bg-ledger-head hover:bg-ledger-head"
+          className="border-ledger-border border-b bg-ledger-head hover:bg-ledger-head"
         >
           {hg.headers.map((h) => (
             <TableHead

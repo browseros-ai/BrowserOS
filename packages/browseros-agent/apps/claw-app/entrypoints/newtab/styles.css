@@ -377,15 +377,15 @@ body {
   --red-tint: hsl(4 65% 95%);
   --blue: #0e7490;
 
-  /* Ledger table. A deeper cobalt than --primary #0254ec: the header is a
-     filled bar, not a CTA, so it carries more weight without competing
-     with the buttons on the same screen. The three ledger inks are a
+  /* Ledger table. The header is a quiet cool-tint strip with muted
+     labels and a hairline underline, not a filled cobalt bar: the loud
+     solid header fought the cool-blue page. The three ledger inks are a
      blue-shifted parallel of the neutral ink scale, so column text reads
-     as one family with the cobalt chrome rather than as grey on blue. */
-  --ledger-head: #0043cd;
-  --ledger-head-ink: #ffffff;
+     as one family with the chrome rather than as grey on blue. */
+  --ledger-head: #eef2f9;
+  --ledger-head-ink: #5f7794;
   --ledger-band: #eaf1fd;
-  --ledger-band-ink: #0043cd;
+  --ledger-band-ink: #3f5d86;
   --ledger-border: #c8d4e0;
   --ledger-divider: #dfe7ee;
   --ledger-link: #155da8;
@@ -501,13 +501,13 @@ body {
   --red-tint: #2b1414;
   --blue: #56b8d8;
 
-  /* Ledger table, dark. The header bar drops to a deep cobalt that still
-     reads as a filled band against --card, and the link / ink roles
-     invert to the light end of the blue ramp. */
-  --ledger-head: #16306e;
-  --ledger-head-ink: #eaf1ff;
+  /* Ledger table, dark. The header is a quiet strip a step above --card
+     rather than a filled cobalt band; the link / ink roles invert to the
+     light end of the blue ramp. */
+  --ledger-head: #151d31;
+  --ledger-head-ink: #a4acbd;
   --ledger-band: #16203a;
-  --ledger-band-ink: #8fb4ff;
+  --ledger-band-ink: #8697b8;
   --ledger-border: #212c40;
   --ledger-divider: #1b2537;
   --ledger-link: #8fb4ff;
