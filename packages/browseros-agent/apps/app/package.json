@@ -2,7 +2,7 @@
   "name": "@browseros/app",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.135",
+  "version": "0.0.136",
   "type": "module",
   "scripts": {
     "dev": "test -d generated/graphql || bun run codegen; bun --env-file=../../.env.development wxt",
