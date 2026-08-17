@@ -31,6 +31,12 @@ export interface ChatErrorContext {
 
 const DETAILS_MAX_LENGTH = 500
 
+// The raw upstream body is JSON, not a sentence, so it gets a larger bound: a
+// credit/quota error carries its actionable specifics in the body, and a 500
+// char cut mid-JSON would strip exactly that. Still bounded so a pathological
+// body cannot flood the card.
+const DETAILS_MAX_LENGTH_RAW = 4000
+
 const USAGE_DOCS_URL = 'https://dub.sh/browseros-usage-limit'
 const USAGE_PAGE_URL = '/app.html#/settings/usage'
 const CONNECTION_DOCS_URL =
@@ -54,13 +60,41 @@ function redact(text: string): string {
   )
 }
 
-function toDetails(text: string | undefined): string | undefined {
+function toDetails(
+  text: string | undefined,
+  maxLength: number = DETAILS_MAX_LENGTH,
+): string | undefined {
   if (!text) return undefined
   const redacted = redact(text).trim()
   if (!redacted) return undefined
-  return redacted.length > DETAILS_MAX_LENGTH
-    ? `${redacted.slice(0, DETAILS_MAX_LENGTH)}…`
+  return redacted.length > maxLength
+    ? `${redacted.slice(0, maxLength)}…`
     : redacted
+}
+
+/**
+ * The full upstream body is the actionable evidence a generic gateway message
+ * hides: OpenRouter-style gateways wrap the real reason in `metadata.raw` while
+ * `message` stays vague. Prefer the response body (pretty-printed when it is
+ * JSON), then the structured `data.raw`, then the message. Redacted and capped
+ * like any other detail.
+ */
+function upstreamDetails(error: APICallError): string | undefined {
+  if (error.responseBody) {
+    try {
+      return toDetails(
+        JSON.stringify(JSON.parse(error.responseBody), null, 2),
+        DETAILS_MAX_LENGTH_RAW,
+      )
+    } catch {
+      return toDetails(error.responseBody, DETAILS_MAX_LENGTH_RAW)
+    }
+  }
+  const raw = (error.data as { raw?: unknown } | undefined)?.raw
+  if (raw !== undefined) {
+    return toDetails(JSON.stringify(raw, null, 2), DETAILS_MAX_LENGTH_RAW)
+  }
+  return toDetails(error.message)
 }
 
 /** Upstream text reaches the user, so it gets the same scrub as `details`. */
@@ -111,7 +145,7 @@ function fromApiCallError(
   const base = {
     provider: ctx.provider,
     statusCode: error.statusCode,
-    details: toDetails(error.message),
+    details: upstreamDetails(error),
   }
   const code = gatewayCode(error)
   const isBrowserOs = ctx.provider === 'browseros'

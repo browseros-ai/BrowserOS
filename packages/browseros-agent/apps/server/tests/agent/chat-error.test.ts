@@ -162,6 +162,61 @@ describe('toChatError', () => {
     expect(error.details).not.toContain('aaaaaaaaaa')
     expect((error.details ?? '').length).toBeLessThanOrEqual(501)
   })
+
+  it('carries the full upstream response body as pretty-printed details', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'Provider returned error',
+        statusCode: 429,
+        data: { code: 'CREDITS_EXHAUSTED' },
+        responseBody: JSON.stringify({
+          error: {
+            code: 'CREDITS_EXHAUSTED',
+            message: 'Provider returned error',
+            metadata: { raw: 'quota 0 of 100 for today' },
+          },
+        }),
+      }),
+      { provider: 'browseros' },
+    )
+
+    // The real reason the generic message hid is preserved in details...
+    expect(error.details).toContain('quota 0 of 100 for today')
+    // ...pretty-printed onto its own lines.
+    expect(error.details).toContain('\n')
+  })
+
+  it('falls back to structured data.raw when there is no response body', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'Provider returned error',
+        statusCode: 429,
+        data: { code: 'CREDITS_EXHAUSTED', raw: { remaining: 0 } },
+      }),
+      { provider: 'browseros' },
+    )
+
+    expect(error.details).toContain('remaining')
+    expect(error.details).toContain('0')
+  })
+
+  it('redacts secrets and caps the raw body in details', () => {
+    const secret = `sk-${'c'.repeat(40)}`
+    const error = toChatError(
+      apiCallError({
+        statusCode: 500,
+        responseBody: JSON.stringify({
+          error: { message: `boom ${secret}`, note: 'x'.repeat(5000) },
+        }),
+      }),
+    )
+
+    expect(error.details).toContain('[REDACTED]')
+    expect(error.details).not.toContain('cccccccccc')
+    // The raw-body bound is larger than the 500-char message cap, still bounded.
+    expect((error.details ?? '').length).toBeLessThanOrEqual(4001)
+    expect((error.details ?? '').length).toBeGreaterThan(501)
+  })
 })
 
 describe('toChatErrorText', () => {

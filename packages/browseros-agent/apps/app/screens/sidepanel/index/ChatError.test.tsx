@@ -130,7 +130,7 @@ describe('ChatError envelope handling', () => {
     expect(html).toContain('Try again')
   })
 
-  it('offers a details disclosure when raw upstream text is present', () => {
+  it('always shows the raw upstream detail with no toggle', () => {
     const html = renderError(
       envelopeError({
         message: 'The model request failed.',
@@ -138,13 +138,41 @@ describe('ChatError envelope handling', () => {
       }),
     )
 
-    expect(html).toContain('Show details')
+    expect(html).not.toContain('Show details')
+    expect(html).toContain('Full error')
+    expect(html).toContain('upstream said: connection reset by peer')
   })
 
-  it('omits the disclosure when there is no extra detail', () => {
+  it('renders no detail block when there is no extra detail', () => {
     const html = renderError(envelopeError({ details: undefined }))
 
+    expect(html).not.toContain('Full error')
+  })
+
+  it('renders the full server error JSON, pretty-printed and always visible', () => {
+    const html = renderError(
+      envelopeError({
+        code: 'credits_exhausted',
+        title: 'Daily limit reached',
+        message: 'You have used all your BrowserOS credits.',
+        retryable: false,
+        provider: 'browseros',
+        details: JSON.stringify({
+          error: {
+            code: 'CREDITS_EXHAUSTED',
+            metadata: { raw: 'quota 0 of 100' },
+          },
+        }),
+      }),
+    )
+
+    // Always-expanded: no toggle, the block and its copy control are present.
     expect(html).not.toContain('Show details')
+    expect(html).toContain('Full error')
+    expect(html).toContain('Copy')
+    // The raw upstream specifics the generic message hid are now visible.
+    expect(html).toContain('CREDITS_EXHAUSTED')
+    expect(html).toContain('quota 0 of 100')
   })
 
   it('falls back to the server-supplied title for an unknown code', () => {
