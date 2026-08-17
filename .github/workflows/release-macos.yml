@@ -258,6 +258,12 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.3.2
 
+      - name: Setup disposable Chromium workspace
+        id: chromium_workspace
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}
+        shell: bash
+        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}"
+
       - name: Setup Bun
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
         uses: oven-sh/setup-bun@v2
@@ -359,7 +365,7 @@ jobs:
               --product "$product"
               --arch "${{ steps.inputs.outputs.arch }}"
               --resource-mode "${{ steps.inputs.outputs.resource_mode }}"
-              --chromium-src "${{ steps.inputs.outputs.chromium_src }}"
+              --chromium-src "${{ steps.chromium_workspace.outputs.chromium_src }}"
             )
             if [ "${{ steps.inputs.outputs.upload_to_r2 }}" != "true" ]; then
               args+=(--no-upload)
@@ -374,6 +380,18 @@ jobs:
             fi
             uv run browseros build "${args[@]}"
           done
+
+      - name: Clean up disposable Chromium workspace
+        if: always()
+        env:
+          MACOS_CHROMIUM_WORKSPACE_STATE_PATH: ${{ steps.chromium_workspace.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.inputs.outputs.browseros_repo }}/.github/scripts/macos-chromium-workspace.sh"
+          if [ -f "$script" ]; then
+            bash "$script" cleanup
+          fi
 
       - name: Clean up macOS signing keychain
         if: always()

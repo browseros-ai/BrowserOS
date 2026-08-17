@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.context import Context
+from ...core.resume import ResumeValidationError, validate_universal_inputs
 from ...core.step import Step, ValidationError, step
 from ...products.server_binaries import server_bundles_for_product
 from ..package.merge import merge_architectures
@@ -104,6 +105,10 @@ class MergeUniversalModule(Step):
             raise ValidationError(
                 f"merge_universal needs a universal context, got '{ctx.architecture}'"
             )
+        try:
+            validate_universal_inputs(ctx, UNIVERSAL_ARCHITECTURES)
+        except ResumeValidationError as exc:
+            raise ValidationError(str(exc)) from exc
         for arch in UNIVERSAL_ARCHITECTURES:
             app = _arch_app_path(ctx, arch)
             if not app.exists():

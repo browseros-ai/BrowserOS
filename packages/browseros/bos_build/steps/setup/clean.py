@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+from ...core.resume import remove_checkpoint_dirs
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import run_command, log_info, log_success, log_warning, safe_rmtree
@@ -31,6 +32,7 @@ class CleanModule(Step):
             log_success(
                 f"Cleaned build directory: {out_path.relative_to(ctx.chromium_src)}"
             )
+        remove_checkpoint_dirs(ctx, self._checkpoint_architectures(ctx))
 
         log_info("\n🔀 Resetting git branch and removing tracked files...")
         self._git_reset(ctx)
@@ -42,14 +44,9 @@ class CleanModule(Step):
         self._prune_orphan_binary_families(ctx)
 
     def _output_dirs(self, ctx: Context) -> tuple[Path, ...]:
-        architectures = (
-            UNIVERSAL_INPUT_ARCHITECTURES
-            if "universal" in ctx.plan_architectures
-            else (ctx.architecture,)
-        )
         dirs: list[Path] = []
         seen: set[Path] = set()
-        for architecture in architectures:
+        for architecture in self._output_architectures(ctx):
             out_ctx = Context(
                 root_dir=ctx.root_dir,
                 chromium_src=ctx.chromium_src,
@@ -63,6 +60,16 @@ class CleanModule(Step):
             dirs.append(out_path)
             seen.add(out_path)
         return tuple(dirs)
+
+    def _output_architectures(self, ctx: Context) -> tuple[str, ...]:
+        if "universal" in ctx.plan_architectures:
+            return UNIVERSAL_INPUT_ARCHITECTURES
+        return (ctx.architecture,)
+
+    def _checkpoint_architectures(self, ctx: Context) -> tuple[str, ...]:
+        if "universal" in ctx.plan_architectures:
+            return (*UNIVERSAL_INPUT_ARCHITECTURES, "universal")
+        return (ctx.architecture,)
 
     def _prune_orphan_binary_families(self, ctx: Context) -> None:
         """Remove resources/binaries/<family> dirs the download config no longer lists.

@@ -3,6 +3,7 @@
 
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from bos_build.core.events import RunFinished, RunStarted, StepFinished, StepStarted
 from bos_build.core.runner import RunResult, StepExecutionError, run
@@ -130,6 +131,24 @@ class RunnerEventTest(unittest.TestCase):
         finished = [e for e in rec.events if isinstance(e, StepFinished)]
         self.assertEqual(started[0].phase, "build")
         self.assertEqual(finished[0].phase, "build")
+
+    def test_checkpoint_lifecycle_invalidates_before_step_and_writes_after_success(self):
+        ctx = _ctx()
+        with (
+            mock.patch(
+                "bos_build.core.runner.invalidate_checkpoints_from"
+            ) as invalidate,
+            mock.patch("bos_build.core.runner.write_step_checkpoint") as write,
+        ):
+            with self.assertRaises(StepExecutionError):
+                run(ctx, [_OkStep(), _BoomStep()], name="r")
+
+        self.assertEqual(
+            [call.args[2] for call in invalidate.call_args_list],
+            ["ok_step", "boom_step"],
+        )
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(write.call_args.args[1].name, "ok_step")
 
 
 if __name__ == "__main__":

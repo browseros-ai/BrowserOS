@@ -16,6 +16,7 @@ import {
   type UIMessageChunk,
 } from 'ai'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
+import { toChatErrorText } from '../../agent/chat-error'
 import { formatUserMessage } from '../../agent/format-message'
 import {
   filterValidMessages,
@@ -323,6 +324,18 @@ export class ChatService {
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
       abortSignal,
+      // Without this the SDK substitutes its masking default, which discards
+      // the status code, provider code, and message of every mid-stream
+      // failure - including every rate limit and credit exhaustion.
+      onError: (error: unknown) => {
+        logger.error('Agent stream failed', {
+          conversationId: request.conversationId,
+          provider: agentConfig.provider,
+          model: agentConfig.model,
+          message: error instanceof Error ? error.message : String(error),
+        })
+        return toChatErrorText(error, { provider: agentConfig.provider })
+      },
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
         const restored = messages.map((message) =>
           message.id === wrappedUserMessageId && message.role === 'user'

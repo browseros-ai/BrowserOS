@@ -9,6 +9,7 @@ from unittest import mock
 from . import clean
 from ...core.context import Context
 from ...core.products import get_product_descriptor
+from ...core.resume import checkpoint_dir
 from ...core.step import ValidationError
 from ...lib.testing import MockBrowserOSRoot, MockChromium, make_context
 
@@ -87,6 +88,26 @@ class CleanExecuteTest(unittest.TestCase):
             self.assertFalse(x64_out.exists())
             self.assertTrue(arm64_out.exists())
 
+    def test_single_arch_clean_removes_matching_checkpoint_dir_only(self):
+        with (
+            tempfile.TemporaryDirectory() as chromium_tmp,
+            tempfile.TemporaryDirectory() as root_tmp,
+        ):
+            chromium = MockChromium(Path(chromium_tmp))
+            root = MockBrowserOSRoot(Path(root_tmp))
+            ctx = make_context(chromium, root, architecture="x64")
+            chromium.with_out_dir("x64")
+            x64_checkpoint = checkpoint_dir(ctx, "x64")
+            arm64_checkpoint = checkpoint_dir(ctx, "arm64")
+            x64_checkpoint.mkdir(parents=True)
+            arm64_checkpoint.mkdir(parents=True)
+
+            with mock.patch.object(clean, "run_command"):
+                clean.CleanModule().execute(ctx)
+
+            self.assertFalse(x64_checkpoint.exists())
+            self.assertTrue(arm64_checkpoint.exists())
+
     def test_universal_clean_removes_same_product_arch_outputs_only(self):
         with (
             tempfile.TemporaryDirectory() as chromium_tmp,
@@ -125,6 +146,29 @@ class CleanExecuteTest(unittest.TestCase):
                     self.assertFalse(x64_out.exists())
                     self.assertTrue(other_arm64_out.exists())
                     self.assertTrue(other_x64_out.exists())
+
+    def test_universal_clean_removes_arch_and_universal_checkpoint_dirs(self):
+        with (
+            tempfile.TemporaryDirectory() as chromium_tmp,
+            tempfile.TemporaryDirectory() as root_tmp,
+        ):
+            chromium = MockChromium(Path(chromium_tmp))
+            root = MockBrowserOSRoot(Path(root_tmp))
+            ctx = Context(
+                root_dir=root.root,
+                chromium_src=chromium.src,
+                architecture="arm64",
+                plan_architectures=("universal",),
+                build_type="release",
+            )
+            for arch in ("arm64", "x64", "universal"):
+                checkpoint_dir(ctx, arch).mkdir(parents=True)
+
+            with mock.patch.object(clean, "run_command"):
+                clean.CleanModule().execute(ctx)
+
+            for arch in ("arm64", "x64", "universal"):
+                self.assertFalse(checkpoint_dir(ctx, arch).exists())
 
 
 class CleanPruneOrphanBinariesTest(unittest.TestCase):

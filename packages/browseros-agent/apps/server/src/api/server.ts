@@ -6,6 +6,7 @@
 
 import { websocket } from 'hono/bun'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import { toChatError } from '../agent/chat-error'
 import { HttpAgentError } from '../agent/errors'
 import { INLINED_ENV } from '../env'
 import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
@@ -94,13 +95,16 @@ export async function createHttpServer(config: HttpServerConfig) {
       stack: error.stack,
     })
 
+    // Same envelope the chat stream emits, so the client parses failures that
+    // happen before streaming starts with the one parser it already has.
+    // `name`/`statusCode` are kept for callers that read the previous shape.
+    const chatError = toChatError(error)
     return c.json(
       {
         error: {
+          ...chatError,
           name: 'InternalServerError',
-          message: error.message || 'An unexpected error occurred',
-          code: 'INTERNAL_SERVER_ERROR',
-          statusCode: 500,
+          statusCode: chatError.statusCode ?? 500,
         },
       },
       500,

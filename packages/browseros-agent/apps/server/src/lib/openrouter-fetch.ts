@@ -1,5 +1,14 @@
 import { APICallError } from '@ai-sdk/provider'
 
+/** Retry-After and rate-limit headers only reach the SDK via responseHeaders. */
+function headersToRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    record[key] = value
+  })
+  return record
+}
+
 /**
  * Creates a fetch function that extracts detailed error messages from OpenRouter-style APIs.
  *
@@ -19,10 +28,16 @@ export function createOpenRouterCompatibleFetch(): typeof fetch {
       const statusCode = response.status
       let errorMessage = `HTTP ${statusCode}: ${response.statusText}`
       let responseBody: string | undefined
+      // `data` keeps the upstream code structured so the chat error classifier
+      // branches on a field instead of searching the message text.
+      let data: { code: string; raw?: unknown } | undefined
 
       try {
         responseBody = await response.clone().text()
         const parsed = JSON.parse(responseBody)
+        if (parsed.error?.code) {
+          data = { code: parsed.error.code, raw: parsed.error.metadata?.raw }
+        }
         if (parsed.error?.message) {
           errorMessage = parsed.error.message
           if (parsed.error.code) {
@@ -42,6 +57,8 @@ export function createOpenRouterCompatibleFetch(): typeof fetch {
         requestBodyValues: {},
         statusCode,
         responseBody,
+        responseHeaders: headersToRecord(response.headers),
+        data,
       })
     }
 

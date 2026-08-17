@@ -2,7 +2,7 @@
   "name": "@browseros/app",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.132",
+  "version": "0.0.136",
   "type": "module",
   "scripts": {
     "dev": "test -d generated/graphql || bun run codegen; bun --env-file=../../.env.development wxt",
@@ -21,6 +21,7 @@
   "dependencies": {
     "@ai-sdk/react": "^3.0.248",
     "@browseros/server": "workspace:*",
+    "@browseros/shared": "workspace:*",
     "@hookform/resolvers": "^5.7.1",
     "@lobehub/icons": "^2.48.0",
     "@mdxeditor/editor": "^4.2.0",
