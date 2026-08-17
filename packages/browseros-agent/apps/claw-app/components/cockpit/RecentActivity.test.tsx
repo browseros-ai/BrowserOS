@@ -145,7 +145,7 @@ describe('RecentActivity', () => {
     expect(html.match(/STOPPED/g)?.length).toBe(6)
   })
 
-  it('renders one uniform grid of compact cards capped at the home limit', () => {
+  it('renders a compact card grid, then a minimal list for the rest', () => {
     screenshotBaseUrl = null
     const tasks = Array.from({ length: 12 }, (_, index) => ({
       ...sampleTask,
@@ -157,10 +157,12 @@ describe('RecentActivity', () => {
     queryOverride = { isPending: false, data: { pages: [{ items: tasks }] } }
 
     const html = render()
-    // Capped at the home limit (6), not the full 12.
-    expect(html).toContain('6 sessions')
+    expect(html).toContain('12 sessions')
+    // First six as cards, the rest as minimal list rows.
     expect(html.match(/data-testid="support-tile-/g)?.length).toBe(6)
-    // No redundant activity table.
+    expect(html.match(/data-testid="activity-row-/g)?.length).toBe(6)
+    expect(html).toContain('data-testid="recent-activity-list"')
+    // A minimal list, not the old heavy activity table.
     expect(html).not.toContain('data-testid="recent-activity-table"')
     expect(html).not.toContain('>Tool chain<')
     // The live run still surfaces its LIVE chip.
