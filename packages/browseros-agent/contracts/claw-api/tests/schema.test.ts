@@ -325,7 +325,18 @@ describe('skills API schema', () => {
       'clean',
       'createdAt',
     ])
-    expect(schemas.SkillDetail?.required).toEqual(['skill', 'body', 'runs'])
+    expect(schemas.SkillDetail?.required).toEqual([
+      'skill',
+      'body',
+      'runs',
+      'tokenSavings',
+    ])
+    expect(schemas.SkillTokenSavings?.required).toEqual([
+      'saved',
+      'otherBrowsers',
+      'used',
+      'measuredRunCount',
+    ])
     expect(schemas.DirectorySkill?.required).toEqual([
       'name',
       'category',
