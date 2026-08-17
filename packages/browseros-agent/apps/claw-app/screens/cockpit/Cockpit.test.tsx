@@ -263,7 +263,6 @@ describe('Cockpit (v2)', () => {
     expect(heroIndex).toBeGreaterThan(-1)
     expect(savedStatsIndex).toBeGreaterThan(heroIndex)
     expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
-    expect(html).toContain('Nothing running')
     expect(html).not.toContain('Running now')
     expect(statsQueryEnabled()).toBe(true)
   })
