@@ -161,6 +161,7 @@ describe('release-claw-server workflow', () => {
     expect(ota).toContain('- finalize')
     expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('pull-requests: write')
     expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
     expect(ota).toContain('product: browserclaw')
     expect(ota).toContain(
@@ -188,5 +189,8 @@ describe('release-claw-server workflow', () => {
     expect(reflection).toContain('Cargo.lock')
     expect(reflection).toContain('git config user.name "github-actions[bot]"')
     expect(reflection).toContain('gh pr create')
+    expect(reflection).toContain('merge-release-pr.sh')
+    expect(reflection).toContain('headRefOid')
+    expect(reflection).not.toContain('--squash --auto')
   })
 })

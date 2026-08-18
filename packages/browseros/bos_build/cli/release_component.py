@@ -10,14 +10,20 @@ from typing import List, Optional
 import requests
 import typer
 
+from ..lib.env import EnvConfig
 from ..lib.paths import get_package_root
+from ..lib.r2 import get_r2_client
 from ..lib.utils import log_error
 from ..release.component_release import (
     GitComponentReleaseOperations,
     StandaloneReleaseRequest,
     resolve_standalone_release,
 )
-from ..release.components import AllocationRecord, stamp_component
+from ..release.components import (
+    AllocationRecord,
+    read_component_version,
+    stamp_component,
+)
 from ..release.extensions.specs import spec_by_name
 from ..release.feeds.render import extract_manifest_versions
 
@@ -96,6 +102,7 @@ def resolve(
     repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
     remote: str = typer.Option("origin", "--remote"),
     manifest: Optional[List[str]] = typer.Option(None, "--manifest"),
+    r2_allocations: bool = typer.Option(False, "--r2-allocations"),
     github_output: Optional[Path] = typer.Option(None, "--github-output"),
     github_summary: Optional[Path] = typer.Option(None, "--github-summary"),
 ) -> None:
@@ -104,6 +111,16 @@ def resolve(
         repository = repo or os.environ.get("GITHUB_REPOSITORY", "")
         if not repository:
             raise ValueError("--repo or GITHUB_REPOSITORY is required")
+        operation_options = {}
+        if r2_allocations:
+            env = EnvConfig()
+            client = get_r2_client(env)
+            if client is None:
+                raise RuntimeError("R2 client is required for immutable allocations")
+            operation_options = {
+                "r2_client": client,
+                "r2_bucket": env.r2_bucket,
+            }
         record = resolve_standalone_release(
             StandaloneReleaseRequest(
                 component=component,
@@ -113,7 +130,9 @@ def resolve(
                 requested_version=requested_version,
                 release_ref=release_ref,
             ),
-            GitComponentReleaseOperations(_repo_root(repo_root), repository, remote),
+            GitComponentReleaseOperations(
+                _repo_root(repo_root), repository, remote, **operation_options
+            ),
             _manifest_allocations(component, manifest or []),
         )
         values = {
@@ -156,6 +175,19 @@ def stamp(
                 {"changed": [str(path) for path in changed]}, sort_keys=True
             )
         )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        log_error(str(exc))
+        raise typer.Exit(1)
+
+
+@app.command("read")
+def read(
+    component: str = typer.Option(..., "--component"),
+    repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
+) -> None:
+    """Read the normalized release identity from source."""
+    try:
+        typer.echo(read_component_version(_repo_root(repo_root), component))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         log_error(str(exc))
         raise typer.Exit(1)

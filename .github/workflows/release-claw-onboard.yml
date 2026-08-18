@@ -65,6 +65,7 @@ permissions:
 concurrency:
   group: release-claw-onboard
   cancel-in-progress: false
+  queue: max
 
 jobs:
   prepare:
@@ -72,6 +73,7 @@ jobs:
     concurrency:
       group: release-component-allocation
       cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -115,6 +117,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           REF_NAME: ${{ github.ref_name }}
           REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: |
@@ -126,6 +132,7 @@ jobs:
             --ref-name "$REF_NAME" \
             --requested-version "$REQUESTED_VERSION" \
             --release-ref HEAD \
+            --r2-allocations \
             --repo "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT" \
             --github-summary "$GITHUB_STEP_SUMMARY"
@@ -181,8 +188,9 @@ jobs:
           title="BrowserOS neo Onboarding - v$VERSION"
           release_sha="${{ steps.release.outputs.release_sha }}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
-            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq '.targetCommitish')"
+            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            target="$(jq -r '.targetCommitish' <<< "$release")"
             if [ "$is_draft" != "true" ] || [ "$target" != "$release_sha" ]; then
               echo "::error::$RELEASE_TAG is not a reusable draft for $release_sha"
               exit 1
@@ -280,7 +288,7 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          release="$(gh release view "$RELEASE_TAG" --json assets,isDraft,targetCommitish)"
+          release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
           asset_count="$(jq '[.assets[] | select(.name == "browseros-claw-onboard-resources.zip")] | length' <<< "$release")"
           if [ "$asset_count" -ne 1 ]; then
             echo "::error::Expected onboarding draft asset, found $asset_count"
@@ -421,15 +429,16 @@ jobs:
           fi
 
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // ""')"
-            if [ -z "$pr" ]; then
-              gh pr create \
+            pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+            if [ -z "$pr_url" ]; then
+              pr_url="$(gh pr create \
                 --title "chore: bump claw onboarding version to ${VERSION}" \
                 --body "Reflects the published claw-onboard/v${VERSION} onboarding resources." \
                 --base "$DEFAULT_BRANCH" \
-                --head "$branch"
+                --head "$branch")"
             fi
-            gh pr merge "$branch" --squash --auto
+            head_sha="$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')"
+            packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"
             exit 0
           fi
 
@@ -438,10 +447,11 @@ jobs:
           git checkout -b "$branch"
           git add "$package_json" "$lock"
           git commit -m "chore: bump claw onboarding version to ${VERSION}"
+          head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"
-          gh pr create \
+          pr_url="$(gh pr create \
             --title "chore: bump claw onboarding version to ${VERSION}" \
             --body "Reflects the published claw-onboard/v${VERSION} onboarding resources." \
             --base "$DEFAULT_BRANCH" \
-            --head "$branch"
-          gh pr merge "$branch" --squash --auto
+            --head "$branch")"
+          packages/browseros-agent/scripts/release/merge-release-pr.sh "$pr_url" "$head_sha"

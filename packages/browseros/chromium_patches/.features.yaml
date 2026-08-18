@@ -64,8 +64,9 @@ features:
       - chrome/common/chrome_paths_linux.cc
       - chrome/install_static/chromium_install_modes.h
       # About page (version + branding display)
-      - chrome/browser/resources/settings/about_page/about_page.html
       - chrome/browser/resources/settings/about_page/about_page.ts
+      - chrome/browser/resources/settings/about_page/about_page.html.ts
+      - chrome/browser/resources/settings/about_page/about_page.css
       - chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
       # Dock icon variants
       - chrome/browser/chrome_browser_application_mac.mm
@@ -114,6 +115,7 @@ features:
       - chrome/app/app-Info.plist
       - chrome/browser/BUILD.gn
       - chrome/browser/buildflags.gni
+      - chrome/browser/mac/BUILD.gn
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.h
       - chrome/browser/mac/chrome_browser_main_extra_parts_mac.mm
       - chrome/browser/mac/sparkle_glue.h
@@ -122,6 +124,7 @@ features:
       - chrome/browser/ui/BUILD.gn
       - chrome/browser/ui/toolbar/app_menu_icon_controller.cc
       - chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc
+      - chrome/browser/ui/webui/help/BUILD.gn
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
       - chrome/browser/ui/webui/help/version_updater_mac.mm
@@ -391,12 +394,11 @@ features:
       - chrome/browser/browser_features.cc
       - chrome/browser/browser_features.h
       - chrome/browser/net/profile_network_context_service.cc
-      - chrome/browser/resources/settings/reset_page/reset_profile_dialog.html
+      - chrome/browser/resources/settings/reset_page/reset_profile_dialog.html.ts
       - chrome/browser/themes/BUILD.gn
       - chrome/browser/themes/theme_service.cc
       - chrome/browser/ui/browser_ui_prefs.cc
       - chrome/browser/ui/views/extensions/extension_view_views.cc
-      - chrome/browser/ui/views/chrome_layout_provider.cc
       - chrome/browser/ui/views/infobars/infobar_container_view.cc
       - chrome/browser/ui/views/new_tab_footer/
       - chrome/browser/ui/webui/new_tab_footer/
@@ -444,7 +446,7 @@ features:
     description: "series: ungoogled-chromium manifest v2 extensions support"
     files:
       - chrome/browser/extensions/api/developer_private/extension_info_generator.cc
-      - chrome/browser/extensions/manifest_v2_experiment_manager.cc
+      - extensions/browser/manifest_v2_handler.cc
       - chrome/browser/ui/webui/extensions/extensions_ui.cc
       - extensions/common/extension.cc
 

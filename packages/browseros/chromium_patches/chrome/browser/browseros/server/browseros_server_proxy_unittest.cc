@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_proxy_unittest.cc b/chrome/browser/browseros/server/browseros_server_proxy_unittest.cc
 new file mode 100644
-index 0000000000000..522e6b7c49265
+index 0000000000000000000000000000000000000000..fd4dabd7cd439bedf6ea7fde9b6a502a821def8a
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_proxy_unittest.cc
-@@ -0,0 +1,1257 @@
+@@ -0,0 +1,1259 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -138,7 +138,8 @@ index 0000000000000..522e6b7c49265
 +    socket_ = std::make_unique<net::TCPClientSocket>(
 +        net::AddressList(
 +            net::IPEndPoint(net::IPAddress::IPv4Localhost(), port)),
-+        nullptr, nullptr, nullptr, net::NetLogSource());
++        nullptr, nullptr, nullptr, net::NetLogSource(),
++        net::handles::kInvalidNetworkHandle);
 +
 +    net::TestCompletionCallback callback;
 +    int result = socket_->Connect(callback.callback());
@@ -284,7 +285,8 @@ index 0000000000000..522e6b7c49265
 +    auto tcp_socket = std::make_unique<net::TCPClientSocket>(
 +        net::AddressList(
 +            net::IPEndPoint(net::IPAddress::IPv4Localhost(), port)),
-+        nullptr, nullptr, nullptr, net::NetLogSource());
++        nullptr, nullptr, nullptr, net::NetLogSource(),
++        net::handles::kInvalidNetworkHandle);
 +
 +    net::TestCompletionCallback tcp_callback;
 +    int result = tcp_socket->Connect(tcp_callback.callback());

@@ -66,6 +66,10 @@
       "types": "./src/schemas/ui-stream.ts",
       "default": "./src/schemas/ui-stream.ts"
     },
+    "./schemas/chat-error": {
+      "types": "./src/schemas/chat-error.ts",
+      "default": "./src/schemas/chat-error.ts"
+    },
     "./schemas/browser-context": {
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"

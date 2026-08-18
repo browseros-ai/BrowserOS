@@ -1,13 +1,13 @@
 diff --git a/tools/metrics/histograms/metadata/browser/enums.xml b/tools/metrics/histograms/metadata/browser/enums.xml
-index e4c6dfc3429a3..181b143095c88 100644
+index d004385fbf0e6f346fadc5e350d69f8b3647caab..93aa9956b4e2db73786e69f04e9c5c8e40e54ebd 100644
 --- a/tools/metrics/histograms/metadata/browser/enums.xml
 +++ b/tools/metrics/histograms/metadata/browser/enums.xml
-@@ -367,6 +367,8 @@ chromium-metrics-reviews@google.com.
-   <int value="132" label="AUTOFILL_AI_SAVE_ENTITY_INFOBAR_DELEGATE_IOS"/>
+@@ -368,6 +368,8 @@ chromium-metrics-reviews@google.com.
    <int value="133" label="JS_OPTIMIZATIONS_INFOBAR_DELEGATE"/>
    <int value="134" label="WEB_APP_BLOCKED_MIGRATION_INFOBAR_DELEGATE"/>
-+  <int value="135" label="BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE"/>
-+  <int value="136" label="BROWSEROS_EXTENSION_INFOBAR_DELEGATE"/>
+   <int value="135" label="OSCRYPTASYNC_AVAILABILITY_INFOBAR_DELEGATE"/>
++  <int value="136" label="BROWSEROS_AGENT_INSTALLING_INFOBAR_DELEGATE"/>
++  <int value="137" label="BROWSEROS_EXTENSION_INFOBAR_DELEGATE"/>
  </enum>
  
  <!-- LINT.ThenChange(//components/infobars/core/infobar_delegate.h:InfoBarIdentifier) -->

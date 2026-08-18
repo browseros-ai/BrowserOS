@@ -313,6 +313,109 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/skills': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Every skill the user has, newest activity first. */
+    get: operations['listSkills']
+    put?: never
+    /** @description Create a skill by hand. Writes SKILL.md and links it into the requested agents. */
+    post: operations['createSkill']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/skills/{name}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getSkill']
+    put: operations['updateSkill']
+    post?: never
+    /** @description Delete the skill and unlink it from every registered agent directory. */
+    delete: operations['deleteSkill']
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/skills/{name}/runs': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Run history for a skill, newest first, cursor-paginated. */
+    get: operations['listSkillRuns']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/directory': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description The first-party catalog of installable skills, sourced from a trusted remote repo. */
+    get: operations['listDirectory']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/directory/{name}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description A single catalog entry with its SKILL.md body, for preview before install. */
+    get: operations['getDirectorySkill']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/directory/{name}/add': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Install a catalog skill. Writes SKILL.md, links it into the connected agents, and records it as a skill. */
+    post: operations['addDirectorySkill']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -623,6 +726,157 @@ export interface components {
       bytesReclaimed: number
       usage: components['schemas']['AuditStorageUsage']
     }
+    /**
+     * @description How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+     * @enum {string}
+     */
+    SkillOrigin: 'agent' | 'manual' | 'directory'
+    Skill: {
+      /** @description Slug used as the on-disk folder name and the agent command. */
+      name: string
+      description: string
+      /** @description Primary site the skill operates on, when known. */
+      site?: string
+      origin: components['schemas']['SkillOrigin']
+      /** @description The session the skill was authored from, when applicable. */
+      sourceSessionId?: string
+      /** Format: int64 */
+      version: number
+      /** @description Agents the skill is currently linked into. */
+      linkedAgents: components['schemas']['Harness'][]
+      /** Format: int64 */
+      runCount: number
+      /**
+       * Format: int64
+       * @description Runs whose every tool dispatch succeeded.
+       */
+      cleanRunCount: number
+      /**
+       * Format: int64
+       * @description Estimated tokens for run 1. Present once the skill has at least one measured run.
+       */
+      firstRunTokens?: number
+      /**
+       * Format: int64
+       * @description Estimated tokens for the most recent run. Present once the skill has at least one measured run.
+       */
+      latestRunTokens?: number
+      /**
+       * Format: int64
+       * @description Epoch ms of the most recent run. Absent until the skill has run.
+       */
+      lastRunAt?: number
+      /** Format: int64 */
+      createdAt: number
+      /** Format: int64 */
+      updatedAt: number
+      tokenSavings?: components['schemas']['SkillTokenSavings']
+    }
+    SkillList: {
+      items: components['schemas']['Skill'][]
+    }
+    SkillRun: {
+      id: string
+      skillName: string
+      sessionId: string
+      /** Format: int64 */
+      runNumber: number
+      agentId: string
+      /** Format: int64 */
+      tokens?: number
+      /** Format: int64 */
+      durationMs?: number
+      /** Format: int64 */
+      toolCount?: number
+      /** @description True when every tool dispatch in the run succeeded. */
+      clean: boolean
+      /** @description The tool that failed, when the run is not clean. */
+      erroredTool?: string
+      /** Format: int64 */
+      createdAt: number
+    }
+    SkillRunList: {
+      items: components['schemas']['SkillRun'][]
+      /**
+       * Format: int64
+       * @description Cursor for the next historical page of runs.
+       */
+      nextCursor?: number
+    }
+    SkillDetail: {
+      skill: components['schemas']['Skill']
+      /** @description The raw SKILL.md contents. */
+      body: string
+      runs: components['schemas']['SkillRun'][]
+      tokenSavings: components['schemas']['SkillTokenSavings']
+    }
+    SkillTokenSavings: {
+      /**
+       * Format: int64
+       * @description Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+       */
+      saved: number
+      /**
+       * Format: int64
+       * @description Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+       */
+      otherBrowsers: number
+      /**
+       * Format: int64
+       * @description Tokens BrowserOS neo actually used across the measured runs.
+       */
+      used: number
+      /**
+       * Format: int64
+       * @description How many of the skill's runs had a measured efficiency projection.
+       */
+      measuredRunCount: number
+    }
+    SkillCreate: {
+      name: string
+      description: string
+      site?: string
+      steps?: string[]
+      learnedNotes?: string[]
+      /** @description Agents to link into. Defaults to every connected agent when omitted. */
+      linkAgents?: components['schemas']['Harness'][]
+    }
+    SkillUpdate: {
+      description?: string
+      /** @description Primary site the skill operates on. An empty string clears it. */
+      site?: string
+      /** @description Replacement steps. Re-renders the SKILL.md from structured fields. */
+      steps?: string[]
+      /** @description Replacement learned notes. Re-renders the SKILL.md from structured fields. */
+      learnedNotes?: string[]
+      /** @description Replacement SKILL.md contents for a raw manual edit or agent authoring. */
+      body?: string
+    }
+    DirectorySkill: {
+      name: string
+      category: string
+      description: string
+      /** Format: int64 */
+      installs: number
+      sourceRepo?: string
+      /** Format: int64 */
+      updatedAt?: number
+    }
+    DirectorySkillList: {
+      items: components['schemas']['DirectorySkill'][]
+      /** @description The repo the catalog is sourced from. */
+      sourceRepo?: string
+      /**
+       * Format: int64
+       * @description Epoch ms the catalog was last fetched.
+       */
+      updatedAt?: number
+    }
+    DirectorySkillDetail: {
+      skill: components['schemas']['DirectorySkill']
+      /** @description The catalog SKILL.md contents, shown for preview before install. */
+      body: string
+    }
   }
   responses: {
     /** @description Invalid request input. */
@@ -693,6 +947,7 @@ export interface components {
     SessionId: string
     ScreenshotId: number
     Harness: components['schemas']['Harness']
+    SkillName: string
     RecordingTabId: number
     /** @description Opaque 32-character hexadecimal document token supplied by Chrome. */
     RecordingDocumentId: string
@@ -1244,6 +1499,230 @@ export interface operations {
           'application/json': components['schemas']['AuditCleanupResult']
         }
       }
+      500: components['responses']['InternalError']
+    }
+  }
+  listSkills: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The user's skills. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillList']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  createSkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SkillCreate']
+      }
+    }
+    responses: {
+      /** @description The created skill. */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      400: components['responses']['BadRequest']
+      409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  getSkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill, its SKILL.md body, and its recent runs. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillDetail']
+        }
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  updateSkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SkillUpdate']
+      }
+    }
+    responses: {
+      /** @description The updated skill. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillDetail']
+        }
+      }
+      400: components['responses']['BadRequest']
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  deleteSkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill was deleted. */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  listSkillRuns: {
+    parameters: {
+      query?: {
+        cursor?: number
+        limit?: number
+      }
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description A cursor-paginated page of runs. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillRunList']
+        }
+      }
+      400: components['responses']['BadRequest']
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  listDirectory: {
+    parameters: {
+      query?: {
+        category?: string
+        search?: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The catalog. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['DirectorySkillList']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  getDirectorySkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The catalog entry and its SKILL.md body. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['DirectorySkillDetail']
+        }
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  addDirectorySkill: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The installed skill. */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
       500: components['responses']['InternalError']
     }
   }

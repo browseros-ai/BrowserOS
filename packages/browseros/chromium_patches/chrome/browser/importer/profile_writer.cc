@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 2659d698da985..6ee889ce6bb92 100644
+index 35842f390f52847f831c29b11c4a3bfad78c0e8a..f87cf5549e4e3ea5dcd75ada41bac55c085caf3b 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 2659d698da985..6ee889ce6bb92 100644
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
-@@ -36,7 +37,23 @@
+@@ -37,7 +38,24 @@
  #include "components/prefs/pref_service.h"
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_service.h"
@@ -27,14 +27,15 @@ index 2659d698da985..6ee889ce6bb92 100644
 +#include "extensions/browser/extension_registry.h"
 +#include "chrome/browser/extensions/extension_install_prompt.h"
 +#include "chrome/browser/extensions/webstore_install_with_prompt.h"
-+#include "chrome/browser/ui/browser.h"
-+#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "content/public/browser/web_contents.h"
 +#include "base/memory/raw_ptr.h"
  
  using bookmarks::BookmarkModel;
  using bookmarks::BookmarkNode;
-@@ -75,6 +92,22 @@ void ShowBookmarkBar(Profile* profile) {
+@@ -76,6 +94,22 @@ void ShowBookmarkBar(Profile* profile) {
    profile->GetPrefs()->SetBoolean(bookmarks::prefs::kShowBookmarkBar, true);
  }
  
@@ -57,7 +58,7 @@ index 2659d698da985..6ee889ce6bb92 100644
  }  // namespace
  
  ProfileWriter::ProfileWriter(Profile* profile) : profile_(profile) {}
-@@ -99,6 +132,83 @@ void ProfileWriter::AddPasswordForm(
+@@ -100,6 +134,83 @@ void ProfileWriter::AddPasswordForm(
    }
  }
  
@@ -141,7 +142,7 @@ index 2659d698da985..6ee889ce6bb92 100644
  void ProfileWriter::AddHistoryPage(const history::URLRows& page,
                                     history::VisitSource visit_source) {
    if (!page.empty()) {
-@@ -338,3 +448,119 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
+@@ -339,3 +450,122 @@ void ProfileWriter::AddAutocompleteFormDataEntries(
  }
  
  ProfileWriter::~ProfileWriter() = default;
@@ -176,10 +177,13 @@ index 2659d698da985..6ee889ce6bb92 100644
 +  // Find an active WebContents to use (required by WebstoreInstallWithPrompt)
 +  content::WebContents* web_contents = nullptr;
 +
-+  // Try to get a web contents from the active browser
-+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
-+  if (browser && browser->tab_strip_model()) {
-+    web_contents = browser->tab_strip_model()->GetActiveWebContents();
++  // Try to get a web contents from the active browser.
++  ProfileBrowserCollection* browser_collection =
++      ProfileBrowserCollection::GetForProfile(profile_);
++  BrowserWindowInterface* browser =
++      browser_collection ? browser_collection->GetLastActiveBrowser() : nullptr;
++  if (browser && browser->GetTabStripModel()) {
++    web_contents = browser->GetTabStripModel()->GetActiveWebContents();
 +  }
 +
 +  if (!web_contents) {

@@ -27,6 +27,10 @@ def _upload_ctx(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         env=SimpleNamespace(
+            browserclaw_onboard_resource_version=None,
+            browserclaw_server_resource_version=None,
+            browseros_server_resource_version=None,
+            bundled_product_extension_version=None,
             r2_bucket="browseros",
             r2_cdn_base_url="https://cdn.browseros.com",
             has_r2_config=lambda: True,
@@ -48,14 +52,17 @@ def _upload_ctx(
 
 class UploadMetadataTest(unittest.TestCase):
     def test_release_json_records_actions_provenance(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
-            "os.environ",
-            {
-                "GITHUB_SHA": "a" * 40,
-                "GITHUB_RUN_ID": "30418029456",
-                "GITHUB_RUN_ATTEMPT": "2",
-            },
-            clear=False,
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "GITHUB_SHA": "a" * 40,
+                    "GITHUB_RUN_ID": "30418029456",
+                    "GITHUB_RUN_ATTEMPT": "2",
+                },
+                clear=False,
+            ),
         ):
             release = generate_release_json(
                 _upload_ctx(Path(tmp)),
@@ -67,9 +74,79 @@ class UploadMetadataTest(unittest.TestCase):
         self.assertEqual(release["workflow_run_id"], "30418029456")
         self.assertEqual(release["workflow_run_attempt"], "2")
 
+    def test_release_json_uses_explicit_build_source_sha(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "BROWSEROS_BUILD_SOURCE_SHA": "b" * 40,
+                    "GITHUB_SHA": "a" * 40,
+                },
+                clear=False,
+            ),
+        ):
+            release = generate_release_json(
+                _upload_ctx(Path(tmp)),
+                [{"filename": "BrowserOS_v1.2.3_x64.AppImage", "size": 12}],
+                "linux",
+            )
+
+        self.assertEqual(release["source_sha"], "b" * 40)
+
+    def test_published_release_json_records_exact_component_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _upload_ctx(Path(tmp))
+            ctx.env.browseros_server_resource_version = "0.0.129"
+            ctx.env.bundled_product_extension_version = "0.0.125.0"
+            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+
+            release = generate_release_json(
+                ctx,
+                [{"filename": "BrowserOS_v1.2.3_x64.AppImage", "size": 12}],
+                "linux",
+            )
+
+        self.assertEqual(
+            release["component_versions"],
+            {
+                "server": "0.0.129",
+                "agent": "0.0.125.0",
+                "claw-onboard": "0.0.15",
+            },
+        )
+
+    def test_browserclaw_release_json_records_its_exact_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _upload_ctx(
+                Path(tmp),
+                product_id="browserclaw",
+                display_name="BrowserOS neo",
+                artifact_prefix="BrowserOS_neo",
+            )
+            ctx.env.browserclaw_server_resource_version = "0.0.29"
+            ctx.env.bundled_product_extension_version = "0.2.2.0"
+            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+
+            release = generate_release_json(
+                ctx,
+                [{"filename": "BrowserOS_neo_v1.2.3_x64.AppImage", "size": 12}],
+                "linux",
+            )
+
+        self.assertEqual(
+            release["component_versions"],
+            {
+                "claw-server-rust": "0.0.29",
+                "browserclaw": "0.2.2.0",
+                "claw-onboard": "0.0.15",
+            },
+        )
+
     def test_source_release_json_uses_candidate_provenance_not_github_sha(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
-            "os.environ", {"GITHUB_SHA": "9" * 40}, clear=False
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"GITHUB_SHA": "9" * 40}, clear=False),
         ):
             ctx = _upload_ctx(Path(tmp))
             ctx.resource_mode = "source"
@@ -357,9 +434,7 @@ class UploadMetadataTest(unittest.TestCase):
 
         merged = merge_release_metadata(existing, new)
 
-        self.assertEqual(
-            merged["artifacts"]["arm64"]["sparkle_signature"], "SIG=="
-        )
+        self.assertEqual(merged["artifacts"]["arm64"]["sparkle_signature"], "SIG==")
         self.assertEqual(merged["artifacts"]["arm64"]["sha256"], "a" * 64)
 
     def test_merge_release_metadata_replaces_an_earlier_run(self) -> None:

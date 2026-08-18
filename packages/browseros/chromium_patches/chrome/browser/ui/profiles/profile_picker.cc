@@ -1,16 +1,17 @@
 diff --git a/chrome/browser/ui/profiles/profile_picker.cc b/chrome/browser/ui/profiles/profile_picker.cc
-index 4d0b91c7a0b97..0f34b87dcda91 100644
+index 1c1e093d40a288d65b981d4f5a30630430fa72f1..7a8787c8cca093ffc93a9f4b38f0d00f66b0e6a2 100644
 --- a/chrome/browser/ui/profiles/profile_picker.cc
 +++ b/chrome/browser/ui/profiles/profile_picker.cc
-@@ -5,12 +5,15 @@
+@@ -5,6 +5,8 @@
  #include "chrome/browser/ui/profiles/profile_picker.h"
  
  #include <string>
 +#include <utility>
 +#include <vector>
  
+ #include "base/check_is_test.h"
  #include "base/command_line.h"
- #include "base/containers/flat_set.h"
+@@ -12,6 +14,7 @@
  #include "base/feature_list.h"
  #include "base/logging.h"
  #include "base/metrics/histogram_functions.h"
@@ -30,7 +31,7 @@ index 4d0b91c7a0b97..0f34b87dcda91 100644
  ProfilePicker::AvailabilityOnStartup GetAvailabilityOnStartup() {
    int availability_on_startup = g_browser_process->local_state()->GetInteger(
        prefs::kBrowserProfilePickerAvailabilityOnStartup);
-@@ -202,3 +210,13 @@ void ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(bool value) {
+@@ -205,3 +213,13 @@ void ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(bool value) {
  bool ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened() {
    return g_open_command_line_urls_in_next_profile_opened;
  }

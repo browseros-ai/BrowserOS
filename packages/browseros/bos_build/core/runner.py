@@ -26,6 +26,7 @@ from .events import (
     StepStarted,
     Subscriber,
 )
+from .resume import invalidate_checkpoints_from, write_step_checkpoint
 from .step import Step, ValidationError, all_steps
 from ..lib.utils import log_error, log_info, log_success, log_warning
 
@@ -88,6 +89,7 @@ def run(
             _emit(subscribers, StepStarted(run=name, step=step_name, phase=step.phase))
             step_start = time.time()
             _warn_missing_requires(ctx, step, step_name)
+            invalidate_checkpoints_from(ctx, step_names, step_name)
 
             try:
                 step.validate(ctx)
@@ -98,6 +100,7 @@ def run(
 
             try:
                 step.execute(ctx)
+                write_step_checkpoint(ctx, step, step_names)
             except Exception as e:
                 _finish_step(subscribers, results, name, step, step_start, error=str(e))
                 log_error(f"Step {step_name} failed: {e}")

@@ -62,6 +62,7 @@ on:
 concurrency:
   group: release-extensions-and-feeds
   cancel-in-progress: false
+  queue: max
 
 jobs:
   feeds:

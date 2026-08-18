@@ -29,6 +29,8 @@ class FakeOperations:
         self.tags = {}
         self.ancestor = True
         self.synced = []
+        self.resource_records = {}
+        self.resource_probes = []
 
     def sync(self, default_branch: str) -> None:
         self.synced.append(default_branch)
@@ -47,6 +49,10 @@ class FakeOperations:
 
     def allocations(self, component: str):
         return self.records
+
+    def resource_allocation(self, component: str, version: str, source_sha: str):
+        self.resource_probes.append((component, version, source_sha))
+        return self.resource_records.get(version)
 
 
 def _request(**overrides) -> StandaloneReleaseRequest:
@@ -71,6 +77,14 @@ class StandaloneReleaseTest(unittest.TestCase):
         self.assertEqual(record.release_sha, SOURCE_SHA)
         self.assertEqual(record.reservation, "create")
         self.assertEqual(operations.synced, ["main"])
+
+    def test_schedule_uses_the_called_workflow_checkout(self) -> None:
+        operations = FakeOperations()
+
+        record = resolve_standalone_release(_request(event_name="schedule"), operations)
+
+        self.assertEqual(record.release_sha, SOURCE_SHA)
+        self.assertEqual(record.tag, "agent-server/v0.0.127")
 
     def test_skips_tags_and_open_candidate_reservations(self) -> None:
         operations = FakeOperations()
@@ -114,6 +128,98 @@ class StandaloneReleaseTest(unittest.TestCase):
 
         self.assertEqual(record.version, "0.0.128")
         self.assertEqual(record.reservation, "reuse")
+
+    def test_probes_only_resolved_versions_until_one_is_unoccupied(self) -> None:
+        operations = FakeOperations()
+        operations.records = [
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        ]
+        operations.resource_records = {
+            "0.0.128": AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.128",
+            ),
+            "0.0.129": AllocationRecord(
+                component="server",
+                version="0.0.129",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.129",
+            ),
+        }
+
+        record = resolve_standalone_release(_request(), operations)
+
+        self.assertEqual(record.version, "0.0.130")
+        self.assertEqual(
+            operations.resource_probes,
+            [
+                ("server", "0.0.128", SOURCE_SHA),
+                ("server", "0.0.129", SOURCE_SHA),
+                ("server", "0.0.130", SOURCE_SHA),
+            ],
+        )
+
+    def test_matching_resource_binding_preserves_source_bound_retry(self) -> None:
+        operations = FakeOperations()
+        operations.records = [
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        ]
+        operations.resource_records = {
+            "0.0.128": AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="resource",
+                source_sha=SOURCE_SHA,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            )
+        }
+
+        record = resolve_standalone_release(_request(), operations)
+
+        self.assertEqual(record.version, "0.0.128")
+        self.assertEqual(record.reservation, "reuse")
+        self.assertEqual(
+            operations.resource_probes,
+            [("server", "0.0.128", SOURCE_SHA)],
+        )
+
+    def test_explicit_version_rejects_conflicting_resource_binding(self) -> None:
+        operations = FakeOperations()
+        operations.resource_records = {
+            "0.0.129": AllocationRecord(
+                component="server",
+                version="0.0.129",
+                kind="resource",
+                reference="r2://browseros/artifacts/server/0.0.129",
+            )
+        }
+
+        with self.assertRaisesRegex(ValueError, "already allocated"):
+            resolve_standalone_release(
+                _request(requested_version="0.0.129"), operations
+            )
+
+        self.assertEqual(
+            operations.resource_probes,
+            [("server", "0.0.129", SOURCE_SHA)],
+        )
 
     def test_tag_push_requires_annotated_source_bound_tag(self) -> None:
         operations = FakeOperations()
@@ -184,6 +290,81 @@ class StandaloneReleaseTest(unittest.TestCase):
 
 
 class ComponentAllocationDiscoveryTest(unittest.TestCase):
+    def test_read_version_decodes_semver_safe_chrome_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp), "browseros-ai/BrowserOS"
+            )
+            with mock.patch.object(
+                operations, "_git", return_value='{"version":"0.0.126+7"}'
+            ):
+                version = operations.read_version("agent", "origin/main")
+
+        self.assertEqual(version, "0.0.126.7")
+
+    def test_r2_retry_uses_requested_source_with_older_release_history(self) -> None:
+        key = "artifacts/server/0.0.130/browseros-server-resources-linux-x64.zip"
+        client = mock.MagicMock()
+        client.list_objects_v2.return_value = {
+            "Contents": [{"Key": key}],
+            "IsTruncated": False,
+        }
+        client.head_object.return_value = {
+            "Metadata": {
+                "component": "artifacts/server",
+                "release-sha": SOURCE_SHA,
+                "sha256": "a" * 64,
+                "target": "linux-x64",
+                "version": "0.0.130",
+            }
+        }
+        releases = [
+            {
+                "tagName": "agent-server/v0.0.130",
+                "isDraft": True,
+                "targetCommitish": SOURCE_SHA,
+            },
+            {
+                "tagName": "agent-server/v0.0.129",
+                "isDraft": False,
+                "targetCommitish": "2" * 40,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp),
+                "browseros-ai/BrowserOS",
+                r2_client=client,
+                r2_bucket="browseros",
+            )
+            with (
+                mock.patch.object(operations, "_git", return_value=""),
+                mock.patch(
+                    "bos_build.release.component_release.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=1, stdout="", stderr=""
+                    ),
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_pull_requests",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=releases,
+                ),
+            ):
+                operations.allocations("server")
+                resource = operations.resource_allocation(
+                    "server", "0.0.130", SOURCE_SHA
+                )
+
+        self.assertIsNotNone(resource)
+        assert resource is not None
+        self.assertTrue(resource.reusable)
+        self.assertEqual(resource.source_sha, SOURCE_SHA)
+        client.head_object.assert_called_once_with(Bucket="browseros", Key=key)
+
     def test_open_browser_candidate_is_discovered_as_a_reservation(self) -> None:
         candidate = CandidateRecord(
             product="browseros",
@@ -201,9 +382,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
             pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",
         )
         body = (
-            "<!-- browseros-release-candidate-v1\n"
-            f"{candidate.to_json().strip()}\n"
-            "-->"
+            f"<!-- browseros-release-candidate-v1\n{candidate.to_json().strip()}\n-->"
         )
         with tempfile.TemporaryDirectory() as tmp:
             operations = GitComponentReleaseOperations(
@@ -231,6 +410,10 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                             "isCrossRepository": False,
                         }
                     ],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=[],
                 ),
                 mock.patch(
                     "bos_build.release.component_release.GitHubCandidateBackend.validate_candidate"

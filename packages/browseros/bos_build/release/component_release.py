@@ -12,10 +12,12 @@ from .candidate import GitHubCandidateBackend, candidate_record_from_pull_reques
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_version_from_package,
     normalize_component_version,
     resolve_standalone_version,
 )
-from .github import list_pull_requests
+from .github import list_github_releases, list_pull_requests
+from .r2_allocations import discover_r2_component_allocation
 
 
 @dataclass(frozen=True)
@@ -81,11 +83,14 @@ class ComponentReleaseOperations(Protocol):
 
     def allocations(self, component: str) -> Sequence[AllocationRecord]: ...
 
+    def resource_allocation(
+        self, component: str, version: str, source_sha: str
+    ) -> AllocationRecord | None: ...
+
 
 def _version_key(component: str, version: str) -> tuple[int, ...]:
     return tuple(
-        int(part)
-        for part in normalize_component_version(component, version).split(".")
+        int(part) for part in normalize_component_version(component, version).split(".")
     )
 
 
@@ -95,7 +100,12 @@ def resolve_standalone_release(
     additional_allocations: Sequence[AllocationRecord] = (),
 ) -> StandaloneReleaseRecord:
     """Resolve one source-bound standalone component release."""
-    if request.event_name not in {"push", "workflow_dispatch", "workflow_call"}:
+    if request.event_name not in {
+        "push",
+        "schedule",
+        "workflow_dispatch",
+        "workflow_call",
+    }:
         raise ValueError(f"Unsupported release event: {request.event_name}")
     if not request.default_branch:
         raise ValueError("default_branch is required")
@@ -123,22 +133,34 @@ def resolve_standalone_release(
         requested = request.requested_version
         version = requested or operations.read_version(request.component, release_sha)
 
-    if not operations.is_default_branch_ancestor(
-        release_sha, request.default_branch
-    ):
+    if not operations.is_default_branch_ancestor(release_sha, request.default_branch):
         raise ValueError(
             f"Release commit {release_sha} is not reachable from "
             f"{operations.remote}/{request.default_branch}"
         )
 
-    allocations = (*operations.allocations(request.component), *additional_allocations)
-    resolved = resolve_standalone_version(
-        component_id=request.component,
-        committed_version=version,
-        allocations=allocations,
-        requested_version=requested,
-        source_sha=release_sha,
-    )
+    allocations = [
+        *operations.allocations(request.component),
+        *additional_allocations,
+    ]
+    probed_versions = set()
+    while True:
+        resolved = resolve_standalone_version(
+            component_id=request.component,
+            committed_version=version,
+            allocations=allocations,
+            requested_version=requested,
+            source_sha=release_sha,
+        )
+        if resolved in probed_versions:
+            break
+        probed_versions.add(resolved)
+        resource = operations.resource_allocation(
+            request.component, resolved, release_sha
+        )
+        if resource is None:
+            break
+        allocations.append(resource)
     tag = f"{spec.tag_prefix}{resolved}"
     tag_state = operations.tag_state(tag)
     if tag_state is not None:
@@ -191,10 +213,15 @@ class GitComponentReleaseOperations:
         repo_root: Path,
         repo: str,
         remote: str = "origin",
+        *,
+        r2_client=None,
+        r2_bucket: str = "",
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.repo = repo
         self.remote = remote
+        self.r2_client = r2_client
+        self.r2_bucket = r2_bucket
 
     def _git(self, *args: str, check: bool = True) -> str:
         result = subprocess.run(
@@ -241,7 +268,7 @@ class GitComponentReleaseOperations:
             value = match.group(1) if match else None
         if not isinstance(value, str):
             raise ValueError(f"Missing version in {spec.manifest_path} at {ref}")
-        return normalize_component_version(component, value)
+        return component_version_from_package(component, value)
 
     def tag_state(self, tag: str) -> TagState | None:
         result = subprocess.run(
@@ -295,28 +322,7 @@ class GitComponentReleaseOperations:
                 )
             )
 
-        result = subprocess.run(
-            [
-                "gh",
-                "release",
-                "list",
-                "--repo",
-                self.repo,
-                "--limit",
-                "1000",
-                "--json",
-                "tagName,isDraft,targetCommitish",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        releases = json.loads(result.stdout or "[]")
-        if not isinstance(releases, list):
-            raise RuntimeError("GitHub release response must be an array")
-        for release in releases:
-            if not isinstance(release, dict):
-                continue
+        for release in list_github_releases(self.repo):
             tag = release.get("tagName")
             if not isinstance(tag, str) or not tag.startswith(spec.tag_prefix):
                 continue
@@ -327,7 +333,7 @@ class GitComponentReleaseOperations:
             except ValueError:
                 continue
             tag_identity = self.tag_state(tag)
-            source_sha = (
+            release_source_sha = (
                 tag_identity.target_sha
                 if tag_identity is not None
                 else str(release.get("targetCommitish", ""))
@@ -337,7 +343,7 @@ class GitComponentReleaseOperations:
                     component=component,
                     version=version,
                     kind="release",
-                    source_sha=source_sha,
+                    source_sha=release_source_sha,
                     reference=tag,
                     reusable=release.get("isDraft") is True,
                     public=release.get("isDraft") is False,
@@ -365,3 +371,16 @@ class GitComponentReleaseOperations:
                 )
             )
         return tuple(allocations)
+
+    def resource_allocation(
+        self, component: str, version: str, source_sha: str
+    ) -> AllocationRecord | None:
+        if self.r2_client is None:
+            return None
+        return discover_r2_component_allocation(
+            self.r2_client,
+            self.r2_bucket,
+            component,
+            version,
+            source_sha,
+        )

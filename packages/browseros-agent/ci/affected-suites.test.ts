@@ -63,6 +63,18 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['build'])
   })
 
+  it('adds the release suite for release scripts and workflows', () => {
+    expect(
+      suiteNames(
+        [],
+        ['packages/browseros-agent/scripts/release/commit-update-snapshot.sh'],
+      ),
+    ).toEqual(['release'])
+    expect(suiteNames([], ['.github/workflows/nightly-browseros.yml'])).toEqual(
+      ['release'],
+    )
+  })
+
   it('runs the full matrix on a test-harness change', () => {
     for (const harnessFile of [
       '.github/workflows/test.yml',
@@ -123,7 +135,7 @@ describe('computeAffectedSuites', () => {
     ])
   })
 
-  it('surfaces every affected suite when a universal dependency changes', () => {
+  it('surfaces every package-owned suite when a universal dependency changes', () => {
     // A change to @browseros/shared marks all packages affected (Turbo global
     // hash); the mapping should then request every suite.
     const allPackages: AffectedPackage[] = [
@@ -135,7 +147,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/claw-server-rust', 'apps/claw-server-rust'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
-      new Set(Object.keys(SUITES)),
+      new Set(Object.keys(SUITES).filter((suite) => suite !== 'release')),
     )
   })
 

@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/toolbar/BUILD.gn b/chrome/browser/ui/views/toolbar/BUILD.gn
-index fdaded5854f5b..09581eaf68b1f 100644
+index f50374fe1c458cdc45b868b0bab77d897e3f2d8f..da39ad093ae240e3666cff7a095772ce3b0c1438 100644
 --- a/chrome/browser/ui/views/toolbar/BUILD.gn
 +++ b/chrome/browser/ui/views/toolbar/BUILD.gn
-@@ -148,6 +148,8 @@ source_set("impl") {
+@@ -157,6 +157,8 @@ source_set("impl") {
      ":toolbar",
      "//base:i18n",
      "//build:branding_buildflags",

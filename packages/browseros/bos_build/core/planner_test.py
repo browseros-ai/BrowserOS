@@ -323,13 +323,16 @@ class SwitchesTest(unittest.TestCase):
             Switches(preset="debug", resource_mode="source").resolved()
 
     def test_source_mode_plans_local_resources(self):
-        steps = plan(
-            Switches(preset="release", resource_mode="source"), "x64", "linux"
-        )
+        steps = plan(Switches(preset="release", resource_mode="source"), "x64", "linux")
 
         self.assertNotIn("download_resources", steps)
-        self.assertLess(steps.index("prepare_common_resources"), steps.index("prepare_server_resources"))
-        self.assertLess(steps.index("prepare_server_resources"), steps.index("resources"))
+        self.assertLess(
+            steps.index("prepare_common_resources"),
+            steps.index("prepare_server_resources"),
+        )
+        self.assertLess(
+            steps.index("prepare_server_resources"), steps.index("resources")
+        )
         self.assertLess(steps.index("resources"), steps.index("bundled_extensions"))
         self.assertLess(steps.index("bundled_extensions"), steps.index("compile"))
 
@@ -569,7 +572,7 @@ class ProfileTest(unittest.TestCase):
             plan(prof.switches, "arm64", "macos"), plan(CI, "arm64", "macos")
         )
 
-    def test_nightly_macos_profile_keeps_signed_defaults_without_downloads(self):
+    def test_nightly_macos_profile_keeps_signed_published_defaults(self):
         profile_path = (
             Path(__file__).resolve().parents[1] / "profiles" / "nightly-macos.yaml"
         )
@@ -577,11 +580,11 @@ class ProfileTest(unittest.TestCase):
 
         self.assertTrue(switches.clean)
         self.assertEqual("full", switches.provision)
-        self.assertFalse(switches.download)
+        self.assertTrue(switches.download)
         self.assertTrue(switches.sign)
         self.assertTrue(switches.upload)
-        self.assertEqual(switches.resource_mode, "source")
-        self.assertNotIn("download_resources", plan(switches, "arm64", "macos"))
+        self.assertEqual(switches.resource_mode, "published")
+        self.assertIn("download_resources", plan(switches, "arm64", "macos"))
 
     def test_arch_list(self):
         prof = self._load("preset: release\narch: [x64, arm64]\n")
@@ -725,8 +728,6 @@ class PreflightTest(unittest.TestCase):
 
 class DownloadSwitchTest(unittest.TestCase):
     def test_no_download_drops_resource_download_only(self):
-        # The signed macOS nightly profile stages server resources locally
-        # and disables only download_resources.
         with_dl = plan(RELEASE, "arm64", "macos")
         without = plan(Switches(preset="release", download=False), "arm64", "macos")
         self.assertEqual([s for s in with_dl if s != "download_resources"], without)

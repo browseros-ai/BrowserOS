@@ -131,7 +131,7 @@ Profiles are saved switch sets in `profiles/`:
 | --- | --- | --- |
 | `release-ci` | `build-browseros.yml`, the reusable Linux/Windows lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
 | `nightly-ci` | unsigned cloud nightlies | the same, plus `sign: false`, `upload: false` |
-| `nightly-macos` | the two signed mac nightlies | `preset: release`, `resource_mode: source` |
+| `nightly-macos` | the two signed mac nightlies | `preset: release`, `resource_mode: published` |
 
 `release-macos.yml` runs `--preset release` against the persistent checkout on
 the self-hosted Mac and receives source or published mode from its caller.
@@ -150,25 +150,24 @@ gh workflow run release-browserclaw.yml --ref main
 ```
 
 There are no platform, component, extension-channel, or signing inputs. The
-workflow freezes the dispatch SHA, creates or recovers an immutable version PR,
-builds all in-repository resources from that candidate, and merges the PR only
-after every native lane passes. BrowserOS bumps its Bun server and `agent`;
-BrowserOS neo bumps its Rust server and `browserclaw`. Both rebuild onboarding
-without changing its version.
+workflow freezes the dispatch SHA, publishes the product server and extension
+to alpha in strict order, and passes their exact output versions into every
+native browser lane. The committed onboarding version is pinned too, so queued
+builds cannot drift to a later component release.
 
 ### What CI does, and where it stops
 
-A BrowserOS neo run builds onboarding, the Rust server, the BrowserClaw
-extension CRX, and browser artifacts for the complete native matrix.
+A full run publishes the product server release, latest resource alias, alpha
+server OTA, product extension CRX, and alpha/bundled extension feeds before it
+builds browser artifacts for the complete native matrix.
 
-It **stages**. It does not promote:
+The browser release itself remains staged:
 
 - Browser deliverables and metadata land in R2.
-- The browser appcast is rendered as a retained preview artifact.
 - The GitHub release is a draft.
-- Component releases, aliases, appcasts, and extension feeds are untouched.
+- The production browser appcast is untouched.
 
-Going live is a human decision. That is on purpose.
+Promoting the browser to production is a human decision.
 
 ## Promote a release to live
 
@@ -210,9 +209,10 @@ cloned from external repos. All four version independently of the browser.
 The standalone workflow owns the default alpha lifecycle: for the in-repo
 `agent` and `browserclaw` extensions it allocates the next version when
 `version` is omitted, builds and verifies the immutable CRX, publishes the
-GitHub release, commits the coherent tracked alpha snapshots, and uploads those
-exact feed files to R2. External `controller` and `bugreporter` releases require
-an explicit version because their source commit is not the monorepo release SHA.
+GitHub release, merges the coherent tracked alpha snapshots through a
+short-lived pull request, and uploads those exact feed files to R2. External
+`controller` and `bugreporter` releases require an explicit version because
+their source commit is not the monorepo release SHA.
 
 ```bash
 gh workflow run release-extensions.yml \
@@ -277,11 +277,10 @@ published under the historical `claw-server-rust/prod-resources` key. Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
 Two signed macOS nightlies run on the self-hosted Mac and publish rolling
-prereleases anyone can download: `nightly-browseros` (04:00 UTC) and
-`nightly-browserclaw` (06:30 UTC). Nightlies and full releases both use source
-mode: extensions, onboarding, and native servers come from the selected
-checkout. Published mode exists only for callers that intentionally want
-already released component resources. See
+prereleases anyone can download: `nightly-browseros` (04:17 UTC) and
+`nightly-browserclaw` (06:47 UTC). Nightlies and full releases first publish
+the product server and extension to alpha, then build the browser from those
+published resources. See
 [`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md).
 
 ## Patches and products

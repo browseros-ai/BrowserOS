@@ -26,6 +26,11 @@ from ..core.planner import (
     required_env,
     slice_runs_from,
 )
+from ..core.resume import (
+    ResumeValidationError,
+    attach_resume_state,
+    validate_resume_before_execution,
+)
 from ..core.resolver import resolve_config, resolve_pipeline
 from ..lib.notify import slack_subscriber
 from ..release.lane import write_lane_manifest
@@ -458,9 +463,10 @@ def _execute_runs(
     # per-step static checks) for EVERY arch before any run starts — a
     # misconfigured second arch must not surface after hours of arch one.
     try:
+        validate_resume_before_execution(runs)
         for run_ctx, run_steps in runs:
             preflight(run_steps, ctx=run_ctx)
-    except ValueError as e:
+    except (ResumeValidationError, ValueError) as e:
         log_error(str(e))
         raise typer.Exit(1)
 
@@ -632,7 +638,8 @@ def _resolve_preset(
 
         # Runs execute sequentially (universal is three runs on one tree),
         # so --from resumes the run timeline, not each run.
-        arch_plans = plan_runs(switches)
+        full_arch_plans = plan_runs(switches)
+        arch_plans = full_arch_plans
         if from_ is not None:
             arch_plans = slice_runs_from(arch_plans, from_)
 
@@ -703,7 +710,7 @@ def _resolve_preset(
                         )
                 else:
                     resolved_source_sha = ""
-                return [
+                runs = [
                     (
                         Context(
                             chromium_src=src,
@@ -721,6 +728,13 @@ def _resolve_preset(
                     )
                     for run_arch, steps in arch_plans
                 ]
+                attach_resume_state(
+                    runs,
+                    full_arch_plans,
+                    resume_from=from_,
+                    strict=from_ is not None,
+                )
+                return runs
             except ValueError as e:
                 log_error(str(e))
                 raise typer.Exit(1)

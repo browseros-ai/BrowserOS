@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
-index 9603137595182b9f442bd54cd6711fffc1fe7af8..ef7b235234126d511921233b1579442c4d9598db 100644
+index 0777bf71430c810f7b6ae41a7708cdd069b6c5a4..a70c2a696db38e36aa8744258a0b7da16c46295b 100644
 --- a/chrome/browser/ui/browser.cc
 +++ b/chrome/browser/ui/browser.cc
-@@ -45,6 +45,7 @@
+@@ -47,6 +47,7 @@
  #include "chrome/browser/background/background_contents_service_factory.h"
  #include "chrome/browser/bookmarks/bookmark_model_factory.h"
  #include "chrome/browser/browser_process.h"
@@ -10,7 +10,7 @@ index 9603137595182b9f442bd54cd6711fffc1fe7af8..ef7b235234126d511921233b1579442c
  #include "chrome/browser/buildflags.h"
  #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
  #include "chrome/browser/content_settings/mixed_content_settings_tab_helper.h"
-@@ -623,11 +624,17 @@ Browser::Browser(const CreateParams& params)
+@@ -555,11 +556,17 @@ Browser::Browser(const CreateParams& params)
  
    tab_strip_model_->AddObserver(this);
  
@@ -28,7 +28,7 @@ index 9603137595182b9f442bd54cd6711fffc1fe7af8..ef7b235234126d511921233b1579442c
  
    ProfileMetrics::LogProfileLaunch(profile_);
  
-@@ -2287,6 +2294,11 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
+@@ -1824,6 +1831,11 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
        source->GetController().GetPendingEntry()
            ? source->GetController().GetPendingEntry()
            : source->GetController().GetLastCommittedEntry();
@@ -40,7 +40,7 @@ index 9603137595182b9f442bd54cd6711fffc1fe7af8..ef7b235234126d511921233b1579442c
    if (entry) {
      const GURL& url = entry->GetURL();
      const GURL& virtual_url = entry->GetVirtualURL();
-@@ -2299,15 +2311,18 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
+@@ -1836,15 +1848,18 @@ bool Browser::ShouldFocusLocationBarByDefault(WebContents* source) {
           url.host() == chrome::kChromeUINewTabHost) ||
          (virtual_url.SchemeIs(content::kChromeUIScheme) &&
           virtual_url.host() == chrome::kChromeUINewTabHost)) {

@@ -1,5 +1,5 @@
 diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
-index 5f9acdb7f3550..1b8b27d5d763b 100644
+index 7128e8164e86664c7456b1e2b53334a27df3c0b0..c4a28bd47cc1774b9babaf3246059affdd91ade1 100644
 --- a/chrome/installer/mini_installer/BUILD.gn
 +++ b/chrome/installer/mini_installer/BUILD.gn
 @@ -6,6 +6,7 @@ import("//build/config/compiler/compiler.gni")
@@ -10,7 +10,7 @@ index 5f9acdb7f3550..1b8b27d5d763b 100644
  import("//chrome/process_version_rc_template.gni")
  import("//third_party/dawn/scripts/dawn_features.gni")
  import("//third_party/ffmpeg/ffmpeg_options.gni")
-@@ -223,6 +224,13 @@ action("mini_installer_archive") {
+@@ -228,6 +229,13 @@ action("mini_installer_archive") {
      inputs += [ "$root_out_dir/icudtl.dat" ]
    }
  

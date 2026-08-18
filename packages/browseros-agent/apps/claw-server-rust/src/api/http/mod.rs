@@ -27,6 +27,7 @@ mod replay;
 mod screenshots;
 mod sessions;
 mod settings;
+mod skills;
 mod system;
 
 /// UTF-8 request-body ceiling enforced before recording ingest and advertised by
@@ -86,6 +87,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/connections/{harness}",
             put(connections::connect).delete(connections::disconnect),
         )
+        .route("/api/v1/skills", get(skills::list).post(skills::create))
+        .route(
+            "/api/v1/skills/{name}",
+            get(skills::get).put(skills::update).delete(skills::delete),
+        )
+        .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
         .nest_service(
             "/mcp",
             Router::new()

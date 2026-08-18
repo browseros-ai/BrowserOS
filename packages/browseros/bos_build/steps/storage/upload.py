@@ -29,6 +29,7 @@ from ...release.prepared_resources import (
     PreparedResourcesManifest,
     load_prepared_resources,
 )
+from ...products.resource_sources import source_resources_for_product
 
 
 def _sha256(path: Path) -> str:
@@ -51,14 +52,32 @@ def _source_manifest(ctx: Context) -> PreparedResourcesManifest:
     if manifest.source_sha != ctx.source_sha:
         raise ValueError("Prepared-resource source SHA does not match release metadata")
     if manifest.browser_version != ctx.get_semantic_version():
-        raise ValueError("Prepared-resource browser version does not match release metadata")
+        raise ValueError(
+            "Prepared-resource browser version does not match release metadata"
+        )
     return manifest
 
 
 def _release_provenance(ctx: Context) -> dict[str, object]:
     provenance: dict[str, object] = {
-        "source_sha": os.environ.get("GITHUB_SHA", ""),
+        "source_sha": os.environ.get(
+            "BROWSEROS_BUILD_SOURCE_SHA", os.environ.get("GITHUB_SHA", "")
+        ),
     }
+    if getattr(ctx, "resource_mode", "published") == "published":
+        source = source_resources_for_product(ctx.product.id)
+        server_version = (
+            ctx.env.browseros_server_resource_version
+            if ctx.product.id == "browseros"
+            else ctx.env.browserclaw_server_resource_version
+        )
+        component_versions = {
+            source.server_component: server_version,
+            source.extension_component: ctx.env.bundled_product_extension_version,
+            source.onboarding_component: ctx.env.browserclaw_onboard_resource_version,
+        }
+        if all(component_versions.values()):
+            provenance["component_versions"] = component_versions
     if getattr(ctx, "resource_mode", "published") == "source":
         manifest = _source_manifest(ctx)
         provenance = {
@@ -131,16 +150,7 @@ def generate_release_json(
     artifacts: List[Dict],
     platform: str,
 ) -> Dict:
-    """Generate release.json metadata for a platform
-
-    Args:
-        ctx: Build context
-        artifacts: List of artifact dicts with filename, size, and any extra fields
-        platform: Platform name (macos, win, linux)
-
-    Returns:
-        Dict containing release metadata
-    """
+    """Generate release metadata for one platform."""
     env = ctx.env
 
     release_data = {
@@ -223,15 +233,7 @@ def _get_linux_artifact_key(filename: str) -> Optional[str]:
 
 
 def _get_artifact_key(filename: str, platform: str) -> str:
-    """Get artifact key name from filename
-
-    Examples:
-        BrowserOS_v0.31.0_arm64.dmg -> arm64
-        BrowserOS_v0.31.0_x64.dmg -> x64
-        BrowserOS_v0.31.0_x64_installer.exe -> x64_installer
-        BrowserOS_v0.31.0_x64.AppImage -> x64_appimage
-        browseros_0.31.0_amd64.deb -> x64_deb
-    """
+    """Derive a release artifact key from its filename."""
     lower = filename.lower()
 
     if platform == "macos":
@@ -277,11 +279,7 @@ def _filter_product_artifacts(ctx: Context, artifacts: List[Path]) -> List[Path]
 
 
 def detect_artifacts(ctx: Context) -> List[Path]:
-    """Detect artifacts in dist directory based on platform
-
-    Returns:
-        List of artifact file paths found
-    """
+    """Find the active product's artifacts for the current platform."""
     dist_dir = ctx.get_dist_dir()
     if not dist_dir.exists():
         return []
@@ -293,7 +291,7 @@ def detect_artifacts(ctx: Context) -> List[Path]:
     elif IS_WINDOWS():
         artifacts.extend(dist_dir.glob("*.exe"))
         artifacts.extend(dist_dir.glob("*.zip"))
-    else:  # Linux
+    else:
         artifacts.extend(dist_dir.glob("*.AppImage"))
         artifacts.extend(dist_dir.glob("*.deb"))
 
@@ -304,16 +302,7 @@ def upload_release_artifacts(
     ctx: Context,
     extra_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[bool, Optional[Dict]]:
-    """Upload release artifacts to R2 and generate release.json
-
-    Args:
-        ctx: Build context
-        extra_metadata: Optional dict mapping filename to extra metadata fields
-                       e.g. {"file.dmg": {"sparkle_signature": "...", "sparkle_length": 123}}
-
-    Returns:
-        (success, release_json_data) tuple
-    """
+    """Upload release artifacts and their metadata to R2."""
     if not BOTO3_AVAILABLE:
         log_warning("boto3 not installed. Skipping R2 upload.")
         log_info("Install with: pip install boto3")

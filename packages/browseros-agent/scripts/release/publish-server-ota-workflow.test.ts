@@ -43,22 +43,25 @@ describe('publish-server-ota workflow', () => {
     expect(build).toContain('actions/upload-artifact@v7')
   })
 
-  it('assembles all fragments before one guarded live publication', () => {
+  it('persists all fragments through a pull request before live publication', () => {
     const publish = section('  publish:')
     expect(publish).toContain('- build-payloads')
     expect(publish).toContain('actions/download-artifact@v7')
     expect(publish).toContain('pattern: server-ota-fragment-*')
     expect(publish).toContain('ota server assemble-appcast')
-    expect(publish).toContain(
-      'ota server release-appcast --channel alpha --product "$PRODUCT" --publish',
-    )
+    expect(publish).toContain('ota server release-appcast')
+    expect(publish).toContain('--channel alpha')
+    expect(publish).toContain('--product "$PRODUCT"')
+    expect(publish).toContain('--publish')
     expect(publish).toContain('commit-update-snapshot.sh')
 
     const assembleIndex = publish.indexOf('ota server assemble-appcast')
-    const liveIndex = publish.indexOf('ota server release-appcast')
     const snapshotIndex = publish.indexOf('commit-update-snapshot.sh')
-    expect(liveIndex).toBeGreaterThan(assembleIndex)
-    expect(snapshotIndex).toBeGreaterThan(liveIndex)
+    const liveIndex = publish.indexOf('ota server release-appcast')
+    expect(snapshotIndex).toBeGreaterThan(assembleIndex)
+    expect(liveIndex).toBeGreaterThan(snapshotIndex)
+    expect(workflow).toContain('pull-requests: write')
+    expect(publish).not.toContain('HEAD:$DEFAULT_BRANCH')
   })
 
   it('accepts only product-owned snapshot inputs from its callers', () => {

@@ -98,3 +98,49 @@ describe('cockpit stats API fixture', () => {
     expect(jsonRoundTrip<CockpitStats>(stats)).toEqual(stats)
   })
 })
+
+describe('skills API fixtures', () => {
+  test('skill list carries origin, version, and run stats', () => {
+    const list = fixture('skill-list.json') as {
+      items: Array<Record<string, unknown>>
+    }
+    const skill = list.items[0] as Record<string, unknown>
+    expect(skill.name).toBe('masason-email-sweep')
+    expect(skill.origin).toBe('agent')
+    expect(skill.version).toBe(4)
+    expect(skill.cleanRunCount).toBe(17)
+    expect(Number.isSafeInteger(skill.latestRunTokens as number)).toBe(true)
+    expect(jsonRoundTrip(list)).toEqual(list)
+  })
+
+  test('skill detail bundles the SKILL.md body and its runs', () => {
+    const detail = fixture('skill-detail.json') as {
+      skill: Record<string, unknown>
+      body: string
+      runs: Array<Record<string, unknown>>
+    }
+    expect(detail.skill.name).toBe('masason-email-sweep')
+    expect(detail.body).toContain('name: masason-email-sweep')
+    expect(detail.runs.length).toBeGreaterThan(0)
+    expect(detail.runs[0]?.clean).toBe(true)
+  })
+
+  test('run list records a not-clean run with the failing tool', () => {
+    const runs = fixture('skill-run-list.json') as {
+      items: Array<Record<string, unknown>>
+    }
+    const failed = runs.items.find((run) => run.clean === false)
+    expect(failed?.erroredTool).toBe('compose')
+  })
+
+  test('directory list reports provenance and installs', () => {
+    const list = fixture('directory-list.json') as {
+      items: Array<Record<string, unknown>>
+      sourceRepo?: string
+    }
+    expect(list.sourceRepo).toBe('browseros-ai/skills')
+    const entry = list.items[0] as Record<string, unknown>
+    expect(entry.category).toBe('RESEARCH')
+    expect(Number.isSafeInteger(entry.installs as number)).toBe(true)
+  })
+})

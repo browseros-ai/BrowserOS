@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-index c2437bfc295a9..4b2971f34e108 100644
+index eb57e9daa3474d4acc93074e44e57663cb5dea55..0de0ff2d21a2c2aef63c2e048037ad6c78d0fcc9 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
 @@ -4,8 +4,10 @@
@@ -13,7 +13,7 @@ index c2437bfc295a9..4b2971f34e108 100644
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
-@@ -15,11 +17,13 @@
+@@ -14,11 +16,13 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
  #include "chrome/browser/ui/side_panel/side_panel_registry.h"
@@ -27,7 +27,7 @@ index c2437bfc295a9..4b2971f34e108 100644
  #include "extensions/common/extension.h"
  #include "extensions/common/extension_features.h"
  #include "extensions/common/permissions/api_permission.h"
-@@ -120,6 +124,16 @@ void ExtensionSidePanelManager::MaybeCreateActionItemForExtension(
+@@ -119,6 +123,16 @@ void ExtensionSidePanelManager::MaybeCreateActionItemForExtension(
                         std::underlying_type_t<actions::ActionPinnableState>(
                             actions::ActionPinnableState::kPinnable))
            .Build());
@@ -44,7 +44,7 @@ index c2437bfc295a9..4b2971f34e108 100644
  }
  
  actions::ActionId ExtensionSidePanelManager::GetOrCreateActionIdForExtension(
-@@ -159,6 +173,7 @@ void ExtensionSidePanelManager::OnExtensionUnloaded(
+@@ -158,6 +172,7 @@ void ExtensionSidePanelManager::OnExtensionUnloaded(
      it->second->DeregisterEntry();
      coordinators_.erase(extension->id());
    }

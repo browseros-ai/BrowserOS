@@ -13,6 +13,9 @@ import requests
 from ...core.context import Context
 from ...core.step import Step, ValidationError, step
 from ...lib.utils import log_info, log_success
+from ...products.resource_sources import source_resources_for_product
+from ...release.components import normalize_component_version
+from ...release.feeds.spec import extension_by_name
 from ...release.prepared_resources import PreparedResourcesManifest
 from ..resources.source import validated_common_resources
 
@@ -108,9 +111,7 @@ class BundledExtensionsModule(Step):
             )
 
     def _get_output_dir(self, ctx: Context) -> Path:
-        return (
-            ctx.chromium_src / "chrome/browser/browseros/bundled_extensions"
-        )
+        return ctx.chromium_src / "chrome/browser/browseros/bundled_extensions"
 
     def _clear_generated_outputs(self, ctx: Context, output_dir: Path) -> None:
         for crx_path in output_dir.glob("*.crx"):
@@ -124,6 +125,11 @@ class BundledExtensionsModule(Step):
 
     def _fetch_and_parse_manifest(self, url: str) -> List[ExtensionInfo]:
         log_info(f"  Fetching manifest: {url}")
+        if "://" not in url:
+            try:
+                return self._parse_manifest_xml(Path(url).read_text(encoding="utf-8"))
+            except OSError as exc:
+                raise RuntimeError(f"Failed to read extension manifest: {exc}") from exc
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
@@ -158,6 +164,18 @@ class BundledExtensionsModule(Step):
         self, extensions: List[ExtensionInfo], ctx: Context
     ) -> List[ExtensionInfo]:
         by_id = {extension.id: extension for extension in extensions}
+        pinned_version = ctx.env.bundled_product_extension_version
+        if pinned_version:
+            source = source_resources_for_product(ctx.product.id)
+            version = normalize_component_version(
+                source.extension_component, pinned_version
+            )
+            spec = extension_by_name(source.extension_name)
+            by_id[spec.extension_id] = ExtensionInfo(
+                spec.extension_id,
+                version,
+                spec.crx_url(version),
+            )
         missing = [
             f"{name} ({extension_id})"
             for extension_id, name in ctx.required_extension_ids
@@ -168,8 +186,7 @@ class BundledExtensionsModule(Step):
                 f"Bundled extension manifest for {ctx.product.display_name} "
                 "missing required entries: " + ", ".join(missing)
             )
-        required = {extension_id for extension_id, _ in ctx.required_extension_ids}
-        return [extension for extension in extensions if extension.id in required]
+        return [by_id[extension_id] for extension_id, _ in ctx.required_extension_ids]
 
     def _download_extension(self, extension: ExtensionInfo, output_dir: Path) -> None:
         destination = output_dir / f"{extension.id}.crx"
@@ -191,13 +208,9 @@ class BundledExtensionsModule(Step):
             sys.stdout.write(f"\r    {destination.name}: done\n")
             sys.stdout.flush()
         except requests.RequestException as exc:
-            raise RuntimeError(
-                f"Failed to download {extension.id}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to download {extension.id}: {exc}") from exc
 
-    def _generate_json(
-        self, extensions: List[ExtensionInfo], output_dir: Path
-    ) -> None:
+    def _generate_json(self, extensions: List[ExtensionInfo], output_dir: Path) -> None:
         data: Dict[str, Dict[str, str]] = {
             extension.id: {
                 "external_crx": f"{extension.id}.crx",

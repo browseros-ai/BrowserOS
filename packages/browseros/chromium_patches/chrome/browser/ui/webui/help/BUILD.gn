@@ -1,0 +1,44 @@
+diff --git a/chrome/browser/ui/webui/help/BUILD.gn b/chrome/browser/ui/webui/help/BUILD.gn
+index 17d8d3e2832c4d572054a7c866690703e9fe87a2..0bd72a0fb02f29e7d23b51d2e0a9a6d519ded6e5 100644
+--- a/chrome/browser/ui/webui/help/BUILD.gn
++++ b/chrome/browser/ui/webui/help/BUILD.gn
+@@ -2,6 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//chrome/browser/sparkle_buildflags.gni")
+ import("//chrome/common/features.gni")
+ 
+ source_set("help") {
+@@ -36,11 +37,17 @@ source_set("help") {
+   }
+ 
+   if (is_mac) {
+-    sources = [ "version_updater_mac.mm" ]
++    sources = [
++      "sparkle_version_updater_mac.h",
++      "sparkle_version_updater_mac.mm",
++      "version_updater_mac.mm",
++    ]
+     deps += [
+       "//base:i18n",
+       "//chrome/app:branded_strings",
+       "//chrome/app:generated_resources_grit",
++      "//chrome/browser:buildflags",
++      "//chrome/browser/mac:sparkle_glue_headers",
+       "//chrome/browser/updater",
+       "//chrome/updater:browser_sources",
+       "//ui/base",
+@@ -63,6 +70,12 @@ source_set("help") {
+       ]
+     } else {
+       sources = [ "version_updater_basic.cc" ]
++      if (enable_winsparkle) {
++        sources += [
++          "winsparkle_version_updater_win.cc",
++          "winsparkle_version_updater_win.h",
++        ]
++      }
+     }
+   }
+ 

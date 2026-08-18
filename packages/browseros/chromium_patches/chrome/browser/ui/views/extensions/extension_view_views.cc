@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/extensions/extension_view_views.cc b/chrome/browser/ui/views/extensions/extension_view_views.cc
-index f24639d796626..cc56b0d062a32 100644
+index d9bcad18e98b604503987f187f99f1222ef68883..a38fa05d1793c9a4b0555f0b54975ea1c7cf0b40 100644
 --- a/chrome/browser/ui/views/extensions/extension_view_views.cc
 +++ b/chrome/browser/ui/views/extensions/extension_view_views.cc
 @@ -9,6 +9,7 @@
@@ -10,7 +10,7 @@ index f24639d796626..cc56b0d062a32 100644
  #include "chrome/browser/extensions/extension_view_host.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser.h"
-@@ -147,6 +148,14 @@ void ExtensionViewViews::OnLoaded() {
+@@ -140,6 +141,14 @@ void ExtensionViewViews::OnLoaded() {
  
    SetVisible(true);
    ResizeDueToAutoResize(web_contents(), pending_preferred_size_);

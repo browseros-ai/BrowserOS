@@ -18,15 +18,15 @@
     }
   },
   "dependencies": {
-    "@remotion/google-fonts": "^4.0.498",
+    "@remotion/google-fonts": "^4.0.507",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "remotion": "^4.0.400"
   },
   "devDependencies": {
-    "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0",
-    "@remotion/cli": "^4.0.498",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@remotion/cli": "^4.0.507",
     "@remotion/bundler": "^4.0.400",
     "@remotion/renderer": "^4.0.400"
   }

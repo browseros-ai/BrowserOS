@@ -117,6 +117,13 @@ describe('release-server workflow', () => {
     expect(section('  reflect-version:')).toContain('- finalize')
   })
 
+  it('merges reflection PRs through the verified release helper', () => {
+    const reflection = section('  reflect-version:')
+    expect(reflection).toContain('merge-release-pr.sh')
+    expect(reflection).toContain('headRefOid')
+    expect(reflection).not.toContain('--squash --auto')
+  })
+
   it('publishes and persists standalone alpha releases by default', () => {
     const dispatch = section('  workflow_dispatch:', '  workflow_call:')
     const ota = section('  publish-ota:', '  reflect-version:')
@@ -124,6 +131,7 @@ describe('release-server workflow', () => {
     expect(dispatch).toContain('default: true')
     expect(ota).toContain("github.event_name != 'push'")
     expect(ota).toContain('inputs.publish_ota == true')
+    expect(ota).toContain('pull-requests: write')
     expect(ota).toContain('uses: ./.github/workflows/publish-server-ota.yml')
     expect(ota).toContain('product: browseros')
     expect(ota).toContain(

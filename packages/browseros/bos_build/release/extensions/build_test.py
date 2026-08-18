@@ -23,12 +23,12 @@ class ExtensionBuildTest(unittest.TestCase):
             manifest = source / spec.manifest_path
             dist = source / spec.dist_path
             manifest.parent.mkdir(parents=True)
-            manifest.write_text(json.dumps({"version": "0.0.101.0"}))
+            manifest.write_text(json.dumps({"version": "0.0.101"}))
             dist.mkdir(parents=True)
             (dist / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "version": "0.0.101.0",
+                        "version": "0.0.101",
                         "update_url": "https://cdn.browseros.com/extensions/update-manifest.xml",
                     }
                 )
@@ -55,13 +55,17 @@ class ExtensionBuildTest(unittest.TestCase):
                     stamp_version=False,
                 )
 
-            self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.101.0")
+            self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.101")
+            self.assertEqual(
+                json.loads((dist / "manifest.json").read_text())["version"],
+                "0.0.101.0",
+            )
             self.assertEqual(built.path, output)
             self.assertEqual(built.version, "0.0.101.0")
             self.assertEqual(run.call_count, 2)
             pack.assert_called_once()
 
-    def test_standalone_build_can_stamp_the_shared_source(self) -> None:
+    def test_standalone_build_stamps_only_the_built_manifest(self) -> None:
         spec = spec_by_name("browserclaw")
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -69,12 +73,12 @@ class ExtensionBuildTest(unittest.TestCase):
             manifest = source / spec.manifest_path
             dist = source / spec.dist_path
             manifest.parent.mkdir(parents=True)
-            manifest.write_text(json.dumps({"version": "0.1.7.0"}))
+            manifest.write_text(json.dumps({"version": "0.1.7"}))
             dist.mkdir(parents=True)
             (dist / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "version": "0.1.8.0",
+                        "version": "0.1.7",
                         "update_url": "https://cdn.browseros.com/extensions/update-manifest.xml",
                     }
                 )
@@ -100,7 +104,11 @@ class ExtensionBuildTest(unittest.TestCase):
                     stamp_version=True,
                 )
 
-            self.assertEqual(json.loads(manifest.read_text())["version"], "0.1.8.0")
+            self.assertEqual(json.loads(manifest.read_text())["version"], "0.1.7")
+            self.assertEqual(
+                json.loads((dist / "manifest.json").read_text())["version"],
+                "0.1.8.0",
+            )
 
     def test_refuses_version_drift_before_build(self) -> None:
         spec = spec_by_name("agent")

@@ -3,6 +3,8 @@
   "compilerOptions": {
     "types": ["chrome", "bun"],
     "allowImportingTsExtensions": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // wxt 0.21's generated base turns on noUncheckedIndexedAccess; opt back out until the codebase adopts it deliberately.
+    "noUncheckedIndexedAccess": false
   }
 }

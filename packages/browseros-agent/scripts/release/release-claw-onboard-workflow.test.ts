@@ -101,5 +101,8 @@ describe('release-claw-onboard workflow', () => {
     expect(reflection).toContain('apps/claw-onboard/package.json')
     expect(reflection).toContain('git config user.name "github-actions[bot]"')
     expect(reflection).toContain('gh pr create')
+    expect(reflection).toContain('merge-release-pr.sh')
+    expect(reflection).toContain('headRefOid')
+    expect(reflection).not.toContain('--squash --auto')
   })
 })

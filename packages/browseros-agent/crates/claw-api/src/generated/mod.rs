@@ -14,5 +14,7 @@ pub mod sessions;
 pub use self::sessions::*;
 pub mod settings;
 pub use self::settings::*;
+pub mod skills;
+pub use self::skills::*;
 pub mod system;
 pub use self::system::*;

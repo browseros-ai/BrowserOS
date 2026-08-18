@@ -90,6 +90,7 @@ class Context:
     prepared_resources: Optional[Path] = None
     prepared_resources_supplied: bool = False
     source_sha: str = ""
+    resume_state: Any = None
 
     # Third party pins
     SPARKLE_VERSION: str = "2.7.0"

@@ -76,6 +76,73 @@ class BundledExtensionsTest(unittest.TestCase):
             )
             self.assertEqual({extension.id for extension in selected}, extension_ids)
 
+    def test_published_selection_pins_product_extension_version(self) -> None:
+        cases = (
+            (
+                "browseros",
+                BROWSEROS_AGENT_EXTENSION_ID,
+                "0.0.125.0",
+                "https://cdn.browseros.com/extensions/agent-0.0.125.0.crx",
+            ),
+            (
+                "browserclaw",
+                BROWSERCLAW_EXTENSION_ID,
+                "0.2.2.0",
+                "https://cdn.browseros.com/extensions/browserclaw-0.2.2.0.crx",
+            ),
+        )
+        for product, product_id, version, url in cases:
+            extensions = [
+                extension
+                for extension in self._all_extensions()
+                if extension.id != product_id
+            ]
+            with (
+                self.subTest(product=product),
+                patch.dict(
+                    os.environ,
+                    {"BUNDLED_PRODUCT_EXTENSION_VERSION": version},
+                    clear=True,
+                ),
+            ):
+                selected = BundledExtensionsModule()._select_product_extensions(
+                    extensions, self._ctx(product)
+                )
+                by_id = {extension.id: extension for extension in selected}
+                self.assertEqual(by_id[product_id].version, version)
+                self.assertEqual(by_id[product_id].codebase, url)
+                self.assertEqual(
+                    by_id[BROWSEROS_BUG_REPORTER_EXTENSION_ID].version,
+                    "52.0.0.0",
+                )
+
+    def test_published_manifest_can_be_read_from_exact_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "bundled-manifest.xml"
+            path.write_text(
+                """<?xml version="1.0"?>
+<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+  <app appid="bflpfmnmnokmjhmgnolecpppdbdophmk">
+    <updatecheck codebase="https://cdn.browseros.com/extensions/agent-0.0.125.0.crx" version="0.0.125.0" />
+  </app>
+</gupdate>
+""",
+                encoding="utf-8",
+            )
+
+            extensions = BundledExtensionsModule()._fetch_and_parse_manifest(str(path))
+
+        self.assertEqual(
+            extensions,
+            [
+                ExtensionInfo(
+                    BROWSEROS_AGENT_EXTENSION_ID,
+                    "0.0.125.0",
+                    "https://cdn.browseros.com/extensions/agent-0.0.125.0.crx",
+                )
+            ],
+        )
+
     def test_published_mode_downloads_selected_manifest_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             chromium = Path(temp)
@@ -95,7 +162,9 @@ class BundledExtensionsTest(unittest.TestCase):
                 module.execute(self._ctx("browseros", chromium_src=chromium))
 
             fetch.assert_called_once()
-            output = module._get_output_dir(self._ctx("browseros", chromium_src=chromium))
+            output = module._get_output_dir(
+                self._ctx("browseros", chromium_src=chromium)
+            )
             self.assertEqual(
                 {path.stem for path in output.glob("*.crx")},
                 {BROWSEROS_AGENT_EXTENSION_ID, BROWSEROS_BUG_REPORTER_EXTENSION_ID},
@@ -122,7 +191,9 @@ class BundledExtensionsTest(unittest.TestCase):
                 )
                 module = BundledExtensionsModule()
                 with (
-                    patch(f"{MODULE}.validated_common_resources", return_value=manifest),
+                    patch(
+                        f"{MODULE}.validated_common_resources", return_value=manifest
+                    ),
                     patch.object(module, "_fetch_and_parse_manifest") as fetch,
                     patch.object(module, "_download_extension") as download,
                 ):
@@ -135,12 +206,12 @@ class BundledExtensionsTest(unittest.TestCase):
                     (output / f"{product_id}.crx").read_bytes(), b"product-crx"
                 )
                 self.assertEqual(
-                    (output / f"{BROWSEROS_BUG_REPORTER_EXTENSION_ID}.crx").read_bytes(),
+                    (
+                        output / f"{BROWSEROS_BUG_REPORTER_EXTENSION_ID}.crx"
+                    ).read_bytes(),
                     b"bug-crx",
                 )
-                generated = json.loads(
-                    (output / "bundled_extensions.json").read_text()
-                )
+                generated = json.loads((output / "bundled_extensions.json").read_text())
                 self.assertEqual(
                     generated[product_id]["external_version"], product_version
                 )

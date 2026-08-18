@@ -73,6 +73,59 @@ class ComponentReleaseCliTest(unittest.TestCase):
             self.assertEqual(values["names"], "server")
             self.assertIn("BrowserOS server release", summary.read_text())
 
+    def test_resolve_can_include_immutable_r2_allocations(self) -> None:
+        record = StandaloneReleaseRecord(
+            component="server",
+            version="0.0.130",
+            tag="agent-server/v0.0.130",
+            release_sha="1" * 40,
+            previous_tag="agent-server/v0.0.128",
+            reservation="create",
+        )
+        env = mock.Mock(r2_bucket="browseros")
+        client = object()
+        with (
+            mock.patch("bos_build.cli.release_component.EnvConfig", return_value=env),
+            mock.patch(
+                "bos_build.cli.release_component.get_r2_client", return_value=client
+            ),
+            mock.patch(
+                "bos_build.cli.release_component.GitComponentReleaseOperations"
+            ) as operations,
+            mock.patch(
+                "bos_build.cli.release_component.resolve_standalone_release",
+                return_value=record,
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "release",
+                    "component",
+                    "resolve",
+                    "--component",
+                    "server",
+                    "--event-name",
+                    "workflow_dispatch",
+                    "--default-branch",
+                    "main",
+                    "--release-ref",
+                    "HEAD",
+                    "--repo",
+                    "browseros-ai/BrowserOS",
+                    "--r2-allocations",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        operations.assert_called_once_with(
+            mock.ANY,
+            "browseros-ai/BrowserOS",
+            "origin",
+            r2_client=client,
+            r2_bucket="browseros",
+        )
+
     def test_manifest_versions_become_public_extension_allocations(self) -> None:
         content = render_update_manifest({"browserclaw": "0.1.9.0"})
         with mock.patch(
@@ -125,6 +178,29 @@ class ComponentReleaseCliTest(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.128")
             self.assertIn('"version": "0.0.128"', lockfile.read_text())
+
+    def test_read_decodes_semver_safe_chrome_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "packages/browseros-agent/apps/app/package.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"version": "0.0.126+7"}))
+
+            result = runner.invoke(
+                app,
+                [
+                    "release",
+                    "component",
+                    "read",
+                    "--component",
+                    "agent",
+                    "--repo-root",
+                    str(root),
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(result.output.strip(), "0.0.126.7")
 
 
 if __name__ == "__main__":

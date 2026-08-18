@@ -1,11 +1,11 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Target.pdl b/third_party/blink/public/devtools_protocol/domains/Target.pdl
-index e8380799949d0..1a05bd1ee43c7 100644
+index 222ac7602584eaab647ad3841b99ad9dfa735d2e..2722bf0b07c290eb950cc814799ae54be650361c 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Target.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Target.pdl
-@@ -33,6 +33,12 @@ domain Target
-       # Provides additional details for specific target types. For example, for
-       # the type of "page", this may be set to "prerender".
-       experimental optional string subtype
+@@ -39,6 +39,12 @@ domain Target
+       # Embedder-specific target metadata. This is only set for targets of
+       # type "tab".
+       experimental optional object embedderData
 +      # Session-scoped tab id for targets associated with a browser tab.
 +      # Present for page and frame targets; absent for workers, browser, etc.
 +      experimental optional Browser.TabID tabId
