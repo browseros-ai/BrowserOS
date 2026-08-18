@@ -60,8 +60,9 @@ on:
         required: true
 
 concurrency:
-  group: release-extension-feeds
+  group: release-extensions-and-feeds
   cancel-in-progress: false
+  queue: max
 
 jobs:
   feeds:

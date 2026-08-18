@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'bun:test'
 import { Hono } from 'hono'
+import type { Env } from '../../src/api/types'
 import {
   isTrustedAppOrigin,
   requireTrustedAppOrigin,
 } from '../../src/api/utils/request-auth'
+
+const localServer = {
+  server: {
+    requestIP: () => ({ address: '127.0.0.1' }),
+  },
+} as never
 
 describe('request auth', () => {
   it('accepts loopback and extension origins', () => {
@@ -20,7 +27,7 @@ describe('request auth', () => {
   })
 
   it('blocks requests from untrusted origins', async () => {
-    const app = new Hono()
+    const app = new Hono<Env>()
       .use('/*', requireTrustedAppOrigin())
       .get('/agents/status', (c) => c.json({ ok: true }))
 
@@ -33,13 +40,20 @@ describe('request auth', () => {
   })
 
   it('allows requests from trusted origins', async () => {
-    const app = new Hono()
+    const app = new Hono<Env>()
       .use('/*', requireTrustedAppOrigin())
       .get('/agents/status', (c) => c.json({ ok: true }))
 
-    const res = await app.request('http://localhost/agents/status', {
-      headers: { Origin: 'chrome-extension://browseros' },
-    })
+    const res = await app.request(
+      'http://localhost/agents/status',
+      {
+        headers: {
+          Host: 'localhost',
+          Origin: 'chrome-extension://browseros',
+        },
+      },
+      localServer,
+    )
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })

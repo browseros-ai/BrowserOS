@@ -27,6 +27,58 @@ on:
         required: false
         type: boolean
         default: true
+      resource_mode:
+        description: "Resource provider: published or source"
+        required: false
+        type: string
+        default: published
+      candidate_sha:
+        description: "Exact source candidate SHA"
+        required: false
+        type: string
+        default: ""
+      prepared_resources_artifact:
+        description: "Prepared common-resource artifact"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "Published-mode checkout ref"
+        required: false
+        type: string
+        default: ""
+      server_version:
+        description: "Exact published product server version"
+        required: false
+        type: string
+        default: ""
+      extension_version:
+        description: "Exact published product extension version"
+        required: false
+        type: string
+        default: ""
+      onboarding_version:
+        description: "Exact published onboarding resource version"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      R2_ACCOUNT_ID:
+        required: false
+      R2_ACCESS_KEY_ID:
+        required: false
+      R2_SECRET_ACCESS_KEY:
+        required: false
+      R2_BUCKET:
+        required: false
+      BROWSEROS_CONFIG_URL:
+        required: false
+      POSTHOG_API_KEY:
+        required: false
+      SENTRY_DSN:
+        required: false
+      CLAW_POSTHOG_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -34,6 +86,7 @@ permissions:
 concurrency:
   group: release-linux
   cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:
@@ -45,8 +98,13 @@ jobs:
         id: plan
         env:
           PRODUCTS: ${{ inputs.products || 'browseros' }}
+          RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
         run: |
           set -euo pipefail
+          if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
+            echo "::error::source mode builds one candidate product per lane"
+            exit 1
+          fi
           case "$PRODUCTS" in
             all)
               matrix='[{"product":"browseros"},{"product":"browserclaw"}]'
@@ -77,13 +135,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONCURRENCY_GROUP: release-linux
+          RUNNER_LABEL: warp-custom-browseros-ubuntu-2204-x64-32x
+          JOB_FILTER: >-
+            [.jobs[]
+            | select(any(.labels[]?; . == $runner_label))
+            | {name, status}]
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + 20 * 60 ))
           failures=0
           while :; do
-            if jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name != "queue-watchdog") | select(.status != "completed") | {name, status}]')"; then
+            if response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100")" \
+              && jobs="$(jq -c --arg runner_label "$RUNNER_LABEL" "$JOB_FILTER" <<<"$response")"; then
               failures=0
             else
               failures=$(( failures + 1 ))
@@ -104,7 +167,7 @@ jobs:
             if [ "$(date +%s)" -ge "$deadline" ]; then
               doc="packages/browseros/bos_build/docs/warpbuild-ci.md"
               if [ "$total" -eq 0 ]; then
-                echo "::error::queue-watchdog matched no build jobs - were the matrix job names changed? Fix the filter; not cancelling."
+                echo "::error::queue-watchdog matched no build jobs - did the lane's runner label change? Fix the filter; not cancelling."
                 exit 1
               fi
               stuck="$(jq -r '[.[] | select(.status == "queued") | .name] | join(", ")' <<<"$jobs")"
@@ -138,4 +201,19 @@ jobs:
       profile: release-ci
       sign: false
       upload: ${{ inputs.upload_to_r2 }}
-    secrets: inherit
+      resource-mode: ${{ inputs.resource_mode || 'published' }}
+      candidate-sha: ${{ inputs.candidate_sha || '' }}
+      prepared-resources-artifact: ${{ inputs.prepared_resources_artifact || '' }}
+      ref: ${{ inputs.ref || '' }}
+      server-version: ${{ inputs.server_version || '' }}
+      extension-version: ${{ inputs.extension_version || '' }}
+      onboarding-version: ${{ inputs.onboarding_version || '' }}
+    secrets:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}

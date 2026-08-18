@@ -8,17 +8,27 @@ passing projection test proves the path never needs a chromium checkout.
 import multiprocessing
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import typer
 from typer.testing import CliRunner
 
 from bos_build.browseros import app
-from bos_build.cli.build import _resolve_preset
+from bos_build.cli.build import (
+    _PlanProjection,
+    _execute_runs,
+    _parse_toolchain_ids,
+    _resolve_preset,
+    _resolve_source_sha,
+)
 from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
+from bos_build.core.resume import ResumeState
 from bos_build.lib.testing import MockChromium
 from bos_build.lib.utils import get_platform, get_platform_arch
 
@@ -116,12 +126,37 @@ class ShowPlanPresetTest(_ProfileMixin):
         self.assertIn("x64 (", result.output)
         self.assertIn("arm64 (", result.output)
 
-    def test_bundle_local_extensions_switch_reflected(self):
-        path = self._profile("preset: release\nbundle_local_extensions: true\n")
+    def test_resource_mode_switch_reflected(self):
+        path = self._profile("preset: release\nresource_mode: source\n")
         with scrubbed_env():
             result = invoke("--profile", str(path), "--show-plan")
         self.assertEqual(result.exit_code, 0, combined(result))
-        self.assertIn("bundle_local_extensions=True", result.output)
+        self.assertIn("resource_mode=source", result.output)
+        self.assertIn("prepare_common_resources", plan_lines(result.output))
+
+    def test_prepared_resources_requires_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "release",
+                "--prepared-resources",
+                "/tmp/prepared",
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("source mode", combined(result))
+
+    def test_source_sha_requires_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "release",
+                "--source-sha",
+                "a" * 40,
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("source mode", combined(result))
 
     def test_profile_skip_unions_with_cli_skip(self):
         path = self._profile("preset: release\nskip: [upload]\n")
@@ -225,6 +260,68 @@ class ModeGuardTest(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Invalid architecture", combined(result))
 
+    def test_lane_manifest_requires_preset_source_mode(self):
+        with scrubbed_env():
+            result = invoke(
+                "--modules", "clean", "--lane-manifest", "/tmp/lane.json"
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("preset", combined(result).lower())
+
+    def test_toolchain_identity_requires_lane_manifest(self):
+        with scrubbed_env():
+            result = invoke(
+                "--preset",
+                "debug",
+                "--toolchain-id",
+                "runner=warp",
+                "--show-plan",
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("lane-manifest", combined(result))
+
+
+class LaneManifestCliTest(unittest.TestCase):
+    def test_toolchain_identity_parser_rejects_duplicates_and_empty_values(self):
+        self.assertEqual(
+            _parse_toolchain_ids(["runner=warp", "image=macos-15"]),
+            {"runner": "warp", "image": "macos-15"},
+        )
+        for values in (["runner="], ["=warp"], ["runner=a", "runner=b"]):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                _parse_toolchain_ids(values)
+
+    def test_successful_source_build_writes_lane_manifest(self):
+        context = SimpleNamespace(resource_mode="source")
+        projection = _PlanProjection(
+            header=[],
+            arch_plans=[("x64", ["compile"])],
+            build_runs=lambda: [(context, ["compile"])],
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            scrubbed_env(),
+            mock.patch("bos_build.cli.build._resolve_preset", return_value=projection),
+            mock.patch("bos_build.cli.build._execute_runs_with_checkout_lock"),
+            mock.patch("bos_build.cli.build.write_lane_manifest") as write_lane,
+        ):
+            destination = Path(tmp) / "lane.json"
+            result = invoke(
+                "--preset",
+                "release",
+                "--resource-mode",
+                "source",
+                "--lane-manifest",
+                str(destination),
+                "--toolchain-id",
+                "runner=warp",
+            )
+
+        self.assertEqual(result.exit_code, 0, combined(result))
+        write_lane.assert_called_once_with(
+            [context], destination, {"runner": "warp"}
+        )
+
 
 class CheckoutLockCliTest(unittest.TestCase):
     def test_build_fails_fast_when_checkout_is_locked(self):
@@ -254,6 +351,80 @@ class CheckoutLockCliTest(unittest.TestCase):
                     proc.kill()
                     proc.join(5)
             self.assertEqual(proc.exitcode, 0)
+
+
+class ResumeValidationCliTest(unittest.TestCase):
+    def _ctx(self, tmp: Path, resume_state=None):
+        return SimpleNamespace(
+            chromium_src=tmp,
+            product=SimpleNamespace(id="browseros"),
+            architecture="x64",
+            build_type="release",
+            extra_gn_args=(),
+            semantic_version="0.31.0",
+            chromium_version="137.0.7151.69",
+            browseros_build_offset="80",
+            resume_state=resume_state,
+        )
+
+    def _resume_state(self, strict: bool) -> ResumeState:
+        return ResumeState(
+            full_arch_plans=(("x64", ("compile", "sign_macos")),),
+            resume_from="sign_macos",
+            candidate={"schema": "test"},
+            candidate_digest="digest",
+            strict=strict,
+        )
+
+    def test_strict_resume_missing_checkpoint_stops_before_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), self._resume_state(strict=True))
+            with (
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+                self.assertRaises(typer.Exit),
+            ):
+                _execute_runs(
+                    [(ctx, ["sign_macos"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_not_called()
+
+    def test_nonstrict_resume_state_does_not_require_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), self._resume_state(strict=False))
+            with (
+                mock.patch("bos_build.cli.build.preflight"),
+                mock.patch("bos_build.cli.build.slack_subscriber", return_value=lambda event: None),
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+            ):
+                _execute_runs(
+                    [(ctx, ["compile"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_called_once()
+
+    def test_context_without_resume_state_keeps_direct_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), resume_state=None)
+            with (
+                mock.patch("bos_build.cli.build.preflight"),
+                mock.patch("bos_build.cli.build.slack_subscriber", return_value=lambda event: None),
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+            ):
+                _execute_runs(
+                    [(ctx, ["compile"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_called_once()
 
 
 class ModulesProfileCliTest(_ProfileMixin):
@@ -402,12 +573,15 @@ class GnArgPlumbingTest(_ProfileMixin):
             clean=None,
             provision=None,
             download=None,
+            resource_mode=None,
+            prepared_resources=None,
             sign=None,
             upload=None,
             build_type=None,
             skip=None,
             from_=None,
             chromium_src=None,
+            source_sha=None,
             extra_gn_args=("symbol_level=2",),
         )
         kwargs.update(overrides)
@@ -425,18 +599,53 @@ class GnArgPlumbingTest(_ProfileMixin):
         for ctx, _steps in runs:
             self.assertEqual(ctx.extra_gn_args, ("symbol_level=2",))
 
-    def test_preset_build_runs_carry_bundle_local_extensions(self):
-        profile_path = self._profile("preset: release\nbundle_local_extensions: true\n")
+    def test_preset_build_runs_carry_source_resource_identity(self):
+        profile_path = self._profile("preset: release\nresource_mode: source\n")
         with tempfile.TemporaryDirectory() as tmp:
             m = MockChromium(Path(tmp))
-            with scrubbed_env():
+            prepared = Path(tmp) / "prepared"
+            with (
+                scrubbed_env(),
+                mock.patch(
+                    "bos_build.cli.build._resolve_source_sha",
+                    return_value="a" * 40,
+                ),
+            ):
                 projection = _resolve_preset(
-                    **self._preset_kwargs(profile=profile_path, chromium_src=m.src)
+                    **self._preset_kwargs(
+                        profile=profile_path,
+                        chromium_src=m.src,
+                        prepared_resources=prepared,
+                    )
                 )
                 runs = projection.build_runs()
         self.assertTrue(runs)
         for ctx, _steps in runs:
-            self.assertTrue(ctx.bundle_local_extensions)
+            self.assertEqual(ctx.resource_mode, "source")
+            self.assertEqual(ctx.prepared_resources, prepared.resolve())
+            self.assertEqual(ctx.source_sha, "a" * 40)
+
+    def test_source_sha_override_reaches_provenance_validation(self):
+        profile_path = self._profile("preset: release\nresource_mode: source\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            m = MockChromium(Path(tmp))
+            with (
+                scrubbed_env(),
+                mock.patch(
+                    "bos_build.cli.build._resolve_source_sha",
+                    return_value="a" * 40,
+                ) as resolve,
+            ):
+                projection = _resolve_preset(
+                    **self._preset_kwargs(
+                        profile=profile_path,
+                        chromium_src=m.src,
+                        source_sha="a" * 40,
+                    )
+                )
+                projection.build_runs()
+
+        resolve.assert_called_once_with(mock.ANY, "a" * 40)
 
     def test_modules_profile_build_runs_carry_extra_gn_args(self):
         profile_path = self._profile("modules: [clean]\n")
@@ -450,6 +659,76 @@ class GnArgPlumbingTest(_ProfileMixin):
         self.assertTrue(runs)
         for ctx, _steps in runs:
             self.assertEqual(ctx.extra_gn_args, ("symbol_level=2",))
+
+
+class SourceProvenanceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.version = self.root / "packages/browseros/resources/BROWSEROS_VERSION"
+        self.offset = (
+            self.root / "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"
+        )
+        self.component = (
+            self.root / "packages/browseros-agent/apps/server/package.json"
+        )
+        for path, content in (
+            (self.version, "BROWSEROS_MAJOR=0\n"),
+            (self.offset, "1\n"),
+            (self.component, "{}\n"),
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        subprocess.run(
+            ["git", "init", "--initial-branch=main"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Build test"],
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "build@example.invalid"],
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        self.sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def test_clean_source_resolves_without_override(self) -> None:
+        self.assertEqual(_resolve_source_sha(self.root), self.sha)
+
+    def test_override_allows_only_browser_version_files(self) -> None:
+        self.version.write_text("BROWSEROS_MAJOR=1\n")
+        self.offset.write_text("2\n")
+
+        with self.assertRaisesRegex(ValueError, "clean tracked checkout"):
+            _resolve_source_sha(self.root)
+        self.assertEqual(_resolve_source_sha(self.root, self.sha), self.sha)
+
+        self.component.write_text('{"version":"2"}\n')
+        with self.assertRaisesRegex(ValueError, "package.json"):
+            _resolve_source_sha(self.root, self.sha)
+
+    def test_override_must_match_head(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not match HEAD"):
+            _resolve_source_sha(self.root, "f" * 40)
 
 
 if __name__ == "__main__":

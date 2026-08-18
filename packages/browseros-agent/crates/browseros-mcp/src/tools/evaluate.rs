@@ -18,15 +18,22 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
+Prefer `run` for multi-step work; reach for evaluate only as a fallback for a one-off page-context read or script. \
 Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
-Return a value to read it back.";
+Provide `code` (an async body; use `return` to read a value) or `func` (a function \
+expression like `() => {...}` that gets invoked). Return a value to read it back.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct EvaluateArgs {
     /// Page id from `tabs`.
     page: u32,
     /// Async-capable JS body evaluated inside the page. Use `return` to read a value.
-    code: String,
+    #[serde(default)]
+    code: Option<String>,
+    /// A function expression to invoke, e.g. `() => {...}` or `async () => {...}`.
+    /// An alternative to `code` for callers that pass a function.
+    #[serde(default)]
+    func: Option<String>,
     /// Max evaluation time in ms (default 30000).
     timeout: Option<f64>,
 }
@@ -66,6 +73,13 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: EvaluateArgs = parse_args(raw)?;
+        let Some(expression) = resolve_expression(args.code.as_deref(), args.func.as_deref())
+        else {
+            return Ok(Some(error_result(
+                "evaluate: provide `code` (an async body) or `func` (a function to invoke)"
+                    .to_string(),
+            )));
+        };
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
@@ -76,7 +90,7 @@ fn handler<'a>(
             .send(
                 "Runtime.evaluate",
                 json!({
-                    "expression": wrap_as_async_iife(&args.code),
+                    "expression": expression,
                     "returnByValue": true,
                     "awaitPromise": true,
                     "timeout": timeout,
@@ -164,8 +178,23 @@ fn handler<'a>(
     })
 }
 
+/// Builds the JS expression to evaluate from either arg form: `code` is an async
+/// body, `func` is a function expression to invoke. `code` wins if both are given;
+/// `None` when neither is provided.
+fn resolve_expression(code: Option<&str>, func: Option<&str>) -> Option<String> {
+    match (code, func) {
+        (Some(code), _) => Some(wrap_as_async_iife(code)),
+        (None, Some(func)) => Some(wrap_as_invoked_fn(func)),
+        (None, None) => None,
+    }
+}
+
 fn wrap_as_async_iife(code: &str) -> String {
     format!("(async () => {{\n{code}\n}})()")
+}
+
+fn wrap_as_invoked_fn(func: &str) -> String {
+    format!("(async () => {{ return await ({func})(); }})()")
 }
 
 fn safe_stringify(value: &Value) -> String {
@@ -191,4 +220,26 @@ fn safe_prefix(text: &str, max_chars: usize) -> String {
         end = end.saturating_sub(1);
     }
     text[..end].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_expression_handles_code_func_and_neither() {
+        // A body is wrapped in an async IIFE.
+        let code = resolve_expression(Some("return 1;"), None).unwrap_or_default();
+        assert!(code.contains("return 1;"));
+        assert!(code.starts_with("(async () =>"));
+        // A function is invoked, so its return value flows back.
+        let func = resolve_expression(None, Some("() => 2")).unwrap_or_default();
+        assert!(func.contains("await (() => 2)()"));
+        // Code wins if both are provided.
+        let both = resolve_expression(Some("return 3;"), Some("() => 4")).unwrap_or_default();
+        assert!(both.contains("return 3;"));
+        assert!(!both.contains("() => 4"));
+        // Neither is an error at the call site.
+        assert!(resolve_expression(None, None).is_none());
+    }
 }

@@ -97,12 +97,12 @@ afterEach(() => {
 })
 
 describe('scheduled provider resolution', () => {
-  it('falls back through the configured default when an explicit scheduled provider is local runtime only', async () => {
+  it('uses an explicit scheduled provider', async () => {
     const { getChatServerResponse } = await import('./getChatServerResponse')
 
     await getChatServerResponse({
       message: 'Run my schedule',
-      providerId: 'codex-provider',
+      providerId: 'anthropic-sonnet',
     })
 
     expect(fetchBodies[0]).toMatchObject({
@@ -112,7 +112,7 @@ describe('scheduled provider resolution', () => {
     })
   })
 
-  it('falls back through the configured default when an explicit refine provider is local runtime only', async () => {
+  it('uses an explicit refine provider', async () => {
     globalThis.fetch = mock(async (_url, init) => {
       fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
       return Response.json({ success: true, refined: 'Refined prompt' })
@@ -123,7 +123,7 @@ describe('scheduled provider resolution', () => {
     await refinePrompt({
       prompt: 'Check mail',
       name: 'Morning brief',
-      providerId: 'codex-provider',
+      providerId: 'anthropic-sonnet',
     })
 
     expect(fetchBodies[0]).toMatchObject({
@@ -155,17 +155,6 @@ const providers: LlmProviderConfig[] = [
     apiKey: 'sk-ant',
     supportsImages: true,
     contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'codex-provider',
-    type: 'codex',
-    name: 'Codex',
-    modelId: 'gpt-5.3-codex',
-    supportsImages: false,
-    contextWindow: 400000,
     temperature: 0.2,
     createdAt: timestamp,
     updatedAt: timestamp,

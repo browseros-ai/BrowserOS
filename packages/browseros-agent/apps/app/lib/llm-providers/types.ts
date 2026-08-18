@@ -64,14 +64,6 @@ export interface LlmProviderConfig {
   // ChatGPT Pro (Codex) fields
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   reasoningSummary?: 'auto' | 'concise' | 'detailed'
-
-  // ACP-backed providers (claude-code, codex, acp-custom). agent id
-  // resolves through acpx's registry; command is only set for
-  // acp-custom; workspace is the fixed-path cwd picked at provider-
-  // create time.
-  acpAgentId?: string
-  acpCommand?: string
-  acpFixedWorkspacePath?: string
 }
 
 /**

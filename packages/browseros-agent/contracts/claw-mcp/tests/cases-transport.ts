@@ -13,11 +13,14 @@ const EXPECTED_TOOLS = [
   'download',
   'evaluate',
   'grep',
+  'history',
+  'mark_skill_run',
   'name_session',
   'navigate',
   'pdf',
   'read',
   'run',
+  'save_skill',
   'screenshot',
   'snapshot',
   'tab_groups',
@@ -29,7 +32,7 @@ const EXPECTED_TOOLS = [
 
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the full 17-tool catalog',
+    name: 'transport: tools/list exposes the full catalog including run',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()

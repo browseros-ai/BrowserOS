@@ -63,6 +63,14 @@
       },
       "destination": "resources/db/migrations",
       "recursive": true
+    },
+    {
+      "name": "BrowserOS agent skill",
+      "source": {
+        "type": "local",
+        "path": "apps/server/resources/skills/browseros/SKILL.md"
+      },
+      "destination": "resources/skills/browseros/SKILL.md"
     }
   ]
 }

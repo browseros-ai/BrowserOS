@@ -18,8 +18,8 @@ export interface BuildSidepanelPreparedSendMessagesRequestInput
   agentServerUrl: string
   target: SidepanelChatTarget | undefined
   fallbackProvider: LlmProviderConfig
-  agentSessionId?: string
   message?: string
+  attachments?: Array<{ mediaType: string; data: string }>
 }
 
 export interface PrepareSidepanelSendMessagesRequestInput
@@ -45,22 +45,28 @@ export function buildSidepanelPreparedSendMessagesRequest({
   agentServerUrl,
   target,
   fallbackProvider,
-  agentSessionId,
   message,
   ...common
 }: BuildSidepanelPreparedSendMessagesRequestInput) {
   if (target?.kind === 'acp') {
     return {
-      api: `${agentServerUrl}/agents/${encodeURIComponent(target.agentId)}/sidepanel/chat`,
+      api: `${agentServerUrl}/chat`,
       body: {
+        target: { type: target.agentType, agentId: target.agentId },
         conversationId: common.conversationId,
-        agentSessionId: agentSessionId ?? common.conversationId,
         message: message ?? '',
+        mode: common.mode,
         browserContext: common.browserContext,
         userSystemPrompt: common.userSystemPrompt,
         userWorkingDir: common.userWorkingDir,
+        supportsImages: common.supportsImages,
+        previousConversation: common.previousConversation,
+        declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,
+        attachments: common.attachments?.length
+          ? common.attachments
+          : undefined,
       },
     }
   }
@@ -85,6 +91,5 @@ export function toProviderOption(target: SidepanelChatTarget): Provider {
     agentId: target.kind === 'acp' ? target.agentId : undefined,
     adapterName: target.kind === 'acp' ? target.adapterName : undefined,
     modelLabel: target.kind === 'acp' ? target.modelLabel : undefined,
-    modelControl: target.kind === 'acp' ? target.modelControl : undefined,
   }
 }

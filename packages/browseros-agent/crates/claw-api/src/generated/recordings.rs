@@ -15,11 +15,14 @@ use serde::{Deserialize, Serialize};
 pub struct AppendRecordingEventsResponse {
     #[serde(rename = "accepted")]
     pub accepted: i64,
+    /// True when the tab's session has ended and the recorder should stop.
+    #[serde(rename = "stop")]
+    pub stop: bool,
 }
 
 impl AppendRecordingEventsResponse {
-    pub fn new(accepted: i64) -> AppendRecordingEventsResponse {
-        AppendRecordingEventsResponse { accepted }
+    pub fn new(accepted: i64, stop: bool) -> AppendRecordingEventsResponse {
+        AppendRecordingEventsResponse { accepted, stop }
     }
 }
 

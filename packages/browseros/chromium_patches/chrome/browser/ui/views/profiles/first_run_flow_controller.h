@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/views/profiles/first_run_flow_controller.h b/chrome/browser/ui/views/profiles/first_run_flow_controller.h
-index ec68e45018034..a2644df0d8430 100644
+index 237d314f225405c39bede1efe56736a68043ea5c..c7b8afb1c26e57d39ccd5d23950331f73c21e8cf 100644
 --- a/chrome/browser/ui/views/profiles/first_run_flow_controller.h
 +++ b/chrome/browser/ui/views/profiles/first_run_flow_controller.h
-@@ -61,6 +61,7 @@ class FirstRunFlowController : public ProfileManagementFlowControllerImpl {
+@@ -112,6 +112,7 @@ class FirstRunFlowController : public ProfileManagementFlowControllerImpl {
+   bool is_feature_showcase_eligible() const;
  
-  private:
    void HandleIntroSigninChoice(IntroChoice choice);
 +  void HandleBrowserOSOnboardingComplete();
  
-   // Run the `finish_flow_callback_` if it's not empty.
-   void RunFinishFlowCallback();
+   void PlaySignInCelebrationSound();
+ 

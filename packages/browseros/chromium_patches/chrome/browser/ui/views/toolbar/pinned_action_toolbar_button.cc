@@ -1,38 +1,39 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
-index cb5f33a2c5f4c..d3708615bf897 100644
+index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c70c9d50b 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 +++ b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
-@@ -8,6 +8,12 @@
- #include <type_traits>
- 
- #include "base/auto_reset.h"
-+#include "chrome/browser/browseros/core/browseros_action_utils.h"
-+#include "chrome/browser/browseros/core/browseros_prefs.h"
-+#include "chrome/browser/ui/actions/chrome_action_id.h"
-+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
-+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-+#include "chrome/common/extensions/extension_constants.h"
+@@ -13,13 +13,18 @@
  #include "base/metrics/user_metrics.h"
  #include "base/notreached.h"
  #include "base/strings/strcat.h"
-@@ -30,6 +36,7 @@
++#include "chrome/browser/browseros/core/browseros_action_utils.h"
++#include "chrome/browser/browseros/core/browseros_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/browser_actions.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+ #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
+ #include "chrome/browser/ui/views/event_utils.h"
+@@ -32,7 +37,11 @@
+ #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
  #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
++#include "chrome/common/extensions/extension_constants.h"
++#include "chrome/common/pref_names.h"
  #include "chrome/grit/generated_resources.h"
++#include "components/prefs/pref_service.h"
 +#include "third_party/skia/include/core/SkColor.h"
  #include "ui/actions/action_id.h"
  #include "ui/actions/actions.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -42,6 +49,8 @@
- #include "ui/views/controls/button/button_controller.h"
- #include "ui/views/view_class_properties.h"
- #include "ui/views/view_utils.h"
-+#include "components/prefs/pref_service.h"
-+#include "chrome/common/pref_names.h"
- 
- namespace {
- // Width of the status indicator shown across the button.
-@@ -86,6 +95,28 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
+@@ -97,6 +106,28 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
    GetViewAccessibility().SetDescription(
        std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
  
@@ -42,10 +43,10 @@ index cb5f33a2c5f4c..d3708615bf897 100644
 +      // Check if labels should be shown
 +      bool show_labels = true;
 +      if (browser_ && browser_->profile()) {
-+        show_labels = browseros::ShouldShowToolbarLabels(
-+            browser_->profile()->GetPrefs());
++        show_labels =
++            browseros::ShouldShowToolbarLabels(browser_->profile()->GetPrefs());
 +      }
-+      
++
 +      if (show_labels) {
 +        // Use LabelButton::SetText directly to set permanent text
 +        views::LabelButton::SetText(action_item->GetText());
@@ -61,7 +62,7 @@ index cb5f33a2c5f4c..d3708615bf897 100644
    // Normally, the notify action is determined by whether a view is draggable
    // (and is set to press for non-draggable and release for draggable views).
    // However, PinnedActionToolbarButton may be draggable or non-draggable
-@@ -222,6 +253,30 @@ void PinnedActionToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
+@@ -235,6 +266,30 @@ void PinnedActionToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
    skip_execution_ = false;
  }
  
@@ -92,7 +93,7 @@ index cb5f33a2c5f4c..d3708615bf897 100644
  void PinnedActionToolbarButton::UpdateIcon() {
    const std::optional<VectorIcons>& icons = GetVectorIcons();
    // If the button is a cached permanent button the color provider will not be
-@@ -234,7 +289,12 @@ void PinnedActionToolbarButton::UpdateIcon() {
+@@ -247,7 +302,12 @@ void PinnedActionToolbarButton::UpdateIcon() {
                                      ? icons->touch_icon
                                      : icons->icon;
  
@@ -100,13 +101,13 @@ index cb5f33a2c5f4c..d3708615bf897 100644
 +  // Special case for Third Party LLM - use custom orange color
 +  if (action_id_ == kActionSidePanelShowThirdPartyLlm) {
 +    const SkColor orange = SkColorSetRGB(0xFB, 0x65, 0x18);
-+    UpdateIconsWithColors(icon, orange, orange, orange, 
++    UpdateIconsWithColors(icon, orange, orange, orange,
 +                          GetForegroundColor(ButtonState::STATE_DISABLED));
 +  } else if (is_icon_visible_ && action_engaged_) {
      UpdateIconsWithColors(
          icon, GetColorProvider()->GetColor(kColorToolbarActionItemEngaged),
          GetColorProvider()->GetColor(kColorToolbarActionItemEngaged),
-@@ -336,6 +396,26 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
+@@ -341,6 +401,26 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
      }
    }
  

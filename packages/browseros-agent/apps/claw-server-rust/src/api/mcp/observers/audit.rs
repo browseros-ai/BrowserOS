@@ -79,7 +79,9 @@ pub async fn record_local_tool_dispatch(
             args_json: bounded_args_json(dispatch.raw_args),
             result_meta: tool_result_meta(dispatch.result, false),
             duration_ms: dispatch.duration_ms,
+            created_at: None,
             dispatch_id: dispatch.dispatch_id,
+            parent_dispatch_id: None,
             tool_input_token_estimate: estimate_tool_input_tokens(
                 dispatch.tool_name,
                 dispatch.raw_args,
@@ -139,7 +141,11 @@ async fn build_event(
             args_json: bounded_args_json(&call.raw_args),
             result_meta: tool_result_meta(result, cancelled),
             duration_ms,
+            // Stamp the tool's start so a script dispatch sorts before the child
+            // primitives it records while executing; top-level rows have no parent.
+            created_at: Some(call.started_at_ms),
             dispatch_id: call.dispatch_id.clone(),
+            parent_dispatch_id: None,
             tool_input_token_estimate: estimate_tool_input_tokens(call.tool().name, &call.raw_args),
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
@@ -169,6 +175,33 @@ fn preview_callback(call: &ToolCall, session: &Arc<Session>) -> AuditPreview {
             Ok(true)
         })
     })
+}
+
+/// Captures a screenshot of the session's active owned tab and attaches it to
+/// the given audit row. Called synchronously by the code-mode script hook so a
+/// script's primitives get per-step screenshots like granular tools; failures
+/// are non-fatal.
+pub(crate) async fn persist_screenshot(
+    state: &AppState,
+    session_id: &str,
+    dispatch_id: &DispatchId,
+    row_id: i64,
+) {
+    let bytes = match state.visuals.capture(session_id).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return,
+        Err(error) => {
+            warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot capture failed");
+            return;
+        }
+    };
+    if let Err(error) = state.screenshots.write(session_id, row_id, &bytes).await {
+        warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
+        return;
+    }
+    if let Err(error) = state.audit_log.mark_screenshot(row_id).await {
+        warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
+    }
 }
 
 fn tool_result_meta(result: &ToolResult, cancelled: bool) -> String {

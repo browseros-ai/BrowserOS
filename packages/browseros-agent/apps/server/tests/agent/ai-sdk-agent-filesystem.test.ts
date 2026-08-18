@@ -41,14 +41,4 @@ describe('buildAgentFilesystemToolSet', () => {
     )
     expect(Object.keys(tools)).toEqual(['filesystem_read'])
   })
-
-  it('omits filesystem tools for ACP providers', () => {
-    const tools = buildAgentFilesystemToolSet(
-      agentConfig({
-        provider: LLM_PROVIDERS.CODEX,
-        workingDir: '/tmp/browseros-workspace',
-      }),
-    )
-    expect(Object.keys(tools)).toEqual([])
-  })
 })

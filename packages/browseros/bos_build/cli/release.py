@@ -2,7 +2,7 @@
 """Release CLI - Modular release automation for BrowserOS"""
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
@@ -22,7 +22,13 @@ from ..release import (
     DownloadModule,
 )
 from ..release.list import DEFAULT_LIST_LIMIT
-from . import release_feeds
+from . import (
+    release_browser,
+    release_candidate,
+    release_component,
+    release_feeds,
+    release_resources,
+)
 
 app = typer.Typer(
     help="Release automation commands",
@@ -39,6 +45,10 @@ github_app = typer.Typer(
 app.add_typer(github_app, name="github")
 
 release_feeds.register(app)
+app.add_typer(release_candidate.app, name="candidate")
+app.add_typer(release_browser.app, name="browser")
+app.add_typer(release_component.app, name="component")
+app.add_typer(release_resources.app, name="resources")
 
 _PRODUCT_HELP = f"Product to operate on ({', '.join(PRODUCTS)})"
 
@@ -173,11 +183,45 @@ def publish(
         ..., "--version", "-v", help="Version to operate on (e.g., 0.31.0)"
     ),
     product: Optional[str] = typer.Option(None, "--product", help=_PRODUCT_HELP),
+    platforms: Optional[List[str]] = typer.Option(
+        None,
+        "--platform",
+        help="Platform to promote: macos, win, or linux (repeatable; default: all)",
+    ),
+    macos_arch: str = typer.Option(
+        "universal",
+        "--macos-arch",
+        help="Expected macOS artifact set: arm64, x64, or universal",
+    ),
+    source_sha: str = typer.Option(
+        "",
+        "--source-sha",
+        help="Require release metadata from this source commit",
+    ),
+    workflow_run_id: str = typer.Option(
+        "",
+        "--workflow-run-id",
+        help="Require release metadata from this Actions run",
+    ),
+    workflow_run_attempt: str = typer.Option(
+        "",
+        "--workflow-run-attempt",
+        help="Require release metadata from this Actions run attempt",
+    ),
 ):
     """Publish versioned artifacts to download/ paths (make live)."""
     release_ctx = create_release_context(version, product=product)
     log_info(f"🚀 Publishing v{version} to download/ paths")
-    execute_module(release_ctx, PublishModule())
+    execute_module(
+        release_ctx,
+        PublishModule(
+            platforms=platforms,
+            macos_arch=macos_arch,
+            source_sha=source_sha,
+            workflow_run_id=workflow_run_id,
+            workflow_run_attempt=workflow_run_attempt,
+        ),
+    )
 
 
 @app.command("download")
@@ -227,6 +271,36 @@ def github_create(
         False, "--publish", "-p", help="Also publish to download/ paths after creating release"
     ),
     product: Optional[str] = typer.Option(None, "--product", help=_PRODUCT_HELP),
+    platforms: Optional[str] = typer.Option(
+        None,
+        "--platforms",
+        help="Release platform selection: all, linux, windows, or macos",
+    ),
+    macos_arch: str = typer.Option(
+        "universal",
+        "--macos-arch",
+        help="Expected macOS artifact set: arm64, x64, or universal",
+    ),
+    source_sha: str = typer.Option(
+        "",
+        "--source-sha",
+        help="Require release metadata from this source commit",
+    ),
+    workflow_run_id: str = typer.Option(
+        "",
+        "--workflow-run-id",
+        help="Require release metadata from this Actions run",
+    ),
+    workflow_run_attempt: str = typer.Option(
+        "",
+        "--workflow-run-attempt",
+        help="Require release metadata from this Actions run attempt",
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="Commit SHA or branch for the release tag",
+    ),
 ):
     """Create GitHub release from R2 artifacts
 
@@ -243,12 +317,30 @@ def github_create(
         draft=draft,
         skip_upload=skip_upload,
         title=title,
+        platforms=platforms,
+        macos_arch=macos_arch,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+        target=target,
     )
     execute_module(ctx, module)
 
     if publish_to_download:
         log_info(f"\n🚀 Publishing v{version} to download/ paths")
-        execute_module(ctx, PublishModule())
+        publish_platforms = None
+        if platforms and platforms != "all":
+            publish_platforms = ["win" if platforms == "windows" else platforms]
+        execute_module(
+            ctx,
+            PublishModule(
+                platforms=publish_platforms,
+                macos_arch=macos_arch,
+                source_sha=source_sha,
+                workflow_run_id=workflow_run_id,
+                workflow_run_attempt=workflow_run_attempt,
+            ),
+        )
 
 
 if __name__ == "__main__":

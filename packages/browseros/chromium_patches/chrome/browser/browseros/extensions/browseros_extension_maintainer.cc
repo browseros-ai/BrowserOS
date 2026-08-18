@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000..568aba57b6197
+index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96458f6698
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 @@ -0,0 +1,440 @@
@@ -30,7 +30,7 @@ index 0000000000000..568aba57b6197
 +#include "extensions/browser/pending_extension_manager.h"
 +#include "extensions/browser/uninstall_reason.h"
 +#include "extensions/common/extension.h"
-+#include "extensions/common/manifest_url_handlers.h"
++#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 +#include "extensions/common/mojom/manifest.mojom-shared.h"
 +#include "net/base/load_flags.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"

@@ -342,6 +342,30 @@ describe('createRecordingsRelay', () => {
     expect(recoveredTabs).toEqual([12])
   })
 
+  it('signals a retired tab only when the server reports the session ended', async () => {
+    const outbox = createMemoryOutbox()
+    const retiredTabs: number[] = []
+    let stop = false
+    const relay = createRecordingsRelay({
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      outbox,
+      fetch: async (input, init) => {
+        const request = asRequest(input, init)
+        if (request.url.endsWith('/api/v1/system')) return systemResponse()
+        return Response.json({ accepted: 1, stop })
+      },
+      warn: () => {},
+    })
+    relay.onTabRecordingRetired((tabId) => retiredTabs.push(tabId))
+
+    await relay.post(19, documentIds.retrying, 'live')
+    expect(retiredTabs).toEqual([])
+
+    stop = true
+    await relay.post(19, documentIds.retrying, 'ended')
+    expect(retiredTabs).toEqual([19])
+  })
+
   it('bounds the durable outbox and marks the evicted document incomplete', async () => {
     const outbox = createMemoryOutbox()
     const relay = createRecordingsRelay({

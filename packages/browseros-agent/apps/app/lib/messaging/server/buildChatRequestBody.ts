@@ -59,6 +59,7 @@ export const buildChatRequestBody = ({
   selectedTextSource,
   isScheduledTask,
 }: ChatRequestBodyParams) => ({
+  target: { type: 'browseros' as const, providerId: provider.id },
   message,
   provider: provider.type,
   providerId: provider.id,
@@ -78,13 +79,6 @@ export const buildChatRequestBody = ({
   sessionToken: provider.sessionToken,
   reasoningEffort: provider.reasoningEffort,
   reasoningSummary: provider.reasoningSummary,
-  // ACP-backed providers (claude-code, codex, acp-custom) need their
-  // own fields to reach the server; otherwise every provider config of
-  // a given type would share one workspace and the user-supplied
-  // workspace path would be silently dropped.
-  acpAgentId: provider.acpAgentId,
-  acpCommand: provider.acpCommand,
-  acpFixedWorkspacePath: provider.acpFixedWorkspacePath,
   browserContext,
   userSystemPrompt,
   userWorkingDir,

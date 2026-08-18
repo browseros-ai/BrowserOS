@@ -68,8 +68,8 @@ arch: arm64           # single arch only
 ```
 
 Planner-owned keys (`preset`, `clean`, `provision`, `download`, `sign`,
-`upload`, `bundle_local_extensions`, `skip`) and the `--skip` / `--from` flags
-are rejected alongside `modules:`. You own the list; edit it directly. Shipped
+`upload`, `resource_mode`, `skip`) and the `--skip` / `--from` flags are
+rejected alongside `modules:`. You own the list; edit it directly. Shipped
 profiles stay switch-based, and a golden test keeps them from drifting.
 
 The same escape hatch exists on the command line for one-off runs:

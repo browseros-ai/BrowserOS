@@ -17,7 +17,7 @@ pub(crate) struct Emitter {
     surface: AgentSurface,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum EntryValue {
     String(String),
     Bool(bool),
@@ -35,6 +35,17 @@ impl Emitter {
             ConfigFormat::Json | ConfigFormat::Jsonc => Ok(json_read(raw, self.surface.stdio)),
             ConfigFormat::Toml => toml_read(raw, self.surface.stdio),
         }
+    }
+
+    pub(crate) fn inspect(&self, raw: &str, name: &str) -> Result<Option<McpServerSpec>, Error> {
+        let key = transform_key(name, self.surface.stdio);
+        let entry = match self.surface.mcp.format {
+            ConfigFormat::Json | ConfigFormat::Jsonc => {
+                json_entry(raw, self.surface.stdio.top_level_key, &key)?
+            }
+            ConfigFormat::Toml => toml_entry(raw, self.surface.stdio.top_level_key, &key)?,
+        };
+        Ok(entry.and_then(|entry| decode_entry(&entry, self.surface.stdio, self.surface.http)))
     }
 
     pub(crate) fn add(&self, raw: &str, name: &str, spec: &McpServerSpec) -> Result<String, Error> {
@@ -57,6 +68,77 @@ impl Emitter {
             ConfigFormat::Toml => toml_remove(raw, self.surface.stdio.top_level_key, &key),
         }
     }
+}
+
+fn decode_entry(
+    entry: &BTreeMap<String, EntryValue>,
+    stdio: StdioShape,
+    http: Option<HttpShape>,
+) -> Option<McpServerSpec> {
+    if let Some(http) = http {
+        let url_field = http.url_field.unwrap_or("url");
+        if let Some(EntryValue::String(url)) = entry.get(url_field) {
+            let headers = match http.header_field.unwrap_or("headers") {
+                field if !entry.contains_key(field) => BTreeMap::new(),
+                field => match entry.get(field) {
+                    Some(EntryValue::StringMap(headers)) => headers.clone(),
+                    _ => return None,
+                },
+            };
+            let is_sse = http
+                .tag_key
+                .zip(http.sse_tag_value)
+                .is_some_and(|(key, value)| {
+                    entry.get(key) == Some(&EntryValue::String(value.to_string()))
+                });
+            let spec = if is_sse {
+                McpServerSpec::Sse {
+                    url: url.clone(),
+                    headers,
+                }
+            } else {
+                McpServerSpec::Http {
+                    url: url.clone(),
+                    headers,
+                }
+            };
+            if entry == &entry_map(build_entry(&spec, stdio, Some(http)).ok()?) {
+                return Some(spec);
+            }
+        }
+    }
+
+    let command_field = stdio.command_field.unwrap_or("command");
+    let (command, args) = if stdio.command_as_array {
+        let EntryValue::Strings(parts) = entry.get(command_field)? else {
+            return None;
+        };
+        let (command, args) = parts.split_first()?;
+        (command.clone(), args.to_vec())
+    } else {
+        let EntryValue::String(command) = entry.get(command_field)? else {
+            return None;
+        };
+        let args_field = stdio.args_field.unwrap_or("args");
+        let args = match entry.get(args_field) {
+            None => Vec::new(),
+            Some(EntryValue::Strings(args)) => args.clone(),
+            _ => return None,
+        };
+        (command.clone(), args)
+    };
+    let env_field = stdio.env_field.unwrap_or("env");
+    let env = match entry.get(env_field) {
+        None => BTreeMap::new(),
+        Some(EntryValue::StringMap(env)) => env.clone(),
+        _ => return None,
+    };
+    let spec = McpServerSpec::Stdio { command, args, env };
+    (entry == &entry_map(build_entry(&spec, stdio, http).ok()?)).then_some(spec)
+}
+
+fn entry_map(entry: Vec<(String, EntryValue)>) -> BTreeMap<String, EntryValue> {
+    entry.into_iter().collect()
 }
 
 fn transform_key(name: &str, shape: StdioShape) -> String {
@@ -192,6 +274,57 @@ fn json_read(raw: &str, shape: StdioShape) -> Vec<String> {
         .collect()
 }
 
+fn json_entry(
+    raw: &str,
+    top_level_key: &str,
+    name: &str,
+) -> Result<Option<BTreeMap<String, EntryValue>>, Error> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let root =
+        CstRootNode::parse(raw, &ParseOptions::default()).map_err(|error| Error::Config {
+            format: "JSON/JSONC",
+            message: error.to_string(),
+        })?;
+    let Some(value) = root
+        .object_value()
+        .and_then(|object| object.object_value(top_level_key))
+        .and_then(|container| container.get(name))
+        .and_then(|property| property.value())
+        .and_then(|value| value.to_serde_value())
+    else {
+        return Ok(None);
+    };
+    Ok(json_entry_map(value))
+}
+
+fn json_entry_map(value: serde_json::Value) -> Option<BTreeMap<String, EntryValue>> {
+    value
+        .as_object()?
+        .iter()
+        .map(|(key, value)| json_entry_value(value.clone()).map(|value| (key.clone(), value)))
+        .collect()
+}
+
+fn json_entry_value(value: serde_json::Value) -> Option<EntryValue> {
+    match value {
+        serde_json::Value::String(value) => Some(EntryValue::String(value)),
+        serde_json::Value::Bool(value) => Some(EntryValue::Bool(value)),
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(|value| value.as_str().map(ToString::to_string))
+            .collect::<Option<Vec<_>>>()
+            .map(EntryValue::Strings),
+        serde_json::Value::Object(values) => values
+            .into_iter()
+            .map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
+            .collect::<Option<BTreeMap<_, _>>>()
+            .map(EntryValue::StringMap),
+        _ => None,
+    }
+}
+
 fn json_add(
     raw: &str,
     top_level_key: &str,
@@ -277,6 +410,54 @@ fn toml_read(raw: &str, shape: StdioShape) -> Result<Vec<String>, Error> {
         .and_then(Item::as_table_like)
         .map(|table| table.iter().map(|(key, _)| key.to_string()).collect())
         .unwrap_or_default())
+}
+
+fn toml_entry(
+    raw: &str,
+    top_level_key: &str,
+    name: &str,
+) -> Result<Option<BTreeMap<String, EntryValue>>, Error> {
+    let document = parse_toml(raw)?;
+    let Some(entry) = document
+        .get(top_level_key)
+        .and_then(Item::as_table_like)
+        .and_then(|table| table.get(name))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(None);
+    };
+    Ok(entry
+        .iter()
+        .map(|(key, item)| decode_toml_entry_value(item).map(|value| (key.to_string(), value)))
+        .collect())
+}
+
+fn decode_toml_entry_value(item: &Item) -> Option<EntryValue> {
+    let value = item.as_value()?;
+    if let Some(value) = value.as_str() {
+        return Some(EntryValue::String(value.to_string()));
+    }
+    if let Some(value) = value.as_bool() {
+        return Some(EntryValue::Bool(value));
+    }
+    if let Some(values) = value.as_array() {
+        return values
+            .iter()
+            .map(|value| value.as_str().map(ToString::to_string))
+            .collect::<Option<Vec<_>>>()
+            .map(EntryValue::Strings);
+    }
+    value.as_inline_table().and_then(|values| {
+        values
+            .iter()
+            .map(|(key, value)| {
+                value
+                    .as_str()
+                    .map(|value| (key.to_string(), value.to_string()))
+            })
+            .collect::<Option<BTreeMap<_, _>>>()
+            .map(EntryValue::StringMap)
+    })
 }
 
 fn toml_add(

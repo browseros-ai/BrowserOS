@@ -11,7 +11,24 @@ on:
       - "packages/browseros/pyproject.toml"
       - "packages/browseros/uv.lock"
       - "tools/release_secrets/**"
+      - ".github/scripts/macos-chromium-workspace.sh"
+      - ".github/scripts/macos-signing-keychain.sh"
       - ".github/workflows/bos-build-tests.yml"
+      - ".github/workflows/build-browseros.yml"
+      - ".github/workflows/nightly-browserclaw.yml"
+      - ".github/workflows/nightly-browseros.yml"
+      - ".github/workflows/publish-server-ota.yml"
+      - ".github/workflows/reserve-nightly-browser-version.yml"
+      - ".github/workflows/release-browseros.yml"
+      - ".github/workflows/release-browserclaw.yml"
+      - ".github/workflows/release-claw-onboard.yml"
+      - ".github/workflows/release-claw-server.yml"
+      - ".github/workflows/release-extension-feeds.yml"
+      - ".github/workflows/release-extensions.yml"
+      - ".github/workflows/release-linux.yml"
+      - ".github/workflows/release-macos.yml"
+      - ".github/workflows/release-server.yml"
+      - ".github/workflows/release-windows.yml"
 
 jobs:
   tests:
@@ -50,3 +67,20 @@ jobs:
       - name: Run vendor_uploads tests
         working-directory: packages/browseros/tools/vendor_uploads
         run: uv run python -m unittest discover -s vendor_uploads -t . -p "*_test.py"
+
+  windows-git-bootstrap:
+    name: Windows Git bootstrap / Git Bash + native Git
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Verify Windows Git bootstrap
+        shell: bash
+        working-directory: packages/browseros
+        run: uv run python -m unittest bos_build.ci_workflow_test -v

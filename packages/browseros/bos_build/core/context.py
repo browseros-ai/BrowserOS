@@ -86,9 +86,11 @@ class Context:
     # Per-invocation --gn-arg overrides; configure appends them last in
     # args.gn (GN last-write-wins). Never persisted to profiles.
     extra_gn_args: tuple[str, ...] = ()
-    # Nightly-only opt-in: build in-repo bundled extensions from this checkout
-    # instead of using their CDN-pinned CRX entries.
-    bundle_local_extensions: bool = False
+    resource_mode: str = "published"
+    prepared_resources: Optional[Path] = None
+    prepared_resources_supplied: bool = False
+    source_sha: str = ""
+    resume_state: Any = None
 
     # Third party pins
     SPARKLE_VERSION: str = "2.7.0"
@@ -151,7 +153,7 @@ class Context:
             return f"{self.product.app_base_name}{get_executable_extension()}"
         if IS_MACOS():
             return f"{self.product.app_base_name}.app"
-        return self.product.app_base_name.lower()
+        return self.product.linux.launcher_name
 
     @property
     def CHROMIUM_APP_NAME(self) -> str:
@@ -203,7 +205,9 @@ class Context:
 
     def get_extensions_manifest_url(self) -> str:
         """Get CDN URL for bundled extensions manifest"""
-        return "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        return self.env.bundled_extensions_manifest_url or (
+            "https://cdn.browseros.com/extensions/bundled-manifest.xml"
+        )
 
     def get_entitlements_dir(self) -> Path:
         """Get entitlements directory"""

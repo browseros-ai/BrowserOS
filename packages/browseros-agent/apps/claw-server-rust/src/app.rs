@@ -2,7 +2,9 @@ use crate::{
     analytics::{AnalyticsService, AnalyticsSink},
     api::http,
     config::Config,
-    db::{AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger},
+    db::{
+        AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger, SkillsRepository,
+    },
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
     services::{
@@ -12,11 +14,13 @@ use crate::{
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
         profiles::ProfileService,
-        recordings::{RecordingIngestService, RecordingStore},
+        recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
         replay::ReplayService,
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
         sessions::Sessions,
+        skill_runs::SkillRunService,
+        skills::SkillService,
     },
     storage::JsonStore,
 };
@@ -32,11 +36,14 @@ pub struct AppState {
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
+    pub live_recordings: Arc<LiveRecordingBus>,
     pub replay: Arc<ReplayService>,
     pub screenshots: Arc<ScreenshotService>,
     pub tab_activity: Arc<TabActivityService>,
     pub tab_registry: Arc<TabRegistry>,
     pub harness: Arc<HarnessService>,
+    pub skills: Arc<SkillService>,
+    pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
@@ -66,6 +73,7 @@ impl AppState {
         session_tabs.release_all_open().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
+            config.browserclaw_dir.join("replays"),
             recording_index.clone(),
             50,
             Duration::from_secs(30),
@@ -85,6 +93,15 @@ impl AppState {
             skill,
             analytics_sink.clone(),
         ));
+        let skills = Arc::new(SkillService::new(
+            SkillsRepository::new(database.clone()),
+            harness.clone(),
+            config.browserclaw_dir.join("skills"),
+        ));
+        let skill_runs = Arc::new(SkillRunService::new(
+            SkillsRepository::new(database.clone()),
+            audit_log.clone(),
+        ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
             database,
@@ -100,15 +117,22 @@ impl AppState {
         );
         sessions.set_completion_hook(Arc::new({
             let session_efficiency = session_efficiency.clone();
+            let skill_runs = skill_runs.clone();
             move |session_id| {
+                skill_runs.spawn_finalize(session_id.clone());
                 let _ = session_efficiency.queue_finalize(session_id);
             }
         }));
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser =
             BrowserService::new(config.cdp_port, sessions.ownership(), tab_registry.clone());
-        let recording_ingest =
-            RecordingIngestService::new(recordings.clone(), browser.clone(), tab_registry.clone());
+        let live_recordings = LiveRecordingBus::new();
+        let recording_ingest = RecordingIngestService::new(
+            recordings.clone(),
+            browser.clone(),
+            tab_registry.clone(),
+            live_recordings.clone(),
+        );
         let tab_activity = Arc::new(TabActivityService::default());
         let visuals = SessionVisualService::new(
             sessions.clone(),
@@ -147,11 +171,14 @@ impl AppState {
             session_tabs,
             recordings,
             recording_ingest,
+            live_recordings,
             replay,
             screenshots,
             tab_activity,
             tab_registry,
             harness,
+            skills,
+            skill_runs,
             analytics,
             profiles,
             sessions,

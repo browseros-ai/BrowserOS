@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/extensions/settings_overridden_params_providers.cc b/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
-index 77281f600f64d..87dc12de08d9e 100644
+index c39cdf2db7e2fe1877aa7cda847939ef21e3cf4f..9b7ebad81276eb5efcdacc6bec27133141c11447 100644
 --- a/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 +++ b/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 @@ -11,6 +11,7 @@
@@ -18,7 +18,7 @@ index 77281f600f64d..87dc12de08d9e 100644
  #include "chrome/browser/extensions/extension_url_overrides.h"
  #include "chrome/browser/extensions/settings_api_helpers.h"
  #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
-@@ -402,6 +404,13 @@ std::optional<ExtensionSettingsOverriddenDialog::Params> GetNtpOverriddenParams(
+@@ -407,6 +409,13 @@ std::optional<ExtensionSettingsOverriddenDialog::Params> GetNtpOverriddenParams(
      return std::nullopt;
    }
  

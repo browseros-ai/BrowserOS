@@ -14,4 +14,11 @@ export interface RecorderResnapshotMessage {
   type: 'recorder-resnapshot'
 }
 
-export type RecorderMessage = RecorderEventsMessage | RecorderResnapshotMessage
+export interface RecorderStopMessage {
+  type: 'recorder-stop'
+}
+
+export type RecorderMessage =
+  | RecorderEventsMessage
+  | RecorderResnapshotMessage
+  | RecorderStopMessage

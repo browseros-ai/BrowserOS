@@ -154,6 +154,9 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
         self.assertNotIn("app_guid", identity_struct.group("body"))
         self.assertNotIn("elevator_iid", identity_struct.group("body"))
         self.assertNotIn("tracing_service_iid", identity_struct.group("body"))
+        self.assertNotIn(
+            "legacy_command_execute_clsid", identity_struct.group("body")
+        )
         self.assertEqual(
             browserclaw.count(
                 "inline constexpr ProductInstallIdentity kProductInstallIdentity"
@@ -168,26 +171,22 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
         )
 
         expected_fields = {
-            "base_app_name": ('L"BrowserClaw"', 'L"BrowserOS"'),
+            "base_app_name": ('L"BrowserOS neo"', 'L"BrowserOS"'),
             "base_app_id": ('L"BrowserClaw"', 'L"BrowserOS"'),
             "browser_prog_id_prefix": ('L"BClawHTML"', 'L"BOSHTML"'),
             "browser_prog_id_description": (
-                'L"BrowserClaw HTML Document"',
+                'L"BrowserOS neo HTML Document"',
                 'L"BrowserOS HTML Document"',
             ),
             "direct_launch_url_scheme": ('"browserclaw"', '"browseros"'),
             "pdf_prog_id_prefix": ('L"BClawPDF"', 'L"BOSPDF"'),
             "pdf_prog_id_description": (
-                'L"BrowserClaw PDF Document"',
+                'L"BrowserOS neo PDF Document"',
                 'L"BrowserOS PDF Document"',
             ),
             "active_setup_guid": (
                 'L"{E9E65674-914E-4A29-83A9-A98D407446EC}"',
                 'L"{0EF5669B-7FD7-4138-A91F-E466631ADE97}"',
-            ),
-            "legacy_command_execute_clsid": (
-                'L""',
-                'L"{AFDDB293-0724-49E5-A4EC-1096BF6C84AF}"',
             ),
         }
         for field, (browserclaw_value, browseros_value) in expected_fields.items():
@@ -210,7 +209,6 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
             "pdf_prog_id_prefix",
             "pdf_prog_id_description",
             "active_setup_guid",
-            "legacy_command_execute_clsid",
             "toast_activator_clsid",
             "elevator_clsid",
             "tracing_service_clsid",

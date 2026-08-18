@@ -307,12 +307,54 @@ class SwitchesTest(unittest.TestCase):
         self.assertEqual(Switches(preset="release").build_type, "release")
         self.assertEqual(Switches(preset="debug").build_type, "debug")
 
-    def test_bundle_local_extensions_defaults_off(self):
-        self.assertFalse(Switches().resolved().bundle_local_extensions)
+    def test_resource_mode_defaults_to_published(self):
+        self.assertEqual(Switches().resolved().resource_mode, "published")
 
-    def test_bundle_local_extensions_does_not_change_step_order(self):
-        local = Switches(preset="release", bundle_local_extensions=True)
-        self.assertEqual(plan(local, "x64", "linux"), plan(RELEASE, "x64", "linux"))
+    def test_invalid_resource_mode_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Invalid resource mode"):
+            Switches(resource_mode="mirror").resolved()
+
+    def test_source_mode_rejects_download(self):
+        with self.assertRaisesRegex(ValueError, "source mode"):
+            Switches(resource_mode="source", download=True).resolved()
+
+    def test_source_mode_rejects_debug_union_builds(self):
+        with self.assertRaisesRegex(ValueError, "release preset"):
+            Switches(preset="debug", resource_mode="source").resolved()
+
+    def test_source_mode_plans_local_resources(self):
+        steps = plan(Switches(preset="release", resource_mode="source"), "x64", "linux")
+
+        self.assertNotIn("download_resources", steps)
+        self.assertLess(
+            steps.index("prepare_common_resources"),
+            steps.index("prepare_server_resources"),
+        )
+        self.assertLess(
+            steps.index("prepare_server_resources"), steps.index("resources")
+        )
+        self.assertLess(steps.index("resources"), steps.index("bundled_extensions"))
+        self.assertLess(steps.index("bundled_extensions"), steps.index("compile"))
+
+    def test_source_mode_universal_prepares_common_once_and_server_per_arch(self):
+        runs = plan_runs(
+            Switches(
+                preset="release",
+                architectures=("universal",),
+                resource_mode="source",
+            ),
+            "macos",
+        )
+
+        self.assertEqual([arch for arch, _ in runs], ["arm64", "x64", "universal"])
+        self.assertEqual(
+            sum("prepare_common_resources" in steps for _, steps in runs), 1
+        )
+        self.assertEqual(
+            [arch for arch, steps in runs if "prepare_server_resources" in steps],
+            ["arm64", "x64"],
+        )
+        self.assertEqual(runs[2][1][0], "merge_universal")
 
 
 class SkipTest(unittest.TestCase):
@@ -530,7 +572,7 @@ class ProfileTest(unittest.TestCase):
             plan(prof.switches, "arm64", "macos"), plan(CI, "arm64", "macos")
         )
 
-    def test_nightly_macos_profile_keeps_signed_defaults_without_downloads(self):
+    def test_nightly_macos_profile_keeps_signed_published_defaults(self):
         profile_path = (
             Path(__file__).resolve().parents[1] / "profiles" / "nightly-macos.yaml"
         )
@@ -538,11 +580,11 @@ class ProfileTest(unittest.TestCase):
 
         self.assertTrue(switches.clean)
         self.assertEqual("full", switches.provision)
-        self.assertFalse(switches.download)
+        self.assertTrue(switches.download)
         self.assertTrue(switches.sign)
         self.assertTrue(switches.upload)
-        self.assertTrue(switches.bundle_local_extensions)
-        self.assertNotIn("download_resources", plan(switches, "arm64", "macos"))
+        self.assertEqual(switches.resource_mode, "published")
+        self.assertIn("download_resources", plan(switches, "arm64", "macos"))
 
     def test_arch_list(self):
         prof = self._load("preset: release\narch: [x64, arm64]\n")
@@ -557,9 +599,13 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(prof.switches.skip, ("upload", "series_patches"))
         self.assertEqual(self._load("skip: upload\n").switches.skip, ("upload",))
 
-    def test_bundle_local_extensions_profile_key(self):
-        prof = self._load("preset: release\nbundle_local_extensions: true\n")
-        self.assertTrue(prof.switches.bundle_local_extensions)
+    def test_resource_mode_profile_key(self):
+        prof = self._load("preset: release\nresource_mode: source\n")
+        self.assertEqual(prof.switches.resource_mode, "source")
+
+    def test_bundle_local_extensions_profile_key_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unknown profile keys"):
+            self._load("preset: release\nbundle_local_extensions: true\n")
 
     def test_flat_profile_has_no_modules(self):
         self.assertIsNone(self._load("preset: release\n").modules)
@@ -590,7 +636,7 @@ class ProfileTest(unittest.TestCase):
             ("download", "false"),
             ("sign", "false"),
             ("upload", "false"),
-            ("bundle_local_extensions", "true"),
+            ("resource_mode", "source"),
             ("skip", "[upload]"),
         ):
             with self.assertRaisesRegex(ValueError, "do not combine", msg=key):
@@ -682,8 +728,6 @@ class PreflightTest(unittest.TestCase):
 
 class DownloadSwitchTest(unittest.TestCase):
     def test_no_download_drops_resource_download_only(self):
-        # The signed macOS nightly profile stages server resources locally
-        # and disables only download_resources.
         with_dl = plan(RELEASE, "arm64", "macos")
         without = plan(Switches(preset="release", download=False), "arm64", "macos")
         self.assertEqual([s for s in with_dl if s != "download_resources"], without)
@@ -693,7 +737,7 @@ class DownloadSwitchTest(unittest.TestCase):
         prof = load_profile(shipped)
         # Shipped profiles stay switch-based; modules: is a local-only opt-in.
         self.assertIsNone(prof.modules)
-        self.assertFalse(prof.switches.bundle_local_extensions)
+        self.assertEqual(prof.switches.resource_mode, "published")
         for platform, arch in (
             ("macos", "arm64"),
             ("windows", "x64"),

@@ -12,6 +12,11 @@ pub struct Model {
     pub size_bytes: i64,
     pub event_count: i64,
     pub has_gap: bool,
+    /// Committed byte length of the on-disk `replays/` NDJSON file for this
+    /// document. 0 means the payload is not (yet) in a file: either the stream
+    /// is empty or it predates the file migration and its payload still lives in
+    /// `recording_payloads`. Readers trust this as the file's valid length.
+    pub payload_bytes: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

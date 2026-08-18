@@ -12,7 +12,13 @@ from typer.testing import CliRunner
 from bos_build.browseros import app
 from bos_build.cli import ota as ota_cli
 from bos_build.release.feeds.publisher import FeedPublisher
+from bos_build.release.feeds.render import (
+    SignedArtifact,
+    parse_server_appcast_content,
+    render_server_appcast,
+)
 from bos_build.release.feeds.spec import server_feed
+from bos_build.release.ota.common import SERVER_PLATFORMS
 
 runner = CliRunner()
 
@@ -33,6 +39,7 @@ def _appcast(bundle_id: str, channel: str, version: str | None = None) -> str:
         item = f"""
     <item>
       <sparkle:version>{version}</sparkle:version>
+      <enclosure url="https://cdn.browseros.com/server/test.zip" />
     </item>
 """
     return f"""\
@@ -83,9 +90,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         )
 
     def test_empty_default_feed_names_selection_and_hints_browserclaw(self):
-        self.paths["browseros-server"].write_text(
-            _appcast("browseros-server", "prod")
-        )
+        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
         self.paths["browserclaw-server"].write_text(
             _appcast("browserclaw-server", "prod", "0.0.12")
         )
@@ -119,9 +124,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         publisher_factory.assert_not_called()
 
     def test_missing_sibling_feed_does_not_mask_empty_error(self):
-        self.paths["browseros-server"].write_text(
-            _appcast("browseros-server", "prod")
-        )
+        self.paths["browseros-server"].write_text(_appcast("browseros-server", "prod"))
 
         with (
             mock.patch.object(
@@ -146,9 +149,7 @@ class ReleaseAppcastCliTest(unittest.TestCase):
             mock.patch.object(
                 ota_cli, "get_appcast_path", side_effect=self._get_appcast_path
             ),
-            mock.patch.object(
-                ota_cli, "_feed_publisher", side_effect=self._publisher
-            ),
+            mock.patch.object(ota_cli, "_feed_publisher", side_effect=self._publisher),
         ):
             result = self._invoke("--product", "browserclaw")
 
@@ -177,6 +178,119 @@ class ReleaseAppcastCliTest(unittest.TestCase):
         self.assertIn(f"source={custom.resolve()}", output)
         self.assertNotIn("Did you mean --product", output)
         publisher_factory.assert_not_called()
+
+
+class AssembleServerAppcastTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.output = self.root / "appcast-server.alpha.xml"
+        self.publisher = FeedPublisher(
+            env=SimpleNamespace(r2_bucket="browseros"),
+            r2_client=_MissingR2Client(),
+            http_head=lambda _: 200,
+            appcast_staging_dir=self.root / "staged",
+        )
+
+    def _fragment(
+        self,
+        platform_name: str,
+        version: str = "0.0.129",
+        bundle_id: str = "browseros-server",
+    ) -> str:
+        platform = next(
+            item for item in SERVER_PLATFORMS if item["name"] == platform_name
+        )
+        artifact = SignedArtifact(
+            platform=platform_name,
+            zip_path=Path(f"{platform_name}.zip"),
+            signature=f"signature-{platform_name}",
+            length=1234,
+            os=platform["os"],
+            arch=platform["arch"],
+        )
+        path = self.root / f"{platform_name}.xml"
+        path.write_text(
+            render_server_appcast(
+                server_feed(bundle_id, "alpha"),
+                version,
+                [artifact],
+            )
+        )
+        return f"{platform_name}={path}"
+
+    def test_assembles_exactly_one_native_fragment_per_platform(self):
+        fragments = [self._fragment(item["name"]) for item in SERVER_PLATFORMS]
+
+        result = ota_cli._assemble_server_appcast(
+            version="0.0.129",
+            bundle_id="browseros-server",
+            channel="alpha",
+            fragments=fragments,
+            publisher=self.publisher,
+            output_path=self.output,
+        )
+
+        self.assertEqual(result, self.output)
+        parsed = parse_server_appcast_content(self.output.read_text())
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.version, "0.0.129")
+        self.assertEqual(
+            set(parsed.artifacts),
+            {item["name"] for item in SERVER_PLATFORMS},
+        )
+
+    def test_refuses_incomplete_native_fragment_set(self):
+        fragments = [
+            self._fragment(item["name"])
+            for item in SERVER_PLATFORMS
+            if item["name"] != "windows_x64"
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Missing appcast fragments"):
+            ota_cli._assemble_server_appcast(
+                version="0.0.129",
+                bundle_id="browseros-server",
+                channel="alpha",
+                fragments=fragments,
+                publisher=self.publisher,
+                output_path=self.output,
+            )
+
+    def test_refuses_fragment_without_its_assigned_platform(self):
+        linux = self._fragment("linux_x64")
+        path = linux.split("=", 1)[1]
+
+        with self.assertRaisesRegex(ValueError, "does not contain darwin_arm64"):
+            ota_cli._assemble_server_appcast(
+                version="0.0.129",
+                bundle_id="browseros-server",
+                channel="alpha",
+                fragments=[f"darwin_arm64={path}"],
+                publisher=self.publisher,
+                output_path=self.output,
+            )
+
+    def test_refuses_fragment_for_another_version(self):
+        fragments = [
+            self._fragment(
+                item["name"],
+                version="0.0.128" if item["name"] == "linux_x64" else "0.0.129",
+            )
+            for item in SERVER_PLATFORMS
+        ]
+
+        with self.assertRaisesRegex(ValueError, "carries version 0.0.128"):
+            ota_cli._assemble_server_appcast(
+                version="0.0.129",
+                bundle_id="browseros-server",
+                channel="alpha",
+                fragments=fragments,
+                publisher=self.publisher,
+                output_path=self.output,
+            )
 
 
 if __name__ == "__main__":

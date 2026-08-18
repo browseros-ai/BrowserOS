@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/browser_commands.cc b/chrome/browser/ui/browser_commands.cc
-index cd7f650386e23..3ad70515264a1 100644
+index 83efe1922093d916df033033654f010c06632777..bc5053d76c3599478714599510c248b01ab2bc94 100644
 --- a/chrome/browser/ui/browser_commands.cc
 +++ b/chrome/browser/ui/browser_commands.cc
-@@ -119,6 +119,7 @@
+@@ -127,6 +127,7 @@
  #include "chrome/browser/web_applications/web_app_helpers.h"
  #include "chrome/browser/web_applications/web_app_provider.h"
  #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -10,7 +10,7 @@ index cd7f650386e23..3ad70515264a1 100644
  #include "chrome/common/chrome_features.h"
  #include "chrome/common/content_restriction.h"
  #include "chrome/common/pref_names.h"
-@@ -2528,7 +2529,20 @@ bool IsDebuggerAttachedToCurrentTab(BrowserWindowInterface* browser) {
+@@ -2679,7 +2680,20 @@ bool IsDebuggerAttachedToCurrentTab(BrowserWindowInterface* browser) {
  void CopyURL(BrowserWindowInterface* browser,
               content::WebContents* web_contents) {
    ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);

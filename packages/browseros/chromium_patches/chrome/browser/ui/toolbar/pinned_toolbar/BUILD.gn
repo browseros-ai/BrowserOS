@@ -1,21 +1,21 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn b/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
-index 895f727d5141c..a77291c87c5e0 100644
+index 449a04e3e9a29f239d9b12dc4d8eb79ffd751be8..07b5d1bac47c4b0949afce148e3849b968171aaf 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
-@@ -39,6 +39,8 @@ source_set("impl") {
+@@ -40,6 +40,8 @@ source_set("impl") {
      ]
      deps = [
        "//chrome/browser:primitives",
 +      "//chrome/browser/browseros/core:action_utils",
 +      "//chrome/browser/browseros/core:prefs",
        "//chrome/browser/translate",
-       "//chrome/browser/ui:tab_search_feature",
-       "//chrome/browser/ui:ui_features",
-@@ -59,6 +61,7 @@ if (!is_android) {
+       "//chrome/browser/ui:browser_actions",
+       "//chrome/browser/ui:browser_element_identifiers",
+@@ -62,6 +64,7 @@ if (!is_android) {
      sources = [ "pinned_toolbar_actions_model_browsertest.cc" ]
      deps = [
        ":pinned_toolbar",
 +      "//chrome/browser/browseros/core:prefs",
-       "//chrome/browser/ui:tab_search_feature",
        "//chrome/browser/ui:ui_features",
        "//chrome/browser/ui/actions:actions_headers",
+       "//chrome/browser/ui/toolbar",

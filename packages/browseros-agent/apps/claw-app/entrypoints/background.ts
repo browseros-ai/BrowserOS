@@ -21,8 +21,17 @@ export default defineBackground(() => {
         .catch(() => {})
     } catch {}
   }
+  const requestStop = (tabId: number) => {
+    // The tab's session has ended; stop recording it through the cleanup grace.
+    try {
+      void chrome.tabs
+        .sendMessage(tabId, { type: 'recorder-stop' })
+        .catch(() => {})
+    } catch {}
+  }
 
   relay.onTabRecoveredAfterLoss(requestResnapshot)
+  relay.onTabRecordingRetired(requestStop)
   void relay.start().catch((error) => {
     console.warn('[browseros-claw replay] durable outbox startup failed', error)
   })

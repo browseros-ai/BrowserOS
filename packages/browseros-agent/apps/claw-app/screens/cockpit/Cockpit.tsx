@@ -1,5 +1,6 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
@@ -12,7 +13,6 @@ import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
 
-/** Renders the Claw cockpit homepage. */
 export function Cockpit() {
   const { sessions } = useCockpitData()
 
@@ -42,6 +42,10 @@ export function Cockpit() {
     connections.data?.items.some(
       (c) => c.installed && isUserFacingHarness(c.harness),
     ) ?? false
+  const connectedHarnesses =
+    connections.data?.items
+      .filter((c) => c.installed && isUserFacingHarness(c.harness))
+      .map((c) => c.harness) ?? []
   const hasHistoricalActivity = (taskProbe.data?.pages ?? []).some(
     (p) => p.items.length > 0,
   )
@@ -66,23 +70,27 @@ export function Cockpit() {
     enabled: shouldLoadStats,
   })
 
-  if (state !== 'ready') {
-    return (
-      <div className="mx-auto flex max-w-7xl flex-col px-8 pt-8 pb-16">
-        <CockpitOnboarding state={state} />
+  const content =
+    state !== 'ready' ? (
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+        <ProductHuntBanner />
+        <CockpitOnboarding
+          state={state}
+          connectedHarnesses={connectedHarnesses}
+        />
+      </div>
+    ) : (
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+        <CockpitHero />
+        {shouldLoadStats && stats.data?.hasMeasuredStats ? (
+          <SavedStatsBand stats={stats.data} />
+        ) : (
+          <RunningGrid sessions={sessions} />
+        )}
+        <ProductHuntBanner />
+        <RecentActivity />
       </div>
     )
-  }
 
-  return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
-      <CockpitHero />
-      {shouldLoadStats && stats.data?.hasMeasuredStats ? (
-        <SavedStatsBand stats={stats.data} />
-      ) : (
-        <RunningGrid sessions={sessions} />
-      )}
-      <RecentActivity />
-    </div>
-  )
+  return <div className="flex min-h-screen flex-col">{content}</div>
 }

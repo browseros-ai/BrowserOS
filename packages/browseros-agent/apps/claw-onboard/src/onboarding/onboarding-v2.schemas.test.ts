@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  defaultImportItemsForSource,
   MOCK_BROWSEROS_IMPORT_SOURCES,
-  selectableItemsForSource,
 } from './onboarding-v2.helpers'
 import {
   onboardingFormDefaults,
@@ -14,7 +14,7 @@ describe('onboardingFormSchema', () => {
     const parsed = onboardingFormSchema.parse(onboardingFormDefaults)
     expect(parsed.selectedSourceId).toBe('chrome-work')
     expect(parsed.selectedItems).toEqual(
-      selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
     )
   })
 

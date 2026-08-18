@@ -41,7 +41,22 @@ import { dirname, join, relative, resolve } from 'node:path'
 
 const projectRoot = resolve(import.meta.dir, '..')
 const junitPath = process.env.BROWSEROS_JUNIT_PATH?.trim()
-const testArgs = process.argv.slice(2)
+const args = process.argv.slice(2)
+const cwdArgs = args.filter((arg) => arg.startsWith('--cwd='))
+
+if (cwdArgs.length > 1) {
+  console.error('run-bun-test: expected at most one --cwd argument')
+  process.exit(2)
+}
+
+const testCwdArg = cwdArgs[0]?.slice('--cwd='.length)
+if (cwdArgs.length === 1 && !testCwdArg) {
+  console.error('run-bun-test: --cwd requires a directory')
+  process.exit(2)
+}
+
+const testCwd = testCwdArg ? resolve(projectRoot, testCwdArg) : projectRoot
+const testArgs = args.filter((arg) => !arg.startsWith('--cwd='))
 
 if (testArgs.length === 0) {
   console.error(
@@ -80,7 +95,7 @@ for (const [i, file] of files.entries()) {
   cmd.push(file)
 
   const result = spawnSync(cmd[0], cmd.slice(1), {
-    cwd: projectRoot,
+    cwd: testCwd,
     env: process.env,
     stdio: 'inherit',
   })
@@ -104,8 +119,6 @@ if (failed > 0) {
   console.error(`run-bun-test: ${failed} of ${files.length} test files failed`)
   process.exit(1)
 }
-
-// ------------------------------------------------------------------
 
 function collectTestFiles(args: string[]): string[] {
   const out: string[] = []

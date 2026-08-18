@@ -1,4 +1,4 @@
-import { LayoutDashboard, PlugZap, ScrollText } from 'lucide-react'
+import { LayoutDashboard, PlugZap, Repeat, ScrollText } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -21,6 +21,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: 'Cockpit', to: '/', icon: LayoutDashboard },
   { name: 'MCP', to: '/mcp', icon: PlugZap },
+  { name: 'Tasks', to: '/skills', icon: Repeat },
   { name: 'Audit', to: '/audit', icon: ScrollText },
 ]
 

@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Environment variable configuration for BrowserOS build system
-
-This module provides centralized access to all environment variables used by the build system.
-It provides type-safe access, defaults, and clear documentation of what each variable is for.
-
-The module automatically loads .env files from the project root on import.
-"""
+"""Environment variable configuration for BrowserOS builds."""
 
 import os
 from typing import Optional
@@ -27,6 +20,8 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
         "ESIGNER_TOTP_SECRET",
         "GITHUB_TOKEN",
         "GH_TOKEN",
+        "MACOS_CERTIFICATE_P12",
+        "MACOS_CERTIFICATE_PWD",
         "MACOS_KEYCHAIN_PASSWORD",
         "POSTHOG_API_KEY",
         "PROD_MACOS_NOTARIZATION_PWD",
@@ -43,12 +38,10 @@ def _load_dotenv_file():
     from .paths import get_package_root
 
     browseros_root = get_package_root()
-    project_root = browseros_root.parent.parent  # repo root
-
-    # Try loading .env from multiple locations (most specific first)
+    project_root = browseros_root.parent.parent
     env_locations = [
-        browseros_root / ".env",  # packages/browseros/.env
-        project_root / ".env",  # repo root .env
+        browseros_root / ".env",
+        project_root / ".env",
     ]
 
     for env_path in env_locations:
@@ -57,25 +50,11 @@ def _load_dotenv_file():
             return
 
 
-# Load .env on module import
 _load_dotenv_file()
 
 
 class EnvConfig:
-    """
-    Centralized environment variable configuration
-
-    This class provides clean, type-safe access to all environment variables
-    used by the build system. It serves as the single source of truth for
-    what environment variables are available and what they're used for.
-
-    Usage:
-        env = EnvConfig()
-        if env.chromium_src:
-            chromium_path = Path(env.chromium_src)
-    """
-
-    # === Build Configuration ===
+    """Centralize build environment access and defaults."""
 
     @property
     def chromium_src(self) -> Optional[str]:
@@ -93,11 +72,34 @@ class EnvConfig:
         return os.environ.get("PYTHONPATH")
 
     @property
+    def browseros_server_resource_version(self) -> Optional[str]:
+        """Exact BrowserOS server resource version for release builds."""
+        return os.environ.get("BROWSEROS_SERVER_RESOURCE_VERSION")
+
+    @property
+    def browserclaw_server_resource_version(self) -> Optional[str]:
+        """Exact BrowserClaw server resource version for release builds."""
+        return os.environ.get("BROWSERCLAW_SERVER_RESOURCE_VERSION")
+
+    @property
+    def browserclaw_onboard_resource_version(self) -> Optional[str]:
+        """Exact BrowserClaw onboarding resource version for release builds."""
+        return os.environ.get("BROWSERCLAW_ONBOARD_RESOURCE_VERSION")
+
+    @property
+    def bundled_extensions_manifest_url(self) -> Optional[str]:
+        """Run-scoped bundled extension manifest URL for release builds."""
+        return os.environ.get("BUNDLED_EXTENSIONS_MANIFEST_URL")
+
+    @property
+    def bundled_product_extension_version(self) -> Optional[str]:
+        """Exact product extension version for release builds."""
+        return os.environ.get("BUNDLED_PRODUCT_EXTENSION_VERSION")
+
+    @property
     def depot_tools_win_toolchain(self) -> str:
         """Windows depot_tools toolchain setting (0 = use system toolchain)"""
         return os.environ.get("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
-
-    # === macOS Code Signing ===
 
     @property
     def macos_certificate_name(self) -> Optional[str]:
@@ -124,7 +126,10 @@ class EnvConfig:
         """macOS login keychain password (used to unlock keychain on build servers)"""
         return os.environ.get("MACOS_KEYCHAIN_PASSWORD")
 
-    # === Windows Code Signing ===
+    @property
+    def macos_keychain_path(self) -> Optional[str]:
+        """Explicit macOS signing keychain path."""
+        return os.environ.get("MACOS_KEYCHAIN_PATH")
 
     @property
     def code_sign_tool_path(self) -> Optional[str]:
@@ -155,8 +160,6 @@ class EnvConfig:
     def esigner_credential_id(self) -> Optional[str]:
         """eSigner credential ID for Windows code signing"""
         return os.environ.get("ESIGNER_CREDENTIAL_ID")
-
-    # === Upload & Distribution (Cloudflare R2) ===
 
     @property
     def r2_account_id(self) -> Optional[str]:
@@ -191,8 +194,6 @@ class EnvConfig:
             return f"https://{account_id}.r2.cloudflarestorage.com"
         return None
 
-    # === Sparkle Signing (macOS) ===
-
     @property
     def sparkle_private_key(self) -> Optional[str]:
         """Base64-encoded Sparkle Ed25519 private key for macOS auto-update signing"""
@@ -203,22 +204,13 @@ class EnvConfig:
         """Path to Sparkle sign_update tool (overrides auto-detection)"""
         return os.environ.get("SPARKLE_SIGN_UPDATE_PATH")
 
-    # === Notifications ===
-
     @property
     def slack_webhook_url(self) -> Optional[str]:
         """Slack webhook URL for build notifications"""
         return os.environ.get("SLACK_WEBHOOK_URL")
 
-    # === Helper Methods ===
-
     def get_macos_signing_config(self) -> dict:
-        """
-        Get all macOS signing configuration as a dict
-
-        Returns:
-            dict with keys: certificate_name, apple_id, team_id, notarization_pwd
-        """
+        """Return the macOS signing configuration."""
         return {
             "certificate_name": self.macos_certificate_name or "",
             "apple_id": self.macos_notarization_apple_id or "",
@@ -227,12 +219,7 @@ class EnvConfig:
         }
 
     def get_windows_signing_config(self) -> dict:
-        """
-        Get all Windows signing configuration as a dict
-
-        Returns:
-            dict with keys: code_sign_tool_path, username, password, totp_secret, credential_id
-        """
+        """Return the Windows signing configuration."""
         return {
             "code_sign_tool_path": self.code_sign_tool_path or "",
             "username": self.esigner_username or "",
@@ -242,22 +229,9 @@ class EnvConfig:
         }
 
     def validate_required(self, *var_names: str) -> None:
-        """
-        Validate that required environment variables are set
-
-        Args:
-            *var_names: Variable names to check (e.g., "chromium_src", "gcs_bucket")
-
-        Raises:
-            ValueError: If any required variable is not set
-
-        Example:
-            env = EnvConfig()
-            env.validate_required("chromium_src", "macos_certificate_name")
-        """
+        """Require the named environment variables."""
         missing = []
         for var_name in var_names:
-            # Convert property name to env var name (e.g., chromium_src -> CHROMIUM_SRC)
             env_var = var_name.upper()
             if not os.environ.get(env_var):
                 missing.append(env_var)
@@ -268,12 +242,7 @@ class EnvConfig:
             )
 
     def get_r2_config(self) -> dict:
-        """
-        Get all R2 configuration as a dict
-
-        Returns:
-            dict with keys: account_id, access_key_id, secret_access_key, bucket, cdn_base_url, endpoint_url
-        """
+        """Return the R2 configuration."""
         return {
             "account_id": self.r2_account_id or "",
             "access_key_id": self.r2_access_key_id or "",

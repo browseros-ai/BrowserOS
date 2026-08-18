@@ -1,10 +1,10 @@
 diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
-index 3732a63380831..59a3948f998f9 100644
+index f051aaf1c55ed686d6652c4b32622532f0692487..6ae6a672b7e121ee82b949b4bf9abeec061bfd92 100644
 --- a/content/browser/devtools/protocol/target_handler.cc
 +++ b/content/browser/devtools/protocol/target_handler.cc
-@@ -120,6 +120,19 @@ std::unique_ptr<Target::TargetInfo> BuildTargetInfo(
-   if (!subtype.empty()) {
-     target_info->SetSubtype(subtype);
+@@ -135,6 +135,19 @@ std::unique_ptr<Target::TargetInfo> BuildTargetInfo(
+       }
+     }
    }
 +  WebContents* web_contents = host->GetWebContents();
 +  if (web_contents) {
@@ -22,7 +22,23 @@ index 3732a63380831..59a3948f998f9 100644
    return target_info;
  }
  
-@@ -1437,11 +1450,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
+@@ -461,10 +474,11 @@ class TargetHandler::RequestThrottle : public TargetHandler::Throttle {
+ 
+ class TargetHandler::Session : public DevToolsAgentHostClient {
+  public:
+-  static std::optional<std::string> Attach(TargetHandler* handler,
+-                                           scoped_refptr<DevToolsAgentHost> agent_host,
+-                                           bool waiting_for_debugger,
+-                                           bool flatten_protocol) {
++  static std::optional<std::string> Attach(
++      TargetHandler* handler,
++      scoped_refptr<DevToolsAgentHost> agent_host,
++      bool waiting_for_debugger,
++      bool flatten_protocol) {
+     std::string id = base::UnguessableToken::Create().ToString();
+     // We don't support or allow the non-flattened protocol when in binary mode.
+     // So, we coerce the setting to true, as the non-flattened mode is
+@@ -1494,11 +1508,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
  }
  
  void TargetHandler::DevToolsAgentHostAttached(DevToolsAgentHost* host) {

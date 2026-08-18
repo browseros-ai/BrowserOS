@@ -6,19 +6,23 @@ import type { S3Client } from '@aws-sdk/client-s3'
 import { writeArtifactMetadata } from './metadata'
 import { downloadObjectToFile } from './r2'
 import type {
-  BuildProductDescriptor,
+  ArtifactMetadataIdentity,
   BuildTarget,
   R2Config,
+  ResourceBuildProductDescriptor,
   ResourceRule,
   StagedArtifact,
 } from './types'
 
-function artifactRoot(product: BuildProductDescriptor, target: BuildTarget) {
+function artifactRoot(
+  product: ResourceBuildProductDescriptor,
+  target: BuildTarget,
+) {
   return join(product.distRoot, target.id)
 }
 
 export function stagedBinaryName(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   target: BuildTarget,
 ): string {
   if (target.os === 'windows') {
@@ -30,7 +34,7 @@ export function stagedBinaryName(
 }
 
 function binaryDestinationPath(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   rootDir: string,
   target: BuildTarget,
 ): string {
@@ -50,7 +54,7 @@ async function copyProductBinary(
 }
 
 async function createArtifactRoot(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   compiledBinaryPath: string,
   target: BuildTarget,
 ): Promise<string> {
@@ -69,8 +73,14 @@ async function finalizeArtifact(
   rootDir: string,
   target: BuildTarget,
   version: string,
+  identity?: ArtifactMetadataIdentity,
 ): Promise<StagedArtifact> {
-  const metadataPath = await writeArtifactMetadata(rootDir, target.id, version)
+  const metadataPath = await writeArtifactMetadata(
+    rootDir,
+    target.id,
+    version,
+    identity,
+  )
   return {
     target,
     rootDir,
@@ -132,9 +142,8 @@ async function stageLocalRule(
   }
 }
 
-/** Stages one target artifact, including any local and R2 resource rules. */
 export async function stageTargetArtifact(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   compiledBinaryPath: string,
   target: BuildTarget,
   rules: ResourceRule[],
@@ -142,6 +151,7 @@ export async function stageTargetArtifact(
   client: S3Client,
   r2: R2Config,
   version: string,
+  identity?: ArtifactMetadataIdentity,
 ): Promise<StagedArtifact> {
   const rootDir = await createArtifactRoot(product, compiledBinaryPath, target)
 
@@ -149,17 +159,17 @@ export async function stageTargetArtifact(
     await stageRule(rootDir, sourceRoot, rule, target, client, r2)
   }
 
-  return finalizeArtifact(rootDir, target, version)
+  return finalizeArtifact(rootDir, target, version, identity)
 }
 
-/** Stages one target artifact using only local resource rules. */
 export async function stageCompiledArtifact(
-  product: BuildProductDescriptor,
+  product: ResourceBuildProductDescriptor,
   compiledBinaryPath: string,
   target: BuildTarget,
   version: string,
   rules: ResourceRule[] = [],
   sourceRoot = process.cwd(),
+  identity?: ArtifactMetadataIdentity,
 ): Promise<StagedArtifact> {
   const rootDir = await createArtifactRoot(product, compiledBinaryPath, target)
 
@@ -175,5 +185,5 @@ export async function stageCompiledArtifact(
     )
   }
 
-  return finalizeArtifact(rootDir, target, version)
+  return finalizeArtifact(rootDir, target, version, identity)
 }

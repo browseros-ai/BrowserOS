@@ -59,6 +59,14 @@ impl AppError {
     }
 
     #[must_use]
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
     pub fn gone(message: impl Into<String>) -> Self {
         Self::Http {
             status: StatusCode::GONE,

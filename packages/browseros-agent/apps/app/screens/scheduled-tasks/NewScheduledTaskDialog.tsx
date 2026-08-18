@@ -38,7 +38,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { SCHEDULED_TASK_PROMPT_REFINED_EVENT } from '@/lib/constants/analyticsEvents'
 import {
   findChatProviderById,
-  isChatProviderType,
   resolveChatProvider,
 } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
@@ -187,14 +186,12 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
     return null
   })()
 
-  const providerOptions: Provider[] = providers
-    .filter((provider) => isChatProviderType(provider.type))
-    .map((p) => ({
-      kind: 'llm',
-      id: p.id,
-      name: p.name,
-      type: p.type,
-    }))
+  const providerOptions: Provider[] = providers.map((provider) => ({
+    kind: 'llm',
+    id: provider.id,
+    name: provider.name,
+    type: provider.type,
+  }))
 
   // Replace textarea content via execCommand so the browser's native undo
   // stack (Cmd+Z / Ctrl+Z) records the change. Falls back to form.setValue

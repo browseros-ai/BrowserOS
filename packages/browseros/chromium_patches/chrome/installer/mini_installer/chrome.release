@@ -1,8 +1,8 @@
 diff --git a/chrome/installer/mini_installer/chrome.release b/chrome/installer/mini_installer/chrome.release
-index 0f331c3e0f2a39813af0a33a162cefaff9324524..56773976378807c144a07ef9725a2261db013ad9 100644
+index 5add215198e878e161e75f1918aaf9826eb8e47c..b0a1c30e0bd667279eb188264f01fdeb7eff848e 100644
 --- a/chrome/installer/mini_installer/chrome.release
 +++ b/chrome/installer/mini_installer/chrome.release
-@@ -36,9 +36,11 @@ vk_swiftshader.dll: %(VersionDir)s\
+@@ -37,9 +37,11 @@ vk_swiftshader.dll: %(VersionDir)s\
  vk_swiftshader_icd.json: %(VersionDir)s\
  vulkan-1.dll: %(VersionDir)s\
  v8_context_snapshot.bin: %(VersionDir)s\
@@ -14,7 +14,7 @@ index 0f331c3e0f2a39813af0a33a162cefaff9324524..56773976378807c144a07ef9725a2261
  Extensions\*.*: %(VersionDir)s\Extensions\
  locales\*.pak: %(VersionDir)s\Locales
  
-@@ -63,6 +65,23 @@ PrivacySandboxAttestationsPreloaded\privacy-sandbox-attestations.dat: %(VersionD
+@@ -64,6 +66,23 @@ PrivacySandboxAttestationsPreloaded\privacy-sandbox-attestations.dat: %(VersionD
  MEIPreload\manifest.json: %(VersionDir)s\MEIPreload\
  MEIPreload\preloaded_data.pb: %(VersionDir)s\MEIPreload\
  

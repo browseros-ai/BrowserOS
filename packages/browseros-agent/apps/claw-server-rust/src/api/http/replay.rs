@@ -92,7 +92,7 @@ pub(super) async fn download_events(
     Ok(response)
 }
 
-async fn require_known_session(
+pub(super) async fn require_known_session(
     state: &AppState,
     request_id: &RequestId,
     session_id: &str,

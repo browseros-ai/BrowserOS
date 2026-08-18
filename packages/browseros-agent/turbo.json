@@ -1,0 +1,42 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": [
+    "bun.lock",
+    "bunfig.toml",
+    "tsconfig.json",
+    "biome.json",
+    "Cargo.toml",
+    "Cargo.lock",
+    "turbo.json"
+  ],
+  "globalEnv": ["CI"],
+  "globalPassThroughEnv": [
+    "VITE_PUBLIC_BROWSEROS_API",
+    "BROWSEROS_*",
+    "NODE_ENV"
+  ],
+  "tasks": {
+    "codegen": {
+      "outputs": ["generated/**", "src/**/*.gen.ts"]
+    },
+    "build": {
+      "dependsOn": ["^build", "codegen"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**", ".output/**", ".wxt/**", "build/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
+    },
+    "test": {
+      "dependsOn": ["codegen"],
+      "outputs": ["test-results/**", "coverage/**"]
+    },
+    "lint:rust": {
+      "cache": false
+    },
+    "test:rust": {
+      "cache": false
+    }
+  }
+}

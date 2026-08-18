@@ -97,14 +97,33 @@ export function importItemListLabel(items: readonly string[]): string {
   return items.map(importItemLabel).join(', ')
 }
 
-export function selectableItemsForSource(
+export const OPTIONAL_IMPORT_ITEMS: readonly BrowserOSImportItem[] = [
+  'searchEngines',
+  'extensions',
+]
+
+function isOptionalImportItem(item: BrowserOSImportItem): boolean {
+  return OPTIONAL_IMPORT_ITEMS.includes(item)
+}
+
+export function defaultImportItemsForSource(
   source: BrowserOSImportSource,
 ): BrowserOSImportItem[] {
-  return [
-    ...(source.recommendedItems.length
-      ? source.recommendedItems
-      : source.supportedItems),
-  ]
+  return source.supportedItems.filter((item) => !isOptionalImportItem(item))
+}
+
+export interface ImportSelectionSplit {
+  defaultItems: BrowserOSImportItem[]
+  optionalItems: BrowserOSImportItem[]
+}
+
+export function splitImportSelection(
+  items: readonly BrowserOSImportItem[],
+): ImportSelectionSplit {
+  return {
+    defaultItems: items.filter((item) => !isOptionalImportItem(item)),
+    optionalItems: items.filter(isOptionalImportItem),
+  }
 }
 
 export function sanitizeImportSelection(
@@ -143,7 +162,7 @@ export function importSourceSelectionChangeFor(
   const nextSource = sources[0]
   return {
     selectedSourceId: nextSource.id,
-    selectedItems: selectableItemsForSource(nextSource),
+    selectedItems: defaultImportItemsForSource(nextSource),
   }
 }
 
@@ -153,7 +172,7 @@ export function startImportRequestFor(
 ): BrowserOSStartImportRequest | null {
   const importItems =
     items === undefined
-      ? selectableItemsForSource(source)
+      ? defaultImportItemsForSource(source)
       : sanitizeImportSelection(source, items)
   if (importItems.length === 0) return null
   return {
@@ -176,6 +195,6 @@ export function importProgressTotal(
 }
 
 export const STARTER_PROMPTS: readonly string[] = [
-  'Book me the cheapest morning flight from SFO to NYC next Friday.',
+  'Search for the cheapest morning flight from SFO to NYC next Friday and show me the top three.',
   'Open the pull requests assigned to me on GitHub and summarize each.',
 ]

@@ -10,7 +10,7 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, initializeDb } from '../../../src/lib/db'
-import { agentDefinitions } from '../../../src/lib/db/schema'
+import { acpAgents } from '../../../src/lib/db/schema'
 
 describe('database initialization', () => {
   const tempDirs: string[] = []
@@ -28,7 +28,7 @@ describe('database initialization', () => {
     const dbPath = join(dir, 'nested', 'browseros.sqlite')
 
     const handle = initializeDb({ dbPath })
-    const rows = handle.db.select().from(agentDefinitions).all()
+    const rows = handle.db.select().from(acpAgents).all()
 
     expect(existsSync(dbPath)).toBe(true)
     expect(rows).toEqual([])
@@ -52,7 +52,7 @@ describe('database initialization', () => {
     })
 
     expectCurrentSchema(handle)
-    expect(handle.db.select().from(agentDefinitions).all()).toEqual([])
+    expect(handle.db.select().from(acpAgents).all()).toEqual([])
   })
 
   it('bootstraps the current schema when a migration directory is empty', () => {
@@ -67,7 +67,7 @@ describe('database initialization', () => {
 
     expect(handle.migrationsDir).toBe(null)
     expectCurrentSchema(handle)
-    expect(handle.db.select().from(agentDefinitions).all()).toEqual([])
+    expect(handle.db.select().from(acpAgents).all()).toEqual([])
   })
 
   it('skips empty packaged migration resources', () => {
@@ -82,7 +82,7 @@ describe('database initialization', () => {
     })
 
     expect(handle.migrationsDir).not.toBe(packagedMigrationsDir)
-    expect(handle.db.select().from(agentDefinitions).all()).toEqual([])
+    expect(handle.db.select().from(acpAgents).all()).toEqual([])
   })
 
   it('does not rerun old migrations after fallback schema bootstrap', () => {
@@ -98,7 +98,7 @@ describe('database initialization', () => {
     expect(() => initializeDb({ dbPath })).not.toThrow()
   })
 
-  it('scrubs stored provider config from legacy Hermes agent rows', () => {
+  it('deletes legacy agent records instead of migrating them', () => {
     const dir = mkTempDir()
     const dbPath = join(dir, 'browseros.sqlite')
     const sqlite = new BunDatabase(dbPath)
@@ -121,8 +121,9 @@ describe('database initialization', () => {
         hash text NOT NULL,
         created_at numeric
       );
+      CREATE TABLE produced_files (id text PRIMARY KEY NOT NULL);
     `)
-    for (const migration of expectedMigrationHistory.slice(0, 3)) {
+    for (const migration of expectedMigrationHistory.slice(0, 4)) {
       sqlite
         .prepare(
           'INSERT INTO __drizzle_migrations ("hash", "created_at") VALUES (?, ?)',
@@ -148,66 +149,29 @@ describe('database initialization', () => {
         `,
       )
       .run(
-        'legacy-hermes',
-        'Legacy Hermes',
-        'hermes',
+        'legacy-claude',
+        'Legacy Claude',
+        'claude',
         'default',
         'medium',
         'approve-all',
-        'agent:legacy-hermes:main',
+        'agent:legacy-claude:main',
         false,
         '{"apiKey":"secret"}',
-        1000,
-        1000,
-      )
-    sqlite
-      .prepare(
-        `
-          INSERT INTO agent_definitions (
-            id,
-            name,
-            adapter,
-            model_id,
-            reasoning_effort,
-            permission_mode,
-            session_key,
-            pinned,
-            adapter_config_json,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        'legacy-other',
-        'Legacy Other',
-        'removed-adapter',
-        'default',
-        'medium',
-        'approve-all',
-        'agent:legacy-other:main',
-        false,
-        '{"apiKey":"keep"}',
         1000,
         1000,
       )
     sqlite.close()
 
     const handle = initializeDb({ dbPath })
-    const rows = handle.sqlite
-      .query<{ id: string; adapterConfigJson: string | null }, []>(
-        `
-          SELECT id, adapter_config_json AS adapterConfigJson
-          FROM agent_definitions
-          ORDER BY id
-        `,
+    const legacyTable = handle.sqlite
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_definitions'",
       )
-      .all()
+      .get()
 
-    expect(rows).toEqual([
-      { id: 'legacy-hermes', adapterConfigJson: null },
-      { id: 'legacy-other', adapterConfigJson: '{"apiKey":"keep"}' },
-    ])
+    expect(legacyTable).toBeNull()
+    expect(handle.db.select().from(acpAgents).all()).toEqual([])
   })
 
   function expectCurrentSchema(handle: ReturnType<typeof initializeDb>): void {
@@ -217,9 +181,8 @@ describe('database initialization', () => {
           SELECT name FROM sqlite_master
           WHERE type = 'table'
             AND name IN (
-              'agent_definitions',
+              'acp_agents',
               'oauth_tokens',
-              'produced_files',
               '__drizzle_migrations'
             )
           ORDER BY name
@@ -230,9 +193,8 @@ describe('database initialization', () => {
 
     expect(tables).toEqual([
       '__drizzle_migrations',
-      'agent_definitions',
+      'acp_agents',
       'oauth_tokens',
-      'produced_files',
     ])
     const migrations = handle.sqlite
       .query<{ hash: string; createdAt: number }, []>(
@@ -270,5 +232,13 @@ const expectedMigrationHistory = [
   {
     hash: '34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52',
     createdAt: 1781916712443,
+  },
+  {
+    hash: '76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd',
+    createdAt: 1785893663690,
+  },
+  {
+    hash: '44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154',
+    createdAt: 1785900211901,
   },
 ]

@@ -5,7 +5,6 @@ export interface AuditFilters {
   status: TaskStatus | null
   site: string | null
   search: string
-  sort: { id: string; desc: boolean } | null
 }
 
 export const DEFAULT_FILTERS: AuditFilters = {
@@ -13,7 +12,6 @@ export const DEFAULT_FILTERS: AuditFilters = {
   status: null,
   site: null,
   search: '',
-  sort: null,
 }
 
 const KEYS = {
@@ -21,7 +19,6 @@ const KEYS = {
   status: 'status',
   site: 'site',
   q: 'q',
-  sort: 'sort',
 } as const
 
 const VALID_STATUS = new Set<TaskStatus>([
@@ -36,18 +33,11 @@ export function paramsToFilters(params: URLSearchParams): AuditFilters {
   const status = VALID_STATUS.has(statusRaw as TaskStatus)
     ? (statusRaw as TaskStatus)
     : null
-  const sortRaw = params.get(KEYS.sort)
-  let sort: AuditFilters['sort'] = null
-  if (sortRaw) {
-    const [id, dir] = sortRaw.split(':')
-    if (id) sort = { id, desc: dir !== 'asc' }
-  }
   return {
     agentSlug: params.get(KEYS.agent),
     status,
     site: params.get(KEYS.site),
     search: params.get(KEYS.q) ?? '',
-    sort,
   }
 }
 
@@ -57,11 +47,5 @@ export function filtersToParams(filters: AuditFilters): URLSearchParams {
   if (filters.status) params.set(KEYS.status, filters.status)
   if (filters.site) params.set(KEYS.site, filters.site)
   if (filters.search) params.set(KEYS.q, filters.search)
-  if (filters.sort) {
-    params.set(
-      KEYS.sort,
-      `${filters.sort.id}:${filters.sort.desc ? 'desc' : 'asc'}`,
-    )
-  }
   return params
 }

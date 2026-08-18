@@ -27,6 +27,7 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
+import { IncognitoNotice } from './IncognitoNotice'
 
 /**
  * @public
@@ -51,6 +52,7 @@ export const Chat = () => {
     isRestoringConversation,
     hasRestorableSession,
     restoreSessionFromOtherTab,
+    isIncognito,
     retryLastTurn,
   } = useChatSessionContext()
 
@@ -252,6 +254,8 @@ export const Chat = () => {
         )}
         {chatErrorProps && <ChatError {...chatErrorProps} />}
       </main>
+
+      {isIncognito && <IncognitoNotice />}
 
       <ChatFooter
         mode={mode}

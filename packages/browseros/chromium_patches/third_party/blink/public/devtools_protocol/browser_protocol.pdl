@@ -1,8 +1,8 @@
 diff --git a/third_party/blink/public/devtools_protocol/browser_protocol.pdl b/third_party/blink/public/devtools_protocol/browser_protocol.pdl
-index b7f11d4131dbe..c3d3ab36fac47 100644
+index c8e47c29b4d06431381495a5d42a40eaead4879d..bc9a95da6fa8c259151f475c488e2823ac5c99b1 100644
 --- a/third_party/blink/public/devtools_protocol/browser_protocol.pdl
 +++ b/third_party/blink/public/devtools_protocol/browser_protocol.pdl
-@@ -12,6 +12,7 @@ include domains/Accessibility.pdl
+@@ -13,6 +13,7 @@ include domains/Ads.pdl
  include domains/Animation.pdl
  include domains/Audits.pdl
  include domains/Autofill.pdl
@@ -10,7 +10,7 @@ index b7f11d4131dbe..c3d3ab36fac47 100644
  include domains/BackgroundService.pdl
  include domains/BluetoothEmulation.pdl
  include domains/Browser.pdl
-@@ -32,6 +33,7 @@ include domains/FedCm.pdl
+@@ -33,6 +34,7 @@ include domains/FedCm.pdl
  include domains/Fetch.pdl
  include domains/FileSystem.pdl
  include domains/HeadlessExperimental.pdl

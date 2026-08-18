@@ -203,7 +203,110 @@ function displayedNumbers(): string[] {
   )
 }
 
+function expectClasses(
+  element: Element | null | undefined,
+  classNames: string[],
+): void {
+  const actual = element?.getAttribute('class') ?? ''
+  for (const className of classNames) expect(actual).toContain(className)
+}
+
 describe('SavedStatsBand', () => {
+  it('uses the Cyanotype range control and inline stats composition', async () => {
+    await render()
+
+    const section = container.querySelector('[data-saved-stats]')
+    const header = container.querySelector('[data-saved-stats-header]')
+    const heading = header?.querySelector('h2')
+    const tablist = container.querySelector('[role="tablist"]')
+    const allTimeTab = tab('All time')
+    const card = container.querySelector('[data-saved-stats-card]')
+    const savedValue = container.querySelector('[data-stat="tokens-saved"]')
+    const savingsPill = container.querySelector('[data-savings-pill]')
+    const percentage = container.querySelector('[data-stat="percentage"]')
+    const track = container.querySelector('[data-budget-track]')
+    const fill = container.querySelector('[data-used-fill]')
+    const usedLabel = container.querySelector(
+      '[data-stat="browserclaw-tokens"]',
+    )?.parentElement
+    const comparisonLabel = container.querySelector(
+      '[data-stat="comparison-tokens"]',
+    )?.parentElement
+    const humanTime = container.querySelector('[data-stat="human-time"]')
+    const sessionMetrics = container.querySelector(
+      '[data-session-tool-metrics]',
+    )
+
+    // The heading stays; the live-running status is gone.
+    expect(heading?.textContent).toBe('Since you started')
+    expect(container.querySelector('[data-running-status]')).toBeNull()
+
+    expectClasses(section, ['gap-4'])
+    expectClasses(header, ['flex-wrap', 'items-center', 'gap-3'])
+    expectClasses(heading, [
+      'font-semibold',
+      'text-[18px]',
+      'text-cyanotype-ink',
+      'leading-7',
+    ])
+    expectClasses(tablist, [
+      'ml-auto',
+      'h-9',
+      'rounded-[9px]',
+      'bg-cyanotype-well',
+      'p-1',
+    ])
+    expectClasses(allTimeTab, [
+      'h-7',
+      'rounded-md',
+      'font-normal',
+      'text-[12px]',
+      'text-cyanotype-muted',
+      'data-active:bg-white',
+      'data-active:font-semibold',
+      'data-active:text-cyanotype-blue',
+    ])
+    expectClasses(card, [
+      'rounded-[9px]',
+      'border-cyanotype-border',
+      'bg-card',
+      'px-5',
+      'py-4',
+    ])
+    expectClasses(savedValue, [
+      'font-extrabold',
+      'text-[26px]',
+      'text-cyanotype-ink',
+      'leading-none',
+      'tracking-[-0.02em]',
+    ])
+    expectClasses(savingsPill, [
+      'rounded-full',
+      'bg-green-tint',
+      'px-2.5',
+      'py-1',
+    ])
+    expectClasses(percentage, ['font-bold', 'text-[13px]', 'text-green'])
+    expectClasses(usedLabel, ['font-medium', 'text-cyanotype-soft'])
+    expectClasses(comparisonLabel, ['text-cyanotype-muted'])
+    expectClasses(track, ['h-1.5', 'rounded-full', 'bg-cyanotype-well'])
+    expectClasses(fill, ['rounded-full', 'bg-green'])
+    expectClasses(humanTime, [
+      'font-extrabold',
+      'text-[26px]',
+      'tracking-[-0.02em]',
+    ])
+    expectClasses(sessionMetrics, [
+      'min-w-0',
+      'max-w-full',
+      'break-all',
+      'font-extrabold',
+      'text-[26px]',
+      'tracking-[-0.02em]',
+    ])
+    expect(usedLabel?.textContent).toBe('used 100')
+  })
+
   it('switches with arrow keys and click, including a zero recent window', async () => {
     await render()
 
@@ -407,26 +510,43 @@ describe('SavedStatsBand', () => {
     expect(container.textContent).toContain(
       'a screenshot-first agent would spend',
     )
-    expect(container.textContent).toContain(
-      'compact DOM & tool responses instead of a screenshot per call',
-    )
     expect(container.textContent).not.toContain('DOM-dump agent')
     expect(container.textContent).not.toContain(
       'scaled screenshots instead of full-page DOM dumps',
     )
   })
 
-  it('stacks at narrow widths and disables the decorative loop for reduced motion', async () => {
+  it('keeps contract-maximum counters inside the responsive metrics column', async () => {
+    const maximum = Number.MAX_SAFE_INTEGER
+    await render(
+      stats({
+        allTime: statsWindow({
+          sessionCount: maximum,
+          toolCallCount: maximum,
+        }),
+      }),
+    )
+
+    const metrics = container.querySelector('[data-session-tool-metrics]')
+    expect(metrics?.textContent).toContain('9,007,199,254,740,991')
+    expectClasses(metrics, ['min-w-0', 'max-w-full', 'break-all'])
+    expect(metrics?.getAttribute('class')).not.toContain('whitespace-nowrap')
+  })
+
+  it('encodes a narrow-first stack and keeps the bounded progress fill responsive', async () => {
     await render()
 
     const card = container.querySelector('[data-saved-stats-card]')
+    const panel = card?.firstElementChild
     const track = container.querySelector('[data-budget-track]')
-    const ping = container.querySelector('[data-used-marker-ping]')
-    expect(card?.getAttribute('class')).toContain('flex-col')
-    expect(card?.getAttribute('class')).toContain('md:flex-row')
+    const fill = container.querySelector('[data-used-fill]')
+    expect(card?.getAttribute('class')).toContain('rounded-[9px]')
+    expect(panel?.getAttribute('class')).toContain('flex-col')
     expect(track?.getAttribute('class')).toContain('overflow-hidden')
-    expect(ping?.getAttribute('class')).toContain('animate-ping')
-    expect(ping?.getAttribute('class')).toContain('motion-reduce:animate-none')
+    expect(fill?.getAttribute('class')).toContain('transition-[width]')
+    expect(fill?.getAttribute('class')).toContain(
+      'motion-reduce:transition-none',
+    )
     expect(container.querySelector('[data-stat="tokens-saved"]')).not.toBeNull()
   })
 })

@@ -3,7 +3,7 @@ export class ApiResponseError extends Error {
 
   constructor(public readonly response: Response) {
     super(
-      `BrowserClaw API request failed with status ${response.status.toString()}`,
+      `BrowserOS neo API request failed with status ${response.status.toString()}`,
     )
   }
 }

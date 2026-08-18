@@ -26,7 +26,6 @@ const MAX_QUEUE_SIZE: usize = 256;
 const SERVER_VERSION: &str = "server_version";
 const OS_PLATFORM: &str = "os_platform";
 const PROCESS_PERSON_PROFILE: &str = "$process_person_profile";
-const GEOIP_DISABLE: &str = "$geoip_disable";
 const IS_SERVER: &str = "$is_server";
 
 #[derive(Debug, Clone)]
@@ -210,7 +209,6 @@ impl AnalyticsService {
                 Value::String(events::platform_token().to_string()),
             ),
             (PROCESS_PERSON_PROFILE, Value::Bool(false)),
-            (GEOIP_DISABLE, Value::Bool(true)),
             (IS_SERVER, Value::Bool(true)),
         ] {
             if event.insert_prop(key, value).is_err() {
@@ -272,7 +270,6 @@ async fn build_client(config: &AnalyticsConfig, distinct_id: &str) -> AppResult<
         .api_key(project_key.clone())
         .host(config.host.clone())
         .request_timeout_seconds(REQUEST_TIMEOUT_SECONDS)
-        .disable_geoip(true)
         .is_server(true)
         .flush_at(1usize)
         .max_queue_size(MAX_QUEUE_SIZE)
@@ -290,7 +287,6 @@ fn final_allowlist(mut event: Event) -> Option<Event> {
     let definition = events::by_wire_name(event.event_name())?;
     if !definition.required_values_are_normalized(event.properties())
         || event.properties().get(PROCESS_PERSON_PROFILE) != Some(&Value::Bool(false))
-        || event.properties().get(GEOIP_DISABLE) != Some(&Value::Bool(true))
         || event.properties().get(IS_SERVER) != Some(&Value::Bool(true))
     {
         return None;
@@ -303,11 +299,7 @@ fn final_allowlist(mut event: Event) -> Option<Event> {
             !definition.allows_property(key)
                 && !matches!(
                     key.as_str(),
-                    SERVER_VERSION
-                        | OS_PLATFORM
-                        | PROCESS_PERSON_PROFILE
-                        | GEOIP_DISABLE
-                        | IS_SERVER
+                    SERVER_VERSION | OS_PLATFORM | PROCESS_PERSON_PROFILE | IS_SERVER
                 )
         })
         .cloned()
@@ -371,7 +363,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wire_payload_is_personless_and_exactly_allowlisted() -> anyhow::Result<()> {
+    async fn wire_payload_is_personless_geoip_enabled_and_exactly_allowlisted() -> anyhow::Result<()>
+    {
         let directory = tempdir()?;
         let stable_id = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
         persist_state(
@@ -406,7 +399,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true
             })
         );
@@ -463,7 +455,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );
@@ -478,7 +469,7 @@ mod tests {
             (SERVER_VERSION, json!("1")),
             (OS_PLATFORM, json!("linux")),
             (PROCESS_PERSON_PROFILE, json!(false)),
-            (GEOIP_DISABLE, json!(true)),
+            ("$geoip_disable", json!(true)),
             (IS_SERVER, json!(true)),
             ("$os_version", json!("private")),
             ("$lib", json!("posthog-rs")),
@@ -488,7 +479,8 @@ mod tests {
         }
         let filtered = final_allowlist(valid)
             .ok_or_else(|| anyhow::anyhow!("catalog event was unexpectedly dropped"))?;
-        assert_eq!(filtered.properties().len(), 5);
+        assert_eq!(filtered.properties().len(), 4);
+        assert!(!filtered.properties().contains_key("$geoip_disable"));
         assert!(!filtered.properties().contains_key("$os_version"));
         assert!(!filtered.properties().contains_key("$lib"));
         assert!(!filtered.properties().contains_key("unexpected"));

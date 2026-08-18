@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards, observers},
+    api::mcp::{effects, guards, helper_runtime, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -22,7 +22,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -200,8 +200,16 @@ const EFFECTS: &[NamedToolEffect] = &[
         name: "session-naming",
         run: effects::session_naming::apply,
     },
+    NamedToolEffect {
+        name: "helper-discovery",
+        run: helper_runtime::discovery,
+    },
 ];
 
+// The distiller (auto-capture of a successful run into a candidate helper) is
+// intentionally not wired. Self-healing keeps its agent-driven surface
+// (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
+// auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
 const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
     name: "audit",
     run: observers::audit::apply,
@@ -238,7 +246,7 @@ async fn dispatch_tool_call_with(
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
         return Err(McpError::invalid_request(
-            "BrowserClaw session is no longer live",
+            "BrowserOS neo session is no longer live",
             None,
         ));
     }
@@ -389,6 +397,34 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     }
     let result = match &call.browser_session {
         Some(browser_session) => {
+            // Script tools drive primitives straight against the shared browser
+            // session, bypassing the guards and audit effect the pipeline runs
+            // per tool. Inject a hook so each primitive is ownership-checked and
+            // recorded as a child of this script's dispatch.
+            let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
+            let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
+                if is_script && call.identity.is_some() {
+                    Some(
+                        Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
+                            call.clone(),
+                        )) as Arc<dyn browseros_mcp::InnerCallHook>,
+                    )
+                } else {
+                    None
+                };
+            // Hot-load the helpers the agent's owned-tab hosts make relevant, so
+            // the script can call them by name. Cheap-gated when no helpers exist.
+            let preloaded_helpers = match &call.identity {
+                Some(identity) if is_script => {
+                    crate::api::mcp::helper_runtime::preload_helpers(
+                        &call.state,
+                        &identity.ownership_key,
+                        browser_session,
+                    )
+                    .await
+                }
+                _ => Vec::new(),
+            };
             let ctx = ToolCtx::new(BrowserToolOptions {
                 session: browser_session.clone(),
                 defaults: BrowserToolDefaults {
@@ -397,6 +433,8 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 },
                 cancel: call.cancel.clone(),
                 output_files: call.output_files.clone(),
+                inner_call_hook,
+                preloaded_helpers,
             });
             match execute_tool(call.tool(), call.raw_args.clone(), &ctx).await {
                 Ok(result) => result,
@@ -407,7 +445,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             }
         }
         None => ToolResult::error(
-            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserClaw and check the cockpit connection status; do not fall back to another browser tool.",
+            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool.",
         ),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
@@ -965,7 +1003,7 @@ mod tests {
         };
         assert_eq!(
             error.message.as_ref(),
-            "BrowserClaw session is no longer live"
+            "BrowserOS neo session is no longer live"
         );
         assert!(
             call.state
@@ -1065,6 +1103,7 @@ mod tests {
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
+                "helper-discovery",
             ]
         );
         assert_eq!(

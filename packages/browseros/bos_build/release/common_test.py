@@ -10,10 +10,12 @@ from ..core.products import get_product_descriptor
 from ..lib.env import EnvConfig
 from . import common
 from .common import (
+    generate_release_notes,
     generate_appcast_item,
     get_download_path_mapping,
     list_all_versions,
     list_legacy_versions,
+    validate_release_metadata,
 )
 
 ARTIFACT = {
@@ -48,6 +50,136 @@ class GenerateAppcastItemTest(unittest.TestCase):
         self.assertNotIn("sparkle:os=", item)
 
 
+def _release_metadata(
+    platform: str,
+    artifact_keys: set[str],
+    *,
+    product: str = "browserclaw",
+    version: str = "0.49.0",
+    source_sha: str = "a" * 40,
+    run_id: str = "123",
+    run_attempt: str = "1",
+) -> dict:
+    prefix = "BrowserOS_neo" if product == "browserclaw" else "BrowserOS"
+    return {
+        "product": product,
+        "version": version,
+        "platform": platform,
+        "source_sha": source_sha,
+        "workflow_run_id": run_id,
+        "workflow_run_attempt": run_attempt,
+        "artifacts": {
+            key: {
+                "filename": f"{prefix}_{key}",
+                "url": f"https://cdn.browseros.com/{prefix}_{key}",
+            }
+            for key in artifact_keys
+        },
+    }
+
+
+class ReleaseContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.metadata = {
+            "macos": _release_metadata(
+                "macos",
+                {"arm64", "x64", "universal"},
+            ),
+            "win": _release_metadata(
+                "win",
+                {"x64_installer", "x64_zip"},
+            ),
+            "linux": _release_metadata(
+                "linux",
+                {"x64_appimage", "x64_deb"},
+            ),
+        }
+
+    def test_all_universal_contract_selects_exactly_seven_current_run_assets(self):
+        selected = validate_release_metadata(
+            self.metadata,
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="all",
+            macos_arch="universal",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+            workflow_run_attempt="1",
+        )
+
+        self.assertEqual(set(selected), {"macos", "win", "linux"})
+        self.assertEqual(
+            sum(len(release["artifacts"]) for release in selected.values()),
+            7,
+        )
+
+    def test_stale_run_provenance_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "workflow_run_id"):
+            validate_release_metadata(
+                self.metadata,
+                version="0.49.0",
+                product_id="browserclaw",
+                platforms="all",
+                macos_arch="universal",
+                source_sha="a" * 40,
+                workflow_run_id="999",
+                workflow_run_attempt="1",
+            )
+
+    def test_one_run_accepts_platforms_from_different_rerun_attempts(self):
+        self.metadata["win"]["workflow_run_attempt"] = "2"
+
+        selected = validate_release_metadata(
+            self.metadata,
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="all",
+            macos_arch="universal",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+        )
+
+        self.assertEqual(selected["linux"]["workflow_run_attempt"], "1")
+        self.assertEqual(selected["win"]["workflow_run_attempt"], "2")
+
+    def test_missing_or_extra_artifact_keys_are_rejected(self):
+        del self.metadata["win"]["artifacts"]["x64_zip"]
+        self.metadata["win"]["artifacts"]["arm64_zip"] = {
+            "filename": "stale.zip",
+            "url": "https://cdn.browseros.com/stale.zip",
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "artifact keys"):
+            validate_release_metadata(
+                self.metadata,
+                version="0.49.0",
+                product_id="browserclaw",
+                platforms="all",
+                macos_arch="universal",
+            )
+
+    def test_partial_platform_contract_excludes_stale_other_platforms(self):
+        selected = validate_release_metadata(
+            self.metadata,
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="windows",
+            macos_arch="universal",
+        )
+
+        self.assertEqual(set(selected), {"win"})
+
+    def test_release_notes_use_product_display_name(self):
+        notes = generate_release_notes(
+            "0.49.0",
+            {"win": self.metadata["win"]},
+            get_product_descriptor("browserclaw"),
+        )
+
+        self.assertIn("## BrowserOS neo v0.49.0", notes)
+        self.assertNotIn("## BrowserOS v", notes)
+
+
 # Golden copy of the pre-productization DOWNLOAD_PATH_MAPPING constant —
 # get_download_path_mapping(browseros) must stay byte-identical to it.
 BROWSEROS_DOWNLOAD_GOLDEN = {
@@ -69,18 +201,18 @@ BROWSEROS_DOWNLOAD_GOLDEN = {
 
 BROWSERCLAW_DOWNLOAD_GOLDEN = {
     "macos": {
-        "arm64": "download/BrowserClaw-arm64.dmg",
-        "x64": "download/BrowserClaw-x86_64.dmg",
-        "universal": "download/BrowserClaw.dmg",
+        "arm64": "download/BrowserOS_neo-arm64.dmg",
+        "x64": "download/BrowserOS_neo-x86_64.dmg",
+        "universal": "download/BrowserOS_neo.dmg",
     },
     "win": {
-        "x64_installer": "download/BrowserClaw_installer.exe",
+        "x64_installer": "download/BrowserOS_neo_installer.exe",
     },
     "linux": {
-        "x64_appimage": "download/BrowserClaw.AppImage",
-        "x64_deb": "download/BrowserClaw.deb",
-        "arm64_appimage": "download/BrowserClaw-arm64.AppImage",
-        "arm64_deb": "download/BrowserClaw-arm64.deb",
+        "x64_appimage": "download/BrowserOS_neo.AppImage",
+        "x64_deb": "download/BrowserOS_neo.deb",
+        "arm64_appimage": "download/BrowserOS_neo-arm64.AppImage",
+        "arm64_deb": "download/BrowserOS_neo-arm64.deb",
     },
 }
 
@@ -143,7 +275,12 @@ class ListAllVersionsTest(unittest.TestCase):
     def test_paginates_truncated_listings(self):
         prefix = "releases/browseros/"
         client = _FakeR2Client(
-            {prefix: [_page(prefix, ["0.29.0"], next_token=1), _page(prefix, ["0.31.0"])]}
+            {
+                prefix: [
+                    _page(prefix, ["0.29.0"], next_token=1),
+                    _page(prefix, ["0.31.0"]),
+                ]
+            }
         )
 
         with mock.patch.object(common, "get_r2_client", return_value=client):

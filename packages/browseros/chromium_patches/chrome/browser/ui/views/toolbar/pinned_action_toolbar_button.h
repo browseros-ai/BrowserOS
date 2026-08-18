@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
-index 5faebc2c5021d..8bb15d8b2e985 100644
+index d9b07af5c000e4d018613b8d6bd2e9a9bc0d2e17..d9ecfef745994d0d1f2528c58d68dbc84b24bb2b 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
 +++ b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
-@@ -52,11 +52,13 @@ class PinnedActionToolbarButton : public ToolbarButton {
+@@ -53,11 +53,13 @@ class PinnedActionToolbarButton : public ToolbarButton {
    }
    void SetActionEngaged(bool action_engaged);
    void UpdateIcon() override;

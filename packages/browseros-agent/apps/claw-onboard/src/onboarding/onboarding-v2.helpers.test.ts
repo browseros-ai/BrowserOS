@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'bun:test'
+import type { BrowserOSImportSource } from './browseros-onboarding-api'
 import {
   completedImportItemCount,
   DEFAULT_BROWSEROS_IMPORT_SOURCE_ID,
+  defaultImportItemsForSource,
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
   importSourceSelectionChangeFor,
   MOCK_BROWSEROS_IMPORT_SOURCES,
+  OPTIONAL_IMPORT_ITEMS,
   STARTER_PROMPTS,
   sanitizeImportSelection,
-  selectableItemsForSource,
   selectedSourceById,
+  splitImportSelection,
   startImportRequestFor,
 } from './onboarding-v2.helpers'
 
@@ -58,7 +61,9 @@ describe('source selection helpers', () => {
       ),
     ).toEqual({
       selectedSourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
-      selectedItems: selectableItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+      selectedItems: defaultImportItemsForSource(
+        MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      ),
     })
   })
 
@@ -69,15 +74,6 @@ describe('source selection helpers', () => {
         'chrome-personal',
       ),
     ).toBeNull()
-  })
-
-  it('falls back to supported items when recommended items are empty', () => {
-    expect(
-      selectableItemsForSource({
-        ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
-        recommendedItems: [],
-      }),
-    ).toEqual(MOCK_BROWSEROS_IMPORT_SOURCES[0].supportedItems)
   })
 
   it('sanitizes explicit item selections against supported items in source order', () => {
@@ -111,7 +107,7 @@ describe('source selection helpers', () => {
   it('builds the Chromium start-import request for one source', () => {
     expect(startImportRequestFor(MOCK_BROWSEROS_IMPORT_SOURCES[0])).toEqual({
       sourceId: 'chrome-work',
-      items: MOCK_BROWSEROS_IMPORT_SOURCES[0].recommendedItems,
+      items: ['history', 'bookmarks', 'cookies', 'passwords', 'autofill'],
     })
   })
 
@@ -144,6 +140,67 @@ describe('source selection helpers', () => {
         supportedItems: [],
       }),
     ).toBeNull()
+  })
+})
+
+describe('default and optional import items', () => {
+  it('treats only search engines and extensions as optional', () => {
+    expect([...OPTIONAL_IMPORT_ITEMS]).toEqual(['searchEngines', 'extensions'])
+  })
+
+  it('defaults every supported non-optional item', () => {
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[0]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords', 'autofill'])
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[1]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords', 'autofill'])
+    expect(
+      defaultImportItemsForSource(MOCK_BROWSEROS_IMPORT_SOURCES[2]),
+    ).toEqual(['history', 'bookmarks', 'cookies', 'passwords'])
+  })
+
+  it('uses supported items instead of Chromium recommendations', () => {
+    const partiallyRecommended: BrowserOSImportSource = {
+      ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      supportedItems: ['extensions', 'autofill', 'searchEngines', 'history'],
+      recommendedItems: ['extensions'],
+    }
+
+    expect(defaultImportItemsForSource(partiallyRecommended)).toEqual([
+      'autofill',
+      'history',
+    ])
+  })
+
+  it('leaves optional-only sources unchecked by default', () => {
+    const optionalOnly: BrowserOSImportSource = {
+      ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      supportedItems: ['extensions', 'searchEngines'],
+      recommendedItems: ['extensions'],
+    }
+
+    expect(defaultImportItemsForSource(optionalOnly)).toEqual([])
+    expect(startImportRequestFor(optionalOnly)).toBeNull()
+    expect(startImportRequestFor(optionalOnly, ['searchEngines'])).toEqual({
+      sourceId: 'chrome-work',
+      items: ['searchEngines'],
+    })
+  })
+
+  it('splits default and optional items without changing their order', () => {
+    expect(
+      splitImportSelection([
+        'history',
+        'searchEngines',
+        'cookies',
+        'extensions',
+        'passwords',
+      ]),
+    ).toEqual({
+      defaultItems: ['history', 'cookies', 'passwords'],
+      optionalItems: ['searchEngines', 'extensions'],
+    })
   })
 })
 

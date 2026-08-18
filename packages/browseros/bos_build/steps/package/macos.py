@@ -3,11 +3,18 @@
 
 import shutil
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Optional, List, Dict
 
 from ...core.context import Context
 from ...core.step import Step, ValidationError, step
-from ...lib.utils import IS_MACOS, log_error, log_info, log_success, run_command
+from ...lib.utils import (
+    IS_MACOS,
+    log_error,
+    log_info,
+    log_success,
+    log_warning,
+    run_command,
+)
 
 
 @step("package_macos", phase="package", platforms=("macos",))
@@ -54,12 +61,15 @@ class MacOSPackageModule(Step):
     ) -> None:
         from ..sign.macos import check_environment
 
-        env_ok, env_vars = check_environment()
+        env_ok, env_vars = check_environment(ctx.env)
         if not env_ok:
             raise ValidationError("Signing environment not configured")
 
         certificate_name = env_vars["certificate_name"]
         keychain_profile = env_vars.get("keychain_profile", "notarytool-profile")
+        keychain_path = (
+            Path(env_vars["keychain_path"]) if env_vars.get("keychain_path") else None
+        )
 
         if not create_signed_notarized_dmg(
             app_path,
@@ -68,8 +78,12 @@ class MacOSPackageModule(Step):
             ctx.product.mac.dmg_volume_name,
             pkg_dmg_path,
             keychain_profile,
+            keychain_path,
+            env_vars,
         ):
             raise RuntimeError("Failed to create signed and notarized DMG")
+
+
 def create_dmg(
     app_path: Path,
     dmg_path: Path,
@@ -136,7 +150,11 @@ def create_dmg(
         return False
 
 
-def sign_dmg(dmg_path: Path, certificate_name: str) -> bool:
+def sign_dmg(
+    dmg_path: Path,
+    certificate_name: str,
+    keychain_path: Optional[Path] = None,
+) -> bool:
     """Sign a DMG file"""
     log_info(f"\n🔏 Signing DMG: {dmg_path.name}")
 
@@ -145,16 +163,17 @@ def sign_dmg(dmg_path: Path, certificate_name: str) -> bool:
         return False
 
     try:
-        run_command(
-            [
-                "codesign",
-                "--sign",
-                certificate_name,
-                "--force",
-                "--timestamp",
-                str(dmg_path),
-            ]
-        )
+        cmd = [
+            "codesign",
+            "--sign",
+            certificate_name,
+            "--force",
+            "--timestamp",
+        ]
+        if keychain_path:
+            cmd.extend(["--keychain", str(keychain_path)])
+        cmd.append(str(dmg_path))
+        run_command(cmd)
 
         # Verify signature
         log_info("🔍 Verifying DMG signature...")
@@ -167,7 +186,12 @@ def sign_dmg(dmg_path: Path, certificate_name: str) -> bool:
         return False
 
 
-def notarize_dmg(dmg_path: Path, keychain_profile: str = "notarytool-profile") -> bool:
+def notarize_dmg(
+    dmg_path: Path,
+    keychain_profile: str = "notarytool-profile",
+    keychain_path: Optional[Path] = None,
+    notarization_env: Optional[Dict[str, str]] = None,
+) -> bool:
     """Notarize a DMG file"""
     log_info(f"\n📤 Notarizing DMG: {dmg_path.name}")
 
@@ -178,18 +202,41 @@ def notarize_dmg(dmg_path: Path, keychain_profile: str = "notarytool-profile") -
     try:
         # Submit for notarization
         log_info("📤 Submitting DMG for notarization (this may take a while)...")
-        result = run_command(
-            [
-                "xcrun",
-                "notarytool",
-                "submit",
-                str(dmg_path),
-                "--keychain-profile",
-                keychain_profile,
-                "--wait",
-            ],
-            check=False,
-        )
+        submit_cmd = [
+            "xcrun",
+            "notarytool",
+            "submit",
+            str(dmg_path),
+            "--keychain-profile",
+            keychain_profile,
+            "--wait",
+        ]
+        if keychain_path:
+            submit_cmd.extend(["--keychain", str(keychain_path)])
+        result = run_command(submit_cmd, check=False)
+
+        if (
+            result.returncode != 0
+            and not keychain_path
+            and notarization_env is not None
+        ):
+            log_warning("Keychain profile unavailable — passing credentials directly")
+            result = run_command(
+                [
+                    "xcrun",
+                    "notarytool",
+                    "submit",
+                    str(dmg_path),
+                    "--apple-id",
+                    notarization_env["apple_id"],
+                    "--team-id",
+                    notarization_env["team_id"],
+                    "--password",
+                    notarization_env["notarization_pwd"],
+                    "--wait",
+                ],
+                check=False,
+            )
 
         log_info(result.stdout)
         if result.stderr:
@@ -271,6 +318,8 @@ def create_signed_notarized_dmg(
     volume_name: str = "BrowserOS",
     pkg_dmg_path: Path | None = None,
     keychain_profile: str = "notarytool-profile",
+    keychain_path: Optional[Path] = None,
+    notarization_env: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Create, sign, and notarize a DMG in one go"""
     log_info("=" * 70)
@@ -282,11 +331,11 @@ def create_signed_notarized_dmg(
         return False
 
     # Sign DMG
-    if not sign_dmg(dmg_path, certificate_name):
+    if not sign_dmg(dmg_path, certificate_name, keychain_path):
         return False
 
     # Notarize DMG
-    if not notarize_dmg(dmg_path, keychain_profile):
+    if not notarize_dmg(dmg_path, keychain_profile, keychain_path, notarization_env):
         return False
 
     log_info("=" * 70)

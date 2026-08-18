@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
-index a394820870334..f14bcf27710e5 100644
+index 7898391cc7d91e1e19e939ddfede0fac3d352da0..c6f292340fc65b6ba4aa709b1bdabb4abf992be2 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
-@@ -350,9 +350,8 @@ void SidePanelCoordinator::PopulateSidePanel(
+@@ -335,9 +335,8 @@ void SidePanelCoordinator::PopulateSidePanel(
    entry->OnEntryShown();
    if (previous_entry) {
      previous_entry->OnEntryHidden();

@@ -1,0 +1,273 @@
+SkillOrigin:
+  type: string
+  enum: [agent, manual, directory]
+  description: How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+Skill:
+  type: object
+  additionalProperties: false
+  required:
+    - name
+    - description
+    - origin
+    - version
+    - linkedAgents
+    - runCount
+    - cleanRunCount
+    - createdAt
+    - updatedAt
+  properties:
+    name:
+      type: string
+      pattern: '^[a-z0-9-]+$'
+      description: Slug used as the on-disk folder name and the agent command.
+    description:
+      type: string
+    site:
+      type: string
+      description: Primary site the skill operates on, when known.
+    origin:
+      $ref: '#/SkillOrigin'
+    sourceSessionId:
+      type: string
+      description: The session the skill was authored from, when applicable.
+    version:
+      type: integer
+      format: int64
+      minimum: 1
+    linkedAgents:
+      type: array
+      items:
+        $ref: ./connections.yaml#/Harness
+      description: Agents the skill is currently linked into.
+    runCount:
+      type: integer
+      format: int64
+      minimum: 0
+    cleanRunCount:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Runs whose every tool dispatch succeeded.
+    firstRunTokens:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: Estimated tokens for run 1. Present once the skill has at least one measured run.
+    latestRunTokens:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: Estimated tokens for the most recent run. Present once the skill has at least one measured run.
+    lastRunAt:
+      type: integer
+      format: int64
+      description: Epoch ms of the most recent run. Absent until the skill has run.
+    createdAt:
+      type: integer
+      format: int64
+    updatedAt:
+      type: integer
+      format: int64
+    tokenSavings:
+      $ref: '#/SkillTokenSavings'
+SkillList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/Skill'
+SkillRun:
+  type: object
+  additionalProperties: false
+  required:
+    - id
+    - skillName
+    - sessionId
+    - runNumber
+    - agentId
+    - clean
+    - createdAt
+  properties:
+    id:
+      type: string
+    skillName:
+      type: string
+    sessionId:
+      type: string
+    runNumber:
+      type: integer
+      format: int64
+      minimum: 1
+    agentId:
+      type: string
+    tokens:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+    durationMs:
+      type: integer
+      format: int64
+      minimum: 0
+    toolCount:
+      type: integer
+      format: int64
+      minimum: 0
+    clean:
+      type: boolean
+      description: True when every tool dispatch in the run succeeded.
+    erroredTool:
+      type: string
+      description: The tool that failed, when the run is not clean.
+    createdAt:
+      type: integer
+      format: int64
+SkillRunList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/SkillRun'
+    nextCursor:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Cursor for the next historical page of runs.
+SkillDetail:
+  type: object
+  additionalProperties: false
+  required: [skill, body, runs, tokenSavings]
+  properties:
+    skill:
+      $ref: '#/Skill'
+    body:
+      type: string
+      description: The raw SKILL.md contents.
+    runs:
+      type: array
+      items:
+        $ref: '#/SkillRun'
+    tokenSavings:
+      $ref: '#/SkillTokenSavings'
+SkillTokenSavings:
+  type: object
+  additionalProperties: false
+  required: [saved, otherBrowsers, used, measuredRunCount]
+  properties:
+    saved:
+      type: integer
+      format: int64
+      description: Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+    otherBrowsers:
+      type: integer
+      format: int64
+      description: Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+    used:
+      type: integer
+      format: int64
+      description: Tokens BrowserOS neo actually used across the measured runs.
+    measuredRunCount:
+      type: integer
+      format: int64
+      description: How many of the skill's runs had a measured efficiency projection.
+SkillCreate:
+  type: object
+  additionalProperties: false
+  required: [name, description]
+  properties:
+    name:
+      type: string
+      pattern: '^[a-z0-9-]+$'
+    description:
+      type: string
+    site:
+      type: string
+    steps:
+      type: array
+      items:
+        type: string
+    learnedNotes:
+      type: array
+      items:
+        type: string
+    linkAgents:
+      type: array
+      items:
+        $ref: ./connections.yaml#/Harness
+      description: Agents to link into. Defaults to every connected agent when omitted.
+SkillUpdate:
+  type: object
+  additionalProperties: false
+  properties:
+    description:
+      type: string
+    site:
+      type: string
+      description: Primary site the skill operates on. An empty string clears it.
+    steps:
+      type: array
+      items:
+        type: string
+      description: Replacement steps. Re-renders the SKILL.md from structured fields.
+    learnedNotes:
+      type: array
+      items:
+        type: string
+      description: Replacement learned notes. Re-renders the SKILL.md from structured fields.
+    body:
+      type: string
+      description: Replacement SKILL.md contents for a raw manual edit or agent authoring.
+DirectorySkill:
+  type: object
+  additionalProperties: false
+  required: [name, category, description, installs]
+  properties:
+    name:
+      type: string
+    category:
+      type: string
+    description:
+      type: string
+    installs:
+      type: integer
+      format: int64
+      minimum: 0
+    sourceRepo:
+      type: string
+    updatedAt:
+      type: integer
+      format: int64
+DirectorySkillList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/DirectorySkill'
+    sourceRepo:
+      type: string
+      description: The repo the catalog is sourced from.
+    updatedAt:
+      type: integer
+      format: int64
+      description: Epoch ms the catalog was last fetched.
+DirectorySkillDetail:
+  type: object
+  additionalProperties: false
+  required: [skill, body]
+  properties:
+    skill:
+      $ref: '#/DirectorySkill'
+    body:
+      type: string
+      description: The catalog SKILL.md contents, shown for preview before install.

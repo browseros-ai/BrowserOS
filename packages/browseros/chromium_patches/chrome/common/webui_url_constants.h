@@ -1,8 +1,8 @@
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
-index d4f57a6ed3430..3c113397707e5 100644
+index 497865b22520bbe16bd6cc68b73ba90e25f70065..ec36673180644ff3cc74864a435164a13df6b357 100644
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
-@@ -33,6 +33,10 @@ namespace chrome {
+@@ -34,6 +34,10 @@ namespace chrome {
  // needed.
  // Please keep in alphabetical order, with OS/feature specific sections below.
  inline constexpr char kChromeUIAboutHost[] = "about";

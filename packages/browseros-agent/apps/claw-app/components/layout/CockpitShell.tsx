@@ -4,15 +4,6 @@ import { AppSidebar } from '@/components/sidebar/AppSidebar'
 
 const COLLAPSE_DELAY = 150
 
-/**
- * Cockpit root layout. Fixed sidebar pinned to the left edge with the
- * main route content offset by w-14 (the collapsed sidebar's width)
- * so it never sits under the rail. Hover expands the sidebar; mouse
- * leave starts a 150ms collapse timer that is cancelled if the user
- * comes back in time. Matches the existing apps/app SidebarLayout
- * idiom; mobile sheet path dropped since this is a new-tab page on
- * desktop only.
- */
 export function CockpitShell() {
   const [expanded, setExpanded] = useState(false)
   const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)

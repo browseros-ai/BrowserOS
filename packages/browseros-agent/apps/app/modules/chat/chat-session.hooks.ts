@@ -1,10 +1,11 @@
 import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport, type UIMessage } from 'ai'
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   clearActiveSession,
   consumeRestorePending,
@@ -25,8 +26,13 @@ import {
   MESSAGE_SENT_EVENT,
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import {
+  bufferActiveConversation,
+  flushActiveConversationBuffer,
+} from '@/lib/conversations/active-conversation-buffer'
 import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
+import { uploadConversations } from '@/lib/conversations/uploadConversationsToGraphql'
 import { useConversations } from '@/lib/conversations/useConversations'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
@@ -48,6 +54,7 @@ import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  shouldPersistHistory,
 } from './chat-session-persistence'
 import {
   prepareSidepanelSendMessagesRequest,
@@ -79,6 +86,16 @@ const getLastUserMessageText = (messages: UIMessage[]) => {
   return ''
 }
 
+const getLastUserMessageFiles = (messages: UIMessage[]) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'user') {
+      return message.parts.filter((part) => part.type === 'file')
+    }
+  }
+  return []
+}
+
 const getResponseAndQueryFromMessageId = (
   messages: UIMessage[],
   messageId: string,
@@ -102,12 +119,9 @@ const getResponseAndQueryFromMessageId = (
 }
 
 export type ChatOrigin = 'sidepanel' | 'newtab'
-export type AgentSessionStrategy = 'conversation' | 'main'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
-  /** ACP agent session id source. Defaults to the conversation id. */
-  agentSessionStrategy?: AgentSessionStrategy
   /** When false, messages are queued until integrations finish syncing. */
   isIntegrationsSynced?: boolean
 }
@@ -183,6 +197,22 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
 
+  // Incognito chats are never written to history or the cloud (#1189). Resolved
+  // from the hosting window on mount (chrome.extension.inIncognitoContext is
+  // false for a side panel in spanning mode). This settles long before any turn
+  // ends, so the turn-end save always sees the correct value.
+  const [isIncognito, setIsIncognito] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    isIncognitoWindow().then((incognito) => {
+      if (!cancelled) setIsIncognito(incognito)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const persistHistory = shouldPersistHistory(isIncognito)
+
   const {
     baseUrl: agentServerUrl,
     isLoading: isLoadingAgentUrl,
@@ -192,6 +222,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const { saveConversation: saveLocalConversation } = useConversations()
   const {
     isLoggedIn,
+    userId,
     saveConversation: saveRemoteConversation,
     resetConversation: resetRemoteConversation,
     markMessagesAsSaved,
@@ -233,7 +264,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     startTask: startExecutionTask,
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
-  } = useExecutionHistoryTracker()
+  } = useExecutionHistoryTracker({ enabled: persistHistory })
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
       messages,
@@ -361,20 +392,18 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           optionsRef.current?.origin,
           personalizationRef.current,
         )
-        const agentSessionStrategy =
-          optionsRef.current?.agentSessionStrategy ?? 'conversation'
-        const agentSessionId =
-          agentSessionStrategy === 'main' ? 'main' : conversationIdRef.current
-
         const commonRequest = {
           conversationId: conversationIdRef.current,
-          agentSessionId,
           mode: currentMode,
           browserContext: requestBrowserContext,
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
           declinedApps,
+          attachments: getLastUserMessageFiles(messages).map((file) => ({
+            mediaType: file.mediaType,
+            data: file.url,
+          })),
         }
 
         const message = getLastMessageText(messages)
@@ -683,14 +712,68 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
-    if (isLoggedIn) {
-      saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    } else {
-      saveLocalConversation(conversationIdRef.current, messagesToSave)
+    // Skip all history writes in incognito so the chat never becomes durable
+    // (neither local nor cloud) and can't surface in a normal window (#1189).
+    if (persistHistory) {
+      if (isLoggedIn) {
+        // Buffer the settled turn durably before the fire-and-forget cloud
+        // write, so an interrupted navigation still lets the next mount sync it
+        // (#559).
+        if (userId) {
+          void bufferActiveConversation({
+            id: conversationIdRef.current,
+            messages: messagesToSave,
+            lastMessagedAt: Date.now(),
+            userId,
+          })
+        }
+        saveRemoteConversation(conversationIdRef.current, messagesToSave)
+      } else {
+        saveLocalConversation(conversationIdRef.current, messagesToSave)
+      }
     }
 
     invalidateCredits()
   }, [status])
+
+  // Save the in-flight conversation before it can be lost: on page hide (full
+  // navigation, tab switch, close) and on unmount, because an in-app SPA route
+  // change to Settings unmounts the chat while the page stays visible, so
+  // visibilitychange never fires. Reads the latest messages either way; the next
+  // mount then syncs it to the cloud (#559). The settled turn is also buffered
+  // at turn end above. This effect's deps are the auth pair, not messages, so
+  // the unmount write runs once, not on every token.
+  useEffect(() => {
+    if (!persistHistory || !isLoggedIn || !userId) return
+    const writeBuffer = () => {
+      const latest = getPersistableMessages(messagesRef.current)
+      if (latest.length === 0) return
+      void bufferActiveConversation({
+        id: conversationIdRef.current,
+        messages: latest,
+        lastMessagedAt: Date.now(),
+        userId,
+      })
+    }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') writeBuffer()
+    }
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      writeBuffer()
+    }
+  }, [persistHistory, isLoggedIn, userId])
+
+  // On mount (and on sign-in), push any buffered in-flight conversations for the
+  // current user to the cloud so an interrupted chat still lands in history. It
+  // is never restored into the active conversation; recovery is via history.
+  useEffect(() => {
+    if (!persistHistory || !isLoggedIn || !userId) return
+    void flushActiveConversationBuffer(userId, (conversations) =>
+      uploadConversations(conversations, userId),
+    )
+  }, [persistHistory, isLoggedIn, userId])
 
   useEffect(() => {
     if (chatError) invalidateCredits()
@@ -701,6 +784,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const pendingMessageRef = useRef<{
     text: string
     action?: ChatAction
+    files?: FileUIPart[]
   } | null>(null)
 
   const trackMessageSent = useCallback(() => {
@@ -715,7 +799,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         selectedLlmProvider?.id,
       provider_type: agentTarget ? 'acp' : llmTargetProvider?.type,
       agent_id: agentTarget?.agentId,
-      adapter: agentTarget?.adapter,
+      adapter: agentTarget?.agentType,
       model:
         agentTarget?.modelId ??
         llmTargetProvider?.modelId ??
@@ -724,13 +808,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }, [mode, selectedChatTargetRef, selectedLlmProvider])
 
   const dispatchMessage = useCallback(
-    (text: string) => {
+    (text: string, files?: FileUIPart[]) => {
       trackMessageSent()
       startExecutionTask({
         conversationId: conversationIdRef.current,
         promptText: text,
       })
-      baseSendMessage({ text })
+      baseSendMessage({ text, files })
     },
     [baseSendMessage, startExecutionTask, trackMessageSent],
   )
@@ -751,11 +835,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           return next
         })
       }
-      dispatchMessage(pending.text)
+      dispatchMessage(pending.text, pending.files)
     }
   }, [agentServerUrl, dispatchMessage, isIntegrationsSynced])
 
-  const sendMessage = (params: { text: string; action?: ChatAction }) => {
+  const sendMessage = (params: {
+    text: string
+    action?: ChatAction
+    files?: FileUIPart[]
+  }) => {
     if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
       pendingMessageRef.current = params
       return
@@ -769,7 +857,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         return next
       })
     }
-    dispatchMessage(params.text)
+    dispatchMessage(params.text, params.files)
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -795,9 +883,35 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     return () => unwatch()
   }, [])
 
+  const discardServerSession = useCallback((conversationId: string) => {
+    const serverUrl = agentUrlRef.current
+    if (!serverUrl) return
+    void fetch(`${serverUrl}/chat/${encodeURIComponent(conversationId)}`, {
+      method: 'DELETE',
+      keepalive: true,
+    })
+      .then((response) => {
+        if (!response.ok && response.status !== 404) {
+          throw new Error(`Session cleanup failed (${response.status})`)
+        }
+      })
+      .catch((error) => {
+        sentry.captureException(error, {
+          extra: { conversationId },
+        })
+      })
+  }, [])
+
+  useEffect(
+    () => () => discardServerSession(conversationIdRef.current),
+    [discardServerSession],
+  )
+
   const resetConversationState = () => {
+    const previousConversationId = conversationIdRef.current
     stop()
     void finishExecutionTask({ isAbort: true })
+    discardServerSession(previousConversationId)
     setConversationId(crypto.randomUUID())
     setMessages([])
     setTextToAction(new Map())
@@ -821,7 +935,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       model_id:
         target.kind === 'acp' ? target.modelId : target.provider.modelId,
       agent_id: target.kind === 'acp' ? target.agentId : undefined,
-      adapter: target.kind === 'acp' ? target.adapter : undefined,
+      adapter: target.kind === 'acp' ? target.agentType : undefined,
     })
 
     void selectChatTarget(target).catch((error) => {
@@ -892,6 +1006,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoading: isLoadingProviders || isLoadingAgentUrl,
     canSend,
     isSyncing: !isIntegrationsSynced,
+    isIncognito,
     isRestoringConversation,
     agentUrlError,
     chatError,

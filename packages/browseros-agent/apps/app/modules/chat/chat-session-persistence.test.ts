@@ -3,7 +3,23 @@ import type { ChatStatus, UIMessage } from 'ai'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
+  shouldPersistHistory,
 } from './chat-session-persistence'
+
+describe('shouldPersistHistory', () => {
+  it('persists a normal, non-temporary chat', () => {
+    expect(shouldPersistHistory(false)).toBe(true)
+  })
+
+  it('never persists in an incognito context', () => {
+    expect(shouldPersistHistory(true)).toBe(false)
+    expect(shouldPersistHistory(true, false)).toBe(false)
+  })
+
+  it('does not persist a temporary chat even in a normal context', () => {
+    expect(shouldPersistHistory(false, true)).toBe(false)
+  })
+})
 
 describe('chat session persistence transitions', () => {
   it('saves exactly once when streaming ends in an error with partial content', () => {

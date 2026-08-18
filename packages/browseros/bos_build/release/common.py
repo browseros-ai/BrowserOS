@@ -13,6 +13,127 @@ from ..lib.r2 import get_release_json, get_r2_client, BOTO3_AVAILABLE
 
 PLATFORMS = ["macos", "win", "linux"]
 PLATFORM_DISPLAY_NAMES = {"macos": "macOS", "win": "Windows", "linux": "Linux"}
+_PLATFORM_ALIASES = {
+    "linux": "linux",
+    "macos": "macos",
+    "win": "win",
+    "windows": "win",
+}
+_PROVENANCE_FIELDS = (
+    "source_sha",
+    "workflow_run_id",
+    "workflow_run_attempt",
+)
+
+
+def selected_release_platforms(platforms: str) -> Tuple[str, ...]:
+    """Map a workflow platform selection to release.json platform keys."""
+    if platforms == "all":
+        return tuple(PLATFORMS)
+    try:
+        return (_PLATFORM_ALIASES[platforms],)
+    except KeyError as exc:
+        valid = ", ".join(("all", *sorted(_PLATFORM_ALIASES)))
+        raise ValueError(
+            f"Unknown release platform selection '{platforms}'. Valid: {valid}"
+        ) from exc
+
+
+def expected_browser_artifact_keys(
+    platforms: str,
+    macos_arch: str,
+) -> Dict[str, set[str]]:
+    """Exact browser artifact keys selected by the top-level release inputs."""
+    expected: Dict[str, set[str]] = {}
+    for platform in selected_release_platforms(platforms):
+        if platform == "linux":
+            expected[platform] = {"x64_appimage", "x64_deb"}
+        elif platform == "win":
+            expected[platform] = {"x64_installer", "x64_zip"}
+        elif macos_arch == "universal":
+            expected[platform] = {"arm64", "x64", "universal"}
+        elif macos_arch in ("arm64", "x64"):
+            expected[platform] = {macos_arch}
+        else:
+            raise ValueError(
+                f"Unknown macOS architecture '{macos_arch}'. "
+                "Valid: arm64, x64, universal"
+            )
+    return expected
+
+
+def validate_release_metadata(
+    metadata: Dict[str, Dict],
+    *,
+    version: str,
+    product_id: str,
+    platforms: str,
+    macos_arch: str,
+    source_sha: str = "",
+    workflow_run_id: str = "",
+    workflow_run_attempt: str = "",
+) -> Dict[str, Dict]:
+    """Select and validate the exact R2 metadata for one release invocation."""
+    expected = expected_browser_artifact_keys(platforms, macos_arch)
+    provenance = {
+        "source_sha": source_sha,
+        "workflow_run_id": workflow_run_id,
+        "workflow_run_attempt": workflow_run_attempt,
+    }
+    selected: Dict[str, Dict] = {}
+
+    for platform, expected_keys in expected.items():
+        release = metadata.get(platform)
+        if release is None:
+            raise RuntimeError(
+                f"Missing {platform} release metadata for {product_id} v{version}"
+            )
+
+        identity = {
+            "product": product_id,
+            "version": version,
+            "platform": platform,
+        }
+        for field, expected_value in identity.items():
+            if str(release.get(field, "")) != expected_value:
+                raise RuntimeError(
+                    f"{platform} release metadata {field} mismatch: "
+                    f"expected {expected_value!r}, got {release.get(field)!r}"
+                )
+
+        for field in _PROVENANCE_FIELDS:
+            expected_value = provenance[field]
+            if expected_value and str(release.get(field, "")) != expected_value:
+                raise RuntimeError(
+                    f"{platform} release metadata {field} mismatch: "
+                    f"expected {expected_value!r}, got {release.get(field)!r}"
+                )
+
+        artifacts = release.get("artifacts")
+        if not isinstance(artifacts, dict):
+            raise RuntimeError(
+                f"{platform} release metadata artifacts is not an object"
+            )
+        actual_keys = set(artifacts)
+        if actual_keys != expected_keys:
+            raise RuntimeError(
+                f"{platform} release metadata artifact keys mismatch: "
+                f"expected {sorted(expected_keys)}, got {sorted(actual_keys)}"
+            )
+        for key, artifact in artifacts.items():
+            if (
+                not isinstance(artifact, dict)
+                or not artifact.get("filename")
+                or not artifact.get("url")
+            ):
+                raise RuntimeError(
+                    f"{platform} release metadata artifact {key!r} "
+                    "must include filename and url"
+                )
+
+        selected[platform] = release
+
+    return selected
 
 
 def get_download_path_mapping(
@@ -203,15 +324,20 @@ def generate_appcast_item(
 </item>"""
 
 
-def generate_release_notes(version: str, metadata: Dict[str, Dict]) -> str:
+def generate_release_notes(
+    version: str,
+    metadata: Dict[str, Dict],
+    product: Optional[ProductDescriptor] = None,
+) -> str:
     """Generate markdown release notes from metadata"""
+    product = product or default_product_descriptor()
     chromium_version = "unknown"
     for platform in PLATFORMS:
         if platform in metadata:
             chromium_version = metadata[platform].get("chromium_version", "unknown")
             break
 
-    notes = f"""## BrowserOS v{version}
+    notes = f"""## {product.display_name} v{version}
 
 Chromium version: {chromium_version}
 

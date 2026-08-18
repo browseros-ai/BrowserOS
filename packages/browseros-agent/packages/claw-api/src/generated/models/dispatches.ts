@@ -114,4 +114,16 @@ export interface Dispatch {
      * @memberof Dispatch
      */
     screenshotId?: number;
+    /**
+     * Stable ULID for this dispatch. A script dispatch's primitives reference it via parentDispatchId, so the cockpit can group them under it.
+     * @type {string}
+     * @memberof Dispatch
+     */
+    dispatchKey?: string;
+    /**
+     * Set on a primitive recorded inside a script (run) dispatch; equals that script dispatch's dispatchKey.
+     * @type {string}
+     * @memberof Dispatch
+     */
+    parentDispatchId?: string;
 }

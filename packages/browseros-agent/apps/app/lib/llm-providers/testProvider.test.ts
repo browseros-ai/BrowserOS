@@ -52,39 +52,6 @@ describe('testProvider — request body', () => {
       apiKey: 'sk-test',
     })
   })
-
-  it('forwards ACP fields when present', async () => {
-    await testProvider(
-      baseProvider({
-        type: 'claude-code',
-        apiKey: undefined,
-        acpAgentId: 'claude',
-        acpFixedWorkspacePath: '/tmp/x',
-      }),
-      'http://127.0.0.1:9000',
-    )
-    expect(lastCall?.body).toMatchObject({
-      provider: 'claude-code',
-      acpAgentId: 'claude',
-      acpFixedWorkspacePath: '/tmp/x',
-    })
-  })
-
-  it('forwards acp-custom command for the probe spawn path', async () => {
-    await testProvider(
-      baseProvider({
-        type: 'acp-custom',
-        acpAgentId: 'my-agent',
-        acpCommand: 'my-bin acp',
-      }),
-      'http://127.0.0.1:9000',
-    )
-    expect(lastCall?.body).toMatchObject({
-      provider: 'acp-custom',
-      acpAgentId: 'my-agent',
-      acpCommand: 'my-bin acp',
-    })
-  })
 })
 
 describe('testProvider — client-side fetch failure (issue #1844)', () => {

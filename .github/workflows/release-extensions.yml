@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version stamped on every selected extension (e.g., 0.0.118)"
-        required: true
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
+        required: false
         type: string
+        default: ""
       extension:
         description: "Extension to release"
         required: true
@@ -17,38 +18,72 @@ on:
           - controller
           - bugreporter
           - browserclaw
-        default: "all"
+        default: "browserclaw"
       branch:
-        description: "Branch override (checkout ref for in-repo builds, clone branch for external repos)"
+        description: "Source ref; also overrides the branch for external extensions"
         required: false
         type: string
         default: ""
-      github_release:
-        description: "Create or update the GitHub release"
+      mode:
+        description: "Build a prepared release or finalize an existing one"
+        required: false
+        type: choice
+        options:
+          - build
+          - finalize
+        default: "build"
+      defer_finalize:
+        description: "Leave a successful build private for a later finalize call"
+        required: false
+        type: boolean
+        default: false
+      publish_alpha_feed:
+        description: "Publish and persist the alpha feed after finalization"
         required: false
         type: boolean
         default: true
   workflow_call:
     inputs:
       version:
-        description: "Version stamped on every selected extension (e.g., 0.0.118)"
-        required: true
+        description: "Explicit version; agent and BrowserOS neo allocate one when omitted"
+        required: false
         type: string
+        default: ""
       extension:
         description: "Extension to release: all, agent, controller, bugreporter, or browserclaw"
         required: false
         type: string
-        default: "all"
+        default: "browserclaw"
       branch:
-        description: "Branch override (checkout ref for in-repo builds, clone branch for external repos)"
+        description: "Source ref; also overrides the branch for external extensions"
         required: false
         type: string
         default: ""
-      github_release:
-        description: "Create or update the GitHub release"
+      mode:
+        description: "Build a prepared release or finalize an existing one"
+        required: false
+        type: string
+        default: "build"
+      defer_finalize:
+        description: "Leave a successful build private for a later finalize call"
         required: false
         type: boolean
         default: false
+      publish_alpha_feed:
+        description: "Publish and persist the alpha feed after finalization"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "Prepared four-part extension version"
+        value: ${{ jobs.prepare.outputs.version }}
+      tag:
+        description: "Prepared extension tag; empty when extension is all"
+        value: ${{ jobs.prepare.outputs.tag }}
+      release_sha:
+        description: "Immutable source commit"
+        value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
       GH_TOKEN:
         required: false
@@ -87,25 +122,248 @@ on:
       VITE_CLAW_POSTHOG_HOST:
         required: false
 
+permissions:
+  contents: write
+  pull-requests: write
+
 concurrency:
-  group: release-extensions
+  group: release-extensions-and-feeds
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
-
+  prepare:
+    concurrency:
+      group: release-component-allocation
+      cancel-in-progress: false
+      queue: max
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 20
+    outputs:
+      mode: ${{ steps.validate.outputs.mode }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      names: ${{ steps.release.outputs.names }}
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v7
         with:
-          # Full history and tags: per-extension release notes diff against the
-          # previous ext-<name>/v* tag and need the whole commit range.
           fetch-depth: 0
-          ref: ${{ inputs.branch || github.ref }}
+          ref: ${{ inputs.branch || github.event.repository.default_branch || 'main' }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Validate lifecycle inputs
+        id: validate
+        env:
+          BRANCH: ${{ inputs.branch || '' }}
+          DEFER_FINALIZE: ${{ inputs.defer_finalize }}
+          EXTENSION: ${{ inputs.extension }}
+          MODE: ${{ inputs.mode || 'build' }}
+          VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          case "$EXTENSION" in
+            all|agent|controller|bugreporter|browserclaw) ;;
+            *)
+              echo "::error::Unknown extension '$EXTENSION'"
+              exit 1
+              ;;
+          esac
+          if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
+            echo "::error::mode must be build or finalize"
+            exit 1
+          fi
+          if [ "$MODE" = "finalize" ]; then
+            if [ -z "$VERSION" ] || [[ ! "$BRANCH" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::finalize mode requires an explicit version and the prepared 40-character source SHA in branch"
+              exit 1
+            fi
+            if [ "$DEFER_FINALIZE" = "true" ]; then
+              echo "::error::finalize mode cannot defer finalization"
+              exit 1
+            fi
+          fi
+          if [ -z "$VERSION" ] && [ "$EXTENSION" != "agent" ] && [ "$EXTENSION" != "browserclaw" ]; then
+            echo "::error::$EXTENSION requires an explicit version"
+            exit 1
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve extension release
+        id: release
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
+          EXTENSION: ${{ inputs.extension }}
+          GH_TOKEN: ${{ github.token }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          REQUESTED_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          if [ "$EXTENSION" = "agent" ] || [ "$EXTENSION" = "browserclaw" ]; then
+            args=(
+              --component "$EXTENSION"
+              --event-name "$EVENT_NAME"
+              --default-branch "$DEFAULT_BRANCH"
+              --requested-version "$REQUESTED_VERSION"
+              --release-ref HEAD
+              --r2-allocations
+              --repo "$GITHUB_REPOSITORY"
+              --github-output "$GITHUB_OUTPUT"
+              --github-summary "$GITHUB_STEP_SUMMARY"
+            )
+            if [ -z "$REQUESTED_VERSION" ]; then
+              args+=(
+                --manifest https://cdn.browseros.com/extensions/bundled-manifest.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.alpha.xml
+                --manifest https://cdn.browseros.com/extensions/update-manifest.xml
+              )
+            fi
+            uv run browseros release component resolve "${args[@]}"
+          else
+            records="${RUNNER_TEMP}/explicit-extension-records.json"
+            echo '[]' > "$records"
+            uv run browseros ext resolve-version \
+              --name "$EXTENSION" \
+              --source-sha "$release_sha" \
+              --release-records "$records" \
+              --version "$REQUESTED_VERSION" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reserve private drafts
+        if: ${{ steps.validate.outputs.mode == 'build' }}
+        env:
+          EXTENSION: ${{ inputs.extension }}
+          GH_TOKEN: ${{ github.token }}
+          NAMES: ${{ steps.release.outputs.names }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --prune
+          for NAME in $NAMES; do
+            TAG="ext-${NAME}/v${VERSION}"
+            notes="${RUNNER_TEMP}/extension-${NAME}-notes.md"
+            case "$NAME" in
+              agent)
+                TITLE="BrowserOS Agent Extension - v$VERSION"
+                SCOPE="packages/browseros-agent/apps/app"
+                ;;
+              browserclaw)
+                TITLE="BrowserOS neo Extension - v$VERSION"
+                SCOPE="packages/browseros-agent/apps/claw-app"
+                ;;
+              controller)
+                TITLE="BrowserOS Controller Extension - v$VERSION"
+                SCOPE=""
+                ;;
+              bugreporter)
+                TITLE="BrowserOS Bug Reporter Extension - v$VERSION"
+                SCOPE=""
+                ;;
+            esac
+            if [ -n "$SCOPE" ]; then
+              previous="$(git tag --list "ext-${NAME}/v*" | { grep -vFx "$TAG" || true; } | sort -V | tail -n 1)"
+              changelog="${RUNNER_TEMP}/extension-${NAME}-changelog.md"
+              if [ -z "$previous" ]; then
+                echo "Initial $TITLE release." > "$changelog"
+              else
+                git log "${previous}..${RELEASE_SHA}" --pretty=format:"- %s (%h)" -- "$SCOPE" > "$changelog"
+                if [ ! -s "$changelog" ]; then
+                  echo "No changes in $SCOPE since $previous." > "$changelog"
+                fi
+              fi
+              node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
+                --input "$changelog" \
+                --output "$notes" \
+                --max-entries 15 \
+                --previous-tag "$previous" \
+                --release-tag "$TAG"
+            else
+              echo "Built from the selected external extension branch." > "$notes"
+            fi
+
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              release="$(gh release view "$TAG" --json isDraft,targetCommitish,assets)"
+              is_draft="$(jq -r '.isDraft' <<< "$release")"
+              if [ "$is_draft" = "true" ]; then
+                target="$(jq -r '.targetCommitish' <<< "$release")"
+                tag_matches=false
+                if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+                  if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
+                    [ "$(git rev-list -n 1 "$TAG")" != "$RELEASE_SHA" ]; then
+                    echo "::error::Existing tag $TAG must be annotated at $RELEASE_SHA; historical lightweight tags need a new version"
+                    exit 1
+                  fi
+                  tag_matches=true
+                fi
+                if [ "$target" != "$RELEASE_SHA" ] && [ "$tag_matches" != "true" ]; then
+                  echo "::error::$TAG is not a draft for $RELEASE_SHA"
+                  exit 1
+                fi
+                gh release edit "$TAG" --title "$TITLE" --notes-file "$notes"
+                echo "Reused private draft $TAG"
+              else
+                if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null || \
+                  [ "$(git cat-file -t "refs/tags/$TAG" 2>/dev/null || true)" != "tag" ] || \
+                  [ "$(git rev-list -n 1 "$TAG" 2>/dev/null || true)" != "$RELEASE_SHA" ]; then
+                  echo "::error::Published release $TAG requires an annotated tag at $RELEASE_SHA; historical lightweight tags need a new version"
+                  exit 1
+                fi
+                echo "Reused already-published release $TAG"
+              fi
+            elif git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+              if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
+                [ "$(git rev-list -n 1 "$TAG")" != "$RELEASE_SHA" ]; then
+                echo "::error::Existing tag $TAG must be annotated at $RELEASE_SHA; historical lightweight tags need a new version"
+                exit 1
+              fi
+              gh release create "$TAG" \
+                --verify-tag \
+                --draft \
+                --target "$RELEASE_SHA" \
+                --title "$TITLE" \
+                --notes-file "$notes"
+              echo "Reserved repair draft for existing tag $TAG"
+            else
+              gh release create "$TAG" \
+                --draft \
+                --target "$RELEASE_SHA" \
+                --title "$TITLE" \
+                --notes-file "$notes"
+              echo "Reserved private draft $TAG"
+            fi
+          done
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 45
+    env:
+      EXTENSION: ${{ inputs.extension }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout prepared source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
@@ -117,33 +375,30 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Stamp in-repository extension version
+        if: ${{ inputs.extension == 'agent' || inputs.extension == 'browserclaw' }}
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component "$EXTENSION" --version "$VERSION"
 
       - name: Verify Chrome is available
         run: google-chrome --version
 
-      - name: Run extension release
+      - name: Build and upload immutable extension CRX
         working-directory: packages/browseros
         env:
-          VERSION: ${{ inputs.version }}
-          EXTENSION: ${{ inputs.extension }}
-          BRANCH: ${{ inputs.branch }}
-
-          # Cloning private external extension repos
+          BRANCH: ${{ inputs.branch || '' }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-          # Cloudflare R2 (CRX upload)
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-
-          # Extension signing keys
           BROWSEROS_AGENT_V2_KEY: ${{ secrets.BROWSEROS_AGENT_V2_KEY }}
           BROWSEROS_CONTROLLER_KEY: ${{ secrets.BROWSEROS_CONTROLLER_KEY }}
           BUGREPORTER_KEY: ${{ secrets.BUGREPORTER_KEY }}
           BROWSERCLAW_KEY: ${{ secrets.BROWSERCLAW_KEY }}
-
-          # Build-time env consumed by the extension bundles
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           VITE_PUBLIC_SENTRY_DSN: ${{ secrets.VITE_PUBLIC_SENTRY_DSN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -155,129 +410,427 @@ jobs:
           VITE_CLAW_POSTHOG_HOST: ${{ secrets.VITE_CLAW_POSTHOG_HOST }}
           VITE_PUBLIC_BROWSEROS_API: https://api.browseros.com
           NODE_ENV: production
-        # Args are quoted at execution time (never baked into a command
-        # string) so a crafted dispatch input cannot break into this shell.
         run: |
           set -euo pipefail
-          args=(--version "$VERSION")
+          args=(--version "$VERSION" --source-sha "$RELEASE_SHA")
           if [ "$EXTENSION" != "all" ]; then
             args+=(--name "$EXTENSION")
           fi
           if [ -n "$BRANCH" ]; then
             args+=(--branch "$BRANCH")
           fi
-          {
-            echo "### Release command"
-            echo '```bash'
-            echo "browseros ext release ${args[*]}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
           uv run browseros ext release "${args[@]}"
 
-      - name: Create GitHub releases
-        if: ${{ inputs.github_release }}
+      - name: Attach CRX assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ inputs.version }}
-          EXTENSION: ${{ inputs.extension }}
-          BRANCH: ${{ inputs.branch }}
-        # One release per selected extension, each in its own ext-<name>/v* tag
-        # namespace (mirrors the agent-server/v* convention in release-server.yml).
-        # Inputs arrive via env and are only ever used quoted, so a crafted
-        # dispatch value cannot break out of this shell; the extension name is
-        # additionally validated against the known set before it feeds a tag.
+          GH_TOKEN: ${{ github.token }}
+          NAMES: ${{ needs.prepare.outputs.names }}
         run: |
           set -euo pipefail
-
-          TARGET_SHA="$(git rev-parse HEAD)"
-
-          if [ "$EXTENSION" = "all" ]; then
-            names=(agent controller bugreporter browserclaw)
-          else
-            names=("$EXTENSION")
-          fi
-
-          for NAME in "${names[@]}"; do
-            case "$NAME" in
-              agent)
-                TITLE="BrowserOS Agent Extension - v$VERSION"
-                KIND="in-repo"
-                SCOPE_PATH="packages/browseros-agent/apps/app"
-                ;;
-              browserclaw)
-                TITLE="BrowserClaw Extension - v$VERSION"
-                KIND="in-repo"
-                SCOPE_PATH="packages/browseros-agent/apps/claw-app"
-                ;;
-              controller)
-                TITLE="BrowserOS Controller Extension - v$VERSION"
-                KIND="external"
-                REPO="browseros-ai/BrowserOS-agent"
-                EXT_BRANCH="${BRANCH:-main}"
-                ;;
-              bugreporter)
-                TITLE="BrowserOS Bug Reporter Extension - v$VERSION"
-                KIND="external"
-                REPO="browseros-ai/BrowserOS-feedback-extension"
-                EXT_BRANCH="${BRANCH:-main}"
-                ;;
-              *)
-                echo "::error::Unknown extension '$NAME'"
+          for NAME in $NAMES; do
+            TAG="ext-${NAME}/v${VERSION}"
+            asset="${NAME}-${VERSION}.crx"
+            path="packages/browseros/build/extensions/dist/${asset}"
+            if [ ! -f "$path" ]; then
+              echo "::error::Missing built extension artifact $path"
+              exit 1
+            fi
+            asset_count="$(gh release view "$TAG" --json assets --jq \
+              "[.assets[] | select(.name == \"$asset\")] | length")"
+            if [ "$asset_count" -gt 0 ]; then
+              existing="${RUNNER_TEMP}/existing-${NAME}"
+              mkdir -p "$existing"
+              gh release download "$TAG" --pattern "$asset" --dir "$existing"
+              if ! cmp --silent "$path" "$existing/$asset"; then
+                echo "::error::GitHub release asset conflict for $TAG/$asset"
                 exit 1
-                ;;
-            esac
-
-            RELEASE_TAG="ext-${NAME}/v${VERSION}"
-            NOTES_FILE="/tmp/notes-${NAME}.md"
-
-            if [ "$KIND" = "in-repo" ]; then
-              # Newest existing ext-<name>/v* tag by version order, excluding the
-              # tag being released so idempotent re-runs still diff from the prior one.
-              PREVIOUS_TAG="$(git tag --list "ext-${NAME}/v*" | { grep -vFx "$RELEASE_TAG" || true; } | sort -V | tail -n1)"
-              CHANGELOG_FILE="/tmp/changelog-${NAME}.md"
-
-              if [ -z "$PREVIOUS_TAG" ]; then
-                echo "Initial ${TITLE} release." > "$CHANGELOG_FILE"
-              else
-                git log "${PREVIOUS_TAG}..${TARGET_SHA}" --pretty=format:"- %s (%h)" -- "$SCOPE_PATH" > "$CHANGELOG_FILE"
-                if [ ! -s "$CHANGELOG_FILE" ]; then
-                  echo "No changes in ${SCOPE_PATH} since ${PREVIOUS_TAG}." > "$CHANGELOG_FILE"
-                fi
               fi
-
-              node packages/browseros-agent/scripts/release/cap-release-changelog.mjs \
-                --input "$CHANGELOG_FILE" \
-                --output "$NOTES_FILE" \
-                --max-entries 15 \
-                --previous-tag "$PREVIOUS_TAG" \
-                --release-tag "$RELEASE_TAG"
+              echo "Reused identical GitHub release asset $TAG/$asset"
             else
-              # Built from another repo, so this monorepo's git log says nothing
-              # about it — record the source instead of inventing a changelog.
-              echo "Built from ${REPO} @ ${EXT_BRANCH}." > "$NOTES_FILE"
-            fi
-
-            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-              gh release edit "$RELEASE_TAG" \
-                --title "$TITLE" \
-                --notes-file "$NOTES_FILE"
-            else
-              gh release create "$RELEASE_TAG" \
-                --target "$TARGET_SHA" \
-                --title "$TITLE" \
-                --notes-file "$NOTES_FILE"
-            fi
-
-            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-              gh release edit "$RELEASE_TAG" --draft=false
+              gh release upload "$TAG" "$path"
             fi
           done
 
-      - name: Upload CRX artifacts
-        if: always()
+      - name: Upload CRX workflow artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: extension-release-${{ inputs.extension }}-${{ inputs.version }}
+          name: extension-release-${{ inputs.extension }}-${{ needs.prepare.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: packages/browseros/build/extensions/dist/*.crx
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
+
+  preflight_alpha:
+    needs:
+      - prepare
+      - build
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 10
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
+      should_publish: ${{ steps.render.outputs.should_publish }}
+    env:
+      NAMES: ${{ needs.prepare.outputs.names }}
+      PUBLISH_ALPHA_FEED: ${{ inputs.publish_alpha_feed }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Record feed snapshot base
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Preflight alpha feed update
+        id: render
+        working-directory: packages/browseros
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH_ALPHA_FEED" != "true" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Alpha publication is owned by the calling workflow"
+            exit 0
+          fi
+          args=(--channel alpha)
+          pin_count=0
+          for NAME in $NAMES; do
+            case "$NAME" in
+              agent|bugreporter|browserclaw)
+                args+=(--set "$NAME=$VERSION")
+                pin_count=$((pin_count + 1))
+                ;;
+            esac
+          done
+          if [ "$pin_count" -eq 0 ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "No selected extension is registered in the alpha update feed"
+            exit 0
+          fi
+          uv run browseros release extensions "${args[@]}"
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Stage exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          mkdir -p "$artifact_root/updates/extensions"
+          for path in "${paths[@]}"; do
+            cp "$path" "$artifact_root/$path"
+          done
+          (
+            cd "$artifact_root"
+            sha256sum "${paths[@]}" > SHA256SUMS
+          )
+
+      - name: Upload exact alpha feed snapshot
+        if: ${{ steps.render.outputs.should_publish == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    needs:
+      - prepare
+      - build
+      - preflight_alpha
+    if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.build.result == 'success')) }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 20
+    env:
+      EXTENSION: ${{ inputs.extension }}
+      NAMES: ${{ needs.prepare.outputs.names }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout prepared source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Verify prepared extension release
+        working-directory: packages/browseros
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          canonical_dir="${RUNNER_TEMP}/canonical-extension-assets"
+          uv run browseros ext verify \
+            --version "$VERSION" \
+            --name "$EXTENSION" \
+            --source-sha "$RELEASE_SHA" \
+            --output-dir "$canonical_dir"
+          git fetch origin --tags --prune
+          for NAME in $NAMES; do
+            TAG="ext-${NAME}/v${VERSION}"
+            asset="${NAME}-${VERSION}.crx"
+            release="$(gh release view "$TAG" --json isDraft,targetCommitish,assets)"
+            if ! jq -e --arg asset "$asset" \
+              '([.assets[].name] | sort) == [$asset]' <<< "$release" >/dev/null; then
+              echo "::error::$TAG must contain exactly the prepared asset $asset"
+              exit 1
+            fi
+            draft_dir="${RUNNER_TEMP}/draft-extension-assets/${NAME}"
+            mkdir -p "$draft_dir"
+            gh release download "$TAG" --pattern "$asset" --dir "$draft_dir"
+            if ! cmp --silent "$canonical_dir/$asset" "$draft_dir/$asset"; then
+              echo "::error::GitHub release asset does not match canonical R2 object: $TAG/$asset"
+              exit 1
+            fi
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            tag_exists=false
+            if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+              if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
+                [ "$(git rev-list -n 1 "$TAG")" != "$RELEASE_SHA" ]; then
+                echo "::error::Tag $TAG must be annotated at $RELEASE_SHA; historical lightweight tags need a new version"
+                exit 1
+              fi
+              tag_exists=true
+            fi
+            if [ "$is_draft" = "true" ]; then
+              target="$(jq -r '.targetCommitish' <<< "$release")"
+              if [ "$target" != "$RELEASE_SHA" ] && [ "$tag_exists" != "true" ]; then
+                echo "::error::Draft $TAG is not prepared for $RELEASE_SHA"
+                exit 1
+              fi
+            elif [ "$tag_exists" != "true" ]; then
+              echo "::error::Published release $TAG has no tag"
+              exit 1
+            fi
+          done
+
+      - name: Create annotated extension tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          refs=()
+          for NAME in $NAMES; do
+            TAG="ext-${NAME}/v${VERSION}"
+            if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+              if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ] || \
+                [ "$(git rev-list -n 1 "$TAG")" != "$RELEASE_SHA" ]; then
+                echo "::error::Tag $TAG must be annotated at $RELEASE_SHA; historical lightweight tags need a new version"
+                exit 1
+              fi
+              continue
+            fi
+            case "$NAME" in
+              agent) TITLE="BrowserOS Agent Extension - v$VERSION" ;;
+              browserclaw) TITLE="BrowserOS neo Extension - v$VERSION" ;;
+              controller) TITLE="BrowserOS Controller Extension - v$VERSION" ;;
+              bugreporter) TITLE="BrowserOS Bug Reporter Extension - v$VERSION" ;;
+            esac
+            git tag -a "$TAG" -m "$TITLE" "$RELEASE_SHA"
+            refs+=("refs/tags/$TAG")
+          done
+          if [ "${#refs[@]}" -gt 0 ]; then
+            git push --atomic origin "${refs[@]}"
+          fi
+
+      - name: Publish private drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for NAME in $NAMES; do
+            TAG="ext-${NAME}/v${VERSION}"
+            if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$TAG" --draft=false
+            else
+              echo "Release $TAG is already published"
+            fi
+          done
+
+  publish_alpha:
+    needs:
+      - prepare
+      - preflight_alpha
+      - finalize
+    if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    concurrency:
+      group: release-feed-snapshots
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight_alpha.outputs.base_sha }}
+
+      - name: Download exact alpha feed snapshot
+        uses: actions/download-artifact@v7
+        with:
+          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged-alpha-feeds
+
+      - name: Restore exact alpha feed snapshot
+        run: |
+          set -euo pipefail
+          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          (
+            cd "$artifact_root"
+            sha256sum --check SHA256SUMS
+          )
+          for path in "${paths[@]}"; do
+            cp "$artifact_root/$path" "$GITHUB_WORKSPACE/$path"
+          done
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Persist exact alpha feed snapshots
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          paths=(
+            updates/extensions/update-manifest.alpha.xml
+            updates/extensions/extensions.alpha.json
+            updates/extensions/bundled-manifest.xml
+          )
+          packages/browseros-agent/scripts/release/commit-update-snapshot.sh \
+            "$DEFAULT_BRANCH" \
+            "chore(release): update extension alpha feeds to ${VERSION}" \
+            "${paths[@]}"
+
+      - name: Publish committed alpha feeds
+        working-directory: packages/browseros
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          uv run browseros release feeds publish-local \
+            extensions/update-manifest.alpha.xml \
+            extensions/extensions.alpha.json \
+            extensions/bundled-manifest.xml \
+            --publish
+
+  reflect-version:
+    needs:
+      - prepare
+      - finalize
+      - publish_alpha
+    if: ${{ always() && needs.prepare.result == 'success' && needs.finalize.result == 'success' && (needs.publish_alpha.result == 'success' || needs.publish_alpha.result == 'skipped') }}
+    runs-on: warp-ubuntu-2404-x64-4x
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      NAMES: ${{ needs.prepare.outputs.names }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Reflect released extension versions on main
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE" fetch origin "$DEFAULT_BRANCH" --no-tags
+          git -C "$GITHUB_WORKSPACE" checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+
+          paths=()
+          for name in $NAMES; do
+            case "$name" in
+              agent) manifest="packages/browseros-agent/apps/app/package.json" ;;
+              browserclaw) manifest="packages/browseros-agent/apps/claw-app/package.json" ;;
+              *) continue ;;
+            esac
+            current="$(uv run browseros release component read --component "$name")"
+            if [ "$current" != "$VERSION" ]; then
+              newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
+              if [ "$newest" = "$current" ]; then
+                echo "$name is already newer than released version $VERSION"
+                continue
+              fi
+            fi
+            uv run browseros release component stamp --component "$name" --version "$VERSION"
+            paths+=("$manifest" "packages/browseros-agent/bun.lock")
+          done
+
+          if [ "${#paths[@]}" -eq 0 ] || git -C "$GITHUB_WORKSPACE" diff --quiet -- "${paths[@]}"; then
+            echo "Extension source versions already match the release"
+            exit 0
+          fi
+
+          scope="${{ inputs.extension }}"
+          branch="chore-bump-${scope}-extension-v${VERSION}"
+          if git -C "$GITHUB_WORKSPACE" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
+            if [ -z "$pr_url" ]; then
+              pr_url="$(gh pr create \
+                --title "chore: bump ${scope} extension version to ${VERSION}" \
+                --body "Reflects the published extension release at version ${VERSION}." \
+                --base "$DEFAULT_BRANCH" \
+                --head "$branch")"
+            fi
+            head_sha="$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')"
+            "$GITHUB_WORKSPACE/packages/browseros-agent/scripts/release/merge-release-pr.sh" "$pr_url" "$head_sha"
+            exit 0
+          fi
+
+          git -C "$GITHUB_WORKSPACE" config user.name "github-actions[bot]"
+          git -C "$GITHUB_WORKSPACE" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$GITHUB_WORKSPACE" checkout -b "$branch"
+          git -C "$GITHUB_WORKSPACE" add -- "${paths[@]}"
+          git -C "$GITHUB_WORKSPACE" commit -m "chore: bump ${scope} extension version to ${VERSION}"
+          head_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          git -C "$GITHUB_WORKSPACE" push origin "$branch"
+          pr_url="$(gh pr create \
+            --title "chore: bump ${scope} extension version to ${VERSION}" \
+            --body "Reflects the published extension release at version ${VERSION}." \
+            --base "$DEFAULT_BRANCH" \
+            --head "$branch")"
+          "$GITHUB_WORKSPACE/packages/browseros-agent/scripts/release/merge-release-pr.sh" "$pr_url" "$head_sha"

@@ -19,6 +19,14 @@ Harness:
   required: true
   schema:
     $ref: ./schemas/connections.yaml#/Harness
+SkillName:
+  name: name
+  in: path
+  required: true
+  schema:
+    type: string
+    pattern: '^[a-z0-9-]+$'
+    minLength: 1
 RecordingTabId:
   name: X-Recording-Tab-Id
   in: header

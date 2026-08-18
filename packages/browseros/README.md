@@ -2,7 +2,7 @@
 
 Custom Chromium build with AI agent integration, enhanced privacy patches, and native MCP support.
 
-> Based on **Chromium 146.0.7680.31** · Built with Python 3.12+ · Licensed under [AGPL-3.0](../../LICENSE)
+> Based on **Chromium 151.0.7922.137** · Built with Python 3.12+ · Licensed under [AGPL-3.0](../../LICENSE)
 
 ## What This Is
 
@@ -106,10 +106,10 @@ BrowserOS applies patches on top of vanilla Chromium. Patches are organized in t
 The exact Chromium version is pinned in `CHROMIUM_VERSION`:
 
 ```
-MAJOR=146
+MAJOR=151
 MINOR=0
-BUILD=7680
-PATCH=31
+BUILD=7922
+PATCH=137
 ```
 
 To update the base Chromium version, update this file and `BASE_COMMIT`, then resolve any patch conflicts.

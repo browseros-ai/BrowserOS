@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { HTTPException } from 'hono/http-exception'
 import {
   createMcpRoutes,
   MANAGED_MCP_SERVERS_HEADER,
@@ -151,5 +152,35 @@ describe('createMcpRoutes', () => {
     expect(
       serverCreations.map((creation) => creation.includeStructuredContent),
     ).toEqual([false, true, false])
+  })
+
+  it('surfaces a transport HTTPException with its real status instead of masking it as 500', async () => {
+    const app = createTestMcpRoutes({
+      createMcpTransport: (() => ({
+        handleRequest: async () => {
+          throw new HTTPException(406, { message: 'Not Acceptable' })
+        },
+      })) as never,
+    })
+
+    const res = await postMcp(app)
+
+    expect(res.status).toBe(406)
+  })
+
+  it('returns 500 with a JSON-RPC internal error only for unexpected errors', async () => {
+    const app = createTestMcpRoutes({
+      createMcpTransport: (() => ({
+        handleRequest: async () => {
+          throw new Error('boom')
+        },
+      })) as never,
+    })
+
+    const res = await postMcp(app)
+    const body = (await res.json()) as { error: { code: number } }
+
+    expect(res.status).toBe(500)
+    expect(body.error.code).toBe(-32603)
   })
 })

@@ -1,39 +1,4 @@
-# Copy resources configuration for Nxtscape build
-# This file defines all copy operations for resources during the build process
-#
-# Conditional Operations:
-# - Use 'build_type' field to specify when an operation should run
-#   - Supported build types: debug, release, dev, prod
-#   - Operations without build_type run for all builds
-# - Use 'os' field to specify target operating systems
-#   - Supported values: windows, macos, linux (case-sensitive)
-#   - Operations without os run for all platforms
-# - Use 'arch' field to specify target architectures
-#   - Supported values: x64, arm64
-#   - Operations without arch run for all architectures
-#
-# Example:
-#   - name: "macOS-only Binary"
-#     source: "resources/binaries/macos_only"
-#     destination: "chrome/browser/resources/macos/"
-#     type: "directory"
-#     os: ["macos"]
-#
-#   - name: "ARM64-only Library"
-#     source: "resources/libs/arm64_optimized"
-#     destination: "chrome/browser/lib/"
-#     type: "directory"
-#     arch: ["arm64"]
-#
-#   - name: "Windows x64 DLL"
-#     source: "resources/dlls/x64/special.dll"
-#     destination: "chrome/browser/resources/"
-#     type: "file"
-#     os: ["windows"]
-#     arch: ["x64"]
-
 copy_operations:
-  # Version file
   - name: "BrowserOS Version File"
     source: "resources/BROWSEROS_VERSION"
     destination: "chrome/BROWSEROS_VERSION"
@@ -147,11 +112,14 @@ copy_operations:
     type: "directory"
     product: "browserclaw"
 
-  # BrowserOS Server resources - Platform & Architecture specific
   - name: "BrowserOS Server Resources - macOS ARM64"
     source: "resources/binaries/browseros_server/darwin-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["macos"]
     arch: ["arm64"]
 
@@ -159,6 +127,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/darwin-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["macos"]
     arch: ["x64"]
 
@@ -166,6 +138,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-arm64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["linux"]
     arch: ["arm64"]
 
@@ -173,6 +149,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/linux-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["linux"]
     arch: ["x64"]
 
@@ -180,6 +160,10 @@ copy_operations:
     source: "resources/binaries/browseros_server/windows-x64/resources"
     destination: "chrome/browser/browseros/server/resources"
     type: "directory"
+    product: "browseros"
+    managed: true
+    required: true
+    clear_destination: true
     os: ["windows"]
     arch: ["x64"]
 
@@ -195,6 +179,9 @@ copy_operations:
         to: "bin/browseros-claw-server"
         optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["macos"]
     arch: ["arm64"]
 
@@ -207,6 +194,9 @@ copy_operations:
         to: "bin/browseros-claw-server"
         optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["macos"]
     arch: ["x64"]
 
@@ -219,6 +209,9 @@ copy_operations:
         to: "bin/browseros-claw-server"
         optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["linux"]
     arch: ["arm64"]
 
@@ -231,6 +224,9 @@ copy_operations:
         to: "bin/browseros-claw-server"
         optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["linux"]
     arch: ["x64"]
 
@@ -243,12 +239,16 @@ copy_operations:
         to: "bin/browseros-claw-server.exe"
         optional: true
     type: "directory"
+    product: "browserclaw"
+    managed: true
+    required: true
     os: ["windows"]
     arch: ["x64"]
 
-  # BrowserOS Claw onboarding static resources - platform-independent dist
-  # downloaded from R2, feeds the onboarding grit pak built for every product
   - name: "BrowserOS Claw Onboarding Resources"
     source: "resources/binaries/browseros_claw_onboard/resources"
     destination: "chrome/browser/browseros/onboarding/resources"
     type: "directory"
+    managed: true
+    required: true
+    clear_destination: true

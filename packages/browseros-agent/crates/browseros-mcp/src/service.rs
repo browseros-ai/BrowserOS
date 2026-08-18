@@ -28,7 +28,6 @@ pub const BROWSER_MCP_INSTRUCTIONS: &str = r#"BrowserOS MCP - you are driving th
 Shared environment. The user (and possibly other agents) are using this browser right now:
 - Open your own tab with tabs action="new" (returns its page id + first snapshot); touch an existing tab only when the user points you at it.
 - Don't steal focus, close tabs you didn't open, or rearrange the user's windows.
-- Close your tabs when done.
 
 Core loop: snapshot -> act -> verify.
 - snapshot renders the page as an accessibility tree; interactive elements carry [ref=eN] handles.
@@ -44,7 +43,7 @@ Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump (over="ax" keeps refs on matches).
 - screenshot is for visual checks only; pdf saves the page as a document; download clicks a ref and saves the file; upload sets local file paths on a file input.
 
-Prefer act over JavaScript for single interactions. run (browser SDK script) does real multi-step flows and bulk extraction in one call; evaluate is one-shot page-context JS.
+Reach for run first; the granular tools are the fallback. run (browser SDK script) composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in one call. Use a single granular tool (act, snapshot, navigate, evaluate) directly only for a one-off step or when a run script cannot express it.
 
 Parallelize when it helps: give independent subtasks their own tabs - at most 5 at a time unless the user explicitly asks for more. windows can create a separate window when a task needs isolation.
 
@@ -174,6 +173,8 @@ impl BrowserMcpService {
             defaults: self.defaults.clone(),
             cancel,
             output_files: self.output_files.clone(),
+            inner_call_hook: None,
+            preloaded_helpers: Vec::new(),
         })
     }
 

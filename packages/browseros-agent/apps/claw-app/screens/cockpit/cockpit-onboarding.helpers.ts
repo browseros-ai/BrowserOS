@@ -36,45 +36,34 @@ export function getOnboardingState({
 }
 
 export const HERO_COPY = {
-  eyebrow: 'GET STARTED',
+  eyebrow: 'WELCOME',
   h1Prefix: 'You watch. Your agent',
   h1Accent: 'works.',
   subhead:
-    'Set up BrowserClaw once. Tell your AI to use it. Everything lands here.',
+    'Your agents are wired in. Watch a quick demo, then hand your first task to any of them.',
 } as const
 
-export const PRIMARY_ACTION_COPY = {
-  install: {
-    activeLabel: 'Set up MCP endpoint',
-    doneLabel: 'View MCP endpoint',
-    href: '/mcp',
-  },
+export const PANEL_COPY = {
+  heading: 'Hand off your first task',
+  // Three status messages share one fixed-height slot so copying never
+  // reflows the panel. Keep each to at most two lines at panel width.
+  tieBack: 'Then come back here to watch it run.',
+  waiting: 'Waiting for your first run. Come back the moment you press enter.',
+  copied: 'Copied. Paste it into your agent, then watch it here.',
 } as const
 
-export const WAITING_COPY = {
-  connectedNoActivity:
-    'Waiting for your first run. Come back here as soon as you press enter in your agent.',
-  promptCopied:
-    'Prompt copied. Paste it into Claude Code, Cursor, or Codex, then press enter.',
+export const MANAGE_COPY = {
+  label: 'Manage agents',
+  href: '/mcp',
 } as const
 
-export const STARTER_PROMPT_LABEL =
-  'Paste this into Claude Code, Cursor, or Codex.'
+export const STARTER_PROMPT_LABEL = 'Paste this prompt into your agent.'
 
 export const STARTER_PROMPT =
-  'Use BrowserClaw. Book me the cheapest morning flight from SFO to NYC next Friday.'
+  'Using BrowserOS neo, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
 
-export const STEP_COPY = {
-  install: {
-    activeTitle: 'Install BrowserClaw as an MCP.',
-    doneTitle: 'MCP installed.',
-  },
-  ask: {
-    title: 'Prompt your agent.',
-  },
-  watch: {
-    title: 'Watch it here.',
-  },
+export const CONNECTED_COPY = {
+  suffix: 'connected',
 } as const
 
 export const FOOTER_COPY = {

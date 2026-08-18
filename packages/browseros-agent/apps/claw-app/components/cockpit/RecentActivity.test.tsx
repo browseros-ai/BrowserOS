@@ -11,6 +11,7 @@ interface MockQueryShape {
 }
 
 let queryOverride: MockQueryShape = { isPending: true }
+let screenshotBaseUrl: string | null = null
 
 // Spread the real audit-hooks module so unrelated tests that import
 // useTaskDetail / useDispatches / useAuditCleanupCandidates keep
@@ -20,12 +21,13 @@ let queryOverride: MockQueryShape = { isPending: true }
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
   useSessions: () => queryOverride,
-  taskScreenshotUrl: (sessionId: string, id: number) =>
-    `/api/v1/sessions/${sessionId}/screenshots/${id}`,
-  useTaskScreenshotBaseUrl: () => null,
+  taskScreenshotUrl: (sessionId: string, id: number, baseUrl?: string) =>
+    `${baseUrl ?? ''}/api/v1/sessions/${sessionId}/screenshots/${id}`,
+  useTaskScreenshotBaseUrl: () => screenshotBaseUrl,
 }))
 
 const { RecentActivity } = await import('./RecentActivity')
+const { AuditHoverPreview } = await import('../audit/AuditHoverPreview')
 
 function render(): string {
   const client = new QueryClient({
@@ -69,7 +71,8 @@ describe('RecentActivity', () => {
     expect(html).toContain('No recent activity')
   })
 
-  it('renders the freshest task as the lead tile with title, agent, and meta', () => {
+  it('renders each task as a compact session card with title, agent, and meta', () => {
+    screenshotBaseUrl = null
     queryOverride = {
       isPending: false,
       data: { pages: [{ items: [sampleTask] }] },
@@ -77,9 +80,49 @@ describe('RecentActivity', () => {
     const html = render()
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
-    // DONE is the silent default in the editorial cockpit; the tile
-    // instead carries a mono meta line with the dispatch count.
-    expect(html).toContain('4 tools')
+    expect(html).toContain('ph-no-capture')
+    // All cards share the calm light caption tone; there is no lead tile.
+    expect(html).toContain('data-caption-tone="light"')
+    expect(html).not.toContain('data-caption-tone="blue"')
+    // Compact meta line carries the dispatch count (Xs · Nt · ago).
+    expect(html).toContain('4t')
+  })
+
+  it('keeps the saturated blue caption tone for audit hover previews', () => {
+    screenshotBaseUrl = null
+    const html = renderToStaticMarkup(<AuditHoverPreview task={sampleTask} />)
+    expect(html).toContain('data-caption-tone="blue"')
+  })
+
+  it('preserves lead and supporting session screenshots with useful alt text', () => {
+    screenshotBaseUrl = 'http://127.0.0.1:9200'
+    queryOverride = {
+      isPending: false,
+      data: {
+        pages: [
+          {
+            items: [
+              sampleTask,
+              {
+                ...sampleTask,
+                sessionId: 'sess-2',
+                label: 'Codex',
+                startedAt: sampleTask.startedAt - 1,
+              },
+            ],
+          },
+        ],
+      },
+    }
+
+    const html = render()
+    expect(html).toContain('alt="Session preview from Claude Code"')
+    expect(html).toContain('alt="Session preview from Codex"')
+    expect(html).not.toContain('data-caption-tone="blue"')
+    expect(html.match(/data-caption-tone="light"/g)?.length).toBe(2)
+    expect(html).toContain(
+      'http://127.0.0.1:9200/api/v1/sessions/sess-1/screenshots/7',
+    )
   })
 
   it('renders the section header + view-all CTA in the empty state', () => {
@@ -100,5 +143,29 @@ describe('RecentActivity', () => {
     queryOverride = { isPending: false, data: { pages: [{ items: tasks }] } }
     const html = render()
     expect(html.match(/STOPPED/g)?.length).toBe(6)
+  })
+
+  it('renders a compact card grid, then a minimal list for the rest', () => {
+    screenshotBaseUrl = null
+    const tasks = Array.from({ length: 12 }, (_, index) => ({
+      ...sampleTask,
+      sessionId: `cyanotype-${index}`,
+      name: `Task ${index}`,
+      startedAt: sampleTask.startedAt - index,
+      status: index === 0 ? ('live' as const) : ('done' as const),
+    }))
+    queryOverride = { isPending: false, data: { pages: [{ items: tasks }] } }
+
+    const html = render()
+    expect(html).toContain('12 sessions')
+    // First six as cards, the rest as minimal list rows.
+    expect(html.match(/data-testid="support-tile-/g)?.length).toBe(6)
+    expect(html.match(/data-testid="activity-row-/g)?.length).toBe(6)
+    expect(html).toContain('data-testid="recent-activity-list"')
+    // A minimal list, not the old heavy activity table.
+    expect(html).not.toContain('data-testid="recent-activity-table"')
+    expect(html).not.toContain('>Tool chain<')
+    // The live run still surfaces its LIVE chip.
+    expect(html).toContain('>LIVE<')
   })
 })

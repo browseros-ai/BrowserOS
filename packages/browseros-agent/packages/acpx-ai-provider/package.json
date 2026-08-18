@@ -15,7 +15,7 @@
     "@ai-sdk/provider-utils": "^4.0.26"
   },
   "peerDependencies": {
-    "acpx": ">=0.8.0",
+    "acpx": "^0.13.0",
     "ai": ">=6.0.0"
   },
   "exports": {

@@ -43,11 +43,20 @@ pub(super) async fn append_document_events(
         )
         .await
         .map_err(|source| internal(&request_id, source))?;
-    Ok(Json(AppendRecordingEventsResponse::new(if appended {
+    // Tell the recorder to stop once this tab's session has ended, so it is not
+    // recorded through the tab-cleanup grace. A ledger read error must never fail
+    // ingest, so it degrades to "keep recording".
+    let stop = state
+        .session_tabs
+        .tab_recording_should_stop(tab_id)
+        .await
+        .unwrap_or(false);
+    let accepted = if appended {
         i64::try_from(parsed.events.len()).unwrap_or(i64::MAX)
     } else {
         0
-    })))
+    };
+    Ok(Json(AppendRecordingEventsResponse::new(accepted, stop)))
 }
 
 /// Tolerant parse of recorder-supplied NDJSON: lines that are not JSON

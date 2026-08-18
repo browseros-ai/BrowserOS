@@ -6,9 +6,9 @@ import { Form } from '@/components/ui/form'
 import type { BrowserOSOnboardingState } from '../browseros-onboarding-api'
 import { BROWSEROS_ONBOARDING_API_VERSION } from '../browseros-onboarding-api'
 import {
+  defaultImportItemsForSource,
   importItemLabel,
   MOCK_BROWSEROS_IMPORT_SOURCES,
-  selectableItemsForSource,
 } from '../onboarding-v2.helpers'
 import {
   type OnboardingFormValues,
@@ -98,7 +98,7 @@ function render(
 }
 
 function checklistRowFor(html: string, label: string): string {
-  const checklistStart = html.indexOf('What to import')
+  const checklistStart = html.indexOf('What to copy')
   const labelIndex = html.indexOf(`>${label}</span>`, checklistStart)
   if (checklistStart === -1 || labelIndex === -1) return ''
   const rowStart = html.lastIndexOf('<label', labelIndex)
@@ -126,19 +126,21 @@ function buttonMarkupFor(html: string, label: string): string {
 }
 
 describe('ImportStep', () => {
-  it('renders the picker, the Keychain notice, and an Import button in picker phase', () => {
+  it('renders the picker, the Keychain notice, and a Copy button in picker phase', () => {
     const html = render('picker')
-    expect(html).toContain('Pick a profile to import')
+    expect(html).toContain('Pick a profile')
     expect(html).toContain('Google Chrome - Work')
     expect(html).toContain('Google Chrome - Personal')
     expect(html).toContain('Microsoft Edge - Default')
-    expect(html).toContain('What to import')
-    for (const item of MOCK_BROWSEROS_IMPORT_SOURCES[0].supportedItems) {
+    expect(html).toContain('What to copy')
+    for (const item of defaultImportItemsForSource(
+      MOCK_BROWSEROS_IMPORT_SOURCES[0],
+    )) {
       expect(checklistRowFor(html, importItemLabel(item))).toContain(
         'aria-checked="true"',
       )
     }
-    expect(html).toContain('7 of 7 selected')
+    expect(html).toContain('5 selected')
     // JSX wraps "macOS will ask" in a semibold span, so the string
     // "macOS will ask to read" is split by a </span> boundary in the
     // rendered HTML. Assert on the positive plus a negative that
@@ -147,36 +149,75 @@ describe('ImportStep', () => {
     // without fighting the JSX structure.
     expect(html).toContain('macOS will ask')
     expect(html).not.toContain('macOS will ask permission')
-    expect(html).toContain('Import 7 items from Work')
+    expect(html).toContain('Allow')
+    expect(html).not.toContain('Always Allow')
+    expect(html).toContain('Copy 5 items from Work')
     expect(html).not.toContain('Chrome is open')
     expect(html).not.toContain('Quit Chrome for me')
     expect(html).not.toContain('disabled=""')
   })
 
-  it('checks recommended items and leaves non-recommended supported items unchecked', () => {
+  it('checks every supported non-optional item by default', () => {
     const source = MOCK_BROWSEROS_IMPORT_SOURCES[1]
     const html = render('picker', readyState(), {
       selectedSourceId: source.id,
-      selectedItems: selectableItemsForSource(source),
+      selectedItems: defaultImportItemsForSource(source),
     })
 
-    expect(html).toContain('4 of 5 selected')
-    expect(html).toContain('Import 4 items from Personal')
-    for (const item of source.recommendedItems) {
-      const row = checklistRowFor(html, importItemLabel(item))
+    expect(html).toContain('5 selected')
+    expect(html).toContain('Copy 5 items from Personal')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Cookies',
+      'Passwords',
+      'Autofill',
+    ]) {
+      const row = checklistRowFor(html, item)
       expect(row).toContain('data-checked=""')
       expect(row).toContain('aria-checked="true"')
     }
-    const autofillRow = checklistRowFor(html, 'Autofill')
-    expect(autofillRow).toContain('data-unchecked=""')
-    expect(autofillRow).toContain('aria-checked="false"')
+    expect(html).not.toContain('<details')
   })
 
-  it('disables import until at least one supported item is selected', () => {
+  it('collapses only search engines and extensions behind a disclosure', () => {
+    const html = render('picker')
+    const detailsStart = html.indexOf('<details')
+    const detailsEnd = html.indexOf('</details>', detailsStart)
+    const details = html.slice(detailsStart, detailsEnd)
+
+    expect(detailsStart).toBeGreaterThan(-1)
+    expect(html).toContain('Also copy my browsing setup')
+    expect(details).toContain('Search engines')
+    expect(details).toContain('Extensions')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Cookies',
+      'Passwords',
+      'Autofill',
+    ]) {
+      expect(details).not.toContain(item)
+    }
+    for (const item of ['Search engines', 'Extensions']) {
+      expect(checklistRowFor(html, item)).toContain('aria-checked="false"')
+    }
+  })
+
+  it('counts a custom mixed selection in the action label', () => {
+    const html = render('picker', readyState(), {
+      selectedItems: ['cookies', 'passwords', 'history'],
+    })
+
+    expect(html).toContain('3 selected')
+    expect(html).toContain('Copy 3 items from Work')
+  })
+
+  it('disables the copy action until at least one item is selected', () => {
     const html = render('picker', readyState(), { selectedItems: [] })
 
-    expect(html).toContain('0 of 7 selected')
-    expect(html).toContain('Select what to import')
+    expect(html).toContain('0 selected')
+    expect(html).toContain('Select what to copy')
     expect(html).toContain('disabled=""')
   })
 
@@ -199,8 +240,8 @@ describe('ImportStep', () => {
         ],
       }),
     )
-    expect(html).toContain('Nothing to import from this profile')
-    expect(html).not.toContain('What to import')
+    expect(html).toContain('Nothing to copy from this profile')
+    expect(html).not.toContain('What to copy')
     expect(html).toContain('disabled=""')
   })
 
@@ -227,8 +268,8 @@ describe('ImportStep', () => {
       selectedItems: ['history'],
     })
 
-    expect(html).toContain('1 of 7 selected')
-    expect(html).toContain('Import 1 item from Work')
+    expect(html).toContain('1 selected')
+    expect(html).toContain('Copy 1 item from Work')
   })
 
   it('renders the importing progress card during importing phase', () => {
@@ -297,7 +338,7 @@ describe('ImportStep', () => {
         ],
       }),
     )
-    expect(html).toContain('Imported 7 items from Google Chrome - Work')
+    expect(html).toContain('Copied 7 items from Google Chrome - Work')
     expect(html).toContain('History, Bookmarks')
     expect(html).toContain('Continue')
   })
@@ -305,7 +346,7 @@ describe('ImportStep', () => {
   it('does not fabricate a success summary when progress is missing', () => {
     const html = render('imported', readyState({ status: 'succeeded' }))
 
-    expect(html).toContain('Imported 0 items from Work')
+    expect(html).toContain('Copied 0 items from Work')
     expect(html).toContain('No item details reported')
     expect(html).not.toContain('History, Bookmarks')
   })
@@ -322,7 +363,7 @@ describe('ImportStep', () => {
       }),
     )
 
-    expect(html).toContain('Imported 0 items from Work')
+    expect(html).toContain('Copied 0 items from Work')
     expect(html).toContain('No completed items reported')
     expect(html).not.toContain('History, Bookmarks')
   })

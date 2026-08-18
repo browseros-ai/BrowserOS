@@ -63,6 +63,40 @@ impl AppRuntime {
                     .spawn_idle_sweeper(shutdown.child_token()),
             },
             BackgroundTask {
+                name: "agent tab cleanup sweeper",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(state.config.session_sweep_interval);
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    match crate::services::tab_cleanup::sweep_orphaned_tabs(
+                                        &state.session_tabs,
+                                        &state.browser,
+                                        crate::clock::now_epoch_ms(),
+                                        state.config.session_retention,
+                                    )
+                                    .await
+                                    {
+                                        Ok(count) if count > 0 => {
+                                            info!(count, "closed finished-agent tabs");
+                                        }
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            warn!(error = %error, "agent tab cleanup sweep failed");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "audit retention sweeper",
                 handle: tokio::spawn({
                     let state = state.clone();
@@ -97,6 +131,13 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "recording payload migration",
+                handle: state
+                    .recordings
+                    .clone()
+                    .spawn_payload_migration(shutdown.child_token()),
+            },
+            BackgroundTask {
                 name: "session efficiency reconciliation",
                 handle: tokio::spawn({
                     let session_efficiency = state.session_efficiency.clone();
@@ -109,6 +150,23 @@ impl AppRuntime {
                             Ok(_) => {}
                             Err(error) => {
                                 warn!(error = %error, "session efficiency reconciliation failed");
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
+                name: "skill run reconciliation",
+                handle: tokio::spawn({
+                    let skill_runs = state.skill_runs.clone();
+                    async move {
+                        match skill_runs.reconcile().await {
+                            Ok(recorded) if recorded > 0 => {
+                                info!(recorded, "reconciled skill run projections");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                warn!(error = %error, "skill run reconciliation failed");
                             }
                         }
                     }
@@ -253,6 +311,8 @@ mod tests {
             result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 5,
             dispatch_id: DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
@@ -543,7 +603,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );
@@ -571,7 +630,6 @@ mod tests {
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
                 "$process_person_profile": false,
-                "$geoip_disable": true,
                 "$is_server": true,
             })
         );

@@ -1,8 +1,8 @@
 diff --git a/chrome/common/chrome_paths.cc b/chrome/common/chrome_paths.cc
-index eae95c5f35740..d350b9aff6705 100644
+index 56ff14c59c12ac006dbb6a68fe2d430dee6eafd7..ebc010833628dd76a5e43bfa1926886d7fe2a3aa 100644
 --- a/chrome/common/chrome_paths.cc
 +++ b/chrome/common/chrome_paths.cc
-@@ -518,6 +518,19 @@ bool PathProvider(int key, base::FilePath* result) {
+@@ -506,6 +506,19 @@ bool PathProvider(int key, base::FilePath* result) {
        create_dir = true;
        break;
  
