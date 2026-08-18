@@ -45,11 +45,15 @@ const sampleSkill: Skill = {
   linkedAgents: ['Claude Code', 'Codex'],
   runCount: 5,
   cleanRunCount: 4,
-  firstRunTokens: 23000,
-  latestRunTokens: 14600,
   lastRunAt: 1_000_000_000_000,
   createdAt: 900_000_000_000,
   updatedAt: 1_000_000_000_000,
+  tokenSavings: {
+    saved: 45000,
+    otherBrowsers: 60000,
+    used: 15000,
+    measuredRunCount: 5,
+  },
 }
 
 describe('Tasks list screen', () => {
@@ -73,22 +77,24 @@ describe('Tasks list screen', () => {
     expect(renderApp()).toContain('Could not load')
   })
 
-  it('renders a row per skill with the command, description, and clean ratio', () => {
+  it('renders a row per skill with the command, description, and success rate', () => {
     dataOverride = { ...baseData, skills: [sampleSkill] }
     const html = renderApp()
     expect(html).toContain('/inbox-sweep')
     expect(html).toContain('Check the inbox and draft what is owed')
+    // Clean ratio 4/5 and its color-coded 80% success rate.
     expect(html).toContain('4/5')
-    expect(html).toContain('14.6k')
+    expect(html).toContain('80%')
   })
 
-  it('renders the getting-cheaper delta on the cost column', () => {
+  it('renders tokens saved for a measured skill', () => {
     dataOverride = { ...baseData, skills: [sampleSkill] }
-    // 23000 -> 14600 is roughly a 37% reduction.
-    expect(renderApp()).toContain('37%')
+    const html = renderApp()
+    expect(html).toContain('45.0k')
+    expect(html).toContain('saved')
   })
 
-  it('renders "not run" for a skill with no measured runs', () => {
+  it('renders "not run" and "not measured" for a skill with no runs', () => {
     dataOverride = {
       ...baseData,
       skills: [
@@ -96,12 +102,18 @@ describe('Tasks list screen', () => {
           ...sampleSkill,
           runCount: 0,
           cleanRunCount: 0,
-          firstRunTokens: undefined,
-          latestRunTokens: undefined,
           lastRunAt: undefined,
+          tokenSavings: {
+            saved: 0,
+            otherBrowsers: 0,
+            used: 0,
+            measuredRunCount: 0,
+          },
         },
       ],
     }
-    expect(renderApp()).toContain('not run')
+    const html = renderApp()
+    expect(html).toContain('not run')
+    expect(html).toContain('not measured')
   })
 })

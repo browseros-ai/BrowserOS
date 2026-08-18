@@ -770,6 +770,7 @@ export interface components {
       createdAt: number
       /** Format: int64 */
       updatedAt: number
+      tokenSavings?: components['schemas']['SkillTokenSavings']
     }
     SkillList: {
       items: components['schemas']['Skill'][]

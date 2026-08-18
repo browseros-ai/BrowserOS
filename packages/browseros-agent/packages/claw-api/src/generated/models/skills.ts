@@ -194,6 +194,12 @@ export interface Skill {
      * @memberof Skill
      */
     updatedAt: number;
+    /**
+     *
+     * @type {SkillTokenSavings}
+     * @memberof Skill
+     */
+    tokenSavings?: SkillTokenSavings;
 }
 
 /**

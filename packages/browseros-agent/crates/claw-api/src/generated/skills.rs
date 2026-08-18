@@ -123,6 +123,8 @@ pub struct Skill {
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+    #[serde(rename = "tokenSavings", skip_serializing_if = "Option::is_none")]
+    pub token_savings: Option<Box<models::SkillTokenSavings>>,
 }
 
 impl Skill {
@@ -152,6 +154,7 @@ impl Skill {
             last_run_at: None,
             created_at,
             updated_at,
+            token_savings: None,
         }
     }
 }

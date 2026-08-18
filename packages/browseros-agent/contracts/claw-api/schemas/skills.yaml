@@ -70,6 +70,8 @@ Skill:
     updatedAt:
       type: integer
       format: int64
+    tokenSavings:
+      $ref: '#/SkillTokenSavings'
 SkillList:
   type: object
   additionalProperties: false

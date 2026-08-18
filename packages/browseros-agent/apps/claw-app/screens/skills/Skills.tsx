@@ -22,12 +22,7 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import {
-  formatTokens,
-  skillCommand,
-  successRate,
-  tokenDeltaPercent,
-} from './skills.helpers'
+import { formatTokens, skillCommand, successRate } from './skills.helpers'
 
 const CELL_PADDING = 'px-2 py-3 first:pl-4 last:pr-4'
 
@@ -105,7 +100,7 @@ export function Skills() {
                     'h-auto w-40 text-right font-medium text-[12px] text-ledger-head-ink',
                   )}
                 >
-                  Cost / run
+                  Tokens saved
                 </TableHead>
                 <TableHead
                   className={cn(
@@ -142,7 +137,6 @@ export function Skills() {
 }
 
 function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
-  const delta = tokenDeltaPercent(skill.firstRunTokens, skill.latestRunTokens)
   const rate = successRate(skill.cleanRunCount, skill.runCount)
   return (
     <TableRow
@@ -169,24 +163,15 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
         {skill.runCount}
       </TableCell>
       <TableCell className={cn(CELL_PADDING, 'text-right align-middle')}>
-        {skill.latestRunTokens === undefined ? (
-          <span className="text-[13px] text-ink-3">not run</span>
-        ) : (
+        {skill.tokenSavings && skill.tokenSavings.measuredRunCount > 0 ? (
           <div className="flex flex-col items-end gap-0.5">
             <span className="text-[13px] text-ink">
-              {formatTokens(skill.latestRunTokens)}
+              {formatTokens(Math.max(0, skill.tokenSavings.saved))}
             </span>
-            {delta !== null && delta !== 0 && (
-              <span
-                className={cn(
-                  'text-[11px]',
-                  delta < 0 ? 'text-green' : 'text-red',
-                )}
-              >
-                {delta < 0 ? '↓' : '↑'} {Math.abs(delta)}%
-              </span>
-            )}
+            <span className="text-[11px] text-ink-3">saved</span>
           </div>
+        ) : (
+          <span className="text-[13px] text-ink-3">not measured</span>
         )}
       </TableCell>
       <TableCell className={cn(CELL_PADDING, 'text-right align-middle')}>

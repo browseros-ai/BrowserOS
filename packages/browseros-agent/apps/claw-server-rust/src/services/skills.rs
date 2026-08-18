@@ -165,6 +165,12 @@ impl SkillService {
         self.repo.list_runs(name, cursor, limit).await
     }
 
+    /// Every recorded run across all skills, so the list handler can attach each
+    /// skill's token savings without a per-skill query.
+    pub async fn all_runs(&self) -> AppResult<Vec<skill_runs::Model>> {
+        self.repo.all_runs().await
+    }
+
     pub async fn create(&self, input: CreateSkill) -> AppResult<SkillView> {
         let _guard = self.mutate.lock().await;
         self.create_locked(input).await

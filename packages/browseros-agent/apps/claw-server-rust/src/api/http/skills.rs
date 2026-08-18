@@ -13,6 +13,7 @@ use axum::{
 use claw_api::models::{self, Skill, SkillCreate, SkillDetail, SkillList, SkillRun, SkillRunList};
 use harness_integrations::AgentId;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RunsQuery {
@@ -24,14 +25,36 @@ pub(super) async fn list(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
 ) -> Result<Json<SkillList>, CanonicalError> {
-    let items = state
+    let views = state
         .skills
         .list()
         .await
-        .map_err(|source| map_error(&request_id, source))?
-        .into_iter()
-        .map(skill_to_dto)
-        .collect();
+        .map_err(|source| map_error(&request_id, source))?;
+    let all_runs = state
+        .skills
+        .all_runs()
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    let mut runs_by_skill: HashMap<String, Vec<skill_runs::Model>> = HashMap::new();
+    for run in all_runs {
+        runs_by_skill
+            .entry(run.skill_name.clone())
+            .or_default()
+            .push(run);
+    }
+    let mut items = Vec::with_capacity(views.len());
+    for view in views {
+        let runs = runs_by_skill
+            .get(&view.model.name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let token_savings = skill_token_savings(&state, runs)
+            .await
+            .map_err(|source| map_error(&request_id, source))?;
+        let mut dto = skill_to_dto(view);
+        dto.token_savings = Some(Box::new(token_savings));
+        items.push(dto);
+    }
     Ok(Json(SkillList::new(items)))
 }
 
