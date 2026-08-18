@@ -4,6 +4,7 @@ import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { AcpAgent, AcpAgentType } from './acp-agent-types'
 import { buildAgentApiUrl } from './agent-api-url'
+import { computeAgentsSettled } from './agents.helpers'
 
 interface AcpAgentsResponse {
   agents: AcpAgent[]
@@ -56,13 +57,14 @@ export function useAcpAgents(enabled = true) {
       (agentsSupported && (query.isLoading || urlLoading)),
     // `loading` (via query.isLoading) briefly reads false on the render the
     // query flips enabled, while `agents` is still empty. `settled` instead
-    // stays false until the fetch has actually resolved, so callers can tell a
-    // not-yet-loaded agent from a genuinely absent one.
-    settled: capabilitiesLoading
-      ? false
-      : !agentsSupported
-        ? true
-        : !urlLoading && query.isFetched,
+    // stays false until the fetch has succeeded, so callers can tell a
+    // not-yet-loaded (or failed) agent list from a genuinely absent one.
+    settled: computeAgentsSettled({
+      capabilitiesLoading,
+      agentsSupported,
+      urlLoading,
+      agentsQuerySucceeded: query.isSuccess,
+    }),
     error: agentsSupported ? (query.error ?? urlError) : null,
     refetch: query.refetch,
   }
