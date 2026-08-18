@@ -76,6 +76,7 @@ import {
 import { getModelContextLength, getModelsForProvider } from './models'
 import {
   isCredentiallessProviderType,
+  isLocalRuntimeProviderType,
   normalizeProviderFormValues,
   type ProviderFormValues,
   providerFormSchema,

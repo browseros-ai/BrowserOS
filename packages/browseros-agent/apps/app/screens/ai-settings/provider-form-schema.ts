@@ -136,3 +136,10 @@ export function normalizeProviderFormValues(
 ): ProviderFormValues {
   return values
 }
+
+/** Identifies provider types that run locally and do not require API keys or cloud credentials. */
+export function isLocalRuntimeProviderType(
+  type: z.infer<typeof providerTypeEnum>,
+): boolean {
+  return type === 'ollama' || type === 'lmstudio' || type === 'browseros'
+}
