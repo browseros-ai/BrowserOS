@@ -22,7 +22,12 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import { formatTokens, skillCommand, tokenDeltaPercent } from './skills.helpers'
+import {
+  formatTokens,
+  skillCommand,
+  successRate,
+  tokenDeltaPercent,
+} from './skills.helpers'
 
 const CELL_PADDING = 'px-2 py-3 first:pl-4 last:pr-4'
 
@@ -105,10 +110,10 @@ export function Skills() {
                 <TableHead
                   className={cn(
                     CELL_PADDING,
-                    'h-auto w-24 text-right font-medium text-[12px] text-ledger-head-ink',
+                    'h-auto w-32 text-right font-medium text-[12px] text-ledger-head-ink',
                   )}
                 >
-                  Clean
+                  Success rate
                 </TableHead>
                 <TableHead
                   className={cn(
@@ -138,6 +143,7 @@ export function Skills() {
 
 function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
   const delta = tokenDeltaPercent(skill.firstRunTokens, skill.latestRunTokens)
+  const rate = successRate(skill.cleanRunCount, skill.runCount)
   return (
     <TableRow
       data-testid={`skill-row-${skill.name}`}
@@ -183,13 +189,15 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
           </div>
         )}
       </TableCell>
-      <TableCell
-        className={cn(
-          CELL_PADDING,
-          'text-right align-middle text-[13px] text-ledger-ink-2',
-        )}
-      >
-        {skill.cleanRunCount}/{skill.runCount}
+      <TableCell className={cn(CELL_PADDING, 'text-right align-middle')}>
+        <div className="flex flex-col items-end gap-0.5">
+          <span className={cn('font-medium text-[13px]', rate.colorClass)}>
+            {rate.hasRuns ? `${rate.percent}%` : 'not run'}
+          </span>
+          <span className="text-[11px] text-ink-3">
+            {skill.cleanRunCount}/{skill.runCount}
+          </span>
+        </div>
       </TableCell>
       <TableCell
         className={cn(CELL_PADDING, 'align-middle')}

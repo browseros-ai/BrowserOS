@@ -5,6 +5,7 @@ import {
   neoName,
   parseSkillBody,
   skillCommand,
+  successRate,
   tokenDeltaPercent,
 } from './skills.helpers'
 
@@ -25,6 +26,33 @@ describe('neoName', () => {
 
   it('leaves an interior neo- untouched', () => {
     expect(neoName('weather-neo-check')).toBe('neo-weather-neo-check')
+  })
+})
+
+describe('successRate', () => {
+  it('is muted with no runs', () => {
+    expect(successRate(0, 0)).toEqual({
+      hasRuns: false,
+      percent: 0,
+      colorClass: 'text-ink-3',
+    })
+  })
+
+  it('is green at or above 90 percent', () => {
+    expect(successRate(2, 2)).toEqual({
+      hasRuns: true,
+      percent: 100,
+      colorClass: 'text-green',
+    })
+    expect(successRate(9, 10).colorClass).toBe('text-green')
+  })
+
+  it('is amber between 70 and 89 percent', () => {
+    expect(successRate(7, 10).colorClass).toBe('text-amber')
+  })
+
+  it('is red below 70 percent', () => {
+    expect(successRate(1, 2).colorClass).toBe('text-red')
   })
 })
 

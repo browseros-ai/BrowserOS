@@ -26,6 +26,7 @@ import {
   formatRelativeTime,
   formatTokens,
   skillCommand,
+  successRate,
 } from './skills.helpers'
 
 const AGENT_LABELS: Record<string, string> = {
@@ -183,17 +184,10 @@ function TokensSavedCard({
 
 /** How often the skill runs end to end without a tool error, color-coded. */
 function SuccessRateCard({ skill }: { skill: Skill }) {
-  const hasRuns = skill.runCount > 0
-  const percent = hasRuns
-    ? Math.round((skill.cleanRunCount / skill.runCount) * 100)
-    : 0
-  const colorClass = !hasRuns
-    ? 'text-ink-3'
-    : percent >= 90
-      ? 'text-green'
-      : percent >= 70
-        ? 'text-amber'
-        : 'text-red'
+  const { hasRuns, percent, colorClass } = successRate(
+    skill.cleanRunCount,
+    skill.runCount,
+  )
   return (
     <StatCard title="Success rate">
       <div className="flex items-baseline gap-1">
