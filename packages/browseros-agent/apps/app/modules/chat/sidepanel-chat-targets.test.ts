@@ -5,6 +5,7 @@ import {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
   persistSidepanelChatTargetSelection,
+  resolveRepairedSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
@@ -87,6 +88,67 @@ describe('resolveSidepanelChatTarget', () => {
         selection: { kind: 'acp', id: 'deleted-agent' },
       }),
     ).toMatchObject({ kind: 'llm', id: provider.id })
+  })
+})
+
+describe('resolveRepairedSelection', () => {
+  const targets = buildSidepanelChatTargets({
+    providers: [provider],
+    agents: [agent],
+  })
+  const llmTarget = targets[0]
+  const acpTarget = targets[1]
+
+  it('keeps an ACP selection while agents are still loading (not ready)', () => {
+    // Regression guard: agents not settled yet, so the resolved target has
+    // fallen back to the LLM provider. The stored ACP selection must survive.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: llmTarget,
+        ready: false,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a selection that matches the resolved target', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: acpTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('repairs a stale selection to the resolved fallback once ready', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: 'deleted-agent' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: provider.id } })
+  })
+
+  it('repairs to null when nothing resolves', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: undefined,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: null })
+  })
+
+  it('never repairs when there is no stored selection', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: null,
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
   })
 })
 

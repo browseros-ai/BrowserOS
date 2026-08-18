@@ -111,6 +111,41 @@ export function resolveSidepanelChatTarget({
     : undefined
 }
 
+export type RepairSelectionDecision =
+  | { repair: false }
+  | { repair: true; selection: SidepanelChatTargetSelection | null }
+
+/**
+ * Decides whether a persisted sidebar selection needs repair. It only repairs
+ * once the target lists are settled, so an ACP selection is never wiped while
+ * its agent is still loading (which would silently downgrade an ACP default to
+ * the LLM fallback on every startup).
+ */
+export function resolveRepairedSelection({
+  selection,
+  resolvedTarget,
+  ready,
+}: {
+  selection: SidepanelChatTargetSelection | null
+  resolvedTarget: SidepanelChatTarget | undefined
+  ready: boolean
+}): RepairSelectionDecision {
+  if (!ready || !selection) return { repair: false }
+  if (
+    resolvedTarget &&
+    resolvedTarget.kind === selection.kind &&
+    resolvedTarget.id === selection.id
+  ) {
+    return { repair: false }
+  }
+  return {
+    repair: true,
+    selection: resolvedTarget
+      ? { kind: resolvedTarget.kind, id: resolvedTarget.id }
+      : null,
+  }
+}
+
 export function toLlmProviderConfig(
   target: SidepanelChatTarget | undefined,
 ): LlmProviderConfig | undefined {

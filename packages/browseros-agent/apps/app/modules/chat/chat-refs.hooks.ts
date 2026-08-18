@@ -9,6 +9,7 @@ import {
   buildSidepanelChatTargets,
   loadSidepanelChatTargetSelection,
   persistSidepanelChatTargetSelection,
+  resolveRepairedSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTarget,
   type SidepanelChatTargetSelection,
@@ -37,7 +38,11 @@ export const useChatRefs = () => {
     setDefaultProvider,
     isLoading: isLoadingProviders,
   } = useLlmProviders()
-  const { agents, loading: isLoadingAgents } = useAcpAgents()
+  const {
+    agents,
+    loading: isLoadingAgents,
+    settled: agentsSettled,
+  } = useAcpAgents()
   const { personalization } = usePersonalization()
   const [targetSelection, setTargetSelection] =
     useState<SidepanelChatTargetSelection | null>(null)
@@ -72,20 +77,19 @@ export const useChatRefs = () => {
   )
 
   useEffect(() => {
-    if (isLoadingProviders || isLoadingAgents || !targetSelection) return
-    if (
-      selectedChatTarget?.kind === targetSelection.kind &&
-      selectedChatTarget.id === targetSelection.id
-    ) {
-      return
-    }
-
-    const repairedSelection = selectedChatTarget
-      ? { kind: selectedChatTarget.kind, id: selectedChatTarget.id }
-      : null
-    setTargetSelection(repairedSelection)
+    // Only repair once providers and agents are settled. Otherwise a stored ACP
+    // selection is wiped to the LLM fallback during the startup window where the
+    // agents fetch has not resolved yet and the agent is absent from the list.
+    const ready = !isLoadingProviders && agentsSettled
+    const decision = resolveRepairedSelection({
+      selection: targetSelection,
+      resolvedTarget: selectedChatTarget,
+      ready,
+    })
+    if (!decision.repair) return
+    setTargetSelection(decision.selection)
     void persistSidepanelChatTargetSelection(selectedChatTarget)
-  }, [isLoadingAgents, isLoadingProviders, selectedChatTarget, targetSelection])
+  }, [agentsSettled, isLoadingProviders, selectedChatTarget, targetSelection])
 
   const selectedLlmProviderRef = useRef<LlmProviderConfig | null>(
     selectedLlmProvider,

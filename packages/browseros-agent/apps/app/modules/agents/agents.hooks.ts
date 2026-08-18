@@ -54,6 +54,15 @@ export function useAcpAgents(enabled = true) {
     loading:
       capabilitiesLoading ||
       (agentsSupported && (query.isLoading || urlLoading)),
+    // `loading` (via query.isLoading) briefly reads false on the render the
+    // query flips enabled, while `agents` is still empty. `settled` instead
+    // stays false until the fetch has actually resolved, so callers can tell a
+    // not-yet-loaded agent from a genuinely absent one.
+    settled: capabilitiesLoading
+      ? false
+      : !agentsSupported
+        ? true
+        : !urlLoading && query.isFetched,
     error: agentsSupported ? (query.error ?? urlError) : null,
     refetch: query.refetch,
   }
