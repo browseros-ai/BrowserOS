@@ -61,6 +61,7 @@ export class PageManager {
     const result = await this.cdp.Browser.getTabs()
     const tabs = (result.tabs as ProtocolTabInfo[]).filter(
       (tab) =>
+        tab.isActive ||
         !EXCLUDED_URL_PREFIXES.some((prefix) => tab.url.startsWith(prefix)),
     )
 
