@@ -1055,8 +1055,9 @@ describe('ChatService history persistence', () => {
       new AbortController().signal,
     )
 
-    // The errored turn produced no assistant reply, so nothing is persisted and
-    // durable history stays clean (no trailing user message to corrupt reload).
+    // The errored turn produced no assistant reply, so nothing is persisted:
+    // a cold reload from SQLite stays clean. The in-memory session still holds
+    // the unanswered user message; the guard is persistence, not a session trim.
     expect(conversationStore.save).not.toHaveBeenCalled()
     expect(sessionStore.get(conversationId)).toBeDefined()
   })
