@@ -1,6 +1,6 @@
-import { Menu } from 'lucide-react'
+import { Loader2, Menu } from 'lucide-react'
 import type { FC } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { AppSidebar } from '@/components/sidebar/AppSidebar'
 import { Button } from '@/components/ui/button'
@@ -127,7 +127,15 @@ export const SidebarLayout: FC = () => {
 
         {location.pathname === '/home/chat' ? (
           <main className="relative h-dvh overflow-hidden">
-            <Outlet />
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
           </main>
         ) : (
           <main
@@ -148,7 +156,15 @@ export const SidebarLayout: FC = () => {
                   : 'translateX(0px)',
               }}
             >
-              <Outlet />
+              <Suspense
+                fallback={
+                  <div className="flex h-40 items-center justify-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <Outlet />
+              </Suspense>
             </div>
           </main>
         )}

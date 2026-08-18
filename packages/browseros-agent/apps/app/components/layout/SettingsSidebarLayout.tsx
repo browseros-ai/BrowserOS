@@ -1,6 +1,6 @@
-import { Menu } from 'lucide-react'
+import { Loader2, Menu } from 'lucide-react'
 import type { FC } from 'react'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { SettingsSidebar } from '@/components/sidebar/SettingsSidebar'
 import { Button } from '@/components/ui/button'
@@ -37,7 +37,15 @@ export const SettingsSidebarLayout: FC = () => {
           </header>
           <main className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-              <Outlet />
+              <Suspense
+                fallback={
+                  <div className="flex h-40 items-center justify-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <Outlet />
+              </Suspense>
             </div>
           </main>
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -56,7 +64,15 @@ export const SettingsSidebarLayout: FC = () => {
         <SettingsSidebar />
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-            <Outlet />
+            <Suspense
+              fallback={
+                <div className="flex h-40 items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
