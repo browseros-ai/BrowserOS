@@ -100,8 +100,9 @@ function isLikelyUserInitiatedBlankOrChildTab(tab: chrome.tabs.Tab): boolean {
   if (
     url === 'about:blank' ||
     url === '' ||
-    url === 'chrome://newtab/' ||
+    url.startsWith('chrome://newtab') ||
     url.startsWith('chrome://new-tab-page') ||
+    url.startsWith('chrome-search://') ||
     url.startsWith('https://www.google.com/_/chrome/newtab')
   ) {
     return true

@@ -72,9 +72,14 @@ const ChatInputSchema = z.object({
     .optional(),
 })
 
-const BrowserOsChatRequestSchema = AgentLLMConfigSchema.merge(ChatInputSchema)
+const BrowserOsChatRequestSchema = z
+  .object({
+    ...AgentLLMConfigSchema.shape,
+    ...ChatInputSchema.shape,
+  })
   .extend({
     target: BrowserOsAgentTargetSchema.optional(),
+    acpAgentId: z.never().optional(),
   })
   .transform((request) => ({
     ...request,
