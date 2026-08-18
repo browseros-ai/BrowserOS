@@ -158,6 +158,10 @@ pub struct InnerCallRecord<'a> {
     pub is_error: bool,
     /// Wall-clock duration of the primitive in milliseconds.
     pub duration_ms: i64,
+    /// Estimated output tokens of the primitive's result payload (v1 estimator),
+    /// so the inner audit row counts toward session token measurement the same
+    /// way a granular tool's output does.
+    pub output_token_estimate: i64,
 }
 
 #[derive(Clone)]

@@ -608,6 +608,12 @@ impl BrowserBridge {
             {
                 hook.on_page_created(page_id).await;
             }
+            let output_token_estimate = match &outcome {
+                Ok(BrowserCallValue::Json(value)) => {
+                    crate::token_estimate::estimate_json_output_tokens(value)
+                }
+                Ok(BrowserCallValue::Undefined) | Err(_) => 0,
+            };
             hook.record(InnerCallRecord {
                 method,
                 page,
@@ -615,6 +621,7 @@ impl BrowserBridge {
                 from_helper,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
+                output_token_estimate,
             })
             .await;
         }
