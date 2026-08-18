@@ -10,7 +10,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, sea_query::OnConflict,
+    QuerySelect, TransactionTrait, sea_query::OnConflict,
 };
 
 /// Database boundary for user skills and their run history.
@@ -59,10 +59,23 @@ impl SkillsRepository {
         Ok(())
     }
 
+    /// Deletes a skill and everything keyed to its name: its run history and any
+    /// pending run marks. Otherwise a task recreated with the same name would
+    /// inherit the deleted task's runs, counts, token history, and run
+    /// numbering, contradicting the delete dialog's "run history is discarded".
+    /// Atomic so a partial failure cannot orphan runs without their skill.
     pub async fn delete(&self, name: &str) -> AppResult<u64> {
-        let result = Skills::delete_by_id(name.to_owned())
-            .exec(self.db.connection())
+        let txn = self.db.connection().begin().await?;
+        let result = Skills::delete_by_id(name.to_owned()).exec(&txn).await?;
+        SkillRuns::delete_many()
+            .filter(skill_runs::Column::SkillName.eq(name))
+            .exec(&txn)
             .await?;
+        SkillRunMarks::delete_many()
+            .filter(skill_run_marks::Column::SkillName.eq(name))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
         Ok(result.rows_affected)
     }
 

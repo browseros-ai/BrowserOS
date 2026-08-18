@@ -646,6 +646,89 @@ async fn mark_rejects_unknown_skill_and_finalize_skips_a_deleted_one() -> anyhow
 }
 
 #[tokio::test]
+async fn deleting_a_skill_discards_its_run_history() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    let new_skill = || CreateSkill {
+        name: "neo-inbox-sweep".to_string(),
+        description: "Check the inbox".to_string(),
+        site: None,
+        steps: vec!["Read the inbox".to_string()],
+        learned_notes: vec![],
+        origin: SkillOrigin::Agent,
+        source_session_id: None,
+    };
+
+    state.skills.create(new_skill()).await?;
+
+    // One completed, marked run gives the skill some history.
+    state
+        .audit_log
+        .record_session_start(
+            "run-sess",
+            "convo-run",
+            "codex",
+            "codex/inbox",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("run-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("run-sess", "closed", None)
+        .await?;
+    state.skill_runs.mark("run-sess", "neo-inbox-sweep").await?;
+    assert!(state.skill_runs.finalize("run-sess").await?);
+    assert_eq!(state.skills.get("neo-inbox-sweep").await?.runs.len(), 1);
+
+    // A second session is marked but not yet finalized: a pending mark.
+    state
+        .skill_runs
+        .mark("pending-sess", "neo-inbox-sweep")
+        .await?;
+
+    // Delete, then recreate a task under the same name.
+    state.skills.delete("neo-inbox-sweep").await?;
+    state.skills.create(new_skill()).await?;
+
+    // The recreated task starts clean: it inherits no runs or counts.
+    let detail = state.skills.get("neo-inbox-sweep").await?;
+    assert!(detail.runs.is_empty());
+    assert_eq!(detail.view.stats.run_count, 0);
+    assert_eq!(detail.view.stats.clean_run_count, 0);
+
+    // The deleted task's pending mark is gone, so completing that session
+    // records nothing against the recreated task.
+    state
+        .audit_log
+        .record_session_start(
+            "pending-sess",
+            "convo-run",
+            "codex",
+            "codex/inbox",
+            "codex",
+            "1",
+        )
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch("pending-sess", "read", false))
+        .await?;
+    state
+        .audit_log
+        .record_session_end("pending-sess", "closed", None)
+        .await?;
+    assert!(!state.skill_runs.finalize("pending-sess").await?);
+    assert!(state.skills.get("neo-inbox-sweep").await?.runs.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Result<()> {
     let app = test_app().await?;
     let skills = app.state.skills.clone();
