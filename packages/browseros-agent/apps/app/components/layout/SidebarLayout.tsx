@@ -113,7 +113,7 @@ export const SidebarLayout: FC = () => {
         {/* biome-ignore lint/a11y/noStaticElementInteractions: hover interactions needed */}
         <div
           // Keep the left sidebar above any Home search/glow layers.
-          className="fixed inset-y-0 left-0 z-50"
+          className={`fixed inset-y-0 left-0 z-50 ${sidebarOpen ? 'w-64' : 'w-14'}`}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
