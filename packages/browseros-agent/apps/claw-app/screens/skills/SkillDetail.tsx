@@ -246,7 +246,7 @@ function RunHistory({ runs }: { runs: SkillRun[] }) {
         <div className="overflow-clip rounded-9 border border-ledger-border bg-card">
           <Table className="table-fixed">
             <TableHeader>
-              <TableRow className="border-none bg-ledger-head hover:bg-ledger-head">
+              <TableRow className="border-ledger-border border-b bg-ledger-head hover:bg-ledger-head">
                 <TableHead
                   className={cn(
                     CELL_PADDING,

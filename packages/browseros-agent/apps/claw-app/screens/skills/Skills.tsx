@@ -77,7 +77,7 @@ export function Skills() {
         <LedgerCard>
           <Table className="table-fixed">
             <TableHeader>
-              <TableRow className="border-none bg-ledger-head hover:bg-ledger-head">
+              <TableRow className="border-ledger-border border-b bg-ledger-head hover:bg-ledger-head">
                 <TableHead
                   className={cn(
                     CELL_PADDING,
