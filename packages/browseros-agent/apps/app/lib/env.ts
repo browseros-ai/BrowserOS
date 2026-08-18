@@ -14,6 +14,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform(parseBrowserOSApiUrl),
+  VITE_BROWSEROS_SERVER_PORT: z.string().optional(),
   PROD: z.boolean().optional().default(false),
 })
 
