@@ -901,6 +901,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                         setModelPickerOpen(isOpen)
                         if (!isOpen) setModelSearch('')
                       }}
+                      modal={true}
                     >
                       <PopoverTrigger asChild>
                         <button
