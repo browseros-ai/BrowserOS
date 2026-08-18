@@ -40,11 +40,11 @@ export function SupportingTile({
       state={{ from: location.pathname }}
       data-testid={`support-tile-${task.sessionId}`}
       className={cn(
-        'group relative flex min-h-[216px] flex-col overflow-hidden rounded-[9px] border border-cyanotype-border bg-card transition-[border-color,box-shadow] duration-150 hover:border-cyanotype-blue hover:shadow-sm md:min-h-0',
+        'group relative flex flex-col overflow-hidden rounded-[9px] border border-cyanotype-border bg-card transition-[border-color,box-shadow] duration-150 hover:border-cyanotype-blue hover:shadow-sm',
         className,
       )}
     >
-      <div className="relative flex-1 overflow-hidden border-cyanotype-border border-b bg-cyanotype-well">
+      <div className="relative aspect-[16/10] overflow-hidden border-cyanotype-border border-b bg-cyanotype-well">
         {screenshotId !== null && screenshotBaseUrl !== null ? (
           <img
             src={taskScreenshotUrl(
@@ -94,7 +94,7 @@ function Caption({
   return (
     <div
       className={cn(
-        'flex flex-col gap-[7px] px-5 pt-4 pb-[18px]',
+        'flex flex-col gap-1.5 px-4 pt-3 pb-3.5',
         toneClasses.surface,
       )}
       data-caption-tone={tone}
@@ -108,7 +108,7 @@ function Caption({
         )}
         {isStopped && <span className={toneClasses.subdued}>STOPPED</span>}
       </div>
-      <h3 className="truncate font-bold text-[16px] leading-5 tracking-[-0.02em]">
+      <h3 className="truncate font-bold text-[14px] leading-5 tracking-[-0.02em]">
         {task.name}
       </h3>
       <p className="text-[11.5px] tabular-nums leading-[14px]">

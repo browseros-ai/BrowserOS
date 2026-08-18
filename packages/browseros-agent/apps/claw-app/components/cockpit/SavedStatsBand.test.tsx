@@ -157,13 +157,8 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
 })
 
-async function render(
-  value: CockpitStats = stats(),
-  runningCount = 0,
-): Promise<void> {
-  await act(async () =>
-    root.render(<SavedStatsBand runningCount={runningCount} stats={value} />),
-  )
+async function render(value: CockpitStats = stats()): Promise<void> {
+  await act(async () => root.render(<SavedStatsBand stats={value} />))
 }
 
 function tab(label: string): HTMLElement {
@@ -217,29 +212,15 @@ function expectClasses(
 }
 
 describe('SavedStatsBand', () => {
-  it('derives the running status from the live session count', async () => {
-    await render(stats(), 0)
-    const status = container.querySelector('[data-running-status]')
-    expect(status?.textContent).toBe('Nothing running')
-
-    await render(stats(), 2)
-    expect(status?.textContent).toBe('2 running')
-    expect(container.textContent).not.toContain('Nothing running')
-  })
-
-  it('uses the Cyanotype range control and responsive stats composition', async () => {
+  it('uses the Cyanotype range control and inline stats composition', async () => {
     await render()
 
     const section = container.querySelector('[data-saved-stats]')
     const header = container.querySelector('[data-saved-stats-header]')
     const heading = header?.querySelector('h2')
-    const status = container.querySelector('[data-running-status]')
     const tablist = container.querySelector('[role="tablist"]')
     const allTimeTab = tab('All time')
     const card = container.querySelector('[data-saved-stats-card]')
-    const primary = container.querySelector('[data-stats-primary]')
-    const divider = container.querySelector('[data-stats-divider]')
-    const secondary = container.querySelector('[data-stats-secondary]')
     const savedValue = container.querySelector('[data-stat="tokens-saved"]')
     const savingsPill = container.querySelector('[data-savings-pill]')
     const percentage = container.querySelector('[data-stat="percentage"]')
@@ -251,11 +232,14 @@ describe('SavedStatsBand', () => {
     const comparisonLabel = container.querySelector(
       '[data-stat="comparison-tokens"]',
     )?.parentElement
-    const caption = container.querySelector('[data-saved-stats-caption]')
     const humanTime = container.querySelector('[data-stat="human-time"]')
     const sessionMetrics = container.querySelector(
       '[data-session-tool-metrics]',
     )
+
+    // The heading stays; the live-running status is gone.
+    expect(heading?.textContent).toBe('Since you started')
+    expect(container.querySelector('[data-running-status]')).toBeNull()
 
     expectClasses(section, ['gap-4'])
     expectClasses(header, ['flex-wrap', 'items-center', 'gap-3'])
@@ -265,7 +249,6 @@ describe('SavedStatsBand', () => {
       'text-cyanotype-ink',
       'leading-7',
     ])
-    expectClasses(status, ['text-[12px]', 'text-cyanotype-muted'])
     expectClasses(tablist, [
       'ml-auto',
       'h-9',
@@ -282,57 +265,35 @@ describe('SavedStatsBand', () => {
       'data-active:bg-white',
       'data-active:font-semibold',
       'data-active:text-cyanotype-blue',
-      'data-active:shadow-[0_1px_3px_rgba(12,39,66,0.12)]',
     ])
     expectClasses(card, [
       'rounded-[9px]',
       'border-cyanotype-border',
       'bg-card',
-      'px-7',
-      'py-6',
-      'shadow-card',
-      'md:gap-8',
+      'px-5',
+      'py-4',
     ])
-    expectClasses(primary, ['min-w-0', 'flex-[2]'])
-    expectClasses(divider, [
-      'h-px',
-      'w-full',
-      'bg-cyanotype-border',
-      'md:w-px',
-      'md:self-stretch',
-    ])
-    expectClasses(secondary, ['min-w-0', 'flex-1', 'gap-5'])
     expectClasses(savedValue, [
       'font-extrabold',
-      'text-[46px]',
+      'text-[26px]',
       'text-cyanotype-ink',
       'leading-none',
-      'tracking-[-0.03em]',
+      'tracking-[-0.02em]',
     ])
     expectClasses(savingsPill, [
       'rounded-full',
-      'border-cyanotype-border',
-      'bg-cyanotype-well',
-      'px-3',
+      'bg-green-tint',
+      'px-2.5',
       'py-1',
     ])
-    expectClasses(percentage, [
-      'font-extrabold',
-      'text-[14px]',
-      'text-cyanotype-blue',
-    ])
-    expectClasses(usedLabel, [
-      'font-semibold',
-      'text-[12px]',
-      'text-cyanotype-blue',
-    ])
-    expectClasses(comparisonLabel, ['text-[12px]', 'text-cyanotype-muted'])
-    expectClasses(track, ['h-3', 'rounded-full', 'bg-cyanotype-well'])
-    expectClasses(fill, ['rounded-full', 'bg-cyanotype-blue'])
-    expectClasses(caption, ['mt-2.5', 'text-[12px]', 'text-cyanotype-soft'])
+    expectClasses(percentage, ['font-bold', 'text-[13px]', 'text-green'])
+    expectClasses(usedLabel, ['font-medium', 'text-cyanotype-soft'])
+    expectClasses(comparisonLabel, ['text-cyanotype-muted'])
+    expectClasses(track, ['h-1.5', 'rounded-full', 'bg-cyanotype-well'])
+    expectClasses(fill, ['rounded-full', 'bg-green'])
     expectClasses(humanTime, [
       'font-extrabold',
-      'text-[28px]',
+      'text-[26px]',
       'tracking-[-0.02em]',
     ])
     expectClasses(sessionMetrics, [
@@ -340,7 +301,7 @@ describe('SavedStatsBand', () => {
       'max-w-full',
       'break-all',
       'font-extrabold',
-      'text-[28px]',
+      'text-[26px]',
       'tracking-[-0.02em]',
     ])
     expect(usedLabel?.textContent).toBe('used 100')
@@ -549,9 +510,6 @@ describe('SavedStatsBand', () => {
     expect(container.textContent).toContain(
       'a screenshot-first agent would spend',
     )
-    expect(container.textContent).toContain(
-      'compact DOM & tool responses instead of a screenshot per call',
-    )
     expect(container.textContent).not.toContain('DOM-dump agent')
     expect(container.textContent).not.toContain(
       'scaled screenshots instead of full-page DOM dumps',
@@ -579,10 +537,11 @@ describe('SavedStatsBand', () => {
     await render()
 
     const card = container.querySelector('[data-saved-stats-card]')
+    const panel = card?.firstElementChild
     const track = container.querySelector('[data-budget-track]')
     const fill = container.querySelector('[data-used-fill]')
-    expect(card?.getAttribute('class')).toContain('flex-col')
-    expect(card?.getAttribute('class')).toContain('md:flex-row')
+    expect(card?.getAttribute('class')).toContain('rounded-[9px]')
+    expect(panel?.getAttribute('class')).toContain('flex-col')
     expect(track?.getAttribute('class')).toContain('overflow-hidden')
     expect(fill?.getAttribute('class')).toContain('transition-[width]')
     expect(fill?.getAttribute('class')).toContain(

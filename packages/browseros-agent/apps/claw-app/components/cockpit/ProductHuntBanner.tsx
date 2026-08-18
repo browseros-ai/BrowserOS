@@ -39,30 +39,27 @@ export function ProductHuntBannerCard({
   onDismiss: () => void
 }) {
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
-      <ProductHuntIcon className="size-9 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="font-semibold text-foreground text-sm">
-          We&apos;re live on Product Hunt today 🎉
-        </p>
-        <p className="text-muted-foreground text-xs">
-          An upvote or comment would mean a lot &mdash; it helps us keep
-          BrowserOS free and supported.
-        </p>
-      </div>
+    <div className="flex items-center gap-3 rounded-[9px] border border-[#ff6154]/25 bg-[#ff6154]/[0.06] px-4 py-2.5">
+      <ProductHuntIcon className="size-7 shrink-0" />
+      <p className="min-w-0 flex-1 truncate text-[13px] text-cyanotype-ink leading-5">
+        <span className="font-semibold">Live on Product Hunt.</span>{' '}
+        <span className="text-cyanotype-soft">
+          A vote or comment helps keep BrowserOS free.
+        </span>
+      </p>
       <Button
         size="sm"
         onClick={onOpen}
         aria-label="Support BrowserOS on Product Hunt"
-        className="shrink-0 bg-[#ff6154] text-[#18181b] hover:bg-[#e5563f]"
+        className="h-7 shrink-0 bg-[#ff6154] px-3 text-[#18181b] text-[13px] hover:bg-[#e5563f]"
       >
-        Support us →
+        Support →
       </Button>
       <button
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-50 transition-opacity hover:opacity-100"
+        className="shrink-0 rounded-sm p-1 text-cyanotype-soft opacity-60 transition-opacity hover:opacity-100"
       >
         <X className="size-3.5" />
       </button>
@@ -91,12 +88,5 @@ export function ProductHuntBanner() {
     persistDismissed()
   }
 
-  return (
-    <section className="space-y-4" aria-labelledby="announcements-heading">
-      <h2 id="announcements-heading" className="font-semibold text-ink text-lg">
-        Announcements
-      </h2>
-      <ProductHuntBannerCard onOpen={handleOpen} onDismiss={handleDismiss} />
-    </section>
-  )
+  return <ProductHuntBannerCard onOpen={handleOpen} onDismiss={handleDismiss} />
 }

@@ -1,30 +1,16 @@
 import { History } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { type TaskSummary, useSessions } from '@/modules/api/audit.hooks'
+import { formatDuration, formatRelative } from '@/screens/audit/audit.helpers'
 import { EmptyState } from './EmptyState'
-import { LeadRunTile } from './LeadRunTile'
-import { RunRow } from './RunRow'
 import { SupportingTile } from './SupportingTile'
 
+// A compact card grid for the freshest runs, then a minimal text list for the
+// rest, then the audit link. LIVE runs float to the top of the grid.
+const HOME_GRID_COUNT = 6
 const HOME_TASK_LIMIT = 12
 
-/**
- * Cockpit editorial layout: lead-story tile + a 2x2 supporting
- * grid + typographic tail. LIVE runs always take the lead slot
- * regardless of start time; everything else stacks newest-first.
- *
- * Grid shape (md and up):
- *
- *   ┌────────────────────────┬────────┬────────┐
- *   │                        │  s1    │  s2    │
- *   │         lead           ├────────┼────────┤
- *   │                        │  s3    │  s4    │
- *   └────────────────────────┴────────┴────────┘
- *
- * Rows are locked to 216px at the bento breakpoint. At mobile the
- * cards stack into a single column and keep an explicit media area.
- */
 export function RecentActivity() {
   const query = useSessions({
     variables: { limit: HOME_TASK_LIMIT },
@@ -36,26 +22,29 @@ export function RecentActivity() {
     .slice(0, HOME_TASK_LIMIT)
   const now = Date.now()
   const ordered = orderByLiveThenRecency(tasks)
-  const lead = ordered[0]
-  const supporting = ordered.slice(1, 5)
-  const tail = ordered.slice(5)
+  const gridTasks = ordered.slice(0, HOME_GRID_COUNT)
+  const listTasks = ordered.slice(HOME_GRID_COUNT)
 
   return (
     <section className="ph-no-capture space-y-5">
       <SectionHeader sessionCount={ordered.length} />
       {query.isPending ? (
-        <BentoSkeleton />
-      ) : !lead ? (
+        <ActivityGridSkeleton />
+      ) : ordered.length === 0 ? (
         <EmptyState
           title="No recent activity"
           hint="Tool calls from connected agents will appear here."
           icon={<History className="size-5" />}
         />
       ) : (
-        <>
-          <BentoGrid lead={lead} supporting={supporting} now={now} />
-          {tail.length > 0 && <ActivityTable tail={tail} now={now} />}
-        </>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {gridTasks.map((task) => (
+              <SupportingTile key={task.sessionId} task={task} now={now} />
+            ))}
+          </div>
+          {listTasks.length > 0 && <ActivityList tasks={listTasks} now={now} />}
+        </div>
       )}
       <div className="pt-0.5">
         <NavLink
@@ -87,83 +76,59 @@ function SectionHeader({ sessionCount }: { sessionCount: number }) {
   )
 }
 
-interface BentoGridProps {
-  lead: TaskSummary
-  supporting: TaskSummary[]
-  now: number
-}
-
-function BentoGrid({ lead, supporting, now }: BentoGridProps) {
+/** Minimal one-line-per-run list for the runs beyond the card grid. */
+function ActivityList({ tasks, now }: { tasks: TaskSummary[]; now: number }) {
+  const location = useLocation()
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[216px_216px]">
-      <LeadRunTile
-        task={lead}
-        now={now}
-        captionTone="blue"
-        className="min-h-[360px] md:col-span-6 md:row-span-2 md:min-h-0"
-      />
-      {supporting.map((task, idx) => (
-        <SupportingTile
-          key={task.sessionId}
-          task={task}
-          now={now}
-          className={supportingSlotClass(idx)}
-        />
-      ))}
-    </div>
-  )
-}
-
-function supportingSlotClass(idx: number): string {
-  // Uniform 2x2 grid of supporting cells (3 cols wide, 1 row tall
-  // each) to the right of the lead. Every tile has the same
-  // footprint so the visual weight of the row is even.
-  switch (idx) {
-    case 0:
-      return 'md:col-span-3 md:col-start-7 md:row-start-1'
-    case 1:
-      return 'md:col-span-3 md:col-start-10 md:row-start-1'
-    case 2:
-      return 'md:col-span-3 md:col-start-7 md:row-start-2'
-    case 3:
-      return 'md:col-span-3 md:col-start-10 md:row-start-2'
-    default:
-      return 'md:hidden'
-  }
-}
-
-function ActivityTable({ tail, now }: { tail: TaskSummary[]; now: number }) {
-  return (
-    <div
-      className="overflow-hidden rounded-[9px] border border-cyanotype-border bg-card"
-      data-testid="recent-activity-table"
+    <ul
+      className="divide-y divide-cyanotype-border overflow-hidden rounded-[9px] border border-cyanotype-border bg-card"
+      data-testid="recent-activity-list"
     >
-      <div>
-        <div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_64px_64px] items-center gap-3 bg-cyanotype-blue px-4 py-2 text-[11px] text-white leading-[14px] md:grid-cols-[236px_minmax(0,1fr)_240px_72px_64px] md:gap-4">
-          <span>Agent</span>
-          <span>Target</span>
-          <span className="hidden md:block">Tool chain</span>
-          <span className="text-right">Duration</span>
-          <span className="text-right">When</span>
-        </div>
-        <div>
-          {tail.map((task) => (
-            <RunRow key={task.sessionId} task={task} now={now} />
-          ))}
-        </div>
-      </div>
-    </div>
+      {tasks.map((task) => {
+        const isLive = task.status === 'live'
+        const isStopped = task.status === 'cancelled'
+        return (
+          <li key={task.sessionId}>
+            <NavLink
+              to={`/audit/${encodeURIComponent(task.sessionId)}`}
+              state={{ from: location.pathname }}
+              data-testid={`activity-row-${task.sessionId}`}
+              className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-cyanotype-well/60"
+            >
+              <span className="w-28 shrink-0 truncate font-medium text-[12px] text-cyanotype-ink leading-4">
+                {task.label}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[12px] text-cyanotype-soft leading-4">
+                {task.name}
+              </span>
+              {isLive && (
+                <span className="shrink-0 rounded-full bg-cyanotype-live px-2 py-0.5 font-semibold text-[10px] text-cyanotype-live-ink">
+                  LIVE
+                </span>
+              )}
+              {isStopped && (
+                <span className="shrink-0 font-medium text-[10px] text-cyanotype-muted">
+                  STOPPED
+                </span>
+              )}
+              <span className="shrink-0 text-[11px] text-cyanotype-muted tabular-nums leading-4">
+                {formatDuration(task.durationMs)} · {task.dispatchCount}t ·{' '}
+                {formatRelative(task.startedAt, now)}
+              </span>
+            </NavLink>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
-function BentoSkeleton() {
+function ActivityGridSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:grid-rows-[216px_216px]">
-      <Skeleton className="min-h-[360px] rounded-[9px] md:col-span-6 md:row-span-2 md:min-h-0" />
-      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-7 md:row-start-1 md:min-h-0" />
-      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-10 md:row-start-1 md:min-h-0" />
-      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-7 md:row-start-2 md:min-h-0" />
-      <Skeleton className="min-h-[216px] rounded-[9px] md:col-span-3 md:col-start-10 md:row-start-2 md:min-h-0" />
+    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
+        <Skeleton key={id} className="min-h-[240px] rounded-[9px]" />
+      ))}
     </div>
   )
 }

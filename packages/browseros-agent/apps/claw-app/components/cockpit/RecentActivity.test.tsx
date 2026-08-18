@@ -71,7 +71,7 @@ describe('RecentActivity', () => {
     expect(html).toContain('No recent activity')
   })
 
-  it('renders the freshest task as the lead tile with title, agent, and meta', () => {
+  it('renders each task as a compact session card with title, agent, and meta', () => {
     screenshotBaseUrl = null
     queryOverride = {
       isPending: false,
@@ -81,10 +81,11 @@ describe('RecentActivity', () => {
     expect(html).toContain('Browsed example.com')
     expect(html).toContain('Claude Code')
     expect(html).toContain('ph-no-capture')
-    expect(html).toContain('data-caption-tone="blue"')
-    // DONE is the silent default in the editorial cockpit; the tile
-    // instead carries a compact meta line with the dispatch count.
-    expect(html).toContain('4 tools')
+    // All cards share the calm light caption tone; there is no lead tile.
+    expect(html).toContain('data-caption-tone="light"')
+    expect(html).not.toContain('data-caption-tone="blue"')
+    // Compact meta line carries the dispatch count (Xs · Nt · ago).
+    expect(html).toContain('4t')
   })
 
   it('keeps the saturated blue caption tone for audit hover previews', () => {
@@ -115,10 +116,10 @@ describe('RecentActivity', () => {
     }
 
     const html = render()
-    expect(html).toContain('alt="Session hero from Claude Code"')
+    expect(html).toContain('alt="Session preview from Claude Code"')
     expect(html).toContain('alt="Session preview from Codex"')
-    expect(html.match(/data-caption-tone="blue"/g)?.length).toBe(1)
-    expect(html.match(/data-caption-tone="light"/g)?.length).toBe(1)
+    expect(html).not.toContain('data-caption-tone="blue"')
+    expect(html.match(/data-caption-tone="light"/g)?.length).toBe(2)
     expect(html).toContain(
       'http://127.0.0.1:9200/api/v1/sessions/sess-1/screenshots/7',
     )
@@ -144,7 +145,7 @@ describe('RecentActivity', () => {
     expect(html.match(/STOPPED/g)?.length).toBe(6)
   })
 
-  it('renders the cyanotype activity table and counts all visible sessions', () => {
+  it('renders a compact card grid, then a minimal list for the rest', () => {
     screenshotBaseUrl = null
     const tasks = Array.from({ length: 12 }, (_, index) => ({
       ...sampleTask,
@@ -157,8 +158,14 @@ describe('RecentActivity', () => {
 
     const html = render()
     expect(html).toContain('12 sessions')
-    expect(html).toContain('data-testid="recent-activity-table"')
-    expect(html).toContain('>Tool chain<')
-    expect(html.match(/data-testid="run-row-/g)?.length).toBe(7)
+    // First six as cards, the rest as minimal list rows.
+    expect(html.match(/data-testid="support-tile-/g)?.length).toBe(6)
+    expect(html.match(/data-testid="activity-row-/g)?.length).toBe(6)
+    expect(html).toContain('data-testid="recent-activity-list"')
+    // A minimal list, not the old heavy activity table.
+    expect(html).not.toContain('data-testid="recent-activity-table"')
+    expect(html).not.toContain('>Tool chain<')
+    // The live run still surfaces its LIVE chip.
+    expect(html).toContain('>LIVE<')
   })
 })
