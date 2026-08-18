@@ -31,6 +31,10 @@ async function getMcpPort(): Promise<number> {
   }
 
   if (!env.PROD) {
+    if (env.VITE_BROWSEROS_SERVER_PORT) {
+      const port = Number(env.VITE_BROWSEROS_SERVER_PORT)
+      if (port) return port
+    }
     try {
       const devUrl = new URL(
         env.VITE_PUBLIC_BROWSEROS_API ?? 'http://127.0.0.1:9111',
@@ -70,6 +74,10 @@ export async function getProxyPort(): Promise<number> {
   }
 
   if (!env.PROD) {
+    if (env.VITE_BROWSEROS_SERVER_PORT) {
+      const port = Number(env.VITE_BROWSEROS_SERVER_PORT)
+      if (port) return port
+    }
     try {
       const devUrl = new URL(
         env.VITE_PUBLIC_BROWSEROS_API ?? 'http://127.0.0.1:9111',
