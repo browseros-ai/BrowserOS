@@ -46,10 +46,15 @@ async function waitForCdp(port: number, maxAttempts = 120): Promise<boolean> {
   return false
 }
 
+interface CdpTarget {
+  type: string
+  webSocketDebuggerUrl?: string
+}
+
 async function navigateBrowser(port: number, url: string): Promise<boolean> {
   try {
     const listRes = await fetch(`http://127.0.0.1:${port}/json/list`)
-    const targets = (await listRes.json()) as Record<string, unknown>[]
+    const targets = (await listRes.json()) as CdpTarget[]
     const pageTarget = targets.find((t) => t.type === 'page')
     if (!pageTarget) return false
 
