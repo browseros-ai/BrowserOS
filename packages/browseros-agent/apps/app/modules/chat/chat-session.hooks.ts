@@ -5,13 +5,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
-import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   clearActiveSession,
   consumeRestorePending,
   readActiveSession,
   saveActiveSession,
 } from '@/lib/browseros/activeSessionStorage'
+import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   getTabConversation,
   setTabConversation,
@@ -126,7 +126,7 @@ export interface ChatSessionOptions {
   isIntegrationsSynced?: boolean
 }
 
-const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
+const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the active tab. When performing browser actions, ALWAYS act on and navigate the active tab (the tab where the user prompted you) directly. Do NOT open a new tab unless the user explicitly asks you to open a new tab.`
 
 const getUserSystemPrompt = (
   origin: ChatOrigin | undefined,

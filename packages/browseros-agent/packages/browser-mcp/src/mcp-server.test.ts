@@ -109,7 +109,7 @@ describe('createBrowserMcpServer', () => {
       {
         url: 'https://example.com',
         opts: {
-          background: true,
+          background: false,
           windowId: 7,
           tabGroupId: 'group-a',
         },

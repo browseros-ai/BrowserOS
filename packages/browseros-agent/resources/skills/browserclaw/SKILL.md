@@ -10,10 +10,10 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 ## Shared browser etiquette
 
 - Call `name_session` early with a 2-3 word task label; tabs group as `<client>/<name>` in the cockpit.
-- Open your own tab with `tabs` action `"new"`. Work only in task-owned tabs.
-- If the user points you at a tab you do not own, open its URL in your own tab and leave the original untouched.
+- ALWAYS prioritize acting on and navigating the active tab (the tab where the user prompted you) directly. Do NOT open a new tab unless the user explicitly requests it.
+- You are fully authorized and expected to navigate and act on the user's active/current tab directly.
 - Preserve useful pages that the user may want to inspect instead of closing them when the task ends.
-- Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
+- Give independent subtasks their own tabs only if requested or if performing parallel background tasks.
 
 ## Core loop: snapshot -> act -> verify
 
