@@ -21,6 +21,7 @@ import { formatUserMessage } from '../../agent/format-message'
 import {
   filterValidMessages,
   sanitizeMessagesForToolset,
+  stripReasoningParts,
 } from '../../agent/message-validation'
 import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
@@ -332,8 +333,11 @@ export class ChatService {
     const wrappedUserMessageId =
       session.agent.messages[session.agent.messages.length - 1]?.id
 
-    const promptUiMessages: UIMessage[] = filterValidMessages(
-      session.agent.messages,
+    // Strip reasoning from the request copy only. session.agent.messages keeps
+    // reasoning so it still persists to SQLite and renders in the client history;
+    // the model must not see replayed reasoning (see stripReasoningParts).
+    const promptUiMessages: UIMessage[] = stripReasoningParts(
+      filterValidMessages(session.agent.messages),
     ).map((message) =>
       message.id === wrappedUserMessageId && message.role === 'user'
         ? {
@@ -369,12 +373,23 @@ export class ChatService {
             : message,
         )
         session.agent.messages = filterValidMessages(restored)
+
+        // Only persist a turn that produced an assistant reply. A stream that
+        // errored before any output leaves the history ending on the user
+        // message; persisting that corrupts durable history, because the next
+        // turn reloads it and appends another user message, and the provider
+        // rejects back-to-back user messages.
+        const turnCompleted =
+          session.agent.messages[session.agent.messages.length - 1]?.role ===
+          'assistant'
+
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
           totalMessages: session.agent.messages.length,
+          turnCompleted,
         })
 
-        if (request.historyMode === 'local') {
+        if (request.historyMode === 'local' && turnCompleted) {
           await this.persistConversation({
             id: request.conversationId,
             messages: session.agent.messages,

@@ -963,7 +963,17 @@ describe('ChatService history persistence', () => {
     const agent = createFakeAgent()
     agentToReturn = agent
     streamResponseHandler = async ({ onFinish }) => {
-      await onFinish({ messages: agent.messages })
+      // A completed turn ends with the assistant reply.
+      await onFinish({
+        messages: [
+          ...agent.messages,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'hi there' }],
+          },
+        ],
+      })
       return new Response('ok')
     }
     const conversationStore = {
@@ -1010,6 +1020,45 @@ describe('ChatService history persistence', () => {
       | undefined
     expect(saved?.id).toBe(conversationId)
     expect(saved?.targetType).toBe('browseros')
+  })
+
+  it('does not persist and drops the dangling user message when a turn errors', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    // The stream errored before any output: onFinish reports the history
+    // ending on the user message, with no assistant reply appended.
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => null),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const sessionStore = createSessionStore()
+    const conversationId = crypto.randomUUID()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      browserOsRequest(conversationId, 'local'),
+      new AbortController().signal,
+    )
+
+    // The errored turn produced no assistant reply, so nothing is persisted and
+    // durable history stays clean (no trailing user message to corrupt reload).
+    expect(conversationStore.save).not.toHaveBeenCalled()
+    expect(sessionStore.get(conversationId)).toBeDefined()
   })
 
   it('never touches the store and seeds from previousConversation in cloud mode', async () => {
