@@ -52,7 +52,9 @@ function browserOSProduct(defaultProduct: 'browseros' | 'browserclaw') {
   return product
 }
 
-const extensionPath = resolve(configDir, 'dist/chrome-mv3-dev').replace(/\\/g, '/')
+const extensionPath = process.platform === 'win32'
+  ? resolve(configDir, 'dist/chrome-mv3-dev')
+  : resolve(configDir, 'dist/chrome-mv3-dev').replace(/\\/g, '/')
 
 const chromiumArgs = [
   '--use-mock-keychain',

@@ -18,7 +18,7 @@ const apiPattern = apiUrl.port
 export default defineConfig({
   outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
-  runner: {
+  webExt: {
     disabled: true,
   },
   manifest: {

@@ -101,7 +101,9 @@ async function main(): Promise<void> {
   const browserProfile = join(tmpdir(), `browseros-dev-${label}-${key}-custom`)
   mkdirSync(browserProfile, { recursive: true })
 
-  const extensionPath = join(ROOT, 'apps/app/dist/chrome-mv3-dev').replace(/\\/g, '/')
+  const extensionPath = process.platform === 'win32'
+    ? join(ROOT, 'apps/app/dist/chrome-mv3-dev')
+    : join(ROOT, 'apps/app/dist/chrome-mv3-dev').replace(/\\/g, '/')
   const browserArgs = [
     `--load-extension=${extensionPath}`,
     `--remote-debugging-port=${cdpPort}`,
