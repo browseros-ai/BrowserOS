@@ -46,6 +46,29 @@ export function filterValidMessages(messages: UIMessage[]): UIMessage[] {
 }
 
 /**
+ * Remove `reasoning` parts from a message list before it is sent to the model.
+ *
+ * Reasoning is ephemeral. It stays in the durable and client-displayed history,
+ * but must not be replayed to the provider: convertToModelMessages can turn a
+ * multi-step assistant message into a reasoning-only assistant message (no text,
+ * no tool call), which serializes to `content: null` with no `tool_calls`. Strict
+ * OpenAI-compatible providers reject that with "The content field is a required
+ * field", so a conversation cannot continue past the first turn once a reasoning
+ * model has answered. Stripping reasoning from the request copy keeps replay
+ * provider-agnostic; the model still generates fresh reasoning for the new turn.
+ */
+export function stripReasoningParts(messages: UIMessage[]): UIMessage[] {
+  return messages
+    .map((message) => {
+      const parts = message.parts.filter((part) => part.type !== 'reasoning')
+      return parts.length === message.parts.length
+        ? message
+        : { ...message, parts }
+    })
+    .filter(hasMessageContent)
+}
+
+/**
  * Remove tool parts that reference tools not present in the given toolset.
  *
  * When a session is rebuilt with a different set of tools (e.g., workspace
