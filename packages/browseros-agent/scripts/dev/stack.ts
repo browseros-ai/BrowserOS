@@ -46,7 +46,49 @@ async function waitForCdp(port: number, maxAttempts = 120): Promise<boolean> {
   return false
 }
 
+async function navigateBrowser(port: number, url: string): Promise<boolean> {
+  try {
+    const listRes = await fetch(`http://127.0.0.1:${port}/json/list`)
+    const targets = (await listRes.json()) as Record<string, unknown>[]
+    const pageTarget = targets.find((t) => t.type === 'page')
+    if (!pageTarget) return false
+
+    const wsUrl = pageTarget.webSocketDebuggerUrl
+    if (!wsUrl) return false
+
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl)
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            id: 1,
+            method: 'Page.navigate',
+            params: { url },
+          }),
+        )
+        setTimeout(() => {
+          ws.close()
+          resolve(true)
+        }, 500)
+      }
+      ws.onerror = () => resolve(false)
+    })
+  } catch {
+    return false
+  }
+}
+
 async function main(): Promise<void> {
+  if (process.platform === 'win32') {
+    log('info', 'Cleaning up any dangling custom Chromium processes…')
+    try {
+      const { execSync } = await import('node:child_process')
+      execSync(
+        'powershell -Command "Get-Process -Name chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \'*AppData\\Local\\Chromium*\' } | Stop-Process -Force"',
+      )
+    } catch {}
+  }
+
   const stackEnv = loadStackEnv()
   const cdpPort = Number(stackEnv.BROWSEROS_CDP_PORT) || 9333
   const serverPort = Number(stackEnv.BROWSEROS_SERVER_PORT) || 9111
@@ -71,7 +113,7 @@ async function main(): Promise<void> {
   log('info', 'Waiting for extension to compile…')
   const reader = agentProc.stdout.getReader()
   const decoder = new TextDecoder()
-  
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -81,7 +123,6 @@ async function main(): Promise<void> {
       break
     }
   }
-
   // Resume forwarding stdout asynchronously
   ;(async () => {
     try {
@@ -101,14 +142,15 @@ async function main(): Promise<void> {
   const browserProfile = join(tmpdir(), `browseros-dev-${label}-${key}-custom`)
   mkdirSync(browserProfile, { recursive: true })
 
-  const extensionPath = process.platform === 'win32'
-    ? join(ROOT, 'apps/app/dist/chrome-mv3-dev')
-    : join(ROOT, 'apps/app/dist/chrome-mv3-dev').replace(/\\/g, '/')
+  const extensionPath =
+    process.platform === 'win32'
+      ? join(ROOT, 'apps/app/dist/chrome-mv3-dev')
+      : join(ROOT, 'apps/app/dist/chrome-mv3-dev').replace(/\\/g, '/')
   const browserArgs = [
     `--load-extension=${extensionPath}`,
     `--remote-debugging-port=${cdpPort}`,
     `--user-data-dir=${browserProfile}`,
-    '--app=chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html',
+    '--app=about:blank',
     '--disable-features=EdgeStartupBoost',
     '--no-first-run',
     '--no-default-browser-check',
@@ -125,7 +167,9 @@ async function main(): Promise<void> {
   ]
 
   if (stackEnv.BROWSEROS_EXTENSION_PORT) {
-    browserArgs.push(`--browseros-extension-port=${stackEnv.BROWSEROS_EXTENSION_PORT}`)
+    browserArgs.push(
+      `--browseros-extension-port=${stackEnv.BROWSEROS_EXTENSION_PORT}`,
+    )
   }
 
   log('info', `Starting browser: ${browserBinary} (standalone app mode)`)
@@ -139,6 +183,11 @@ async function main(): Promise<void> {
   const cdpReady = await waitForCdp(cdpPort)
   if (cdpReady) {
     log('server', 'CDP ready')
+    log('info', 'Navigating app window to extension page…')
+    await navigateBrowser(
+      cdpPort,
+      'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk/app.html',
+    )
   } else {
     log('server', pc.yellow('CDP not responding; starting server anyway'))
   }
@@ -168,7 +217,9 @@ async function main(): Promise<void> {
   ])
   cleanup()
   if (agentCode !== 0 || browserCode !== 0 || serverCode !== 0) {
-    console.error(`\nExited: agent=${agentCode} browser=${browserCode} server=${serverCode}`)
+    console.error(
+      `\nExited: agent=${agentCode} browser=${browserCode} server=${serverCode}`,
+    )
     process.exit(1)
   }
 }
