@@ -144,7 +144,7 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
       onClick={onOpen}
       className="cursor-pointer border-ledger-divider border-b hover:bg-card-tint"
     >
-      <TableCell className={cn(CELL_PADDING, 'align-top')}>
+      <TableCell className={cn(CELL_PADDING, 'align-middle')}>
         <div className="flex flex-col gap-0.5">
           <span className="font-medium font-mono text-[13px] text-primary">
             {skillCommand(skill.name)}
@@ -157,12 +157,12 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
       <TableCell
         className={cn(
           CELL_PADDING,
-          'text-right align-top text-[13px] text-ink',
+          'text-right align-middle text-[13px] text-ink',
         )}
       >
         {skill.runCount}
       </TableCell>
-      <TableCell className={cn(CELL_PADDING, 'text-right align-top')}>
+      <TableCell className={cn(CELL_PADDING, 'text-right align-middle')}>
         {skill.latestRunTokens === undefined ? (
           <span className="text-[13px] text-ink-3">not run</span>
         ) : (
@@ -186,13 +186,13 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
       <TableCell
         className={cn(
           CELL_PADDING,
-          'text-right align-top text-[13px] text-ledger-ink-2',
+          'text-right align-middle text-[13px] text-ledger-ink-2',
         )}
       >
         {skill.cleanRunCount}/{skill.runCount}
       </TableCell>
       <TableCell
-        className={cn(CELL_PADDING, 'align-top')}
+        className={cn(CELL_PADDING, 'align-middle')}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-end gap-1.5">
