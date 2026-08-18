@@ -4,15 +4,15 @@ import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
-  migrateSidePanelIfOpenBetweenTabs,
-  openSidePanel,
-  SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
-  SHIMMY_SIDEPANEL_LAST_TAB_KEY,
-  toggleSidePanel,
   ensureSidePanelRuntimeStateLoaded,
   initializeSidePanelOptions,
+  migrateSidePanelIfOpenBetweenTabs,
+  openSidePanel,
   registerSidePanelOpenStateListeners,
+  SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
+  SHIMMY_SIDEPANEL_LAST_TAB_KEY,
   setSidePanelPerWindowPreference,
+  toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import {
@@ -97,7 +97,15 @@ function shouldResetAppTabToHomeOnStartup(url?: string): boolean {
 function isLikelyUserInitiatedBlankOrChildTab(tab: chrome.tabs.Tab): boolean {
   if (tab.openerTabId != null) return true
   const url = tab.url ?? tab.pendingUrl ?? ''
-  if (url === 'about:blank' || url === '') return true
+  if (
+    url === 'about:blank' ||
+    url === '' ||
+    url === 'chrome://newtab/' ||
+    url.startsWith('chrome://new-tab-page') ||
+    url.startsWith('https://www.google.com/_/chrome/newtab')
+  ) {
+    return true
+  }
   return false
 }
 
@@ -334,7 +342,9 @@ export default defineBackground(() => {
         .getValue()
         .then((shownOnce) => {
           if (shownOnce) return
-          chrome.tabs.create({ url: chrome.runtime.getURL('app.html#/onboarding') })
+          chrome.tabs.create({
+            url: chrome.runtime.getURL('app.html#/onboarding'),
+          })
           onboardingShownOnceStorage.setValue(true)
         })
         .catch(() => null)
