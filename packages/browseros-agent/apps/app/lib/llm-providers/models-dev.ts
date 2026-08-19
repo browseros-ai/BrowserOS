@@ -1,5 +1,12 @@
 import data from './models-dev-data.json'
 
+export type ReasoningControlType = 'effort' | 'toggle' | 'budget_tokens'
+
+export interface ReasoningControl {
+  type: ReasoningControlType
+  values: string[]
+}
+
 export interface ModelsDevModel {
   id: string
   name: string
@@ -8,6 +15,8 @@ export interface ModelsDevModel {
   supportsImages: boolean
   supportsReasoning: boolean
   supportsToolCall: boolean
+  supportsTemperature: boolean
+  reasoningControls?: ReasoningControl[]
   inputCost?: number
   outputCost?: number
 }

@@ -83,11 +83,44 @@ describe('generateModelsData', () => {
           supportsImages: true,
           supportsReasoning: true,
           supportsToolCall: true,
+          supportsTemperature: true,
           inputCost: 1,
           outputCost: 2,
         },
       ],
     })
+  })
+
+  test('passes through reasoning controls and temperature support', () => {
+    const output = generateModelsData(
+      {
+        'source-provider': provider({
+          reasoner: model({
+            id: 'reasoner-model',
+            reasoning: true,
+            temperature: false,
+            reasoning_options: [
+              { type: 'effort', values: ['low', 'medium', 'high'] },
+              { type: 'unknown-type', values: ['x'] },
+            ],
+          }),
+          plain: model({ id: 'plain-model' }),
+        }),
+      },
+      { 'source-provider': 'browseros-provider' },
+    )
+
+    const models = output['browseros-provider']?.models ?? []
+    const reasoner = models.find((m) => m.id === 'reasoner-model')
+    const plain = models.find((m) => m.id === 'plain-model')
+
+    expect(reasoner?.supportsTemperature).toBe(false)
+    expect(reasoner?.reasoningControls).toEqual([
+      { type: 'effort', values: ['low', 'medium', 'high'] },
+    ])
+    // Missing temperature defaults to supported; no controls when none provided.
+    expect(plain?.supportsTemperature).toBe(true)
+    expect(plain?.reasoningControls).toBeUndefined()
   })
 
   test('omits non-chat models', () => {
@@ -212,6 +245,16 @@ describe('generateModelsData', () => {
         expect(typeof model.supportsImages).toBe('boolean')
         expect(typeof model.supportsReasoning).toBe('boolean')
         expect(typeof model.supportsToolCall).toBe('boolean')
+        expect(typeof model.supportsTemperature).toBe('boolean')
+        if (model.reasoningControls !== undefined) {
+          expect(Array.isArray(model.reasoningControls)).toBe(true)
+          for (const control of model.reasoningControls) {
+            expect(['effort', 'toggle', 'budget_tokens']).toContain(
+              control.type,
+            )
+            expect(Array.isArray(control.values)).toBe(true)
+          }
+        }
       }
 
       expect(ids.size).toBe(provider.models.length)
