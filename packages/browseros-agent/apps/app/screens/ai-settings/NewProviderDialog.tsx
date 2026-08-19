@@ -93,6 +93,19 @@ function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
 }
 
+/**
+ * Valid temperature range by provider. models.dev only says whether temperature
+ * is supported, not its range, so this encodes the provider-level limits.
+ * Anthropic caps at 1.0 (the SDK clamps anything higher); most others accept 0-2.
+ */
+function getTemperatureRange(type?: ProviderType): {
+  min: number
+  max: number
+} {
+  if (type === 'anthropic') return { min: 0, max: 1 }
+  return { min: 0, max: 2 }
+}
+
 /** Picks a sensible default effort from a model's allowed levels. */
 function pickDefaultEffort(options: string[]): string {
   if (options.includes('medium')) return 'medium'
@@ -247,6 +260,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   )
   const reasoningEffortOptions = getReasoningEffortOptions(selectedModel)
   const temperatureDisabled = selectedModel?.supportsTemperature === false
+  const temperatureRange = getTemperatureRange(watchedType as ProviderType)
 
   const modelFuse = useMemo(
     () =>
@@ -1005,13 +1019,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   name="temperature"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Temperature (0-2)</FormLabel>
+                      <FormLabel>
+                        Temperature ({temperatureRange.min}-
+                        {temperatureRange.max})
+                      </FormLabel>
                       <FormControl>
                         <Input
                           type="number"
                           step="0.1"
-                          min="0"
-                          max="2"
+                          min={temperatureRange.min}
+                          max={temperatureRange.max}
                           disabled={temperatureDisabled}
                           {...field}
                           onChange={(e) =>
