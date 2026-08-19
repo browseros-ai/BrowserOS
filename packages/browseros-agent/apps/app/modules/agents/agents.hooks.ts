@@ -1,14 +1,11 @@
+import type { AgentRoutes } from '@browseros/server'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { hc } from 'hono/client'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import type { AcpAgent, AcpAgentType } from './acp-agent-types'
-import { buildAgentApiUrl } from './agent-api-url'
+import type { AcpAgentType } from './acp-agent-types'
 import { computeAgentsSettled } from './agents.helpers'
-
-interface AcpAgentsResponse {
-  agents: AcpAgent[]
-}
 
 interface CreateAcpAgentInput {
   name: string
@@ -19,21 +16,15 @@ interface CreateAcpAgentInput {
 
 const AGENTS_QUERY_KEY = 'acp-agents'
 
-async function agentsFetch<T>(
-  baseUrl: string,
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
-  const response = await fetch(buildAgentApiUrl(baseUrl, path), init)
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string
-    }
-    throw new Error(
-      body.error ?? `Request failed with status ${response.status}`,
-    )
-  }
-  return response.json() as Promise<T>
+function agentsClient(baseUrl: string) {
+  return hc<AgentRoutes>(`${baseUrl}/agents`)
+}
+
+async function agentRequestError(response: Response): Promise<Error> {
+  const body = (await response.json().catch(() => ({}))) as { error?: string }
+  return new Error(
+    body.error ?? `Request failed with status ${response.status}`,
+  )
 }
 
 export function useAcpAgents(enabled = true) {
@@ -44,9 +35,13 @@ export function useAcpAgents(enabled = true) {
     isLoading: urlLoading,
     error: urlError,
   } = useAgentServerUrl()
-  const query = useQuery<AcpAgentsResponse, Error>({
+  const query = useQuery({
     queryKey: [AGENTS_QUERY_KEY, baseUrl],
-    queryFn: () => agentsFetch(baseUrl as string, '/'),
+    queryFn: async () => {
+      const response = await agentsClient(baseUrl as string).index.$get()
+      if (!response.ok) throw await agentRequestError(response)
+      return response.json()
+    },
     enabled: Boolean(baseUrl) && !urlLoading && enabled && agentsSupported,
   })
 
@@ -79,11 +74,9 @@ export function useCreateAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const result = await agentsFetch<{ agent: AcpAgent }>(baseUrl, '/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
-      })
+      const response = await agentsClient(baseUrl).index.$post({ json: input })
+      if (!response.ok) throw await agentRequestError(response)
+      const result = await response.json()
       return result.agent
     },
     onSuccess: () =>
@@ -100,11 +93,11 @@ export function useDeleteAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      return agentsFetch<{ success: true }>(
-        baseUrl,
-        `/${encodeURIComponent(agentId)}`,
-        { method: 'DELETE' },
-      )
+      const response = await agentsClient(baseUrl)[':agentId'].$delete({
+        param: { agentId },
+      })
+      if (!response.ok) throw await agentRequestError(response)
+      return response.json()
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),
