@@ -1,6 +1,9 @@
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
-import type { ProviderOptions } from 'ai'
+import type { JSONValue } from 'ai'
 import type { ResolvedAgentConfig } from './types'
+
+/** Mirrors the AI SDK's (non-exported) ProviderOptions shape. */
+type ProviderOptions = Record<string, Record<string, JSONValue>>
 
 /** AI SDK top-level reasoning setting values. Note there is no 'max'. */
 type ReasoningLevel =
