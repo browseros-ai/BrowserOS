@@ -1026,6 +1026,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                       <FormControl>
                         <Input
                           type="number"
+                          aria-invalid={contextExceedsMax}
                           {...field}
                           onChange={(e) =>
                             field.onChange(Number(e.target.value))
