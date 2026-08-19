@@ -84,6 +84,13 @@ describe('probeAcpAgent — input shape', () => {
     expect(lastCall?.timeoutMs).toBe(120_000)
   })
 
+  it('spawns the probe in the home directory, never the sidecar process.cwd()', async () => {
+    const os = await import('node:os')
+    nextResult = baseProbeResult()
+    await probeAcpAgent({ type: 'claude' })
+    expect(lastCall?.cwd).toBe(os.homedir())
+  })
+
   it('honours an explicit timeoutMs', async () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ type: 'claude', timeoutMs: 5_000 })
