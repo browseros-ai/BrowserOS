@@ -128,6 +128,7 @@ export class ChatService {
       userSystemPrompt: request.userSystemPrompt,
       workingDir: request.userWorkingDir,
       supportsImages: request.supportsImages,
+      supportsReasoning: request.supportsReasoning,
       chatMode: request.mode === 'chat',
       isScheduledTask: request.isScheduledTask,
       origin: request.origin,

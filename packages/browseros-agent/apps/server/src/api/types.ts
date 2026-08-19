@@ -51,6 +51,7 @@ const ChatInputSchema = z.object({
   isScheduledTask: z.boolean().optional().default(false),
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
+  supportsReasoning: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
   origin: z.enum(['sidepanel', 'newtab']).optional().default('sidepanel'),
   declinedApps: z.array(z.string()).optional(),

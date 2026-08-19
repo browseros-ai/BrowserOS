@@ -10,7 +10,6 @@ import {
 } from '@browseros/browser-mcp/output-file'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import {
   type LanguageModel,
   type ModelMessage,
@@ -35,6 +34,7 @@ import {
 import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
+import { buildAgentReasoningConfig } from './reasoning-config'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
@@ -334,27 +334,13 @@ export class AiSdkAgent {
         ),
       })
 
-    // Codex requires store=false — tell the SDK to inline content
-    // instead of using item_reference (which fails with store=false)
-    const isChatGPTPro =
-      config.resolvedConfig.provider === LLM_PROVIDERS.CHATGPT_PRO
-
     const agent = new ToolLoopAgent({
       model,
       instructions,
       tools,
       stopWhen: [stepCountIs(AGENT_LIMITS.MAX_TURNS)],
       prepareStep,
-      ...(isChatGPTPro && {
-        providerOptions: {
-          openai: {
-            store: false,
-            reasoningEffort: config.resolvedConfig.reasoningEffort || 'medium',
-            reasoningSummary: config.resolvedConfig.reasoningSummary || 'auto',
-            include: ['reasoning.encrypted_content'],
-          },
-        },
-      }),
+      ...buildAgentReasoningConfig(config.resolvedConfig),
     })
 
     logger.info('Agent session created (v2)', {
