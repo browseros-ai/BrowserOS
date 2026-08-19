@@ -122,10 +122,24 @@ describe('resolveRepairedSelection', () => {
     ).toEqual({ repair: false })
   })
 
-  it('repairs a stale selection to the resolved fallback once ready', () => {
+  it('keeps a stale ACP selection even when ready (never wiped by the fetch-backed list)', () => {
+    // Regression guard: the agents list is fetch-backed and can be stale or
+    // cross-context-stale (a persisted cache, or another context that has not
+    // refetched a newly-created agent). An absent agent must NOT trigger a repair
+    // that silently downgrades the ACP default to the LLM fallback.
     expect(
       resolveRepairedSelection({
         selection: { kind: 'acp', id: 'deleted-agent' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('repairs a stale LLM selection to the resolved fallback once ready', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'removed-provider' },
         resolvedTarget: llmTarget,
         ready: true,
       }),

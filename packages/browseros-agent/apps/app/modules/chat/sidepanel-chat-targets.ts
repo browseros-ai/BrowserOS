@@ -116,10 +116,15 @@ export type RepairSelectionDecision =
   | { repair: true; selection: SidepanelChatTargetSelection | null }
 
 /**
- * Decides whether a persisted sidebar selection needs repair. It only repairs
- * once the target lists are settled, so an ACP selection is never wiped while
- * its agent is still loading (which would silently downgrade an ACP default to
- * the LLM fallback on every startup).
+ * Decides whether a persisted sidebar selection needs repair. It never repairs
+ * an ACP selection: the agents list is fetch-backed and can be stale (a
+ * persisted react-query cache, or a different extension context that has not
+ * refetched a newly-created agent), so repairing here would wipe a valid ACP
+ * default and silently downgrade it to the LLM fallback. Stale ACP selections
+ * are cleaned by `clearSidepanelChatTargetSelectionForAgent` on delete, and
+ * `resolveSidepanelChatTarget` already falls back non-destructively at render.
+ * Only LLM selections are repaired, since providers load reliably from local
+ * storage, and only once loads are settled.
  */
 export function resolveRepairedSelection({
   selection,
@@ -131,6 +136,7 @@ export function resolveRepairedSelection({
   ready: boolean
 }): RepairSelectionDecision {
   if (!ready || !selection) return { repair: false }
+  if (selection.kind === 'acp') return { repair: false }
   if (
     resolvedTarget &&
     resolvedTarget.kind === selection.kind &&
