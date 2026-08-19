@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { useAcpAgents } from '@/modules/agents/agents.hooks'
@@ -101,7 +100,11 @@ export function useChatTargetSelection() {
     selectedChatTarget,
   )
 
-  useDeepCompareEffect(() => {
+  // selectedLlmProvider is memoized in useLlmProviders (stable reference until it
+  // actually changes), so a plain effect fires exactly when it changes. Not
+  // useDeepCompareEffect: its single dep is null before providers load, and that
+  // library throws when every dependency is a primitive.
+  useEffect(() => {
     selectedLlmProviderRef.current = selectedLlmProvider
   }, [selectedLlmProvider])
 
