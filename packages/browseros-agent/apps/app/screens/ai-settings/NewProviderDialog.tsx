@@ -262,6 +262,31 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const temperatureDisabled = selectedModel?.supportsTemperature === false
   const temperatureRange = getTemperatureRange(watchedType as ProviderType)
 
+  // Context window guardrails for catalog models with a known window.
+  const modelDefaultContext = selectedModel?.contextLength
+  const watchedContextWindow = form.watch('contextWindow')
+  const contextIsCustom =
+    modelDefaultContext !== undefined &&
+    watchedContextWindow !== modelDefaultContext
+  const contextExceedsMax =
+    modelDefaultContext !== undefined &&
+    typeof watchedContextWindow === 'number' &&
+    watchedContextWindow > modelDefaultContext
+  const resetContextWindow = () => {
+    if (modelDefaultContext !== undefined) {
+      form.setValue('contextWindow', modelDefaultContext)
+    }
+  }
+  const resetContextLink = (
+    <button
+      type="button"
+      onClick={resetContextWindow}
+      className="cursor-pointer text-primary hover:underline"
+    >
+      Reset
+    </button>
+  )
+
   const modelFuse = useMemo(
     () =>
       new Fuse(modelInfoList, {
@@ -1007,9 +1032,23 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                           }
                         />
                       </FormControl>
-                      <FormDescription>
-                        Auto-filled based on model
-                      </FormDescription>
+                      {contextExceedsMax && (
+                        <p className="text-destructive text-sm">
+                          Context window cannot exceed{' '}
+                          {formatContextWindow(modelDefaultContext ?? 0)}.{' '}
+                          {resetContextLink}
+                        </p>
+                      )}
+                      {!contextExceedsMax && contextIsCustom && (
+                        <FormDescription>
+                          Custom value added. {resetContextLink}
+                        </FormDescription>
+                      )}
+                      {!contextExceedsMax && !contextIsCustom && (
+                        <FormDescription>
+                          Auto-filled based on model
+                        </FormDescription>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1087,7 +1126,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 {isTesting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isTesting ? 'Testing...' : 'Test'}
               </Button>
-              <Button type="submit" disabled={isTesting}>
+              <Button type="submit" disabled={isTesting || contextExceedsMax}>
                 {initialValues?.id ? 'Update' : 'Save'}
               </Button>
             </DialogFooter>
