@@ -72,7 +72,13 @@ import {
   getIncompleteCatalogHint,
   getModelPickerRows,
 } from './model-picker.helpers'
-import { getModelContextLength, getModelsForProvider } from './models'
+import {
+  getModelContextLength,
+  getModelsForProvider,
+  getReasoningEffortOptions,
+  type ModelInfo,
+  modelSupportsReasoning,
+} from './models'
 import {
   isCredentiallessProviderType,
   normalizeProviderFormValues,
@@ -85,6 +91,13 @@ const DEFAULT_CONTEXT_WINDOW = 128000
 
 function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
+}
+
+/** Picks a sensible default effort from a model's allowed levels. */
+function pickDefaultEffort(options: string[]): string {
+  if (options.includes('medium')) return 'medium'
+  if (options.includes('high')) return 'high'
+  return options[Math.floor(options.length / 2)] ?? 'medium'
 }
 
 function formatContextWindow(tokens: number): string {
@@ -225,6 +238,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+  const selectedModel: ModelInfo | undefined = modelInfoList.find(
+    (m) => m.modelId === watchedModelId,
+  )
+  const showReasoning = modelSupportsReasoning(
+    selectedModel,
+    watchedType as ProviderType,
+  )
+  const reasoningEffortOptions = getReasoningEffortOptions(selectedModel)
+  const temperatureDisabled = selectedModel?.supportsTemperature === false
 
   const modelFuse = useMemo(
     () =>
@@ -244,6 +266,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   const commitModelId = (modelId: string, contextLength?: number) => {
     form.setValue('modelId', modelId)
+    const info = modelInfoList.find((m) => m.modelId === modelId)
+    if (info?.supportsImages !== undefined) {
+      form.setValue('supportsImages', info.supportsImages)
+    }
+    // Reset effort to a level this model actually supports.
+    form.setValue(
+      'reasoningEffort',
+      pickDefaultEffort(getReasoningEffortOptions(info)),
+    )
     track(MODEL_SELECTED_EVENT, {
       provider_type: watchedType,
       model_id: modelId,
@@ -438,6 +469,85 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (setupGuideUrl) chrome.tabs.create({ url: setupGuideUrl })
   }
 
+  // Reasoning summaries are an OpenAI-family concept; other providers stream
+  // reasoning text without a separate summary control.
+  const showReasoningSummary =
+    watchedType === 'openai' ||
+    watchedType === 'azure' ||
+    watchedType === 'chatgpt-pro'
+
+  const renderReasoningControls = () => (
+    <div className="space-y-4 border-border border-t pt-4">
+      <h4 className="font-medium text-sm">Reasoning</h4>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          control={form.control}
+          name="reasoningEffort"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Reasoning Effort</FormLabel>
+              <Select
+                onValueChange={field.onChange}
+                value={
+                  reasoningEffortOptions.includes(field.value ?? '')
+                    ? field.value
+                    : pickDefaultEffort(reasoningEffortOptions)
+                }
+              >
+                <FormControl>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {reasoningEffortOptions.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value.charAt(0).toUpperCase() + value.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                How much the model thinks before responding
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {showReasoningSummary && (
+          <FormField
+            control={form.control}
+            name="reasoningSummary"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Reasoning Summary</FormLabel>
+                <Select
+                  onValueChange={field.onChange}
+                  value={field.value || 'auto'}
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="concise">Concise</SelectItem>
+                    <SelectItem value="detailed">Detailed</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  Detail level of visible thinking steps
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+      </div>
+    </div>
+  )
+
   const renderProviderSpecificFields = () => {
     if (
       isCredentiallessProviderType(watchedType) &&
@@ -453,70 +563,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
     if (watchedType === 'chatgpt-pro') {
       return (
-        <>
-          <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-            Credentials are managed via OAuth. No API key needed.
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="reasoningEffort"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Reasoning Effort</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value || 'medium'}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    How much the model thinks before responding
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="reasoningSummary"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Reasoning Summary</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value || 'auto'}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="concise">Concise</SelectItem>
-                      <SelectItem value="detailed">Detailed</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    Detail level of visible thinking steps
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </>
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
+          Credentials are managed via OAuth. No API key needed.
+        </div>
       )
     }
 
@@ -902,6 +951,8 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               )}
             />
 
+            {showReasoning && renderReasoningControls()}
+
             <div className="space-y-4 border-border border-t pt-4">
               <h4 className="font-medium text-sm">Model Configuration</h4>
               <FormField
@@ -956,6 +1007,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                           step="0.1"
                           min="0"
                           max="2"
+                          disabled={temperatureDisabled}
                           {...field}
                           onChange={(e) =>
                             field.onChange(Number(e.target.value))
@@ -963,7 +1015,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                         />
                       </FormControl>
                       <FormDescription>
-                        Controls response randomness
+                        {temperatureDisabled
+                          ? 'This model does not support temperature'
+                          : 'Controls response randomness'}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

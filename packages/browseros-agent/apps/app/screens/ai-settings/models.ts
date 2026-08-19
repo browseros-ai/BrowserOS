@@ -1,6 +1,7 @@
 import {
   getModelsDevModels,
   type ModelsDevModel,
+  type ReasoningControl,
 } from '../../lib/llm-providers/models-dev'
 import type { ProviderType } from '../../lib/llm-providers/types'
 
@@ -10,6 +11,8 @@ export interface ModelInfo {
   supportsImages?: boolean
   supportsReasoning?: boolean
   supportsToolCall?: boolean
+  supportsTemperature?: boolean
+  reasoningControls?: ReasoningControl[]
 }
 
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
@@ -45,6 +48,8 @@ function fromModelsDevModel(m: ModelsDevModel): ModelInfo {
     supportsImages: m.supportsImages,
     supportsReasoning: m.supportsReasoning,
     supportsToolCall: m.supportsToolCall,
+    supportsTemperature: m.supportsTemperature,
+    reasoningControls: m.reasoningControls,
   }
 }
 
@@ -55,11 +60,39 @@ export function getModelsForProvider(providerType: ProviderType): ModelInfo[] {
   return getModelsDevModels(providerType).map(fromModelsDevModel)
 }
 
+export function getModelInfo(
+  providerType: ProviderType,
+  modelId: string,
+): ModelInfo | undefined {
+  return getModelsForProvider(providerType).find((m) => m.modelId === modelId)
+}
+
 export function getModelContextLength(
   providerType: ProviderType,
   modelId: string,
 ): number | undefined {
-  const models = getModelsForProvider(providerType)
-  const model = models.find((m) => m.modelId === modelId)
-  return model?.contextLength
+  return getModelInfo(providerType, modelId)?.contextLength
+}
+
+const DEFAULT_EFFORT_VALUES = ['low', 'medium', 'high']
+
+/** Whether the add-model dialog should show reasoning controls for this model. */
+export function modelSupportsReasoning(
+  model: ModelInfo | undefined,
+  providerType: ProviderType,
+): boolean {
+  // chatgpt-pro models are not in the catalog snapshot but always reason.
+  return Boolean(model?.supportsReasoning) || providerType === 'chatgpt-pro'
+}
+
+/**
+ * The reasoning effort levels to offer for a model: the catalog's per-model
+ * effort values when present, else a sensible default (toggle/budget models
+ * have no effort levels but the server still maps effort to a budget).
+ */
+export function getReasoningEffortOptions(
+  model: ModelInfo | undefined,
+): string[] {
+  const effort = model?.reasoningControls?.find((c) => c.type === 'effort')
+  return effort?.values.length ? effort.values : DEFAULT_EFFORT_VALUES
 }
