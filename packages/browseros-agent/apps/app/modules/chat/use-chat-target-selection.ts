@@ -13,6 +13,7 @@ import {
   resolveSidepanelChatTarget,
   type SidepanelChatTarget,
   type SidepanelChatTargetSelection,
+  watchSidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
 
 /**
@@ -46,8 +47,17 @@ export function useChatTargetSelection() {
     loadSidepanelChatTargetSelection().then((selection) => {
       if (!cancelled) setTargetSelection(selection)
     })
+    // Live-sync across surfaces: changing the selection in the sidebar, home, or
+    // settings writes storage, and WXT's storage.watch (over browser.storage
+    // .onChanged) fires in every extension context, so the other surfaces update
+    // without a reload. Re-persisting the same value is a no-op, so this cannot
+    // loop with the repair effect.
+    const unwatch = watchSidepanelChatTargetSelection((selection) => {
+      setTargetSelection(selection)
+    })
     return () => {
       cancelled = true
+      unwatch()
     }
   }, [])
 
