@@ -181,7 +181,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
-    setDefaultProvider,
     chatTargets,
     selectedChatTarget,
     selectChatTarget,
@@ -864,7 +863,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         },
       })
     })
-    if (target.kind === 'llm') setDefaultProvider(target.provider.id)
 
     if (
       previousTarget &&

@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
+  commitChatTargetSelection,
   persistSidepanelChatTargetSelection,
   resolveRepairedSelection,
   resolveSidepanelChatTarget,
@@ -171,6 +172,46 @@ describe('target selection storage', () => {
     await clearSidepanelChatTargetSelectionForAgent(agent.id, store)
 
     expect(await store.getValue()).toBeNull()
+  })
+})
+
+describe('commitChatTargetSelection', () => {
+  it('persists an LLM selection and updates the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'llm', id: provider.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'llm', id: provider.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(provider.id)
+  })
+
+  it('persists an ACP selection without touching the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'acp', id: agent.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
+    expect(setDefaultProvider).not.toHaveBeenCalled()
+  })
+
+  it('clears the selection without touching the default provider id', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: agent.id })
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(null, { setDefaultProvider }, store)
+
+    expect(await store.getValue()).toBeNull()
+    expect(setDefaultProvider).not.toHaveBeenCalled()
   })
 })
 

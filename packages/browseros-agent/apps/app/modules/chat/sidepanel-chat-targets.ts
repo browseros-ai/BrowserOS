@@ -170,6 +170,21 @@ export async function saveSidepanelChatTargetSelection(
   await targetStore.setValue(selection)
 }
 
+/**
+ * The single "change the selected chat target" side effect, shared by every
+ * surface (sidebar, home, settings). Persists the selection and, for an LLM
+ * target, also updates the default-provider id so both stores stay consistent.
+ * Keeping this in one place is what prevents surfaces from drifting apart.
+ */
+export async function commitChatTargetSelection(
+  selection: SidepanelChatTargetSelection | null,
+  deps: { setDefaultProvider: (providerId: string) => Promise<void> },
+  store?: SidepanelChatTargetSelectionWriter,
+): Promise<void> {
+  await saveSidepanelChatTargetSelection(selection, store)
+  if (selection?.kind === 'llm') await deps.setDefaultProvider(selection.id)
+}
+
 export async function clearSidepanelChatTargetSelectionForAgent(
   agentId: string,
   store?: SidepanelChatTargetSelectionReader &
