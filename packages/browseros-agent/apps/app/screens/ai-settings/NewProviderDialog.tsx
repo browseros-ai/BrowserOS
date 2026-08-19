@@ -844,6 +844,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                     </FormControl>
                   ) : (
                     <Popover
+                      // modal makes this popover own the scroll lock while open.
+                      // Without it the Dialog's react-remove-scroll blocks wheel
+                      // events over the body-portaled list, so it cannot scroll
+                      // past its max height (only search could reach lower rows).
+                      modal
                       open={modelPickerOpen}
                       onOpenChange={(isOpen) => {
                         setModelPickerOpen(isOpen)
