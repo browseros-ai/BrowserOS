@@ -12,8 +12,10 @@ import { toProviderOption } from '@/modules/chat/chat-session-request'
 import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import {
   buildSidepanelChatTargets,
+  loadSidepanelChatTargetSelection,
   persistSidepanelChatTargetSelection,
   resolveSidepanelChatTarget,
+  type SidepanelChatTargetSelection,
 } from '@/modules/chat/sidepanel-chat-targets'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { useActiveHint } from '@/screens/newtab/index/active-hint.hooks'
@@ -42,12 +44,6 @@ export const AgentCommandHome: FC = () => {
     capabilitiesLoading,
     supportsInlineChat,
   })
-  const [selectedProvider, setSelectedProvider] = useState<Provider | null>(
-    null,
-  )
-  const waitingForLlmCapabilities =
-    selectedProvider?.kind === 'llm' && llmRoutingMode === 'wait'
-
   const targets = useMemo(
     () =>
       buildSidepanelChatTargets({
@@ -61,22 +57,48 @@ export const AgentCommandHome: FC = () => {
     [targets],
   )
 
-  // Default the picker to the user's default LLM provider (BrowserOS out of the
-  // box) so the composer works with zero agents. Re-resolve if the current
-  // selection disappears (e.g. its provider/agent was removed).
+  const [targetSelection, setTargetSelection] =
+    useState<SidepanelChatTargetSelection | null>(null)
+
   useEffect(() => {
-    if (targets.length === 0) return
-    const stillValid =
-      selectedProvider &&
-      providerOptions.some(
-        (option) =>
-          option.id === selectedProvider.id &&
-          option.kind === selectedProvider.kind,
-      )
-    if (stillValid) return
-    const fallback = resolveSidepanelChatTarget({ targets, defaultProviderId })
-    setSelectedProvider(fallback ? toProviderOption(fallback) : null)
-  }, [targets, providerOptions, selectedProvider, defaultProviderId])
+    let cancelled = false
+    loadSidepanelChatTargetSelection().then((selection) => {
+      if (!cancelled) setTargetSelection(selection)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Derive the picker from the persisted selection so a third-party agent chosen
+  // here (or in the sidebar/settings) is restored on load. resolveSidepanelChatTarget
+  // falls back to the default LLM provider (BrowserOS out of the box) until an ACP
+  // agent finishes loading, so the composer stays usable with zero agents.
+  const selectedChatTarget = useMemo(
+    () =>
+      resolveSidepanelChatTarget({
+        targets,
+        defaultProviderId,
+        selection: targetSelection,
+      }),
+    [targets, defaultProviderId, targetSelection],
+  )
+  const selectedProvider = useMemo(
+    () => (selectedChatTarget ? toProviderOption(selectedChatTarget) : null),
+    [selectedChatTarget],
+  )
+  const waitingForLlmCapabilities =
+    selectedProvider?.kind === 'llm' && llmRoutingMode === 'wait'
+
+  const handleSelectProvider = (provider: Provider) => {
+    const target = targets.find(
+      (entry) => entry.kind === provider.kind && entry.id === provider.id,
+    )
+    if (!target) return
+    setTargetSelection({ kind: target.kind, id: target.id })
+    void persistSidepanelChatTargetSelection(target)
+    if (target.kind === 'llm') void setDefaultProvider(target.id)
+  }
 
   const handleSend = async (input: ConversationInputSendInput) => {
     if (!selectedProvider) return
@@ -142,7 +164,7 @@ export const AgentCommandHome: FC = () => {
               variant="home"
               providers={providerOptions}
               selectedProvider={selectedProvider}
-              onSelectProvider={setSelectedProvider}
+              onSelectProvider={handleSelectProvider}
               onSend={handleSend}
               streaming={false}
               disabled={!selectedProvider || waitingForLlmCapabilities}
