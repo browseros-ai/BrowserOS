@@ -42,7 +42,7 @@ describe('generateText — text-only', () => {
       prompt: 'hi',
       stopWhen: stepCountIs(1),
     })
-    expect(usage.cachedInputTokens).toBe(1024)
+    expect(usage.inputTokenDetails?.cacheReadTokens).toBe(1024)
   })
 
   test('reasoning content is preserved alongside text', async () => {

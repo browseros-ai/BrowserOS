@@ -38,18 +38,13 @@ function formatFilePlaceholder(mediaType?: string, filename?: string): string {
 }
 
 function isBinaryToolResultContentPart(part: ToolResultContentPart): boolean {
-  return (
-    part.type === 'media' ||
-    part.type === 'image-data' ||
-    part.type === 'file-data'
-  )
+  return part.type === 'image-data' || part.type === 'file-data'
 }
 
 function toolResultContentPartToText(part: ToolResultContentPart): string {
   switch (part.type) {
     case 'text':
       return part.text
-    case 'media':
     case 'image-data':
       return '[Image]'
     case 'file-data':
@@ -62,6 +57,8 @@ function toolResultContentPartToText(part: ToolResultContentPart): string {
       return formatFileId(part.fileId)
     case 'custom':
       return '[Custom content]'
+    default:
+      return ''
   }
 }
 
@@ -108,7 +105,6 @@ export function estimateToolResultOutput(output: ToolResultOutput): {
           case 'text':
             chars += part.text.length
             break
-          case 'media':
           case 'image-data':
           case 'file-data':
             images++

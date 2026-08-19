@@ -28,7 +28,7 @@ export interface ComputedConfig {
   toolOutputMaxChars: number
 }
 
-export interface CompactionState {
+export type CompactionState = {
   existingSummary: string | null
   compactionCount: number
 }

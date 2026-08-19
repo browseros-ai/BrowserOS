@@ -84,6 +84,19 @@ export class AcpxLanguageModel implements LanguageModelV2 {
 
     const translator = new EventTranslator({
       generateId: this.providerInstance.generateId,
+      onUsageUpdate: (event) => {
+        this.providerInstance.recordUsage({
+          used: event.used,
+          size: event.size,
+          cost: event.cost,
+          breakdown: event.breakdown,
+          at: Date.now(),
+          sessionKey,
+        })
+      },
+      onAvailableCommands: (commands) => {
+        this.providerInstance.recordAvailableCommands(sessionKey, commands)
+      },
     })
 
     let stream = createTranslatingStream(turn, translator)

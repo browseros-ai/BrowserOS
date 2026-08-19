@@ -1,7 +1,7 @@
 import { devToolsMiddleware } from '@ai-sdk/devtools'
 import type {
-  LanguageModelV3,
-  LanguageModelV3Middleware,
+  LanguageModelV4,
+  LanguageModelV4Middleware,
 } from '@ai-sdk/provider'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
@@ -139,17 +139,17 @@ export class AiSdkAgent {
       AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
 
     const { model: rawModel } = await createLanguageModel(config.resolvedConfig)
-    const isV3Model =
+    const isV4Model =
       typeof rawModel === 'object' &&
       rawModel !== null &&
       'specificationVersion' in rawModel &&
-      rawModel.specificationVersion === 'v3'
+      rawModel.specificationVersion === 'v4'
 
     let model = rawModel
-    if (isV3Model && config.aiSdkDevtoolsEnabled) {
+    if (isV4Model && config.aiSdkDevtoolsEnabled) {
       model = wrapLanguageModel({
-        model: rawModel as LanguageModelV3,
-        middleware: devToolsMiddleware() as LanguageModelV3Middleware,
+        model: rawModel as LanguageModelV4,
+        middleware: devToolsMiddleware() as LanguageModelV4Middleware,
       })
       logger.info('AI SDK DevTools middleware enabled', {
         conversationId: config.resolvedConfig.conversationId,
@@ -324,7 +324,7 @@ export class AiSdkAgent {
       messages: ModelMessage[]
       steps: ReadonlyArray<StepWithUsage>
       model: LanguageModel
-      experimental_context: unknown
+      runtimeContext: unknown
     }) =>
       compactionPrepareStep({
         ...options,

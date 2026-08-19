@@ -60,7 +60,7 @@ describe('streamText — text-only turn', () => {
       stopWhen: stepCountIs(1),
     })
     const usage = await result.usage
-    expect(usage.cachedInputTokens).toBe(4096)
+    expect(usage.inputTokenDetails?.cacheReadTokens).toBe(4096)
   })
 
   test('textStream yields the same content', async () => {

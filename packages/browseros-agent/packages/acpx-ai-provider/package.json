@@ -11,12 +11,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^3.0.10",
-    "@ai-sdk/provider-utils": "^4.0.26"
+    "@ai-sdk/provider": "^4.0.0",
+    "@ai-sdk/provider-utils": "^5.0.0"
   },
   "peerDependencies": {
     "acpx": "^0.13.0",
-    "ai": ">=6.0.0"
+    "ai": ">=7.0.0-beta.0"
   },
   "exports": {
     ".": {

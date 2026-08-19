@@ -1,26 +1,49 @@
 import type {
+  JSONValue,
   LanguageModelV2FinishReason,
   LanguageModelV2StreamPart,
   LanguageModelV2Usage,
 } from '@ai-sdk/provider'
-import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from 'acpx/runtime'
+import type {
+  AcpRuntimeAvailableCommand,
+  AcpRuntimeEvent,
+  AcpRuntimeTurnResult,
+} from 'acpx/runtime'
 import { fromRuntimeError } from './errors'
 
 type TextStream = 'output' | 'thought'
 type BlockKind = TextStream | null
 
 interface ToolCallState {
+  blockId: string
   toolName: string
   emittedText: string
   inputClosed: boolean
 }
 
+export type UsageUpdateEvent = Extract<AcpRuntimeEvent, { type: 'status' }> & {
+  tag: 'usage_update'
+}
+
 export interface EventTranslatorOptions {
   generateId: () => string
+  /**
+   * Invoked with the raw `usage_update` event (including the new `cost`
+   * and `breakdown` fields) every time the agent emits one. Synchronous
+   * — must not throw or block.
+   */
+  onUsageUpdate?: (event: UsageUpdateEvent) => void
+  /**
+   * Invoked with the agent's full advertised slash-command list every
+   * time `available_commands_update` arrives. Synchronous — must not
+   * throw or block.
+   */
+  onAvailableCommands?: (commands: AcpRuntimeAvailableCommand[]) => void
 }
 
 export interface FinishOptions {
   result: AcpRuntimeTurnResult
+  /** Optional usage override; defaults to whatever was accumulated from `status` events. */
   usage?: LanguageModelV2Usage
 }
 
@@ -38,17 +61,34 @@ const STOP_REASON_MAP: Record<string, LanguageModelV2FinishReason> = {
   tool_use: 'tool-calls',
 }
 
-/** Converts ACP runtime events into AI SDK stream parts. */
+/**
+ * Translates `AcpRuntimeEvent`s into AI SDK V2 stream parts.
+ *
+ * Holds state between `translate()` calls so that text/reasoning blocks
+ * open exactly once and tool input deltas are diffed against previously
+ * emitted text. Caller is expected to:
+ *
+ *  1. Call `translate(event)` for each runtime event, enqueuing the
+ *     returned parts.
+ *  2. After the runtime turn ends (via `turn.events` iterator
+ *     completion), call `flush()` to close any open block and then
+ *     `finish(result)` to emit the terminal `finish` part.
+ */
 export class EventTranslator {
   private readonly generateId: () => string
+  private readonly onUsageUpdate?: (event: UsageUpdateEvent) => void
+  private readonly onAvailableCommands?: (
+    commands: AcpRuntimeAvailableCommand[],
+  ) => void
   private currentBlock: BlockKind = null
   private currentBlockId: string | null = null
   private readonly toolCalls = new Map<string, ToolCallState>()
-  private accumulatedTotalTokens: number | undefined
-  private accumulatedSize: number | undefined
+  private lastUsageEvent: UsageUpdateEvent | undefined
 
   constructor(opts: EventTranslatorOptions) {
     this.generateId = opts.generateId
+    this.onUsageUpdate = opts.onUsageUpdate
+    this.onAvailableCommands = opts.onAvailableCommands
   }
 
   translate(event: AcpRuntimeEvent): LanguageModelV2StreamPart[] {
@@ -69,9 +109,9 @@ export class EventTranslator {
   flush(): LanguageModelV2StreamPart[] {
     const parts: LanguageModelV2StreamPart[] = []
     parts.push(...this.closeCurrentBlock())
-    for (const [callId, state] of this.toolCalls) {
+    for (const [, state] of this.toolCalls) {
       if (!state.inputClosed) {
-        parts.push({ type: 'tool-input-end', id: callId })
+        parts.push({ type: 'tool-input-end', id: state.blockId })
         state.inputClosed = true
       }
     }
@@ -88,13 +128,20 @@ export class EventTranslator {
       finishReason,
       usage,
     }
+
+    const acpxMeta: Record<string, JSONValue> = {}
+    if (this.lastUsageEvent?.size !== undefined) {
+      acpxMeta.contextWindow = this.lastUsageEvent.size
+    }
+    if (this.lastUsageEvent?.cost !== undefined) {
+      acpxMeta.cost = this.lastUsageEvent.cost as JSONValue
+    }
     if (result.status === 'failed') {
-      part.providerMetadata = {
-        acpx: {
-          errorCode: result.error.code ?? 'unknown',
-          errorMessage: result.error.message,
-        },
-      }
+      acpxMeta.errorCode = result.error.code ?? 'unknown'
+      acpxMeta.errorMessage = result.error.message
+    }
+    if (Object.keys(acpxMeta).length > 0) {
+      part.providerMetadata = { acpx: acpxMeta }
     }
     return part
   }
@@ -105,17 +152,20 @@ export class EventTranslator {
   }
 
   private accumulatedUsage(): LanguageModelV2Usage {
-    if (
-      this.accumulatedTotalTokens === undefined &&
-      this.accumulatedSize === undefined
-    ) {
-      return EMPTY_USAGE
-    }
+    const ev = this.lastUsageEvent
+    if (!ev) return EMPTY_USAGE
+    const breakdown = ev.breakdown
+    // Prefer the per-turn breakdown when the agent provided one; fall
+    // back to the top-level `used` for totalTokens when no breakdown was
+    // sent (codex today). `size` is the context-window ceiling — it
+    // belongs on providerMetadata.acpx.contextWindow, not on
+    // cachedInputTokens.
     return {
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: this.accumulatedTotalTokens,
-      cachedInputTokens: this.accumulatedSize,
+      inputTokens: breakdown?.inputTokens,
+      outputTokens: breakdown?.outputTokens,
+      totalTokens: breakdown?.totalTokens ?? ev.used,
+      cachedInputTokens: breakdown?.cachedReadTokens,
+      reasoningTokens: breakdown?.thoughtTokens,
     }
   }
 
@@ -170,12 +220,12 @@ export class EventTranslator {
     let state = this.toolCalls.get(callId)
     if (!state) {
       const toolName = event.title?.trim() || 'tool'
-      state = { toolName, emittedText: '', inputClosed: false }
+      state = { blockId: callId, toolName, emittedText: '', inputClosed: false }
       this.toolCalls.set(callId, state)
       parts.push({ type: 'tool-input-start', id: callId, toolName })
     }
 
-    parts.push(...this.appendToolText(callId, state, event.text))
+    parts.push(...this.appendToolText(state, event.text))
 
     if (isTerminalToolStatus(event.status)) {
       parts.push(
@@ -186,7 +236,6 @@ export class EventTranslator {
   }
 
   private appendToolText(
-    callId: string,
     state: ToolCallState,
     text: string,
   ): LanguageModelV2StreamPart[] {
@@ -201,7 +250,7 @@ export class EventTranslator {
     if (!delta) return []
 
     state.emittedText += delta
-    return [{ type: 'tool-input-delta', id: callId, delta }]
+    return [{ type: 'tool-input-delta', id: state.blockId, delta }]
   }
 
   private finalizeToolCall(
@@ -211,7 +260,7 @@ export class EventTranslator {
   ): LanguageModelV2StreamPart[] {
     const parts: LanguageModelV2StreamPart[] = []
     if (!state.inputClosed) {
-      parts.push({ type: 'tool-input-end', id: callId })
+      parts.push({ type: 'tool-input-end', id: state.blockId })
       state.inputClosed = true
     }
     parts.push({
@@ -236,12 +285,25 @@ export class EventTranslator {
     event: Extract<AcpRuntimeEvent, { type: 'status' }>,
   ): LanguageModelV2StreamPart[] {
     if (event.tag === 'usage_update') {
-      if (event.used !== undefined) this.accumulatedTotalTokens = event.used
-      if (event.size !== undefined) this.accumulatedSize = event.size
+      const usageEvent = event as UsageUpdateEvent
+      this.lastUsageEvent = usageEvent
+      this.onUsageUpdate?.(usageEvent)
+      return []
+    }
+    if (event.tag === 'available_commands_update') {
+      if (event.availableCommands) {
+        this.onAvailableCommands?.(event.availableCommands)
+      }
       return []
     }
     if (event.tag === 'plan') {
-      // A plan is self-contained so it cannot close the current reasoning block.
+      // Emit plan as a self-contained reasoning block with its own id.
+      // Doesn't disturb the currently-open text/reasoning block — AI SDK
+      // allows multiple reasoning ids to coexist as long as each is
+      // properly start/end-paired. The `[Plan]` prefix lets consumers
+      // distinguish plan announcements from the agent's chain-of-thought.
+      // Trim because whitespace-only plan updates carry no signal — same
+      // intent as the empty-string case.
       const trimmed = event.text.trim()
       if (trimmed.length === 0) return []
       const id = this.generateId()

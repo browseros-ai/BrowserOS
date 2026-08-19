@@ -37,7 +37,7 @@
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-table": "^8.21.3",
     "@xyflow/react": "^12.11.3",
-    "ai": "6.0.230",
+    "ai": "^7.0.0",
     "ansi-to-react": "^6.2.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
