@@ -1,21 +1,13 @@
-import { type FC, useEffect, useMemo, useState } from 'react'
+import type { FC } from 'react'
 import { useNavigate } from 'react-router'
-import type { Provider } from '@/components/chat/chatComponentTypes'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import { ProductHuntBanner } from '@/components/promo/ProductHuntBanner'
 import { Feature } from '@/lib/browseros/capabilities'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import { toProviderOption } from '@/modules/chat/chat-session-request'
 import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
-import {
-  buildSidepanelChatTargets,
-  persistSidepanelChatTargetSelection,
-  resolveSidepanelChatTarget,
-} from '@/modules/chat/sidepanel-chat-targets'
-import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
+import { useChatTargetSelection } from '@/modules/chat/use-chat-target-selection'
 import { useActiveHint } from '@/screens/newtab/index/active-hint.hooks'
 import { ImportDataHint } from '@/screens/newtab/index/ImportDataHint'
 import { RecentSites } from '@/screens/newtab/index/RecentSites'
@@ -30,65 +22,35 @@ import { resolveHomeLlmRoutingMode } from './home-compose.helpers'
 export const AgentCommandHome: FC = () => {
   const navigate = useNavigate()
   const activeHint = useActiveHint()
-  const {
-    providers: llmProviders,
-    defaultProviderId,
-    setDefaultProvider,
-  } = useLlmProviders()
-  const { agents } = useAcpAgents()
   const { supports, isLoading: capabilitiesLoading } = useCapabilities()
   const supportsInlineChat = supports(Feature.NEWTAB_CHAT_SUPPORT)
   const llmRoutingMode = resolveHomeLlmRoutingMode({
     capabilitiesLoading,
     supportsInlineChat,
   })
-  const [selectedProvider, setSelectedProvider] = useState<Provider | null>(
-    null,
-  )
+  // Shared selection: the picker is derived from the persisted selection (kept in
+  // sync with the sidebar and settings), so a third-party agent chosen here is
+  // restored on load and falls back to the default LLM provider while agents load.
+  const {
+    chatTargets,
+    providerOptions,
+    selectedProvider,
+    selectProvider,
+    selectChatTarget,
+  } = useChatTargetSelection()
   const waitingForLlmCapabilities =
     selectedProvider?.kind === 'llm' && llmRoutingMode === 'wait'
-
-  const targets = useMemo(
-    () =>
-      buildSidepanelChatTargets({
-        providers: llmProviders,
-        agents,
-      }),
-    [llmProviders, agents],
-  )
-  const providerOptions = useMemo(
-    () => targets.map(toProviderOption),
-    [targets],
-  )
-
-  // Default the picker to the user's default LLM provider (BrowserOS out of the
-  // box) so the composer works with zero agents. Re-resolve if the current
-  // selection disappears (e.g. its provider/agent was removed).
-  useEffect(() => {
-    if (targets.length === 0) return
-    const stillValid =
-      selectedProvider &&
-      providerOptions.some(
-        (option) =>
-          option.id === selectedProvider.id &&
-          option.kind === selectedProvider.kind,
-      )
-    if (stillValid) return
-    const fallback = resolveSidepanelChatTarget({ targets, defaultProviderId })
-    setSelectedProvider(fallback ? toProviderOption(fallback) : null)
-  }, [targets, providerOptions, selectedProvider, defaultProviderId])
 
   const handleSend = async (input: ConversationInputSendInput) => {
     if (!selectedProvider) return
     if (selectedProvider.kind === 'llm' && llmRoutingMode === 'wait') return
-    const target = targets.find(
+    const target = chatTargets.find(
       (entry) =>
         entry.kind === selectedProvider.kind &&
         entry.id === selectedProvider.id,
     )
     if (!target) return
-    await persistSidepanelChatTargetSelection(target)
-    if (target.kind === 'llm') await setDefaultProvider(target.id)
+    await selectChatTarget(target)
     if (target.kind === 'llm' && llmRoutingMode === 'sidepanel') {
       const action = createBrowserOSAction({
         mode: 'chat',
@@ -142,7 +104,7 @@ export const AgentCommandHome: FC = () => {
               variant="home"
               providers={providerOptions}
               selectedProvider={selectedProvider}
-              onSelectProvider={setSelectedProvider}
+              onSelectProvider={selectProvider}
               onSend={handleSend}
               streaming={false}
               disabled={!selectedProvider || waitingForLlmCapabilities}

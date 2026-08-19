@@ -111,6 +111,41 @@ export function resolveSidepanelChatTarget({
     : undefined
 }
 
+export type RepairSelectionDecision =
+  | { repair: false }
+  | { repair: true; selection: SidepanelChatTargetSelection | null }
+
+/**
+ * Decides whether a persisted sidebar selection needs repair. It only repairs
+ * once the target lists are settled, so an ACP selection is never wiped while
+ * its agent is still loading (which would silently downgrade an ACP default to
+ * the LLM fallback on every startup).
+ */
+export function resolveRepairedSelection({
+  selection,
+  resolvedTarget,
+  ready,
+}: {
+  selection: SidepanelChatTargetSelection | null
+  resolvedTarget: SidepanelChatTarget | undefined
+  ready: boolean
+}): RepairSelectionDecision {
+  if (!ready || !selection) return { repair: false }
+  if (
+    resolvedTarget &&
+    resolvedTarget.kind === selection.kind &&
+    resolvedTarget.id === selection.id
+  ) {
+    return { repair: false }
+  }
+  return {
+    repair: true,
+    selection: resolvedTarget
+      ? { kind: resolvedTarget.kind, id: resolvedTarget.id }
+      : null,
+  }
+}
+
 export function toLlmProviderConfig(
   target: SidepanelChatTarget | undefined,
 ): LlmProviderConfig | undefined {
@@ -133,6 +168,21 @@ export async function saveSidepanelChatTargetSelection(
 ): Promise<void> {
   const targetStore = store ?? (await getSidepanelChatTargetSelectionStorage())
   await targetStore.setValue(selection)
+}
+
+/**
+ * The single "change the selected chat target" side effect, shared by every
+ * surface (sidebar, home, settings). Persists the selection and, for an LLM
+ * target, also updates the default-provider id so both stores stay consistent.
+ * Keeping this in one place is what prevents surfaces from drifting apart.
+ */
+export async function commitChatTargetSelection(
+  selection: SidepanelChatTargetSelection | null,
+  deps: { setDefaultProvider: (providerId: string) => Promise<void> },
+  store?: SidepanelChatTargetSelectionWriter,
+): Promise<void> {
+  await saveSidepanelChatTargetSelection(selection, store)
+  if (selection?.kind === 'llm') await deps.setDefaultProvider(selection.id)
 }
 
 export async function clearSidepanelChatTargetSelectionForAgent(

@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
+  commitChatTargetSelection,
   persistSidepanelChatTargetSelection,
+  resolveRepairedSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
@@ -90,6 +92,67 @@ describe('resolveSidepanelChatTarget', () => {
   })
 })
 
+describe('resolveRepairedSelection', () => {
+  const targets = buildSidepanelChatTargets({
+    providers: [provider],
+    agents: [agent],
+  })
+  const llmTarget = targets[0]
+  const acpTarget = targets[1]
+
+  it('keeps an ACP selection while agents are still loading (not ready)', () => {
+    // Regression guard: agents not settled yet, so the resolved target has
+    // fallen back to the LLM provider. The stored ACP selection must survive.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: llmTarget,
+        ready: false,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a selection that matches the resolved target', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: acpTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('repairs a stale selection to the resolved fallback once ready', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: 'deleted-agent' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: provider.id } })
+  })
+
+  it('repairs to null when nothing resolves', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: undefined,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: null })
+  })
+
+  it('never repairs when there is no stored selection', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: null,
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+})
+
 describe('target selection storage', () => {
   it('persists only target identity', async () => {
     const store = createSelectionStore()
@@ -109,6 +172,46 @@ describe('target selection storage', () => {
     await clearSidepanelChatTargetSelectionForAgent(agent.id, store)
 
     expect(await store.getValue()).toBeNull()
+  })
+})
+
+describe('commitChatTargetSelection', () => {
+  it('persists an LLM selection and updates the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'llm', id: provider.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'llm', id: provider.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(provider.id)
+  })
+
+  it('persists an ACP selection without touching the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'acp', id: agent.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
+    expect(setDefaultProvider).not.toHaveBeenCalled()
+  })
+
+  it('clears the selection without touching the default provider id', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: agent.id })
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(null, { setDefaultProvider }, store)
+
+    expect(await store.getValue()).toBeNull()
+    expect(setDefaultProvider).not.toHaveBeenCalled()
   })
 })
 
