@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   detectLineEnding,
@@ -72,7 +72,7 @@ function generateDiff(oldStr: string, newStr: string): string {
   return lines.join('\n')
 }
 
-export function createEditTool(cwd: string) {
+export function createEditTool(cwd: string): Tool {
   return tool({
     description:
       'Make a targeted edit to a file by replacing an exact string match. The old_string must match exactly one location in the file. If exact match fails, a whitespace-tolerant match is attempted.',

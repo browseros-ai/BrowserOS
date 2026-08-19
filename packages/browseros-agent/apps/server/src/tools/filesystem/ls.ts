@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_LS_LIMIT,
@@ -82,7 +82,7 @@ function formatEntries(
   return result
 }
 
-export function createLsTool(cwd: string) {
+export function createLsTool(cwd: string): Tool {
   return tool({
     description:
       'List directory contents. Shows directories (with trailing /) first, then files with sizes. Entries are sorted alphabetically.',

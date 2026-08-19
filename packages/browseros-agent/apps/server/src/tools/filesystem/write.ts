@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   executeWithMetrics,
@@ -10,7 +10,7 @@ import {
 
 const TOOL_NAME = 'filesystem_write'
 
-export function createWriteTool(cwd: string) {
+export function createWriteTool(cwd: string): Tool {
   return tool({
     description:
       "Create or overwrite a file. Automatically creates parent directories if they don't exist. Use this to create new files or completely replace file contents.",

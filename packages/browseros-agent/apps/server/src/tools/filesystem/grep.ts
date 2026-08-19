@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_GREP_LIMIT,
@@ -114,7 +114,7 @@ function formatMatches(matches: GrepMatch[], context: number): string {
   return lines.join('\n')
 }
 
-export function createGrepTool(cwd: string) {
+export function createGrepTool(cwd: string): Tool {
   return tool({
     description:
       'Search file contents using a regular expression. Returns matching lines with file paths and line numbers. Searches recursively, skipping binary files and common build directories (node_modules, .git, dist, etc.).',

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { wrapUntrusted } from '@browseros/browser-mcp/tools/trust-boundary'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   executeWithMetrics,
@@ -153,7 +153,10 @@ async function resolveReadPath(
 }
 
 /** Creates the read tool for workspace files, or generated browser outputs when no workspace exists. */
-export function createReadTool(cwd?: string, options: ReadToolOptions = {}) {
+export function createReadTool(
+  cwd?: string,
+  options: ReadToolOptions = {},
+): Tool {
   const allowedOutputPaths = options.allowedOutputPaths ?? new Set<string>()
   const supportsGeneratedOutputs = Boolean(options.allowedOutputPaths)
 

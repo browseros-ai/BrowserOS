@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_BASH_TIMEOUT,
@@ -15,7 +15,7 @@ function getShellArgs(): [string, string] {
   return [process.env.SHELL || '/bin/sh', '-c']
 }
 
-export function createBashTool(cwd: string) {
+export function createBashTool(cwd: string): Tool {
   return tool({
     description:
       'Execute a shell command and return its output. Commands run in a shell (sh/bash on Unix, cmd on Windows). Output is truncated to the last 2000 lines if too large.',

@@ -1,4 +1,4 @@
-import { tool } from 'ai'
+import { type Tool, tool } from 'ai'
 import { z } from 'zod'
 import {
   DEFAULT_FIND_LIMIT,
@@ -10,7 +10,7 @@ import {
 
 const TOOL_NAME = 'filesystem_find'
 
-export function createFindTool(cwd: string) {
+export function createFindTool(cwd: string): Tool {
   return tool({
     description:
       'Find files matching a glob pattern. Searches recursively, skipping common build directories (node_modules, .git, dist, etc.). Returns relative file paths.',
