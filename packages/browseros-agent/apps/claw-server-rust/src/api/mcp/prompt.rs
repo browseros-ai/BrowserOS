@@ -99,5 +99,7 @@ mod tests {
     fn prompt_nudges_saving_repeatable_tasks_as_skills() {
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("save_skill"));
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Save repeatable tasks"));
+        // The anti-junk guardrail is behavior-defining; lock it against removal.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("never one-offs"));
     }
 }
