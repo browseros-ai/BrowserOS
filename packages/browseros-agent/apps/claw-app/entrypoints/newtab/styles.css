@@ -58,6 +58,8 @@
   --color-bg-sunken: var(--bg-sunken);
   --color-card-tint: var(--card-tint);
   --color-ink-deep: var(--ink-deep);
+  /* MCP endpoint strip's brand-blue chip; keep separate from ink-deep. */
+  --color-mcp-endpoint: var(--mcp-endpoint);
   --color-border-2: var(--border-2);
   --color-border-strong: var(--border-strong);
 
@@ -330,6 +332,7 @@ body {
   --bg-sunken: #dae5ff;
   --card-tint: #f5f8ff;
   --ink-deep: #01123f;
+  --mcp-endpoint: #0454ec;
   --border-2: #dae5ff;
   /* --border-strong is a real step deeper than --border so it has
      visual weight when used on elevated panels, focused inputs, or
@@ -461,6 +464,7 @@ body {
      read as pressed into the page, matching the light-mode metaphor
      where they sit as Navy Deep chips on Sky Tint. */
   --ink-deep: #050912;
+  --mcp-endpoint: #0454ec;
   --border-2: #212c40;
   --border-strong: #334159;
 

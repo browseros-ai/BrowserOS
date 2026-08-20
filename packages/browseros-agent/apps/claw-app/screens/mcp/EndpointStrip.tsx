@@ -22,7 +22,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
   return (
     <div className="space-y-2">
       <span className="text-[12px] text-cyanotype-muted">{label}</span>
-      <div className="flex items-center gap-3 overflow-hidden rounded-9 bg-ink-deep px-4 py-3 shadow-card">
+      <div className="flex items-center gap-3 overflow-hidden rounded-9 bg-mcp-endpoint px-4 py-3 shadow-card">
         {hasValue ? (
           <>
             <code
