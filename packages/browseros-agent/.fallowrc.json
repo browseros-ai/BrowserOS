@@ -4,6 +4,7 @@
     "apps/server/src/index.ts",
     "apps/server/src/compiled-bootstrap.ts",
     "apps/claw-onboard/src/main.tsx",
+    "apps/app-onboard/src/main.tsx",
     "apps/app/entrypoints/app/main.tsx",
     "apps/app/entrypoints/sidepanel/main.tsx",
     "apps/app/entrypoints/background/index.ts",
@@ -84,7 +85,8 @@
     {
       "files": [
         "apps/app/components/ui/**",
-        "apps/app/components/ai-elements/**"
+        "apps/app/components/ai-elements/**",
+        "apps/app-onboard/src/components/ui/**"
       ],
       "rules": {
         "unused-exports": "off",
