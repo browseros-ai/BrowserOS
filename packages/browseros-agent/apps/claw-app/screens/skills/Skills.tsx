@@ -232,8 +232,8 @@ function SkillsEmpty() {
         <p className="font-semibold text-base text-ink">No tasks yet</p>
         <p className="mx-auto max-w-md text-ink-2 text-sm">
           When your coding agent saves a repeatable browser task with BrowserOS
-          neo, it shows up here, linked into your agents and re-runnable by name.
-          You can also write one yourself.
+          neo, it shows up here, linked into your agents and re-runnable by
+          name. You can also write one yourself.
         </p>
       </div>
       <SkillFormDialog
