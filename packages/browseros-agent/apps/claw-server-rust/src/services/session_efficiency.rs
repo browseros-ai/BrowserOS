@@ -173,6 +173,23 @@ impl SessionEfficiencyService {
         Ok(aggregate_rows(&rows, now_ms))
     }
 
+    /// Aggregates the efficiency of a specific set of sessions (e.g. one skill's
+    /// run sessions). Sessions with no projected efficiency row (unmeasured or
+    /// still live) are skipped; the count of matched sessions is returned so
+    /// callers can distinguish "no measured runs" from "zero savings".
+    pub async fn aggregate_for_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<(SessionEfficiencyWindow, i64)> {
+        let rows = self.repository.rows_for_sessions(session_ids).await?;
+        let mut accumulator = WindowAccumulator::default();
+        for row in &rows {
+            accumulator.add(row);
+        }
+        let measured = i64::try_from(rows.len()).unwrap_or(i64::MAX);
+        Ok((accumulator.finish(), measured))
+    }
+
     fn emit_computed(&self, finalized: &FinalizedSessionEfficiency) {
         let stats = &finalized.stats;
         let input = i128::from(stats.tool_input_token_estimate.max(0));
@@ -1075,6 +1092,42 @@ mod tests {
         );
         assert_eq!(aggregate.all_time.human_time_saved_ms, JS_SAFE_INTEGER);
         assert_eq!(aggregate.all_time.tool_call_count, JS_SAFE_INTEGER);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_for_sessions_sums_only_matching_projections() -> anyhow::Result<()> {
+        let (_dir, _audit, service, repository) = test_services().await?;
+        assert!(
+            repository
+                .insert_if_absent(&stats_row("run-a", 1, 2, 100, 10, 20, 6_000))
+                .await?
+        );
+        assert!(
+            repository
+                .insert_if_absent(&stats_row("run-b", 2, 3, 200, 30, 40, 9_000))
+                .await?
+        );
+
+        let (window, measured) = service
+            .aggregate_for_sessions(&[
+                "run-a".to_owned(),
+                "run-b".to_owned(),
+                "unmeasured".to_owned(),
+            ])
+            .await?;
+        assert_eq!(measured, 2);
+        // used = (10+20) + (30+40)
+        assert_eq!(window.browser_claw_token_estimate, 100);
+        // other browsers = (10+6000) + (30+9000)
+        assert_eq!(window.screenshot_first_token_estimate, 15_040);
+        // saved = (6000-20) + (9000-40)
+        assert_eq!(window.raw_token_savings_estimate, 14_940);
+
+        let (empty, none) = service.aggregate_for_sessions(&[]).await?;
+        assert_eq!(none, 0);
+        assert_eq!(empty.browser_claw_token_estimate, 0);
+        assert_eq!(empty.raw_token_savings_estimate, 0);
         Ok(())
     }
 

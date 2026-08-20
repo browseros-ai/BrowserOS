@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { homedir } from 'node:os'
 import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { type AgentProbeResult, probeAgent as runProbe } from 'acp-probe'
 import { resolveAcpSpawnCommand } from '../../../lib/agents/host-acp/launcher'
@@ -76,8 +77,12 @@ export async function probeAcpAgent(
     launcherSource: launcher.source,
   })
 
+  // Spawn the adapter in a writable dir: acp-probe defaults to the server's
+  // process.cwd(), which is the read-only app bundle in a packaged build, so
+  // the adapter fails to create session files. Matches the chat provider's cwd.
   const result = await runProbe({
     argv: launcher.argv,
+    cwd: homedir(),
     authPolicy: 'skip',
     timeoutMs,
   })

@@ -1,23 +1,26 @@
 import type { FC } from 'react'
 import { useMemo } from 'react'
-import { useConversations } from '@/lib/conversations/useConversations'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
+import {
+  useDeleteServerConversation,
+  useServerConversations,
+} from '@/modules/conversations/conversations.hooks'
 import { ConversationList } from '../components/ConversationList'
 import type { HistoryConversation } from '../components/types'
-import { extractLastUserMessage, groupConversations } from '../components/utils'
+import { groupConversations } from '../components/utils'
 
 export const LocalChatHistory: FC = () => {
-  const { conversations: localConversations, removeConversation } =
-    useConversations()
+  const { data: serverConversations = [] } = useServerConversations()
+  const deleteConversation = useDeleteServerConversation()
   const { conversationId: activeConversationId } = useChatSessionContext()
 
   const conversations = useMemo<HistoryConversation[]>(() => {
-    return localConversations.map((conv) => ({
-      id: conv.id,
-      lastMessagedAt: conv.lastMessagedAt,
-      lastUserMessage: extractLastUserMessage(conv.messages),
+    return serverConversations.map((conversation) => ({
+      id: conversation.id,
+      lastMessagedAt: conversation.lastMessagedAt,
+      lastUserMessage: conversation.lastUserMessage,
     }))
-  }, [localConversations])
+  }, [serverConversations])
 
   const groupedConversations = useMemo(
     () => groupConversations(conversations),
@@ -28,7 +31,7 @@ export const LocalChatHistory: FC = () => {
     <ConversationList
       groupedConversations={groupedConversations}
       activeConversationId={activeConversationId}
-      onDelete={removeConversation}
+      onDelete={(id) => deleteConversation.mutate(id)}
     />
   )
 }

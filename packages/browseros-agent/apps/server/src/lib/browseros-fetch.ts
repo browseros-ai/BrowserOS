@@ -15,6 +15,15 @@ function resolveUrl(url: RequestInfo | URL): string {
   return typeof url === 'string' ? url : url.toString()
 }
 
+/** Retry-After and rate-limit headers only reach the SDK via responseHeaders. */
+function headersToRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    record[key] = value
+  })
+  return record
+}
+
 function parseErrorBody(
   body: string,
 ): { message?: string; code?: string; metadata?: { raw?: unknown } } | null {
@@ -55,6 +64,12 @@ export function createBrowserOSFetch(browserosId: string): typeof fetch {
       const responseBody = await response.text()
       const error = parseErrorBody(responseBody)
 
+      // `data` keeps the gateway's code structured so the chat error
+      // classifier branches on a field instead of searching the message text.
+      const data = error?.code
+        ? { code: error.code, raw: error.metadata?.raw }
+        : undefined
+
       if (statusCode === 429 && error?.code === 'CREDITS_EXHAUSTED') {
         throw new APICallError({
           message: error.message ?? 'Daily credits exhausted',
@@ -62,7 +77,9 @@ export function createBrowserOSFetch(browserosId: string): typeof fetch {
           requestBodyValues: {},
           statusCode,
           responseBody,
+          responseHeaders: headersToRecord(response.headers),
           isRetryable: false,
+          data,
         })
       }
 
@@ -74,6 +91,8 @@ export function createBrowserOSFetch(browserosId: string): typeof fetch {
         requestBodyValues: {},
         statusCode,
         responseBody,
+        responseHeaders: headersToRecord(response.headers),
+        data,
       })
     }
 

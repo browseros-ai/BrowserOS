@@ -31,6 +31,16 @@ pub fn estimate_tool_output_tokens(content: &[ContentBlock]) -> i64 {
     saturating_token_sum(content.iter().map(estimate_content_block_tokens))
 }
 
+/// Estimates output tokens for a JSON primitive result, e.g. a code-mode
+/// `browser.read` payload, by tokenizing its compact serialization the same way
+/// input arguments are counted. A non-serializable value contributes zero.
+#[must_use]
+pub fn estimate_json_output_tokens(value: &Value) -> i64 {
+    serde_json::to_string(value)
+        .map(|json| bounded_tokens(estimate_text_tokens(&json)))
+        .unwrap_or_default()
+}
+
 /// Estimates image tokens from pixel dimensions using the version-1 bounded patch model.
 #[must_use]
 pub fn estimate_image_tokens_from_dimensions(width_px: usize, height_px: usize) -> i64 {
@@ -110,8 +120,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        estimate_image_tokens_from_dimensions, estimate_text_tokens, estimate_tool_input_tokens,
-        estimate_tool_output_tokens, saturating_token_sum,
+        estimate_image_tokens_from_dimensions, estimate_json_output_tokens, estimate_text_tokens,
+        estimate_tool_input_tokens, estimate_tool_output_tokens, saturating_token_sum,
     };
 
     fn png_header(width: u32, height: u32) -> String {
@@ -205,5 +215,17 @@ mod tests {
     #[test]
     fn token_totals_saturate_instead_of_wrapping() {
         assert_eq!(saturating_token_sum([i64::MAX, 1]), i64::MAX);
+    }
+
+    #[test]
+    fn json_output_counts_the_compact_serialization() {
+        assert_eq!(
+            estimate_json_output_tokens(&json!("abcdef")),
+            estimate_text_tokens(r#""abcdef""#) as i64
+        );
+        assert_eq!(
+            estimate_json_output_tokens(&json!(null)),
+            estimate_text_tokens("null") as i64
+        );
     }
 }

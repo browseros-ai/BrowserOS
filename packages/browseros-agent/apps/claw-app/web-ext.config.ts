@@ -55,6 +55,10 @@ function browserOSProduct(defaultProduct: 'browseros' | 'browserclaw') {
 
 const chromiumArgs = [
   '--use-mock-keychain',
+  // web-ext 9.x launches Chromium with --disable-blink-features=AutomationControlled,
+  // which trips Chromium's "unsupported command-line flag" infobar. --test-type
+  // marks this as a dev browser and suppresses that banner.
+  '--test-type',
   '--show-component-extension-options',
   // The dev BrowserOS binary ships an MCP server on port 9100; this
   // package brings its own BrowserClaw API server on port 9200,

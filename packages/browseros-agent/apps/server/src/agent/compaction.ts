@@ -318,26 +318,26 @@ export function createCompactionPrepareStep(
     messages,
     steps,
     model,
-    experimental_context,
+    runtimeContext,
   }: {
     messages: ModelMessage[]
     steps: ReadonlyArray<StepWithUsage>
     model: LanguageModel
-    experimental_context: unknown
+    runtimeContext: unknown
   }) => {
-    const state: CompactionState = isCompactionState(experimental_context)
-      ? experimental_context
+    const state: CompactionState = isCompactionState(runtimeContext)
+      ? runtimeContext
       : { existingSummary: null, compactionCount: 0 }
 
     let currentTokens = getCurrentTokenCount(steps, messages, config)
     if (currentTokens <= config.triggerThreshold) {
-      return { messages, experimental_context: state }
+      return { messages, runtimeContext: state }
     }
 
     let current = stripBinaryContent(messages)
     currentTokens = estimateTokensForThreshold(current, config)
     if (currentTokens <= config.triggerThreshold) {
-      return { messages: current, experimental_context: state }
+      return { messages: current, runtimeContext: state }
     }
 
     const keepRecent = AGENT_LIMITS.COMPACTION_PRUNE_KEEP_RECENT_MESSAGES
@@ -355,7 +355,7 @@ export function createCompactionPrepareStep(
       current = pruned
       currentTokens = estimateTokensForThreshold(current, config)
       if (currentTokens <= config.triggerThreshold) {
-        return { messages: current, experimental_context: state }
+        return { messages: current, runtimeContext: state }
       }
     }
 
@@ -365,7 +365,7 @@ export function createCompactionPrepareStep(
     })
     currentTokens = estimateTokensForThreshold(reduced, config)
     if (currentTokens <= config.triggerThreshold) {
-      return { messages: reduced, experimental_context: state }
+      return { messages: reduced, runtimeContext: state }
     }
 
     logger.warn(
@@ -378,6 +378,6 @@ export function createCompactionPrepareStep(
     )
 
     const compacted = await compactMessages(model, reduced, config, state)
-    return { messages: compacted, experimental_context: state }
+    return { messages: compacted, runtimeContext: state }
   }
 }

@@ -14,6 +14,12 @@ import type {
   SessionScreenshotList,
   SetAuditRetentionRequest,
   ShutdownResponse,
+  Skill,
+  SkillCreate,
+  SkillDetail,
+  SkillList,
+  SkillRunList,
+  SkillUpdate,
   SystemInfo,
   TelemetryState,
 } from '@browseros/claw-api'
@@ -56,6 +62,19 @@ export interface AppendRecordingEventsRequest {
 
 export type SessionRequest = operations['getSession']['parameters']['path']
 export type HarnessRequest = operations['connectHarness']['parameters']['path']
+
+export type SkillNameRequest = operations['getSkill']['parameters']['path']
+
+export interface UpdateSkillRequest {
+  name: SkillNameRequest['name']
+  body: SkillUpdate
+}
+
+export interface ListSkillRunsRequest {
+  name: SkillNameRequest['name']
+  cursor?: number
+  limit?: number
+}
 
 type ApiResult<T> =
   | { data: T; response: Response }
@@ -250,6 +269,48 @@ export class ClawApiClient {
     )
   }
 
+  async listSkills(): Promise<SkillList> {
+    return this.unwrap(await this.client.GET('/api/v1/skills'))
+  }
+
+  async getSkill(request: SkillNameRequest): Promise<SkillDetail> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/skills/{name}', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async createSkill(body: SkillCreate): Promise<Skill> {
+    return this.unwrap(await this.client.POST('/api/v1/skills', { body }))
+  }
+
+  async updateSkill(request: UpdateSkillRequest): Promise<SkillDetail> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/skills/{name}', {
+        params: { path: { name: request.name } },
+        body: request.body,
+      }),
+    )
+  }
+
+  async deleteSkill(request: SkillNameRequest): Promise<void> {
+    this.expectSuccess(
+      await this.client.DELETE('/api/v1/skills/{name}', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async listSkillRuns(request: ListSkillRunsRequest): Promise<SkillRunList> {
+    const { name, ...query } = request
+    return this.unwrap(
+      await this.client.GET('/api/v1/skills/{name}/runs', {
+        params: { path: { name }, query },
+      }),
+    )
+  }
+
   private unwrap<T>(result: ApiResult<T | undefined>): T {
     const errorResponse = this.responseClones.get(result.response)
     this.responseClones.delete(result.response)
@@ -260,5 +321,14 @@ export class ClawApiClient {
       throw new Error('BrowserOS neo API returned an empty success response')
     }
     return result.data
+  }
+
+  // A 204 response carries no body, so this only surfaces a failure.
+  private expectSuccess(result: { error?: unknown; response: Response }): void {
+    const errorResponse = this.responseClones.get(result.response)
+    this.responseClones.delete(result.response)
+    if ('error' in result) {
+      throw new ApiResponseError(errorResponse ?? result.response)
+    }
   }
 }

@@ -7,7 +7,7 @@ use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
     services::sessions::Session,
@@ -398,6 +398,8 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             "evaluate",
             "run",
             "name_session",
+            "save_skill",
+            "mark_skill_run",
         ]
     );
 
@@ -1054,6 +1056,96 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
             .is_some_and(|items| items.iter().any(|item| item["sessionId"] == session_id))
     );
     drop(mock);
+    Ok(())
+}
+
+#[tokio::test]
+async fn historical_sessions_reconcile_stored_live_status() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let disconnected = test_session(
+        SessionId::new("disconnected-session"),
+        "disconnected-agent",
+        "codex",
+    );
+    let connected = test_session(
+        SessionId::new("connected-session"),
+        "connected-agent",
+        "codex",
+    );
+    record_session_with_dispatch(&app, &disconnected).await?;
+    record_session_with_dispatch(&app, &connected).await?;
+    app.state
+        .sessions
+        .insert_for_testing(connected.clone())
+        .await;
+
+    for session in [&disconnected, &connected] {
+        assert_eq!(
+            app.state
+                .audit_log
+                .get_task_summary(session.id().as_str())
+                .await?
+                .map(|summary| summary.status),
+            Some(TaskStatus::Live)
+        );
+    }
+
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/sessions", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
+    for (session_id, expected_status) in [
+        (disconnected.id().as_str(), "done"),
+        (connected.id().as_str(), "live"),
+    ] {
+        let summary = items
+            .iter()
+            .find(|item| item["sessionId"] == session_id)
+            .ok_or_else(|| anyhow::anyhow!("missing session {session_id}"))?;
+        assert_eq!(summary["status"], expected_status);
+
+        let (status, detail) = request_json(
+            &app.router,
+            "GET",
+            &format!("/api/v1/sessions/{session_id}"),
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["session"]["status"], expected_status);
+    }
+
+    let (status, first_done_page) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=done&limit=1",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_done_page["items"], json!([]));
+    let next_cursor = first_done_page["nextCursor"]
+        .as_i64()
+        .ok_or_else(|| anyhow::anyhow!("filtered page dropped its cursor"))?;
+
+    let (status, done) = request_json(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions?status=done&limit=1&cursor={next_cursor}"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        done["items"].as_array().map(|items| {
+            items
+                .iter()
+                .map(|item| item["sessionId"].as_str())
+                .collect::<Vec<_>>()
+        }),
+        Some(vec![Some(disconnected.id().as_str())])
+    );
     Ok(())
 }
 

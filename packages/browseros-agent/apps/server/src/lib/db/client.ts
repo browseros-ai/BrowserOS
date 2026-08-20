@@ -206,6 +206,11 @@ const currentMigrationHistory = [
     hash: '44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154',
     createdAt: 1785900211901,
   },
+  {
+    tag: '0006_add_conversations',
+    hash: 'e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90',
+    createdAt: 1786538823114,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
@@ -246,6 +251,23 @@ const currentSchemaStatements = [
   `
     CREATE INDEX IF NOT EXISTS oauth_tokens_browseros_id_idx
     ON oauth_tokens (browseros_id)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS conversations (
+      id text PRIMARY KEY NOT NULL,
+      messages text NOT NULL,
+      last_user_message text,
+      origin text,
+      target_type text NOT NULL,
+      agent_id text,
+      last_messaged_at integer NOT NULL,
+      created_at integer NOT NULL,
+      updated_at integer NOT NULL
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS conversations_last_messaged_at_idx
+    ON conversations (last_messaged_at)
   `,
   `
     CREATE TABLE IF NOT EXISTS __drizzle_migrations (

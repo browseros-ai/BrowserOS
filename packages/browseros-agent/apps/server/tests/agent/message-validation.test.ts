@@ -13,10 +13,11 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { UIMessage } from 'ai'
+import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai'
 import {
   hasMessageContent,
   sanitizeMessagesForToolset,
+  stripReasoningParts,
 } from '../../src/agent/message-validation'
 
 // ---------------------------------------------------------------------------
@@ -295,5 +296,136 @@ describe('hasMessageContent', () => {
       ],
     }
     expect(hasMessageContent(msg)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripReasoningParts
+// ---------------------------------------------------------------------------
+
+function reasoningPart(text: string): UIMessage['parts'][number] {
+  return {
+    type: 'reasoning',
+    text,
+    state: 'done',
+  } as unknown as UIMessage['parts'][number]
+}
+
+function toolPart(name: string, callId: string): UIMessage['parts'][number] {
+  return {
+    type: `tool-${name}`,
+    toolCallId: callId,
+    state: 'output-available',
+    input: {},
+    output: { ok: true },
+  } as unknown as UIMessage['parts'][number]
+}
+
+const stepStart = {
+  type: 'step-start',
+} as unknown as UIMessage['parts'][number]
+
+// An assistant message with no text and no tool call is invalid on the
+// OpenAI-compatible wire format (content: null, no tool_calls) and strict
+// providers reject it with "The content field is a required field".
+function invalidAssistantCount(model: ModelMessage[]): number {
+  return model.filter((m) => {
+    if (m.role !== 'assistant') return false
+    const content = m.content
+    if (typeof content === 'string') return content.trim().length === 0
+    if (Array.isArray(content)) {
+      const hasText = content.some(
+        (p) => p.type === 'text' && p.text.trim().length > 0,
+      )
+      const hasToolCall = content.some((p) => p.type === 'tool-call')
+      return !hasText && !hasToolCall
+    }
+    return true
+  }).length
+}
+
+describe('stripReasoningParts', () => {
+  it('removes reasoning parts while keeping text and tool parts', () => {
+    const messages: UIMessage[] = [
+      makeAssistantMessage([
+        stepStart,
+        reasoningPart('thinking'),
+        toolPart('tabs', 'c1'),
+        { type: 'text', text: 'done' },
+      ]),
+    ]
+
+    const [result] = stripReasoningParts(messages)
+    expect(result.parts.map((p) => p.type)).toEqual([
+      'step-start',
+      'tool-tabs',
+      'text',
+    ])
+  })
+
+  it('drops a message whose only content was reasoning', () => {
+    const messages: UIMessage[] = [
+      makeUserMessage('hi'),
+      makeAssistantMessage([reasoningPart('private thought')]),
+    ]
+
+    const result = stripReasoningParts(messages)
+    expect(result).toHaveLength(1)
+    expect(result[0].role).toBe('user')
+  })
+
+  it('returns the same reference when there is no reasoning to strip', () => {
+    const messages: UIMessage[] = [
+      makeUserMessage('hi'),
+      makeAssistantMessage([{ type: 'text', text: 'hello' }]),
+    ]
+
+    const result = stripReasoningParts(messages)
+    expect(result[0]).toBe(messages[0])
+    expect(result[1]).toBe(messages[1])
+  })
+
+  it('handles an empty array', () => {
+    expect(stripReasoningParts([])).toHaveLength(0)
+  })
+
+  // Regression guard for the real bug: a persisted assistant turn with
+  // reasoning replayed to a strict provider produced a reasoning-only assistant
+  // model message and a 400 "content field is required".
+  it('makes replayed history convert to a valid provider request', async () => {
+    const history: UIMessage[] = [
+      makeUserMessage('weather in singapore'),
+      makeAssistantMessage([
+        stepStart,
+        reasoningPart('look up the weather'),
+        toolPart('tabs', 'c1'),
+        { type: 'text', text: 'It is sunny in Singapore.' },
+      ]),
+      makeUserMessage('and in malaysia?'),
+      // A reasoning-only step converts to an assistant model message with no
+      // text and no tool call: the exact shape the provider rejects.
+      makeAssistantMessage([reasoningPart('the user asked about malaysia')]),
+    ]
+
+    // Without the fix, the reasoning-only step yields an invalid assistant
+    // message ("content field is required").
+    expect(
+      invalidAssistantCount(await convertToModelMessages(history)),
+    ).toBeGreaterThan(0)
+
+    // With the fix, nothing invalid reaches the provider...
+    const fixed = await convertToModelMessages(stripReasoningParts(history))
+    expect(invalidAssistantCount(fixed)).toBe(0)
+    // ...and the prior tool call and text still survive (higher fidelity than
+    // the cloud lane's text-only projection).
+    expect(fixed.some((m) => m.role === 'tool')).toBe(true)
+    expect(
+      fixed.some(
+        (m) =>
+          m.role === 'assistant' &&
+          Array.isArray(m.content) &&
+          m.content.some((p) => p.type === 'text'),
+      ),
+    ).toBe(true)
   })
 })

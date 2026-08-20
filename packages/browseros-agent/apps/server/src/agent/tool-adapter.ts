@@ -1,4 +1,3 @@
-import type { LanguageModelV2ToolResultOutput } from '@ai-sdk/provider'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
   type BrowserOutputFileAccess,
@@ -13,7 +12,7 @@ import {
   executeTool as executeBrowserTool,
   throwIfAborted,
 } from '@browseros/browser-mcp/tools/framework'
-import { type ToolSet, tool } from 'ai'
+import { dynamicTool, type ToolSet } from 'ai'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
 
@@ -88,23 +87,21 @@ function withBrowserToolTimeout(signal?: AbortSignal): AbortSignal {
   return controller.signal
 }
 
-function contentToModelOutput(
-  content: ContentBlock[],
-): LanguageModelV2ToolResultOutput {
+function contentToModelOutput(content: ContentBlock[]) {
   const hasImages = content.some((c) => c.type === 'image')
   if (!hasImages) {
     const text = content
       .filter((c): c is ContentBlock & { type: 'text' } => c.type === 'text')
       .map((c) => c.text)
       .join('\n')
-    return { type: 'text', value: text || 'Success' }
+    return { type: 'text' as const, value: text || 'Success' }
   }
   return {
-    type: 'content',
+    type: 'content' as const,
     value: content.map((c) =>
       c.type === 'text'
         ? { type: 'text' as const, text: c.text }
-        : { type: 'media' as const, data: c.data, mediaType: c.mimeType },
+        : { type: 'image-data' as const, data: c.data, mediaType: c.mimeType },
     ),
   }
 }
@@ -117,7 +114,7 @@ export function buildBrowserToolSet(
   const toolSet: ToolSet = {}
 
   for (const def of BROWSER_TOOLS) {
-    toolSet[def.name] = tool({
+    toolSet[def.name] = dynamicTool({
       description: def.description,
       inputSchema: def.input,
       execute: async (params, executeOptions?: ToolExecuteOptions) => {
@@ -180,10 +177,10 @@ export function buildBrowserToolSet(
             )
             .map((c) => c.text)
             .join('\n')
-          return { type: 'error-text', value: text }
+          return { type: 'error-text' as const, value: text }
         }
         if (!result.content?.length) {
-          return { type: 'text', value: 'Success' }
+          return { type: 'text' as const, value: 'Success' }
         }
         return contentToModelOutput(result.content)
       },

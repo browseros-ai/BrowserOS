@@ -80,7 +80,6 @@ function toolResultContentPartToUserMedia(
   part: ToolResultContentPart,
 ): UserMediaPart | null {
   switch (part.type) {
-    case 'media':
     case 'image-data':
       if (part.mediaType.startsWith('image/')) {
         return {

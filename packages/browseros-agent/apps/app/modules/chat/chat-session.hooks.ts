@@ -24,10 +24,8 @@ import {
   bufferActiveConversation,
   flushActiveConversationBuffer,
 } from '@/lib/conversations/active-conversation-buffer'
-import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
 import { uploadConversations } from '@/lib/conversations/uploadConversationsToGraphql'
-import { useConversations } from '@/lib/conversations/useConversations'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
@@ -40,6 +38,7 @@ import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
+import { fetchServerConversation } from '@/modules/conversations/conversations.hooks'
 import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
@@ -53,6 +52,7 @@ import {
   prepareSidepanelSendMessagesRequest,
   toProviderOption,
 } from './chat-session-request'
+import { restoreServerConversation } from './chat-session-restore'
 import type { ChatMode } from './chat-types'
 import { addContentFilterNotice } from './content-filter-notice'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
@@ -181,7 +181,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
-    setDefaultProvider,
     chatTargets,
     selectedChatTarget,
     selectChatTarget,
@@ -212,7 +211,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     error: agentUrlError,
   } = useAgentServerUrl()
 
-  const { saveConversation: saveLocalConversation } = useConversations()
   const {
     isLoggedIn,
     userId,
@@ -222,6 +220,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useRemoteConversationSave()
   const [searchParams, setSearchParams] = useSearchParams()
   const conversationIdParam = searchParams.get('conversationId')
+
+  // 'local': the local server owns history (persisted during /chat, loaded from
+  // SQLite); 'cloud': the client owns it (logged-in cloud sync, or incognito).
+  // Read via a ref because the transport closure below is created only once.
+  const historyModeRef = useRef<'local' | 'cloud'>('cloud')
+  useEffect(() => {
+    historyModeRef.current = !isLoggedIn && persistHistory ? 'local' : 'cloud'
+  }, [isLoggedIn, persistHistory])
 
   const agentUrlRef = useRef(agentServerUrl)
 
@@ -375,9 +381,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
 
         const declinedApps = await declinedAppsStorage.getValue()
+        const historyMode = historyModeRef.current
         const previousMessages = messagesRef.current
+        // In local mode the server owns history and loads it from SQLite, so
+        // the client stops replaying it. Cloud mode still ships the projection.
         const history =
-          previousMessages.length > 0
+          historyMode === 'cloud' && previousMessages.length > 0
             ? formatConversationHistory(previousMessages)
             : undefined
         const previousConversation = history?.length ? history : undefined
@@ -393,6 +402,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
+          historyMode,
           declinedApps,
           attachments: getLastUserMessageFiles(messages).map((file) => ({
             mediaType: file.mediaType,
@@ -515,23 +525,31 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       }
       setRestoredConversationId(conversationIdParam)
       setSearchParams({}, { replace: true })
-    } else {
-      const restoreLocal = async () => {
-        const conversations = await conversationStorage.getValue()
-        const conversation = conversations?.find(
-          (c) => c.id === conversationIdParam,
-        )
+      return
+    }
 
-        if (conversation) {
-          setConversationId(
-            conversation.id as ReturnType<typeof crypto.randomUUID>,
-          )
-          setMessages(conversation.messages)
-        }
+    let cancelled = false
+    void restoreServerConversation({
+      conversationId: conversationIdParam,
+      fetchConversation: fetchServerConversation,
+      isCancelled: () => cancelled,
+      onRestore: (conversation) => {
+        setConversationId(
+          conversation.id as ReturnType<typeof crypto.randomUUID>,
+        )
+        setMessages(conversation.messages)
+      },
+      onError: (error) =>
+        sentry.captureException(error, {
+          extra: { conversationId: conversationIdParam },
+        }),
+      onSettled: () => {
         setRestoredConversationId(conversationIdParam)
         setSearchParams({}, { replace: true })
-      }
-      restoreLocal()
+      },
+    })
+    return () => {
+      cancelled = true
     }
   }, [conversationIdParam, remoteConversationData, isLoggedIn])
 
@@ -610,23 +628,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
     // Skip all history writes in incognito so the chat never becomes durable
     // (neither local nor cloud) and can't surface in a normal window (#1189).
-    if (persistHistory) {
-      if (isLoggedIn) {
-        // Buffer the settled turn durably before the fire-and-forget cloud
-        // write, so an interrupted navigation still lets the next mount sync it
-        // (#559).
-        if (userId) {
-          void bufferActiveConversation({
-            id: conversationIdRef.current,
-            messages: messagesToSave,
-            lastMessagedAt: Date.now(),
-            userId,
-          })
-        }
-        saveRemoteConversation(conversationIdRef.current, messagesToSave)
-      } else {
-        saveLocalConversation(conversationIdRef.current, messagesToSave)
+    // Logged-out history is owned by the local server (persisted during /chat
+    // in local mode), so only the cloud lane writes from the client now.
+    if (persistHistory && isLoggedIn) {
+      // Buffer the settled turn durably before the fire-and-forget cloud
+      // write, so an interrupted navigation still lets the next mount sync it
+      // (#559).
+      if (userId) {
+        void bufferActiveConversation({
+          id: conversationIdRef.current,
+          messages: messagesToSave,
+          lastMessagedAt: Date.now(),
+          userId,
+        })
       }
+      saveRemoteConversation(conversationIdRef.current, messagesToSave)
     }
 
     invalidateCredits()
@@ -814,6 +830,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     setLiked({})
     setDisliked({})
     setRestoredConversationId(null)
+    // Clearing the restore param also cancels any in-flight logged-out restore
+    // (via the restore effect's cleanup), so a stale response can't revive the
+    // old conversation over this new blank session.
+    setSearchParams({}, { replace: true })
     resetRemoteConversation()
   }
 
@@ -843,7 +863,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         },
       })
     })
-    if (target.kind === 'llm') setDefaultProvider(target.provider.id)
 
     if (
       previousTarget &&

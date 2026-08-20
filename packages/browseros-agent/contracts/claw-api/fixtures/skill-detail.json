@@ -1,0 +1,33 @@
+{
+  "skill": {
+    "name": "masason-email-sweep",
+    "description": "Check the Masason inbox for new deadlines and draft what is owed",
+    "site": "mail.google.com",
+    "origin": "agent",
+    "sourceSessionId": "sess_a1b2c3",
+    "version": 4,
+    "linkedAgents": ["Claude Code", "Codex"],
+    "runCount": 17,
+    "cleanRunCount": 17,
+    "firstRunTokens": 41200,
+    "latestRunTokens": 14600,
+    "lastRunAt": 1786000000000,
+    "createdAt": 1785000000000,
+    "updatedAt": 1786000000000
+  },
+  "body": "---\nname: masason-email-sweep\ndescription: Check the Masason inbox for new deadlines and draft what is owed\ntools: browseros-neo\n---\n\n## Steps\n1. Open mail.google.com in BrowserOS neo\n2. Read threads newer than the last run timestamp\n3. Leave drafts unsent; report the list back in chat\n",
+  "runs": [
+    {
+      "id": "run_0000000000000000000018",
+      "skillName": "masason-email-sweep",
+      "sessionId": "sess_run18",
+      "runNumber": 18,
+      "agentId": "Claude Code",
+      "tokens": 14600,
+      "durationMs": 161000,
+      "toolCount": 6,
+      "clean": true,
+      "createdAt": 1786000000000
+    }
+  ]
+}

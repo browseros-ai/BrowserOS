@@ -163,6 +163,7 @@ pub struct FirstRunConnectOutcome {
 pub struct HarnessService {
     manager: McpManager,
     workspace_dir: PathBuf,
+    skill_workspace_dir: PathBuf,
     home_dir: PathBuf,
     managed_skill: Option<ManagedSkill>,
     mutex: Arc<Mutex<()>>,
@@ -188,7 +189,14 @@ impl HarnessService {
         home_dir: PathBuf,
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
-        Self::build(workspace_dir, home_dir, analytics, None)
+        let skill_workspace_dir = default_skill_workspace_dir(&workspace_dir);
+        Self::build(
+            workspace_dir,
+            skill_workspace_dir,
+            home_dir,
+            analytics,
+            None,
+        )
     }
 
     #[must_use]
@@ -200,15 +208,22 @@ impl HarnessService {
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
         let managed_skill = ManagedSkill {
-            reconciler: SkillReconciler::new(skill_workspace_dir),
+            reconciler: SkillReconciler::new(skill_workspace_dir.clone()),
             spec,
             environment: SkillEnvironment::current(&home_dir),
         };
-        Self::build(workspace_dir, home_dir, analytics, Some(managed_skill))
+        Self::build(
+            workspace_dir,
+            skill_workspace_dir,
+            home_dir,
+            analytics,
+            Some(managed_skill),
+        )
     }
 
     fn build(
         workspace_dir: PathBuf,
+        skill_workspace_dir: PathBuf,
         home_dir: PathBuf,
         analytics: Arc<dyn AnalyticsSink>,
         managed_skill: Option<ManagedSkill>,
@@ -216,11 +231,65 @@ impl HarnessService {
         Self {
             manager: McpManager::new(&workspace_dir),
             workspace_dir,
+            skill_workspace_dir,
             home_dir,
             managed_skill,
             mutex: Arc::new(Mutex::new(())),
             analytics,
         }
+    }
+
+    /// Reconcile a user-authored skill into every connected agent, returning
+    /// the agents it was linked into. Serialized with all other skill and
+    /// MCP-link mutations through the shared lock so the shared skills.json
+    /// manifest stays consistent.
+    pub async fn install_skill(&self, spec: SkillSpec) -> AppResult<BTreeSet<AgentId>> {
+        let _guard = self.mutex.lock().await;
+        let manager = self.manager.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
+        let environment = SkillEnvironment::current(&self.home_dir);
+        tokio::task::spawn_blocking(move || {
+            let consumers = recognized_browseros_links(&manager, &workspace_dir)
+                .map_err(manager_app_error)?
+                .into_iter()
+                .map(|link| link.agent)
+                .collect::<BTreeSet<_>>();
+            reconciler
+                .reconcile(&spec, &consumers, &environment)
+                .map_err(manager_app_error)?;
+            Ok(consumers)
+        })
+        .await?
+    }
+
+    /// Remove a skill from every agent directory it was linked into. Idempotent.
+    pub async fn uninstall_skill(&self, name: &str) -> AppResult<()> {
+        let _guard = self.mutex.lock().await;
+        let spec = SkillSpec::new(name, String::new()).map_err(manager_app_error)?;
+        let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
+        let environment = SkillEnvironment::current(&self.home_dir);
+        tokio::task::spawn_blocking(move || {
+            reconciler
+                .reconcile(&spec, &BTreeSet::new(), &environment)
+                .map(|_| ())
+                .map_err(manager_app_error)
+        })
+        .await?
+    }
+
+    /// The agents currently linked to BrowserOS neo over MCP, i.e. the set a
+    /// newly authored skill links into by default.
+    pub async fn connected_agents(&self) -> AppResult<BTreeSet<AgentId>> {
+        let _guard = self.mutex.lock().await;
+        let manager = self.manager.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            recognized_browseros_links(&manager, &workspace_dir)
+                .map(|links| links.into_iter().map(|link| link.agent).collect())
+                .map_err(manager_app_error)
+        })
+        .await?
     }
 
     pub async fn connect_browseros(
@@ -1205,6 +1274,16 @@ fn migrate_connected_urls(
 
 fn manager_app_error(error: ManagerError) -> AppError {
     AppError::Internal(error.to_string())
+}
+
+/// The reconciler workspace (holding `skills.json`) as a sibling of the MCP
+/// manager workspace, matching how `new_with_managed_skill` is wired in
+/// `AppState`. Keeps the two reconciler entry points pointed at one manifest.
+fn default_skill_workspace_dir(mcp_workspace_dir: &Path) -> PathBuf {
+    mcp_workspace_dir
+        .parent()
+        .map(|parent| parent.join("harness-integrations"))
+        .unwrap_or_else(|| mcp_workspace_dir.join("harness-integrations"))
 }
 
 #[derive(Debug)]

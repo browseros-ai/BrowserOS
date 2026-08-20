@@ -57,8 +57,10 @@ export interface LlmProviderConfig {
   /** AWS session token (for temporary STS credentials) */
   sessionToken?: string
 
-  // ChatGPT Pro (Codex) fields
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  // Reasoning controls. `reasoningEffort` accepts any level the selected model
+  // advertises via the models.dev catalog (e.g. minimal/low/medium/high/xhigh/max),
+  // so it is stored as a free string validated against the model at selection time.
+  reasoningEffort?: string
   reasoningSummary?: 'auto' | 'concise' | 'detailed'
 }
 

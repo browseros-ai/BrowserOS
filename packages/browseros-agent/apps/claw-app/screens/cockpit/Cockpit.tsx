@@ -72,7 +72,7 @@ export function Cockpit() {
 
   const content =
     state !== 'ready' ? (
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
         <ProductHuntBanner />
         <CockpitOnboarding
           state={state}
@@ -80,10 +80,10 @@ export function Cockpit() {
         />
       </div>
     ) : (
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-8 pt-8 pb-16">
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
         <CockpitHero />
         {shouldLoadStats && stats.data?.hasMeasuredStats ? (
-          <SavedStatsBand runningCount={sessions.length} stats={stats.data} />
+          <SavedStatsBand stats={stats.data} />
         ) : (
           <RunningGrid sessions={sessions} />
         )}

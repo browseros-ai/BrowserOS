@@ -354,13 +354,11 @@ describe('compaction E2E — trigger logic', () => {
       ],
       steps: [{ usage: { inputTokens: 500 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
     expect(result.messages.length).toBe(2)
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(0)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(0)
   })
 
   it('compacts when real usage exceeds trigger (10K window, text-heavy exchanges)', async () => {
@@ -377,10 +375,10 @@ describe('compaction E2E — trigger logic', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(1)
     expect(state.existingSummary).toBeTruthy()
     expect(result.messages.length).toBeLessThan(messages.length)
@@ -399,12 +397,10 @@ describe('compaction E2E — trigger logic', () => {
       messages,
       steps: [] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(1)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(1)
   })
 
   it('does NOT compact on step 0 when messages are small', async () => {
@@ -420,12 +416,10 @@ describe('compaction E2E — trigger logic', () => {
       ],
       steps: [] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(0)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(0)
   })
 
   it('preserves agent-normalized media messages when compaction does not trigger', async () => {
@@ -466,12 +460,10 @@ describe('compaction E2E — trigger logic', () => {
       messages: normalizedMessages,
       steps: [] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(0)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(0)
     expect(result.messages).toHaveLength(4)
 
     const toolOutput = (
@@ -531,7 +523,7 @@ describe('compaction E2E — trigger logic', () => {
         { usage: { inputTokens: triggerAt + 1_000, outputTokens: 100 } },
       ] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
     const output = (
@@ -540,9 +532,7 @@ describe('compaction E2E — trigger logic', () => {
       }>
     )[0].output
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(0)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(0)
     expect(result.messages).toHaveLength(3)
     expect(output.type).toBe('text')
     expect(output.value).toContain('Captured screenshot')
@@ -571,10 +561,10 @@ describe('compaction E2E — token counting', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt - 1 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
     expect(
-      (resultBelow.experimental_context as CompactionState).compactionCount,
+      (resultBelow.runtimeContext as CompactionState).compactionCount,
     ).toBe(0)
 
     // Just above trigger — should compact (text-heavy survives pruning stages)
@@ -582,10 +572,10 @@ describe('compaction E2E — token counting', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
     expect(
-      (resultAbove.experimental_context as CompactionState).compactionCount,
+      (resultAbove.runtimeContext as CompactionState).compactionCount,
     ).toBe(1)
   })
 
@@ -601,12 +591,10 @@ describe('compaction E2E — token counting', () => {
       messages,
       steps: [{ usage: { inputTokens: undefined } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(1)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(1)
   })
 
   it('falls back to estimation when usage.inputTokens is 0', async () => {
@@ -621,12 +609,10 @@ describe('compaction E2E — token counting', () => {
       messages,
       steps: [{ usage: { inputTokens: 0 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    expect(
-      (result.experimental_context as CompactionState).compactionCount,
-    ).toBe(1)
+    expect((result.runtimeContext as CompactionState).compactionCount).toBe(1)
   })
 })
 
@@ -651,10 +637,10 @@ describe('compaction E2E — summarization & fallbacks', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(0)
     expect(state.existingSummary).toBeNull()
     expect(result.messages.length).toBeLessThanOrEqual(messages.length)
@@ -674,10 +660,10 @@ describe('compaction E2E — summarization & fallbacks', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(0)
   })
 
@@ -695,10 +681,10 @@ describe('compaction E2E — summarization & fallbacks', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(0)
   })
 })
@@ -728,10 +714,10 @@ describe('compaction E2E — iterative compaction', () => {
       messages: messages1,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state1 = result1.experimental_context as CompactionState
+    const state1 = result1.runtimeContext as CompactionState
     expect(state1.compactionCount).toBe(1)
     expect(sawPreviousSummary).toBe(false)
 
@@ -745,10 +731,10 @@ describe('compaction E2E — iterative compaction', () => {
       messages: messages2,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: state1,
+      runtimeContext: state1,
     })
 
-    const state2 = result2.experimental_context as CompactionState
+    const state2 = result2.runtimeContext as CompactionState
     expect(state2.compactionCount).toBe(2)
     expect(sawPreviousSummary).toBe(true)
   })
@@ -766,18 +752,18 @@ describe('compaction E2E — iterative compaction', () => {
       messages: messages1,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
-    const state1 = result1.experimental_context as CompactionState
+    const state1 = result1.runtimeContext as CompactionState
     expect(state1.compactionCount).toBe(1)
 
     const result2 = await prepareStep({
       messages: result1.messages,
       steps: [{ usage: { inputTokens: 500 } }] as StepsStub,
       model,
-      experimental_context: state1,
+      runtimeContext: state1,
     })
-    const state2 = result2.experimental_context as CompactionState
+    const state2 = result2.runtimeContext as CompactionState
     expect(state2.compactionCount).toBe(1)
     expect(state2.existingSummary).toBeTruthy()
   })
@@ -827,7 +813,7 @@ describe('compaction E2E — tool output truncation', () => {
       messages,
       steps: [{ usage: { inputTokens: 5000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
     const toolMsg = result.messages.find((m) => m.role === 'tool')
@@ -875,10 +861,10 @@ describe('compaction E2E — tool output truncation', () => {
       messages,
       steps: [{ usage: { inputTokens: 5000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(0)
 
     // Under threshold — messages returned untouched, no truncation
@@ -913,10 +899,10 @@ describe('compaction E2E — tool output truncation', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     // Pruning + clearing resolved the overflow, so LLM summarization was not needed
     expect(state.compactionCount).toBe(0)
     expect(summarizationCalled).toBe(false)
@@ -950,10 +936,10 @@ describe('compaction E2E — pruning and output reduction', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     // Pruning resolved overflow — no LLM compaction needed
     expect(state.compactionCount).toBe(0)
     expect(summarizationCalled).toBe(false)
@@ -1069,10 +1055,10 @@ describe('compaction E2E — pruning and output reduction', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 1000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(1)
     expect(summarizationCalled).toBe(true)
     expect(state.existingSummary).toBeTruthy()
@@ -1376,10 +1362,10 @@ describe('compaction E2E — split turn handling', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 2000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(1)
     expect(state.existingSummary).toBeTruthy()
     expect(result.messages.length).toBeLessThan(messages.length)
@@ -1438,10 +1424,10 @@ describe('compaction E2E — split turn handling', () => {
       messages,
       steps: [{ usage: { inputTokens: triggerAt + 2000 } }] as StepsStub,
       model,
-      experimental_context: null,
+      runtimeContext: null,
     })
 
-    const state = result.experimental_context as CompactionState
+    const state = result.runtimeContext as CompactionState
     expect(state.compactionCount).toBe(1)
     expect(state.existingSummary).toBeTruthy()
 

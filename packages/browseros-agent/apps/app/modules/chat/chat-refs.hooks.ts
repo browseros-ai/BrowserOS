@@ -1,18 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import useDeepCompareEffect from 'use-deep-compare-effect'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { type McpServer, useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { usePersonalization } from '@/lib/personalization/personalizationStorage'
-import { useAcpAgents } from '@/modules/agents/agents.hooks'
-import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
-import {
-  buildSidepanelChatTargets,
-  loadSidepanelChatTargetSelection,
-  persistSidepanelChatTargetSelection,
-  resolveSidepanelChatTarget,
-  type SidepanelChatTarget,
-  type SidepanelChatTargetSelection,
-} from './sidepanel-chat-targets'
+import { useChatTargetSelection } from './use-chat-target-selection'
 
 const constructMcpServers = (servers: McpServer[]) => {
   return servers
@@ -30,108 +20,27 @@ const constructCustomServers = (servers: McpServer[]) => {
 }
 
 export const useChatRefs = () => {
+  const selection = useChatTargetSelection()
   const { servers: mcpServers } = useMcpServers()
-  const {
-    providers: llmProviders,
-    selectedProvider: selectedLlmProvider,
-    setDefaultProvider,
-    isLoading: isLoadingProviders,
-  } = useLlmProviders()
-  const { agents, loading: isLoadingAgents } = useAcpAgents()
   const { personalization } = usePersonalization()
-  const [targetSelection, setTargetSelection] =
-    useState<SidepanelChatTargetSelection | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    loadSidepanelChatTargetSelection().then((selection) => {
-      if (!cancelled) setTargetSelection(selection)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const chatTargets = useMemo(
-    () =>
-      buildSidepanelChatTargets({
-        providers: llmProviders,
-        agents,
-      }),
-    [llmProviders, agents],
-  )
-
-  const selectedChatTarget = useMemo(
-    () =>
-      resolveSidepanelChatTarget({
-        targets: chatTargets,
-        defaultProviderId: selectedLlmProvider?.id ?? llmProviders[0]?.id ?? '',
-        selection: targetSelection,
-      }),
-    [chatTargets, llmProviders, selectedLlmProvider, targetSelection],
-  )
-
-  useEffect(() => {
-    if (isLoadingProviders || isLoadingAgents || !targetSelection) return
-    if (
-      selectedChatTarget?.kind === targetSelection.kind &&
-      selectedChatTarget.id === targetSelection.id
-    ) {
-      return
-    }
-
-    const repairedSelection = selectedChatTarget
-      ? { kind: selectedChatTarget.kind, id: selectedChatTarget.id }
-      : null
-    setTargetSelection(repairedSelection)
-    void persistSidepanelChatTargetSelection(selectedChatTarget)
-  }, [isLoadingAgents, isLoadingProviders, selectedChatTarget, targetSelection])
-
-  const selectedLlmProviderRef = useRef<LlmProviderConfig | null>(
-    selectedLlmProvider,
-  )
-  const selectedChatTargetRef = useRef<SidepanelChatTarget | undefined>(
-    selectedChatTarget,
-  )
   const enabledMcpServersRef = useRef(constructMcpServers(mcpServers))
   const enabledCustomServersRef = useRef(constructCustomServers(mcpServers))
   const personalizationRef = useRef(personalization)
 
   useDeepCompareEffect(() => {
-    selectedLlmProviderRef.current = selectedLlmProvider
     enabledMcpServersRef.current = constructMcpServers(mcpServers)
     enabledCustomServersRef.current = constructCustomServers(mcpServers)
-  }, [selectedLlmProvider, mcpServers])
-
-  useEffect(() => {
-    selectedChatTargetRef.current = selectedChatTarget
-  }, [selectedChatTarget])
+  }, [mcpServers])
 
   useEffect(() => {
     personalizationRef.current = personalization
   }, [personalization])
 
-  const selectChatTarget = useCallback(
-    async (target: SidepanelChatTarget | undefined) => {
-      selectedChatTargetRef.current = target
-      setTargetSelection(target ? { kind: target.kind, id: target.id } : null)
-      await persistSidepanelChatTargetSelection(target)
-    },
-    [],
-  )
-
   return {
-    selectedLlmProviderRef,
-    selectedChatTargetRef,
+    ...selection,
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
-    llmProviders,
-    setDefaultProvider,
-    chatTargets,
-    selectedChatTarget,
-    selectChatTarget,
-    selectedLlmProvider,
-    isLoadingProviders: isLoadingProviders || isLoadingAgents,
   }
 }

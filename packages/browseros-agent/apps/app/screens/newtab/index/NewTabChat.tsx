@@ -63,6 +63,7 @@ export const NewTabChat: FC = () => {
     removeTab,
     handleSubmit,
     handleSuggestionClick,
+    retryLastTurn,
   } = useChatActions({
     events: {
       modeChanged: NEWTAB_CHAT_MODE_CHANGED_EVENT,
@@ -195,7 +196,13 @@ export const NewTabChat: FC = () => {
           />
         )}
         {chatError && (
-          <ChatError error={chatError} providerType={selectedProvider?.type} />
+          <ChatError
+            error={chatError}
+            onRetry={() => {
+              void retryLastTurn()
+            }}
+            providerType={selectedProvider?.type}
+          />
         )}
       </main>
 

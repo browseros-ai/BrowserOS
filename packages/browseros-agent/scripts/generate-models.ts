@@ -10,8 +10,10 @@ export interface ModelsDevModel {
   family?: string
   attachment: boolean
   reasoning: boolean
+  reasoning_options?: Array<{ type: string; values?: string[] }>
   tool_call: boolean
   structured_output?: boolean
+  temperature?: boolean
   modalities: { input: string[]; output: string[] }
   cost?: {
     input: number
@@ -35,6 +37,17 @@ export interface ModelsDevProvider {
   models: Record<string, ModelsDevModel>
 }
 
+/**
+ * Per-model reasoning control surface from models.dev. `effort` carries the
+ * allowed level values; `toggle` and `budget_tokens` carry none.
+ */
+export type ReasoningControlType = 'effort' | 'toggle' | 'budget_tokens'
+
+export interface ReasoningControl {
+  type: ReasoningControlType
+  values: string[]
+}
+
 export interface OutputModel {
   id: string
   name: string
@@ -43,6 +56,10 @@ export interface OutputModel {
   supportsImages: boolean
   supportsReasoning: boolean
   supportsToolCall: boolean
+  /** Whether the model accepts a temperature parameter. Reasoning models often do not. */
+  supportsTemperature: boolean
+  /** Reasoning control descriptors (effort levels / toggle / budget). Absent when the model exposes none. */
+  reasoningControls?: ReasoningControl[]
   inputCost?: number
   outputCost?: number
 }
@@ -95,6 +112,12 @@ export function transformModel(model: ModelsDevModel): OutputModel | null {
   const supportsImages =
     model.attachment || model.modalities.input.includes('image')
 
+  const reasoningControls = (model.reasoning_options ?? [])
+    .filter((o): o is { type: ReasoningControlType; values?: string[] } =>
+      REASONING_CONTROL_TYPES.includes(o.type as ReasoningControlType),
+    )
+    .map((o) => ({ type: o.type, values: o.values ?? [] }))
+
   return {
     id: model.id,
     name: model.name,
@@ -103,12 +126,20 @@ export function transformModel(model: ModelsDevModel): OutputModel | null {
     supportsImages,
     supportsReasoning: model.reasoning,
     supportsToolCall: model.tool_call,
+    supportsTemperature: model.temperature ?? true,
+    ...(reasoningControls.length > 0 && { reasoningControls }),
     ...(model.cost && {
       inputCost: model.cost.input,
       outputCost: model.cost.output,
     }),
   }
 }
+
+const REASONING_CONTROL_TYPES: ReasoningControlType[] = [
+  'effort',
+  'toggle',
+  'budget_tokens',
+]
 
 function assertUniqueModels(providerId: string, models: OutputModel[]) {
   const seen = new Set<string>()

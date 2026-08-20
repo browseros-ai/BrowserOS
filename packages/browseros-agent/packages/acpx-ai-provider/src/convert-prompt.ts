@@ -161,8 +161,44 @@ function formatToolOutput(output: LanguageModelV2ToolResultOutput): string {
   }
 }
 
+/**
+ * v7 hands file-part `data` as a tagged `FileData` object
+ * (`{ type: 'data' | 'url' | 'text', ... }`) even though the V2 part type
+ * still says `string | Uint8Array | URL`. Normalize both shapes to the raw
+ * value the callers below already understand.
+ */
+function unwrapFileData(raw: unknown): string | Uint8Array | URL {
+  if (
+    raw instanceof URL ||
+    raw instanceof Uint8Array ||
+    typeof raw === 'string'
+  ) {
+    return raw
+  }
+  if (raw && typeof raw === 'object' && 'type' in raw) {
+    const fd = raw as {
+      type: string
+      data?: string | Uint8Array
+      url?: URL | string
+      text?: string
+    }
+    if (fd.type === 'data' && fd.data != null) return fd.data
+    if (fd.type === 'url' && fd.url != null) {
+      return fd.url instanceof URL ? fd.url : new URL(String(fd.url))
+    }
+    if (fd.type === 'text') {
+      return `data:text/plain;charset=utf-8,${encodeURIComponent(fd.text ?? '')}`
+    }
+  }
+  throw new Error(FILE_URL_NOT_SUPPORTED)
+}
+
 function toAttachment(part: LanguageModelV2FilePart): ConvertPromptAttachment {
-  const data = part.data
+  const data = unwrapFileData(part.data)
+  if (data instanceof URL) {
+    if (data.protocol !== 'data:') throw new Error(FILE_URL_NOT_SUPPORTED)
+    return { mediaType: part.mediaType, data: extractBase64Data(data.href) }
+  }
   if (typeof data === 'string') {
     return { mediaType: part.mediaType, data: extractBase64Data(data) }
   }
@@ -179,19 +215,23 @@ function extractBase64Data(value: string): string {
 }
 
 function decodeTextFile(part: LanguageModelV2FilePart): string {
-  if (part.data instanceof URL) throw new Error(FILE_URL_NOT_SUPPORTED)
-  if (part.data instanceof Uint8Array) {
-    return new TextDecoder().decode(part.data)
+  let data = unwrapFileData(part.data)
+  if (data instanceof URL) {
+    if (data.protocol !== 'data:') throw new Error(FILE_URL_NOT_SUPPORTED)
+    data = data.href
   }
-  if (part.data.startsWith('data:')) {
-    const commaIndex = part.data.indexOf(',')
+  if (data instanceof Uint8Array) {
+    return new TextDecoder().decode(data)
+  }
+  if (data.startsWith('data:')) {
+    const commaIndex = data.indexOf(',')
     if (commaIndex < 0) return ''
-    const metadata = part.data.slice(0, commaIndex)
-    const data = part.data.slice(commaIndex + 1)
-    if (!metadata.endsWith(';base64')) return decodeURIComponent(data)
-    return new TextDecoder().decode(convertBase64ToUint8Array(data))
+    const metadata = data.slice(0, commaIndex)
+    const value = data.slice(commaIndex + 1)
+    if (!metadata.endsWith(';base64')) return decodeURIComponent(value)
+    return new TextDecoder().decode(convertBase64ToUint8Array(value))
   }
-  return new TextDecoder().decode(convertBase64ToUint8Array(part.data))
+  return new TextDecoder().decode(convertBase64ToUint8Array(data))
 }
 
 function buildJsonSchemaPrompt(responseFormat: JsonResponseFormat): string {

@@ -1,7 +1,7 @@
 import { devToolsMiddleware } from '@ai-sdk/devtools'
 import type {
-  LanguageModelV3,
-  LanguageModelV3Middleware,
+  LanguageModelV4,
+  LanguageModelV4Middleware,
 } from '@ai-sdk/provider'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
@@ -10,7 +10,6 @@ import {
 } from '@browseros/browser-mcp/output-file'
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import {
   type LanguageModel,
   type ModelMessage,
@@ -35,6 +34,7 @@ import {
 import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
+import { buildAgentReasoningConfig } from './reasoning-config'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
@@ -139,17 +139,17 @@ export class AiSdkAgent {
       AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
 
     const { model: rawModel } = await createLanguageModel(config.resolvedConfig)
-    const isV3Model =
+    const isV4Model =
       typeof rawModel === 'object' &&
       rawModel !== null &&
       'specificationVersion' in rawModel &&
-      rawModel.specificationVersion === 'v3'
+      rawModel.specificationVersion === 'v4'
 
     let model = rawModel
-    if (isV3Model && config.aiSdkDevtoolsEnabled) {
+    if (isV4Model && config.aiSdkDevtoolsEnabled) {
       model = wrapLanguageModel({
-        model: rawModel as LanguageModelV3,
-        middleware: devToolsMiddleware() as LanguageModelV3Middleware,
+        model: rawModel as LanguageModelV4,
+        middleware: devToolsMiddleware() as LanguageModelV4Middleware,
       })
       logger.info('AI SDK DevTools middleware enabled', {
         conversationId: config.resolvedConfig.conversationId,
@@ -324,7 +324,7 @@ export class AiSdkAgent {
       messages: ModelMessage[]
       steps: ReadonlyArray<StepWithUsage>
       model: LanguageModel
-      experimental_context: unknown
+      runtimeContext: unknown
     }) =>
       compactionPrepareStep({
         ...options,
@@ -334,27 +334,13 @@ export class AiSdkAgent {
         ),
       })
 
-    // Codex requires store=false — tell the SDK to inline content
-    // instead of using item_reference (which fails with store=false)
-    const isChatGPTPro =
-      config.resolvedConfig.provider === LLM_PROVIDERS.CHATGPT_PRO
-
     const agent = new ToolLoopAgent({
       model,
       instructions,
       tools,
       stopWhen: [stepCountIs(AGENT_LIMITS.MAX_TURNS)],
       prepareStep,
-      ...(isChatGPTPro && {
-        providerOptions: {
-          openai: {
-            store: false,
-            reasoningEffort: config.resolvedConfig.reasoningEffort || 'medium',
-            reasoningSummary: config.resolvedConfig.reasoningSummary || 'auto',
-            include: ['reasoning.encrypted_content'],
-          },
-        },
-      }),
+      ...buildAgentReasoningConfig(config.resolvedConfig),
     })
 
     logger.info('Agent session created (v2)', {

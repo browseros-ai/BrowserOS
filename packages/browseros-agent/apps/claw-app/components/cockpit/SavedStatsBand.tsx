@@ -5,7 +5,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 export type { CockpitStats, CockpitStatsWindow } from '@browseros/claw-api'
 
 interface SavedStatsBandProps {
-  runningCount: number
   stats: CockpitStats
 }
 
@@ -26,7 +25,7 @@ const wholeNumberFormat = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
-export function SavedStatsBand({ runningCount, stats }: SavedStatsBandProps) {
+export function SavedStatsBand({ stats }: SavedStatsBandProps) {
   const [selectedWindow, setSelectedWindow] = useState<WindowKey>('allTime')
 
   if (!stats.hasMeasuredStats) return null
@@ -48,12 +47,6 @@ export function SavedStatsBand({ runningCount, stats }: SavedStatsBandProps) {
         <h2 className="font-semibold text-[18px] text-cyanotype-ink leading-7">
           Since you started
         </h2>
-        <span
-          className="text-[12px] text-cyanotype-muted leading-4"
-          data-running-status
-        >
-          {runningCount === 0 ? 'Nothing running' : `${runningCount} running`}
-        </span>
         <TabsList
           activateOnFocus
           aria-label="Saved stats window"
@@ -73,7 +66,7 @@ export function SavedStatsBand({ runningCount, stats }: SavedStatsBandProps) {
 
       {WINDOWS.map((windowDefinition) => (
         <TabsContent
-          className="flex min-w-0 flex-col items-stretch gap-6 rounded-[9px] border border-cyanotype-border bg-card px-7 py-6 shadow-card md:flex-row md:items-center md:gap-8"
+          className="min-w-0 rounded-[9px] border border-cyanotype-border bg-card px-5 py-4"
           data-saved-stats-card
           key={windowDefinition.key}
           value={windowDefinition.key}
@@ -108,96 +101,52 @@ function SavedStatsPanel({
   )
 
   return (
-    <>
-      <div className="min-w-0 flex-[2]" data-stats-primary>
-        <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2">
-          <div>
-            <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
-              Tokens saved · {windowDefinition.valueLabel}
-            </div>
-            <div
-              className="font-extrabold text-[46px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.03em]"
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
+        <div className="min-w-0">
+          <div className="text-[11px] text-cyanotype-muted leading-4">
+            Tokens saved · {windowDefinition.valueLabel}
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span
+              className="font-extrabold text-[26px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
               data-stat="tokens-saved"
             >
               {formatCompact(visibleSavings)}
-            </div>
-          </div>
-          <div
-            className="inline-flex items-baseline gap-1.5 rounded-full border border-cyanotype-border bg-cyanotype-well px-3 py-1"
-            data-savings-pill
-          >
+            </span>
             <span
-              className="font-extrabold text-[14px] text-cyanotype-blue tabular-nums leading-4"
-              data-stat="percentage"
+              className="inline-flex items-baseline gap-1.5 rounded-full bg-green-tint px-2.5 py-1"
+              data-savings-pill
             >
-              {Math.round(savingsRatio * 100)}%
-            </span>
-            <span className="text-[12px] text-cyanotype-blue leading-4">
-              fewer tokens
+              <span
+                className="font-bold text-[13px] text-green tabular-nums leading-4"
+                data-stat="percentage"
+              >
+                {Math.round(savingsRatio * 100)}%
+              </span>
+              <span className="text-[12px] text-green leading-4">fewer</span>
             </span>
           </div>
         </div>
 
-        {/* Keep both labels outside the bounded track so no ratio can overlap
-            or clip them. */}
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-semibold text-[12px] text-cyanotype-blue leading-4">
-            used{' '}
-            <span className="tabular-nums" data-stat="browserclaw-tokens">
-              {formatCompact(windowStats.browserClawTokenEstimate)}
-            </span>
-          </span>
-          <span className="text-[12px] text-cyanotype-muted leading-4">
-            a screenshot-first agent would spend{' '}
-            <span className="tabular-nums" data-stat="comparison-tokens">
-              {formatCompact(windowStats.screenshotFirstTokenEstimate)}
-            </span>
-          </span>
-        </div>
-
-        <div
-          aria-hidden
-          className="relative h-3 min-w-0 overflow-hidden rounded-full bg-cyanotype-well shadow-[inset_0_0_0_1px_var(--color-cyanotype-border)]"
-          data-budget-track
-        >
-          <div
-            className="absolute inset-y-0 left-0 rounded-full bg-cyanotype-blue transition-[width] duration-300 motion-reduce:transition-none"
-            data-used-fill
-            style={{ width: `${usedRatio * 100}%` }}
-          />
-        </div>
-        <p
-          className="mt-2.5 text-[12px] text-cyanotype-soft leading-4"
-          data-saved-stats-caption
-        >
-          compact DOM &amp; tool responses instead of a screenshot per call
-        </p>
-      </div>
-
-      <div
-        aria-hidden
-        className="h-px w-full bg-cyanotype-border md:h-auto md:w-px md:self-stretch"
-        data-stats-divider
-      />
-
-      <div className="flex min-w-0 flex-1 flex-col gap-5" data-stats-secondary>
-        <div>
-          <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
+        <div className="min-w-0">
+          <div className="text-[11px] text-cyanotype-muted leading-4">
             Human time saved
           </div>
           <div
-            className="font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
+            className="mt-1.5 font-extrabold text-[26px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
             data-stat="human-time"
           >
             {formatHumanTime(windowStats.humanTimeSavedMs)}
           </div>
         </div>
-        <div>
-          <div className="mb-1.5 text-[12px] text-cyanotype-muted leading-4">
+
+        <div className="min-w-0">
+          <div className="text-[11px] text-cyanotype-muted leading-4">
             Sessions · tool calls
           </div>
           <div
-            className="min-w-0 max-w-full break-all font-extrabold text-[28px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
+            className="mt-1.5 min-w-0 max-w-full break-all font-extrabold text-[26px] text-cyanotype-ink tabular-nums leading-none tracking-[-0.02em]"
             data-session-tool-metrics
           >
             <span data-stat="sessions">
@@ -210,7 +159,36 @@ function SavedStatsPanel({
           </div>
         </div>
       </div>
-    </>
+
+      {/* Both labels sit outside the bounded track so no ratio can clip them. */}
+      <div>
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] leading-4">
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-medium text-cyanotype-soft">
+            used{' '}
+            <span className="tabular-nums" data-stat="browserclaw-tokens">
+              {formatCompact(windowStats.browserClawTokenEstimate)}
+            </span>
+          </span>
+          <span className="text-cyanotype-muted">
+            a screenshot-first agent would spend{' '}
+            <span className="tabular-nums" data-stat="comparison-tokens">
+              {formatCompact(windowStats.screenshotFirstTokenEstimate)}
+            </span>
+          </span>
+        </div>
+        <div
+          aria-hidden
+          className="relative h-1.5 min-w-0 overflow-hidden rounded-full bg-cyanotype-well"
+          data-budget-track
+        >
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-green transition-[width] duration-300 motion-reduce:transition-none"
+            data-used-fill
+            style={{ width: `${usedRatio * 100}%` }}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
 

@@ -2,12 +2,15 @@ import { keepPreviousData, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
 import { Loader2 } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
-import { useConversations } from '@/lib/conversations/useConversations'
 import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
+import {
+  useLegacyConversationMigration,
+  useSignInConversationPromote,
+} from '@/modules/conversations/conversations-migration'
 import { useGraphqlInfiniteQuery } from '@/modules/graphql/graphql-infinite-query.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
@@ -121,8 +124,18 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
 export const ChatHistory: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const userId = sessionInfo.user?.id
-  // needed to initiate remote-sync
-  useConversations()
+  const queryClient = useQueryClient()
+  // Drain any pre-upgrade local:conversations to their new home.
+  useLegacyConversationMigration()
+  // On sign-in, promote logged-out (server) history to the cloud, then refresh
+  // the cloud list so it appears. Stable callback keeps the promote effect from
+  // re-running on every render.
+  const refreshCloudHistory = useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: [getQueryKeyFromDocument(GetConversationsForHistoryDocument)],
+    })
+  }, [queryClient])
+  useSignInConversationPromote(refreshCloudHistory)
 
   if (userId) {
     return <RemoteChatHistory userId={userId} />

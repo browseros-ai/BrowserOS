@@ -36,9 +36,7 @@ export const providerFormSchema = z
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),
     sessionToken: z.string().optional(),
-    reasoningEffort: z
-      .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
-      .optional(),
+    reasoningEffort: z.string().optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   })
   .superRefine((data, ctx) => {

@@ -16,6 +16,7 @@ import { requireTrustedAppOrigin } from '../utils/request-auth'
 import { createAcpxProbeRoutes } from './acpx-probe'
 import { createAgentRoutes } from './agents'
 import { createChatRoutes } from './chat'
+import { createConversationRoutes } from './conversations'
 import { createCreditsRoutes } from './credits'
 import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
@@ -71,10 +72,6 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/shutdown', createShutdownRoute({ onShutdown }))
       .route('/status', createStatusRoute({ browser, activity }))
       .route('/test-provider', createProviderRoutes({ browserosId }))
-      .route(
-        '/acpx/probe',
-        protectedAppRoutes(createAcpxProbeRoutes({ resourcesDir })),
-      )
       .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
@@ -114,12 +111,18 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           acpRuntime,
         }),
       )
-      .route('/agents', protectedAppRoutes(resolvedAgentRoutes))
+      // Protected routes. The extension-origin auth middleware is applied per
+      // path prefix (Hono's `/prefix/*` also matches the bare list route), so
+      // unregistered paths stay 404 and public routes are untouched. Routes are
+      // mounted directly; the typed client derives per-route types from the
+      // factories (see rpc.ts), not from this composition.
+      .use('/acpx/probe/*', requireTrustedAppOrigin())
+      .use('/agents/*', requireTrustedAppOrigin())
+      .use('/conversations/*', requireTrustedAppOrigin())
+      .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
+      .route('/agents', resolvedAgentRoutes)
+      .route('/conversations', createConversationRoutes())
   )
-}
-
-function protectedAppRoutes(routes: Hono<Env>) {
-  return new Hono<Env>().use('/*', requireTrustedAppOrigin()).route('/', routes)
 }
 
 function oauthRoutes(tokenManager: OAuthTokenManager | null) {

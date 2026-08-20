@@ -15,17 +15,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import typer
 from typer.testing import CliRunner
 
 from bos_build.browseros import app
 from bos_build.cli.build import (
     _PlanProjection,
+    _execute_runs,
     _parse_toolchain_ids,
     _resolve_preset,
     _resolve_source_sha,
 )
 from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
+from bos_build.core.resume import ResumeState
 from bos_build.lib.testing import MockChromium
 from bos_build.lib.utils import get_platform, get_platform_arch
 
@@ -348,6 +351,80 @@ class CheckoutLockCliTest(unittest.TestCase):
                     proc.kill()
                     proc.join(5)
             self.assertEqual(proc.exitcode, 0)
+
+
+class ResumeValidationCliTest(unittest.TestCase):
+    def _ctx(self, tmp: Path, resume_state=None):
+        return SimpleNamespace(
+            chromium_src=tmp,
+            product=SimpleNamespace(id="browseros"),
+            architecture="x64",
+            build_type="release",
+            extra_gn_args=(),
+            semantic_version="0.31.0",
+            chromium_version="137.0.7151.69",
+            browseros_build_offset="80",
+            resume_state=resume_state,
+        )
+
+    def _resume_state(self, strict: bool) -> ResumeState:
+        return ResumeState(
+            full_arch_plans=(("x64", ("compile", "sign_macos")),),
+            resume_from="sign_macos",
+            candidate={"schema": "test"},
+            candidate_digest="digest",
+            strict=strict,
+        )
+
+    def test_strict_resume_missing_checkpoint_stops_before_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), self._resume_state(strict=True))
+            with (
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+                self.assertRaises(typer.Exit),
+            ):
+                _execute_runs(
+                    [(ctx, ["sign_macos"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_not_called()
+
+    def test_nonstrict_resume_state_does_not_require_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), self._resume_state(strict=False))
+            with (
+                mock.patch("bos_build.cli.build.preflight"),
+                mock.patch("bos_build.cli.build.slack_subscriber", return_value=lambda event: None),
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+            ):
+                _execute_runs(
+                    [(ctx, ["compile"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_called_once()
+
+    def test_context_without_resume_state_keeps_direct_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx(Path(tmp), resume_state=None)
+            with (
+                mock.patch("bos_build.cli.build.preflight"),
+                mock.patch("bos_build.cli.build.slack_subscriber", return_value=lambda event: None),
+                mock.patch("bos_build.cli.build.run_pipeline") as run_pipeline,
+            ):
+                _execute_runs(
+                    [(ctx, ["compile"])],
+                    has_flags=False,
+                    prep=False,
+                    root_dir=Path(tmp),
+                )
+
+        run_pipeline.assert_called_once()
 
 
 class ModulesProfileCliTest(_ProfileMixin):

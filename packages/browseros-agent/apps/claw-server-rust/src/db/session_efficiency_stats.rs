@@ -133,6 +133,21 @@ impl SessionEfficiencyStatsRepository {
             .await?)
     }
 
+    /// The projected efficiency rows for a set of sessions (e.g. one skill's
+    /// runs). Sessions without a projection simply do not appear.
+    pub(crate) async fn rows_for_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<Vec<session_efficiency_stats::Model>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(SessionEfficiencyStats::find()
+            .filter(session_efficiency_stats::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .all(self.db.connection())
+            .await?)
+    }
+
     #[cfg(test)]
     pub(crate) async fn find(
         &self,

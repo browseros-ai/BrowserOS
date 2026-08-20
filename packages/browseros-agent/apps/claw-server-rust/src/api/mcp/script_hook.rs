@@ -7,7 +7,10 @@ use crate::{
     services::helpers,
 };
 use browseros_core::PageId;
-use browseros_mcp::{InnerCallHook, InnerCallRecord};
+use browseros_mcp::{
+    InnerCallHook, InnerCallRecord,
+    token_estimate::{TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens},
+};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
@@ -67,6 +70,7 @@ impl InnerCallHook for ScriptInnerCallHook {
         let is_error = record.is_error;
         let duration_ms = record.duration_ms;
         let from_helper = record.from_helper;
+        let output_token_estimate = record.output_token_estimate;
         let raw_args = record.args.clone();
         Box::pin(async move {
             let Some(identity) = self.identity() else {
@@ -98,6 +102,10 @@ impl InnerCallHook for ScriptInnerCallHook {
                     .await;
             }
             let child_dispatch_id = DispatchId::new();
+            // Measure the inner primitive with the same v1 estimator granular
+            // tools use, so a code-mode run's session is no longer tainted by a
+            // v0 child and its token savings are projected.
+            let tool_input_token_estimate = estimate_tool_input_tokens(&tool_name, &raw_args);
             let input = RecordToolDispatchInput {
                 agent_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
@@ -119,11 +127,9 @@ impl InnerCallHook for ScriptInnerCallHook {
                 created_at: None,
                 dispatch_id: child_dispatch_id.clone(),
                 parent_dispatch_id: Some(self.call.dispatch_id.clone()),
-                // Inner-primitive token traffic is not measured; version 0 is
-                // the reserved unmeasured marker.
-                tool_input_token_estimate: 0,
-                tool_output_token_estimate: 0,
-                token_estimator_version: 0,
+                tool_input_token_estimate,
+                tool_output_token_estimate: output_token_estimate,
+                token_estimator_version: TOKEN_ESTIMATOR_VERSION,
             };
             match self.call.state.audit_log.record_tool_dispatch(input).await {
                 Ok(row_id) => {
@@ -488,6 +494,7 @@ mod tests {
             from_helper: false,
             is_error: false,
             duration_ms: 3,
+            output_token_estimate: 0,
         })
         .await;
         assert!(
@@ -513,6 +520,7 @@ mod tests {
             from_helper: false,
             is_error: false,
             duration_ms: 12,
+            output_token_estimate: 42,
         })
         .await;
 
@@ -534,6 +542,12 @@ mod tests {
             Some(call.dispatch_id.as_str())
         );
         assert_eq!(child.page_id, Some(4));
+        // The inner primitive is measured with the v1 estimator so it no longer
+        // taints the session: a non-zero input estimate from the method + args,
+        // the passed-through output estimate, and the eligible version.
+        assert_eq!(child.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
+        assert!(child.tool_input_token_estimate > 0);
+        assert_eq!(child.tool_output_token_estimate, 42);
         Ok(())
     }
 

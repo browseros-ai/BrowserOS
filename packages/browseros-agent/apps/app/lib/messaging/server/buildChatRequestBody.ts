@@ -1,5 +1,18 @@
+import { getModelsDevModels } from '@/lib/llm-providers/models-dev'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ChatMode } from '@/modules/chat/chat-types'
+
+/**
+ * Resolves whether the selected model supports reasoning from the models.dev
+ * catalog. Unknown/custom models default to true so the server still attempts
+ * reasoning (it is model-gated per provider for the cases that would error).
+ */
+function resolvesSupportsReasoning(provider: LlmProviderConfig): boolean {
+  const model = getModelsDevModels(provider.type).find(
+    (m) => m.id === provider.modelId,
+  )
+  return model?.supportsReasoning ?? true
+}
 
 export interface ChatHistoryEntry {
   role: 'user' | 'assistant'
@@ -35,6 +48,7 @@ export interface ChatRequestBodyParams {
   userWorkingDir?: string
   supportsImages?: boolean
   previousConversation?: ChatHistoryEntry[] | string
+  historyMode?: 'local' | 'cloud'
   declinedApps?: string[]
   selectedText?: string
   selectedTextSource?: {
@@ -54,6 +68,7 @@ export const buildChatRequestBody = ({
   userWorkingDir,
   supportsImages,
   previousConversation,
+  historyMode,
   declinedApps,
   selectedText,
   selectedTextSource,
@@ -83,7 +98,9 @@ export const buildChatRequestBody = ({
   userSystemPrompt,
   userWorkingDir,
   supportsImages: supportsImages ?? provider.supportsImages,
+  supportsReasoning: resolvesSupportsReasoning(provider),
   previousConversation,
+  historyMode,
   declinedApps: declinedApps?.length ? declinedApps : undefined,
   selectedText,
   selectedTextSource,

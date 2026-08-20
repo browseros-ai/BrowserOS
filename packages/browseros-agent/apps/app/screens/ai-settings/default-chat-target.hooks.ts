@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { sentry } from '@/lib/sentry/sentry'
 import {
+  commitChatTargetSelection,
   loadSidepanelChatTargetSelection,
   type SidepanelChatTargetSelection,
-  saveSidepanelChatTargetSelection,
   watchSidepanelChatTargetSelection,
 } from '@/modules/chat/sidepanel-chat-targets'
 import { resolveEffectiveDefaultTarget } from './default-chat-target.helpers'
@@ -59,12 +59,12 @@ export function useDefaultChatTarget({
     }
   }, [])
 
-  const persistSelection = (next: SidepanelChatTargetSelection) => {
+  const selectTarget = (next: SidepanelChatTargetSelection) => {
     setSelection(next)
-    saveSidepanelChatTargetSelection(next).catch((error) => {
+    commitChatTargetSelection(next, { setDefaultProvider }).catch((error) => {
       sentry.captureException(error, {
         extra: {
-          message: 'Failed to persist default chat-target selection',
+          message: 'Failed to change default chat target',
           targetId: next.id,
           targetKind: next.kind,
         },
@@ -73,27 +73,11 @@ export function useDefaultChatTarget({
   }
 
   const selectProvider = (providerId: string) => {
-    setDefaultProvider(providerId).catch((error) => {
-      sentry.captureException(error, {
-        extra: {
-          message: 'Failed to persist default provider id',
-          providerId,
-        },
-      })
-    })
-    persistSelection({ kind: 'llm', id: providerId })
+    selectTarget({ kind: 'llm', id: providerId })
   }
 
   const selectAgent = (agentId: string) => {
-    persistSelection({ kind: 'acp', id: agentId })
-  }
-
-  const selectTarget = (next: SidepanelChatTargetSelection) => {
-    if (next.kind === 'llm') {
-      selectProvider(next.id)
-    } else {
-      selectAgent(next.id)
-    }
+    selectTarget({ kind: 'acp', id: agentId })
   }
 
   const effectiveTarget = resolveEffectiveDefaultTarget({

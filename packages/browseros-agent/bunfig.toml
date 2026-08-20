@@ -13,3 +13,11 @@ timeout = 30000
 
 [install]
 linker = "isolated"
+
+# Do not install dependency versions published less than 3 days ago: a brand
+# new release has not had time to be flagged if it is malicious or broken.
+# Applies to fresh resolutions (bun add / non-frozen bun install). CI runs
+# --frozen-lockfile, which validates the committed lock and is unaffected.
+# Packages that must track latest are excluded per developer in the user-level
+# bunfig, not here.
+minimumReleaseAge = 259200 # 3 days in seconds

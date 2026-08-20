@@ -39,6 +39,8 @@ export interface ResolvedAgentConfig {
   workingDir?: string
   /** Whether the model supports image inputs (vision). Defaults to true. */
   supportsImages?: boolean
+  /** Whether the selected model supports reasoning. Gates reasoning provider options. */
+  supportsReasoning?: boolean
   /** Chat mode - restricts to read-only tools (no browser automation). Defaults to false. */
   chatMode?: boolean
   /** Scheduled task mode - disables tab grouping. Defaults to false. */

@@ -266,7 +266,7 @@ export function toModelOutput({
       value: [
         { type: 'text' as const, text: result.text },
         ...result.images.map((img) => ({
-          type: 'media' as const,
+          type: 'image-data' as const,
           data: img.data,
           mediaType: img.mimeType,
         })),

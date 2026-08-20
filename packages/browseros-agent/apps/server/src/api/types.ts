@@ -51,6 +51,7 @@ const ChatInputSchema = z.object({
   isScheduledTask: z.boolean().optional().default(false),
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
+  supportsReasoning: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
   origin: z.enum(['sidepanel', 'newtab']).optional().default('sidepanel'),
   declinedApps: z.array(z.string()).optional(),
@@ -62,6 +63,11 @@ const ChatInputSchema = z.object({
     })
     .optional(),
   previousConversation: PreviousConversationSchema,
+  // 'local': the server owns history in SQLite (load + persist). 'cloud': the
+  // client owns history (logged-in cloud sync or incognito); the server stays
+  // stateless and persists nothing. Defaults to 'cloud' so existing clients are
+  // unchanged until they opt into server-owned history.
+  historyMode: z.enum(['local', 'cloud']).optional().default('cloud'),
   attachments: z
     .array(
       z.object({

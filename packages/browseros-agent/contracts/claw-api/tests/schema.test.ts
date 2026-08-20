@@ -235,3 +235,113 @@ describe('cockpit stats API schema', () => {
     })
   })
 })
+
+describe('skills API schema', () => {
+  test('registers skill and directory routes and DTOs', () => {
+    const openapi = yaml('openapi.yaml') as {
+      paths: Record<string, unknown>
+      components: {
+        parameters: Record<string, unknown>
+        schemas: Record<string, unknown>
+      }
+    }
+
+    expect(openapi.paths).toMatchObject({
+      '/api/v1/skills': { $ref: './paths/skills.yaml#/collection' },
+      '/api/v1/skills/{name}': { $ref: './paths/skills.yaml#/item' },
+      '/api/v1/skills/{name}/runs': { $ref: './paths/skills.yaml#/runs' },
+      '/api/v1/directory': { $ref: './paths/skills.yaml#/directory' },
+      '/api/v1/directory/{name}': {
+        $ref: './paths/skills.yaml#/directoryItem',
+      },
+      '/api/v1/directory/{name}/add': {
+        $ref: './paths/skills.yaml#/directoryAdd',
+      },
+    })
+    expect(openapi.components.parameters).toMatchObject({
+      SkillName: { $ref: './parameters.yaml#/SkillName' },
+    })
+    expect(openapi.components.schemas).toMatchObject({
+      SkillOrigin: { $ref: './schemas/skills.yaml#/SkillOrigin' },
+      Skill: { $ref: './schemas/skills.yaml#/Skill' },
+      SkillList: { $ref: './schemas/skills.yaml#/SkillList' },
+      SkillDetail: { $ref: './schemas/skills.yaml#/SkillDetail' },
+      SkillRun: { $ref: './schemas/skills.yaml#/SkillRun' },
+      SkillRunList: { $ref: './schemas/skills.yaml#/SkillRunList' },
+      SkillCreate: { $ref: './schemas/skills.yaml#/SkillCreate' },
+      SkillUpdate: { $ref: './schemas/skills.yaml#/SkillUpdate' },
+      DirectorySkill: { $ref: './schemas/skills.yaml#/DirectorySkill' },
+      DirectorySkillList: {
+        $ref: './schemas/skills.yaml#/DirectorySkillList',
+      },
+      DirectorySkillDetail: {
+        $ref: './schemas/skills.yaml#/DirectorySkillDetail',
+      },
+    })
+  })
+
+  test('defines skill operations and DTO shapes', () => {
+    const paths = yaml('paths/skills.yaml') as Record<
+      string,
+      Record<string, { operationId?: string }>
+    >
+    const schemas = yaml('schemas/skills.yaml') as Record<
+      string,
+      {
+        enum?: string[]
+        required?: string[]
+        properties?: Record<string, unknown>
+      }
+    >
+
+    expect(paths.collection?.get?.operationId).toBe('listSkills')
+    expect(paths.collection?.post?.operationId).toBe('createSkill')
+    expect(paths.item?.get?.operationId).toBe('getSkill')
+    expect(paths.item?.put?.operationId).toBe('updateSkill')
+    expect(paths.item?.delete?.operationId).toBe('deleteSkill')
+    expect(paths.runs?.get?.operationId).toBe('listSkillRuns')
+    expect(paths.directory?.get?.operationId).toBe('listDirectory')
+    expect(paths.directoryItem?.get?.operationId).toBe('getDirectorySkill')
+    expect(paths.directoryAdd?.post?.operationId).toBe('addDirectorySkill')
+
+    expect(schemas.SkillOrigin?.enum).toEqual(['agent', 'manual', 'directory'])
+    expect(schemas.Skill?.required).toEqual([
+      'name',
+      'description',
+      'origin',
+      'version',
+      'linkedAgents',
+      'runCount',
+      'cleanRunCount',
+      'createdAt',
+      'updatedAt',
+    ])
+    expect(schemas.SkillRun?.required).toEqual([
+      'id',
+      'skillName',
+      'sessionId',
+      'runNumber',
+      'agentId',
+      'clean',
+      'createdAt',
+    ])
+    expect(schemas.SkillDetail?.required).toEqual([
+      'skill',
+      'body',
+      'runs',
+      'tokenSavings',
+    ])
+    expect(schemas.SkillTokenSavings?.required).toEqual([
+      'saved',
+      'otherBrowsers',
+      'used',
+      'measuredRunCount',
+    ])
+    expect(schemas.DirectorySkill?.required).toEqual([
+      'name',
+      'category',
+      'description',
+      'installs',
+    ])
+  })
+})

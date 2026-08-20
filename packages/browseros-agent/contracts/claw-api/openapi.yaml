@@ -44,6 +44,18 @@ paths:
     $ref: ./paths/audit.yaml#/retention
   /api/v1/audit/cleanup:
     $ref: ./paths/audit.yaml#/cleanup
+  /api/v1/skills:
+    $ref: ./paths/skills.yaml#/collection
+  /api/v1/skills/{name}:
+    $ref: ./paths/skills.yaml#/item
+  /api/v1/skills/{name}/runs:
+    $ref: ./paths/skills.yaml#/runs
+  /api/v1/directory:
+    $ref: ./paths/skills.yaml#/directory
+  /api/v1/directory/{name}:
+    $ref: ./paths/skills.yaml#/directoryItem
+  /api/v1/directory/{name}/add:
+    $ref: ./paths/skills.yaml#/directoryAdd
 components:
   parameters:
     SessionId:
@@ -52,6 +64,8 @@ components:
       $ref: ./parameters.yaml#/ScreenshotId
     Harness:
       $ref: ./parameters.yaml#/Harness
+    SkillName:
+      $ref: ./parameters.yaml#/SkillName
     RecordingTabId:
       $ref: ./parameters.yaml#/RecordingTabId
     RecordingDocumentId:
@@ -144,3 +158,27 @@ components:
       $ref: ./schemas/audit.yaml#/SetAuditRetentionRequest
     AuditCleanupResult:
       $ref: ./schemas/audit.yaml#/AuditCleanupResult
+    SkillOrigin:
+      $ref: ./schemas/skills.yaml#/SkillOrigin
+    Skill:
+      $ref: ./schemas/skills.yaml#/Skill
+    SkillList:
+      $ref: ./schemas/skills.yaml#/SkillList
+    SkillRun:
+      $ref: ./schemas/skills.yaml#/SkillRun
+    SkillRunList:
+      $ref: ./schemas/skills.yaml#/SkillRunList
+    SkillDetail:
+      $ref: ./schemas/skills.yaml#/SkillDetail
+    SkillTokenSavings:
+      $ref: ./schemas/skills.yaml#/SkillTokenSavings
+    SkillCreate:
+      $ref: ./schemas/skills.yaml#/SkillCreate
+    SkillUpdate:
+      $ref: ./schemas/skills.yaml#/SkillUpdate
+    DirectorySkill:
+      $ref: ./schemas/skills.yaml#/DirectorySkill
+    DirectorySkillList:
+      $ref: ./schemas/skills.yaml#/DirectorySkillList
+    DirectorySkillDetail:
+      $ref: ./schemas/skills.yaml#/DirectorySkillDetail
