@@ -1,8 +1,6 @@
 name: "Nightly: BrowserOS neo macOS (signed)"
 
 on:
-  schedule:
-    - cron: "47 6 * * *"
   workflow_dispatch:
     inputs:
       upload_to_r2:
