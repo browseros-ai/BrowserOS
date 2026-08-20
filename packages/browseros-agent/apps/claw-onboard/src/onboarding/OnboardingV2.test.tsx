@@ -129,14 +129,16 @@ describe('OnboardingV2 shell', () => {
     expect(getAssignedUrl()).toBe('chrome://newtab/#/mcp')
   })
 
-  it('does not navigate after completing through the real Chromium bridge', () => {
+  // The shipped browser is the only place the CTA matters, and it is the one
+  // place the old `isMock` gate skipped: completing left the button dead.
+  it('navigates after completing through the real Chromium bridge', () => {
     const getAssignedUrl = installAssignableWindow('')
     const { bridge, getCompleteCount } = stubBridge(false)
 
     finishBrowserOSOnboarding(bridge)
 
     expect(getCompleteCount()).toBe(1)
-    expect(getAssignedUrl()).toBeNull()
+    expect(getAssignedUrl()).toBe('chrome://newtab/#/mcp')
   })
 
   it('keeps navigating after completion in mock standalone onboarding', () => {

@@ -49,15 +49,33 @@ export function importPhaseFor(status: BrowserOSImportStatus): ImportPhase {
   return 'picker'
 }
 
-/** Leaves standalone onboarding for BrowserClaw's MCP connection page. */
+/**
+ * Leaves onboarding for BrowserClaw's MCP page, which lists every agent on this
+ * machine with its connected state.
+ *
+ * Only a `chrome://` document can make this hop. Chromium drops a
+ * renderer-initiated navigation from an `http(s)` page to a WebUI URL without
+ * raising anything — verified in BrowserOS neo, where `location.assign` leaves
+ * `href` untouched and `window.open` returns null — so this call does nothing
+ * under `vite dev`. From `chrome://browseros-onboarding` the same call does
+ * navigate, and `chrome://newtab/#/mcp` resolves to the MCP screen with the
+ * hash intact.
+ */
 export function openBrowserOsMcpPage() {
   window.location.assign(BROWSEROS_MCP_PAGE_URL)
 }
 
-/** Completes onboarding and leaves standalone mock onboarding when needed. */
+/**
+ * Completes onboarding and heads for the MCP page.
+ *
+ * The navigation is not gated on the bridge: the CTA promises the MCP page on
+ * every build, and gating it on `isMock` is what left the button dead in the
+ * shipped browser. `complete()` goes first so the Chromium handler is told
+ * regardless of what the navigation does to this document.
+ */
 export function finishBrowserOSOnboarding(bridge: BrowserOSOnboardingBridge) {
   bridge.complete()
-  if (bridge.isMock) openBrowserOsMcpPage()
+  openBrowserOsMcpPage()
 }
 
 /** Runs the standalone three-step BrowserClaw onboarding flow. */
