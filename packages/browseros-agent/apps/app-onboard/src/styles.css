@@ -140,6 +140,66 @@
   --animate-glow-once: glow-once 1.5s ease-out 1s forwards;
   /* Added shine animation for card hover highlight effect */
   --animate-shine: shine 0.8s ease-in-out;
+
+  /* app-onboard compatibility layer: the onboarding UI is ported from
+     claw-onboard, which uses its own token vocabulary. These map that
+     vocabulary onto the app's orange/neutral palette so the shared
+     onboarding components wear the app theme without per-class edits. */
+  --color-accent: var(--accent-orange);
+  --color-accent-foreground: var(--primary-foreground);
+  --color-accent-2: var(--accent-orange-bright);
+  --color-accent-ink: oklch(0.55 0.2 41);
+  --color-accent-tint: oklch(0.646 0.222 41.116 / 0.1);
+  --color-accent-tint-2: oklch(0.646 0.222 41.116 / 0.2);
+  --color-ink: var(--foreground);
+  --color-ink-2: oklch(0.42 0.012 285);
+  --color-ink-3: var(--muted-foreground);
+  --color-ink-4: oklch(0.72 0.012 285);
+  --color-bg-canvas: var(--background);
+  --color-bg-sunken: var(--muted);
+  --color-border-2: var(--border);
+  --color-border-strong: oklch(0.84 0.006 286);
+  --color-card-tint: var(--muted);
+  --color-green: oklch(0.6 0.14 150);
+  --color-green-tint: oklch(0.6 0.14 150 / 0.14);
+  --color-amber: oklch(0.7 0.15 70);
+  --color-amber-tint: oklch(0.7 0.15 70 / 0.14);
+  --color-red: var(--destructive);
+  --color-red-tint: oklch(0.577 0.245 27 / 0.12);
+  --font-serif: var(--font-sans);
+  --shadow-card: 0 1px 2px oklch(0.5 0.05 60 / 0.06);
+  --shadow-pop: 0 12px 32px oklch(0.5 0.05 60 / 0.14);
+  --animate-fade-up: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade-in: fade-in 0.3s ease-out;
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 @layer base {

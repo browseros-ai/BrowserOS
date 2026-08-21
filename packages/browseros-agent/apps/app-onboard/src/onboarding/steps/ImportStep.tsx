@@ -1,0 +1,281 @@
+import { AlertTriangle, ArrowRight, Download, RefreshCw } from 'lucide-react'
+import type { UseFormReturn } from 'react-hook-form'
+import { Button } from '@/components/ui/button'
+import { FormField, FormItem, FormMessage } from '@/components/ui/form'
+import type {
+  BrowserOSImportItem,
+  BrowserOSOnboardingState,
+} from '../browseros-onboarding-api'
+import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
+import { ImportedSummaryCard } from '../components/ImportedSummaryCard'
+import { ImportItemChecklist } from '../components/ImportItemChecklist'
+import { ImportingProgressCard } from '../components/ImportingProgressCard'
+import { ImportSourceTile } from '../components/ImportSourceTile'
+import { MacKeychainNotice } from '../components/MacKeychainNotice'
+import { StepWrap } from '../components/StepWrap'
+import {
+  completedImportItemCount,
+  defaultImportItemsForSource,
+  importItemLabel,
+  importItemListLabel,
+  importProgressTotal,
+  sanitizeImportSelection,
+  selectedSourceById,
+} from '../onboarding-v2.helpers'
+import type { OnboardingFormValues } from '../onboarding-v2.schemas'
+import type { ImportPhase } from '../onboarding-v2.types'
+
+interface ImportStepProps {
+  phase: ImportPhase
+  state: BrowserOSOnboardingState
+  form: UseFormReturn<OnboardingFormValues>
+  onImport: () => void
+  onRefresh: () => void
+  onContinue: () => void
+}
+
+function importButtonLabelFor(
+  hasSource: boolean,
+  hasSupportedItems: boolean,
+  checkedItems: readonly BrowserOSImportItem[],
+  sourceName: string,
+): string {
+  if (!hasSource) return 'Pick a profile'
+  if (!hasSupportedItems) return 'Nothing to copy from this profile'
+  if (checkedItems.length === 0) return 'Select what to copy'
+
+  return `Copy ${checkedItems.length} ${
+    checkedItems.length === 1 ? 'item' : 'items'
+  } from ${sourceName}`
+}
+
+export function ImportStep({
+  phase,
+  state,
+  form,
+  onImport,
+  onRefresh,
+  onContinue,
+}: ImportStepProps) {
+  const selectedSourceId = form.watch('selectedSourceId')
+  const selectedSource = selectedSourceById(state.sources, selectedSourceId)
+  const sourceResult = state.results?.[0]
+  const checkedItems = selectedSource
+    ? sanitizeImportSelection(selectedSource, form.watch('selectedItems'))
+    : []
+  const sourceName =
+    sourceResult?.displayName ||
+    selectedSource?.profileName ||
+    selectedSource?.browserName ||
+    'source'
+  const isDetecting = state.status === 'detecting'
+  const hasNoProfiles = !isDetecting && state.sources.length === 0
+  const hasSupportedItems = (selectedSource?.supportedItems.length ?? 0) > 0
+  const isPickerValid =
+    Boolean(selectedSource) &&
+    hasSupportedItems &&
+    checkedItems.length > 0 &&
+    !isDetecting
+  const completedItems = completedImportItemCount(state.progress)
+  const totalItems = selectedSource
+    ? importProgressTotal(checkedItems.length, state.progress)
+    : (state.progress?.totalItems ?? 0)
+  const currentItemLabel = state.progress?.currentItem
+    ? importItemLabel(state.progress.currentItem)
+    : undefined
+  const currentSourceLabel = state.progress?.currentSourceName
+  const importedItems = state.progress?.completedItems ?? []
+  const importedItemSummary = state.progress
+    ? importedItems.length
+      ? importItemListLabel(importedItems)
+      : 'No completed items reported'
+    : 'No item details reported'
+  const importButtonLabel = importButtonLabelFor(
+    Boolean(selectedSource),
+    hasSupportedItems,
+    checkedItems,
+    sourceName,
+  )
+
+  function toggleImportItem(item: BrowserOSImportItem) {
+    if (!selectedSource) return
+    const currentItems = sanitizeImportSelection(
+      selectedSource,
+      form.getValues('selectedItems'),
+    )
+    const nextItems = currentItems.includes(item)
+      ? currentItems.filter((currentItem) => currentItem !== item)
+      : sanitizeImportSelection(selectedSource, [...currentItems, item])
+    form.setValue('selectedItems', nextItems, {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }
+
+  return (
+    <StepWrap>
+      <DisplayHeading>
+        Bring <Em>everything</Em> with you
+      </DisplayHeading>
+      <StepCopy>
+        Copy your history, bookmarks, and saved logins from your current
+        browser. Everything stays on this machine.
+      </StepCopy>
+
+      {phase === 'picker' && (
+        <>
+          <div className="mb-2.5 flex items-center justify-between gap-3">
+            <div className="font-bold text-[12.5px] text-ink-2">
+              {isDetecting ? 'Looking for profiles' : 'Pick a profile'}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={onRefresh}
+              disabled={isDetecting}
+            >
+              <RefreshCw
+                className={`size-3.5 ${isDetecting ? 'animate-spin' : ''}`}
+              />
+              Refresh
+            </Button>
+          </div>
+          <FormField
+            control={form.control}
+            name="selectedSourceId"
+            render={({ field }) => (
+              <FormItem
+                className="mb-4 flex flex-col gap-2.5"
+                role="radiogroup"
+              >
+                {state.sources.map((source) => (
+                  <ImportSourceTile
+                    key={source.id}
+                    source={source}
+                    selected={field.value === source.id}
+                    onSelect={() => {
+                      if (field.value === source.id) return
+                      field.onChange(source.id)
+                      form.setValue(
+                        'selectedItems',
+                        defaultImportItemsForSource(source),
+                        {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        },
+                      )
+                    }}
+                  />
+                ))}
+                {hasNoProfiles && (
+                  <div className="rounded-xl border border-border-2 bg-card p-4 text-[12.5px] text-ink-2">
+                    No profiles found.
+                  </div>
+                )}
+                {/* Only ask for a pick when there is one to make. With no
+                    sources the error is self-inflicted and unactionable:
+                    OnboardingV2 clears selectedSourceId with shouldValidate
+                    whenever the list is empty, including while detecting. */}
+                {state.sources.length > 0 && <FormMessage />}
+              </FormItem>
+            )}
+          />
+          {selectedSource && hasSupportedItems && (
+            <ImportItemChecklist
+              items={selectedSource.supportedItems}
+              checkedItems={checkedItems}
+              onToggle={toggleImportItem}
+            />
+          )}
+          {state.error && (
+            <div className="mb-4 rounded-xl border border-amber/30 bg-amber-tint p-4 text-[12.5px] text-ink-2">
+              {state.error.message}
+            </div>
+          )}
+          <MacKeychainNotice />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              size="lg"
+              onClick={onImport}
+              disabled={!isPickerValid}
+            >
+              <Download className="size-4" />
+              {importButtonLabel}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="ghost"
+              onClick={onContinue}
+            >
+              Skip for now
+            </Button>
+          </div>
+        </>
+      )}
+
+      {phase === 'importing' && (
+        <ImportingProgressCard
+          currentItemLabel={currentItemLabel}
+          progress={completedItems}
+          sourceLabel={currentSourceLabel}
+          total={totalItems}
+        />
+      )}
+
+      {phase === 'failed' && (
+        <>
+          <div className="mb-4 rounded-xl border border-amber/30 bg-amber-tint p-4">
+            <div className="mb-2 flex items-center gap-2 font-bold text-[13px] text-ink">
+              <AlertTriangle className="size-4 text-amber" />
+              Something went wrong.
+            </div>
+            <div className="text-[12.5px] text-ink-2">
+              {state.error?.message ??
+                "BrowserOS neo couldn't finish this import. Try again below, or refresh the profile list."}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2.5">
+            <Button
+              type="button"
+              size="lg"
+              onClick={onImport}
+              disabled={!isPickerValid}
+            >
+              <Download className="size-4" />
+              Try again
+            </Button>
+            <Button type="button" size="lg" variant="ghost" onClick={onRefresh}>
+              <RefreshCw className="size-4" />
+              Refresh profiles
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="ghost"
+              onClick={onContinue}
+            >
+              Skip for now
+            </Button>
+          </div>
+        </>
+      )}
+
+      {phase === 'imported' && (
+        <>
+          <ImportedSummaryCard
+            importedItemCount={completedItems}
+            itemSummary={importedItemSummary}
+            sourceName={sourceName}
+          />
+          <Button type="button" size="lg" onClick={onContinue}>
+            <ArrowRight className="size-4" />
+            Continue
+          </Button>
+        </>
+      )}
+    </StepWrap>
+  )
+}
