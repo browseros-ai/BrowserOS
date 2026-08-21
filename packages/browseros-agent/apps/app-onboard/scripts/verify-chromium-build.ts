@@ -4,13 +4,15 @@ import path from 'node:path'
 const buildDir = path.resolve(import.meta.dir, '../dist/chromium')
 const textResourceFiles = ['app.css', 'app.js', 'index.html']
 // Everything static lives under icon/ because listResourceFiles rejects any
-// other subdirectory outright.
+// other subdirectory outright; keychain-prompt.png is the import step's macOS
+// dialog screenshot, kept under icon/ to satisfy the directory guard.
 const iconResourceFiles = [
   'icon/16.png',
   'icon/32.png',
   'icon/48.png',
   'icon/96.png',
   'icon/128.png',
+  'icon/keychain-prompt.png',
 ]
 const allowedFiles = new Set([...textResourceFiles, ...iconResourceFiles])
 const fontAssetPattern = /\.(?:woff2?|ttf|otf)$/i
