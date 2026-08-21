@@ -124,6 +124,22 @@ describe('createApiRoutes', () => {
     await expect(response.json()).resolves.toEqual({ agents: [] })
   })
 
+  it('serves the tool catalogue for the settings UI', async () => {
+    const response = await createTestApp().request('/mcp-manager/tools')
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      tools: { name: string; description: string }[]
+    }
+    const names = body.tools.map((tool) => tool.name)
+    expect(names).toContain('navigate')
+    expect(names).toContain('run')
+    for (const tool of body.tools) {
+      expect(typeof tool.name).toBe('string')
+      expect(typeof tool.description).toBe('string')
+    }
+  })
+
   it('keeps injected agent routes behind app-origin auth', async () => {
     const agentRoutes = new Hono<Env>().post('/guard-check', (c) =>
       c.json({ ok: true }),

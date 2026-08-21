@@ -95,6 +95,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         '/mcp-manager',
         createMcpManagerRoutes({
           getMcpUrl: () => `http://127.0.0.1:${port}/mcp`,
+          klavis,
         }),
       )
       .route(
