@@ -6,22 +6,19 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import type { McpTool } from '@/lib/mcp/client'
+import { useMcpTools } from './mcp-tools-section.hooks'
 
-export interface MCPToolsSectionProps {
-  tools: McpTool[]
-  isLoading: boolean
-  error: string | null
-  onRefresh: () => void
-}
-
-export const MCPToolsSection: FC<MCPToolsSectionProps> = ({
-  tools,
-  isLoading,
-  error,
-  onRefresh,
-}) => {
+export const MCPToolsSection: FC = () => {
   const [isOpen, setIsOpen] = useState(false)
+  const toolsQuery = useMcpTools()
+
+  const tools = toolsQuery.data ?? []
+  const isLoading = toolsQuery.isFetching
+  const error = toolsQuery.isError
+    ? toolsQuery.error instanceof Error
+      ? toolsQuery.error.message
+      : String(toolsQuery.error)
+    : null
 
   return (
     <Collapsible
@@ -49,7 +46,9 @@ export const MCPToolsSection: FC<MCPToolsSectionProps> = ({
           <Button
             variant="outline"
             size="icon"
-            onClick={onRefresh}
+            onClick={() => {
+              void toolsQuery.refetch()
+            }}
             disabled={isLoading}
             className="border-[var(--accent-orange)] bg-[var(--accent-orange)]/10 text-[var(--accent-orange)] hover:bg-[var(--accent-orange)]/20 hover:text-[var(--accent-orange)]"
             title="Refresh tools"

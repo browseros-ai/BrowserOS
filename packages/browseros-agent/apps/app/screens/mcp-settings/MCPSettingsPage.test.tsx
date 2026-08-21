@@ -46,10 +46,6 @@ mock.module('@/lib/browseros/helpers', () => ({
   getMcpServerUrl: async () => 'http://127.0.0.1:9200/mcp',
 }))
 
-mock.module('@/lib/messaging/server/serverMessages', () => ({
-  sendServerMessage: async () => ({ tools: [] }),
-}))
-
 let MCPSettingsPage: FC
 
 beforeAll(async () => {
