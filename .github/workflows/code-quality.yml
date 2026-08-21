@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - main
-      - feat/claw-server-bootstrap
+      - epic/app-onboard
     paths:
       - ".github/workflows/code-quality.yml"
       - "packages/browseros-agent/**"
