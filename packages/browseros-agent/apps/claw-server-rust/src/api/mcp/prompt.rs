@@ -70,6 +70,14 @@ helper (high ageDays) as a hint, not a guarantee: cross-check it against the liv
 page before trusting it, then re-save. Keep personal data out of saved helpers,
 they are shared across your sessions on that host.
 
+Save repeatable tasks, not just helpers. A helper caches one flow inside run; a
+neo task is the whole job the user re-runs by name. When you finish a browser
+task the user is likely to want again (a recurring check, a status report, a
+routine fetch), call save_skill with a short name, a one-line description, and the
+ordered steps naming the exact SDK calls you used. Save only genuinely
+repeatable, user-valuable tasks, never one-offs or exploratory dead-ends; a saved
+task shows up on the user's /skills and re-runs as /neo-<name>.
+
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
@@ -85,5 +93,13 @@ mod tests {
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("independent subtasks get their own tabs"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("hidden window"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("separate window"));
+    }
+
+    #[test]
+    fn prompt_nudges_saving_repeatable_tasks_as_skills() {
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("save_skill"));
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Save repeatable tasks"));
+        // The anti-junk guardrail is behavior-defining; lock it against removal.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("never one-offs"));
     }
 }

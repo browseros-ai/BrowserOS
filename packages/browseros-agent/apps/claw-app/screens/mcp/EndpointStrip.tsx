@@ -22,7 +22,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
   return (
     <div className="space-y-2">
       <span className="text-[12px] text-cyanotype-muted">{label}</span>
-      <div className="flex items-center gap-3 overflow-hidden rounded-9 bg-ink-deep px-4 py-3 shadow-card">
+      <div className="flex items-center gap-3 overflow-hidden rounded-9 bg-mcp-endpoint px-4 py-3 shadow-card">
         {hasValue ? (
           <>
             <code
@@ -35,7 +35,7 @@ export function EndpointStrip({ label, value }: EndpointStripProps) {
               type="button"
               onClick={copy}
               aria-label={`Copy ${label}`}
-              className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+              className="shrink-0 rounded px-1.5 py-0.5 text-[12px] text-white/90 transition-colors hover:bg-white/10 hover:text-white"
             >
               {copied ? 'Copied ✓' : 'Copy'}
             </button>

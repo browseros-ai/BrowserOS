@@ -1,13 +1,13 @@
 {
-	"extensions": {
-		"adlpneommgkgeanpaekgoaolcpncohkf": {
-			"external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
-		},
-		"bflpfmnmnokmjhmgnolecpppdbdophmk": {
-			"external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
-		},
-		"pjimfkbpehlcllblajnpfamdfjhhlgkc": {
-			"external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
-		}
-	}
+  "extensions": {
+    "adlpneommgkgeanpaekgoaolcpncohkf": {
+      "external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
+    },
+    "bflpfmnmnokmjhmgnolecpppdbdophmk": {
+      "external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
+    },
+    "pjimfkbpehlcllblajnpfamdfjhhlgkc": {
+      "external_update_url": "https://cdn.browseros.com/extensions/update-manifest.xml"
+    }
+  }
 }
