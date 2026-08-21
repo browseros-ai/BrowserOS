@@ -27,6 +27,12 @@ describe('computeAffectedSuites', () => {
     ])
   })
 
+  it('maps an app-onboard change to only the app-onboard suite', () => {
+    expect(
+      suiteNames([pkg('@browseros/app-onboard', 'apps/app-onboard')]),
+    ).toEqual(['app-onboard'])
+  })
+
   it('maps the server package to all seven server suites', () => {
     expect(suiteNames([pkg('@browseros/server', 'apps/server')])).toEqual([
       'server-agent',
@@ -143,6 +149,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app', 'apps/app'),
       pkg('@browseros/claw-app', 'apps/claw-app'),
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
+      pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server-rust', 'apps/claw-server-rust'),
     ]

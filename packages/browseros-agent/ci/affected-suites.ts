@@ -94,6 +94,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'app-onboard': {
+    suite: 'app-onboard',
+    command: '(cd apps/app-onboard && bun run test)',
+    junit_path: 'test-results/app-onboard.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   build: {
     suite: 'build',
     command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
@@ -146,6 +153,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/app': ['agent'],
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
+  '@browseros/app-onboard': ['app-onboard'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
