@@ -65,7 +65,6 @@ export interface SubmitApiKeyInput {
 export interface KlavisSessionHandle {
   browserosId: string
   tools: Tool[]
-  inputSchemas: Map<string, Record<string, never>>
   callTool: (
     name: string,
     args: Record<string, unknown>,
