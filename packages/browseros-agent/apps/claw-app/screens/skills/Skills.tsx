@@ -231,8 +231,9 @@ function SkillsEmpty() {
       <div className="flex flex-col gap-1">
         <p className="font-semibold text-base text-ink">No tasks yet</p>
         <p className="mx-auto max-w-md text-ink-2 text-sm">
-          When BrowserOS neo turns a session into a repeatable skill it shows up
-          here, linked into your coding agents. You can also write one yourself.
+          When your coding agent saves a repeatable browser task with BrowserOS
+          neo, it shows up here, linked into your agents and re-runnable by
+          name. You can also write one yourself.
         </p>
       </div>
       <SkillFormDialog

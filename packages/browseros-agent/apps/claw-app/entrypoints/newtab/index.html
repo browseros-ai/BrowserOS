@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icon/32.png" />
     <title>BrowserOS neo</title>
+    <!-- Pre-applies the stored theme before React renders to avoid a
+         theme flash. Must stay type="module": Vite extracts it into a
+         chunk, which MV3's no-inline-script CSP requires. -->
+    <script type="module">
+      import { getStoredTheme, resolveTheme } from '@/lib/theme/theme-storage'
+
+      const resolved = resolveTheme(getStoredTheme())
+      document.documentElement.classList.remove('light', 'dark')
+      document.documentElement.classList.add(resolved)
+    </script>
   </head>
   <body>
     <div id="root"></div>

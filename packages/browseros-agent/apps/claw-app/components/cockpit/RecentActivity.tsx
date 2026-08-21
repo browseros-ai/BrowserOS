@@ -1,6 +1,8 @@
-import { History } from 'lucide-react'
+import { ChevronDown, History } from 'lucide-react'
+import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { type TaskSummary, useSessions } from '@/modules/api/audit.hooks'
 import { formatDuration, formatRelative } from '@/screens/audit/audit.helpers'
 import { EmptyState } from './EmptyState'
@@ -11,7 +13,34 @@ import { SupportingTile } from './SupportingTile'
 const HOME_GRID_COUNT = 6
 const HOME_TASK_LIMIT = 12
 
+// The header collapses the body, and the choice is remembered per machine so a
+// section collapsed once stays collapsed on every new tab after it. Default is
+// expanded, so a first run still shows that activity exists. Same localStorage
+// shape as ProductHuntBanner, try/catch included: a tab without storage access
+// must fall back to the default rather than throw.
+const COLLAPSED_KEY = 'cockpitRecentActivityCollapsed'
+const BODY_ID = 'recent-activity-body'
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function persistCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? 'true' : 'false')
+  } catch {
+    // A tab without storage access simply forgets the preference.
+  }
+}
+
 export function RecentActivity() {
+  // Lazy initialiser: the persisted value is read during the first render, so
+  // a collapsed section never flashes open on mount.
+  const [collapsed, setCollapsed] = useState(readCollapsed)
   const query = useSessions({
     variables: { limit: HOME_TASK_LIMIT },
     // Homepage feed: poll so new sessions surface without a manual refresh.
@@ -22,30 +51,26 @@ export function RecentActivity() {
     .slice(0, HOME_TASK_LIMIT)
   const now = Date.now()
   const ordered = orderByLiveThenRecency(tasks)
-  const gridTasks = ordered.slice(0, HOME_GRID_COUNT)
-  const listTasks = ordered.slice(HOME_GRID_COUNT)
+
+  const handleToggle = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    persistCollapsed(next)
+  }
 
   return (
     <section className="ph-no-capture space-y-5">
-      <SectionHeader sessionCount={ordered.length} />
-      {query.isPending ? (
-        <ActivityGridSkeleton />
-      ) : ordered.length === 0 ? (
-        <EmptyState
-          title="No recent activity"
-          hint="Tool calls from connected agents will appear here."
-          icon={<History className="size-5" />}
-        />
-      ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {gridTasks.map((task) => (
-              <SupportingTile key={task.sessionId} task={task} now={now} />
-            ))}
-          </div>
-          {listTasks.length > 0 && <ActivityList tasks={listTasks} now={now} />}
-        </div>
-      )}
+      <SectionHeader
+        sessionCount={ordered.length}
+        collapsed={collapsed}
+        bodyId={BODY_ID}
+        onToggle={handleToggle}
+      />
+      <div id={BODY_ID} hidden={collapsed}>
+        {!collapsed && (
+          <ActivityBody isPending={query.isPending} tasks={ordered} now={now} />
+        )}
+      </div>
       <div className="pt-0.5">
         <NavLink
           to="/audit"
@@ -62,17 +87,85 @@ export function RecentActivity() {
   )
 }
 
-function SectionHeader({ sessionCount }: { sessionCount: number }) {
+/**
+ * The whole header row is the disclosure control. The session count stays
+ * visible in both states: it is the at-a-glance value of a collapsed section.
+ */
+function SectionHeader({
+  sessionCount,
+  collapsed,
+  bodyId,
+  onToggle,
+}: {
+  sessionCount: number
+  collapsed: boolean
+  bodyId: string
+  onToggle: () => void
+}) {
   return (
-    <header className="flex items-center gap-3.5 pb-1">
-      <h2 className="shrink-0 font-medium text-[15px] text-cyanotype-ink leading-[18px]">
-        Recent activity
+    <header className="pb-1">
+      <h2>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          data-testid="recent-activity-toggle"
+          className="group flex w-full cursor-pointer items-center gap-3.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyanotype-blue/40"
+        >
+          <span className="shrink-0 font-medium text-[15px] text-cyanotype-ink leading-[18px]">
+            Recent activity
+          </span>
+          <span aria-hidden className="h-px flex-1 bg-cyanotype-border" />
+          <span className="flex shrink-0 items-center gap-2">
+            <span className="text-[11px] text-cyanotype-muted tabular-nums leading-[14px]">
+              {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
+            </span>
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                'size-3.5 shrink-0 text-cyanotype-muted transition-transform duration-150 group-hover:text-cyanotype-soft',
+                !collapsed && 'rotate-180',
+              )}
+            />
+          </span>
+        </button>
       </h2>
-      <span aria-hidden className="h-px flex-1 bg-cyanotype-border" />
-      <span className="shrink-0 text-[11px] text-cyanotype-muted tabular-nums leading-[14px]">
-        {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
-      </span>
     </header>
+  )
+}
+
+/** Skeleton, empty state, or the card grid plus the overflow list. */
+function ActivityBody({
+  isPending,
+  tasks,
+  now,
+}: {
+  isPending: boolean
+  tasks: TaskSummary[]
+  now: number
+}) {
+  if (isPending) return <ActivityGridSkeleton />
+  if (tasks.length === 0) {
+    return (
+      <EmptyState
+        title="No recent activity"
+        hint="Tool calls from connected agents will appear here."
+        icon={<History className="size-5" />}
+      />
+    )
+  }
+  const gridTasks = tasks.slice(0, HOME_GRID_COUNT)
+  const listTasks = tasks.slice(HOME_GRID_COUNT)
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {gridTasks.map((task) => (
+          <SupportingTile key={task.sessionId} task={task} now={now} />
+        ))}
+      </div>
+      {listTasks.length > 0 && <ActivityList tasks={listTasks} now={now} />}
+    </div>
   )
 }
 

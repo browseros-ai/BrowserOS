@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "test -d generated/graphql || bun run codegen; bun --env-file=../../.env.development wxt",
+    "dev:web": "serve dist/chrome-mv3-dev -p 5175 --no-clipboard",
     "build": "bun run codegen && wxt build",
     "build:dev": "bun --env-file=../../.env.development wxt build --mode development",
     "zip": "wxt zip",
@@ -108,6 +109,7 @@
     "@types/react-dom": "^19.2.4",
     "@wxt-dev/module-react": "^1.2.2",
     "lefthook": "^2.1.10",
+    "serve": "^14.2.6",
     "tailwindcss": "^4.3.1",
     "web-ext": "^9.2.0",
     "wxt": "^0.21.4"

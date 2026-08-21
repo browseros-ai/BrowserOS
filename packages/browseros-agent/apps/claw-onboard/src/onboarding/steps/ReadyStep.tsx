@@ -9,50 +9,36 @@ interface ReadyStepProps {
   onDone: () => void
 }
 
-const CONNECT_STEPS = [
-  <>
-    Open the MCP page and click{' '}
-    <strong className="font-semibold">Connect</strong> next to your tool.
-  </>,
-  <>Restart Claude Code once, so it picks up the connection.</>,
-  <>Paste a task into Claude Code&rsquo;s chat:</>,
-]
-
 /**
- * Final onboarding step. The connection itself happens on the MCP page, so this
- * step's job is to say exactly what to do there and where the copied prompt
- * goes — naming Claude Code rather than leaving the destination implied. The
- * restart gets its own step because an agent that has not reloaded its MCP
- * config looks broken rather than unconnected.
+ * Final onboarding step. Connecting is no longer homework: the browser wires
+ * itself up to the agents already installed on this machine, so the screen
+ * states that and hands over a prompt to paste — the copy buttons are the
+ * action, not a numbered checklist.
+ *
+ * The restart survives as a footnote rather than a step because an agent that
+ * has not reloaded its MCP config looks broken rather than unconnected, and
+ * that is the one way a finished setup still reads as failed. Leading with it
+ * would undo the point of the screen.
  */
 export function ReadyStep({ onDone }: ReadyStepProps) {
   return (
     <StepWrap>
       <DisplayHeading>
-        Last step: <Em>connect.</Em>
+        All <Em>set!</Em>
       </DisplayHeading>
       <StepCopy>
-        Your agents can&rsquo;t reach this browser yet. Three things:
+        We connected this browser to the agents already installed on your
+        machine. Try it out &mdash; copy one of these into your agent:
       </StepCopy>
-      <ol className="mb-5 flex flex-col gap-2.5">
-        {CONNECT_STEPS.map((content, index) => (
-          <li
-            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length static copy, no DOM identity to preserve
-            key={index}
-            className="flex items-start gap-2.5 text-[13.5px] text-ink-2"
-          >
-            <span className="mt-px flex size-[19px] shrink-0 items-center justify-center rounded-md bg-accent font-bold text-[11px] text-card">
-              {index + 1}
-            </span>
-            <span>{content}</span>
-          </li>
-        ))}
-      </ol>
-      <div className="mb-6 flex flex-col gap-2.5">
+      <div className="mb-4 flex flex-col gap-2.5">
         {STARTER_PROMPTS.slice(0, 2).map((prompt) => (
           <StarterPromptTile key={prompt} prompt={prompt} />
         ))}
       </div>
+      <p className="mb-6 max-w-[470px] text-[12.5px] text-ink-3 leading-[1.5]">
+        Agent doesn&rsquo;t see this browser yet? Restart it once, so it picks
+        up the connection.
+      </p>
       <Button type="button" size="lg" onClick={onDone}>
         <PlugZap className="size-4" />
         Open the MCP page

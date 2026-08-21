@@ -88,7 +88,7 @@ jobs:
       group: release-component-allocation
       cancel-in-progress: false
       queue: max
-    runs-on: warp-ubuntu-2404-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       mode: ${{ steps.lifecycle.outputs.mode }}
@@ -228,7 +228,7 @@ jobs:
   cargo-test:
     needs: prepare
     if: needs.prepare.outputs.mode == 'build'
-    runs-on: warp-ubuntu-2404-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
@@ -259,8 +259,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: warp-macos-14-arm64-6x
-          - runner: warp-windows-2025-x64-4x
+          - runner: macos-14
+          - runner: windows-latest
 
     steps:
       - uses: actions/checkout@v7
@@ -297,23 +297,23 @@ jobs:
         include:
           - target: darwin-arm64
             rust_target: aarch64-apple-darwin
-            runner: warp-macos-14-arm64-6x
+            runner: macos-14
             binary_ext: ""
           - target: darwin-x64
             rust_target: x86_64-apple-darwin
-            runner: warp-macos-14-arm64-6x
+            runner: macos-14
             binary_ext: ""
           - target: linux-arm64
             rust_target: aarch64-unknown-linux-gnu
-            runner: warp-ubuntu-2404-arm64-4x
+            runner: ubuntu-24.04-arm
             binary_ext: ""
           - target: linux-x64
             rust_target: x86_64-unknown-linux-gnu
-            runner: warp-ubuntu-2404-x64-4x
+            runner: ubuntu-latest
             binary_ext: ""
           - target: windows-x64
             rust_target: x86_64-pc-windows-msvc
-            runner: warp-windows-2025-x64-4x
+            runner: windows-latest
             binary_ext: ".exe"
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -585,7 +585,7 @@ jobs:
       - prepare
       - build
     if: needs.prepare.outputs.mode == 'build'
-    runs-on: warp-ubuntu-2404-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -736,7 +736,7 @@ jobs:
       - prepare
       - publish-versioned
     if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.publish-versioned.result == 'success')) }}
-    runs-on: warp-ubuntu-2404-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -885,7 +885,7 @@ jobs:
       - finalize
       - publish-ota
     if: ${{ always() && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
-    runs-on: warp-ubuntu-2404-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write

@@ -1251,7 +1251,6 @@ class NightlyWorkflowTest(unittest.TestCase):
             "extension": "agent",
             "extension_secret": "BROWSEROS_AGENT_V2_KEY",
             "tag": "nightly-browseros",
-            "cron": "17 4 * * *",
         },
         "nightly-browserclaw.yml": {
             "product": "browserclaw",
@@ -1260,7 +1259,6 @@ class NightlyWorkflowTest(unittest.TestCase):
             "extension": "browserclaw",
             "extension_secret": "BROWSERCLAW_KEY",
             "tag": "nightly-browserclaw",
-            "cron": "47 6 * * *",
         },
     }
 
@@ -1285,7 +1283,7 @@ class NightlyWorkflowTest(unittest.TestCase):
             )
             text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
             with self.subTest(workflow=workflow_name):
-                self.assertEqual(triggers["schedule"], [{"cron": config["cron"]}])
+                self.assertNotIn("schedule", triggers)
                 self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
                 for token in (
                     '"$DEFAULT_BRANCH" != "main"',
