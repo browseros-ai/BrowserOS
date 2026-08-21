@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ExternalLink,
   Loader2,
+  RotateCw,
   XCircle,
 } from 'lucide-react'
 import { type FC, useEffect, useMemo, useRef, useState } from 'react'
@@ -57,6 +58,7 @@ import {
   KIMI_API_KEY_GUIDE_CLICKED_EVENT,
   MODEL_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import { listModels } from '@/lib/llm-providers/listModels'
 import {
   getDefaultBaseUrlForProviders,
   getProviderTemplate,
@@ -71,6 +73,7 @@ import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import {
   getIncompleteCatalogHint,
   getModelPickerRows,
+  servesUserLoadedModels,
 } from './model-picker.helpers'
 import {
   getModelContextLength,
@@ -184,6 +187,367 @@ export interface NewProviderDialogProps {
   onSave: (provider: LlmProviderConfig) => Promise<void>
 }
 
+function ReasoningControls({
+  control,
+  effortOptions,
+  showSummary,
+}: {
+  control: ReturnType<typeof useForm<ProviderFormValues>>['control']
+  effortOptions: string[]
+  showSummary: boolean
+}) {
+  return (
+    <div className="space-y-4 border-border border-t pt-4">
+      <h4 className="font-medium text-sm">Reasoning</h4>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          control={control}
+          name="reasoningEffort"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Reasoning Effort</FormLabel>
+              <Select
+                onValueChange={field.onChange}
+                value={
+                  effortOptions.includes(field.value ?? '')
+                    ? field.value
+                    : pickDefaultEffort(effortOptions)
+                }
+              >
+                <FormControl>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {effortOptions.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value.charAt(0).toUpperCase() + value.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                How much the model thinks before responding
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {showSummary && (
+          <FormField
+            control={control}
+            name="reasoningSummary"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Reasoning Summary</FormLabel>
+                <Select
+                  onValueChange={field.onChange}
+                  value={field.value || 'auto'}
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="concise">Concise</SelectItem>
+                    <SelectItem value="detailed">Detailed</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  Detail level of visible thinking steps
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Auto-discovers the models the endpoint actually serves (OpenAI-compatible,
+ * Ollama, LM Studio). Falls back silently to the bundled catalog + free-form
+ * entry whenever discovery is unavailable or fails.
+ */
+function useDiscoveredModels(input: {
+  providerType: string
+  baseUrl?: string
+  apiKey?: string
+  agentServerUrl?: string
+  enabled: boolean
+  refreshKey: number
+}) {
+  const agentServerUrl = input.agentServerUrl ?? ''
+  const [discoveredModels, setDiscoveredModels] = useState<ModelInfo[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - refreshKey re-triggers the debounced fetch
+  useEffect(() => {
+    if (!input.enabled || !input.baseUrl || !input.agentServerUrl) {
+      setDiscoveredModels([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setModelsLoading(true)
+      try {
+        const models = await listModels(
+          {
+            type: input.providerType,
+            baseUrl: input.baseUrl,
+            apiKey: input.apiKey || undefined,
+          },
+          agentServerUrl,
+        )
+        if (!cancelled) setDiscoveredModels(models)
+      } finally {
+        if (!cancelled) setModelsLoading(false)
+      }
+    }, 600)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      setModelsLoading(false)
+    }
+  }, [
+    input.enabled,
+    input.providerType,
+    input.baseUrl,
+    input.apiKey,
+    input.agentServerUrl,
+    input.refreshKey,
+  ])
+
+  return { discoveredModels, modelsLoading }
+}
+
+function ProviderSpecificFields({
+  type,
+  control,
+  setupGuideUrl,
+  setupGuideText,
+  onSetupGuideClick,
+}: {
+  type: ProviderType
+  control: ReturnType<typeof useForm<ProviderFormValues>>['control']
+  setupGuideUrl?: string
+  setupGuideText: string
+  onSetupGuideClick: (e: React.MouseEvent) => void
+}) {
+  if (isCredentiallessProviderType(type) && type !== 'chatgpt-pro') {
+    const name = type === 'github-copilot' ? 'GitHub' : 'Qwen Code'
+    return (
+      <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
+        Credentials are managed via {name} OAuth. No API key needed.
+      </div>
+    )
+  }
+
+  if (type === 'chatgpt-pro') {
+    return (
+      <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
+        Credentials are managed via OAuth. No API key needed.
+      </div>
+    )
+  }
+
+  if (type === 'azure') {
+    return (
+      <>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField
+            control={control}
+            name="resourceName"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Resource Name *</FormLabel>
+                <FormControl>
+                  <Input placeholder="your-resource-name" {...field} />
+                </FormControl>
+                <FormDescription>Azure OpenAI resource name</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="baseUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Base URL Override</FormLabel>
+                <FormControl>
+                  <Input placeholder="Optional custom URL" {...field} />
+                </FormControl>
+                <FormDescription>
+                  Overrides resource name if set
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        <FormField
+          control={control}
+          name="apiKey"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>API Key *</FormLabel>
+              <FormControl>
+                <Input
+                  type="password"
+                  placeholder="Enter your Azure API key"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </>
+    )
+  }
+
+  if (type === 'bedrock') {
+    return (
+      <>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField
+            control={control}
+            name="accessKeyId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Access Key ID *</FormLabel>
+                <FormControl>
+                  <Input placeholder="AKIA..." {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="secretAccessKey"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Secret Access Key *</FormLabel>
+                <FormControl>
+                  <Input
+                    type="password"
+                    placeholder="Enter your secret access key"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField
+            control={control}
+            name="region"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Region *</FormLabel>
+                <FormControl>
+                  <Input placeholder="us-east-1" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={control}
+            name="sessionToken"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Session Token</FormLabel>
+                <FormControl>
+                  <Input
+                    type="password"
+                    placeholder="Optional (for STS credentials)"
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Required for temporary credentials
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <FormField
+        control={control}
+        name="baseUrl"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Base URL *</FormLabel>
+            <FormControl>
+              <Input placeholder="https://api.openai.com/v1" {...field} />
+            </FormControl>
+            {type === 'openai' && (
+              <FormDescription>
+                If your custom endpoint doesn't work with OpenAI, try the OpenAI
+                Compatible provider template instead.
+              </FormDescription>
+            )}
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={control}
+        name="apiKey"
+        render={({ field }) => {
+          const isApiKeyOptional = ['ollama', 'lmstudio'].includes(type)
+          return (
+            <FormItem>
+              <FormLabel>API Key{isApiKeyOptional ? '' : ' *'}</FormLabel>
+              <FormControl>
+                <Input
+                  type="password"
+                  placeholder={
+                    isApiKeyOptional
+                      ? 'Enter your API key (optional)'
+                      : 'Enter your API key'
+                  }
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                Your API key is encrypted and stored locally.{' '}
+                {setupGuideUrl && (
+                  <a
+                    href={setupGuideUrl}
+                    onClick={onSetupGuideClick}
+                    className="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    {setupGuideText}
+                  </a>
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )
+        }}
+      />
+    </>
+  )
+}
+
 export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   open,
   onOpenChange,
@@ -194,6 +558,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
+  const [modelsRefreshKey, setModelsRefreshKey] = useState(0)
   const modelListRef = useRef<HTMLDivElement>(null)
   const { supports } = useCapabilities()
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
@@ -250,7 +615,30 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSessionToken,
   ])
 
-  const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+  const canDiscoverModels = useMemo(
+    () =>
+      servesUserLoadedModels(watchedType as ProviderType) &&
+      Boolean(watchedBaseUrl) &&
+      Boolean(agentServerUrl),
+    [watchedType, watchedBaseUrl, agentServerUrl],
+  )
+
+  const { discoveredModels, modelsLoading } = useDiscoveredModels({
+    providerType: watchedType,
+    baseUrl: watchedBaseUrl,
+    apiKey: watchedApiKey,
+    agentServerUrl,
+    enabled: canDiscoverModels,
+    refreshKey: modelsRefreshKey,
+  })
+
+  const modelInfoList = useMemo(
+    () =>
+      discoveredModels.length
+        ? discoveredModels
+        : getModelsForProvider(watchedType as ProviderType),
+    [discoveredModels, watchedType],
+  )
   const selectedModel: ModelInfo | undefined = modelInfoList.find(
     (m) => m.modelId === watchedModelId,
   )
@@ -494,10 +882,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedType as ProviderType,
     providerName,
   )
-  const modelCatalogHint = getIncompleteCatalogHint(
-    watchedType as ProviderType,
-    modelInfoList.length,
-    providerName,
+  const modelCatalogHint = useMemo(
+    () =>
+      getIncompleteCatalogHint(
+        watchedType as ProviderType,
+        discoveredModels.length > 0 ? 0 : modelInfoList.length,
+        providerName,
+      ),
+    [watchedType, discoveredModels.length, modelInfoList.length, providerName],
   )
 
   const handleSetupGuideClick = (e: React.MouseEvent) => {
@@ -516,291 +908,22 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedType === 'chatgpt-pro'
 
   const renderReasoningControls = () => (
-    <div className="space-y-4 border-border border-t pt-4">
-      <h4 className="font-medium text-sm">Reasoning</h4>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormField
-          control={form.control}
-          name="reasoningEffort"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Reasoning Effort</FormLabel>
-              <Select
-                onValueChange={field.onChange}
-                value={
-                  reasoningEffortOptions.includes(field.value ?? '')
-                    ? field.value
-                    : pickDefaultEffort(reasoningEffortOptions)
-                }
-              >
-                <FormControl>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {reasoningEffortOptions.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {value.charAt(0).toUpperCase() + value.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                How much the model thinks before responding
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        {showReasoningSummary && (
-          <FormField
-            control={form.control}
-            name="reasoningSummary"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Reasoning Summary</FormLabel>
-                <Select
-                  onValueChange={field.onChange}
-                  value={field.value || 'auto'}
-                >
-                  <FormControl>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    <SelectItem value="auto">Auto</SelectItem>
-                    <SelectItem value="concise">Concise</SelectItem>
-                    <SelectItem value="detailed">Detailed</SelectItem>
-                  </SelectContent>
-                </Select>
-                <FormDescription>
-                  Detail level of visible thinking steps
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        )}
-      </div>
-    </div>
+    <ReasoningControls
+      control={form.control}
+      effortOptions={reasoningEffortOptions}
+      showSummary={showReasoningSummary}
+    />
   )
 
-  const renderProviderSpecificFields = () => {
-    if (
-      isCredentiallessProviderType(watchedType) &&
-      watchedType !== 'chatgpt-pro'
-    ) {
-      const name = watchedType === 'github-copilot' ? 'GitHub' : 'Qwen Code'
-      return (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Credentials are managed via {name} OAuth. No API key needed.
-        </div>
-      )
-    }
-
-    if (watchedType === 'chatgpt-pro') {
-      return (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Credentials are managed via OAuth. No API key needed.
-        </div>
-      )
-    }
-
-    if (watchedType === 'azure') {
-      return (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="resourceName"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Resource Name *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="your-resource-name" {...field} />
-                  </FormControl>
-                  <FormDescription>Azure OpenAI resource name</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="baseUrl"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Base URL Override</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Optional custom URL" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    Overrides resource name if set
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          <FormField
-            control={form.control}
-            name="apiKey"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>API Key *</FormLabel>
-                <FormControl>
-                  <Input
-                    type="password"
-                    placeholder="Enter your Azure API key"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </>
-      )
-    }
-
-    if (watchedType === 'bedrock') {
-      return (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="accessKeyId"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Access Key ID *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="AKIA..." {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="secretAccessKey"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Secret Access Key *</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="password"
-                      placeholder="Enter your secret access key"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="region"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Region *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="us-east-1" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="sessionToken"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Session Token</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="password"
-                      placeholder="Optional (for STS credentials)"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    Required for temporary credentials
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </>
-      )
-    }
-
-    return (
-      <>
-        <FormField
-          control={form.control}
-          name="baseUrl"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Base URL *</FormLabel>
-              <FormControl>
-                <Input placeholder="https://api.openai.com/v1" {...field} />
-              </FormControl>
-              {watchedType === 'openai' && (
-                <FormDescription>
-                  If your custom endpoint doesn't work with OpenAI, try the
-                  OpenAI Compatible provider template instead.
-                </FormDescription>
-              )}
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="apiKey"
-          render={({ field }) => {
-            const isApiKeyOptional = ['ollama', 'lmstudio'].includes(
-              watchedType,
-            )
-            return (
-              <FormItem>
-                <FormLabel>API Key{isApiKeyOptional ? '' : ' *'}</FormLabel>
-                <FormControl>
-                  <Input
-                    type="password"
-                    placeholder={
-                      isApiKeyOptional
-                        ? 'Enter your API key (optional)'
-                        : 'Enter your API key'
-                    }
-                    {...field}
-                  />
-                </FormControl>
-                <FormDescription>
-                  Your API key is encrypted and stored locally.{' '}
-                  {setupGuideUrl && (
-                    <a
-                      href={setupGuideUrl}
-                      onClick={handleSetupGuideClick}
-                      className="inline-flex cursor-pointer items-center gap-1 text-primary hover:underline"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      {setupGuideText}
-                    </a>
-                  )}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )
-          }}
-        />
-      </>
-    )
-  }
+  const renderProviderSpecificFields = () => (
+    <ProviderSpecificFields
+      type={watchedType}
+      control={form.control}
+      setupGuideUrl={setupGuideUrl}
+      setupGuideText={setupGuideText}
+      onSetupGuideClick={handleSetupGuideClick}
+    />
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -867,7 +990,25 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="modelId"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Model *</FormLabel>
+                  <FormLabel>
+                    Model *
+                    {canDiscoverModels && (
+                      <button
+                        type="button"
+                        aria-label="Refresh model list"
+                        title="Refresh model list"
+                        onClick={() => setModelsRefreshKey((k) => k + 1)}
+                        disabled={modelsLoading}
+                        className="ml-1 inline-flex align-middle text-muted-foreground hover:text-foreground disabled:opacity-50"
+                      >
+                        {modelsLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RotateCw className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    )}
+                  </FormLabel>
                   {modelInfoList.length === 0 ? (
                     <FormControl>
                       <Input

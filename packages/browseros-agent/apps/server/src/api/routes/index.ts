@@ -23,7 +23,7 @@ import { createKlavisRoutes } from './klavis'
 import { createMcpRoutes } from './mcp'
 import { createMcpManagerRoutes } from './mcp-manager'
 import { createOAuthRoutes } from './oauth'
-import { createProviderRoutes } from './provider'
+import { createListModelRoutes, createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
@@ -72,6 +72,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/shutdown', createShutdownRoute({ onShutdown }))
       .route('/status', createStatusRoute({ browser, activity }))
       .route('/test-provider', createProviderRoutes({ browserosId }))
+      .route('/list-models', createListModelRoutes())
       .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
