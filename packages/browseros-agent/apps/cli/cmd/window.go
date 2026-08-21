@@ -38,12 +38,9 @@ func init() {
 		Short: "Create a new browser window",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			hidden, _ := cmd.Flags().GetBool("hidden")
-
 			c := newClient()
 			result, err := c.CallTool("windows", map[string]any{
 				"action": "create",
-				"hidden": hidden,
 			})
 			if err != nil {
 				output.Error(err.Error(), 1)
@@ -55,7 +52,6 @@ func init() {
 			}
 		},
 	}
-	createCmd.Flags().Bool("hidden", false, "Create hidden window")
 
 	closeCmd := &cobra.Command{
 		Use:   "close <windowId>",

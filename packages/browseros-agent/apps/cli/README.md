@@ -227,7 +227,7 @@ apps/cli/
 │   ├── root.go         # Root command, global flags
 │   ├── init.go         # Server URL configuration (URL arg or interactive)
 │   ├── launch.go       # launch (find and start BrowserOS, wait for server)
-│   ├── open.go         # open (new_page / new_hidden_page)
+│   ├── open.go         # open (new_page)
 │   ├── nav.go          # nav, back, forward, reload
 │   ├── tabs.go         # tabs/pages alias, active, close
 │   ├── snap.go         # snapshot/snap
