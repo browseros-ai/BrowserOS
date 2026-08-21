@@ -10,7 +10,6 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client'
-import { jsonSchemaObjectToZodRawShape } from 'zod-from-json-schema'
 import type { KlavisClient } from './client'
 import type { KlavisStrataCache } from './strata-cache'
 import type { KlavisSessionHandle } from './types'
@@ -54,19 +53,9 @@ export async function connectKlavisStrataSession(
 
   const { tools } = await withTimeout(client.listTools(), 'listTools')
 
-  const inputSchemas = new Map(
-    tools.map((t) => [
-      t.name,
-      jsonSchemaObjectToZodRawShape(
-        t.inputSchema as never,
-      ) as unknown as Record<string, never>,
-    ]),
-  )
-
   return {
     browserosId: deps.browserosId,
     tools,
-    inputSchemas,
     callTool: (name, args) =>
       withTimeout(
         client.callTool({ name, arguments: args }) as Promise<CallToolResult>,

@@ -257,7 +257,6 @@
         "pino": "^9.14.0",
         "posthog-node": "^4.18.0",
         "zod": "^3.25.76",
-        "zod-from-json-schema": "^0.5.6",
         "zod-to-json-schema": "^3.25.2",
       },
       "devDependencies": {
@@ -4278,8 +4277,6 @@
     "zip-dir": ["zip-dir@2.0.0", "", { "dependencies": { "async": "^3.2.0", "jszip": "^3.2.2" } }, "sha512-uhlsJZWz26FLYXOD6WVuq+fIcZ3aBPGo/cFdiLlv3KNwpa52IF3ISV8fLhQLiqVu5No3VhlqlgthN6gehil1Dg=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
-
-    "zod-from-json-schema": ["zod-from-json-schema@0.5.6", "", { "dependencies": { "zod": "^4.0.17" } }, "sha512-U33AJ7ZWS6y9XNSzMWcdy8hRAvZmWhTtpYJu0SXPT5AArbc9nq2ur7Magzmn5RF9KBV4b3FP0nCpmqqlfXlR9w=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 

@@ -7,7 +7,7 @@
 import type { JSONValue } from '@ai-sdk/provider'
 import type { CallToolResult } from '@modelcontextprotocol/client'
 import { fromJsonSchema, type McpServer } from '@modelcontextprotocol/server'
-import type { ToolSet } from 'ai'
+import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { logger } from '../../../lib/logger'
@@ -216,11 +216,15 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   }
 
   for (const t of session.tools) {
-    const rawShape = session.inputSchemas.get(t.name)
     const name = t.name
     toolSet[name] = {
       description: t.description ?? '',
-      inputSchema: z.object((rawShape ?? {}) as z.ZodRawShape),
+      // Pass the remote JSON schema straight through. Round-tripping it through
+      // Zod (zod-from-json-schema -> zod-to-json-schema under zod v3) silently
+      // drops every property, leaving the connector's tools unusable.
+      inputSchema: jsonSchema(
+        t.inputSchema as Parameters<typeof jsonSchema>[0],
+      ),
       execute: async (args: Record<string, unknown>) =>
         session.callTool(name, args),
       toModelOutput: ({ output }: { output: unknown }) =>
@@ -231,11 +235,11 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   return toolSet
 }
 
-// Stopgap: Klavis tool schemas are still Zod v3 (they flow through the Strata
-// client, which is migrated separately). v2 registerTool derives a tools/list
-// JSON schema only from Zod v4, so bridge the v3 raw shape through JSON.
-// Replaced once the client migration passes the remote JSON schema straight to
-// fromJsonSchema.
+// Bridge a locally hand-built Zod v3 shape (the connector tool's schema) into a
+// v2 registerTool input schema. v2 derives a tools/list JSON schema only from
+// Zod v4, so convert the v3 shape to JSON Schema first, then wrap it. Remote
+// Strata tools do NOT use this path: their JSON schema goes straight to
+// fromJsonSchema (round-tripping through Zod drops every property under v3).
 function toV2InputSchema(rawShape: z.ZodRawShape) {
   // The bridged value is a StandardSchemaWithJSON; type it as a raw shape so
   // registerTool's overload and handler typing resolve as before. At runtime
@@ -243,6 +247,13 @@ function toV2InputSchema(rawShape: z.ZodRawShape) {
   return fromJsonSchema(
     zodToJsonSchema(z.object(rawShape)) as never,
   ) as unknown as Record<string, never>
+}
+
+// Wrap a remote Strata tool's JSON schema for v2 registerTool without any Zod
+// round-trip. Same cast rationale as toV2InputSchema: the typed overload wants a
+// raw shape, while the StandardSchemaWithJSON flows through at runtime.
+function remoteJsonInputSchema(schema: Parameters<typeof fromJsonSchema>[0]) {
+  return fromJsonSchema(schema) as unknown as Record<string, never>
 }
 
 export function registerKlavisTools(
@@ -333,13 +344,16 @@ export function registerKlavisTools(
 
   const selectedServers = selectedServerNames(deps.scope)
   for (const strataTool of session.tools) {
-    const inputSchema = session.inputSchemas.get(strataTool.name)
-
     mcpServer.registerTool(
       strataTool.name,
       {
         description: strataTool.description,
-        inputSchema: toV2InputSchema((inputSchema ?? {}) as z.ZodRawShape),
+        // Pass the remote JSON schema straight through. The old Zod round-trip
+        // dropped every property (zod v3 + zod-from-json-schema), so registerTool
+        // advertised an empty schema that rejected all arguments.
+        inputSchema: remoteJsonInputSchema(
+          strataTool.inputSchema as Parameters<typeof fromJsonSchema>[0],
+        ),
       },
       async (args: Record<string, unknown>) => {
         const startTime = performance.now()
