@@ -36,12 +36,12 @@ interface TimelineProps {
   onScreenshotClick: (screenshotId: number) => void
 }
 
-const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
+const NOTABLE_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
 
 function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
   const ids = new Set<number>()
   for (const d of dispatches) {
-    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.dispatchId)
+    if (NOTABLE_TOOLS.has(d.toolName)) ids.add(d.dispatchId)
   }
   return ids
 }
@@ -54,7 +54,7 @@ export function Timeline({
   onScreenshotClick,
 }: TimelineProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
-  // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
+  // Initial state: notable action rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
   // updates do not reset the user's manual toggles.
   const [expanded, setExpanded] = useState<Set<number>>(() =>
@@ -146,7 +146,7 @@ function TimelineRow({
   onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
-  const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
+  const isNotable = NOTABLE_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
   const screenshotId = dispatch.screenshotId
@@ -155,7 +155,7 @@ function TimelineRow({
     <li
       className={cn(
         'rounded-lg border border-transparent px-2 py-1.5',
-        highRisk && 'border-amber-500/30 bg-amber-500/5',
+        isNotable && 'border-primary/30 bg-primary/5',
         isError && 'border-red-500/30 bg-red-500/5',
       )}
     >
@@ -163,7 +163,7 @@ function TimelineRow({
         type="button"
         onClick={onToggle}
         className={cn(
-          'grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors',
+          'grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors',
           // Hover-tint only the header, never the body. Otherwise the
           // tint matches the args / result codeblock backgrounds and the
           // codeblocks visually disappear into the row.
@@ -189,11 +189,6 @@ function TimelineRow({
         <span className="font-mono text-[11.5px] text-ink-3">
           {dispatch.durationMs ?? 0}ms
         </span>
-        {highRisk && (
-          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-semibold text-[10.5px] text-amber-700 uppercase tracking-wide dark:text-amber-300">
-            High risk
-          </span>
-        )}
       </button>
       {expanded && (
         <div className="mt-2 space-y-2 border-border-2 border-t px-1 pt-2">
