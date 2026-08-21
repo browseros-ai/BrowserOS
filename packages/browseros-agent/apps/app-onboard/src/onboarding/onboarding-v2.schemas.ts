@@ -75,8 +75,11 @@ export const onboardingFormSchema = {
 }
 
 /** Validates the dynamic Chromium source id without bundling Zod into WebUI resources. */
-export const onboardingFormResolver: Resolver<OnboardingFormValues> = (
-  values,
+// Typed via `satisfies` (not an annotation) so its call arity stays 1: react-hook-form's
+// Resolver signature declares (values, context, options), and annotating with it would
+// let callers pass 3 args, which is redundant here since only `values` is used.
+export const onboardingFormResolver = ((
+  values: OnboardingFormValues,
 ): ResolverResult<OnboardingFormValues> => {
   const result = onboardingFormSchema.safeParse(values)
   if (result.success) {
@@ -92,4 +95,4 @@ export const onboardingFormResolver: Resolver<OnboardingFormValues> = (
     values: {},
     errors,
   }
-}
+}) satisfies Resolver<OnboardingFormValues>

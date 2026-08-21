@@ -61,11 +61,10 @@ describe('onboardingFormSchema', () => {
   })
 
   it('keeps selected items in resolver values for valid submissions', () => {
-    const result = onboardingFormResolver(
-      { selectedSourceId: 'source-42', selectedItems: ['history'] },
-      undefined,
-      {} as never,
-    )
+    const result = onboardingFormResolver({
+      selectedSourceId: 'source-42',
+      selectedItems: ['history'],
+    })
 
     expect(result).toEqual({
       values: { selectedSourceId: 'source-42', selectedItems: ['history'] },
