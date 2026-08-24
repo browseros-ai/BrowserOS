@@ -87,7 +87,11 @@ export class ChatService {
     request: ChatRequest,
     abortSignal: AbortSignal,
   ): Promise<Response> {
-    if (request.target.type === 'claude' || request.target.type === 'codex') {
+    if (
+      request.target.type === 'claude' ||
+      request.target.type === 'codex' ||
+      request.target.type === 'custom'
+    ) {
       return this.processAcpMessage(request as AcpChatRequest, abortSignal)
     }
 
