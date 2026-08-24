@@ -289,6 +289,7 @@ class ResourceVersionOverrideTest(unittest.TestCase):
             "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
             "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip",
             "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
+            "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
         )
 
         self.assertEqual(
@@ -321,6 +322,13 @@ class ResourceVersionOverrideTest(unittest.TestCase):
             "claw-onboard/prod-resources/0.0.13/browseros-claw-onboard-resources.zip",
             resolve_resource_key(
                 "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
+                context,
+            ),
+        )
+        self.assertEqual(
+            "app-onboard/prod-resources/0.0.13/browseros-app-onboard-resources.zip",
+            resolve_resource_key(
+                "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
                 context,
             ),
         )
