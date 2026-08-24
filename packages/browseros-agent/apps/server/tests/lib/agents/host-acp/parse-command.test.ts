@@ -16,9 +16,12 @@ describe('splitCommandLine', () => {
   })
 
   it('keeps quoted segments as single args', () => {
-    expect(
-      splitCommandLine('my-agent --path "/Users/me/some dir" --flag'),
-    ).toEqual(['my-agent', '--path', '/Users/me/some dir', '--flag'])
+    expect(splitCommandLine('my-agent --path "/opt/some dir" --flag')).toEqual([
+      'my-agent',
+      '--path',
+      '/opt/some dir',
+      '--flag',
+    ])
   })
 
   it('treats single quotes as literal', () => {
