@@ -2,16 +2,17 @@ diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/brows
 index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1a0a7010b 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
-@@ -41,6 +41,8 @@
+@@ -41,6 +41,9 @@
  #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/browseros/core/browseros_product.h"
 +#include "chrome/browser/browseros/onboarding/browseros_onboarding_prefs.h"
  #include "chrome/browser/extensions/startup_helper.h"
  #include "chrome/browser/first_run/first_run.h"
  #include "chrome/browser/lifetime/browser_shutdown.h"
-@@ -476,6 +478,49 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
+@@ -476,6 +479,58 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
  
@@ -44,7 +45,16 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
 +
 +  if (status == ProfilePicker::FirstRunExitStatus::kCompleted) {
 +    ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(true);
-+    ProfilePicker::SetFirstRunTabsInNextProfileOpened(first_run_urls);
++    // BrowserOS onboarding hands off to the agent extension so the user
++    // can finish setting up a provider or coding agent; a chrome:// page
++    // cannot navigate there itself. BrowserOS neo routes itself instead.
++    std::vector<GURL> tabs = first_run_urls;
++    if (browseros::IsBrowserOSProduct()) {
++      tabs.emplace_back(std::string("chrome-extension://") +
++                        browseros::kAgentExtensionId +
++                        "/app.html#/settings/ai");
++    }
++    ProfilePicker::SetFirstRunTabsInNextProfileOpened(tabs);
 +    return;
 +  }
 +
@@ -61,7 +71,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -714,6 +759,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -714,6 +769,26 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
  
    if (!IsSilentLaunchEnabled(command_line, profile)) {
