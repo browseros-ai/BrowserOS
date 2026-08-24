@@ -24,7 +24,6 @@ import {
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
-import { syncOnboardingProfile } from '@/lib/onboarding/syncOnboardingProfile'
 import {
   setupScheduledJobsSyncToBackend,
   syncScheduledJobs,
@@ -153,9 +152,6 @@ export default defineBackground(() => {
       } catch {}
       try {
         await syncScheduledJobs()
-      } catch {}
-      try {
-        await syncOnboardingProfile(newSession.user.id)
       } catch {}
     }
   })
