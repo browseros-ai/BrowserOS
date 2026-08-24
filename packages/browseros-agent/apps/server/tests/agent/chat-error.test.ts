@@ -150,7 +150,7 @@ describe('toChatError', () => {
     expect(error.message).not.toContain('bbbbbbbbbb')
   })
 
-  it('redacts key-shaped tokens and caps details', () => {
+  it('redacts key-shaped tokens out of details', () => {
     const error = toChatError(
       apiCallError({
         message: `rejected key sk-${'a'.repeat(40)} for org`,
@@ -160,7 +160,70 @@ describe('toChatError', () => {
 
     expect(error.details).toContain('[REDACTED]')
     expect(error.details).not.toContain('aaaaaaaaaa')
-    expect((error.details ?? '').length).toBeLessThanOrEqual(501)
+  })
+
+  it('carries the full upstream response body as pretty-printed details', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'Provider returned error',
+        statusCode: 429,
+        data: { code: 'CREDITS_EXHAUSTED' },
+        responseBody: JSON.stringify({
+          error: {
+            code: 'CREDITS_EXHAUSTED',
+            message: 'Provider returned error',
+            metadata: { raw: 'quota 0 of 100 for today' },
+          },
+        }),
+      }),
+      { provider: 'browseros' },
+    )
+
+    // The real reason the generic message hid is preserved in details...
+    expect(error.details).toContain('quota 0 of 100 for today')
+    // ...pretty-printed onto its own lines.
+    expect(error.details).toContain('\n')
+  })
+
+  it('falls back to structured data.raw when there is no response body', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'Provider returned error',
+        statusCode: 429,
+        data: { code: 'CREDITS_EXHAUSTED', raw: { remaining: 0 } },
+      }),
+      { provider: 'browseros' },
+    )
+
+    expect(error.details).toContain('remaining')
+    expect(error.details).toContain('0')
+  })
+
+  it('redacts secrets and bounds a pathological raw body', () => {
+    const secret = `sk-${'c'.repeat(40)}`
+    const error = toChatError(
+      apiCallError({
+        statusCode: 500,
+        responseBody: JSON.stringify({
+          error: { message: `boom ${secret}`, note: 'x'.repeat(30000) },
+        }),
+      }),
+    )
+
+    expect(error.details).toContain('[REDACTED]')
+    expect(error.details).not.toContain('cccccccccc')
+    // Bounded so a pathological body cannot flood the wire or the card.
+    expect((error.details ?? '').length).toBeLessThanOrEqual(20001)
+  })
+
+  it('surfaces a plain error message as copyable details', () => {
+    const error = toChatError(
+      new Error('Anthropic session expired. Please re-login.'),
+      { provider: 'anthropic' },
+    )
+
+    expect(error.code).toBe('unknown')
+    expect(error.details).toContain('session expired')
   })
 })
 
