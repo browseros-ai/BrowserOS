@@ -31,8 +31,18 @@ describe('splitCommandLine', () => {
     ])
   })
 
-  it('honors backslash escapes outside quotes', () => {
-    expect(splitCommandLine('bin a\\ b')).toEqual(['bin', 'a b'])
+  it('keeps Windows backslash paths intact when unquoted', () => {
+    expect(splitCommandLine('C:\\Users\\me\\agent.exe --stdio')).toEqual([
+      'C:\\Users\\me\\agent.exe',
+      '--stdio',
+    ])
+  })
+
+  it('keeps Windows paths with spaces via double quotes', () => {
+    expect(splitCommandLine('"C:\\Program Files\\agent.exe" --stdio')).toEqual([
+      'C:\\Program Files\\agent.exe',
+      '--stdio',
+    ])
   })
 
   it('throws on an unterminated quote', () => {

@@ -5,10 +5,11 @@
  */
 
 /**
- * Split a custom agent's full command line into argv, honoring single quotes
- * (literal), double quotes (with backslash escapes), and backslash escapes
- * outside quotes. Throws on an unterminated quote so a malformed command is
- * rejected up front rather than spawned wrong.
+ * Split a custom agent's full command line into argv, honoring single and double
+ * quotes (both literal). Backslashes are kept literal so Windows paths such as
+ * `C:\Users\me\agent.exe` survive; use quotes for arguments containing spaces.
+ * Throws on an unterminated quote so a malformed command is rejected up front
+ * rather than spawned wrong.
  */
 export function splitCommandLine(command: string): string[] {
   const argv: string[] = []
@@ -16,36 +17,15 @@ export function splitCommandLine(command: string): string[] {
   let quote: '"' | "'" | null = null
   let hasToken = false
 
-  for (let i = 0; i < command.length; i += 1) {
-    const ch = command[i]
-
-    if (quote === "'") {
-      if (ch === "'") quote = null
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = null
       else current += ch
-      continue
-    }
-
-    if (quote === '"') {
-      if (ch === '\\' && i + 1 < command.length) {
-        i += 1
-        current += command[i]
-      } else if (ch === '"') {
-        quote = null
-      } else {
-        current += ch
-      }
       continue
     }
 
     if (ch === "'" || ch === '"') {
       quote = ch
-      hasToken = true
-      continue
-    }
-
-    if (ch === '\\' && i + 1 < command.length) {
-      i += 1
-      current += command[i]
       hasToken = true
       continue
     }
