@@ -86,6 +86,7 @@ function toAcpTargetForAgent(agent: AcpAgent): SidepanelChatTarget {
 function formatAdapterName(adapter: AcpAgentType): string {
   if (adapter === 'claude') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
+  if (adapter === 'custom') return 'Custom agent'
   return adapter
 }
 

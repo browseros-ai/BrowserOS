@@ -1,4 +1,4 @@
-import { Check, Loader2, Trash2 } from 'lucide-react'
+import { Check, Loader2, Pencil, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { AdapterIcon, adapterLabel } from '@/components/agents/AdapterIcon'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,7 @@ export interface CodingAgentCardProps {
   deleting: boolean
   onSelect: () => void
   onDelete: (agent: AcpAgent) => void
+  onEdit?: (agent: AcpAgent) => void
 }
 
 export const CodingAgentCard: FC<CodingAgentCardProps> = ({
@@ -20,9 +21,15 @@ export const CodingAgentCard: FC<CodingAgentCardProps> = ({
   deleting,
   onSelect,
   onDelete,
+  onEdit,
 }) => {
+  const isCustom = agent.type === 'custom'
+  const primaryLabel =
+    isCustom && agent.customConfig?.command
+      ? agent.customConfig.command
+      : adapterLabel(agent.type)
   const metadata = [
-    adapterLabel(agent.type),
+    primaryLabel,
     agent.modelId ?? 'Agent default model',
     agent.reasoningEffort,
   ]
@@ -59,7 +66,13 @@ export const CodingAgentCard: FC<CodingAgentCardProps> = ({
         {isSelected ? <Check className="h-3 w-3 text-white" /> : null}
       </div>
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
-        <AdapterIcon adapter={agent.type} className="h-6 w-6" />
+        {isCustom && agent.customConfig?.icon ? (
+          <span className="text-lg leading-none">
+            {agent.customConfig.icon}
+          </span>
+        ) : (
+          <AdapterIcon adapter={agent.type} className="h-6 w-6" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
@@ -75,6 +88,20 @@ export const CodingAgentCard: FC<CodingAgentCardProps> = ({
         </div>
         <p className="truncate text-muted-foreground text-sm">{metadata}</p>
       </div>
+      {isCustom && onEdit ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Edit ${agent.name}`}
+          onClick={(event) => {
+            event.preventDefault()
+            onEdit(agent)
+          }}
+          className="shrink-0 text-muted-foreground hover:bg-[var(--accent-orange)]/10 hover:text-[var(--accent-orange)]"
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+      ) : null}
       <Button
         variant="ghost"
         size="icon-sm"
