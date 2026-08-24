@@ -217,3 +217,38 @@ describe('resolveAcpSpawnCommand', () => {
     expect(out?.argv.join('\n')).not.toContain('CODEX_HOME')
   })
 })
+
+describe('resolveAcpSpawnCommand (custom)', () => {
+  it('runs a custom command as given, split into argv', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'npx -y @scope/my-agent-acp --stdio',
+      platform: 'darwin',
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['npx', '-y', '@scope/my-agent-acp', '--stdio'])
+  })
+
+  it('injects custom env at the process-launch boundary', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent',
+      spawnEnv: { MY_AGENT_KEY: 'secret' },
+      platform: 'darwin',
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['env', 'MY_AGENT_KEY=secret', 'my-agent'])
+  })
+
+  it('does not wrap the custom command in bundled-bun', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent --stdio',
+      resourcesDir: '/fake/resources',
+      resolveBundledBun: stubBunPresent,
+      platform: 'darwin',
+    })
+    expect(out.argv).toEqual(['my-agent', '--stdio'])
+    expect(out.argv.join(' ')).not.toContain('--package')
+  })
+})

@@ -182,4 +182,58 @@ describe('buildAcpAgentPolicy', () => {
       'full-access',
     ])
   })
+
+  it('builds a custom agent policy from stored config', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('custom', {
+        id: 'custom-1',
+        name: 'My Agent',
+        modelId: 'gpt-x',
+        customConfig: {
+          command: 'npx -y @scope/my-agent-acp --stdio',
+          env: { MY_AGENT_KEY: 'secret' },
+          fullAccessModes: ['bypass'],
+          systemPromptAppend: 'Extra instructions.',
+        },
+      }),
+      conversationId: 'conversation-1',
+      serverPort: 9001,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+    })
+
+    // Per-agent registry id, never a shared 'custom' key.
+    expect(policy.adapter).toBe('custom:custom-1')
+    const override = policy.agentRegistryOverrides['custom:custom-1']
+    if (!Array.isArray(override)) throw new Error('Expected custom argv')
+    expect(override.join(' ')).toContain('@scope/my-agent-acp')
+    // Custom env rides at the process-launch boundary.
+    expect(override.join(' ')).toContain('MY_AGENT_KEY=secret')
+    expect(policy.sessionOptions).toEqual({
+      model: 'gpt-x',
+      systemPrompt: { append: 'Extra instructions.' },
+    })
+    expect(policy.fullAccessModeCandidates).toEqual(['bypass'])
+    // BrowserOS MCP is injected regardless of agent type.
+    expect(policy.mcpServers[0]?.name).toBe('browseros')
+  })
+
+  it('gives a custom agent no full-access modes when none are configured', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('custom', {
+        id: 'custom-2',
+        name: 'Bare Agent',
+        customConfig: { command: 'bare-agent' },
+      }),
+      conversationId: 'conversation-1',
+      serverPort: 9001,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+    })
+
+    expect(policy.fullAccessModeCandidates).toEqual([])
+    expect(policy.sessionOptions).toEqual({})
+  })
 })

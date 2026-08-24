@@ -94,4 +94,29 @@ describe('POST /acpx/probe', () => {
     const res = await call({ type: 'claude', timeoutMs: 100 })
     expect(res.status).toBe(400)
   })
+
+  it('requires a command to probe a custom agent', async () => {
+    expect((await call({ type: 'custom' })).status).toBe(400)
+  })
+
+  it('forwards the command and env for a custom probe', async () => {
+    nextProbeResult = {
+      models: [],
+      reasoning: null,
+      supportsConfigOption: false,
+      agentInfo: null,
+      protocolVersion: 1,
+    }
+    const res = await call({
+      type: 'custom',
+      command: 'npx -y @scope/my-agent-acp',
+      env: { MY_AGENT_KEY: 'v' },
+    })
+    expect(res.status).toBe(200)
+    expect(lastInput).toMatchObject({
+      type: 'custom',
+      command: 'npx -y @scope/my-agent-acp',
+      env: { MY_AGENT_KEY: 'v' },
+    })
+  })
 })

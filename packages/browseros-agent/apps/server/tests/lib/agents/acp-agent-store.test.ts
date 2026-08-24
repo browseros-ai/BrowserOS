@@ -70,6 +70,49 @@ describe('DbAcpAgentStore', () => {
     expect(await store.get(agent.id)).toBeNull()
   })
 
+  test('round-trips a custom agent config through the DB', async () => {
+    const store = createStore()
+    const customConfig = {
+      command: 'npx -y @scope/my-agent-acp --stdio',
+      env: { MY_AGENT_KEY: 'secret' },
+      fullAccessModes: ['bypass'],
+      reasoningEffortKey: 'effort',
+      icon: '🤖',
+    }
+    const agent = await store.create({
+      name: 'My Agent',
+      type: 'custom',
+      customConfig,
+    })
+
+    expect(agent.type).toBe('custom')
+    expect(agent.customConfig).toEqual(customConfig)
+    expect((await store.get(agent.id))?.customConfig).toEqual(customConfig)
+    expect((await store.list())[0]?.customConfig).toEqual(customConfig)
+  })
+
+  test('updates name and custom config, and 404s an unknown id', async () => {
+    const store = createStore()
+    const agent = await store.create({
+      name: 'A',
+      type: 'custom',
+      customConfig: { command: 'old' },
+    })
+
+    const updated = await store.update(agent.id, {
+      name: 'B',
+      customConfig: { command: 'new --stdio' },
+    })
+    expect(updated).toMatchObject({
+      name: 'B',
+      customConfig: { command: 'new --stdio' },
+    })
+    expect(updated?.updatedAt).toBeGreaterThanOrEqual(agent.updatedAt)
+    expect(
+      await store.update('00000000-0000-4000-8000-0000000000ff', { name: 'x' }),
+    ).toBeNull()
+  })
+
   test('migration resets legacy harness state without clearing unrelated data', () => {
     const dir = mkdtempSync(join(tmpdir(), 'browseros-acp-migration-test-'))
     tempDirs.push(dir)
