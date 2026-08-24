@@ -12,18 +12,20 @@ const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.e
 export const evaluate = defineTool({
   name: 'evaluate',
   description: DESCRIPTION,
-  input: z.object({
-    page: z.number().int().describe('Page id from `tabs`.'),
-    code: z
-      .string()
-      .describe(
-        'Async-capable JS body evaluated inside the page. Use `return` to read a value.',
-      ),
-    timeout: z
-      .number()
-      .optional()
-      .describe('Max evaluation time in ms (default 30000).'),
-  }),
+  input: z
+    .object({
+      page: z.number().int().describe('Page id from `tabs`.'),
+      code: z
+        .string()
+        .describe(
+          'Async-capable JS body evaluated inside the page. Use `return` to read a value.',
+        ),
+      timeout: z
+        .number()
+        .optional()
+        .describe('Max evaluation time in ms (default 30000).'),
+    })
+    .strict(),
   annotations: {
     title: 'Run JavaScript in page',
     destructiveHint: true,

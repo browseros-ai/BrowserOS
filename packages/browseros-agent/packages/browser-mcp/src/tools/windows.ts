@@ -8,14 +8,16 @@ export const windows = defineTool({
   name: 'windows',
   description:
     'Manage browser windows: list, create, close, or activate a window.',
-  input: z.object({
-    action: z.enum(ACTIONS).default('list'),
-    windowId: z
-      .number()
-      .int()
-      .optional()
-      .describe('Window id for close and activate.'),
-  }),
+  input: z
+    .object({
+      action: z.enum(ACTIONS).default('list'),
+      windowId: z
+        .number()
+        .int()
+        .optional()
+        .describe('Window id for close and activate.'),
+    })
+    .strict(),
   annotations: {
     title: 'Manage windows',
     destructiveHint: true,

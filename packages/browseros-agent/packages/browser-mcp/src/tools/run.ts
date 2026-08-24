@@ -30,17 +30,19 @@ interface RunOutcome {
 export const run = defineTool({
   name: 'run',
   description: DESCRIPTION,
-  input: z.object({
-    code: z
-      .string()
-      .describe(
-        'Async-capable JS body. Use top-level await; `return` a value.',
-      ),
-    timeout: z
-      .number()
-      .optional()
-      .describe('Max run time in ms (default 30000).'),
-  }),
+  input: z
+    .object({
+      code: z
+        .string()
+        .describe(
+          'Async-capable JS body. Use top-level await; `return` a value.',
+        ),
+      timeout: z
+        .number()
+        .optional()
+        .describe('Max run time in ms (default 30000).'),
+    })
+    .strict(),
   output: z.object({
     ok: z.boolean(),
     value: z.unknown().optional(),

@@ -21,23 +21,25 @@ export const read = defineTool({
   name: 'read',
   description:
     'Extract page content as markdown (default), plain text, or a list of links. For reading/scraping, not acting.',
-  input: z.object({
-    page: z.number().int(),
-    format: z.enum(['markdown', 'text', 'links']).default('markdown'),
-    selector: z.string().optional().describe('Restrict to a CSS subtree.'),
-    viewportOnly: z
-      .boolean()
-      .optional()
-      .describe('For markdown reads, include only visible viewport content.'),
-    includeLinks: z
-      .boolean()
-      .optional()
-      .describe('For markdown reads, render links as markdown links.'),
-    includeImages: z
-      .boolean()
-      .optional()
-      .describe('For markdown reads, include image references.'),
-  }),
+  input: z
+    .object({
+      page: z.number().int(),
+      format: z.enum(['markdown', 'text', 'links']).default('markdown'),
+      selector: z.string().optional().describe('Restrict to a CSS subtree.'),
+      viewportOnly: z
+        .boolean()
+        .optional()
+        .describe('For markdown reads, include only visible viewport content.'),
+      includeLinks: z
+        .boolean()
+        .optional()
+        .describe('For markdown reads, render links as markdown links.'),
+      includeImages: z
+        .boolean()
+        .optional()
+        .describe('For markdown reads, include image references.'),
+    })
+    .strict(),
   annotations: { title: 'Read page content', readOnlyHint: true },
   handler: async (args, ctx) => {
     const { session } = await ctx.session.pages.getSession(args.page)

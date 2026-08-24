@@ -94,6 +94,7 @@ struct FillField {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ActArgs {
     page: u32,
     kind: ActKind,

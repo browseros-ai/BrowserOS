@@ -6,22 +6,24 @@ export const pdf = defineTool({
   name: 'pdf',
   description:
     'Print the page to a PDF and save it to a BrowserOS output file, returning the path. Use for archiving or reading a page as a document; prefer read for extracting text.',
-  input: z.object({
-    page: z.number().int().describe('Page id from `tabs`.'),
-    landscape: z.boolean().optional().describe('Use landscape orientation.'),
-    background: z
-      .boolean()
-      .optional()
-      .describe('Compatibility alias for printBackground.'),
-    printBackground: z
-      .boolean()
-      .optional()
-      .describe('Print background graphics.'),
-    preferCSSPageSize: z
-      .boolean()
-      .default(false)
-      .describe('Use CSS page size when the page defines one.'),
-  }),
+  input: z
+    .object({
+      page: z.number().int().describe('Page id from `tabs`.'),
+      landscape: z.boolean().optional().describe('Use landscape orientation.'),
+      background: z
+        .boolean()
+        .optional()
+        .describe('Compatibility alias for printBackground.'),
+      printBackground: z
+        .boolean()
+        .optional()
+        .describe('Print background graphics.'),
+      preferCSSPageSize: z
+        .boolean()
+        .default(false)
+        .describe('Use CSS page size when the page defines one.'),
+    })
+    .strict(),
   annotations: { title: 'Save page as PDF', readOnlyHint: true },
   handler: async (args, ctx) => {
     const { session } = await ctx.session.pages.getSession(args.page)

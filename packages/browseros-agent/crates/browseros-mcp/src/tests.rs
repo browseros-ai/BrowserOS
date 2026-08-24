@@ -1282,3 +1282,16 @@ fn collect_schema_reference_paths(value: &Value, path: String, paths: &mut Vec<S
         _ => {}
     }
 }
+
+#[test]
+fn every_tool_rejects_unknown_arguments() {
+    for tool in catalog() {
+        let schema = Value::Object(tool.input_schema.as_ref().clone());
+        assert_eq!(
+            schema.pointer("/additionalProperties"),
+            Some(&json!({ "not": {} })),
+            "{} accepts unknown arguments; add #[serde(deny_unknown_fields)] to its args struct",
+            tool.name
+        );
+    }
+}

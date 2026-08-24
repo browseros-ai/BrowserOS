@@ -43,6 +43,7 @@ impl Default for ScreenshotSize {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ScreenshotArgs {
     page: u32,
     #[serde(default)]

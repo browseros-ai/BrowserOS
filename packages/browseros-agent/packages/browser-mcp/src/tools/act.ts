@@ -15,52 +15,60 @@ export const act = defineTool({
   name: 'act',
   description:
     'Act on the page using refs from the last snapshot. kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Reads back a diff of what changed - re-snapshot if you need fresh refs.',
-  input: z.object({
-    page: z.number().int(),
-    kind: z.enum([
-      'click',
-      'click_at',
-      'type',
-      'type_at',
-      'fill',
-      'press',
-      'hover',
-      'hover_at',
-      'focus',
-      'check',
-      'uncheck',
-      'select',
-      'scroll',
-      'drag',
-      'drag_at',
-    ]),
-    ref: z.string().optional().describe('Target element ref, e.g. "e12".'),
-    text: z.string().optional().describe('Text for kind=type.'),
-    value: z.string().optional().describe('Value for kind=fill/select.'),
-    fields: z
-      .array(z.object({ ref: z.string(), value: z.string() }))
-      .optional()
-      .describe('Multiple fields for kind=fill, filled in order.'),
-    key: z
-      .string()
-      .optional()
-      .describe('Key/combo for kind=press, e.g. "Enter", "Control+a".'),
-    direction: z.enum(['up', 'down', 'left', 'right']).optional(),
-    amount: z
-      .number()
-      .optional()
-      .describe('Scroll amount (wheel notches), default 3.'),
-    x: z.number().optional().describe('Viewport x coordinate for *_at kinds.'),
-    y: z.number().optional().describe('Viewport y coordinate for *_at kinds.'),
-    targetRef: z.string().optional().describe('Target ref for kind=drag.'),
-    startX: z.number().optional().describe('Drag start x coordinate.'),
-    startY: z.number().optional().describe('Drag start y coordinate.'),
-    endX: z.number().optional().describe('Drag end x coordinate.'),
-    endY: z.number().optional().describe('Drag end y coordinate.'),
-    button: z.enum(['left', 'middle', 'right']).optional(),
-    clickCount: z.number().int().optional(),
-    clear: z.boolean().optional(),
-  }),
+  input: z
+    .object({
+      page: z.number().int(),
+      kind: z.enum([
+        'click',
+        'click_at',
+        'type',
+        'type_at',
+        'fill',
+        'press',
+        'hover',
+        'hover_at',
+        'focus',
+        'check',
+        'uncheck',
+        'select',
+        'scroll',
+        'drag',
+        'drag_at',
+      ]),
+      ref: z.string().optional().describe('Target element ref, e.g. "e12".'),
+      text: z.string().optional().describe('Text for kind=type.'),
+      value: z.string().optional().describe('Value for kind=fill/select.'),
+      fields: z
+        .array(z.object({ ref: z.string(), value: z.string() }))
+        .optional()
+        .describe('Multiple fields for kind=fill, filled in order.'),
+      key: z
+        .string()
+        .optional()
+        .describe('Key/combo for kind=press, e.g. "Enter", "Control+a".'),
+      direction: z.enum(['up', 'down', 'left', 'right']).optional(),
+      amount: z
+        .number()
+        .optional()
+        .describe('Scroll amount (wheel notches), default 3.'),
+      x: z
+        .number()
+        .optional()
+        .describe('Viewport x coordinate for *_at kinds.'),
+      y: z
+        .number()
+        .optional()
+        .describe('Viewport y coordinate for *_at kinds.'),
+      targetRef: z.string().optional().describe('Target ref for kind=drag.'),
+      startX: z.number().optional().describe('Drag start x coordinate.'),
+      startY: z.number().optional().describe('Drag start y coordinate.'),
+      endX: z.number().optional().describe('Drag end x coordinate.'),
+      endY: z.number().optional().describe('Drag end y coordinate.'),
+      button: z.enum(['left', 'middle', 'right']).optional(),
+      clickCount: z.number().int().optional(),
+      clear: z.boolean().optional(),
+    })
+    .strict(),
   annotations: {
     title: 'Interact with page',
     destructiveHint: true,
