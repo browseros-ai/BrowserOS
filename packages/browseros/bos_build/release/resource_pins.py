@@ -91,12 +91,19 @@ RESOURCE_FAMILIES = (
         archive_base="browseros-claw-onboard-resources",
         targets=("universal",),
     ),
+    ResourceFamily(
+        name="browseros_onboard",
+        component="app-onboard/prod-resources",
+        archive_base="browseros-app-onboard-resources",
+        targets=("universal",),
+    ),
 )
 
 COMPONENT_RESOURCE_FAMILY = {
     "browseros-server": "browseros_server",
     "browserclaw-server": "browserclaw_server",
     "browserclaw-onboard": "browserclaw_onboard",
+    "browseros-onboard": "browseros_onboard",
 }
 
 

@@ -112,7 +112,7 @@ class UploadMetadataTest(unittest.TestCase):
             {
                 "server": "0.0.129",
                 "agent": "0.0.125.0",
-                "claw-onboard": "0.0.15",
+                "app-onboard": "0.0.15",
             },
         )
 

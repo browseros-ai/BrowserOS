@@ -110,6 +110,7 @@ class ResourcePinsTest(unittest.TestCase):
                 "browseros_server": "0.0.1",
                 "browserclaw_server": "0.0.2",
                 "browserclaw_onboard": "0.0.3",
+                "browseros_onboard": "0.0.4",
             },
         )
         self.assertTrue(

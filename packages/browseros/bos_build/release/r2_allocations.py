@@ -18,6 +18,7 @@ _RESOURCE_FAMILY_NAMES = {
     "server": "browseros_server",
     "claw-server-rust": "browserclaw_server",
     "claw-onboard": "browserclaw_onboard",
+    "app-onboard": "browseros_onboard",
 }
 _EXTENSION_COMPONENTS = frozenset({"agent", "browserclaw"})
 

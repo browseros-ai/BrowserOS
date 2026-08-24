@@ -101,6 +101,16 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         workspace_path="apps/claw-onboard",
         tag_prefix="claw-onboard/v",
     ),
+    "app-onboard": ComponentSpec(
+        id="app-onboard",
+        display_name="BrowserOS onboarding",
+        version_scheme="semver",
+        manifest_path=Path("packages/browseros-agent/apps/app-onboard/package.json"),
+        lockfile_path=Path("packages/browseros-agent/bun.lock"),
+        package_name="@browseros/app-onboard",
+        workspace_path="apps/app-onboard",
+        tag_prefix="app-onboard/v",
+    ),
 }
 
 _CANDIDATE_COMPONENTS = {

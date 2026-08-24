@@ -13,7 +13,7 @@ class SourceResourceCatalogTest(unittest.TestCase):
         self.assertEqual(source.server_component, "server")
         self.assertEqual(source.extension_component, "agent")
         self.assertEqual(source.extension_name, "agent")
-        self.assertEqual(source.onboarding_component, "claw-onboard")
+        self.assertEqual(source.onboarding_component, "app-onboard")
         self.assertEqual(source.external_extension_names, ("bugreporter",))
 
     def test_browserclaw_source_resources(self) -> None:

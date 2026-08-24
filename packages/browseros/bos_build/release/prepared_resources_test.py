@@ -92,7 +92,7 @@ class FakeOperations:
         self.downloads.append(url)
         return _crx(BROWSEROS_BUG_REPORTER_EXTENSION_ID, b"bug")
 
-    def build_onboarding(self, destination: Path) -> None:
+    def build_onboarding(self, destination: Path, component: str) -> None:
         self.onboarding_builds += 1
         _onboarding_zip(destination)
 
@@ -111,7 +111,7 @@ class PreparedResourcesTest(unittest.TestCase):
             component_versions={
                 "server": "0.0.128",
                 "agent": "0.0.101.0",
-                "claw-onboard": "0.0.12",
+                "app-onboard": "0.0.12",
             },
             output_dir=self.output,
             manifest_url="https://cdn.browseros.com/extensions/bundled-manifest.xml",

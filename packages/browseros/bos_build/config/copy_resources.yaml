@@ -245,6 +245,15 @@ copy_operations:
     os: ["windows"]
     arch: ["x64"]
 
+  - name: "BrowserOS Onboarding Resources"
+    source: "resources/binaries/browseros_app_onboard/resources"
+    destination: "chrome/browser/browseros/onboarding/resources"
+    type: "directory"
+    managed: true
+    required: true
+    clear_destination: true
+    product: "browseros"
+
   - name: "BrowserOS Claw Onboarding Resources"
     source: "resources/binaries/browseros_claw_onboard/resources"
     destination: "chrome/browser/browseros/onboarding/resources"
@@ -252,3 +261,4 @@ copy_operations:
     managed: true
     required: true
     clear_destination: true
+    product: "browserclaw"
