@@ -12,10 +12,11 @@ export const acpAgents = sqliteTable(
   {
     id: text('id').primaryKey(),
     name: text('name').notNull(),
-    type: text('type', { enum: ['claude', 'codex'] }).notNull(),
+    type: text('type', { enum: ['claude', 'codex', 'custom'] }).notNull(),
     modelId: text('model_id'),
     reasoningEffort: text('reasoning_effort'),
     workingDirectory: text('working_directory'),
+    customConfig: text('custom_config'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
