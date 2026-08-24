@@ -225,6 +225,72 @@ describe('toChatError', () => {
     expect(error.code).toBe('unknown')
     expect(error.details).toContain('session expired')
   })
+
+  it('redacts a JWT sitting inside a non-sensitive field', () => {
+    // Assembled from segments so the full token is never a literal in source
+    // (scanners match the whole token; the regex sees the runtime value).
+    const jwt = [
+      'eyJhbGciOiJIUzI1NiJ9',
+      'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
+      'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c',
+    ].join('.')
+    const error = toChatError(
+      apiCallError({
+        statusCode: 500,
+        responseBody: JSON.stringify({
+          error: { message: `auth failed: ${jwt}` },
+        }),
+      }),
+    )
+
+    expect(error.details).toContain('[REDACTED]')
+    expect(error.details).not.toContain('eyJhbGci')
+  })
+
+  it('redacts a sensitive JSON value by its key on the raw text', () => {
+    const error = toChatError(
+      apiCallError({
+        statusCode: 401,
+        responseBody: JSON.stringify({
+          access_token: 'ATsecret-value-9f8e7d6c5b4a',
+        }),
+      }),
+    )
+
+    expect(error.details).toContain('[REDACTED]')
+    expect(error.details).not.toContain('ATsecret-value')
+  })
+
+  it('redacts URL userinfo while keeping the host', () => {
+    const password = 'hunter2'.repeat(2)
+    const error = toChatError(
+      new Error(
+        `proxy failed at https://svc:${password}@proxy.internal:8080/v1`,
+      ),
+    )
+
+    expect(error.details).toContain('[REDACTED]')
+    expect(error.details).not.toContain(password)
+    // Host stays so the error is still diagnosable.
+    expect(error.details).toContain('proxy.internal')
+  })
+
+  it('redacts vendor token shapes (Google, Slack)', () => {
+    // Prefixes split from bodies so no full token literal appears in source.
+    const google = 'AIza'.concat('A'.repeat(35))
+    const slack = 'xoxb-'.concat('1234567890-abcdefghijklmnop')
+    const error = toChatError(
+      apiCallError({
+        statusCode: 403,
+        responseBody: JSON.stringify({
+          error: { message: `google ${google} slack ${slack}` },
+        }),
+      }),
+    )
+
+    expect(error.details).not.toContain(google)
+    expect(error.details).not.toContain(slack)
+  })
 })
 
 describe('toChatErrorText', () => {
