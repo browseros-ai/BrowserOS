@@ -91,9 +91,12 @@ impl SkillReconciler {
 
         let mut manifest = read_manifest(&self.workspace_dir)?;
         let before = manifest.targets.len();
+        // Only drop a legacy record once its directory is actually gone. A directory
+        // we could not remove (or could not inspect) still exists, so keeping its
+        // record leaves disk and manifest consistent and lets the next reconcile retry.
         manifest
             .targets
-            .retain(|entry| entry.skill_name != legacy_name);
+            .retain(|entry| entry.skill_name != legacy_name || entry.target_path.exists());
         if manifest.targets.len() != before {
             write_manifest(&self.workspace_dir, &manifest)?;
         }
@@ -1021,6 +1024,43 @@ mod tests {
                 .remove_legacy_directories("browserclaw", &environment)?
                 .is_empty()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn remove_legacy_directories_keeps_records_for_directories_that_remain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+
+        // Install under the legacy name, then replace its ownership marker with a
+        // foreign one so the sweep declines to remove the directory (standing in for
+        // any case where the directory is left on disk).
+        let legacy_spec = SkillSpec::new("browserclaw", "---\nname: browseros-neo\n---\nlegacy\n")?;
+        reconciler.reconcile(
+            &legacy_spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+        )?;
+        let legacy_dir =
+            resolve_agent_skill_target(AgentId::ClaudeCode, "browserclaw", &environment)?;
+        fs::write(
+            legacy_dir.join(".browserclaw-managed.json"),
+            r#"{"version":1,"managedBy":"other-tool","skillName":"browserclaw","contentHash":"x"}"#,
+        )?;
+        let manifest_path = state.join("skills.json");
+        assert!(fs::read_to_string(&manifest_path)?.contains("browserclaw"));
+
+        let removed = reconciler.remove_legacy_directories("browserclaw", &environment)?;
+
+        // The directory still exists, so its manifest record is preserved rather than
+        // orphaned; the next reconcile retries it.
+        assert!(removed.is_empty());
+        assert!(legacy_dir.join("SKILL.md").exists());
+        assert!(fs::read_to_string(&manifest_path)?.contains("browserclaw"));
         Ok(())
     }
 }
