@@ -58,6 +58,10 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         acpRuntime.closeAllForAgent(agentId, {
           discardPersistentState: true,
         }),
+      onUpdate: (agentId) =>
+        acpRuntime.closeAllForAgent(agentId, {
+          discardPersistentState: true,
+        }),
     })
 
   return (
