@@ -333,10 +333,12 @@ async function applyFullAccess(
   provider: AcpxProvider,
   policy: AcpAgentPolicy,
 ): Promise<void> {
-  if (
-    !provider.runtime.setMode ||
-    policy.fullAccessModeCandidates.length === 0
-  ) {
+  if (policy.fullAccessModeCandidates.length === 0) {
+    // No bypass mode configured (common for custom agents). Run in the agent's
+    // own default permission mode rather than forcing one.
+    return
+  }
+  if (!provider.runtime.setMode) {
     throw new Error(`ACP adapter ${policy.adapter} has no full-access mode`)
   }
 
@@ -355,12 +357,19 @@ async function applyFullAccess(
   })
 }
 
+function resolveReasoningEffortKey(agent: AcpAgentDefinition): string {
+  if (agent.type === 'custom') {
+    return agent.customConfig?.reasoningEffortKey ?? 'effort'
+  }
+  return agent.type === 'codex' ? 'reasoning_effort' : 'effort'
+}
+
 async function applyReasoningEffort(
   provider: AcpxProvider,
   agent: AcpAgentDefinition,
 ): Promise<void> {
   if (!agent.reasoningEffort || !provider.runtime.setConfigOption) return
-  const key = agent.type === 'codex' ? 'reasoning_effort' : 'effort'
+  const key = resolveReasoningEffortKey(agent)
   try {
     await provider.setConfigOption(key, agent.reasoningEffort)
   } catch (error) {

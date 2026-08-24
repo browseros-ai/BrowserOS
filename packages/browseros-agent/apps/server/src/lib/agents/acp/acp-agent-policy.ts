@@ -10,7 +10,7 @@ import type {
   SessionAgentOptions,
 } from '@browseros/acpx-ai-provider'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import type { AcpAgentDefinition, AcpAgentType } from '../agent-types'
+import type { AcpAgentDefinition } from '../agent-types'
 import { DANGEROUS_ALLOW_MODE_CANDIDATES } from '../host-acp/config'
 import { resolveAcpSpawnCommand } from '../host-acp/launcher'
 import { deriveAcpSessionKey } from '../storage/acp-agent-store'
@@ -27,7 +27,7 @@ export interface BuildAcpAgentPolicyInput {
 }
 
 export interface AcpAgentPolicy {
-  adapter: AcpAgentType
+  adapter: string
   cwd: string
   sessionKey: string
   agentRegistryOverrides: Record<string, string | string[]>
@@ -40,26 +40,43 @@ export async function buildAcpAgentPolicy(
   input: BuildAcpAgentPolicyInput,
 ): Promise<AcpAgentPolicy> {
   const skill = await loadBrowserOsSkill(input.resourcesDir)
+  // Custom agents get a per-agent registry id so two concurrent custom agents
+  // with different commands never collide on a shared 'custom' key.
+  const adapter =
+    input.agent.type === 'custom'
+      ? `custom:${input.agent.id}`
+      : input.agent.type
   const launcher = resolveAcpSpawnCommand({
     agentType: input.agent.type,
+    customCommand:
+      input.agent.type === 'custom'
+        ? input.agent.customConfig?.command
+        : undefined,
     browserosDir: input.browserosDir,
     resourcesDir: input.resourcesDir,
     spawnEnv: buildSpawnEnvironment(input.agent, skill),
   })
 
   return {
-    adapter: input.agent.type,
+    adapter,
     cwd: input.agent.workingDirectory?.trim() || homedir(),
     sessionKey: deriveAcpSessionKey(input.agent.id, input.conversationId),
-    agentRegistryOverrides: { [input.agent.type]: launcher.argv },
+    agentRegistryOverrides: { [adapter]: launcher.argv },
     mcpServers: buildAcpMcpServers({
       serverPort: input.serverPort,
       conversationId: input.conversationId,
       browserContext: input.browserContext,
     }),
     sessionOptions: buildSessionOptions(input.agent, skill),
-    fullAccessModeCandidates: DANGEROUS_ALLOW_MODE_CANDIDATES[input.agent.type],
+    fullAccessModeCandidates: resolveFullAccessModeCandidates(input.agent),
   }
+}
+
+function resolveFullAccessModeCandidates(
+  agent: AcpAgentDefinition,
+): readonly string[] {
+  if (agent.type === 'custom') return agent.customConfig?.fullAccessModes ?? []
+  return DANGEROUS_ALLOW_MODE_CANDIDATES[agent.type]
 }
 
 function buildSessionOptions(
@@ -73,6 +90,14 @@ function buildSessionOptions(
     }
   }
 
+  if (agent.type === 'custom') {
+    const append = agent.customConfig?.systemPromptAppend
+    return {
+      ...(agent.modelId ? { model: agent.modelId } : {}),
+      ...(append ? { systemPrompt: { append } } : {}),
+    }
+  }
+
   return {}
 }
 
@@ -80,6 +105,8 @@ function buildSpawnEnvironment(
   agent: AcpAgentDefinition,
   skill: string,
 ): Record<string, string> | undefined {
+  if (agent.type === 'custom') return agent.customConfig?.env
+
   if (agent.type !== 'codex') return undefined
 
   // acpx applies its snake_case record policy to SessionAgentOptions.env, so

@@ -7,9 +7,10 @@
 import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { resolveBundledBun, withBundledBunAcpAdapterEnv } from './bundled-bun'
 import { withBundledNativeBinaryPath } from './bundled-native-binary'
-import { HOST_ACP_ADAPTER_CONFIG } from './config'
+import { HOST_ACP_ADAPTER_CONFIG, type HostAcpAdapter } from './config'
+import { splitCommandLine } from './parse-command'
 
-export type AcpLauncherSource = 'bundled-bun' | 'host-npx-fallback'
+export type AcpLauncherSource = 'bundled-bun' | 'host-npx-fallback' | 'custom'
 
 export interface AcpLauncherResolution {
   argv: string[]
@@ -18,6 +19,11 @@ export interface AcpLauncherResolution {
 
 export interface ResolveAcpSpawnCommandInput {
   agentType: AcpAgentType
+  /**
+   * Full command line for `type: 'custom'` agents. Shell-split into argv and run
+   * as given (no bundled-bun package wrapping).
+   */
+  customCommand?: string
   browserosDir?: string | null
   env?: NodeJS.ProcessEnv
   resourcesDir?: string | null
@@ -29,8 +35,13 @@ export interface ResolveAcpSpawnCommandInput {
 export function resolveAcpSpawnCommand(
   input: ResolveAcpSpawnCommandInput,
 ): AcpLauncherResolution {
-  const config = HOST_ACP_ADAPTER_CONFIG[input.agentType]
   const platform = input.platform ?? process.platform
+
+  if (input.agentType === 'custom' || input.customCommand !== undefined) {
+    return resolveCustomSpawnCommand(input, platform)
+  }
+
+  const config = HOST_ACP_ADAPTER_CONFIG[input.agentType as HostAcpAdapter]
 
   const resolve = input.resolveBundledBun ?? resolveBundledBun
   const bunPath = resolve({
@@ -94,6 +105,34 @@ export function resolveAcpSpawnCommand(
       platform === 'win32',
     ),
     source: 'host-npx-fallback',
+  }
+}
+
+function resolveCustomSpawnCommand(
+  input: ResolveAcpSpawnCommandInput,
+  platform: NodeJS.Platform,
+): AcpLauncherResolution {
+  const command = input.customCommand?.trim()
+  if (!command) {
+    throw new Error('Custom ACP agent is missing a launch command')
+  }
+  const argv = splitCommandLine(command)
+  if (argv.length === 0) {
+    throw new Error('Custom ACP agent command is empty')
+  }
+  // Run the user's command as given; the child inherits process.env, and the
+  // custom env rides in as spawnEnv overrides.
+  const baseArgv =
+    platform === 'win32' ? windowsNpxArgv(argv, input.env ?? process.env) : argv
+  return {
+    argv: withSpawnEnvironment(
+      baseArgv,
+      { ...input.spawnEnv },
+      platform,
+      'node',
+      platform === 'win32',
+    ),
+    source: 'custom',
   }
 }
 
