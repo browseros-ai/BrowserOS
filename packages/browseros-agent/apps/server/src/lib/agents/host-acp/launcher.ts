@@ -9,6 +9,7 @@ import { resolveBundledBun, withBundledBunAcpAdapterEnv } from './bundled-bun'
 import { withBundledNativeBinaryPath } from './bundled-native-binary'
 import { HOST_ACP_ADAPTER_CONFIG, type HostAcpAdapter } from './config'
 import { splitCommandLine } from './parse-command'
+import { mergePath, resolveLoginShellPath } from './resolve-login-path'
 
 export type AcpLauncherSource = 'bundled-bun' | 'host-npx-fallback' | 'custom'
 
@@ -30,6 +31,7 @@ export interface ResolveAcpSpawnCommandInput {
   platform?: NodeJS.Platform
   spawnEnv?: Readonly<Record<string, string>>
   resolveBundledBun?: typeof resolveBundledBun
+  resolveLoginShellPath?: typeof resolveLoginShellPath
 }
 
 export function resolveAcpSpawnCommand(
@@ -124,10 +126,23 @@ function resolveCustomSpawnCommand(
   // custom env rides in as spawnEnv overrides.
   const baseArgv =
     platform === 'win32' ? windowsNpxArgv(argv, input.env ?? process.env) : argv
+  const spawnEnv = { ...input.spawnEnv }
+  // On macOS/Linux, prepend the user's login-shell PATH so a GUI-launched
+  // server finds binaries installed via the shell profile (homebrew, nvm, ...).
+  const loginPath = (input.resolveLoginShellPath ?? resolveLoginShellPath)({
+    platform,
+    env: input.env,
+  })
+  if (loginPath) {
+    const inherited =
+      pathValue(inheritedPath(input.env ?? process.env, platform), platform) ??
+      ''
+    spawnEnv.PATH = mergePath(loginPath, inherited)
+  }
   return {
     argv: withSpawnEnvironment(
       baseArgv,
-      { ...input.spawnEnv },
+      spawnEnv,
       platform,
       'node',
       platform === 'win32',
