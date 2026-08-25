@@ -15,6 +15,26 @@ describe('browser tool input schemas', () => {
     }
     expect(permissive).toEqual([])
   })
+
+  it('rejects unknown arguments nested inside object and array fields', () => {
+    const screenshot = BROWSER_TOOLS.find((tool) => tool.name === 'screenshot')
+    // A misspelled nested dimension must not be silently dropped and defaulted.
+    expect(
+      screenshot?.input.safeParse({
+        page: 1,
+        size: { width: 100, heigth: 200 },
+      }).success,
+    ).toBe(false)
+
+    const act = BROWSER_TOOLS.find((tool) => tool.name === 'act')
+    expect(
+      act?.input.safeParse({
+        page: 1,
+        kind: 'fill',
+        fields: [{ ref: 'e1', value: 'x', typo: true }],
+      }).success,
+    ).toBe(false)
+  })
 })
 
 /** Minimal valid arguments per tool, so the only parse failure can be the unknown key. */

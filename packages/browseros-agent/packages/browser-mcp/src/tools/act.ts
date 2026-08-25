@@ -39,7 +39,7 @@ export const act = defineTool({
       text: z.string().optional().describe('Text for kind=type.'),
       value: z.string().optional().describe('Value for kind=fill/select.'),
       fields: z
-        .array(z.object({ ref: z.string(), value: z.string() }))
+        .array(z.object({ ref: z.string(), value: z.string() }).strict())
         .optional()
         .describe('Multiple fields for kind=fill, filled in order.'),
       key: z

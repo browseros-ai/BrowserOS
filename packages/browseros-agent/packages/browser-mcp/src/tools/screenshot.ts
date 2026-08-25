@@ -8,10 +8,12 @@ const DEFAULT_SCREENSHOT_FORMAT = 'jpeg'
 const DEFAULT_SCREENSHOT_QUALITY = 80
 const DEFAULT_SCREENSHOT_SIZE = { width: 1024, height: 768 } as const
 const screenshotFormat = z.enum(['jpeg', 'png', 'webp'])
-const screenshotSize = z.object({
-  width: z.number().int().positive().max(4096).default(1024),
-  height: z.number().int().positive().max(4096).default(768),
-})
+const screenshotSize = z
+  .object({
+    width: z.number().int().positive().max(4096).default(1024),
+    height: z.number().int().positive().max(4096).default(768),
+  })
+  .strict()
 
 type ScreenshotFormat = z.infer<typeof screenshotFormat>
 type ScreenshotSize = z.infer<typeof screenshotSize>

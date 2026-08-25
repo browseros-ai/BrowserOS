@@ -88,6 +88,7 @@ enum ActMouseButton {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct FillField {
     r#ref: String,
     value: String,
