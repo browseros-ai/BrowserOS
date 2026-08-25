@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
-from ...lib.utils import log_info, log_success, log_error
+from ...lib.utils import IS_MACOS, log_info, log_success, log_error, log_warning
 
 
 @step("chromium_replace", phase="prep")
@@ -47,12 +47,54 @@ def replace_chromium_files_impl(ctx: Context, replacements=None) -> bool:
         log_info(
             f"⚠️  No chromium_files overlays found under: {ctx.get_chromium_replace_files_dir()}"
         )
+        _apply_macos_team_id(ctx)
         return True
 
     log_success(
         f"Replaced {replaced_count} files (skipped {skipped_count} non-matching files)"
     )
+    _apply_macos_team_id(ctx)
     return True
+
+
+def _apply_macos_team_id(ctx: Context) -> None:
+    """Stamp the configured signing Team ID into Chromium's branding file."""
+    if not IS_MACOS():
+        return
+
+    team_id = ctx.env.macos_team_id
+    if not team_id:
+        return
+    if "\n" in team_id or "\r" in team_id:
+        raise ValueError("MACOS_TEAM_ID must not contain newlines")
+
+    branding_path = ctx.chromium_src / "chrome/app/theme/chromium/BRANDING"
+    if not branding_path.exists():
+        log_warning(
+            "  ⚠️  Chromium branding file not found; macOS Team ID was not applied"
+        )
+        return
+
+    content = branding_path.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+    replaced = False
+    for index, line in enumerate(lines):
+        line_content = line.rstrip("\r\n")
+        if line_content.startswith("MAC_TEAM_ID="):
+            newline = line[len(line_content) :]
+            lines[index] = f"MAC_TEAM_ID={team_id}{newline}"
+            replaced = True
+
+    if not replaced:
+        log_warning(
+            "  ⚠️  MAC_TEAM_ID entry not found in Chromium branding; Team ID was not applied"
+        )
+        return
+
+    updated = "".join(lines)
+    if updated != content:
+        branding_path.write_text(updated, encoding="utf-8")
+    log_info("  ✓ Applied macOS signing Team ID to Chromium branding")
 
 
 def _replace_from_root(ctx: Context, replacement_dir: Path) -> tuple[int, int]:
