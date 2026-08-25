@@ -90,6 +90,7 @@ export function toProviderOption(target: SidepanelChatTarget): Provider {
     kind: target.kind,
     agentId: target.kind === 'acp' ? target.agentId : undefined,
     adapterName: target.kind === 'acp' ? target.adapterName : undefined,
+    brandKey: target.kind === 'acp' ? target.brandKey : undefined,
     modelLabel: target.kind === 'acp' ? target.modelLabel : undefined,
   }
 }

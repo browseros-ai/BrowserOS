@@ -9,6 +9,8 @@ export interface Provider {
   kind: 'llm' | 'acp'
   agentId?: string
   adapterName?: string
+  /** Brand id for the agent's logo (its type, or a popular-agent id). */
+  brandKey?: string
   modelLabel?: string
   modelControl?: 'runtime-supported' | 'best-effort'
 }

@@ -1,4 +1,5 @@
 import type { FC } from 'react'
+import HermesIcon from '@/assets/hermes.png'
 import { Antigravity } from '@/components/ui/svgs/antigravity'
 import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
 import { CodexDark } from '@/components/ui/svgs/codexDark'
@@ -32,12 +33,13 @@ const AntigravityMark: FC<AgentMarkProps> = ({ className }) => (
   <Antigravity className={className} />
 )
 
-// opencode's glyph, re-authored to `currentColor` so it themes with the tile
-// (the shared svg carries a white background rect that reads as a box in tiles).
+// opencode's glyph. The shared svg carries a white background rect that reads
+// as a box in tiles, so render just the glyph in opencode's brand ink (dark on
+// light, white on dark) rather than the tile's accent color.
 const OpencodeMark: FC<AgentMarkProps> = ({ className }) => (
   <svg
     viewBox="0 0 512 512"
-    className={className}
+    className={cn('text-[#17181c] dark:text-white', className)}
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     role="img"
@@ -50,6 +52,14 @@ const OpencodeMark: FC<AgentMarkProps> = ({ className }) => (
       fill="currentColor"
     />
   </svg>
+)
+
+const HermesMark: FC<AgentMarkProps> = ({ className }) => (
+  <img
+    src={HermesIcon}
+    alt="Hermes"
+    className={cn('h-full w-full object-contain', className)}
+  />
 )
 
 const OpenClawMark: FC<AgentMarkProps> = ({ className }) => (
@@ -124,6 +134,7 @@ export const BRAND_MARKS: Record<string, FC<AgentMarkProps>> = {
   openclaw: OpenClawMark,
   antigravity: AntigravityMark,
   pi: PiMark,
+  hermes: HermesMark,
 }
 
 /**

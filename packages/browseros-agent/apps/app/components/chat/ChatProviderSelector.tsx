@@ -1,6 +1,7 @@
 import { Bot, Check, Plus } from 'lucide-react'
 import type { FC, PropsWithChildren } from 'react'
 import { useState } from 'react'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import {
   Command,
   CommandEmpty,
@@ -107,7 +108,11 @@ export const ChatProviderSelector: FC<
 }
 
 function ProviderOptionIcon({ provider }: { provider: Provider }) {
-  if (provider.kind === 'acp') return <Bot size={18} />
+  if (provider.kind === 'acp') {
+    const Mark = BRAND_MARKS[provider.brandKey ?? '']
+    if (Mark) return <Mark className="h-[18px] w-[18px]" />
+    return <Bot size={18} />
+  }
   if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
   return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }
