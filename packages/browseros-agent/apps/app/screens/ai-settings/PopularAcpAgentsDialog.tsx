@@ -1,5 +1,6 @@
 import { ArrowUpRight } from 'lucide-react'
 import type { FC } from 'react'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -9,13 +10,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { POPULAR_ACP_AGENTS } from './popular-acp-agents'
-import { POPULAR_AGENT_MARKS } from './popular-agent-marks'
 
 export interface PopularAcpAgentsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Fill the parent form's command field with the chosen starting point. */
-  onSelect: (command: string) => void
+  /**
+   * Fill the parent form's command field with the chosen starting point and
+   * carry the agent id so the saved agent adopts that agent's brand logo.
+   */
+  onSelect: (command: string, agentId: string) => void
 }
 
 export const PopularAcpAgentsDialog: FC<PopularAcpAgentsDialogProps> = ({
@@ -35,7 +38,7 @@ export const PopularAcpAgentsDialog: FC<PopularAcpAgentsDialogProps> = ({
 
       <div className="space-y-2 py-2">
         {POPULAR_ACP_AGENTS.map((agent) => {
-          const Mark = POPULAR_AGENT_MARKS[agent.id]
+          const Mark = BRAND_MARKS[agent.id]
           return (
             <div
               key={agent.id}
@@ -64,7 +67,9 @@ export const PopularAcpAgentsDialog: FC<PopularAcpAgentsDialogProps> = ({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => onSelect(agent.suggestedCommand as string)}
+                    onClick={() =>
+                      onSelect(agent.suggestedCommand as string, agent.id)
+                    }
                   >
                     Use
                   </Button>

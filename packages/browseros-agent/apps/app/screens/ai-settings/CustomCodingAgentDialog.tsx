@@ -63,7 +63,9 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
   const [fullAccessModesText, setFullAccessModesText] = useState('')
   const [reasoningEffortKey, setReasoningEffortKey] = useState('')
   const [systemPromptAppend, setSystemPromptAppend] = useState('')
-  const [icon, setIcon] = useState('')
+  // Brand id (e.g. 'opencode') carried from the Popular-agents picker so the
+  // saved agent shows that agent's logo. Stored in customConfig.icon.
+  const [logoKey, setLogoKey] = useState('')
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState('')
   const [popularOpen, setPopularOpen] = useState(false)
@@ -80,7 +82,7 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
     setFullAccessModesText((config?.fullAccessModes ?? []).join(', '))
     setReasoningEffortKey(config?.reasoningEffortKey ?? '')
     setSystemPromptAppend(config?.systemPromptAppend ?? '')
-    setIcon(config?.icon ?? '')
+    setLogoKey(config?.icon ?? '')
     setModelId(agent?.modelId ?? '')
     setReasoningEffort(agent?.reasoningEffort ?? '')
     setPopularOpen(false)
@@ -117,7 +119,7 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
       fullAccessModesText,
       reasoningEffortKey,
       systemPromptAppend,
-      icon,
+      icon: logoKey,
     })
     if (isEdit && agent) {
       await updateAgent.mutateAsync({
@@ -351,16 +353,6 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
                     placeholder="Optional extra instructions"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="custom-agent-icon">Icon</Label>
-                  <Input
-                    id="custom-agent-icon"
-                    className="w-24"
-                    value={icon}
-                    onChange={(event) => setIcon(event.target.value)}
-                    placeholder="🤖"
-                  />
-                </div>
               </CollapsibleContent>
             </Collapsible>
 
@@ -387,8 +379,9 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
       <PopularAcpAgentsDialog
         open={popularOpen}
         onOpenChange={setPopularOpen}
-        onSelect={(selectedCommand) => {
+        onSelect={(selectedCommand, agentId) => {
           setCommand(selectedCommand)
+          setLogoKey(agentId)
           setPopularOpen(false)
         }}
       />

@@ -1,6 +1,10 @@
 import { Check, Loader2, Pencil, Trash2 } from 'lucide-react'
 import type { FC } from 'react'
 import { AdapterIcon, adapterLabel } from '@/components/agents/AdapterIcon'
+import {
+  agentBrandKey,
+  BRAND_MARKS,
+} from '@/components/agents/agent-brand-marks'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -24,6 +28,7 @@ export const CodingAgentCard: FC<CodingAgentCardProps> = ({
   onEdit,
 }) => {
   const isCustom = agent.type === 'custom'
+  const Mark = BRAND_MARKS[agentBrandKey(agent) ?? '']
   const primaryLabel =
     isCustom && agent.customConfig?.command
       ? agent.customConfig.command
@@ -65,11 +70,9 @@ export const CodingAgentCard: FC<CodingAgentCardProps> = ({
       >
         {isSelected ? <Check className="h-3 w-3 text-white" /> : null}
       </div>
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
-        {isCustom && agent.customConfig?.icon ? (
-          <span className="text-lg leading-none">
-            {agent.customConfig.icon}
-          </span>
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
+        {Mark ? (
+          <Mark className="h-6 w-6" />
         ) : (
           <AdapterIcon adapter={agent.type} className="h-6 w-6" />
         )}

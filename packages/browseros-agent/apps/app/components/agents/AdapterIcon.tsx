@@ -1,6 +1,7 @@
-import { Blocks, Bot, Cpu, Sparkles } from 'lucide-react'
+import { Blocks, Bot } from 'lucide-react'
 import type { FC } from 'react'
 import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
+import { BRAND_MARKS } from './agent-brand-marks'
 
 export interface AdapterIconProps {
   adapter: AcpAgentType | 'unknown'
@@ -8,16 +9,12 @@ export interface AdapterIconProps {
 }
 
 export const AdapterIcon: FC<AdapterIconProps> = ({ adapter, className }) => {
-  switch (adapter) {
-    case 'claude':
-      return <Sparkles className={className} aria-label="Claude Code" />
-    case 'codex':
-      return <Cpu className={className} aria-label="Codex" />
-    case 'custom':
-      return <Blocks className={className} aria-label="Custom agent" />
-    default:
-      return <Bot className={className} aria-label="Agent" />
+  const Mark = BRAND_MARKS[adapter]
+  if (Mark) return <Mark className={className} />
+  if (adapter === 'custom') {
+    return <Blocks className={className} aria-label="Custom agent" />
   }
+  return <Bot className={className} aria-label="Agent" />
 }
 
 export function adapterLabel(adapter: AcpAgentType | 'unknown'): string {

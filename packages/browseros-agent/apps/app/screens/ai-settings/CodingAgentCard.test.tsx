@@ -80,19 +80,20 @@ describe('CodingAgentCard', () => {
     expect(html).toContain('animate-spin')
   })
 
-  it('shows the command, icon, and edit button for custom agents', () => {
+  it('shows the command, brand logo, and edit button for custom agents', () => {
     const customAgent: AcpAgent = {
       id: '00000000-0000-4000-8000-000000000002',
       name: 'My Agent',
       type: 'custom',
-      customConfig: { command: 'npx -y @scope/my-agent-acp', icon: '🤖' },
+      // icon carries the popular-agent brand key set when the user picks one.
+      customConfig: { command: 'opencode acp', icon: 'opencode' },
       createdAt: 1,
       updatedAt: 1,
     }
     const html = renderCard({ agent: customAgent, onEdit: () => {} })
-    expect(html).toContain('npx -y @scope/my-agent-acp')
+    expect(html).toContain('opencode acp')
     expect(html).toContain('aria-label="Edit My Agent"')
-    expect(html).toContain('🤖')
+    expect(html).toContain('aria-label="opencode"')
   })
 
   it('omits the edit button when onEdit is absent', () => {
