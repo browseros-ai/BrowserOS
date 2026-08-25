@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { AppSelector } from '@/components/elements/AppSelector'
@@ -523,7 +524,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             isExpandedDraft ? 'items-end' : 'items-center',
           )}
         >
-          <BotInputIcon variant={variant} />
+          <BotInputIcon provider={selectedProvider} />
           <div className="flex-1">
             <Textarea
               ref={textareaRef}
@@ -680,23 +681,29 @@ function AttachmentChip({
   )
 }
 
-function BotInputIcon({ variant }: { variant: 'home' | 'conversation' }) {
+function BotInputIcon({ provider }: { provider?: Provider | null }) {
+  const AcpMark =
+    provider?.kind === 'acp' ? BRAND_MARKS[provider.brandKey ?? ''] : undefined
   return (
-    <div
-      className={cn(
-        'flex items-center justify-center text-[var(--accent-orange)]',
-        variant === 'home'
-          ? 'h-8 w-8 rounded-lg bg-[var(--accent-orange)]/10'
-          : 'h-8 w-8 rounded-lg bg-[var(--accent-orange)]/10',
+    <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
+      {AcpMark ? (
+        <AcpMark className="h-5 w-5" />
+      ) : provider?.type === 'browseros' ? (
+        <BrowserOSIcon size={18} />
+      ) : provider && provider.kind === 'llm' ? (
+        <ProviderIcon type={provider.type as ProviderType} size={18} />
+      ) : (
+        <Bot className="h-4 w-4" />
       )}
-    >
-      <Bot className="h-4 w-4" />
     </div>
   )
 }
 
 function TargetPillIcon({ provider }: { provider: Provider }) {
-  if (provider.kind === 'acp') return <Bot className="size-3" />
+  if (provider.kind === 'acp') {
+    const Mark = BRAND_MARKS[provider.brandKey ?? '']
+    return Mark ? <Mark className="size-3" /> : <Bot className="size-3" />
+  }
   if (provider.type === 'browseros') return <BrowserOSIcon size={12} />
   return <ProviderIcon type={provider.type as ProviderType} size={12} />
 }

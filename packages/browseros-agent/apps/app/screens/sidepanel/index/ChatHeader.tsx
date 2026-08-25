@@ -1,6 +1,7 @@
 import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { CreditBadge } from '@/components/credits/CreditBadge'
@@ -64,16 +65,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
             title="Change AI Provider"
           >
-            {selectedProvider.kind === 'acp' ? (
-              <Bot className="h-[18px] w-[18px]" />
-            ) : selectedProvider.type === 'browseros' ? (
-              <BrowserOSIcon size={18} />
-            ) : (
-              <ProviderIcon
-                type={selectedProvider.type as ProviderType}
-                size={18}
-              />
-            )}
+            <HeaderProviderIcon provider={selectedProvider} />
             <span className="font-semibold text-base">
               {selectedProvider.name}
             </span>
@@ -141,4 +133,17 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
       </div>
     </header>
   )
+}
+
+function HeaderProviderIcon({ provider }: { provider: Provider }) {
+  if (provider.kind === 'acp') {
+    const Mark = BRAND_MARKS[provider.brandKey ?? '']
+    return Mark ? (
+      <Mark className="h-[18px] w-[18px]" />
+    ) : (
+      <Bot className="h-[18px] w-[18px]" />
+    )
+  }
+  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
+  return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }
