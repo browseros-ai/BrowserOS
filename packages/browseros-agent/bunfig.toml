@@ -14,6 +14,12 @@ timeout = 30000
 [install]
 linker = "isolated"
 
+# Global virtual store: install each package once into a shared store and
+# symlink it in, instead of copying a full dependency tree per checkout. With
+# many worktrees open this is the difference between ~2G each and ~32M each.
+# Requires the isolated linker above. https://bun.com/docs/pm/global-store
+globalStore = true
+
 # Do not install dependency versions published less than 3 days ago: a brand
 # new release has not had time to be flagged if it is malicious or broken.
 # Applies to fresh resolutions (bun add / non-frozen bun install). CI runs
