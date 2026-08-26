@@ -42,6 +42,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Start Turbo remote cache (GitHub Actions cache)
         uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1

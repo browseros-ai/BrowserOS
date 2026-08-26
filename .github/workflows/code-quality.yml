@@ -26,6 +26,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       # Run Biome through the repo's own lint script (bunx @biomejs/biome) so CI
       # uses the exact same Biome as local `bun run lint`, instead of a version
@@ -52,6 +54,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Start Turbo remote cache (GitHub Actions cache)
         uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1
@@ -89,6 +93,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
@@ -121,6 +127,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Setup Rust
         run: |
@@ -160,6 +168,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Install dependencies
         run: bun ci
