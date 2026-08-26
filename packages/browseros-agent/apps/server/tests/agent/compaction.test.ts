@@ -224,7 +224,16 @@ describe('computeBudget: overhead', () => {
 })
 
 describe('computeBudget: invalid context windows', () => {
-  for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  // 0.5 is the interesting one: it is positive, so a `> 0` bound admits it,
+  // and then flooring makes it a zero-token window.
+  for (const invalid of [
+    0,
+    0.5,
+    0.9,
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ]) {
     it(`${String(invalid)} falls back to the default context window`, () => {
       const budget = computeBudget(invalid)
       expect(budget.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW)
@@ -236,6 +245,16 @@ describe('computeBudget: invalid context windows', () => {
 
   it('rounds a fractional context window down', () => {
     expect(computeBudget(200_000.9).contextWindow).toBe(200_000)
+  })
+
+  it('accepts the smallest usable window', () => {
+    expect(computeBudget(1).contextWindow).toBe(1)
+  })
+
+  it('never produces a zero threshold', () => {
+    for (const size of [0, 0.5, 1, 2, 100, 8_000, 200_000]) {
+      expect(computeBudget(size).threshold).toBeGreaterThan(0)
+    }
   })
 })
 

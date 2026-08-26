@@ -427,17 +427,70 @@ describe('compaction E2E: convergence', () => {
     })
   }
 
-  it('returns a smaller transcript even when nothing is prunable', async () => {
+  // Plain text carries no tool calls and no reasoning, so both prune passes
+  // are no-ops. Without a message-drop floor the transcript comes back
+  // untouched and the provider rejects the request.
+  // Message size is scaled to the window: dropping whole messages can only
+  // help when several individual messages fit in the budget that is left
+  // after overhead. See the oversized-message case below for the other side.
+  for (const { contextWindow, charsPerMessage, exchanges } of [
+    { contextWindow: 8_000, charsPerMessage: 600, exchanges: 20 },
+    { contextWindow: 32_000, charsPerMessage: 3_000, exchanges: 20 },
+    { contextWindow: 200_000, charsPerMessage: 12_000, exchanges: 40 },
+  ]) {
+    it(`${contextWindow / 1000}K context: text-only transcripts still land under the threshold`, async () => {
+      const { threshold, overhead } = computeBudget(contextWindow)
+      const prepareStep = createCompactionPrepareStep({ contextWindow })
+
+      const messages = buildTextHeavyMessages(exchanges, charsPerMessage)
+      expect(estimateTotalTokens(messages, overhead)).toBeGreaterThan(threshold)
+
+      const result = await prepareStep({ messages, steps: [] as StepsStub })
+
+      expect(
+        estimateTotalTokens(result.messages, overhead),
+      ).toBeLessThanOrEqual(threshold)
+      expect(result.messages.length).toBeLessThan(messages.length)
+    })
+  }
+
+  it('keeps the first message when dropping the oldest', async () => {
     const contextWindow = 8_000
     const prepareStep = createCompactionPrepareStep({ contextWindow })
 
-    // Plain text carries no tool calls and no reasoning, so pruning has
-    // nothing to remove. The step must still terminate and stay valid.
-    const messages = buildTextHeavyMessages(20, 4_000)
+    const messages = buildTextHeavyMessages(60, 4_000)
     const result = await prepareStep({ messages, steps: [] as StepsStub })
 
-    expect(result.messages.length).toBeGreaterThan(0)
-    expect(result.messages.length).toBeLessThanOrEqual(messages.length)
+    expect(result.messages[0]).toEqual(messages[0])
+  })
+
+  it('keeps the most recent message when dropping the oldest', async () => {
+    const contextWindow = 8_000
+    const prepareStep = createCompactionPrepareStep({ contextWindow })
+
+    const messages = buildTextHeavyMessages(60, 4_000)
+    const result = await prepareStep({ messages, steps: [] as StepsStub })
+
+    expect(result.messages.at(-1)).toEqual(messages.at(-1))
+  })
+
+  // Dropping whole messages cannot shrink a single message that is itself
+  // larger than the window. The step must degrade, not throw.
+  it('does not throw when one message alone exceeds the window', async () => {
+    const contextWindow = 8_000
+    const prepareStep = createCompactionPrepareStep({ contextWindow })
+
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'x'.repeat(400_000) },
+      { role: 'assistant', content: 'y'.repeat(400_000) },
+      { role: 'user', content: 'z'.repeat(400_000) },
+    ]
+
+    const result = await prepareStep({ messages, steps: [] as StepsStub })
+
+    expect(result.messages.length).toBe(2)
+    expect(result.messages[0]).toEqual(messages[0])
+    expect(result.messages[1]).toEqual(messages[2])
   })
 
   it('reaches a fixed point after one pass', async () => {
