@@ -1093,7 +1093,7 @@ class PublisherTestCase(unittest.TestCase):
             ),
             (
                 "appcast-claw-server.xml",
-                "0.0.15",
+                "0.0.44",
                 (
                     (
                         "BrowserOS Claw Server",
@@ -1108,7 +1108,7 @@ class PublisherTestCase(unittest.TestCase):
                         "BrowserOS Claw Server (Alpha) binary updates",
                     ),
                 ),
-                "1df47182d63006294b87323d276896e489f141f2aed1f0266a2119c9ffef3eef",
+                "ad5b3243ba935f9cced98a18a48c850bb11e2012e81be53ae265399c87ec5610",
             ),
         )
 
@@ -1131,12 +1131,12 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual((spec.kind, spec.channel), ("extensions", "alpha"))
         self.assertEqual(
             set(extract_manifest_versions(manifest).values()),
-            {"0.0.139.0", "54.0.0.0", "0.2.15.0"},
+            {"0.0.139.0", "54.0.0.0", "0.2.17.0"},
         )
         original = manifest.replace("</gupdate>", "  </app>\n</gupdate>")
         self.assertEqual(
             hashlib.sha256(original.encode()).hexdigest(),
-            "d2a7b386ea9928cb4ae4f0a8537f304db19e7e17e51178feecbe2f5a90f08fb7",
+            "1844d1c76722f5423b1a48fa2f7d5636cbb9cba6b98dd5c4daf56113b2737bc1",
         )
 
     def test_browserclaw_snapshots_use_current_product_title(self):
