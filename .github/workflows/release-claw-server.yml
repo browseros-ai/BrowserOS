@@ -75,6 +75,13 @@ on:
 permissions:
   contents: write
 
+env:
+  # A committed .cargo/config.toml moves compiler output beside the checkout so
+  # sibling worktrees can share it. A workflow run has a single checkout and gains
+  # nothing from that, and several steps locate build output at the in-repo path,
+  # so pin it back here. An env var takes precedence over the config file.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/packages/browseros-agent/target
+
 concurrency:
   # The legacy key keeps in-flight revisions of the renamed workflow serialized.
   group: release-claw-server-rust

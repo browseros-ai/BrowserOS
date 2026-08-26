@@ -1,0 +1,14 @@
+[build]
+# Put compiler output beside the checkout rather than inside it, so sibling
+# git worktrees of this repo share one target directory instead of each
+# building a full private copy. Resolved relative to this file's parent, so a
+# checkout at <path>/BrowserOS builds into <path>/shared-target.
+#
+# Single-checkout clones are unaffected in practice: they simply build one
+# directory higher than before.
+#
+# CI pins CARGO_TARGET_DIR back to the in-repo path, because a workflow run has
+# exactly one checkout and gains nothing from sharing, while several release
+# steps locate the compiled binary at packages/browseros-agent/target. An env
+# var overrides this file, so anything running cargo in CI must set it.
+target-dir = "../shared-target"
