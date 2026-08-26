@@ -26,6 +26,14 @@ const ignoresList = ignorePatterns.ignores?.map((each) => `!${each}`) ?? []
 
 const config: CodegenConfig = {
   schema: schemaPath,
+  // The codegen CLI resolves plugin packages relative to its own location. Bun
+  // links it in from a store outside this project, so a plugin declared as this
+  // app's dependency is not reachable from there and the short name fails to
+  // load. Resolve from this file instead, where the dependency is declared.
+  pluginLoader: (name: string) =>
+    import(
+      name.startsWith('@graphql-codegen/') ? name : `@graphql-codegen/${name}`
+    ),
   documents: ['./**/*.tsx', './**/*.ts', ...ignoresList],
   ignoreNoDocuments: true,
   generates: {
