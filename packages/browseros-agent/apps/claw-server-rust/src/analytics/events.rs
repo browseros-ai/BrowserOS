@@ -59,10 +59,6 @@ const CLIENT_ALIASES: [(&str, &str); 4] = [
 ];
 
 const UNRECOGNIZED_EMPTY: &str = "unrecognized-empty";
-const UNRECOGNIZED_REDACTED: &str = "unrecognized-redacted";
-/// Slugs longer than this are treated as opaque tokens (hashes, blobs) and redacted
-/// rather than surfaced as a candidate client name.
-const MAX_CANDIDATE_SLUG_LEN: usize = 40;
 
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
     "Claude Code",
@@ -309,27 +305,14 @@ fn bucket_client_name(raw: &str) -> String {
         return slug;
     }
 
-    // Not allowlisted. Rather than collapse every such client into one opaque
-    // bucket (which hides a large, legitimate long tail), split it so the tail is
-    // diagnosable without leaking PII. `clientInfo.name` is client-controlled free
-    // text that can carry emails, paths, URLs, or secrets, so only a safe-shaped
-    // slug is surfaced; anything with structural PII markers, or an opaque blob, is
-    // redacted, and a blank name is reported as empty.
+    // Not allowlisted: record the client's own slug so the long tail is visible
+    // instead of collapsed into one opaque bucket. A blank name has nothing to
+    // record, so it is reported as empty.
     if slug.is_empty() {
         UNRECOGNIZED_EMPTY.to_string()
-    } else if is_pii_shaped(raw) || slug.len() > MAX_CANDIDATE_SLUG_LEN {
-        UNRECOGNIZED_REDACTED.to_string()
     } else {
         slug
     }
-}
-
-/// A raw client name carries structural PII (email, path, URL, or host:port) when it
-/// contains any of these markers. Slugging strips them, but the slug would still embed
-/// the fragments, so the check runs against the original raw, not the slug.
-fn is_pii_shaped(raw: &str) -> bool {
-    raw.chars()
-        .any(|c| matches!(c, '@' | '/' | '\\' | ':' | '.'))
 }
 
 #[cfg(test)]
@@ -469,36 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn pii_shaped_client_names_are_redacted() {
-        for raw in [
-            "https://example.com",
-            "user@example.com",
-            "/home/user/secret",
-            r"C:\Users\someone",
-            "codex@example.com",
-            "codex://private",
-            "/codex/home/user",
-            "192.168.1.10",
-        ] {
-            assert_eq!(
-                AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
-                Some(json!({ "client_name": "unrecognized-redacted" })),
-                "{raw:?} carries PII markers and should be redacted"
-            );
-        }
-    }
-
-    #[test]
-    fn opaque_blob_client_names_are_redacted() {
-        let blob = "a".repeat(MAX_CANDIDATE_SLUG_LEN + 1);
-        assert_eq!(
-            AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": blob })),
-            Some(json!({ "client_name": "unrecognized-redacted" }))
-        );
-    }
-
-    #[test]
-    fn safe_unlisted_client_names_surface_their_slug() {
+    fn unlisted_client_names_surface_their_slug() {
         for (raw, expected) in [
             ("Roo Code", "roo-code"),
             ("LibreChat", "librechat"),
@@ -509,7 +463,7 @@ mod tests {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
                 Some(json!({ "client_name": expected })),
-                "{raw:?} should surface as a candidate slug"
+                "{raw:?} should surface its slug"
             );
         }
     }
