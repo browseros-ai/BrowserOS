@@ -6,25 +6,25 @@
     "jsx": "react-jsx",
     // wxt 0.21's generated base turns on noUncheckedIndexedAccess; opt back out until the codebase adopts it deliberately.
     "noUncheckedIndexedAccess": false,
-    // The global virtual store resolves dependencies through symlinks into a
-    // store outside the project, and TypeScript follows those to their real
-    // path. A dependency re-exporting React's own types (LucideProps extending
+    // baseUrl is required, not decorative: without it the entries below resolve
+    // under tsc but not under Bun's runtime resolver, which drops every @/
+    // import at test time.
+    "baseUrl": ".",
+    // The global virtual store links dependencies in from a store outside the
+    // project, and TypeScript resolves those symlinks to their real path. A
+    // dependency re-exporting React's own types (LucideProps extending
     // SVGProps) can no longer reach @types/react by walking up from there, so
     // pin the specifier to the workspace copy.
     //
-    // A paths block replaces rather than merges with the one inherited from
-    // .wxt/tsconfig.json, so the generated aliases are repeated here, rebased
-    // from .wxt/ to this directory.
+    // A paths block replaces rather than merges with the one inherited through
+    // extends, so the generated wxt aliases are restated here, rebased from
+    // .wxt/ to this directory.
     "paths": {
       "react": ["./node_modules/@types/react"],
       "react-dom": ["./node_modules/@types/react-dom"],
-      "@": ["."],
       "@/*": ["./*"],
-      "~": ["."],
       "~/*": ["./*"],
-      "@@": ["."],
       "@@/*": ["./*"],
-      "~~": ["."],
       "~~/*": ["./*"]
     }
   }
