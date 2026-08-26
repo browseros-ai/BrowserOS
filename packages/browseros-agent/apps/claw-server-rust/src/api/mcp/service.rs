@@ -150,13 +150,17 @@ impl ClawMcpService {
             .map(str::trim)
             .filter(|category| !category.is_empty())
         {
-            self.state.analytics.capture(
-                crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
-                json!({
-                    "task_category": category,
-                    "client_name": started.session.client_name(),
-                }),
-            );
+            // At most once per session: a later name_session rename must not
+            // re-declare and overcount the category mix or the declaration rate.
+            if started.session.try_mark_task_declared() {
+                self.state.analytics.capture(
+                    crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
+                    json!({
+                        "task_category": category,
+                        "client_name": started.session.client_name(),
+                    }),
+                );
+            }
         }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
