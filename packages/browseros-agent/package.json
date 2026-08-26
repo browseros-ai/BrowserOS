@@ -120,5 +120,9 @@
     "protobufjs": "^7.6.5",
     "shell-quote": "^1.9.0",
     "tmp": "^0.2.6"
-  }
+  },
+  "trustedDependencies": [
+    "@lobehub/icons",
+    "@lobehub/ui"
+  ]
 }
