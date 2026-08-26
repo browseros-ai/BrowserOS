@@ -273,7 +273,7 @@ jobs:
         # falls back to latest. Keep in sync with packageManager.
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.6"
+          bun-version: "1.3.14"
 
       - name: Install BrowserOS server dependencies
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'

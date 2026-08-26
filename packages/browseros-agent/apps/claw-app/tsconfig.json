@@ -6,10 +6,6 @@
     "jsx": "react-jsx",
     // wxt 0.21's generated base turns on noUncheckedIndexedAccess; opt back out until the codebase adopts it deliberately.
     "noUncheckedIndexedAccess": false,
-    // baseUrl is required, not decorative: without it the entries below resolve
-    // under tsc but not under Bun's runtime resolver, which drops every @/
-    // import at test time.
-    "baseUrl": ".",
     // The global virtual store links dependencies in from a store outside the
     // project, and TypeScript resolves those symlinks to their real path. A
     // dependency re-exporting React's own types (LucideProps extending
