@@ -487,7 +487,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", plus a `category` for the kind of task. Tabs are grouped as <client>/<name>; the label stays on this machine and only the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
@@ -495,6 +495,23 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
             "type": "object",
             "properties": {
                 "name": { "type": "string", "maxLength": 64 },
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "shopping",
+                        "research",
+                        "email-and-messaging",
+                        "form-filling",
+                        "data-extraction",
+                        "testing-and-qa",
+                        "dev-tools",
+                        "social-media",
+                        "finance-and-admin",
+                        "internal-tools",
+                        "other"
+                    ],
+                    "description": "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list."
+                },
                 "session": {
                     "type": "string",
                     "description": "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session."
