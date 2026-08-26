@@ -46,7 +46,8 @@ use uuid::Uuid;
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
-const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
+const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", plus a `category` for the kind of task. Tabs are grouped as <client>/<name>; the label stays on this machine and only the category is used for anonymous aggregate analytics. Call again to update.";
+const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
@@ -143,6 +144,20 @@ impl ClawMcpService {
                 .into_call_tool_result();
             }
         };
+        if let Some(category) = raw_args
+            .get("category")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|category| !category.is_empty())
+        {
+            self.state.analytics.capture(
+                crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
+                json!({
+                    "task_category": category,
+                    "client_name": started.session.client_name(),
+                }),
+            );
+        }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
             browser.as_ref(),
@@ -644,7 +659,12 @@ fn name_session_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "maxLength": NAME_SESSION_INPUT_MAX_LEN }
+            "name": { "type": "string", "maxLength": NAME_SESSION_INPUT_MAX_LEN },
+            "category": {
+                "type": "string",
+                "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
+                "description": NAME_SESSION_CATEGORY_DESCRIPTION
+            }
         },
         "required": ["name"]
     }) else {
@@ -1095,7 +1115,7 @@ mod tests {
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
-            "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
+            "- Name your session early with name_session: a 2-3 word task label plus the\n  category that best fits the task; tabs group as <client>/<name>."
         ));
         assert!(instructions.contains(
             "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
@@ -1156,6 +1176,11 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "maxLength": 64 },
+                    "category": {
+                        "type": "string",
+                        "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
+                        "description": NAME_SESSION_CATEGORY_DESCRIPTION
+                    },
                     "session": { "type": "string", "description": SESSION_ARG_DESCRIPTION }
                 },
                 "required": ["name"]
