@@ -289,6 +289,7 @@ class ResourceVersionOverrideTest(unittest.TestCase):
             "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
             "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip",
             "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
+            "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
         )
 
         self.assertEqual(
@@ -321,6 +322,13 @@ class ResourceVersionOverrideTest(unittest.TestCase):
             "claw-onboard/prod-resources/0.0.13/browseros-claw-onboard-resources.zip",
             resolve_resource_key(
                 "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
+                context,
+            ),
+        )
+        self.assertEqual(
+            "app-onboard/prod-resources/0.0.13/browseros-app-onboard-resources.zip",
+            resolve_resource_key(
+                "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
                 context,
             ),
         )
@@ -564,7 +572,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "BrowserOS Server Resources - macOS x64",
                 "BrowserOS Claw Rust Server Resources - macOS ARM64",
                 "BrowserOS Claw Rust Server Resources - macOS x64",
-                "BrowserOS Claw Onboarding Resources",
+                "BrowserOS Onboarding Resources",
             ],
             [op["name"] for op in filtered],
         )
@@ -601,19 +609,28 @@ class DownloadResourceConfigTest(unittest.TestCase):
         self.assertNotIn("BrowserOS Server Resources - macOS x64", names)
         self.assertNotIn("BrowserOS Claw Rust Server Resources - macOS x64", names)
 
-    def test_real_config_includes_claw_onboard_resources_everywhere(self) -> None:
-        # The onboarding dist is platform-independent and its grit pak is
-        # built for every product, so the operation must carry no gates.
+    def test_real_config_includes_onboarding_resources_per_product(self) -> None:
+        # Each product bakes its own onboarding SPA into the shared grit pak,
+        # so exactly one onboarding download applies on every platform.
         operations = self._real_download_operations()
-        expected = (
-            "BrowserOS Claw Onboarding Resources",
-            "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
-            "resources/binaries/browseros_claw_onboard",
-        )
+        expected_by_product = {
+            "browseros": (
+                "BrowserOS Onboarding Resources",
+                "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
+                "resources/binaries/browseros_app_onboard",
+            ),
+            "browserclaw": (
+                "BrowserOS Claw Onboarding Resources",
+                "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
+                "resources/binaries/browseros_claw_onboard",
+            ),
+        }
+        onboard_names = {value[0] for value in expected_by_product.values()}
 
-        onboard_ops = [op for op in operations if op["name"] == expected[0]]
-        self.assertEqual(1, len(onboard_ops))
-        self.assertEqual("artifact_zip", onboard_ops[0]["download_type"])
+        for expected in expected_by_product.values():
+            onboard_ops = [op for op in operations if op["name"] == expected[0]]
+            self.assertEqual(1, len(onboard_ops))
+            self.assertEqual("artifact_zip", onboard_ops[0]["download_type"])
 
         for platform, architecture in [
             ("macos", "arm64"),
@@ -623,7 +640,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
             ("linux", "x64"),
             ("windows", "x64"),
         ]:
-            for product in ("browseros", "browserclaw"):
+            for product, expected in expected_by_product.items():
                 with self.subTest(
                     platform=platform, arch=architecture, product=product
                 ):
@@ -633,7 +650,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
                     actual = [
                         (op["name"], op["r2_key"], op["destination"])
                         for op in filtered
-                        if op["name"] == expected[0]
+                        if op["name"] in onboard_names
                     ]
                     self.assertEqual([expected], actual)
 

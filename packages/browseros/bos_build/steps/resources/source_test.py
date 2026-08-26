@@ -34,7 +34,7 @@ class SourceResourcesStepTest(unittest.TestCase):
             component_versions={
                 "server": "0.0.128",
                 "agent": "0.0.101.0",
-                "claw-onboard": "0.0.12",
+                "app-onboard": "0.0.12",
             },
             files={},
         )
@@ -82,7 +82,7 @@ class SourceResourcesStepTest(unittest.TestCase):
         versions = {
             "server": "0.0.128",
             "agent": "0.0.101.0",
-            "claw-onboard": "0.0.12",
+            "app-onboard": "0.0.12",
         }
         read_version.side_effect = lambda _root, component: versions[component]
         prepare.return_value = self.manifest

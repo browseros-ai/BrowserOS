@@ -462,18 +462,19 @@ class CopyResourcesTest(unittest.TestCase):
                 self.assertTrue(op["managed"])
                 self.assertTrue(op["required"])
 
-    def test_real_config_copies_claw_onboard_resources_for_both_products(self):
+    def test_real_config_copies_each_products_own_onboarding_resources(self):
         self.root.write_copy_config(self._real_copy_config())
-        onboard_source = (
-            self.root.root
-            / "resources"
-            / "binaries"
-            / "browseros_claw_onboard"
-            / "resources"
-        )
-        (onboard_source / "icon").mkdir(parents=True)
-        (onboard_source / "index.html").write_text("<html>onboard</html>")
-        (onboard_source / "icon" / "32.png").write_text("icon-bytes")
+        onboard_sources = {
+            "browseros": "browseros_app_onboard",
+            "browserclaw": "browseros_claw_onboard",
+        }
+        for product, binary_dir in onboard_sources.items():
+            source = (
+                self.root.root / "resources" / "binaries" / binary_dir / "resources"
+            )
+            (source / "icon").mkdir(parents=True)
+            (source / "index.html").write_text(f"<html>{product}</html>")
+            (source / "icon" / "32.png").write_text(f"{product}-icon-bytes")
 
         onboard_dest = (
             self.chromium.src
@@ -484,7 +485,7 @@ class CopyResourcesTest(unittest.TestCase):
             / "resources"
         )
 
-        for product in ("browseros", "browserclaw"):
+        for product in onboard_sources:
             with self.subTest(product=product):
                 self._seed_required_resources(product, "arm64")
                 if onboard_dest.exists():
@@ -504,10 +505,12 @@ class CopyResourcesTest(unittest.TestCase):
                     self.assertTrue(copy_resources_impl(ctx))
 
                 self.assertEqual(
-                    (onboard_dest / "index.html").read_text(), "<html>onboard</html>"
+                    (onboard_dest / "index.html").read_text(),
+                    f"<html>{product}</html>",
                 )
                 self.assertEqual(
-                    (onboard_dest / "icon" / "32.png").read_text(), "icon-bytes"
+                    (onboard_dest / "icon" / "32.png").read_text(),
+                    f"{product}-icon-bytes",
                 )
 
     def _real_copy_config(self) -> dict:
@@ -533,8 +536,13 @@ class CopyResourcesTest(unittest.TestCase):
         )
         server.mkdir(parents=True, exist_ok=True)
         (server / binary).write_text(product)
+        onboard_binary = (
+            "browseros_app_onboard"
+            if product == "browseros"
+            else "browseros_claw_onboard"
+        )
         onboarding = (
-            self.root.root / "resources/binaries/browseros_claw_onboard/resources"
+            self.root.root / f"resources/binaries/{onboard_binary}/resources"
         )
         onboarding.mkdir(parents=True, exist_ok=True)
         index = onboarding / "index.html"

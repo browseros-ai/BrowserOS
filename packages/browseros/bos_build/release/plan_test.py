@@ -280,6 +280,7 @@ class ReleasePlanTest(unittest.TestCase):
                 {
                     "browserclaw_onboard": "0.0.3",
                     "browserclaw_server": "0.0.2",
+                    "browseros_onboard": "0.0.4",
                     "browseros_server": "0.0.1",
                 },
             )

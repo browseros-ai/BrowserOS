@@ -147,7 +147,7 @@ class PreparationOperations(Protocol):
 
     def download(self, url: str) -> bytes: ...
 
-    def build_onboarding(self, destination: Path) -> None: ...
+    def build_onboarding(self, destination: Path, component: str) -> None: ...
 
 
 def _sha256(path: Path) -> str:
@@ -194,6 +194,11 @@ def _resolve_manifest_extension(xml: str, extension_id: str) -> tuple[str, str]:
             f"Bundled extension manifest must contain one entry for {extension_id}"
         )
     return matches[0]
+
+
+def _onboarding_archive_name(component: str) -> str:
+    """Archive filename published by one onboarding component's build."""
+    return f"browseros-{component}-resources.zip"
 
 
 def _validate_onboarding_archive(path: Path, version: str) -> None:
@@ -360,8 +365,10 @@ def prepare_common_resources(
 
         onboarding_dir = staging / "onboarding"
         onboarding_dir.mkdir()
-        onboarding = onboarding_dir / "browseros-claw-onboard-resources.zip"
-        operations.build_onboarding(onboarding)
+        onboarding = onboarding_dir / _onboarding_archive_name(
+            source.onboarding_component
+        )
+        operations.build_onboarding(onboarding, source.onboarding_component)
         _validate_onboarding_archive(onboarding, onboarding_version)
 
         prepared = PreparedResourcesManifest(
@@ -444,14 +451,14 @@ class LocalPreparationOperations:
         response.raise_for_status()
         return response.content
 
-    def build_onboarding(self, destination: Path) -> None:
+    def build_onboarding(self, destination: Path, component: str) -> None:
         agent_root = self.repo_root / "packages/browseros-agent"
-        manifest = agent_root / "apps/claw-onboard/package.json"
+        manifest = agent_root / f"apps/{component}/package.json"
         lockfile = agent_root / "bun.lock"
         before = (manifest.read_bytes(), lockfile.read_bytes())
         environment = {**os.environ, "NODE_ENV": "production"}
         subprocess.run(
-            ["bun", "scripts/build/claw-onboard.ts", "--no-upload"],
+            ["bun", f"scripts/build/{component}.ts", "--no-upload"],
             cwd=agent_root,
             env=environment,
             check=True,
@@ -460,7 +467,7 @@ class LocalPreparationOperations:
             raise RuntimeError("Onboarding build changed its committed version files")
         built = (
             agent_root
-            / "dist/prod/claw-onboard/browseros-claw-onboard-resources.zip"
+            / f"dist/prod/{component}/{_onboarding_archive_name(component)}"
         )
         if not built.is_file():
             raise FileNotFoundError(f"Onboarding build did not produce {built}")

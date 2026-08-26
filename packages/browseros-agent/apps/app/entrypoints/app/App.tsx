@@ -9,16 +9,13 @@ import { LoginPage } from '@/screens/auth/LoginPage'
 import { LogoutPage } from '@/screens/auth/LogoutPage'
 import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
+import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
 import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
 import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
-import { OnboardingDemo } from '@/screens/onboarding/demo/OnboardingDemo'
-import { FeaturesPage } from '@/screens/onboarding/features/Features'
-import { Onboarding } from '@/screens/onboarding/index/Onboarding'
-import { StepsLayout } from '@/screens/onboarding/steps/StepsLayout'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 import { UsagePage } from '@/screens/usage/UsagePage'
@@ -90,12 +87,7 @@ export const App: FC = () => {
           </Route>
         </Route>
 
-        <Route path="onboarding">
-          <Route index element={<Onboarding />} />
-          <Route path="steps/:stepId" element={<StepsLayout />} />
-          <Route path="demo" element={<OnboardingDemo />} />
-          <Route path="features" element={<FeaturesPage />} />
-        </Route>
+        <Route path="features" element={<FeaturesPage />} />
 
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route

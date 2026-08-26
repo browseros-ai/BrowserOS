@@ -109,7 +109,7 @@ jobs:
         env:
           EXTENSION_SHA: ${{ needs.extension.outputs.release_sha }}
           EXTENSION_VERSION: ${{ needs.extension.outputs.version }}
-          ONBOARDING_VERSION: ${{ needs.reserve.outputs.onboarding_version }}
+          ONBOARDING_VERSION: ${{ needs.reserve.outputs.app_onboarding_version }}
           SERVER_SHA: ${{ needs.server.outputs.release_sha }}
           SERVER_VERSION: ${{ needs.server.outputs.version }}
           SOURCE_SHA: ${{ needs.reserve.outputs.source_sha }}
@@ -243,7 +243,9 @@ jobs:
           BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
           BROWSEROS_REPO: ${{ steps.build_inputs.outputs.browseros_repo }}
           BROWSEROS_SERVER_RESOURCE_VERSION: ${{ needs.server.outputs.version }}
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ needs.reserve.outputs.onboarding_version }}
+          # Per-build onboarding resource pin; BrowserOS bakes the app-onboard
+          # component, so it reserves that app's version.
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ needs.reserve.outputs.app_onboarding_version }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ steps.build_inputs.outputs.browseros_repo }}/updates/extensions/bundled-manifest.xml
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ needs.extension.outputs.version }}
           CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.chromium_src }}

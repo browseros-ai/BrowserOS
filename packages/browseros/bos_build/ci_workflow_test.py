@@ -1027,6 +1027,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
         )
         for workflow_name in workflows:
@@ -1046,6 +1047,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
         ):
             text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
@@ -1063,6 +1065,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
             "release-extension-feeds.yml",
             "release-linux.yml",
@@ -1108,6 +1111,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             ("release-server.yml", "prepare", "Resolve release"),
             ("release-claw-server.yml", "prepare", "Resolve release"),
             ("release-claw-onboard.yml", "prepare", "Resolve release"),
+            ("release-app-onboard.yml", "prepare", "Resolve release"),
             ("release-extensions.yml", "prepare", "Resolve extension release"),
         )
         for workflow_name, job_name, step_name in jobs:
@@ -1251,6 +1255,7 @@ class NightlyWorkflowTest(unittest.TestCase):
             "extension": "agent",
             "extension_secret": "BROWSEROS_AGENT_V2_KEY",
             "tag": "nightly-browseros",
+            "onboarding_output": "app_onboarding_version",
         },
         "nightly-browserclaw.yml": {
             "product": "browserclaw",
@@ -1259,6 +1264,7 @@ class NightlyWorkflowTest(unittest.TestCase):
             "extension": "browserclaw",
             "extension_secret": "BROWSERCLAW_KEY",
             "tag": "nightly-browserclaw",
+            "onboarding_output": "onboarding_version",
         },
     }
 
@@ -1392,7 +1398,9 @@ class NightlyWorkflowTest(unittest.TestCase):
                 self.assertIn("BROWSEROS_BUILD_SOURCE_SHA", build["env"])
                 self.assertEqual(
                     build["env"]["BROWSERCLAW_ONBOARD_RESOURCE_VERSION"],
-                    "${{ needs.reserve.outputs.onboarding_version }}",
+                    "${{ needs.reserve.outputs."
+                    + config["onboarding_output"]
+                    + " }}",
                 )
 
     def test_nightlies_setup_ci_keychain_before_build_and_cleanup_always(self):
@@ -1583,7 +1591,9 @@ class NightlyWorkflowTest(unittest.TestCase):
             "'.mergeCommit.oid // \"\"'",
             'test "$merged_version" = "$version"',
             "onboarding_version=\"$(jq -er '.version' packages/browseros-agent/apps/claw-onboard/package.json)\"",
+            "app_onboarding_version=\"$(jq -er '.version' packages/browseros-agent/apps/app-onboard/package.json)\"",
             'echo "onboarding_version=$onboarding_version"',
+            'echo "app_onboarding_version=$app_onboarding_version"',
             "for attempt in 1 2 3 4 5",
         ):
             self.assertIn(token, reserve_step["run"])
@@ -1591,6 +1601,10 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertEqual(
             triggers["workflow_call"]["outputs"]["onboarding_version"]["value"],
             "${{ jobs.reserve.outputs.onboarding_version }}",
+        )
+        self.assertEqual(
+            triggers["workflow_call"]["outputs"]["app_onboarding_version"]["value"],
+            "${{ jobs.reserve.outputs.app_onboarding_version }}",
         )
         self.assertNotIn('git push origin "HEAD:refs/heads/main"', reserve_step["run"])
         self.assertEqual(

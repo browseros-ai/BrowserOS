@@ -22,6 +22,7 @@ SOURCE_RESOURCES = {
         server_component="server",
         extension_component="agent",
         extension_name="agent",
+        onboarding_component="app-onboard",
     ),
     "browserclaw": SourceResources(
         product_id="browserclaw",
