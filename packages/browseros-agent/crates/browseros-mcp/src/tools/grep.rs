@@ -29,6 +29,7 @@ enum GrepOver {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct GrepArgs {
     page: u32,
     /// Case-insensitive regular expression.

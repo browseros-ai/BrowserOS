@@ -1,0 +1,1 @@
+ALTER TABLE `acp_agents` ADD `custom_config` text;

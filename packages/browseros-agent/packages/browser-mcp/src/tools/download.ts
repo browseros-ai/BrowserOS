@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { getToolOutputDir } from '../tool-output-dir'
 import { defineTool, textResult } from './framework'
 import { recordBrowserOutputFile } from './output-file'
@@ -11,12 +11,14 @@ export const download = defineTool({
   name: 'download',
   description:
     'Click an element (by ref from the last snapshot) to trigger a file download, and save it to a BrowserOS output file. Returns the saved path and filename.',
-  input: z.object({
-    page: z.number().int().describe('Page id from `tabs`.'),
-    ref: z
-      .string()
-      .describe('Ref of the element that triggers the download, e.g. "e12".'),
-  }),
+  input: z
+    .object({
+      page: z.number().int().describe('Page id from `tabs`.'),
+      ref: z
+        .string()
+        .describe('Ref of the element that triggers the download, e.g. "e12".'),
+    })
+    .strict(),
   annotations: {
     title: 'Download from page',
     destructiveHint: true,

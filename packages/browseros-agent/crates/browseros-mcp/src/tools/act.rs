@@ -88,12 +88,14 @@ enum ActMouseButton {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct FillField {
     r#ref: String,
     value: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ActArgs {
     page: u32,
     kind: ActKind,

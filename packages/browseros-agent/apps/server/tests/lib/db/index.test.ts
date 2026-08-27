@@ -245,4 +245,8 @@ const expectedMigrationHistory = [
     hash: 'e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90',
     createdAt: 1786538823114,
   },
+  {
+    hash: '561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b',
+    createdAt: 1787580067090,
+  },
 ]

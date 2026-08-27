@@ -31,6 +31,7 @@ enum ReadFormat {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ReadArgs {
     page: u32,
     #[serde(default)]

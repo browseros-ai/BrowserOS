@@ -18,6 +18,7 @@ Click an element (by ref from the last snapshot) to trigger a file download, \
 and save it to a BrowserOS output file. Returns the saved path and filename.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DownloadArgs {
     /// Page id from `tabs`.
     page: u32,

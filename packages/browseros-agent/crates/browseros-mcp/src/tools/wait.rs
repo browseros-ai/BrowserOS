@@ -34,6 +34,7 @@ enum WaitValue {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct WaitArgs {
     page: u32,
     /// What to wait for. Defaults to "time" (a fixed pause).

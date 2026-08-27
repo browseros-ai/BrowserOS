@@ -1,0 +1,11 @@
+[build]
+# Keep intermediate artifacts outside the checkout so every clone and worktree
+# on a machine shares one copy instead of each rebuilding the dependency graph.
+# {cargo-cache-home} expands to CARGO_HOME, so this is portable: no absolute
+# path, no assumption about where the repo lives. Cargo does not expand ~ or
+# $HOME, and target-dir does not support templating, so build-dir is the only
+# form that gets this.
+#
+# Final artifacts still land in <checkout>/target, so anything locating a built
+# binary by path keeps working.
+build-dir = "{cargo-cache-home}/build/browseros"

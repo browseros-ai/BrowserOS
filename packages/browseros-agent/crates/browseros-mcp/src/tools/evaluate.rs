@@ -24,6 +24,7 @@ Provide `code` (an async body; use `return` to read a value) or `func` (a functi
 expression like `() => {...}` that gets invoked). Return a value to read it back.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EvaluateArgs {
     /// Page id from `tabs`.
     page: u32,

@@ -5,10 +5,11 @@
  */
 
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { jsonSchemaObjectToZodRawShape } from 'zod-from-json-schema'
+import {
+  type CallToolResult,
+  Client,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client'
 import type { KlavisClient } from './client'
 import type { KlavisStrataCache } from './strata-cache'
 import type { KlavisSessionHandle } from './types'
@@ -52,19 +53,9 @@ export async function connectKlavisStrataSession(
 
   const { tools } = await withTimeout(client.listTools(), 'listTools')
 
-  const inputSchemas = new Map(
-    tools.map((t) => [
-      t.name,
-      jsonSchemaObjectToZodRawShape(
-        t.inputSchema as never,
-      ) as unknown as Record<string, never>,
-    ]),
-  )
-
   return {
     browserosId: deps.browserosId,
     tools,
-    inputSchemas,
     callTool: (name, args) =>
       withTimeout(
         client.callTool({ name, arguments: args }) as Promise<CallToolResult>,

@@ -24,6 +24,7 @@ enum ScreenshotFormat {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ScreenshotSize {
     #[serde(default = "default_width")]
     #[schemars(range(min = 1, max = 4096))]
@@ -43,6 +44,7 @@ impl Default for ScreenshotSize {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ScreenshotArgs {
     page: u32,
     #[serde(default)]

@@ -22,14 +22,15 @@ use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation,
-        InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        PaginatedRequestParams, ServerCapabilities, Tool, ToolAnnotations,
+        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, Tool, ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -40,12 +41,15 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use ulid::Ulid;
+use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
-const NAME_SESSION_DESCRIPTION: &str = "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename.";
+const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", plus a `category` for the kind of task. Tabs are grouped as <client>/<name>; the label stays on this machine and only the category is used for anonymous aggregate analytics. Call again to update.";
+const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
+const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
@@ -103,10 +107,11 @@ impl ClawMcpService {
             .catalog
             .iter()
             .map(ToolDef::to_mcp_tool)
+            .map(with_session_arg)
             .collect::<Vec<_>>();
-        tools.push(self.name_session_tool.clone());
-        tools.push(self.save_skill_tool.clone());
-        tools.push(self.mark_skill_run_tool.clone());
+        tools.push(with_session_arg(self.name_session_tool.clone()));
+        tools.push(with_session_arg(self.save_skill_tool.clone()));
+        tools.push(with_session_arg(self.mark_skill_run_tool.clone()));
         tools
     }
 
@@ -139,6 +144,24 @@ impl ClawMcpService {
                 .into_call_tool_result();
             }
         };
+        if let Some(category) = raw_args
+            .get("category")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|category| !category.is_empty())
+        {
+            // At most once per session: a later name_session rename must not
+            // re-declare and overcount the category mix or the declaration rate.
+            if started.session.try_mark_task_declared() {
+                self.state.analytics.capture(
+                    crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
+                    json!({
+                        "task_category": category,
+                        "client_name": started.session.client_name(),
+                    }),
+                );
+            }
+        }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
             browser.as_ref(),
@@ -278,6 +301,42 @@ impl ClawMcpService {
         });
     }
 
+    /// Looks up an existing store session for `session_id` or mints one under it.
+    /// Does not touch `self.lifecycle`, so a caller that must stay out of the
+    /// transport-close cleanup can start a session without arming that teardown.
+    async fn start_session_in_store(
+        &self,
+        session_id: SessionId,
+        client: ClientInfo,
+    ) -> Result<StartedSession, McpError> {
+        let session = if let Some(session) = self.state.sessions.lookup(&session_id).await {
+            session
+        } else {
+            let profiles = self.state.profiles.list_profiles().await.map_err(|error| {
+                McpError::internal_error(format!("agent profile lookup failed: {error}"), None)
+            })?;
+            let profiles = profiles.iter().map(ProfileView::from).collect::<Vec<_>>();
+            let agent = ClientIdentity::resolve(&client, &profiles);
+            let session = self
+                .state
+                .sessions
+                .mint_with_id(session_id.clone(), agent, client.clone())
+                .await
+                .map_err(|error| {
+                    McpError::internal_error(format!("mcp session start failed: {error}"), None)
+                })?;
+            tracing::info!(
+                session_id = %session.id(),
+                agent = %session.convo_id(),
+                "mcp session initialized"
+            );
+            session
+        };
+        Ok(started_session_from(session, &client))
+    }
+
+    /// Legacy and stdio path. Caches the session id and start flag in
+    /// `self.lifecycle`, which the transport-close `Drop` uses to reap the session.
     async fn ensure_session_started(
         &self,
         session_id: SessionId,
@@ -296,8 +355,9 @@ impl ClawMcpService {
             title: None,
         });
 
-        let session = if lifecycle.started {
-            self.state
+        if lifecycle.started {
+            let session = self
+                .state
                 .sessions
                 .lookup(&session_id)
                 .await
@@ -306,43 +366,37 @@ impl ClawMcpService {
                         format!("BrowserOS neo session {session_id} is no longer live"),
                         None,
                     )
-                })?
-        } else if let Some(session) = self.state.sessions.lookup(&session_id).await {
-            lifecycle.started = true;
-            session
-        } else {
-            let profiles = self.state.profiles.list_profiles().await.map_err(|error| {
-                McpError::internal_error(format!("agent profile lookup failed: {error}"), None)
-            })?;
-            let profiles = profiles.iter().map(ProfileView::from).collect::<Vec<_>>();
-            let agent = ClientIdentity::resolve(&client, &profiles);
-            let session = self
-                .state
-                .sessions
-                .mint_with_id(session_id.clone(), agent, client.clone())
-                .await
-                .map_err(|error| {
-                    McpError::internal_error(format!("mcp session start failed: {error}"), None)
                 })?;
-            lifecycle.started = true;
-            tracing::info!(
-                session_id = %session.id(),
-                agent = %session.convo_id(),
-                "mcp session initialized"
-            );
-            session
+            return Ok(started_session_from(session, &client));
+        }
+
+        let started = self.start_session_in_store(session_id, client).await?;
+        lifecycle.started = true;
+        Ok(started)
+    }
+
+    /// Modern stateless path. Reuses a live server-minted handle; any absent or
+    /// unrecognized handle mints a fresh server-generated handle rather than being
+    /// honored, so a caller cannot choose or seed a session id and concurrent calls
+    /// never mint the same id. Does not touch `self.lifecycle`, so the per-request
+    /// service `Drop` never reaps it; idle sweeping owns cleanup.
+    async fn resolve_modern_session(
+        &self,
+        provided: Option<SessionId>,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        let client = ClientInfo {
+            name: "agent".to_string(),
+            version: "unknown".to_string(),
+            title: None,
         };
-        let agent_label = client
-            .title
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .or_else(|| (!client.name.is_empty()).then_some(client.name.as_str()))
-            .unwrap_or_else(|| session.agent().slug())
-            .to_string();
-        Ok(StartedSession {
-            session,
-            agent_label,
-        })
+        if let Some(handle) = provided
+            && let Some(session) = self.state.sessions.lookup(&handle).await
+        {
+            return Ok((started_session_from(session, &client), handle));
+        }
+        let handle = SessionId::new(Uuid::new_v4().to_string());
+        let started = self.start_session_in_store(handle.clone(), client).await?;
+        Ok((started, handle))
     }
 
     async fn learn_session_from_request(
@@ -395,6 +449,17 @@ impl Drop for ClawMcpService {
     }
 }
 
+// The server serves the modern stateless revision alongside the legacy revisions,
+// so 2026-07-28 clients get the sessionless model while older clients keep the
+// session model. rmcp picks per request from what a client negotiates.
+const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2026_07_28,
+    ProtocolVersion::V_2025_11_25,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2024_11_05,
+];
+
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -403,6 +468,10 @@ impl ServerHandler for ClawMcpService {
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
             .with_instructions(BROWSERCLAW_MCP_INSTRUCTIONS)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(SUPPORTED_PROTOCOL_VERSIONS)
     }
 
     async fn initialize(
@@ -434,23 +503,23 @@ impl ServerHandler for ClawMcpService {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         if name == NAME_SESSION_TOOL_NAME {
-            return Some(self.name_session_tool.clone());
+            return Some(with_session_arg(self.name_session_tool.clone()));
         }
         if name == SAVE_SKILL_TOOL_NAME {
-            return Some(self.save_skill_tool.clone());
+            return Some(with_session_arg(self.save_skill_tool.clone()));
         }
         if name == MARK_SKILL_RUN_TOOL_NAME {
-            return Some(self.mark_skill_run_tool.clone());
+            return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
         self.find_tool_index(name)
-            .map(|index| self.catalog[index].to_mcp_tool())
+            .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
@@ -458,11 +527,28 @@ impl ServerHandler for ClawMcpService {
         if !is_name_session && !is_save_skill && !is_mark_skill_run && tool_index.is_none() {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         }
-        let raw_args = request
+        let mut raw_args = request
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(JsonObject::new()));
-        let started = self.learn_session_from_request(&context).await?;
+        let provided_handle = raw_args
+            .get("session")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(SessionId::new);
+        if let Value::Object(map) = &mut raw_args {
+            map.remove("session");
+        }
+        let modern = protocol_version_from_extensions(&context.extensions)
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+            && session_id_from_extensions(&context.extensions).is_none();
+        let (started, session_handle) = if modern {
+            let (started, handle) = self.resolve_modern_session(provided_handle).await?;
+            (started, Some(handle))
+        } else {
+            (self.learn_session_from_request(&context).await?, None)
+        };
         started.session.touch(tokio::time::Instant::now()).await;
         started.session.mark_used();
         let concurrent_used_sessions = self.state.sessions.used_count().await.max(1);
@@ -516,14 +602,15 @@ impl ServerHandler for ClawMcpService {
             dispatch_tool_call(call).await
         };
 
-        finish_tool_call(
+        let finished = finish_tool_call(
             started.session.as_ref(),
             &tool_name,
             tool_started_at,
             concurrent_used_sessions,
             result,
         )
-        .await
+        .await;
+        attach_session_handle(finished, session_handle).map(Into::into)
     }
 }
 
@@ -576,7 +663,12 @@ fn name_session_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "maxLength": NAME_SESSION_INPUT_MAX_LEN }
+            "name": { "type": "string", "maxLength": NAME_SESSION_INPUT_MAX_LEN },
+            "category": {
+                "type": "string",
+                "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
+                "description": NAME_SESSION_CATEGORY_DESCRIPTION
+            }
         },
         "required": ["name"]
     }) else {
@@ -720,6 +812,56 @@ async fn finish_local_dispatch(
     }
 }
 
+fn started_session_from(session: Arc<Session>, client: &ClientInfo) -> StartedSession {
+    let agent_label = client
+        .title
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or_else(|| (!client.name.is_empty()).then_some(client.name.as_str()))
+        .unwrap_or_else(|| session.agent().slug())
+        .to_string();
+    StartedSession {
+        session,
+        agent_label,
+    }
+}
+
+fn with_session_arg(mut tool: Tool) -> Tool {
+    let mut schema = tool.input_schema.as_ref().clone();
+    let properties = schema
+        .entry("properties")
+        .or_insert_with(|| Value::Object(JsonObject::new()));
+    if let Value::Object(properties) = properties {
+        properties.insert(
+            "session".to_string(),
+            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION }),
+        );
+    }
+    tool.input_schema = Arc::new(schema);
+    tool
+}
+
+fn attach_session_handle(
+    result: Result<CallToolResult, McpError>,
+    handle: Option<SessionId>,
+) -> Result<CallToolResult, McpError> {
+    let Some(handle) = handle else {
+        return result;
+    };
+    result.map(|mut call_result| {
+        let handle = handle.to_string();
+        match &mut call_result.structured_content {
+            Some(Value::Object(map)) => {
+                map.insert("session".to_string(), Value::String(handle));
+            }
+            _ => {
+                call_result.structured_content = Some(json!({ "session": handle }));
+            }
+        }
+        call_result
+    })
+}
+
 fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<SessionId> {
     extensions
         .get::<axum::http::request::Parts>()
@@ -730,12 +872,130 @@ fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<Se
         .map(SessionId::new)
 }
 
+fn protocol_version_from_extensions(
+    extensions: &rmcp::model::Extensions,
+) -> Option<ProtocolVersion> {
+    extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.headers.get("mcp-protocol-version"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(protocol_version_from_str)
+}
+
+fn protocol_version_from_str(value: &str) -> Option<ProtocolVersion> {
+    match value {
+        "2026-07-28" => Some(ProtocolVersion::V_2026_07_28),
+        "2025-11-25" => Some(ProtocolVersion::V_2025_11_25),
+        "2025-06-18" => Some(ProtocolVersion::V_2025_06_18),
+        "2025-03-26" => Some(ProtocolVersion::V_2025_03_26),
+        "2024-11-05" => Some(ProtocolVersion::V_2024_11_05),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    #[test]
+    fn supported_protocol_versions_includes_modern_and_legacy() {
+        assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
+        assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
+    }
+
+    #[tokio::test]
+    async fn with_session_arg_adds_an_optional_session_property_to_every_tool() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+
+        let injected = with_session_arg(service.name_session_tool.clone());
+        let schema = Value::Object(injected.input_schema.as_ref().clone());
+        assert_eq!(
+            schema["properties"]["session"],
+            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION })
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("session")))
+        );
+
+        for tool in service.listed_tools() {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(
+                schema["properties"]["session"]["type"],
+                json!("string"),
+                "tool {} is missing the session property",
+                tool.name
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn modern_session_reuses_returned_handles_and_never_honors_client_ids()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+
+        let (first, minted) = service
+            .resolve_modern_session(None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        let (again, reused) = service
+            .resolve_modern_session(Some(minted.clone()))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(reused.to_string(), minted.to_string());
+        assert_eq!(
+            again.session.id().to_string(),
+            first.session.id().to_string()
+        );
+
+        let client_chosen = SessionId::new("client-picked-id");
+        let (other, other_handle) = service
+            .resolve_modern_session(Some(client_chosen.clone()))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(other_handle.to_string(), client_chosen.to_string());
+        assert_ne!(
+            other.session.id().to_string(),
+            first.session.id().to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attach_session_handle_adds_the_handle_only_for_modern_calls() -> anyhow::Result<()> {
+        let modern = attach_session_handle(
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text("ok"),
+            ])),
+            Some(SessionId::new("handle-xyz")),
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let structured = modern
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("modern result carries the session handle"))?;
+        assert_eq!(structured["session"], json!("handle-xyz"));
+
+        let legacy = attach_session_handle(
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text("ok"),
+            ])),
+            None,
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert!(legacy.structured_content.is_none());
+        Ok(())
+    }
 
     fn usage_session() -> Arc<Session> {
         Session::new(
@@ -859,7 +1119,7 @@ mod tests {
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
-            "- Rename your session early with name_session using a 2-3 word task label;\n  tabs group as <client>/<name>."
+            "- Name your session early with name_session: a 2-3 word task label plus the\n  category that best fits the task; tabs group as <client>/<name>."
         ));
         assert!(instructions.contains(
             "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
@@ -919,7 +1179,13 @@ mod tests {
             json!({
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string", "maxLength": 64 }
+                    "name": { "type": "string", "maxLength": 64 },
+                    "category": {
+                        "type": "string",
+                        "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
+                        "description": NAME_SESSION_CATEGORY_DESCRIPTION
+                    },
+                    "session": { "type": "string", "description": SESSION_ARG_DESCRIPTION }
                 },
                 "required": ["name"]
             })

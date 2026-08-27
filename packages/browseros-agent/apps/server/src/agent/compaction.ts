@@ -1,383 +1,203 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
-import {
-  type LanguageModel,
-  type ModelMessage,
-  pruneMessages,
-  streamText,
-} from 'ai'
+import { type ModelMessage, pruneMessages } from 'ai'
 import { logger } from '../lib/logger'
 import { stripBinaryContent } from './compaction/content'
 import {
-  buildSummarizationPrompt,
-  buildSummarizationSystemPrompt,
-  buildTurnPrefixPrompt,
-  messagesToTranscript,
-} from './compaction/prompt'
-import {
-  type CompactionState,
-  type ComputedConfig,
-  computeConfig,
   estimateTokens,
-  estimateTokensForThreshold,
-  findSafeSplitPoint,
+  estimateTotalTokens,
   getCurrentTokenCount,
-  isCompactionState,
-  reduceToolOutputs,
   type StepWithUsage,
-  slidingWindow,
-} from './compaction/utils'
+} from './compaction/tokens'
 
-export {
-  type CompactionState,
-  computeConfig,
-  estimateTokens,
-  estimateTokensForThreshold,
-  findSafeSplitPoint,
-  getCurrentTokenCount,
-  reduceToolOutputs,
-  type StepWithUsage,
-  slidingWindow,
-} from './compaction/utils'
+export type { StepWithUsage }
+export { estimateTokens, estimateTotalTokens, getCurrentTokenCount }
 
 export interface CompactionConfig {
   contextWindow: number
 }
 
-async function consumeStreamText(
-  result: ReturnType<typeof streamText>,
-): Promise<string> {
-  const chunks: string[] = []
-  for await (const chunk of result.textStream) {
-    chunks.push(chunk)
-  }
-  return chunks.join('')
+export interface CompactionBudget {
+  /** Context window actually used, after rejecting nonsense values. */
+  contextWindow: number
+  /** Compaction runs once the estimated prompt exceeds this. */
+  threshold: number
+  /** System prompt and tool schemas, which `prepareStep` cannot see. */
+  overhead: number
 }
 
-async function callSummarizer(
-  model: LanguageModel,
+/**
+ * Derives the single trigger threshold from the context window.
+ *
+ * Reserve leaves room for the model's own response. It is capped at half the
+ * window so small models are not left with a negative budget, and the overhead
+ * allowance is capped alongside it so overhead alone can never exceed the
+ * threshold and pin compaction on permanently.
+ *
+ * `contextWindowSize` arrives from the client as a bare optional number, so a
+ * zero, a negative, a fraction, or a NaN can reach here and would otherwise
+ * produce a threshold that every request exceeds. The bound is `>= 1` rather
+ * than `> 0` because anything below one floors to zero.
+ */
+export function computeBudget(contextWindow: number): CompactionBudget {
+  const window =
+    Number.isFinite(contextWindow) && contextWindow >= 1
+      ? Math.floor(contextWindow)
+      : AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
+  const reserve = Math.min(
+    AGENT_LIMITS.COMPACTION_RESERVE_TOKENS,
+    Math.floor(window * 0.5),
+  )
+  const overhead = Math.min(
+    AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD,
+    Math.floor(window * 0.4),
+  )
+  return { contextWindow: window, threshold: window - reserve, overhead }
+}
+
+/**
+ * Drops the oldest messages until the transcript fits, keeping the first
+ * message and the longest recent suffix that still fits alongside it.
+ *
+ * This only ever runs after every tool call has already been pruned away, so
+ * unlike a general sliding window it cannot separate a tool call from its
+ * result: there are no pairs left to break. It exists because pruning has no
+ * lever against plain user and assistant text, which is what a transcript is
+ * made of once the tool exchanges are gone.
+ *
+ * Per-message estimates are summed rather than measured across the whole list,
+ * which rounds up on every message. Erring high is the safe direction here.
+ */
+function dropOldestMessages(
   messages: ModelMessage[],
-  userPrompt: string,
-  timeoutMs: number,
-  maxOutputTokens: number,
-  logLabel: string,
-): Promise<string | null> {
-  const transcript = messagesToTranscript(messages)
-  if (!transcript.trim()) return null
+  threshold: number,
+  overhead: number,
+): ModelMessage[] {
+  if (messages.length <= 2) return messages
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const costs = messages.map((message) => estimateTokens([message]))
+  let budget = threshold - overhead - costs[0]
+  let start = messages.length
 
-  try {
-    const result = streamText({
-      model,
-      system: buildSummarizationSystemPrompt(),
-      maxOutputTokens,
-      messages: [
-        {
-          role: 'user',
-          content: `<conversation_transcript>\n${transcript}\n</conversation_transcript>\n\n${userPrompt}`,
-        },
-      ],
-      abortSignal: controller.signal,
-    })
-
-    const text = await consumeStreamText(result)
-    return text || null
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    logger.warn(`${logLabel} failed`, { error: message })
-    return null
-  } finally {
-    clearTimeout(timeout)
+  for (let i = messages.length - 1; i >= 1; i--) {
+    if (costs[i] > budget) break
+    budget -= costs[i]
+    start = i
   }
+
+  if (start >= messages.length) {
+    return [messages[0], messages[messages.length - 1]]
+  }
+  return [messages[0], ...messages.slice(start)]
 }
 
-async function summarizeMessages(
-  model: LanguageModel,
-  messagesToSummarize: ModelMessage[],
-  existingSummary: string | null,
-  timeoutMs: number,
-  maxOutputTokens: number,
-): Promise<string | null> {
-  return callSummarizer(
-    model,
-    messagesToSummarize,
-    buildSummarizationPrompt(existingSummary),
-    timeoutMs,
-    maxOutputTokens,
-    'Summarization',
-  )
-}
-
-async function summarizeTurnPrefix(
-  model: LanguageModel,
-  turnPrefixMessages: ModelMessage[],
-  timeoutMs: number,
-  maxOutputTokens: number,
-): Promise<string | null> {
-  return callSummarizer(
-    model,
-    turnPrefixMessages,
-    buildTurnPrefixPrompt(),
-    timeoutMs,
-    maxOutputTokens,
-    'Turn prefix summarization',
-  )
-}
-
-async function compactMessages(
-  model: LanguageModel,
-  messages: ModelMessage[],
-  config: ComputedConfig,
-  state: CompactionState,
-): Promise<ModelMessage[]> {
-  const { splitIndex, turnStartIndex, isSplitTurn } = findSafeSplitPoint(
-    messages,
-    config.keepRecentTokens,
-    config.imageTokenEstimate,
-  )
-
-  if (splitIndex === -1) {
-    logger.info('Cannot find safe split point, using sliding window')
-    return slidingWindow(messages, config.triggerThreshold)
-  }
-
-  const toKeep = messages.slice(splitIndex)
-  let historyMessages: ModelMessage[]
-  let turnPrefixMessages: ModelMessage[] = []
-
-  if (isSplitTurn && turnStartIndex >= 0) {
-    historyMessages = messages.slice(0, turnStartIndex)
-    turnPrefixMessages = messages.slice(turnStartIndex, splitIndex)
-    logger.info('Split turn detected', {
-      historyMessages: historyMessages.length,
-      turnPrefixMessages: turnPrefixMessages.length,
-      toKeepMessages: toKeep.length,
-    })
-  } else {
-    historyMessages = messages.slice(0, splitIndex)
-  }
-
-  let toSummarize = historyMessages
-  let summarizedTurnPrefix = turnPrefixMessages
-
-  if (toSummarize.length > 0) {
-    const summarizeTokens = estimateTokens(toSummarize)
-    if (summarizeTokens > config.maxSummarizationInput) {
-      logger.info('Capping summarization input, dropping oldest messages', {
-        excess: summarizeTokens - config.maxSummarizationInput,
-        maxSummarizationInput: config.maxSummarizationInput,
-      })
-      toSummarize = slidingWindow(toSummarize, config.maxSummarizationInput)
-    }
-  }
-
-  if (summarizedTurnPrefix.length > 0) {
-    const prefixTokens = estimateTokens(summarizedTurnPrefix)
-    if (prefixTokens > config.maxSummarizationInput) {
-      logger.info('Capping turn prefix input, dropping oldest messages', {
-        excess: prefixTokens - config.maxSummarizationInput,
-        maxSummarizationInput: config.maxSummarizationInput,
-      })
-      summarizedTurnPrefix = slidingWindow(
-        summarizedTurnPrefix,
-        config.maxSummarizationInput,
-      )
-    }
-  }
-
-  const totalSummarizable =
-    estimateTokens(toSummarize) + estimateTokens(summarizedTurnPrefix)
-  if (totalSummarizable < config.minSummarizableTokens) {
-    logger.info('Too little content to summarize, using sliding window')
-    return slidingWindow(messages, config.triggerThreshold)
-  }
-
-  const turnPrefixOutputBudget = Math.max(
-    AGENT_LIMITS.COMPACTION_MIN_TOKEN_FLOOR,
-    Math.floor(
-      config.summarizerMaxOutputTokens *
-        AGENT_LIMITS.COMPACTION_TURN_PREFIX_OUTPUT_RATIO,
-    ),
-  )
-
-  logger.info('Attempting LLM-based compaction', {
-    toSummarizeMessages: toSummarize.length,
-    toSummarizeTokens: estimateTokens(toSummarize),
-    turnPrefixMessages: summarizedTurnPrefix.length,
-    turnPrefixTokens: estimateTokens(summarizedTurnPrefix),
-    toKeepMessages: toKeep.length,
-    toKeepTokens: estimateTokens(toKeep),
-    isSplitTurn,
-    hasExistingSummary: state.existingSummary != null,
-    compactionCount: state.compactionCount,
-  })
-
-  let summary: string | null = null
-  if (isSplitTurn && summarizedTurnPrefix.length > 0) {
-    if (toSummarize.length > 0) {
-      const [historySummary, turnPrefixSummary] = await Promise.all([
-        summarizeMessages(
-          model,
-          toSummarize,
-          state.existingSummary,
-          config.summarizationTimeoutMs,
-          config.summarizerMaxOutputTokens,
-        ),
-        summarizeTurnPrefix(
-          model,
-          summarizedTurnPrefix,
-          config.summarizationTimeoutMs,
-          turnPrefixOutputBudget,
-        ),
-      ])
-
-      if (historySummary && turnPrefixSummary) {
-        summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
-      } else {
-        summary = historySummary ?? turnPrefixSummary
-      }
-    } else {
-      summary = await summarizeTurnPrefix(
-        model,
-        summarizedTurnPrefix,
-        config.summarizationTimeoutMs,
-        turnPrefixOutputBudget,
-      )
-    }
-  } else {
-    summary = await summarizeMessages(
-      model,
-      toSummarize,
-      state.existingSummary,
-      config.summarizationTimeoutMs,
-      config.summarizerMaxOutputTokens,
-    )
-  }
-
-  if (!summary) {
-    logger.warn('Summarization returned empty, using sliding window fallback')
-    return slidingWindow(messages, config.triggerThreshold)
-  }
-
-  const allSummarized = [...toSummarize, ...summarizedTurnPrefix]
-  const summaryTokens = Math.ceil(summary.length / 4)
-  const originalTokens = estimateTokens(allSummarized)
-  if (summaryTokens >= originalTokens) {
-    logger.warn(
-      'Summary is larger than original, using sliding window fallback',
-      {
-        summaryTokens,
-        originalTokens,
-      },
-    )
-    return slidingWindow(messages, config.triggerThreshold)
-  }
-
-  state.existingSummary = summary
-  state.compactionCount++
-
-  logger.info('LLM compaction succeeded', {
-    originalMessages: messages.length,
-    keptMessages: toKeep.length,
-    summaryTokens,
-    originalTokens,
-    compressionRatio: `${((1 - summaryTokens / originalTokens) * 100).toFixed(0)}%`,
-    compactionCount: state.compactionCount,
-    isSplitTurn,
-  })
-
-  return [
-    {
-      role: 'user',
-      content: `${summary}\n\nContinue from where you left off.`,
-    },
-    ...toKeep,
-  ]
-}
-
+/**
+ * Builds the `prepareStep` callback that keeps a run inside its context window.
+ *
+ * The policy is deliberately small, following the AI SDK's compaction guide:
+ * one trigger threshold, one compaction path, one deterministic fallback.
+ *
+ * The system prompt is never at risk here. It reaches the model as the agent's
+ * `instructions`, which `prepareStep` receives separately from `messages` and
+ * which this callback never returns, so it carries through every compaction
+ * untouched. It is only relevant to the token math, where it is accounted for
+ * as overhead.
+ */
 export function createCompactionPrepareStep(
   userConfig?: Partial<CompactionConfig>,
 ) {
-  const contextWindow =
-    userConfig?.contextWindow ?? AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW
-  const config = computeConfig(contextWindow)
+  const { contextWindow, threshold, overhead } = computeBudget(
+    userConfig?.contextWindow ?? AGENT_LIMITS.DEFAULT_CONTEXT_WINDOW,
+  )
+  const keepRecent = AGENT_LIMITS.COMPACTION_PRUNE_KEEP_RECENT_MESSAGES
 
-  logger.info('Compaction config computed', {
+  logger.info('Compaction configured', {
     contextWindow,
-    reserveTokens: config.reserveTokens,
-    triggerRatio: config.triggerRatio.toFixed(3),
-    triggerAtTokens: Math.floor(config.triggerThreshold),
-    keepRecentTokens: config.keepRecentTokens,
-    minSummarizableTokens: config.minSummarizableTokens,
-    maxSummarizationInput: config.maxSummarizationInput,
-    summarizerMaxOutputTokens: config.summarizerMaxOutputTokens,
+    threshold,
+    overhead,
+    keepRecentMessages: keepRecent,
   })
 
   return async ({
     messages,
     steps,
-    model,
-    runtimeContext,
   }: {
     messages: ModelMessage[]
     steps: ReadonlyArray<StepWithUsage>
-    model: LanguageModel
-    runtimeContext: unknown
-  }) => {
-    const state: CompactionState = isCompactionState(runtimeContext)
-      ? runtimeContext
-      : { existingSummary: null, compactionCount: 0 }
-
-    let currentTokens = getCurrentTokenCount(steps, messages, config)
-    if (currentTokens <= config.triggerThreshold) {
-      return { messages, runtimeContext: state }
+  }): Promise<{ messages: ModelMessage[] }> => {
+    const currentTokens = getCurrentTokenCount(steps, messages, overhead)
+    if (currentTokens <= threshold) {
+      return { messages }
     }
 
-    let current = stripBinaryContent(messages)
-    currentTokens = estimateTokensForThreshold(current, config)
-    if (currentTokens <= config.triggerThreshold) {
-      return { messages: current, runtimeContext: state }
-    }
-
-    const keepRecent = AGENT_LIMITS.COMPACTION_PRUNE_KEEP_RECENT_MESSAGES
-    const pruned = pruneMessages({
-      messages: current,
+    // One path: drop binary payloads, then let the SDK prune reasoning and the
+    // older tool call/result/approval chunks. Pruning through the SDK is what
+    // keeps tool calls paired with their results.
+    const compacted = pruneMessages({
+      messages: stripBinaryContent(messages),
+      reasoning: 'all',
       toolCalls: `before-last-${keepRecent}-messages`,
       emptyMessages: 'remove',
     })
-    if (pruned.length < current.length) {
-      logger.info('Pruned old tool calls', {
-        before: current.length,
-        after: pruned.length,
-        removed: current.length - pruned.length,
-      })
-      current = pruned
-      currentTokens = estimateTokensForThreshold(current, config)
-      if (currentTokens <= config.triggerThreshold) {
-        return { messages: current, runtimeContext: state }
-      }
-    }
 
-    const reduced = reduceToolOutputs(current, {
-      maxChars: config.toolOutputMaxChars,
-      keepRecentCount: 2,
-    })
-    currentTokens = estimateTokensForThreshold(reduced, config)
-    if (currentTokens <= config.triggerThreshold) {
-      return { messages: reduced, runtimeContext: state }
-    }
-
-    logger.warn(
-      'Context still over limit after output reduction, attempting compaction',
-      {
+    const compactedTokens = estimateTotalTokens(compacted, overhead)
+    if (compactedTokens <= threshold) {
+      logger.info('Compacted context', {
         currentTokens,
-        triggerThreshold: Math.floor(config.triggerThreshold),
-        messageCount: reduced.length,
-      },
-    )
+        compactedTokens,
+        threshold,
+        before: messages.length,
+        after: compacted.length,
+      })
+      return { messages: compacted }
+    }
 
-    const compacted = await compactMessages(model, reduced, config, state)
-    return { messages: compacted, runtimeContext: state }
+    // One fallback, in two moves. First clear every remaining tool exchange.
+    const cleared = pruneMessages({
+      messages: compacted,
+      reasoning: 'all',
+      toolCalls: 'all',
+      emptyMessages: 'remove',
+    })
+
+    const clearedTokens = estimateTotalTokens(cleared, overhead)
+    if (clearedTokens <= threshold) {
+      logger.warn('Compaction cleared all tool calls', {
+        currentTokens,
+        compactedTokens,
+        clearedTokens,
+        threshold,
+        before: messages.length,
+        after: cleared.length,
+      })
+      return { messages: cleared }
+    }
+
+    // What is left is plain text, which pruning cannot touch, so drop whole
+    // messages. Without this the request goes out over the model's limit and
+    // the provider rejects it.
+    const floor = dropOldestMessages(cleared, threshold, overhead)
+    const floorTokens = estimateTotalTokens(floor, overhead)
+
+    logger.warn('Compaction dropped oldest messages', {
+      currentTokens,
+      compactedTokens,
+      clearedTokens,
+      floorTokens,
+      threshold,
+      before: messages.length,
+      after: floor.length,
+      // A single message larger than the window cannot be shrunk by dropping
+      // whole messages. Surfaced so an overflow is diagnosable rather than a
+      // bare provider error.
+      stillOverBudget: floorTokens > threshold,
+    })
+
+    return { messages: floor }
   }
 }

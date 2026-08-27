@@ -1,5 +1,5 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import type { TypeOf, ZodObject, ZodRawShape } from 'zod'
+import type { TypeOf, ZodObject, ZodRawShape } from 'zod/v4'
 import {
   type ContentItem,
   type ToolResult as ResponseToolResult,

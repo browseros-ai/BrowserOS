@@ -266,6 +266,11 @@ jobs:
 
       - name: Setup Bun
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
+        # Pinned literally rather than read from package.json: this job builds
+        # from the persistent tree at BROWSEROS_REPO_PATH and never checks out
+        # into GITHUB_WORKSPACE, which is where setup-bun resolves a version
+        # file from. A workspace-relative path finds nothing and Bun silently
+        # falls back to latest. Keep in sync with packageManager.
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.6"

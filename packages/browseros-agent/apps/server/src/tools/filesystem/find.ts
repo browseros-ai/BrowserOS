@@ -1,5 +1,5 @@
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   DEFAULT_FIND_LIMIT,
   executeWithMetrics,

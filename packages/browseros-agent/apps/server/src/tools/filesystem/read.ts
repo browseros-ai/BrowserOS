@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { wrapUntrusted } from '@browseros/browser-mcp/tools/trust-boundary'
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   executeWithMetrics,
   type FilesystemToolResult,

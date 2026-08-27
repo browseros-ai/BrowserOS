@@ -21,6 +21,7 @@ enum NavigateAction {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct NavigateArgs {
     /// Page id from `tabs`.
     page: u32,

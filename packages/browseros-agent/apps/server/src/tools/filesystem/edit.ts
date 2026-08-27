@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   detectLineEnding,
   executeWithMetrics,

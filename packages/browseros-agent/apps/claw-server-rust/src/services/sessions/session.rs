@@ -28,6 +28,7 @@ pub struct Session {
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
+    task_declared: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -59,6 +60,7 @@ impl Session {
             }),
             dispatches_drained: Notify::new(),
             operator_stop_requested: AtomicBool::new(false),
+            task_declared: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -158,6 +160,15 @@ impl Session {
     #[must_use]
     pub fn operator_stop_requested(&self) -> bool {
         self.operator_stop_requested.load(Ordering::Acquire)
+    }
+
+    /// True only on the first call, so a session declares its task category to
+    /// analytics at most once even if `name_session` is called again to rename.
+    #[must_use]
+    pub fn try_mark_task_declared(&self) -> bool {
+        self.task_declared
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.
@@ -271,6 +282,14 @@ mod tests {
             "Codex".to_string(),
             Instant::now(),
         )
+    }
+
+    #[test]
+    fn task_declared_marks_only_once() {
+        let session = test_session("session-task");
+        assert!(session.try_mark_task_declared());
+        assert!(!session.try_mark_task_declared());
+        assert!(!session.try_mark_task_declared());
     }
 
     #[tokio::test]

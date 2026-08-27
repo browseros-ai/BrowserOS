@@ -13,6 +13,12 @@ import { logger } from '../../../lib/logger'
 
 export interface ServerAcpxProbeInput {
   type: AcpAgentType
+  /** Full command line to probe a not-yet-saved custom agent. Required when type is 'custom'. */
+  command?: string
+  /** Child-process env for the probed custom command. */
+  env?: Record<string, string>
+  /** Working directory for the probe (defaults to the user's home). */
+  cwd?: string
   timeoutMs?: number
   resourcesDir?: string | null
   browserosDir?: string | null
@@ -68,6 +74,8 @@ export async function probeAcpAgent(
 
   const launcher = resolveAcpSpawnCommand({
     agentType: input.type,
+    customCommand: input.command,
+    spawnEnv: input.env,
     browserosDir: input.browserosDir ?? getBrowserosDir(),
     resourcesDir: input.resourcesDir,
     platform: input.platform,
@@ -82,7 +90,7 @@ export async function probeAcpAgent(
   // the adapter fails to create session files. Matches the chat provider's cwd.
   const result = await runProbe({
     argv: launcher.argv,
-    cwd: homedir(),
+    cwd: input.cwd?.trim() || homedir(),
     authPolicy: 'skip',
     timeoutMs,
   })

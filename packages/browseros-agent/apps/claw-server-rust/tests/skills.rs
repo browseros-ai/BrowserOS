@@ -367,9 +367,9 @@ async fn skill_create_rejects_bad_names_and_duplicates() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // The embedded product skill occupies "browserclaw"; the neo- namespace
-    // neutralizes the old collision, so a user "browserclaw" now saves cleanly
-    // as "neo-browserclaw" instead of being rejected.
+    // Every user skill is saved under the neo- namespace, so a user-authored
+    // "browserclaw" saves cleanly as "neo-browserclaw" and never collides with a
+    // product-managed directory.
     let (status, created) = request(
         router,
         "POST",

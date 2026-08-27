@@ -5,12 +5,17 @@
  */
 
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { StreamableHTTPTransport } from '@hono/mcp'
+import {
+  createMcpHandler,
+  isLegacyRequest,
+  type McpRequestContext,
+  WebStandardStreamableHTTPServerTransport,
+} from '@modelcontextprotocol/server'
 import { Hono } from 'hono'
-import { HTTPException } from 'hono/http-exception'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
+import { rejectBrowserFetch } from '../middleware/reject-browser-fetch'
 import type { KlavisService } from '../services/klavis'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { ServerActivity } from '../services/server-activity'
@@ -20,8 +25,10 @@ export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
 
 type CreateMcpServerFn = typeof createMcpServer
 type CreateMcpTransportFn = (
-  options: ConstructorParameters<typeof StreamableHTTPTransport>[0],
-) => InstanceType<typeof StreamableHTTPTransport>
+  options: ConstructorParameters<
+    typeof WebStandardStreamableHTTPServerTransport
+  >[0],
+) => InstanceType<typeof WebStandardStreamableHTTPServerTransport>
 
 interface McpRouteDeps {
   version: string
@@ -74,10 +81,73 @@ export function parseManagedMcpServersHeader(
 /** Creates the Hono routes that expose BrowserOS as a request-scoped MCP server. */
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
+  app.use('/*', rejectBrowserFetch())
   const makeMcpServer = deps.createMcpServer ?? createMcpServer
   const makeMcpTransport =
     deps.createMcpTransport ??
-    ((options) => new StreamableHTTPTransport(options))
+    ((options) => new WebStandardStreamableHTTPServerTransport(options))
+
+  // Reads the per-request BrowserOS scope from headers + query. Used by the
+  // POST handler (metrics/logging on every request, including rejected ones)
+  // and by the factory (per-request server construction).
+  function readScope(req: Request) {
+    const url = new URL(req.url)
+    const scopeId = req.headers.get('X-BrowserOS-Scope-Id') || 'ephemeral'
+    const includeStructuredContent = url.searchParams.get('structured') === '1'
+    const defaultWindowId = parseOptionalNumber(
+      req.headers.get('X-BrowserOS-Default-Window-Id') ?? undefined,
+    )
+    const defaultTabGroupId =
+      req.headers.get('X-BrowserOS-Default-Tab-Group-Id') ?? undefined
+    const selectedServerNames = parseManagedMcpServersHeader(
+      req.headers.get(MANAGED_MCP_SERVERS_HEADER) ?? undefined,
+    )
+    const logContext: McpRequestLogContext = {
+      scopeId,
+      selectedServerNames,
+      selectedServerCount: selectedServerNames.length,
+      defaultWindowId,
+      defaultTabGroupId,
+    }
+    return {
+      scopeId,
+      includeStructuredContent,
+      defaultWindowId,
+      defaultTabGroupId,
+      selectedServerNames,
+      logContext,
+    }
+  }
+
+  // One factory backs both eras: createMcpHandler's modern leg and the
+  // hand-wired legacy JSON leg. The factory receives the request, so per-request
+  // header scoping is preserved.
+  const buildServer = (ctx: McpRequestContext) => {
+    const scope = ctx.requestInfo
+      ? readScope(ctx.requestInfo)
+      : {
+          includeStructuredContent: false,
+          defaultWindowId: undefined,
+          defaultTabGroupId: undefined,
+          selectedServerNames: [] as string[],
+        }
+    return makeMcpServer({
+      version: deps.version,
+      browserSession: deps.browserSession,
+      klavis: deps.klavis,
+      connectorScope: { selectedServerNames: scope.selectedServerNames },
+      defaultWindowId: scope.defaultWindowId,
+      defaultTabGroupId: scope.defaultTabGroupId,
+      includeStructuredContent: scope.includeStructuredContent,
+      activity: deps.activity,
+    })
+  }
+
+  // Modern (2026-07-28) leg. `legacy: 'reject'` keeps 2025-era traffic off this
+  // handler; isLegacyRequest routes those to the legacy JSON transport below,
+  // which preserves the existing single-JSON (non-SSE) response shape that the
+  // internal ACP client depends on.
+  const modern = createMcpHandler(buildServer, { legacy: 'reject' })
 
   app.get('/', (c) =>
     c.json({
@@ -87,62 +157,40 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   )
 
   app.post('/', async (c) => {
-    const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
+    const raw = c.req.raw
+    const { scopeId, logContext } = readScope(raw)
     metrics.log('mcp.request', { scopeId })
-    const includeStructuredContent = c.req.query('structured') === '1'
-
-    const defaultWindowId = parseOptionalNumber(
-      c.req.header('X-BrowserOS-Default-Window-Id'),
-    )
-    const defaultTabGroupId =
-      c.req.header('X-BrowserOS-Default-Tab-Group-Id') ?? undefined
-    const selectedServerNames = parseManagedMcpServersHeader(
-      c.req.header(MANAGED_MCP_SERVERS_HEADER),
-    )
-
-    const logContext: McpRequestLogContext = {
-      scopeId,
-      selectedServerNames,
-      selectedServerCount: selectedServerNames.length,
-      defaultWindowId,
-      defaultTabGroupId,
-    }
-
     logger.debug('MCP request received', logContext)
 
-    // Per-request server + transport: no shared state, no race conditions,
-    // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
-    const mcpServer = makeMcpServer({
-      version: deps.version,
-      browserSession: deps.browserSession,
-      klavis: deps.klavis,
-      connectorScope: { selectedServerNames },
-      defaultWindowId,
-      defaultTabGroupId,
-      includeStructuredContent,
-      activity: deps.activity,
-    })
-    const transport = makeMcpTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    })
-
     try {
-      await mcpServer.connect(transport)
-      logger.debug('MCP request transport connected', logContext)
-      const response = await transport.handleRequest(c)
+      // Legacy (2025-era) stays byte-for-byte identical: hand-wired stateless
+      // transport with enableJsonResponse, so the internal ACP client keeps its
+      // single-JSON responses. isLegacyRequest reads a clone, leaving `raw`
+      // consumable by whichever leg serves the request.
+      if (await isLegacyRequest(raw)) {
+        const mcpServer = buildServer({ era: 'legacy', requestInfo: raw })
+        const transport = makeMcpTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true,
+        })
+        await mcpServer.connect(transport)
+        logger.debug('MCP request transport connected', logContext)
+        const response = await transport.handleRequest(raw)
+        logger.debug('MCP request handled', {
+          ...logContext,
+          status: response?.status,
+        })
+        return response
+      }
+
+      // Modern (2026-07-28) requests: server/discover + stateless dispatch.
+      const response = await modern.fetch(raw)
       logger.debug('MCP request handled', {
         ...logContext,
-        status: response?.status,
+        status: response.status,
       })
       return response
     } catch (error) {
-      // @hono/mcp signals HTTP-level problems (unacceptable Accept/Content-Type,
-      // unsupported MCP-Protocol-Version, parse errors) by throwing HTTPException.
-      // Surface those with their real 4xx status instead of masking them as a 500.
-      if (error instanceof HTTPException) {
-        return error.getResponse()
-      }
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('scopeId', scopeId)

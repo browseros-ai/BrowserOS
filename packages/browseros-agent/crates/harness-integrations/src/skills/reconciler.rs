@@ -45,6 +45,64 @@ impl SkillReconciler {
         self.reconcile_with(spec, consumers, environment, replace_managed_directory)
     }
 
+    /// One-time, idempotent migration for a renamed managed skill: removes the
+    /// directories a previous name installed across every catalog harness and purges
+    /// their manifest records, so a subsequent [`reconcile`](Self::reconcile) with the
+    /// new spec replants the skill under the current name. Only directories whose
+    /// ownership marker confirms this product controls `legacy_name` are removed;
+    /// user-authored directories sharing the legacy name are left untouched, and
+    /// anything that cannot be inspected is left in place. Returns the agents whose
+    /// legacy directory was removed (for logging).
+    pub fn remove_legacy_directories(
+        &self,
+        legacy_name: &str,
+        environment: &SkillEnvironment,
+    ) -> Result<BTreeSet<AgentId>, Error> {
+        let mut removed = BTreeSet::new();
+        for agent in AgentId::ALL {
+            if resolve_harness_definition(agent).skill.is_none() {
+                continue;
+            }
+            let Ok(target) = resolve_agent_skill_target(agent, legacy_name, environment) else {
+                continue;
+            };
+            let metadata = match fs::symlink_metadata(&target) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                // Best-effort: never delete a directory we could not inspect.
+                Err(_) => continue,
+            };
+            if !metadata.is_dir() {
+                continue;
+            }
+            // Ownership proof: only remove directories this product planted under the
+            // legacy name. An unreadable or foreign marker leaves the directory alone.
+            let controlled = read_marker(&target)
+                .ok()
+                .flatten()
+                .is_some_and(|marker| marker.controls(legacy_name));
+            if !controlled {
+                continue;
+            }
+            if remove_path(&target).is_ok() {
+                removed.insert(agent);
+            }
+        }
+
+        let mut manifest = read_manifest(&self.workspace_dir)?;
+        let before = manifest.targets.len();
+        // Only drop a legacy record once its directory is actually gone. A directory
+        // we could not remove (or could not inspect) still exists, so keeping its
+        // record leaves disk and manifest consistent and lets the next reconcile retry.
+        manifest
+            .targets
+            .retain(|entry| entry.skill_name != legacy_name || entry.target_path.exists());
+        if manifest.targets.len() != before {
+            write_manifest(&self.workspace_dir, &manifest)?;
+        }
+        Ok(removed)
+    }
+
     fn reconcile_with(
         &self,
         spec: &SkillSpec,
@@ -870,6 +928,139 @@ mod tests {
         assert_eq!(outcome.warnings.len(), 1);
         assert_eq!(fs::read_to_string(target.join("SKILL.md"))?, "old");
         assert_eq!(fs::read(manifest_path)?, manifest_before);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_legacy_directories_migrates_managed_directories_and_replants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+
+        // Install under the legacy name (writes the directory, ownership marker, and
+        // manifest record).
+        let legacy_spec = SkillSpec::new("browserclaw", "---\nname: browseros-neo\n---\nlegacy\n")?;
+        reconciler.reconcile(
+            &legacy_spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+        )?;
+        let legacy_dir =
+            resolve_agent_skill_target(AgentId::ClaudeCode, "browserclaw", &environment)?;
+        assert!(legacy_dir.join("SKILL.md").exists());
+        let manifest_path = state.join("skills.json");
+        assert!(fs::read_to_string(&manifest_path)?.contains("browserclaw"));
+
+        // Migrate: the managed legacy directory is removed, its agent is reported, and
+        // the manifest record is purged.
+        let removed = reconciler.remove_legacy_directories("browserclaw", &environment)?;
+        assert_eq!(removed, BTreeSet::from([AgentId::ClaudeCode]));
+        assert!(!legacy_dir.exists());
+        assert!(!fs::read_to_string(&manifest_path)?.contains("browserclaw"));
+
+        // Replanting under the current name yields a directory that matches the
+        // frontmatter, with the legacy directory gone.
+        let new_spec = SkillSpec::new("browseros-neo", "---\nname: browseros-neo\n---\nnew\n")?;
+        reconciler.reconcile(
+            &new_spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+        )?;
+        let new_dir =
+            resolve_agent_skill_target(AgentId::ClaudeCode, "browseros-neo", &environment)?;
+        assert!(new_dir.join("SKILL.md").exists());
+        assert!(!legacy_dir.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn remove_legacy_directories_leaves_unmanaged_directories_untouched()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+
+        // A user-authored directory sharing the legacy name, with no ownership marker.
+        let legacy_dir =
+            resolve_agent_skill_target(AgentId::ClaudeCode, "browserclaw", &environment)?;
+        fs::create_dir_all(&legacy_dir)?;
+        fs::write(legacy_dir.join("SKILL.md"), "user skill")?;
+
+        let removed = reconciler.remove_legacy_directories("browserclaw", &environment)?;
+
+        assert!(removed.is_empty());
+        assert_eq!(
+            fs::read_to_string(legacy_dir.join("SKILL.md"))?,
+            "user skill"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remove_legacy_directories_is_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+
+        let legacy_spec = SkillSpec::new("browserclaw", "---\nname: browseros-neo\n---\nlegacy\n")?;
+        reconciler.reconcile(
+            &legacy_spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+        )?;
+        assert_eq!(
+            reconciler.remove_legacy_directories("browserclaw", &environment)?,
+            BTreeSet::from([AgentId::ClaudeCode])
+        );
+        assert!(
+            reconciler
+                .remove_legacy_directories("browserclaw", &environment)?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remove_legacy_directories_keeps_records_for_directories_that_remain()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        let environment = SkillEnvironment::new(&home, TargetPlatform::Linux);
+        let reconciler = SkillReconciler::new(&state);
+
+        // Install under the legacy name, then replace its ownership marker with a
+        // foreign one so the sweep declines to remove the directory (standing in for
+        // any case where the directory is left on disk).
+        let legacy_spec = SkillSpec::new("browserclaw", "---\nname: browseros-neo\n---\nlegacy\n")?;
+        reconciler.reconcile(
+            &legacy_spec,
+            &BTreeSet::from([AgentId::ClaudeCode]),
+            &environment,
+        )?;
+        let legacy_dir =
+            resolve_agent_skill_target(AgentId::ClaudeCode, "browserclaw", &environment)?;
+        fs::write(
+            legacy_dir.join(".browserclaw-managed.json"),
+            r#"{"version":1,"managedBy":"other-tool","skillName":"browserclaw","contentHash":"x"}"#,
+        )?;
+        let manifest_path = state.join("skills.json");
+        assert!(fs::read_to_string(&manifest_path)?.contains("browserclaw"));
+
+        let removed = reconciler.remove_legacy_directories("browserclaw", &environment)?;
+
+        // The directory still exists, so its manifest record is preserved rather than
+        // orphaned; the next reconcile retries it.
+        assert!(removed.is_empty());
+        assert!(legacy_dir.join("SKILL.md").exists());
+        assert!(fs::read_to_string(&manifest_path)?.contains("browserclaw"));
         Ok(())
     }
 }

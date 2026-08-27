@@ -96,7 +96,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         browserclaw_dir.join("mcp-manager"),
         browserclaw_dir.join("harness-integrations"),
         home.clone(),
-        SkillSpec::new("browserclaw", "managed skill v1\n")?,
+        SkillSpec::new("browseros-neo", "managed skill v1\n")?,
         analytics.clone(),
     );
     let paths = config_paths()?;
@@ -156,7 +156,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         claude.message,
         "BrowserOS registered as an MCP server in Claude Code."
     );
-    let claude_skill = home.join("skills/browserclaw");
+    let claude_skill = home.join("skills/browseros-neo");
     assert_eq!(
         fs::read_to_string(claude_skill.join("SKILL.md"))?,
         "managed skill v1\n"
@@ -165,12 +165,12 @@ async fn run_connections_case() -> anyhow::Result<()> {
     let codex = service.connect_browseros(Harness::Codex, MCP_URL).await?;
     let zed = service.connect_browseros(Harness::Zed, MCP_URL).await?;
     assert!(codex.installed && zed.installed);
-    let shared_skill = home.join(".agents/skills/browserclaw");
+    let shared_skill = home.join(".agents/skills/browseros-neo");
     assert_eq!(
         fs::read_to_string(shared_skill.join("SKILL.md"))?,
         "managed skill v1\n"
     );
-    let shared_target_path = fs::canonicalize(parent(&shared_skill)?)?.join("browserclaw");
+    let shared_target_path = fs::canonicalize(parent(&shared_skill)?)?.join("browseros-neo");
     let skill_manifest_path = browserclaw_dir.join("harness-integrations/skills.json");
     let skill_manifest: Value = serde_json::from_str(&fs::read_to_string(&skill_manifest_path)?)?;
     let shared_record = skill_manifest["targets"]
@@ -272,7 +272,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         browserclaw_dir.join("mcp-manager"),
         browserclaw_dir.join("harness-integrations"),
         home.clone(),
-        SkillSpec::new("browserclaw", "managed skill v2\n")?,
+        SkillSpec::new("browseros-neo", "managed skill v2\n")?,
         analytics.clone(),
     );
     let ota_update = ota_service.run_skill_reconciliation().await?;
@@ -366,7 +366,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
     assert!(!codex.installed);
     assert_eq!(codex.message, "Codex is not configured.");
 
-    let antigravity_skill = home.join(".gemini/config/skills/browserclaw");
+    let antigravity_skill = home.join(".gemini/config/skills/browseros-neo");
     fs::create_dir_all(&antigravity_skill)?;
     fs::write(antigravity_skill.join("SKILL.md"), "foreign skill")?;
     fs::write(antigravity_skill.join("keep.txt"), "keep")?;

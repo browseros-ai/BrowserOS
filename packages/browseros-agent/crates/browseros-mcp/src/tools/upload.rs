@@ -13,6 +13,7 @@ Set local file path(s) on a file input using a ref from the last snapshot. \
 Use for <input type=\"file\"> upload flows; files must exist on the server filesystem.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct UploadArgs {
     /// Page id from `tabs`.
     page: u32,

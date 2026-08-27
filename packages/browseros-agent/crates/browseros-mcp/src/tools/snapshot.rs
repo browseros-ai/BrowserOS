@@ -49,6 +49,7 @@ impl From<SnapshotModeArg> for SnapshotMode {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SnapshotArgs {
     /// Page id from `tabs` or `navigate`.
     page: u32,

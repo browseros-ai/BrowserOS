@@ -1,5 +1,6 @@
 import type { FC } from 'react'
 import { InlineErrorAlert } from '@/components/agents/PageAlerts'
+import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import { CodingAgentCard } from './CodingAgentCard'
 import type { CodingAgentsController } from './coding-agents.hooks'
 
@@ -7,12 +8,14 @@ export interface CodingAgentsListProps {
   controller: CodingAgentsController
   selectedAgentId: string | null
   onSelectAgent: (agentId: string) => void
+  onEditAgent?: (agent: AcpAgent) => void
 }
 
 export const CodingAgentsList: FC<CodingAgentsListProps> = ({
   controller,
   selectedAgentId,
   onSelectAgent,
+  onEditAgent,
 }) => {
   const { agents, pageError, dismissPageError, deletingAgentId, handleDelete } =
     controller
@@ -32,6 +35,7 @@ export const CodingAgentsList: FC<CodingAgentsListProps> = ({
           deleting={deletingAgentId === agent.id}
           onSelect={() => onSelectAgent(agent.id)}
           onDelete={(target) => void handleDelete(target)}
+          onEdit={onEditAgent}
         />
       ))}
     </div>

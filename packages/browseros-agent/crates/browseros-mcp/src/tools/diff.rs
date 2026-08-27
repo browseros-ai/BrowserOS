@@ -15,6 +15,7 @@ Show what changed on the page since the last snapshot/diff - a cheap way to see 
 an action's effect without re-dumping the whole tree.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DiffArgs {
     page: u32,
 }
