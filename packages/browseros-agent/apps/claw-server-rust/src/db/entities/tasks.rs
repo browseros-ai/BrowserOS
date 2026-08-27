@@ -27,6 +27,9 @@ pub struct Model {
     /// True iff the session has dispatches and every one carries token-estimator v1.
     pub tokens_measured: bool,
     pub updated_at: i64,
+    /// Agent-declared, PII-scrubbed one-or-two-line summary of the task, for audit search.
+    /// Written out-of-band by `name_session`; excluded from the task recompute upsert.
+    pub task_summary: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

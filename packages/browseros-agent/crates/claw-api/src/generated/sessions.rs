@@ -231,6 +231,9 @@ pub struct SessionSummary {
     pub name: String,
     #[serde(rename = "site", skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Agent-declared, PII-scrubbed one-or-two-line summary of the task, used for audit search. Absent when the session never declared one.
+    #[serde(rename = "taskSummary", skip_serializing_if = "Option::is_none")]
+    pub task_summary: Option<String>,
     #[serde(rename = "startedAt")]
     pub started_at: i64,
     #[serde(rename = "endedAt", skip_serializing_if = "Option::is_none")]
@@ -277,6 +280,7 @@ impl SessionSummary {
             label,
             name,
             site: None,
+            task_summary: None,
             started_at,
             ended_at: None,
             duration_ms,

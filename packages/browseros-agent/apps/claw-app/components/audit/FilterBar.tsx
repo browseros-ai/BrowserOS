@@ -192,7 +192,7 @@ export function FilterBar({
         <Input
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
-          placeholder="search sessions..."
+          placeholder="search sessions, summaries..."
           // pr-7 reserves space for the inline clear button so the
           // text never sits under the icon.
           className="h-8 w-64 rounded-9 border-none bg-card pr-7 pl-8 font-mono text-[13px] text-ink shadow-xs placeholder:text-ink-3 focus-visible:ring-0"

@@ -226,6 +226,7 @@ mod tests {
             "skills",
             "skill_runs",
             "skill_run_marks",
+            "task_search",
             "seaql_migrations",
         ] {
             assert!(names.contains(table), "missing table {table}");
@@ -313,6 +314,7 @@ mod tests {
             "tool_input_token_estimate",
             "tool_output_token_estimate",
             "tokens_measured",
+            "task_summary",
         ] {
             assert!(
                 task_columns.contains(column),
@@ -327,7 +329,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -388,6 +390,10 @@ mod tests {
             migrations[14].try_get::<String>("", "version")?,
             "m0015_add_skill_run_marks"
         );
+        assert_eq!(
+            migrations[15].try_get::<String>("", "version")?,
+            "m0016_add_task_summary"
+        );
         Ok(())
     }
 
@@ -427,7 +433,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 15);
+        assert_eq!(migration_count, 16);
         conn.close().await?;
         Ok(())
     }
@@ -491,7 +497,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         assert_eq!(
             migrations
                 .iter()
@@ -514,7 +520,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 15);
+        assert_eq!(migration_count, 16);
         Ok(())
     }
 
@@ -650,7 +656,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 15);
+        assert_eq!(migrations.len(), 16);
         Ok(())
     }
 

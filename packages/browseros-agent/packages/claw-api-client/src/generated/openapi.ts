@@ -530,6 +530,8 @@ export interface components {
       label: string
       name: string
       site?: string
+      /** @description Agent-declared, PII-scrubbed one-or-two-line summary of the task, used for audit search. Absent when the session never declared one. */
+      taskSummary?: string
       /** Format: int64 */
       startedAt: number
       /** Format: int64 */

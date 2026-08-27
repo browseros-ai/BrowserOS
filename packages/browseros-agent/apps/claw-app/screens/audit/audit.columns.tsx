@@ -47,9 +47,16 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
     // the one cell a reader scans rather than skims, and the design calls
     // for the platform UI face at reading size here.
     cell: ({ row }) => (
-      <span className="block truncate font-[system-ui,sans-serif] text-[13px] text-ledger-ink">
-        {row.original.name}
-      </span>
+      <div className="min-w-0">
+        <span className="block truncate font-[system-ui,sans-serif] text-[13px] text-ledger-ink">
+          {row.original.name}
+        </span>
+        {row.original.taskSummary && (
+          <span className="mt-0.5 line-clamp-2 block text-[11px] text-ledger-ink-2 leading-snug">
+            {row.original.taskSummary}
+          </span>
+        )}
+      </div>
     ),
     enableSorting: false,
   },

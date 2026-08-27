@@ -267,6 +267,12 @@ export interface SessionSummary {
      */
     site?: string;
     /**
+     * Agent-declared, PII-scrubbed one-or-two-line summary of the task, used for audit search. Absent when the session never declared one.
+     * @type {string}
+     * @memberof SessionSummary
+     */
+    taskSummary?: string;
+    /**
      *
      * @type {number}
      * @memberof SessionSummary

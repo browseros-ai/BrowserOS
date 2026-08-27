@@ -106,6 +106,10 @@ describe('session visual API schema', () => {
     }
     expect(schemas.SessionSummary?.properties).toHaveProperty('tokenUsage')
     expect(schemas.SessionSummary?.required ?? []).not.toContain('tokenUsage')
+    // Optional agent-declared, PII-scrubbed search summary: present on the shape, never required
+    // (absent for sessions that never declared one).
+    expect(schemas.SessionSummary?.properties).toHaveProperty('taskSummary')
+    expect(schemas.SessionSummary?.required ?? []).not.toContain('taskSummary')
     expect(schemas.SessionTokenUsage?.required).toEqual([
       'inputTokenEstimate',
       'outputTokenEstimate',

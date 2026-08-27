@@ -6,6 +6,7 @@
       "slug": "codex",
       "label": "Codex",
       "name": "Research BrowserClaw",
+      "taskSummary": "Researching BrowserClaw capabilities and gathering release notes for a comparison writeup.",
       "harness": "Codex",
       "color": "#0254ec",
       "startedAt": 1784300400000,

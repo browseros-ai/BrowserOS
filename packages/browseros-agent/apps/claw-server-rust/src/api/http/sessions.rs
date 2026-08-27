@@ -216,6 +216,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         .and_then(|session| session.agent().profile_id())
         .map(|profile_id| profile_id.as_str().to_string());
     summary.site = task.site;
+    summary.task_summary = task.task_summary;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
@@ -249,6 +250,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
     summary.harness = harness;
     summary.color = Some(color);
     summary.site = task.site;
+    summary.task_summary = task.task_summary;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
