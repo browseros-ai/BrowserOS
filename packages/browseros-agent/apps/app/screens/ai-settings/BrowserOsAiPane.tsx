@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { Plus } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
@@ -12,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import {
   CHATGPT_PRO_OAUTH_COMPLETED_EVENT,
@@ -41,8 +43,8 @@ import {
   type OAuthProviderFlowConfig,
   useOAuthProviderFlow,
 } from '@/modules/llm-providers/oauth-provider-flow.hooks'
-import { CodingAgentsList } from './CodingAgentsList'
-import { ConfiguredProvidersList } from './ConfiguredProvidersList'
+import { AddProviderSection } from './AddProviderSection'
+import { ConfiguredTargetsList } from './ConfiguredTargetsList'
 import { CustomCodingAgentDialog } from './CustomCodingAgentDialog'
 import { useCodingAgents } from './coding-agents.hooks'
 import { DeviceCodeDialog } from './DeviceCodeDialog'
@@ -53,11 +55,9 @@ import {
 } from './graphql/aiSettingsDocument'
 import type { IncompleteProvider } from './IncompleteProviderCard'
 import { IncompleteProvidersList } from './IncompleteProvidersList'
-import { LlmProvidersHeader } from './LlmProvidersHeader'
 import { McpPromoBanner } from './McpPromoBanner'
 import { NewCodingAgentDialog } from './NewCodingAgentDialog'
 import { NewProviderDialog } from './NewProviderDialog'
-import { ProviderTemplatesSection } from './ProviderTemplatesSection'
 import { partitionSyncedProviders } from './synced-providers'
 
 // All OAuth providers share the same flow via useOAuthProviderFlow
@@ -406,39 +406,51 @@ export const BrowserOsAiPane: FC = () => {
 
   return (
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
-      <LlmProvidersHeader
-        providers={providers}
-        agents={coding.agents}
-        selectedTarget={effectiveTarget}
-        onSelectTarget={defaultTarget.selectTarget}
-        onAddProvider={handleAddProvider}
-      />
+      <div>
+        <h2 className="font-semibold text-xl">AI &amp; Agents</h2>
+        <p className="text-muted-foreground text-sm">
+          Pick what runs your chats, and connect anything else you use.
+        </p>
+      </div>
 
       <BrowserClawPromoBanner />
-      <McpPromoBanner />
 
-      <ProviderTemplatesSection
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold text-base">
+            Your providers{' '}
+            <span className="font-normal text-muted-foreground">
+              ({providers.length + coding.agents.length})
+            </span>
+          </h3>
+          <Button onClick={handleAddProvider}>
+            <Plus className="size-4" />
+            Add
+          </Button>
+        </div>
+
+        <ConfiguredTargetsList
+          providers={providers}
+          coding={coding}
+          selectedProviderId={selectedProviderId}
+          selectedAgentId={selectedAgentId}
+          testingProviderId={testingProviderId}
+          onSelectProvider={defaultTarget.selectProvider}
+          onSelectAgent={defaultTarget.selectAgent}
+          onTestProvider={handleTestProvider}
+          onEditProvider={handleEditProvider}
+          onDeleteProvider={handleDeleteProvider}
+          onEditAgent={handleEditCustomAgent}
+        />
+      </section>
+
+      <AddProviderSection
         onCreateAgent={handleUseCodingAgentTemplate}
         onCreateCustomAgent={handleCreateCustomAgent}
         onUseTemplate={handleUseTemplate}
       />
 
-      <ConfiguredProvidersList
-        providers={providers}
-        selectedProviderId={selectedProviderId}
-        testingProviderId={testingProviderId}
-        onSelectProvider={defaultTarget.selectProvider}
-        onTestProvider={handleTestProvider}
-        onEditProvider={handleEditProvider}
-        onDeleteProvider={handleDeleteProvider}
-      />
-
-      <CodingAgentsList
-        controller={coding}
-        selectedAgentId={selectedAgentId}
-        onSelectAgent={defaultTarget.selectAgent}
-        onEditAgent={handleEditCustomAgent}
-      />
+      <McpPromoBanner />
 
       <IncompleteProvidersList
         providers={incompleteProviders}
