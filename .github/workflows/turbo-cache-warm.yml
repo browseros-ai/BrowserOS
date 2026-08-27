@@ -1,14 +1,16 @@
 name: Turbo Cache Warm
 
-# Populates the Turbo cache on `main` so PR branches inherit warm cache.
-# GitHub Actions caches restore only from the same branch or the base/default
-# branch, so without a run on `main` every PR would start cold. Neither the
-# Tests nor Code Quality workflows run on `main`, so this is that run.
+# Populates the Turbo and Rust caches on `main` so PR branches inherit warm
+# cache. GitHub Actions caches restore only from the same branch or the
+# base/default branch, so without a run on `main` every PR would start cold.
+# Neither the Tests nor Code Quality workflows run on `main`, so this is that
+# run.
 on:
   push:
     branches: [main]
     paths:
       - .github/workflows/turbo-cache-warm.yml
+      - .cargo/config.toml
       - packages/browseros-agent/**
   schedule:
     # Weekly full warm to backstop GitHub's 7-day unused-cache eviction for
@@ -63,3 +65,38 @@ jobs:
             # Per-merge: warm only what this merge changed.
             bunx turbo run typecheck --affected
           fi
+
+  warm-rust:
+    name: Warm Rust cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        # Pinned to match the Tests workflow. A different toolchain hashes into
+        # a different cache key, which would warm a cache nothing else reads.
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/browseros-agent
+          # Must match the Tests workflow exactly. Without it the key embeds
+          # GITHUB_JOB and this cache would be unreadable there.
+          shared-key: browseros-agent
+          cache-directories: ~/.cargo/build/browseros
+          # Save even though nothing here is a pass/fail gate; warming is the
+          # entire point of the job.
+          save-if: "true"
+
+      - name: Warm Rust cache
+        # Mirrors what the Rust suites compile: test binaries and clippy's
+        # separate artifacts. -D warnings is deliberately omitted, since this
+        # job exists to populate a cache, not to gate on lints.
+        run: |
+          cargo test --workspace --locked --no-run
+          cargo clippy --workspace --all-targets --locked

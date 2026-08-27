@@ -100,6 +100,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/browseros-agent
+          # Without this the key embeds GITHUB_JOB, so the warm cache produced
+          # on main by a differently named job could never be restored here.
+          shared-key: browseros-agent
           # Intermediate artifacts live outside the checkout so worktrees can
           # share them, and rust-cache only saves workspace target dirs plus the
           # registry and git caches by default. Name the build dir explicitly or
