@@ -103,6 +103,14 @@ jobs:
           # Without this the key embeds GITHUB_JOB, so the warm cache produced
           # on main by a differently named job could never be restored here.
           shared-key: browseros-agent
+          # rust-cache hashes every toolchain `rustup toolchain list` reports,
+          # not just the pinned one, and the runner image ships its own Rust
+          # alongside it. That set changes as images roll out, so the key
+          # fragmented across runners and a warm cache was a coin flip. The
+          # lockfile hash still keys the cache, so dependency changes bust it;
+          # cargo fingerprints by rustc version itself, so a toolchain change
+          # rebuilds rather than reusing the wrong artifacts.
+          add-rust-environment-hash-key: false
           # Intermediate artifacts live outside the checkout so worktrees can
           # share them, and rust-cache only saves workspace target dirs plus the
           # registry and git caches by default. Name the build dir explicitly or

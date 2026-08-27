@@ -88,6 +88,14 @@ jobs:
           # Must match the Tests workflow exactly. Without it the key embeds
           # GITHUB_JOB and this cache would be unreadable there.
           shared-key: browseros-agent
+          # rust-cache hashes every toolchain `rustup toolchain list` reports,
+          # not just the pinned one, and the runner image ships its own Rust
+          # alongside it. That set changes as images roll out, so the key
+          # fragmented across runners and a warm cache was a coin flip. The
+          # lockfile hash still keys the cache, so dependency changes bust it;
+          # cargo fingerprints by rustc version itself, so a toolchain change
+          # rebuilds rather than reusing the wrong artifacts.
+          add-rust-environment-hash-key: false
           cache-directories: ~/.cargo/build/browseros
           # Save even though nothing here is a pass/fail gate; warming is the
           # entire point of the job.
