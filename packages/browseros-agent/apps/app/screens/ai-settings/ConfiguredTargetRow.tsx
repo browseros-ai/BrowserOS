@@ -36,6 +36,12 @@ export interface ConfiguredTargetRowProps {
  * The default marker and the kind badge sit in fixed-width slots. Without
  * them, promoting a row adds a DEFAULT badge and drops the "Set as default"
  * button, which resizes the row and shifts every other row's badges sideways.
+ *
+ * Those slots reserve 220px, which is more than a narrow pane can spare, so
+ * below `sm` the kind badge and the set-default button drop out and the name
+ * takes the width back. Nothing is lost: the description already names the
+ * adapter, and the row itself is the control that sets the default, so the
+ * button was only ever a hover affordance for pointer users.
  */
 export const ConfiguredTargetRow: FC<ConfiguredTargetRowProps> = ({
   id,
@@ -93,7 +99,7 @@ export const ConfiguredTargetRow: FC<ConfiguredTargetRowProps> = ({
         </span>
       </label>
 
-      <span className="flex w-[72px] shrink-0 justify-start">
+      <span className="hidden w-[72px] shrink-0 justify-start sm:flex">
         <Badge
           variant="secondary"
           className="rounded font-semibold text-[10px] uppercase tracking-wide"
@@ -102,7 +108,7 @@ export const ConfiguredTargetRow: FC<ConfiguredTargetRowProps> = ({
         </Badge>
       </span>
 
-      <span className="flex w-[116px] shrink-0 justify-end">
+      <span className="flex shrink-0 justify-end sm:w-[116px]">
         {isSelected ? (
           <Badge
             variant="secondary"
@@ -114,7 +120,7 @@ export const ConfiguredTargetRow: FC<ConfiguredTargetRowProps> = ({
           <Button
             variant="outline"
             size="sm"
-            className="opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
+            className="hidden opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 sm:inline-flex"
             onClick={() => actions[0]?.onSelect()}
           >
             Set as default

@@ -132,6 +132,16 @@ describe('ConfiguredTargetsList', () => {
     expect(html).not.toContain('aria-label="Actions for BrowserOS"')
   })
 
+  // Asserting utility classes rather than layout because the reserved width
+  // only exists once CSS is applied, which static markup cannot show. The
+  // guard is here because dropping these turns the row back into 220px of
+  // reserved trailing slots with nothing left for the name on a narrow pane.
+  it('does not reserve the trailing slots on a narrow pane', () => {
+    const html = render()
+    expect(html).toContain('hidden w-[72px] shrink-0 justify-start sm:flex')
+    expect(html).toContain('flex shrink-0 justify-end sm:w-[116px]')
+  })
+
   it('surfaces a list-level error when the agent controller reports one', () => {
     const html = render({
       coding: { ...coding, pageError: 'agent server unreachable' } as never,
