@@ -164,24 +164,23 @@ impl ClawMcpService {
                 );
             }
         }
-        if let Some(summary) = raw_args
+        // Scrub structural PII from any provided summary before it is persisted or
+        // indexed for search; stored locally only, never sent to analytics. Last write wins.
+        let scrubbed_summary = raw_args
             .get("summary")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|summary| !summary.is_empty())
+            .map(scrub_summary);
+        if let Some(clean) = scrubbed_summary.as_deref()
+            && !clean.is_empty()
+            && let Err(error) = self
+                .state
+                .audit_log
+                .set_task_summary(started.session.id().as_str(), clean)
+                .await
         {
-            // Scrub structural PII before it is persisted and indexed for audit search;
-            // stored locally only, never sent to analytics. Last write wins.
-            let clean = scrub_summary(summary);
-            if !clean.is_empty()
-                && let Err(error) = self
-                    .state
-                    .audit_log
-                    .set_task_summary(started.session.id().as_str(), &clean)
-                    .await
-            {
-                warn!(error = %error, "failed to store task summary");
-            }
+            warn!(error = %error, "failed to store task summary");
         }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
@@ -193,13 +192,19 @@ impl ClawMcpService {
         )
         .await;
         let result = ToolResult::text(rename.response, None);
+        // The audit dispatch persists the raw tool arguments; substitute the scrubbed
+        // summary so the unsanitized text never reaches the audit detail timeline.
+        let dispatch_args = match scrubbed_summary.as_deref() {
+            Some(clean) => with_scrubbed_summary(raw_args, clean),
+            None => raw_args.clone(),
+        };
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: NAME_SESSION_TOOL_NAME,
-                raw_args,
+                raw_args: &dispatch_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
                 dispatch_id: dispatch_id.clone(),
@@ -701,6 +706,17 @@ fn scrub_summary(raw: &str) -> String {
     } else {
         scrubbed
     }
+}
+
+/// Clones the tool arguments with the `summary` field replaced by its already-scrubbed
+/// form, so the audit dispatch timeline persists the sanitized summary rather than the raw
+/// one the scrubber removed from `tasks.task_summary` and the search index.
+fn with_scrubbed_summary(raw_args: &Value, clean: &str) -> Value {
+    let mut owned = raw_args.clone();
+    if let Some(object) = owned.as_object_mut() {
+        object.insert("summary".to_string(), Value::String(clean.to_string()));
+    }
+    owned
 }
 
 fn is_pii_token(token: &str) -> bool {
@@ -1296,6 +1312,20 @@ mod tests {
     fn scrub_summary_caps_length() {
         let raw = "word ".repeat(200);
         assert!(scrub_summary(&raw).chars().count() <= SUMMARY_MAX_LEN);
+    }
+
+    #[test]
+    fn with_scrubbed_summary_replaces_summary_and_keeps_other_args() {
+        let raw = "Emailed john@acme.com the invoices";
+        let clean = scrub_summary(raw);
+        let sanitized =
+            with_scrubbed_summary(&json!({ "name": "invoice sync", "summary": raw }), &clean);
+        // The recorded dispatch args carry the scrubbed copy, never the raw one.
+        assert_eq!(sanitized["summary"].as_str(), Some(clean.as_str()));
+        assert!(!clean.contains('@'));
+        assert!(!clean.to_ascii_lowercase().contains("acme.com"));
+        // Unrelated arguments are preserved verbatim.
+        assert_eq!(sanitized["name"].as_str(), Some("invoice sync"));
     }
 
     #[tokio::test]
