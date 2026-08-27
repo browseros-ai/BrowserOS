@@ -10,6 +10,8 @@ describe('VisualRail', () => {
     // import would emit a new hashed asset and fail verify-chromium-build.ts.
     expect(html).toContain('src="/icon/128.png"')
     expect(html).toContain('BrowserOS')
+    expect(html).toContain('agentic browser')
+    expect(html).toContain('automate any web task')
     expect(html).toContain('Bring your browser')
     expect(html).toContain('Local-first. Private.')
   })

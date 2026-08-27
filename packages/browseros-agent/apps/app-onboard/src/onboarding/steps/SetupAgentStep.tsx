@@ -18,7 +18,13 @@ import {
 import { ArrowRight } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { Button } from '@/components/ui/button'
-import { OpenClaw } from '../components/AgentBrandMarks'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { Hermes, OpenClaw } from '../components/AgentBrandMarks'
 import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
 import { StepWrap } from '../components/StepWrap'
 
@@ -30,9 +36,7 @@ interface SetupAgentStepProps {
 type MonoIcon = ComponentType<{ size?: number }>
 interface IconEntry {
   label: string
-  Icon?: MonoIcon
-  /** Shown instead of an icon for agents with no single-colour brand mark. */
-  monogram?: string
+  Icon: MonoIcon
 }
 
 // Real brand marks from @lobehub/icons (the same source the app uses). The
@@ -61,25 +65,22 @@ const CODING_AGENTS: IconEntry[] = [
   { label: 'Gemini CLI', Icon: Gemini },
   { label: 'Qwen Code', Icon: Qwen },
   { label: 'OpenClaw', Icon: OpenClaw },
-  // Hermes' mark is a detailed illustration with no single-colour form, so it
-  // uses the same monogram the app falls back to in its agent picker.
-  { label: 'Hermes', monogram: 'H' },
+  { label: 'Hermes', Icon: Hermes },
 ]
 
-function IconChip({ label, Icon, monogram }: IconEntry) {
+function IconChip({ label, Icon }: IconEntry) {
   return (
-    <span
-      title={label}
-      className="grid size-[42px] place-items-center rounded-[10px] border border-border bg-card text-foreground transition-all duration-150 hover:-translate-y-0.5 hover:border-accent hover:shadow-[0_6px_14px_var(--color-accent-tint)]"
-    >
-      {Icon ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="grid size-[42px] place-items-center rounded-[10px] border border-border bg-card text-foreground transition-all duration-150 hover:-translate-y-0.5 hover:border-accent hover:shadow-[0_6px_14px_var(--color-accent-tint)]" />
+        }
+      >
         <Icon size={23} />
-      ) : (
-        <span className="font-semibold text-[17px] leading-none">
-          {monogram}
-        </span>
-      )}
-    </span>
+        <span className="sr-only">{label}</span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -92,51 +93,53 @@ function IconChip({ label, Icon, monogram }: IconEntry) {
  */
 export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
   return (
-    <StepWrap>
-      <DisplayHeading>
-        Set up your <Em>agent</Em>
-      </DisplayHeading>
-      <StepCopy>
-        Connect an LLM provider or a coding agent harness you already use. We
-        will open BrowserOS so you can finish.
-      </StepCopy>
-      <div className="mb-6 flex max-w-[480px] flex-col gap-[18px]">
-        <div>
-          <div className="mb-2.5 font-bold text-[11px] text-ink-3 uppercase tracking-[0.08em]">
-            Any LLM provider
+    <TooltipProvider>
+      <StepWrap>
+        <DisplayHeading>
+          Set up your <Em>agent</Em>
+        </DisplayHeading>
+        <StepCopy>
+          Connect an LLM provider or a coding agent harness you already use. We
+          will open BrowserOS so you can finish.
+        </StepCopy>
+        <div className="mb-6 flex max-w-[480px] flex-col gap-[18px]">
+          <div>
+            <div className="mb-2.5 font-bold text-[11px] text-ink-3 uppercase tracking-[0.08em]">
+              Any LLM provider
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {LLM_PROVIDERS.map((entry) => (
+                <IconChip key={entry.label} {...entry} />
+              ))}
+              <span className="grid size-[42px] place-items-center rounded-[10px] bg-accent-tint font-bold text-[12px] text-accent">
+                +40
+              </span>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {LLM_PROVIDERS.map((entry) => (
-              <IconChip key={entry.label} {...entry} />
-            ))}
-            <span className="grid size-[42px] place-items-center rounded-[10px] bg-accent-tint font-bold text-[12px] text-accent">
-              +40
-            </span>
+          <div>
+            <div className="mb-2.5 font-bold text-[11px] text-ink-3 uppercase tracking-[0.08em]">
+              Or a coding agent harness you already use
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {CODING_AGENTS.map((entry) => (
+                <IconChip key={entry.label} {...entry} />
+              ))}
+            </div>
+            <div className="mt-2.5 text-[13px] text-ink-3">
+              or any other ACP compatible agent
+            </div>
           </div>
         </div>
-        <div>
-          <div className="mb-2.5 font-bold text-[11px] text-ink-3 uppercase tracking-[0.08em]">
-            Or a coding agent harness you already use
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {CODING_AGENTS.map((entry) => (
-              <IconChip key={entry.label} {...entry} />
-            ))}
-          </div>
-          <div className="mt-2.5 text-[13px] text-ink-3">
-            or any other ACP compatible agent
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" size="lg" onClick={onSetup}>
+            Set up my agent
+            <ArrowRight className="size-4" />
+          </Button>
+          <Button type="button" size="lg" variant="ghost" onClick={onLater}>
+            I'll do this later
+          </Button>
         </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" size="lg" onClick={onSetup}>
-          Set up my agent
-          <ArrowRight className="size-4" />
-        </Button>
-        <Button type="button" size="lg" variant="ghost" onClick={onLater}>
-          I'll do this later
-        </Button>
-      </div>
-    </StepWrap>
+      </StepWrap>
+    </TooltipProvider>
   )
 }

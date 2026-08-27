@@ -1,14 +1,34 @@
 /**
  * Marks for agents that @lobehub/icons does not carry.
  *
- * These are inline single-colour SVGs rather than imported image files: the
- * Chromium build emits exactly app.js, app.css and the icon/ directory listed
- * in that target's BUILD.gn, so any Vite-processed asset either throws during
- * the build or trips the data: URL guard in verify-chromium-build.
+ * Vector marks are inlined rather than imported: the Chromium build emits only
+ * app.js, app.css and the icon/ files listed in that target's BUILD.gn, so a
+ * Vite-processed asset either throws during the build or trips the data: URL
+ * guard in verify-chromium-build. Raster marks are referenced by their runtime
+ * path under public/icon instead, which Vite copies through untouched.
  */
 
 interface MarkProps {
   size?: number
+}
+
+/**
+ * Hermes. Raster mark, so it ships as an icon/ resource rather than a path.
+ *
+ * Sized a little larger than the vector marks and rounded: it is a full-bleed
+ * illustration rather than a glyph, so at glyph size it reads as a framed
+ * thumbnail sitting inside the chip instead of as the chip's own icon.
+ */
+export function Hermes({ size = 24 }: MarkProps) {
+  return (
+    <img
+      src="/icon/hermes.png"
+      alt=""
+      width={Math.round(size * 1.3)}
+      height={Math.round(size * 1.3)}
+      className="rounded-[7px] object-contain"
+    />
+  )
 }
 
 /**

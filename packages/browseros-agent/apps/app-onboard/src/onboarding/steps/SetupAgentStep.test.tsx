@@ -63,18 +63,19 @@ describe('SetupAgentStep', () => {
     )
 
     for (const label of ['Claude Code', 'Codex', 'OpenClaw', 'Hermes']) {
-      expect(html).toContain(`title="${label}"`)
+      expect(html).toContain(label)
     }
   })
 
-  it('renders a monogram for an agent with no single-colour mark', () => {
+  it('serves the Hermes mark from the icon resource directory', () => {
     const html = renderToStaticMarkup(
       <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
     )
 
-    // Hermes' mark is a raster illustration, so the chip falls back to a letter
-    // rather than importing an image the Chromium resource target cannot carry.
-    expect(html).toMatch(/title="Hermes"[^>]*>(?:(?!<svg)[\s\S])*?>H</)
+    // Referenced by runtime path, never imported: an imported image would be
+    // rewritten by Vite into an asset the Chromium resource target rejects.
+    expect(html).toContain('src="/icon/hermes.png"')
+    expect(html).not.toMatch(/src="data:/)
   })
 
   it('wires the primary CTA to setup', () => {
