@@ -70,6 +70,11 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
             <h1 className="font-extrabold text-2xl tracking-tight">
               {task.name}
             </h1>
+            {task.taskSummary && (
+              <p className="max-w-2xl text-[13px] text-ink-2 leading-snug">
+                {task.taskSummary}
+              </p>
+            )}
           </div>
         </div>
 
