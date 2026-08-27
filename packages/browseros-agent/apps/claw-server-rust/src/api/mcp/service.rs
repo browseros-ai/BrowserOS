@@ -46,7 +46,7 @@ use uuid::Uuid;
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
-const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label and summary stay on this machine (the summary makes the session findable in audit search), and only the category is used for anonymous aggregate analytics. Call again to update.";
+const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
@@ -146,6 +146,14 @@ impl ClawMcpService {
                 .into_call_tool_result();
             }
         };
+        // Scrub structural PII from any provided summary before it is stored, indexed for
+        // search, or recorded on the task-declared analytics event. Last write wins locally.
+        let scrubbed_summary = raw_args
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+            .map(scrub_summary);
         if let Some(category) = raw_args
             .get("category")
             .and_then(Value::as_str)
@@ -155,23 +163,24 @@ impl ClawMcpService {
             // At most once per session: a later name_session rename must not
             // re-declare and overcount the category mix or the declaration rate.
             if started.session.try_mark_task_declared() {
+                let mut properties = json!({
+                    "task_category": category,
+                    "client_name": started.session.client_name(),
+                });
+                // The scrubbed summary rides along with the category declaration; the
+                // analytics layer bounds it defensively before it leaves the machine.
+                if let Some(summary) = scrubbed_summary
+                    .as_deref()
+                    .filter(|summary| !summary.is_empty())
+                {
+                    properties["task_summary"] = Value::String(summary.to_string());
+                }
                 self.state.analytics.capture(
                     crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
-                    json!({
-                        "task_category": category,
-                        "client_name": started.session.client_name(),
-                    }),
+                    properties,
                 );
             }
         }
-        // Scrub structural PII from any provided summary before it is persisted or
-        // indexed for search; stored locally only, never sent to analytics. Last write wins.
-        let scrubbed_summary = raw_args
-            .get("summary")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|summary| !summary.is_empty())
-            .map(scrub_summary);
         if let Some(clean) = scrubbed_summary.as_deref()
             && !clean.is_empty()
             && let Err(error) = self
