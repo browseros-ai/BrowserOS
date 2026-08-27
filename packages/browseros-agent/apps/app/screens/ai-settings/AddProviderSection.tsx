@@ -17,6 +17,8 @@ import {
   categoryForTemplate,
   groupAddProviderEntries,
 } from './add-provider.helpers'
+import { CustomAgentTile } from './CustomAgentTile'
+import { POPULAR_ACP_AGENTS } from './popular-acp-agents'
 
 export interface AddProviderSectionProps {
   onCreateAgent: (type: AcpAgentType) => void
@@ -27,6 +29,8 @@ export interface AddProviderSectionProps {
 interface Entry extends AddProviderEntryMeta {
   icon: React.ReactNode
   onAdd: () => void
+  /** Rendered as the wide tile rather than one cell of the grid. */
+  featured?: boolean
 }
 
 const AGENT_TYPES = ['claude', 'codex'] as const
@@ -72,8 +76,13 @@ export const AddProviderSection: FC<AddProviderSectionProps> = ({
           key: 'agent-custom',
           label: 'Custom ACP agent',
           category: 'agent' as const,
+          keywords: POPULAR_ACP_AGENTS.flatMap((agent) => [
+            agent.id,
+            agent.label,
+          ]),
           icon: <Plus className="size-[26px]" />,
           onAdd: onCreateCustomAgent,
+          featured: true,
         },
       ]
     : []
@@ -109,14 +118,18 @@ export const AddProviderSection: FC<AddProviderSectionProps> = ({
               {group.label}
             </h4>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {group.entries.map((entry) => (
-                <AddProviderTile
-                  key={entry.key}
-                  label={entry.label}
-                  icon={entry.icon}
-                  onAdd={entry.onAdd}
-                />
-              ))}
+              {group.entries.map((entry) =>
+                entry.featured ? (
+                  <CustomAgentTile key={entry.key} onAdd={entry.onAdd} />
+                ) : (
+                  <AddProviderTile
+                    key={entry.key}
+                    label={entry.label}
+                    icon={entry.icon}
+                    onAdd={entry.onAdd}
+                  />
+                ),
+              )}
             </div>
           </div>
         ))

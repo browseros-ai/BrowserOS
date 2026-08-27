@@ -64,6 +64,12 @@ export interface AddProviderEntryMeta {
   key: string
   label: string
   category: AddProviderCategory
+  /**
+   * Extra terms this entry should answer to. The custom-agent entry uses it so
+   * searching for a specific ACP agent by name finds the tile that connects
+   * it, rather than returning nothing.
+   */
+  keywords?: readonly string[]
 }
 
 export interface AddProviderGroup<T extends AddProviderEntryMeta> {
@@ -72,10 +78,16 @@ export interface AddProviderGroup<T extends AddProviderEntryMeta> {
   entries: T[]
 }
 
-export function matchesQuery(label: string, query: string): boolean {
+export function matchesQuery(
+  label: string,
+  query: string,
+  keywords: readonly string[] = [],
+): boolean {
   const trimmed = query.trim().toLowerCase()
   if (!trimmed) return true
-  return label.toLowerCase().includes(trimmed)
+  return [label, ...keywords].some((term) =>
+    term.toLowerCase().includes(trimmed),
+  )
 }
 
 /**
@@ -86,7 +98,9 @@ export function groupAddProviderEntries<T extends AddProviderEntryMeta>(
   entries: readonly T[],
   query = '',
 ): AddProviderGroup<T>[] {
-  const matched = entries.filter((entry) => matchesQuery(entry.label, query))
+  const matched = entries.filter((entry) =>
+    matchesQuery(entry.label, query, entry.keywords),
+  )
 
   return ADD_PROVIDER_CATEGORY_ORDER.map((category) => ({
     category,

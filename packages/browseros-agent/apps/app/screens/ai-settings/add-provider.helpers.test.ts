@@ -58,6 +58,16 @@ describe('matchesQuery', () => {
   it('does not match an unrelated query', () => {
     expect(matchesQuery('Ollama', 'anthropic')).toBe(false)
   })
+
+  // Searching for a specific ACP agent should find the tile that connects it,
+  // rather than returning nothing because the label says "Custom".
+  it('matches on keywords as well as the label', () => {
+    expect(matchesQuery('Custom ACP agent', 'opencode', ['opencode'])).toBe(
+      true,
+    )
+    expect(matchesQuery('Custom ACP agent', 'hermes', ['Hermes'])).toBe(true)
+    expect(matchesQuery('Custom ACP agent', 'ollama', ['opencode'])).toBe(false)
+  })
 })
 
 describe('groupAddProviderEntries', () => {
@@ -85,6 +95,18 @@ describe('groupAddProviderEntries', () => {
       'Claude Code',
       'Codex',
     ])
+  })
+
+  it('keeps an entry whose keyword matches even when its label does not', () => {
+    const withKeywords = [
+      {
+        key: 'custom',
+        label: 'Custom ACP agent',
+        category: 'agent' as const,
+        keywords: ['opencode', 'Hermes'],
+      },
+    ]
+    expect(groupAddProviderEntries(withKeywords, 'hermes')).toHaveLength(1)
   })
 
   it('returns nothing when the query matches no entry', () => {

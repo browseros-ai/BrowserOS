@@ -9,6 +9,16 @@ mock.module('@/components/agents/AdapterIcon', () => ({
 mock.module('@/lib/llm-providers/providerIcons', () => ({
   ProviderIcon: () => createElement('span', { 'data-icon': 'provider' }),
 }))
+mock.module('@/components/agents/agent-brand-marks', () => ({
+  BRAND_MARKS: {
+    opencode: () => createElement('span', { 'data-mark': 'opencode' }),
+    hermes: () => createElement('span', { 'data-mark': 'hermes' }),
+    openclaw: () => createElement('span', { 'data-mark': 'openclaw' }),
+    pi: () => createElement('span', { 'data-mark': 'pi' }),
+    antigravity: () => createElement('span', { 'data-mark': 'antigravity' }),
+  },
+  agentBrandKey: () => undefined,
+}))
 mock.module('@/modules/browseros/capabilities.hooks', () => ({
   useCapabilities: () => ({ supports: () => true }),
 }))
@@ -88,6 +98,22 @@ describe('AddProviderSection', () => {
     const html = render()
     expect(html).toContain('Search providers and agents')
     expect(html).toMatch(/<label[^>]*for="[^"]+"/)
+  })
+
+  // "Custom ACP agent" says what it is, not what it gets you. The marks of the
+  // agents the picker offers are what make the tile worth clicking.
+  it('shows the popular agent marks on the custom agent tile', () => {
+    const html = render()
+    for (const id of ['opencode', 'hermes', 'openclaw', 'pi', 'antigravity']) {
+      expect(html).toContain(`data-mark="${id}"`)
+    }
+  })
+
+  it('names those agents in the custom tile copy', () => {
+    const html = render()
+    expect(html).toContain('opencode')
+    expect(html).toContain('OpenClaw')
+    expect(html).toContain('any other ACP compatible agent')
   })
 
   it('keeps a brand icon on every tile', () => {
