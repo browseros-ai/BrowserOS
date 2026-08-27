@@ -18,6 +18,7 @@ import {
 import { ArrowRight } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { Button } from '@/components/ui/button'
+import { OpenClaw } from '../components/AgentBrandMarks'
 import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
 import { StepWrap } from '../components/StepWrap'
 
@@ -29,7 +30,9 @@ interface SetupAgentStepProps {
 type MonoIcon = ComponentType<{ size?: number }>
 interface IconEntry {
   label: string
-  Icon: MonoIcon
+  Icon?: MonoIcon
+  /** Shown instead of an icon for agents with no single-colour brand mark. */
+  monogram?: string
 }
 
 // Real brand marks from @lobehub/icons (the same source the app uses). The
@@ -57,15 +60,25 @@ const CODING_AGENTS: IconEntry[] = [
   { label: 'GitHub Copilot', Icon: Github },
   { label: 'Gemini CLI', Icon: Gemini },
   { label: 'Qwen Code', Icon: Qwen },
+  { label: 'OpenClaw', Icon: OpenClaw },
+  // Hermes' mark is a detailed illustration with no single-colour form, so it
+  // uses the same monogram the app falls back to in its agent picker.
+  { label: 'Hermes', monogram: 'H' },
 ]
 
-function IconChip({ label, Icon }: IconEntry) {
+function IconChip({ label, Icon, monogram }: IconEntry) {
   return (
     <span
       title={label}
       className="grid size-[42px] place-items-center rounded-[10px] border border-border bg-card text-foreground transition-all duration-150 hover:-translate-y-0.5 hover:border-accent hover:shadow-[0_6px_14px_var(--color-accent-tint)]"
     >
-      <Icon size={23} />
+      {Icon ? (
+        <Icon size={23} />
+      ) : (
+        <span className="font-semibold text-[17px] leading-none">
+          {monogram}
+        </span>
+      )}
     </span>
   )
 }
@@ -84,8 +97,8 @@ export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
         Set up your <Em>agent</Em>
       </DisplayHeading>
       <StepCopy>
-        Connect an LLM provider or a coding agent you already use. We will open
-        BrowserOS so you can finish.
+        Connect an LLM provider or a coding agent harness you already use. We
+        will open BrowserOS so you can finish.
       </StepCopy>
       <div className="mb-6 flex max-w-[480px] flex-col gap-[18px]">
         <div>
@@ -103,12 +116,15 @@ export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
         </div>
         <div>
           <div className="mb-2.5 font-bold text-[11px] text-ink-3 uppercase tracking-[0.08em]">
-            Or a coding agent you already use
+            Or a coding agent harness you already use
           </div>
           <div className="flex flex-wrap gap-2">
             {CODING_AGENTS.map((entry) => (
               <IconChip key={entry.label} {...entry} />
             ))}
+          </div>
+          <div className="mt-2.5 text-[13px] text-ink-3">
+            or any other ACP compatible agent
           </div>
         </div>
       </div>

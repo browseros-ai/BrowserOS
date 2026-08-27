@@ -49,11 +49,32 @@ describe('SetupAgentStep', () => {
 
     expect(html).toContain('Set up your')
     expect(html).toContain('Any LLM provider')
-    expect(html).toContain('Or a coding agent you already use')
+    expect(html).toContain('Or a coding agent harness you already use')
+    expect(html).toContain('or any other ACP compatible agent')
     expect(html).toContain('+40')
     expect(html).toContain('Set up my agent')
     // Every chip is a brand SVG; there should be many.
     expect((html.match(/<svg/g) ?? []).length).toBeGreaterThan(10)
+  })
+
+  it('lists the ACP agents alongside the built-in harnesses', () => {
+    const html = renderToStaticMarkup(
+      <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
+    )
+
+    for (const label of ['Claude Code', 'Codex', 'OpenClaw', 'Hermes']) {
+      expect(html).toContain(`title="${label}"`)
+    }
+  })
+
+  it('renders a monogram for an agent with no single-colour mark', () => {
+    const html = renderToStaticMarkup(
+      <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
+    )
+
+    // Hermes' mark is a raster illustration, so the chip falls back to a letter
+    // rather than importing an image the Chromium resource target cannot carry.
+    expect(html).toMatch(/title="Hermes"[^>]*>(?:(?!<svg)[\s\S])*?>H</)
   })
 
   it('wires the primary CTA to setup', () => {
