@@ -75,7 +75,6 @@ on:
 permissions:
   contents: write
 
-
 concurrency:
   # The legacy key keeps in-flight revisions of the renamed workflow serialized.
   group: release-claw-server-rust
