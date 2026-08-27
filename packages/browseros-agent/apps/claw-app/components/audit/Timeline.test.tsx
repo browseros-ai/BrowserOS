@@ -1,6 +1,6 @@
 /**
  * Static-markup pins for the Timeline component's expand-all,
- * collapse-all, and HIGH RISK auto-expand behaviour.
+ * collapse-all, and notable-action auto-expand behaviour.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -71,13 +71,13 @@ describe('Timeline', () => {
 
   it('disables Collapse all on first render when nothing is auto-expanded', () => {
     const html = render([dispatch({ dispatchId: 1, toolName: 'snapshot' })])
-    // Collapse all should be disabled (no HIGH RISK rows auto-expanded).
+    // Collapse all should be disabled (no notable rows auto-expanded).
     expect(html).toMatch(
       /<button[^>]*data-disabled=""[^>]*timeline-collapse-all/,
     )
   })
 
-  it('leaves Collapse all enabled when a HIGH RISK row auto-expands', () => {
+  it('leaves Collapse all enabled when a notable row auto-expands', () => {
     const html = render([
       dispatch({ dispatchId: 1, toolName: 'snapshot' }),
       dispatch({ dispatchId: 2, toolName: 'act' }),
@@ -87,7 +87,7 @@ describe('Timeline', () => {
     )
   })
 
-  it('auto-expands HIGH RISK rows so args + result blocks appear on initial render', () => {
+  it('auto-expands notable rows so args + result blocks appear on initial render', () => {
     const html = render([
       dispatch({
         dispatchId: 7,

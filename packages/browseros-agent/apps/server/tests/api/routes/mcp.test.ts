@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import { HTTPException } from 'hono/http-exception'
 import {
   createMcpRoutes,
   MANAGED_MCP_SERVERS_HEADER,
@@ -154,12 +153,11 @@ describe('createMcpRoutes', () => {
     ).toEqual([false, true, false])
   })
 
-  it('surfaces a transport HTTPException with its real status instead of masking it as 500', async () => {
+  it('returns the transport response verbatim, including its error status', async () => {
     const app = createTestMcpRoutes({
       createMcpTransport: (() => ({
-        handleRequest: async () => {
-          throw new HTTPException(406, { message: 'Not Acceptable' })
-        },
+        handleRequest: async () =>
+          new Response('Not Acceptable', { status: 406 }),
       })) as never,
     })
 
@@ -182,5 +180,17 @@ describe('createMcpRoutes', () => {
 
     expect(res.status).toBe(500)
     expect(body.error.code).toBe(-32603)
+  })
+
+  it('rejects browser-originated requests carrying Sec-Fetch-Site', async () => {
+    const app = createTestMcpRoutes()
+
+    const blocked = await postMcp(app, { 'Sec-Fetch-Site': 'cross-site' })
+    const allowed = await postMcp(app)
+
+    expect(blocked.status).toBe(403)
+    const body = (await blocked.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('FORBIDDEN_BROWSER_REQUEST')
+    expect(allowed.status).toBe(200)
   })
 })

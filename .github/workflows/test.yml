@@ -52,6 +52,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Install dependencies
         run: bun ci
@@ -82,6 +84,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Setup Rust
         if: matrix.needs_rust == true
@@ -96,6 +100,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/browseros-agent
+          # Without this the key embeds GITHUB_JOB, so the warm cache produced
+          # on main by a differently named job could never be restored here.
+          shared-key: browseros-agent
+          # Intermediate artifacts live outside the checkout so worktrees can
+          # share them, and rust-cache only saves workspace target dirs plus the
+          # registry and git caches by default. Name the build dir explicitly or
+          # every run would recompile the dependency graph from scratch.
+          cache-directories: ~/.cargo/build/browseros
 
       - name: Install dependencies
         run: bun ci

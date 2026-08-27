@@ -14,6 +14,7 @@ Print the page to a PDF and save it to a BrowserOS output file, returning the pa
 Use for archiving or reading a page as a document; prefer read for extracting text.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PdfArgs {
     /// Page id from `tabs`.
     page: u32,

@@ -23,9 +23,21 @@ export type ProbeAcpAgentFn = (
 const probeRequestSchema = z
   .object({
     type: AcpAgentTypeSchema,
+    command: z.string().trim().min(1).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().trim().min(1).optional(),
     timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.type === 'custom' && !value.command) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'command is required to probe a custom agent',
+        path: ['command'],
+      })
+    }
+  })
 
 export function createAcpxProbeRoutes(
   options: { probe?: ProbeAcpAgentFn; resourcesDir?: string | null } = {},

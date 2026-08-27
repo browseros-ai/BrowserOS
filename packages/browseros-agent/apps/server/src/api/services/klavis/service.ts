@@ -5,7 +5,7 @@
  */
 
 import { KLAVIS_PROXY_RETRY_BACKOFF_MS } from '@browseros/shared/constants/timeouts'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import type { ToolSet } from 'ai'
 import { logger } from '../../../lib/logger'
 import {

@@ -2,7 +2,7 @@ import type {
   GetRecentResult,
   HistoryEntry,
 } from '@browseros/cdp-protocol/domains/history'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, textResult } from './framework'
 
 const DEFAULT_MAX_RESULTS = 100

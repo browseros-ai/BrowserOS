@@ -4,7 +4,7 @@ import { hc } from 'hono/client'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import type { AcpAgentType } from './acp-agent-types'
+import type { AcpAgentType, CustomAcpAgentConfig } from './acp-agent-types'
 import { computeAgentsSettled } from './agents.helpers'
 
 interface CreateAcpAgentInput {
@@ -12,6 +12,19 @@ interface CreateAcpAgentInput {
   type: AcpAgentType
   modelId?: string
   reasoningEffort?: string
+  workingDirectory?: string
+  customConfig?: CustomAcpAgentConfig
+}
+
+interface UpdateAcpAgentInput {
+  agentId: string
+  patch: {
+    name?: string
+    modelId?: string | null
+    reasoningEffort?: string | null
+    workingDirectory?: string | null
+    customConfig?: CustomAcpAgentConfig
+  }
 }
 
 const AGENTS_QUERY_KEY = 'acp-agents'
@@ -75,6 +88,28 @@ export function useCreateAcpAgent() {
         throw new Error('BrowserOS agent server URL is not ready')
       }
       const response = await agentsClient(baseUrl).index.$post({ json: input })
+      if (!response.ok) throw await agentRequestError(response)
+      const result = await response.json()
+      return result.agent
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),
+  })
+}
+
+export function useUpdateAcpAgent() {
+  const { baseUrl, isLoading } = useAgentServerUrl()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ agentId, patch }: UpdateAcpAgentInput) => {
+      if (!baseUrl || isLoading) {
+        throw new Error('BrowserOS agent server URL is not ready')
+      }
+      const response = await agentsClient(baseUrl)[':agentId'].$put({
+        param: { agentId },
+        json: patch,
+      })
       if (!response.ok) throw await agentRequestError(response)
       const result = await response.json()
       return result.agent

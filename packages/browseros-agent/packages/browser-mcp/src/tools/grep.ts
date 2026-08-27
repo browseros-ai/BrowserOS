@@ -1,5 +1,5 @@
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
 import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'
@@ -12,12 +12,14 @@ export const grep = defineTool({
   name: 'grep',
   description:
     'Search the page without dumping it. over="ax" greps the snapshot lines (matches keep their [ref=eN]); over="content" greps visible text. Returns matching lines.',
-  input: z.object({
-    page: z.number().int(),
-    pattern: z.string().describe('Case-insensitive regular expression.'),
-    over: z.enum(['ax', 'content']).default('ax'),
-    limit: z.number().optional().describe('Max matching lines (default 50).'),
-  }),
+  input: z
+    .object({
+      page: z.number().int(),
+      pattern: z.string().describe('Case-insensitive regular expression.'),
+      over: z.enum(['ax', 'content']).default('ax'),
+      limit: z.number().optional().describe('Max matching lines (default 50).'),
+    })
+    .strict(),
   annotations: { title: 'Search page', readOnlyHint: true },
   handler: async (args, ctx) => {
     let regex: RegExp

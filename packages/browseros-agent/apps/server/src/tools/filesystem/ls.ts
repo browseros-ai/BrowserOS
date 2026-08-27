@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   DEFAULT_LS_LIMIT,
   executeWithMetrics,

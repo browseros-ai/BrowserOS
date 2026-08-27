@@ -10,7 +10,12 @@ use crate::error::{AppError, AppResult};
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
     include_str!("../../../../resources/skills/browserclaw/SKILL.md");
 const SKILL_FRONTMATTER_NAME: &str = "browseros-neo";
-const LEGACY_MANAGED_SKILL_DIRECTORY: &str = "browserclaw";
+/// On-disk directory name for the managed skill; matches the SKILL.md frontmatter
+/// `name` so agents that require `name == parent directory` accept it.
+const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
+/// The pre-rename directory name earlier builds installed the skill under. Existing
+/// installs at this name are migrated to `MANAGED_SKILL_DIRECTORY` on reconcile.
+pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";
 
 #[derive(Deserialize)]
 struct SkillFrontmatter {
@@ -67,7 +72,7 @@ fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
     if frontmatter.description.trim().is_empty() {
         return Err("frontmatter requires a non-empty `description`".to_string());
     }
-    SkillSpec::new(LEGACY_MANAGED_SKILL_DIRECTORY, content).map_err(|error| error.to_string())
+    SkillSpec::new(MANAGED_SKILL_DIRECTORY, content).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -112,7 +117,7 @@ mod tests {
 
         let loaded = load_browserclaw_skill(root.path())?;
 
-        assert_eq!(loaded.name(), "browserclaw");
+        assert_eq!(loaded.name(), "browseros-neo");
         assert_eq!(loaded.content(), runtime);
         Ok(())
     }

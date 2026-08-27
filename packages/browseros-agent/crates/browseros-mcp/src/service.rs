@@ -13,8 +13,9 @@ use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation, JsonObject,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, Tool,
+        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+        Tool,
     },
     service::RequestContext,
 };
@@ -295,7 +296,7 @@ impl ServerHandler for BrowserMcpService {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let Some(def) = self.find_tool(&request.name) else {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         };
@@ -305,6 +306,7 @@ impl ServerHandler for BrowserMcpService {
             .unwrap_or_else(|| Value::Object(JsonObject::new()));
         Ok(self
             .execute_registered_tool(def, args, context.ct.clone())
-            .await)
+            .await
+            .into())
     }
 }

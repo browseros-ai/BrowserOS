@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, mock } from 'bun:test'
+import { asSchema } from 'ai'
 import type { KlavisClient } from '../../../../src/api/services/klavis/client'
 import { KlavisService } from '../../../../src/api/services/klavis/service'
 import type {
@@ -55,7 +56,6 @@ function createHandle(
         inputSchema: { type: 'object' },
       } as never,
     ],
-    inputSchemas: new Map([['gmail_search', {} as never]]),
     callTool: mock(async () => ({
       content: [
         { type: 'text', text: 'Found 2 threads' },
@@ -135,6 +135,51 @@ describe('KlavisService', () => {
     })
   })
 
+  it('keeps parameterized connector tool schemas intact for the model', async () => {
+    const parameterizedSchema = {
+      type: 'object',
+      properties: {
+        category_names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Categories to expand.',
+        },
+      },
+      required: ['category_names'],
+      additionalProperties: false,
+    }
+    const handle = createHandle({
+      tools: [
+        {
+          name: 'get_category_actions',
+          description: 'Expand categories',
+          inputSchema: parameterizedSchema,
+        } as never,
+      ],
+    })
+    const service = new KlavisService({
+      browserosId: 'browseros-1',
+      client: asClient(new StubKlavisClient()),
+      connect: async () => handle,
+    })
+
+    service.start()
+    await nextTick()
+
+    const tool = service.buildAiSdkToolSet().get_category_actions
+    expect(tool).toBeDefined()
+
+    // Regression: the remote JSON schema must reach the model unchanged. Routing
+    // it through Zod (zod-from-json-schema -> zod-to-json-schema under zod v3)
+    // dropped every property, so the model could never supply category_names.
+    const advertised = asSchema(tool.inputSchema).jsonSchema as {
+      properties?: Record<string, unknown>
+      required?: string[]
+    }
+    expect(advertised.properties?.category_names).toBeDefined()
+    expect(advertised.required).toContain('category_names')
+  })
+
   it('maps null MCP results into JSON model output', async () => {
     const handle = createHandle({
       tools: [
@@ -144,7 +189,6 @@ describe('KlavisService', () => {
           inputSchema: { type: 'object' },
         } as never,
       ],
-      inputSchemas: new Map([['notion_lookup', {} as never]]),
       callTool: mock(async () => null as never),
     })
     const service = new KlavisService({

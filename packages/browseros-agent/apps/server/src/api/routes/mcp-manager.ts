@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import {
@@ -12,6 +13,7 @@ import {
   listAgents,
   uninstallFrom,
 } from '../../lib/mcp-manager'
+import type { KlavisService } from '../services/klavis'
 
 interface McpManagerRouteOptions {
   /**
@@ -27,6 +29,11 @@ interface McpManagerRouteOptions {
    * that have no other source.
    */
   getMcpUrl: () => string
+  /**
+   * Optional Klavis service. When present, its connector tools are included in
+   * `GET /tools` so the list matches what the `/mcp` tools/list exposes.
+   */
+  klavis?: KlavisService
 }
 
 const InstallBodySchema = z
@@ -36,9 +43,32 @@ const InstallBodySchema = z
   .partial()
 
 export function createMcpManagerRoutes(options: McpManagerRouteOptions) {
-  const { getMcpUrl } = options
+  const { getMcpUrl, klavis } = options
 
   return new Hono()
+    .get('/tools', (c) => {
+      // Read-only tool catalogue for the settings UI to display. Lives here (not
+      // under /mcp) so the browser can fetch it without speaking the MCP protocol,
+      // and without tripping the /mcp browser-request guard. Mirrors the tool set
+      // that /mcp tools/list exposes: browser tools plus Klavis connector tools.
+      try {
+        const browserTools = BROWSER_TOOLS.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+        }))
+        const connectorToolSet = klavis?.buildAiSdkToolSet() ?? {}
+        const connectorTools = Object.entries(connectorToolSet).map(
+          ([name, tool]) => ({
+            name,
+            description: (tool as { description?: string }).description ?? '',
+          }),
+        )
+        return c.json({ tools: [...browserTools, ...connectorTools] })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ message }, 500)
+      }
+    })
     .get('/agents', async (c) => {
       try {
         const agents = await listAgents()

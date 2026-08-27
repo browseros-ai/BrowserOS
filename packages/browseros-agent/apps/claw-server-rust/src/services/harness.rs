@@ -641,6 +641,19 @@ fn reconcile_managed_skill(
     workspace_dir: &Path,
     managed_skill: &ManagedSkill,
 ) -> Result<SkillReconcileOutcome, ManagerError> {
+    // Heal installs from before the skill directory was renamed: remove the legacy
+    // `browserclaw` directories (marker-verified) so the reconcile below replants the
+    // skill under its current `browseros-neo` name. Idempotent and a no-op once done.
+    let migrated = managed_skill.reconciler.remove_legacy_directories(
+        super::harness_skills::LEGACY_SKILL_DIRECTORY_NAME,
+        &managed_skill.environment,
+    )?;
+    if !migrated.is_empty() {
+        tracing::info!(
+            agents = ?migrated,
+            "migrated legacy BrowserOS neo skill directories to the current name"
+        );
+    }
     let consumers = recognized_browseros_links(manager, workspace_dir)?
         .into_iter()
         .map(|link| link.agent)

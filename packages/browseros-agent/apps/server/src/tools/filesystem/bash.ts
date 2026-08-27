@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   DEFAULT_BASH_TIMEOUT,
   executeWithMetrics,

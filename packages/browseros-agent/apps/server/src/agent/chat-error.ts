@@ -13,7 +13,6 @@
  */
 
 import {
-  AISDKError,
   APICallError,
   InvalidPromptError,
   LoadAPIKeyError,
@@ -29,27 +28,59 @@ export interface ChatErrorContext {
   provider?: string
 }
 
-const DETAILS_MAX_LENGTH = 500
+// `details` carries the full scrubbed upstream error so the card can show it and
+// the user can copy the whole thing. A credit/quota error's actionable specifics
+// live in a JSON body, so a small cut would strip exactly what the user needs.
+// Bounded, but large, so a pathological body still cannot flood the wire or card.
+const DETAILS_MAX_LENGTH = 20000
 
 const USAGE_DOCS_URL = 'https://dub.sh/browseros-usage-limit'
 const USAGE_PAGE_URL = '/app.html#/settings/usage'
 const CONNECTION_DOCS_URL =
   'https://docs.browseros.com/troubleshooting/connection-issues'
 
+const REDACTED = '[REDACTED]'
+
 /**
- * Key-shaped tokens get scrubbed out of free-text upstream messages. The shared
- * Sentry sanitizer only redacts by object key, so it cannot help here.
+ * Value-shaped secrets scrubbed out of the full upstream body before it is shown
+ * or copied. Redacting by object key is not enough here: the body is arbitrary
+ * text (JSON, HTML, or a plain sentence) and a credential can sit inside a
+ * non-sensitive field, so these match on the value's shape. Each entry pairs a
+ * pattern with its replacement so URL and JSON-value rules can keep surrounding
+ * context. Skewed toward over-redaction: a missed token is copied into a bug
+ * report, a false positive only hides a value the user did not need.
  */
-const SECRET_PATTERNS: RegExp[] = [
-  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/g,
-  /\bBearer\s+[A-Za-z0-9._-]{12,}/gi,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+const SECRET_PATTERNS: [RegExp, string][] = [
+  // Provider API keys (OpenAI/Anthropic/Stripe sk-/pk-/rk-) and AWS access keys.
+  [/\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{12,}/g, REDACTED],
+  [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
+  // Bearer tokens and JWTs (three base64url segments).
+  [/\bBearer\s+[A-Za-z0-9._-]{12,}/gi, REDACTED],
+  [/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, REDACTED],
+  // Vendor tokens: GitHub classic + fine-grained, GitLab, Google, Slack.
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}/g, REDACTED],
+  [/\bglpat-[A-Za-z0-9_-]{20}/g, REDACTED],
+  [/\bAIza[0-9A-Za-z_-]{35}/g, REDACTED],
+  [/\bya29\.[0-9A-Za-z_-]{20,}/g, REDACTED],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, REDACTED],
+  // PEM private key blocks.
+  [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    REDACTED,
+  ],
+  // Credentials embedded in a URL (scheme://user:pass@host): keep host, drop userinfo.
+  [/([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi, `$1${REDACTED}@`],
+  // Sensitive JSON string values, matched on the raw text so no object parse is needed.
+  [
+    /("[^"]*(?:token|secret|password|passwd|api[_-]?key|authorization|credential)[^"]*"\s*:\s*)"[^"]*"/gi,
+    `$1"${REDACTED}"`,
+  ],
 ]
 
 function redact(text: string): string {
   return SECRET_PATTERNS.reduce(
-    (acc, pattern) => acc.replace(pattern, '[REDACTED]'),
+    (acc, [pattern, replacement]) => acc.replace(pattern, replacement),
     text,
   )
 }
@@ -61,6 +92,28 @@ function toDetails(text: string | undefined): string | undefined {
   return redacted.length > DETAILS_MAX_LENGTH
     ? `${redacted.slice(0, DETAILS_MAX_LENGTH)}…`
     : redacted
+}
+
+/**
+ * The full upstream body is the actionable evidence a generic gateway message
+ * hides: OpenRouter-style gateways wrap the real reason in `metadata.raw` while
+ * `message` stays vague. Prefer the response body (pretty-printed when it is
+ * JSON), then the structured `data.raw`, then the message. Redacted and capped
+ * like any other detail.
+ */
+function upstreamDetails(error: APICallError): string | undefined {
+  if (error.responseBody) {
+    try {
+      return toDetails(JSON.stringify(JSON.parse(error.responseBody), null, 2))
+    } catch {
+      return toDetails(error.responseBody)
+    }
+  }
+  const raw = (error.data as { raw?: unknown } | undefined)?.raw
+  if (raw !== undefined) {
+    return toDetails(JSON.stringify(raw, null, 2))
+  }
+  return toDetails(error.message)
 }
 
 /** Upstream text reaches the user, so it gets the same scrub as `details`. */
@@ -111,7 +164,7 @@ function fromApiCallError(
   const base = {
     provider: ctx.provider,
     statusCode: error.statusCode,
-    details: toDetails(error.message),
+    details: upstreamDetails(error),
   }
   const code = gatewayCode(error)
   const isBrowserOs = ctx.provider === 'browseros'
@@ -256,6 +309,7 @@ function fromMessage(message: string, ctx: ChatErrorContext): ChatError | null {
       message: safeMessage(message, 'This provider is not fully configured.'),
       retryable: false,
       provider: ctx.provider,
+      details: toDetails(message),
     }
   }
 
@@ -286,6 +340,7 @@ export function toChatError(
       ),
       retryable: false,
       provider: ctx.provider,
+      details: toDetails(error.message),
     }
   }
 
@@ -296,6 +351,7 @@ export function toChatError(
       message: safeMessage(error.message, 'This message could not be sent.'),
       retryable: false,
       provider: ctx.provider,
+      details: toDetails(error.message),
     }
   }
 
@@ -309,7 +365,9 @@ export function toChatError(
     message: safeMessage(message, 'An unexpected error occurred.'),
     retryable: true,
     provider: ctx.provider,
-    details: AISDKError.isInstance(error) ? toDetails(error.name) : undefined,
+    // The raw error is the only evidence for an error the AI SDK could not
+    // classify; carry it scrubbed so the card can show it when it adds detail.
+    details: toDetails(message),
   }
 }
 

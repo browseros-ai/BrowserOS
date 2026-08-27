@@ -217,3 +217,59 @@ describe('resolveAcpSpawnCommand', () => {
     expect(out?.argv.join('\n')).not.toContain('CODEX_HOME')
   })
 })
+
+describe('resolveAcpSpawnCommand (custom)', () => {
+  const noLoginPath = () => undefined
+
+  it('runs a custom command as given, split into argv', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'npx -y @scope/my-agent-acp --stdio',
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['npx', '-y', '@scope/my-agent-acp', '--stdio'])
+  })
+
+  it('injects custom env at the process-launch boundary', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent',
+      spawnEnv: { MY_AGENT_KEY: 'secret' },
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['env', 'MY_AGENT_KEY=secret', 'my-agent'])
+  })
+
+  it('does not wrap the custom command in bundled-bun', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent --stdio',
+      resourcesDir: '/fake/resources',
+      resolveBundledBun: stubBunPresent,
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.argv).toEqual(['my-agent', '--stdio'])
+    expect(out.argv.join(' ')).not.toContain('--package')
+  })
+
+  it('prepends the login-shell PATH so profile-installed binaries resolve', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'opencode acp',
+      env: { PATH: '/usr/bin' },
+      platform: 'darwin',
+      resolveLoginShellPath: () => '/opt/homebrew/bin:/usr/bin',
+    })
+    expect(out.argv).toEqual([
+      'env',
+      'PATH=/opt/homebrew/bin:/usr/bin',
+      'opencode',
+      'acp',
+    ])
+  })
+})

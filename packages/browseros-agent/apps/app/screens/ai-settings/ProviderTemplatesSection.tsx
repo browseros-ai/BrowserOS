@@ -14,15 +14,18 @@ import { cn } from '@/lib/utils'
 import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { CodingAgentTemplateCard } from './CodingAgentTemplateCard'
+import { CustomAgentTemplateCard } from './CustomAgentTemplateCard'
 import { ProviderTemplateCard } from './ProviderTemplateCard'
 
 export interface ProviderTemplatesSectionProps {
   onCreateAgent: (type: AcpAgentType) => void
+  onCreateCustomAgent: () => void
   onUseTemplate: (template: ProviderTemplate) => void
 }
 
 export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
   onCreateAgent,
+  onCreateCustomAgent,
   onUseTemplate,
 }) => {
   const { supports } = useCapabilities()
@@ -44,7 +47,7 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
           <div>
             <h3 className="font-semibold text-lg">Quick provider templates</h3>
             <p className="text-muted-foreground text-sm">
-              {filteredTemplates.length + (supportsCodingAgents ? 2 : 0)}{' '}
+              {filteredTemplates.length + (supportsCodingAgents ? 3 : 0)}{' '}
               templates available
             </p>
           </div>
@@ -66,15 +69,21 @@ export const ProviderTemplatesSection: FC<ProviderTemplatesSectionProps> = ({
                     template={template}
                     onUseTemplate={onUseTemplate}
                   />
-                  {showCodingAdapters && supportsCodingAgents
-                    ? (['claude', 'codex'] as const).map((type) => (
+                  {showCodingAdapters && supportsCodingAgents ? (
+                    <>
+                      {(['claude', 'codex'] as const).map((type) => (
                         <CodingAgentTemplateCard
                           key={`coding-${type}`}
                           type={type}
                           onCreate={onCreateAgent}
                         />
-                      ))
-                    : null}
+                      ))}
+                      <CustomAgentTemplateCard
+                        key="coding-custom"
+                        onCreate={onCreateCustomAgent}
+                      />
+                    </>
+                  ) : null}
                 </Fragment>
               )
             })}

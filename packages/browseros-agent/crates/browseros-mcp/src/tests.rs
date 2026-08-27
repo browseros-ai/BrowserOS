@@ -1282,3 +1282,42 @@ fn collect_schema_reference_paths(value: &Value, path: String, paths: &mut Vec<S
         _ => {}
     }
 }
+
+#[test]
+fn every_tool_rejects_unknown_arguments() {
+    for tool in catalog() {
+        let schema = Value::Object(tool.input_schema.as_ref().clone());
+        let mut permissive = Vec::new();
+        collect_permissive_object_paths(&schema, "$".to_string(), &mut permissive);
+        assert!(
+            permissive.is_empty(),
+            "{} accepts unknown arguments at {}; add #[serde(deny_unknown_fields)] to the \
+             matching args struct",
+            tool.name,
+            permissive.join(", ")
+        );
+    }
+}
+
+/// Walks a generated input schema and reports every object node - nested ones included - that
+/// still accepts unknown properties.
+fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            if object.contains_key("properties")
+                && object.get("additionalProperties") != Some(&json!({ "not": {} }))
+            {
+                paths.push(path.clone());
+            }
+            for (key, child) in object {
+                collect_permissive_object_paths(child, format!("{path}.{key}"), paths);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_permissive_object_paths(item, format!("{path}[{index}]"), paths);
+            }
+        }
+        _ => {}
+    }
+}

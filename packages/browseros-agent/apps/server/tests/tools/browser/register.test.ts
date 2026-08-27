@@ -531,9 +531,9 @@ describe('registerBrowserTools', () => {
     }
 
     const inputSchema = fake.configs.get('wait')?.inputSchema as
-      | { timeout?: { description?: string } }
+      | { shape?: { timeout?: { description?: string } } }
       | undefined
-    expect(inputSchema?.timeout?.description).toContain('default 2000')
+    expect(inputSchema?.shape?.timeout?.description).toContain('default 2000')
   })
 
   it('runs server-runtime JavaScript against the browser session', async () => {

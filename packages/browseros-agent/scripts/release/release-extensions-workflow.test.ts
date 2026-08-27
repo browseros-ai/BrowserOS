@@ -101,7 +101,9 @@ describe('release-extensions workflow', () => {
   it('builds and attaches the immutable CRX before optional finalization', () => {
     const build = section('  build:', '  preflight_alpha:')
     expect(build).toContain('browseros ext release')
-    expect(build).toContain('bun-version: "1.3.6"')
+    expect(build).toContain(
+      'bun-version-file: packages/browseros-agent/package.json',
+    )
     expect(build).toContain('--source-sha "$RELEASE_SHA"')
     expect(build).toContain('gh release upload')
     expect(build).toContain('needs.prepare.outputs.version')

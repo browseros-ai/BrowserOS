@@ -167,12 +167,21 @@ function buildView(message: string, providerType?: string): ChatErrorView {
   return envelope ? fromEnvelope(envelope) : fromMessage(message, providerType)
 }
 
+/** Pretty-print JSON details; leave already-formatted or non-JSON text as-is. */
+function formatErrorDetails(details: string): string {
+  try {
+    return JSON.stringify(JSON.parse(details), null, 2)
+  } catch {
+    return details
+  }
+}
+
 export const ChatError: FC<ChatErrorProps> = ({
   error,
   onRetry,
   providerType,
 }) => {
-  const [showDetails, setShowDetails] = useState(false)
+  const [copiedDetails, setCopiedDetails] = useState(false)
   const view = buildView(error.message, providerType)
 
   const surveyUrl = useMemo(
@@ -182,6 +191,21 @@ export const ChatError: FC<ChatErrorProps> = ({
   )
 
   const canRetry = !!onRetry && view.canRetry
+
+  const detailsText = view.details ? formatErrorDetails(view.details) : ''
+
+  // Copy targets the full string, not the DOM, so the whole error is copied even
+  // though the block clips it to a scroll area on screen.
+  const copyDetails = async () => {
+    if (!detailsText) return
+    try {
+      await navigator.clipboard.writeText(detailsText)
+      setCopiedDetails(true)
+      window.setTimeout(() => setCopiedDetails(false), 1500)
+    } catch {
+      setCopiedDetails(false)
+    }
+  }
 
   return (
     <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
@@ -225,20 +249,23 @@ export const ChatError: FC<ChatErrorProps> = ({
           </a>
         </p>
       )}
-      {view.details && view.details !== view.text && (
+      {detailsText && detailsText !== view.text && (
         <div className="w-full">
-          <button
-            type="button"
-            onClick={() => setShowDetails((shown) => !shown)}
-            className="w-full text-center text-muted-foreground text-xs underline hover:text-foreground"
-          >
-            {showDetails ? 'Hide details' : 'Show details'}
-          </button>
-          {showDetails && (
-            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-muted p-2 text-left text-[10px] text-muted-foreground">
-              {view.details}
-            </pre>
-          )}
+          <div className="mb-1 flex items-center justify-between px-0.5">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+              Full error
+            </span>
+            <button
+              type="button"
+              onClick={copyDetails}
+              className="text-[10px] text-muted-foreground underline hover:text-foreground"
+            >
+              {copiedDetails ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-muted p-2 text-left text-[10px] text-muted-foreground">
+            {detailsText}
+          </pre>
         </div>
       )}
       {canRetry && (

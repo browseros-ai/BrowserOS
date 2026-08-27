@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, Tool } from '@modelcontextprotocol/client'
 
 export interface ConnectorCatalogItem {
   name: string
@@ -65,7 +65,6 @@ export interface SubmitApiKeyInput {
 export interface KlavisSessionHandle {
   browserosId: string
   tools: Tool[]
-  inputSchemas: Map<string, Record<string, never>>
   callTool: (
     name: string,
     args: Record<string, unknown>,

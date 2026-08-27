@@ -3,23 +3,17 @@ import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import type { ModelMessage, ToolResultPart } from 'ai'
 import {
-  computeConfig,
+  computeBudget,
+  createCompactionPrepareStep,
   estimateTokens,
-  findSafeSplitPoint,
+  estimateTotalTokens,
   getCurrentTokenCount,
-  reduceToolOutputs,
   type StepWithUsage,
-  slidingWindow,
 } from '../../src/agent/compaction'
 import {
   countBinaryParts,
   stripBinaryContent,
 } from '../../src/agent/compaction/content'
-import {
-  buildSummarizationPrompt,
-  buildTurnPrefixPrompt,
-  messagesToTranscript,
-} from '../../src/agent/compaction/prompt'
 import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
@@ -27,74 +21,9 @@ import {
 
 const {
   COMPACTION_RESERVE_TOKENS,
-  COMPACTION_SMALL_CONTEXT_WINDOW,
-  COMPACTION_KEEP_RECENT_FRACTION,
-  COMPACTION_MAX_KEEP_RECENT,
-  COMPACTION_MIN_SUMMARIZABLE_INPUT,
-  COMPACTION_MIN_SUMMARIZABLE_INPUT_SMALL,
-  COMPACTION_MAX_SUMMARIZATION_INPUT,
-  COMPACTION_MIN_TOKEN_FLOOR,
-  COMPACTION_SUMMARIZER_OUTPUT_RATIO,
+  COMPACTION_FIXED_OVERHEAD,
+  DEFAULT_CONTEXT_WINDOW,
 } = AGENT_LIMITS
-
-function expectedReserve(contextWindow: number): number {
-  return contextWindow <= COMPACTION_SMALL_CONTEXT_WINDOW
-    ? Math.floor(contextWindow * 0.5)
-    : COMPACTION_RESERVE_TOKENS
-}
-
-function expectedTrigger(contextWindow: number): number {
-  return Math.max(0, contextWindow - expectedReserve(contextWindow))
-}
-
-function expectedKeepRecent(contextWindow: number): number {
-  return Math.max(
-    0,
-    Math.min(
-      COMPACTION_MAX_KEEP_RECENT,
-      Math.floor(
-        expectedTrigger(contextWindow) * COMPACTION_KEEP_RECENT_FRACTION,
-      ),
-    ),
-  )
-}
-
-function expectedAvailableToSummarize(contextWindow: number): number {
-  return Math.max(
-    0,
-    expectedTrigger(contextWindow) - expectedKeepRecent(contextWindow),
-  )
-}
-
-function expectedMinSummarizable(contextWindow: number): number {
-  const base =
-    contextWindow <= COMPACTION_SMALL_CONTEXT_WINDOW
-      ? COMPACTION_MIN_SUMMARIZABLE_INPUT_SMALL
-      : COMPACTION_MIN_SUMMARIZABLE_INPUT
-  return Math.max(
-    COMPACTION_MIN_TOKEN_FLOOR,
-    Math.min(base, expectedAvailableToSummarize(contextWindow)),
-  )
-}
-
-function expectedMaxSummarizationInput(contextWindow: number): number {
-  return Math.min(
-    COMPACTION_MAX_SUMMARIZATION_INPUT,
-    Math.max(
-      expectedMinSummarizable(contextWindow),
-      expectedAvailableToSummarize(contextWindow),
-    ),
-  )
-}
-
-function expectedSummarizerMaxOutput(contextWindow: number): number {
-  return Math.max(
-    COMPACTION_MIN_TOKEN_FLOOR,
-    Math.floor(
-      expectedReserve(contextWindow) * COMPACTION_SUMMARIZER_OUTPUT_RATIO,
-    ),
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,7 +46,7 @@ function assistantToolCall(
     content: [
       {
         type: 'tool-call',
-        toolCallId: `call_${toolName}_${Date.now()}`,
+        toolCallId: `call_${toolName}`,
         toolName,
         input,
       },
@@ -205,7 +134,6 @@ function agentConfig(
   }
 }
 
-// Build a realistic browser automation conversation
 function buildBrowserConversation(
   toolOutputSize: number,
   exchanges: number,
@@ -223,155 +151,224 @@ function buildBrowserConversation(
   return messages
 }
 
+/**
+ * Asserts that no tool result survives without the assistant tool call that
+ * produced it. This is the invariant that makes a compacted transcript a legal
+ * request body: providers reject an orphaned tool result outright.
+ */
+function expectNoOrphanedToolResults(messages: ModelMessage[]): void {
+  const seenCallIds = new Set<string>()
+
+  for (const message of messages) {
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part.type === 'tool-call') {
+          seenCallIds.add(part.toolCallId)
+        }
+      }
+    }
+
+    if (message.role === 'tool') {
+      for (const part of message.content) {
+        expect(seenCallIds.has(part.toolCallId)).toBe(true)
+      }
+    }
+  }
+}
+
+const NO_STEPS: StepWithUsage[] = []
+
 // ---------------------------------------------------------------------------
-// computeConfig — Pi-style reserve trigger
+// computeBudget
 // ---------------------------------------------------------------------------
 
-describe('computeConfig — reserve trigger', () => {
-  it('8K model → reserve is clamped to 50% of context', () => {
-    const config = computeConfig(8_000)
-    expect(config.reserveTokens).toBe(expectedReserve(8_000))
-    expect(config.triggerThreshold).toBe(expectedTrigger(8_000))
-    expect(config.triggerRatio).toBe(0.5)
-  })
+describe('computeBudget: trigger threshold', () => {
+  for (const size of [8_000, 16_000, 30_000, 40_000]) {
+    it(`${size / 1000}K model → reserve is clamped to 50% of context`, () => {
+      const { threshold } = computeBudget(size)
+      expect(threshold).toBe(size - Math.floor(size * 0.5))
+    })
+  }
 
-  it('16K model → reserve is clamped to 50% of context', () => {
-    const config = computeConfig(16_000)
-    expect(config.reserveTokens).toBe(expectedReserve(16_000))
-    expect(config.triggerThreshold).toBe(expectedTrigger(16_000))
-    expect(config.triggerRatio).toBe(0.5)
-  })
-
-  it('30K model → reserve is clamped to 50% of context', () => {
-    const config = computeConfig(30_000)
-    expect(config.reserveTokens).toBe(expectedReserve(30_000))
-    expect(config.triggerThreshold).toBe(expectedTrigger(30_000))
-    expect(config.triggerRatio).toBe(0.5)
-  })
-
-  it('32K model → reserve is clamped to 50% of context', () => {
-    const config = computeConfig(32_000)
-    expect(config.reserveTokens).toBe(expectedReserve(32_000))
-    expect(config.triggerThreshold).toBe(expectedTrigger(32_000))
-    expect(config.triggerRatio).toBe(0.5)
-  })
-
-  for (const size of [64_000, 200_000, 1_000_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → reserve is fixed at COMPACTION_RESERVE_TOKENS`, () => {
-      const config = computeConfig(size)
-      expect(config.reserveTokens).toBe(COMPACTION_RESERVE_TOKENS)
-      expect(config.triggerThreshold).toBe(expectedTrigger(size))
-      expect(config.triggerRatio).toBeCloseTo(expectedTrigger(size) / size, 3)
+  for (const size of [64_000, 128_000, 200_000, 1_000_000]) {
+    it(`${size / 1000}K model → reserve is fixed at COMPACTION_RESERVE_TOKENS`, () => {
+      const { threshold } = computeBudget(size)
+      expect(threshold).toBe(size - COMPACTION_RESERVE_TOKENS)
     })
   }
 })
 
-// ---------------------------------------------------------------------------
-// computeConfig — keep-recent fraction with max cap
-// ---------------------------------------------------------------------------
+describe('computeBudget: overhead', () => {
+  it('8K model → overhead is capped at 40% of context', () => {
+    expect(computeBudget(8_000).overhead).toBe(3_200)
+  })
 
-describe('computeConfig — keep-recent', () => {
-  for (const size of [8_000, 16_000, 32_000, 64_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → keeps ${COMPACTION_KEEP_RECENT_FRACTION * 100}% of trigger budget`, () => {
-      const config = computeConfig(size)
-      expect(config.keepRecentTokens).toBe(expectedKeepRecent(size))
-      expect(config.minSummarizableTokens).toBe(expectedMinSummarizable(size))
+  it('20K model → overhead is capped at 40% of context', () => {
+    expect(computeBudget(20_000).overhead).toBe(8_000)
+  })
+
+  for (const size of [30_000, 64_000, 200_000]) {
+    it(`${size / 1000}K model → overhead equals the constant`, () => {
+      expect(computeBudget(size).overhead).toBe(COMPACTION_FIXED_OVERHEAD)
     })
   }
 
-  for (const size of [200_000, 1_000_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → capped at COMPACTION_MAX_KEEP_RECENT`, () => {
-      const config = computeConfig(size)
-      expect(config.keepRecentTokens).toBe(COMPACTION_MAX_KEEP_RECENT)
+  // Without this, overhead alone exceeds the trigger and compaction never
+  // stops firing on small models.
+  for (const size of [4_000, 8_000, 16_000, 20_000, 30_000, 40_000, 200_000]) {
+    it(`${size / 1000}K model → overhead stays under the threshold`, () => {
+      const { threshold, overhead } = computeBudget(size)
+      expect(overhead).toBeLessThan(threshold)
     })
   }
 })
 
-// ---------------------------------------------------------------------------
-// computeConfig — Pi-style summarization budgets
-// ---------------------------------------------------------------------------
-
-describe('computeConfig — summarization budgets', () => {
-  for (const size of [16_000, 32_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → summarize budget is trigger minus keep-recent`, () => {
-      const config = computeConfig(size)
-      expect(config.maxSummarizationInput).toBe(
-        expectedMaxSummarizationInput(size),
-      )
-      expect(config.summarizerMaxOutputTokens).toBe(
-        expectedSummarizerMaxOutput(size),
+describe('computeBudget: invalid context windows', () => {
+  // 0.5 is the interesting one: it is positive, so a `> 0` bound admits it,
+  // and then flooring makes it a zero-token window.
+  for (const invalid of [
+    0,
+    0.5,
+    0.9,
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ]) {
+    it(`${String(invalid)} falls back to the default context window`, () => {
+      const budget = computeBudget(invalid)
+      expect(budget.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW)
+      expect(budget.threshold).toBe(
+        DEFAULT_CONTEXT_WINDOW - COMPACTION_RESERVE_TOKENS,
       )
     })
   }
 
-  it('20K model → min summarizable is clamped to available summarize budget', () => {
-    const config = computeConfig(20_000)
-    expect(config.minSummarizableTokens).toBe(expectedMinSummarizable(20_000))
-    expect(config.maxSummarizationInput).toBe(
-      expectedMaxSummarizationInput(20_000),
+  it('rounds a fractional context window down', () => {
+    expect(computeBudget(200_000.9).contextWindow).toBe(200_000)
+  })
+
+  it('accepts the smallest usable window', () => {
+    expect(computeBudget(1).contextWindow).toBe(1)
+  })
+
+  it('never produces a zero threshold', () => {
+    for (const size of [0, 0.5, 1, 2, 100, 8_000, 200_000]) {
+      expect(computeBudget(size).threshold).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createCompactionPrepareStep
+// ---------------------------------------------------------------------------
+
+describe('createCompactionPrepareStep', () => {
+  const contextWindow = 40_000
+  const { threshold, overhead } = computeBudget(contextWindow)
+  const prepareStep = createCompactionPrepareStep({ contextWindow })
+
+  it('returns the messages untouched when under the threshold', async () => {
+    const messages = buildBrowserConversation(200, 3)
+    const result = await prepareStep({ messages, steps: NO_STEPS })
+    expect(result.messages).toEqual(messages)
+  })
+
+  it('prunes older tool exchanges once over the threshold', async () => {
+    const messages = buildBrowserConversation(4_000, 12)
+    expect(estimateTotalTokens(messages, overhead)).toBeGreaterThan(threshold)
+
+    const result = await prepareStep({ messages, steps: NO_STEPS })
+
+    expect(estimateTotalTokens(result.messages, overhead)).toBeLessThanOrEqual(
+      threshold,
     )
+    expect(result.messages.length).toBeLessThan(messages.length)
   })
 
-  for (const size of [200_000, 1_000_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → max summarization input capped at COMPACTION_MAX_SUMMARIZATION_INPUT`, () => {
-      const config = computeConfig(size)
-      expect(config.maxSummarizationInput).toBe(
-        COMPACTION_MAX_SUMMARIZATION_INPUT,
-      )
-      expect(config.summarizerMaxOutputTokens).toBe(
-        expectedSummarizerMaxOutput(size),
-      )
-    })
-  }
-})
+  it('keeps the original user request after pruning', async () => {
+    const messages = buildBrowserConversation(4_000, 12)
+    const result = await prepareStep({ messages, steps: NO_STEPS })
 
-// ---------------------------------------------------------------------------
-// computeConfig — fixedOverhead scaling
-// ---------------------------------------------------------------------------
+    expect(result.messages[0]).toEqual(messages[0])
+  })
 
-describe('computeConfig — fixedOverhead scaling', () => {
-  it('8K model → fixedOverhead capped at 40% of context', () => {
-    const config = computeConfig(8_000)
-    expect(config.fixedOverhead).toBe(Math.floor(8_000 * 0.4))
-    expect(config.fixedOverhead).toBeLessThan(
-      AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD,
+  it('never orphans a tool result', async () => {
+    const messages = buildBrowserConversation(4_000, 12)
+    const result = await prepareStep({ messages, steps: NO_STEPS })
+
+    expectNoOrphanedToolResults(result.messages)
+  })
+
+  it('falls back to clearing every tool call when recent messages alone overflow', async () => {
+    const messages = [
+      userMsg('summarize this page'),
+      assistantToolCall('snapshot', {}),
+      toolResult('snapshot', repeat('x', 400_000)),
+      assistantMsg('working on it'),
+    ]
+
+    const result = await prepareStep({ messages, steps: NO_STEPS })
+
+    expect(estimateTotalTokens(result.messages, overhead)).toBeLessThanOrEqual(
+      threshold,
     )
+    expectNoOrphanedToolResults(result.messages)
+    expect(result.messages.some((m) => m.role === 'tool')).toBe(false)
   })
 
-  it('20K model → fixedOverhead capped at 40% of context', () => {
-    const config = computeConfig(20_000)
-    expect(config.fixedOverhead).toBe(Math.floor(20_000 * 0.4))
-    expect(config.fixedOverhead).toBeLessThan(
-      AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD,
-    )
+  it('strips binary tool-result media before pruning', async () => {
+    const messages = [
+      userMsg('screenshot the page'),
+      assistantToolCall('screenshot', {}),
+      toolResultContent('screenshot', [
+        { type: 'text', text: repeat('x', 200_000) },
+        {
+          type: 'image-data',
+          data: repeat('A', 200_000),
+          mediaType: 'image/png',
+        },
+      ]),
+    ]
+
+    expect(countBinaryParts(messages)).toBe(1)
+
+    const result = await prepareStep({ messages, steps: NO_STEPS })
+
+    expect(countBinaryParts(result.messages)).toBe(0)
   })
 
-  it('30K model → fixedOverhead equals constant (40% of 30K = 12K = constant)', () => {
-    const config = computeConfig(30_000)
-    expect(config.fixedOverhead).toBe(AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD)
+  it('prefers reported usage over estimation when deciding to compact', async () => {
+    const messages = buildBrowserConversation(200, 3)
+    const steps: StepWithUsage[] = [
+      { usage: { inputTokens: threshold + 1_000, outputTokens: 0 } },
+    ]
+
+    const result = await prepareStep({ messages, steps })
+
+    // The transcript is tiny, so only the reported usage can have tripped it.
+    expect(result.messages.length).toBeLessThan(messages.length)
   })
 
-  for (const size of [64_000, 200_000, 1_000_000]) {
-    it(`${(size / 1000).toFixed(0)}K model → fixedOverhead equals constant`, () => {
-      const config = computeConfig(size)
-      expect(config.fixedOverhead).toBe(AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD)
+  it('is idempotent once the transcript is already at the floor', async () => {
+    const messages = buildBrowserConversation(4_000, 12)
+    const once = await prepareStep({ messages, steps: NO_STEPS })
+    const twice = await prepareStep({
+      messages: once.messages,
+      steps: NO_STEPS,
     })
-  }
 
-  it('30K model → fixedOverhead does not exceed trigger threshold', () => {
-    const config = computeConfig(30_000)
-    expect(config.fixedOverhead).toBeLessThanOrEqual(config.triggerThreshold)
+    expect(twice.messages).toEqual(once.messages)
   })
 
-  it('20K model → fixedOverhead does not exceed trigger threshold', () => {
-    const config = computeConfig(20_000)
-    expect(config.fixedOverhead).toBeLessThanOrEqual(config.triggerThreshold)
+  it('uses the default context window when none is supplied', async () => {
+    const defaultStep = createCompactionPrepareStep()
+    const messages = buildBrowserConversation(4_000, 12)
+
+    // 12 exchanges is far under a 200K window, so nothing should change.
+    const result = await defaultStep({ messages, steps: NO_STEPS })
+    expect(result.messages).toEqual(messages)
   })
 })
-
-// ---------------------------------------------------------------------------
-// estimateTokens
-// ---------------------------------------------------------------------------
 
 describe('estimateTokens', () => {
   it('estimates text messages as chars/3', () => {
@@ -612,533 +609,23 @@ describe('normalizeMessagesForModel', () => {
 })
 
 // ---------------------------------------------------------------------------
-// findSafeSplitPoint
+// getCurrentTokenCount
 // ---------------------------------------------------------------------------
 
-describe('findSafeSplitPoint', () => {
-  it('returns splitIndex -1 for too few messages', () => {
-    const msgs = [userMsg('hello'), assistantMsg('hi')]
-    const result = findSafeSplitPoint(msgs, 1)
-    expect(result.splitIndex).toBe(-1)
-    expect(result.isSplitTurn).toBe(false)
-  })
+describe('getCurrentTokenCount: additive trailing accounting', () => {
+  const { overhead } = computeBudget(200_000)
 
-  it('returns splitIndex -1 when conversation is smaller than keepRecent', () => {
-    const msgs = [userMsg('hello'), assistantMsg('hi'), userMsg('what')]
-    // Total estimated ~3-4 tokens, keepRecent = 1000
-    const result = findSafeSplitPoint(msgs, 1000)
-    expect(result.splitIndex).toBe(-1)
-    expect(result.isSplitTurn).toBe(false)
-  })
-
-  it('never cuts before a tool message', () => {
-    // Build: user, assistant(tool_call), tool, assistant(text), user, assistant
-    const msgs: ModelMessage[] = [
-      userMsg('do something'),
-      assistantToolCall('navigate', { url: 'https://example.com' }),
-      toolResult('navigate', repeat('x', 2000)),
-      assistantMsg('done navigating'),
-      userMsg(repeat('y', 8000)),
-      assistantMsg(repeat('z', 8000)),
-    ]
-
-    const result = findSafeSplitPoint(msgs, 2100)
-    expect(result.splitIndex).toBeGreaterThan(0)
-    expect(msgs[result.splitIndex].role).not.toBe('tool')
-  })
-
-  it('walks backward past tool messages to find safe cut', () => {
-    const msgs: ModelMessage[] = [
-      userMsg('start'),
-      assistantMsg('ok'),
-      assistantToolCall('click', { selector: '#btn' }),
-      toolResult('click', repeat('x', 4000)), // walking back lands here — unsafe
-      assistantToolCall('snapshot', {}),
-      toolResult('snapshot', repeat('y', 4000)),
-      assistantMsg(repeat('z', 8000)), // ~2000 tokens, keepRecent = 2500
-    ]
-
-    const result = findSafeSplitPoint(msgs, 2500)
-    if (result.splitIndex !== -1) {
-      expect(msgs[result.splitIndex].role).not.toBe('tool')
-    }
-  })
-
-  it('splits correctly in a realistic browser automation flow', () => {
-    // 10 exchanges, each tool output ~4000 chars (~1000 tokens)
-    const msgs = buildBrowserConversation(4000, 10)
-    const result = findSafeSplitPoint(msgs, 3000)
-
-    expect(result.splitIndex).toBeGreaterThan(0)
-    expect(result.splitIndex).toBeLessThan(msgs.length)
-    expect(msgs[result.splitIndex].role).not.toBe('tool')
-
-    const keptTokens = estimateTokens(msgs.slice(result.splitIndex))
-    expect(keptTokens).toBeGreaterThanOrEqual(3000)
-  })
-
-  it('handles assistant tool_call followed by tool result pairs', () => {
-    const msgs: ModelMessage[] = [
-      userMsg('start'),
-      assistantToolCall('a', {}),
-      toolResult('a', 'result a'),
-      assistantToolCall('b', {}),
-      toolResult('b', 'result b'),
-      assistantToolCall('c', {}),
-      toolResult('c', repeat('z', 4000)),
-      assistantMsg('final answer'),
-    ]
-
-    const result = findSafeSplitPoint(msgs, 500)
-    if (result.splitIndex !== -1) {
-      const kept = msgs.slice(result.splitIndex)
-      for (let i = 0; i < kept.length; i++) {
-        if (kept[i].role === 'tool') {
-          expect(i).toBeGreaterThan(0)
-          expect(kept[i - 1].role).toBe('assistant')
-        }
-      }
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// findSafeSplitPoint — split turn detection
-// ---------------------------------------------------------------------------
-
-describe('findSafeSplitPoint — split turn detection', () => {
-  it('detects split turn when cut lands mid-turn (user+assistant+tool+assistant+tool)', () => {
-    const msgs: ModelMessage[] = [
-      userMsg('first request'),
-      assistantMsg('done with first'),
-      userMsg('order MacBook on Amazon'), // index 2 — turn start
-      assistantToolCall('navigate', { url: 'https://amazon.com' }), // index 3
-      toolResult('navigate', repeat('x', 4000)), // index 4
-      assistantToolCall('click', { selector: '#buy' }), // index 5 — cut here
-      toolResult('click', repeat('y', 4000)), // index 6
-      assistantMsg(repeat('z', 8000)), // index 7
-    ]
-
-    // keepRecent should land the cut around index 5 (mid-turn)
-    const result = findSafeSplitPoint(msgs, 2500)
-    if (result.splitIndex !== -1 && result.splitIndex > 2) {
-      expect(result.isSplitTurn).toBe(true)
-      expect(result.turnStartIndex).toBe(2)
-    }
-  })
-
-  it('does not flag split turn when cut is at user message', () => {
-    const msgs: ModelMessage[] = [
-      userMsg('first request'),
-      assistantMsg('done'),
-      userMsg(repeat('x', 8000)), // index 2 — this is where cut lands
-      assistantMsg(repeat('y', 8000)),
-    ]
-
-    const result = findSafeSplitPoint(msgs, 2100)
-    if (result.splitIndex !== -1 && msgs[result.splitIndex].role === 'user') {
-      expect(result.isSplitTurn).toBe(false)
-      expect(result.turnStartIndex).toBe(-1)
-    }
-  })
-
-  it('does not flag split turn when user message is at index 0 (single turn)', () => {
-    // One user message followed by many tool exchanges
-    const msgs: ModelMessage[] = [
-      userMsg('do everything'), // index 0
-    ]
-    for (let i = 0; i < 10; i++) {
-      msgs.push(assistantToolCall(`action_${i}`, { step: i }))
-      msgs.push(toolResult(`action_${i}`, repeat('x', 4000)))
-    }
-    msgs.push(assistantMsg(repeat('z', 8000)))
-
-    const result = findSafeSplitPoint(msgs, 3000)
-    if (result.splitIndex !== -1) {
-      // When the only user message is at index 0, it's NOT a split turn
-      // Regular summarization is better for this case
-      expect(result.isSplitTurn).toBe(false)
-      expect(result.turnStartIndex).toBe(-1)
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Splitting mechanics at different model sizes
-// ---------------------------------------------------------------------------
-
-describe('splitting at different context windows', () => {
-  it('32K model — splits with realistic browser automation', () => {
-    const config = computeConfig(32_000)
-    const msgs = buildBrowserConversation(5000, 12)
-    const totalTokens = estimateTokens(msgs)
-    expect(totalTokens).toBeGreaterThan(12_800)
-
-    const result = findSafeSplitPoint(msgs, config.keepRecentTokens)
-    expect(result.splitIndex).toBeGreaterThan(0)
-    expect(msgs[result.splitIndex].role).not.toBe('tool')
-
-    const kept = msgs.slice(result.splitIndex)
-    const keptTokens = estimateTokens(kept)
-    expect(keptTokens).toBeGreaterThanOrEqual(config.keepRecentTokens)
-
-    const toSummarize = msgs.slice(0, result.splitIndex)
-    expect(toSummarize.length).toBeGreaterThan(0)
-  })
-
-  it('200K model — splits with long conversation', () => {
-    const config = computeConfig(200_000)
-    const msgs = buildBrowserConversation(10000, 50)
-    const totalTokens = estimateTokens(msgs)
-    expect(totalTokens).toBeGreaterThan(100_000)
-
-    const result = findSafeSplitPoint(msgs, config.keepRecentTokens)
-    expect(result.splitIndex).toBeGreaterThan(0)
-
-    const kept = msgs.slice(result.splitIndex)
-    const keptTokens = estimateTokens(kept)
-    expect(keptTokens).toBeGreaterThanOrEqual(config.keepRecentTokens)
-  })
-
-  it('16K model — handles tight context', () => {
-    const config = computeConfig(16_000)
-    const msgs = buildBrowserConversation(2000, 5)
-    const totalTokens = estimateTokens(msgs)
-
-    if (totalTokens > 16_000 * config.triggerRatio) {
-      const result = findSafeSplitPoint(msgs, config.keepRecentTokens)
-      if (result.splitIndex !== -1) {
-        expect(msgs[result.splitIndex].role).not.toBe('tool')
-        const toSummarize = msgs.slice(0, result.splitIndex)
-        expect(estimateTokens(toSummarize)).toBeGreaterThan(0)
-      }
-    }
-  })
-
-  it('keeps tool call + result pairs together after split', () => {
-    for (const contextWindow of [16_000, 32_000, 64_000, 200_000, 1_000_000]) {
-      const config = computeConfig(contextWindow)
-      const msgs = buildBrowserConversation(4000, 8)
-      const result = findSafeSplitPoint(msgs, config.keepRecentTokens)
-
-      if (result.splitIndex === -1) continue
-
-      const kept = msgs.slice(result.splitIndex)
-      for (let i = 0; i < kept.length; i++) {
-        if (kept[i].role === 'tool' && i === 0) {
-          throw new Error(
-            `Orphaned tool result at start of kept messages for ${contextWindow} context window`,
-          )
-        }
-      }
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// reduceToolOutputs
-// ---------------------------------------------------------------------------
-
-describe('reduceToolOutputs', () => {
-  it('truncates protected recent outputs exceeding maxChars', () => {
-    const msgs = [toolResult('test', 'a'.repeat(20_000))]
-    const reduced = reduceToolOutputs(msgs, {
-      maxChars: 15_000,
-      keepRecentCount: 1,
-    })
-
-    const output = (
-      reduced[0].content as Array<{ output: { value: string } }>
-    )[0].output.value
-    expect(output.length).toBeLessThan(20_000)
-    expect(output).toContain('[... truncated')
-  })
-
-  it('clears older verbose outputs but protects the last two', () => {
-    const msgs = [
-      toolResult('old', 'x'.repeat(500)),
-      toolResult('recent_0', 'y'.repeat(500)),
-      toolResult('recent_1', 'z'.repeat(500)),
-    ]
-    const reduced = reduceToolOutputs(msgs, {
-      maxChars: 200,
-      keepRecentCount: 2,
-      clearThreshold: 100,
-    })
-
-    const part = (
-      reduced[0].content as Array<{ output: { type: string; value: string } }>
-    )[0].output.value
-    const protected0 = (
-      reduced[1].content as Array<{ output: { value: string } }>
-    )[0].output.value
-    const protected1 = (
-      reduced[2].content as Array<{ output: { value: string } }>
-    )[0].output.value
-
-    expect(part).toBe('[Cleared — 500 chars]')
-    expect(protected0).toContain('[... truncated')
-    expect(protected1).toContain('[... truncated')
-  })
-
-  it('does not modify non-tool messages', () => {
-    const msgs = [userMsg('hello'), assistantMsg('world')]
-    expect(
-      reduceToolOutputs(msgs, { maxChars: 100, keepRecentCount: 2 }),
-    ).toEqual(msgs)
-  })
-
-  it('normalizes content output before reduction', () => {
-    const msgs = [
-      toolResultContent('snapshot', [
-        { type: 'text', text: 'Captured screenshot' },
-        {
-          type: 'image-data',
-          data: 'x'.repeat(20_000),
-          mediaType: 'image/png',
-        },
-      ]),
-    ]
-    const reduced = reduceToolOutputs(msgs, {
-      maxChars: 100,
-      keepRecentCount: 1,
-      clearThreshold: 0,
-    })
-
-    const output = (
-      reduced[0].content as Array<{ output: { type: string; value: string } }>
-    )[0].output
-
-    expect(output.type).toBe('text')
-    expect(output.value).toContain('Captured screenshot')
-    expect(output.value).toContain('[Image]')
-    expect(output.value).not.toContain('x'.repeat(100))
-  })
-})
-
-// ---------------------------------------------------------------------------
-// slidingWindow
-// ---------------------------------------------------------------------------
-
-describe('slidingWindow', () => {
-  it('keeps tool+assistant pairs together', () => {
-    const msgs: ModelMessage[] = [
-      assistantToolCall('a', {}),
-      toolResult('a', repeat('x', 4000)),
-      assistantToolCall('b', {}),
-      toolResult('b', repeat('y', 4000)),
-      userMsg('continue'),
-    ]
-
-    // maxTokens small enough to force dropping
-    const windowed = slidingWindow(msgs, 1500)
-
-    // Should not start with a tool result (that would be orphaned)
-    if (windowed.length > 0 && windowed[0].role === 'tool') {
-      // If it starts with tool, the next should be assistant
-      expect(windowed.length).toBeGreaterThan(1)
-    }
-  })
-
-  it('preserves at least 2 messages', () => {
-    const msgs = [userMsg(repeat('x', 10000)), assistantMsg(repeat('y', 10000))]
-    const windowed = slidingWindow(msgs, 100)
-    expect(windowed.length).toBeGreaterThanOrEqual(2)
-  })
-
-  it('returns original when under threshold', () => {
-    const msgs = [userMsg('hello'), assistantMsg('hi')]
-    const windowed = slidingWindow(msgs, 100_000)
-    expect(windowed).toEqual(msgs)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// compaction-prompt: buildSummarizationPrompt
-// ---------------------------------------------------------------------------
-
-describe('buildSummarizationPrompt', () => {
-  it('returns initial prompt when no existing summary', () => {
-    const prompt = buildSummarizationPrompt(null)
-    expect(prompt).toContain('Summarize the following')
-    expect(prompt).toContain('## Goal')
-    expect(prompt).toContain('## Active State')
-    expect(prompt).not.toContain('<previous_summary>')
-  })
-
-  it('returns update prompt with previous summary', () => {
-    const prompt = buildSummarizationPrompt('## Goal\nold stuff')
-    expect(prompt).toContain('Update the existing summary')
-    expect(prompt).toContain('PRESERVE all existing information')
-    expect(prompt).toContain('<previous_summary>')
-    expect(prompt).toContain('old stuff')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// compaction-prompt: buildTurnPrefixPrompt
-// ---------------------------------------------------------------------------
-
-describe('buildTurnPrefixPrompt', () => {
-  it('returns turn prefix prompt with expected sections', () => {
-    const prompt = buildTurnPrefixPrompt()
-    expect(prompt).toContain('PREFIX of a turn')
-    expect(prompt).toContain('## Original Request')
-    expect(prompt).toContain('## Early Progress')
-    expect(prompt).toContain('## Context for Suffix')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// compaction-prompt: messagesToTranscript
-// ---------------------------------------------------------------------------
-
-describe('messagesToTranscript', () => {
-  it('serializes user messages', () => {
-    const transcript = messagesToTranscript([userMsg('hello world')])
-    expect(transcript).toBe('[User]: hello world')
-  })
-
-  it('serializes assistant text', () => {
-    const transcript = messagesToTranscript([assistantMsg('I will help')])
-    expect(transcript).toBe('[Assistant]: I will help')
-  })
-
-  it('serializes tool calls', () => {
-    const transcript = messagesToTranscript([
-      assistantToolCall('navigate_to', { url: 'https://example.com' }),
-    ])
-    expect(transcript).toContain('[Tool Call]: navigate_to(')
-    expect(transcript).toContain('https://example.com')
-  })
-
-  it('serializes tool results', () => {
-    const transcript = messagesToTranscript([
-      toolResult('navigate_to', 'Navigated to Example'),
-    ])
-    expect(transcript).toContain(
-      '[Tool Result] navigate_to: Navigated to Example',
-    )
-  })
-
-  it('truncates large tool results to 2K', () => {
-    const transcript = messagesToTranscript([
-      toolResult('snapshot', repeat('x', 5000)),
-    ])
-    expect(transcript).toContain('[... truncated')
-    // The tool output should be capped
-    expect(transcript.length).toBeLessThan(5000)
-  })
-
-  it('serializes content tool results without leaking base64', () => {
-    const transcript = messagesToTranscript([
-      toolResultContent('snapshot', [
-        { type: 'text', text: 'Captured screenshot' },
-        {
-          type: 'image-data',
-          data: 'x'.repeat(10_000),
-          mediaType: 'image/png',
-        },
-      ]),
-    ])
-
-    expect(transcript).toContain('[Tool Result] snapshot: Captured screenshot')
-    expect(transcript).toContain('[Image]')
-    expect(transcript).not.toContain('x'.repeat(100))
-  })
-
-  it('replaces images with [Image]', () => {
-    const transcript = messagesToTranscript([userMsgWithImage('look at this')])
-    expect(transcript).toContain('[Image]')
-    expect(transcript).toContain('look at this')
-  })
-
-  it('handles a full conversation', () => {
-    const msgs: ModelMessage[] = [
-      userMsg('Open google.com'),
-      assistantMsg("I'll navigate to Google."),
-      assistantToolCall('navigate_to', { url: 'https://google.com' }),
-      toolResult('navigate_to', 'Navigated to Google'),
-      assistantMsg('I opened Google. What next?'),
-      userMsg('Search for flights'),
-    ]
-
-    const transcript = messagesToTranscript(msgs)
-    expect(transcript).toContain('[User]: Open google.com')
-    expect(transcript).toContain("[Assistant]: I'll navigate to Google.")
-    expect(transcript).toContain('[Tool Call]: navigate_to(')
-    expect(transcript).toContain(
-      '[Tool Result] navigate_to: Navigated to Google',
-    )
-    expect(transcript).toContain('[User]: Search for flights')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// End-to-end: config + split coherence at all model sizes
-// ---------------------------------------------------------------------------
-
-describe('end-to-end config coherence', () => {
-  const modelSizes = [
-    8_000, 16_000, 32_000, 64_000, 128_000, 200_000, 1_000_000,
-  ]
-
-  for (const size of modelSizes) {
-    it(`${(size / 1000).toFixed(0)}K model — trigger budget is partitioned into keep + summarize`, () => {
-      const config = computeConfig(size)
-      const triggerTokens = config.triggerThreshold
-
-      // Trigger budget is partitioned into kept + summarizable portions.
-      // For large windows the cap means leftover budget exists, so use >=.
-      expect(triggerTokens).toBeGreaterThanOrEqual(
-        config.keepRecentTokens + config.maxSummarizationInput,
-      )
-      expect(config.maxSummarizationInput).toBeGreaterThanOrEqual(
-        config.minSummarizableTokens,
-      )
-
-      // keepRecent should never exceed context window
-      expect(config.keepRecentTokens).toBeLessThan(size)
-
-      // maxSummarizationInput should never exceed context window
-      expect(config.maxSummarizationInput).toBeLessThanOrEqual(size)
-    })
-  }
-
-  it('reserve is either half-context (tiny models) or COMPACTION_RESERVE_TOKENS (larger models)', () => {
-    for (const size of [
-      8_000, 16_000, 32_000, 64_000, 128_000, 200_000, 1_000_000,
-    ]) {
-      const config = computeConfig(size)
-      expect(config.reserveTokens).toBe(expectedReserve(size))
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// getCurrentTokenCount — Pi-style additive counting
-// ---------------------------------------------------------------------------
-
-describe('getCurrentTokenCount — Pi-style additive', () => {
-  const config = computeConfig(200_000)
-
-  it('returns estimated with safety margin when no steps exist', () => {
+  it('returns the estimate plus overhead when no steps exist', () => {
     const msgs = [userMsg('a'.repeat(400))]
-    const result = getCurrentTokenCount([], msgs, config)
-    const rawEstimate = estimateTokens(msgs, config.imageTokenEstimate)
-    const expected =
-      Math.ceil(rawEstimate * config.safetyMultiplier) + config.fixedOverhead
-    expect(result).toBe(expected)
+    const result = getCurrentTokenCount([], msgs, overhead)
+    expect(result).toBe(estimateTokens(msgs) + overhead)
   })
 
-  it('returns estimated when last step has no usage', () => {
+  it('returns the estimate when the last step has no usage', () => {
     const steps: StepWithUsage[] = [{ usage: undefined }]
     const msgs = [userMsg('hello')]
-    const result = getCurrentTokenCount(steps, msgs, config)
-    const rawEstimate = estimateTokens(msgs, config.imageTokenEstimate)
-    const expected =
-      Math.ceil(rawEstimate * config.safetyMultiplier) + config.fixedOverhead
-    expect(result).toBe(expected)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
+    expect(result).toBe(estimateTokens(msgs) + overhead)
   })
 
   it('adds outputTokens to base when no trailing post-step messages remain', () => {
@@ -1146,7 +633,7 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       { usage: { inputTokens: 50_000, outputTokens: 2_000 } },
     ]
     const msgs = [userMsg('hello'), assistantMsg('response')]
-    const result = getCurrentTokenCount(steps, msgs, config)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
     expect(result).toBe(52_000)
   })
 
@@ -1161,11 +648,10 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       toolResult('snapshot', toolOutput),
     ]
 
-    const result = getCurrentTokenCount(steps, msgs, config)
-    const expectedTrailing = estimateTokens(
-      [toolResult('snapshot', toolOutput)],
-      config.imageTokenEstimate,
-    )
+    const result = getCurrentTokenCount(steps, msgs, overhead)
+    const expectedTrailing = estimateTokens([
+      toolResult('snapshot', toolOutput),
+    ])
     expect(result).toBe(100_000 + 1_000 + expectedTrailing)
   })
 
@@ -1182,8 +668,8 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       toolResult('snapshot', largeSnapshot),
     ]
 
-    const result = getCurrentTokenCount(steps, msgs, config)
-    // Must be significantly above 150K — the old code returned 150K (stale)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
+    // Must be significantly above 150K. The old code returned a stale 150K.
     expect(result).toBeGreaterThan(170_000)
   })
 
@@ -1198,15 +684,11 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       toolResult('snapshot', 'y'.repeat(8_000)),
     ]
 
-    const result = getCurrentTokenCount(steps, msgs, config)
-    const trailing1 = estimateTokens(
-      [toolResult('click', 'x'.repeat(4_000))],
-      config.imageTokenEstimate,
-    )
-    const trailing2 = estimateTokens(
-      [toolResult('snapshot', 'y'.repeat(8_000))],
-      config.imageTokenEstimate,
-    )
+    const result = getCurrentTokenCount(steps, msgs, overhead)
+    const trailing1 = estimateTokens([toolResult('click', 'x'.repeat(4_000))])
+    const trailing2 = estimateTokens([
+      toolResult('snapshot', 'y'.repeat(8_000)),
+    ])
     expect(result).toBe(80_000 + 1_000 + trailing1 + trailing2)
   })
 
@@ -1233,8 +715,8 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       },
     )
 
-    const result = getCurrentTokenCount(steps, msgs, config)
-    const trailing = estimateTokens(msgs.slice(-2), config.imageTokenEstimate)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
+    const trailing = estimateTokens(msgs.slice(-2))
 
     expect(result).toBe(50_000 + 500 + trailing)
   })
@@ -1250,14 +732,14 @@ describe('getCurrentTokenCount — Pi-style additive', () => {
       assistantMsg('done'),
     ]
 
-    const result = getCurrentTokenCount(steps, msgs, config)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
     expect(result).toBe(50_500)
   })
 
   it('handles zero outputTokens gracefully', () => {
     const steps: StepWithUsage[] = [{ usage: { inputTokens: 50_000 } }]
     const msgs = [userMsg('hello')]
-    const result = getCurrentTokenCount(steps, msgs, config)
+    const result = getCurrentTokenCount(steps, msgs, overhead)
     expect(result).toBe(50_000)
   })
 })

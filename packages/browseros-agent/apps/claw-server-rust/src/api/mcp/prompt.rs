@@ -22,8 +22,8 @@ Shared with other agents:
   tabs action="new" and work on that copy; leave the original untouched.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
-- Rename your session early with name_session using a 2-3 word task label;
-  tabs group as <client>/<name>.
+- Name your session early with name_session: a 2-3 word task label plus the
+  category that best fits the task; tabs group as <client>/<name>.
 - The user oversees this browser from the BrowserOS neo cockpit (live view,
   audit, replay).
 

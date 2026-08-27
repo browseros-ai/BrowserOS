@@ -31,7 +31,7 @@ function browserSession(): BrowserSession {
 }
 
 describe('createMcpServer structured browser results', () => {
-  it('strips ordinary envelopes by default while retaining run output', async () => {
+  it('adds only the session handle to ordinary envelopes and retains run output', async () => {
     const server = inspect(
       createMcpServer({
         version: 'test',
@@ -42,8 +42,15 @@ describe('createMcpServer structured browser results', () => {
     const tabs = await server._registeredTools.tabs.handler({ action: 'new' })
     const run = await server._registeredTools.run.handler({ code: 'return 42' })
 
-    expect(tabs).not.toHaveProperty('structuredContent')
-    expect(run.structuredContent).toEqual({ ok: true, value: 42, logs: [] })
+    // The ordinary tool envelope is still stripped by default; only the
+    // server-minted session identity handle is surfaced.
+    expect(tabs.structuredContent).toEqual({ session: expect.any(String) })
+    expect(run.structuredContent).toEqual({
+      ok: true,
+      value: 42,
+      logs: [],
+      session: expect.any(String),
+    })
   })
 
   it('returns grep matches for opted-in machine clients', async () => {
@@ -66,6 +73,7 @@ describe('createMcpServer structured browser results', () => {
       over: 'ax',
       count: 1,
       matches: ['button "Save" [ref=e1]'],
+      session: expect.any(String),
     })
   })
 })

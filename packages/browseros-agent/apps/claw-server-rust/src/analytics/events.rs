@@ -11,6 +11,7 @@ use std::{
 };
 
 const CLIENT_NAME: &str = "client_name";
+const TASK_CATEGORY: &str = "task_category";
 const HARNESS: &str = "harness";
 const KIND: &str = "kind";
 const TOOL_NAME: &str = "tool_name";
@@ -58,6 +59,8 @@ const CLIENT_ALIASES: [(&str, &str); 4] = [
     ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
 ];
 
+const UNRECOGNIZED_EMPTY: &str = "unrecognized-empty";
+
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
     "Claude Code",
     "Codex",
@@ -70,9 +73,28 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 
 pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
 
+/// Fixed set of task kinds the agent may declare. Only these tokens leave the
+/// machine; the free-form session name never does. An unrecognized value is
+/// coerced to `other` rather than dropped, so the declaration still counts and a
+/// hot `other` signals a missing row.
+pub(crate) const TASK_CATEGORY_VALUES: [&str; 11] = [
+    "shopping",
+    "research",
+    "email-and-messaging",
+    "form-filling",
+    "data-extraction",
+    "testing-and-qa",
+    "dev-tools",
+    "social-media",
+    "finance-and-admin",
+    "internal-tools",
+    "other",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PropertyKind {
     ClientName,
+    TaskCategory,
     Harness,
     EndKind,
     ToolName,
@@ -94,6 +116,15 @@ impl PropertyDefinition {
     fn normalize(self, value: &Value) -> Option<Value> {
         match self.kind {
             PropertyKind::ClientName => Some(Value::String(bucket_client_name(value.as_str()?))),
+            PropertyKind::TaskCategory => {
+                let raw = value.as_str()?;
+                let category = if TASK_CATEGORY_VALUES.contains(&raw) {
+                    raw
+                } else {
+                    "other"
+                };
+                Some(Value::String(category.to_string()))
+            }
             PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
             PropertyKind::ToolName => {
@@ -193,6 +224,13 @@ pub const AGENT_SESSION_STARTED: EventDefinition = EventDefinition::new(
         PropertyKind::ClientName,
     )],
 );
+pub const AGENT_SESSION_TASK_DECLARED: EventDefinition = EventDefinition::new(
+    "agent_session_task_declared",
+    &[
+        PropertyDefinition::new(TASK_CATEGORY, PropertyKind::TaskCategory),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+    ],
+);
 pub const AGENT_SESSION_ENDED: EventDefinition = EventDefinition::new(
     "agent_session_ended",
     &[
@@ -250,9 +288,10 @@ pub const AGENT_SESSION_EFFICIENCY_COMPUTED: EventDefinition = EventDefinition::
     ],
 );
 
-pub const ALL: [EventDefinition; 7] = [
+pub const ALL: [EventDefinition; 8] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
+    AGENT_SESSION_TASK_DECLARED,
     AGENT_SESSION_ENDED,
     HARNESS_CONNECTED,
     HARNESS_DISCONNECTED,
@@ -300,9 +339,16 @@ fn bucket_client_name(raw: &str) -> String {
     }
 
     if KNOWN_CLIENTS.contains(&slug.as_str()) {
-        slug
+        return slug;
+    }
+
+    // Not allowlisted: record the client's own slug so the long tail is visible
+    // instead of collapsed into one opaque bucket. A blank name has nothing to
+    // record, so it is reported as empty.
+    if slug.is_empty() {
+        UNRECOGNIZED_EMPTY.to_string()
     } else {
-        "unrecognized-client".to_string()
+        slug
     }
 }
 
@@ -313,18 +359,23 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 7);
+        assert_eq!(ALL.len(), 8);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
                 SERVER_STARTED.name(),
                 AGENT_SESSION_STARTED.name(),
+                AGENT_SESSION_TASK_DECLARED.name(),
                 AGENT_SESSION_ENDED.name(),
                 HARNESS_CONNECTED.name(),
                 HARNESS_DISCONNECTED.name(),
                 AGENT_SESSION_TOOL_USAGE.name(),
                 AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
             ]
+        );
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED.property_names(),
+            vec!["task_category", "client_name"]
         );
         assert_eq!(
             AGENT_SESSION_ENDED.property_names(),
@@ -432,21 +483,57 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_content_shaped_client_names_become_unrecognized_client() {
-        for raw in [
-            "",
-            "my-secret-internal-tool",
-            "https://example.com",
-            "user@example.com",
-            "/home/user/secret",
-            r"C:\Users\someone",
-            "codex@example.com",
-            "codex://private",
-            "/codex/home/user",
+    fn blank_client_names_report_as_unrecognized_empty() {
+        for raw in ["", "   ", "!!!", "…"] {
+            assert_eq!(
+                AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
+                Some(json!({ "client_name": "unrecognized-empty" })),
+                "{raw:?} should bucket as empty"
+            );
+        }
+    }
+
+    #[test]
+    fn known_task_categories_pass_through_and_unknown_coerces_to_other() {
+        for category in TASK_CATEGORY_VALUES {
+            assert_eq!(
+                AGENT_SESSION_TASK_DECLARED
+                    .sanitize(&json!({ "task_category": category, "client_name": "cursor" })),
+                Some(json!({ "task_category": category, "client_name": "cursor" }))
+            );
+        }
+        // Anything off-enum is coerced to `other` so the declaration still counts.
+        for raw in ["crypto-trading", "", "SHOPPING", "shopping ", "acme corp"] {
+            assert_eq!(
+                AGENT_SESSION_TASK_DECLARED
+                    .sanitize(&json!({ "task_category": raw, "client_name": "codex" })),
+                Some(json!({ "task_category": "other", "client_name": "codex" }))
+            );
+        }
+    }
+
+    #[test]
+    fn task_declared_drops_when_category_is_not_a_string() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED
+                .sanitize(&json!({ "task_category": 7, "client_name": "cursor" })),
+            None
+        );
+    }
+
+    #[test]
+    fn unlisted_client_names_surface_their_slug() {
+        for (raw, expected) in [
+            ("Roo Code", "roo-code"),
+            ("LibreChat", "librechat"),
+            ("5ire", "5ire"),
+            ("Cherry Studio", "cherry-studio"),
+            ("claude-code-router", "claude-code-router"),
         ] {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
-                Some(json!({ "client_name": "unrecognized-client" }))
+                Some(json!({ "client_name": expected })),
+                "{raw:?} should surface its slug"
             );
         }
     }

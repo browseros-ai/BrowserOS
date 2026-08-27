@@ -207,6 +207,7 @@ const BOOTSTRAP_JS: &str = r#"
 "#;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunArgs {
     /// Async-capable JS body. Use top-level await; `return` a value.
     code: String,

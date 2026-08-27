@@ -38,6 +38,7 @@ enum TabGroupColor {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct TabGroupsArgs {
     #[serde(default)]
     action: TabGroupsAction,

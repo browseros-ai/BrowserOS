@@ -1,6 +1,6 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ZodRawShape } from 'zod'
+import type { McpServer } from '@modelcontextprotocol/server'
+import { z } from 'zod/v4'
 import { executeTool } from './framework'
 import {
   type BrowserOutputFileAccess,
@@ -8,17 +8,41 @@ import {
 } from './output-file'
 import { BROWSER_TOOLS } from './registry'
 
+const SESSION_ARG_DESCRIPTION =
+  'Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.'
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function resolveSessionHandle(
+  args: Record<string, unknown>,
+  enabled: boolean | undefined,
+): { sessionHandle?: string; toolArgs: Record<string, unknown> } {
+  if (!enabled) return { toolArgs: args }
+  const provided = typeof args.session === 'string' ? args.session.trim() : ''
+  const sessionHandle = provided.length > 0 ? provided : crypto.randomUUID()
+  const toolArgs = { ...args }
+  delete toolArgs.session
+  return { sessionHandle, toolArgs }
+}
+
+function mergeSessionHandle(base: unknown, sessionHandle: string | undefined) {
+  if (sessionHandle === undefined) return base
+  return { ...(isPlainObject(base) ? base : {}), session: sessionHandle }
+}
+
 type RegisterFn = (
   name: string,
   config: {
     description: string
-    inputSchema?: ZodRawShape
-    outputSchema?: ZodRawShape
+    inputSchema?: unknown
+    outputSchema?: unknown
     annotations?: Record<string, unknown>
   },
   handler: (
     args: Record<string, unknown>,
-    extra?: { signal?: AbortSignal },
+    extra?: { mcpReq?: { signal?: AbortSignal } },
   ) => Promise<{
     content: unknown
     isError?: boolean
@@ -45,6 +69,8 @@ export interface BrowserToolRegistrationOptions {
   shouldLogToolRegistration?: () => boolean
   logger?: BrowserToolLogger
   source?: string
+  /** When set, expose an optional server-minted session handle argument for caller session identity (2026-07-28). */
+  sessionIdentity?: boolean
 }
 
 export interface BrowserToolLifecycleEvent extends Record<string, unknown> {
@@ -129,12 +155,17 @@ export function registerBrowserTools(
   const register = server.registerTool.bind(server) as unknown as RegisterFn
 
   for (const tool of BROWSER_TOOLS) {
+    const inputSchema = options.sessionIdentity
+      ? tool.input.extend({
+          session: z.string().optional().describe(SESSION_ARG_DESCRIPTION),
+        })
+      : tool.input
     register(
       tool.name,
       {
         description: tool.description,
-        inputSchema: tool.input.shape,
-        ...(tool.output && { outputSchema: tool.output.shape }),
+        inputSchema,
+        ...(tool.output && { outputSchema: tool.output }),
         ...(tool.annotations && {
           annotations: tool.annotations as Record<string, unknown>,
         }),
@@ -143,9 +174,16 @@ export function registerBrowserTools(
         const source = options.source ?? 'mcp'
         const startTime = performance.now()
         const duration = () => Math.round(performance.now() - startTime)
+        const { sessionHandle, toolArgs } = resolveSessionHandle(
+          args,
+          options.sessionIdentity,
+        )
+        const sessionField =
+          sessionHandle !== undefined ? { session: sessionHandle } : undefined
         const logBase = {
           toolName: tool.name,
           source,
+          ...sessionField,
         }
         const lifecycleEvent = {
           tool_name: tool.name,
@@ -153,7 +191,7 @@ export function registerBrowserTools(
         }
         options.logger?.debug?.('MCP browser tool started', {
           ...logBase,
-          args: summarizeBrowserToolArgs(args),
+          args: summarizeBrowserToolArgs(toolArgs),
           defaultWindowId: defaults.defaultWindowId,
           defaultTabGroupId: defaults.defaultTabGroupId,
         })
@@ -162,10 +200,10 @@ export function registerBrowserTools(
           const result = await withBrowserOutputFileAccess(
             options.outputFileAccess,
             () =>
-              executeTool(tool, args, {
+              executeTool(tool, toolArgs, {
                 session,
                 ...defaults,
-                signal: extra?.signal,
+                signal: extra?.mcpReq?.signal,
               }),
           )
           options.onToolExecuted?.({
@@ -178,11 +216,15 @@ export function registerBrowserTools(
           const errorSummary = result.isError
             ? resultTextSummary(result.content)
             : undefined
-          const structuredContent =
+          const baseStructuredContent =
             (options.includeStructuredContent ?? true) ||
             tool.output !== undefined
               ? result.structuredContent
               : undefined
+          const structuredContent = mergeSessionHandle(
+            baseStructuredContent,
+            sessionHandle,
+          )
           options.logger?.debug?.('MCP browser tool completed', {
             ...logBase,
             durationMs,
@@ -219,6 +261,7 @@ export function registerBrowserTools(
           return {
             content: [{ type: 'text' as const, text: errorText }],
             isError: true,
+            ...(sessionField && { structuredContent: sessionField }),
           }
         } finally {
           options.onToolExecutionEnd?.(lifecycleEvent)

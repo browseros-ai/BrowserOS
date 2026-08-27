@@ -1,0 +1,69 @@
+name: Rust Cache Bust
+
+# The shared cargo build directory is cached as an extra `cache-directories`
+# entry, and rust-cache prunes only workspace target dirs, never extra ones. So
+# that entry is cached wholesale and accumulates artifacts for dependencies and
+# profiles that no longer exist. Left alone it grows against the repository's
+# 10GB Actions cache allowance and evicts entries that are still wanted.
+#
+# Dropping it on a schedule keeps that bounded. The next warm run rebuilds it
+# from scratch, so the only cost is one cold Rust compile.
+on:
+  schedule:
+    # 1st and 15th, so roughly fortnightly. Ahead of the Monday 06:00 warm run
+    # rather than alongside it, and the warm workflow is dispatched below in any
+    # case so a fresh cache does not wait for the next merge.
+    - cron: "0 5 1,15 * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: rust-cache-bust
+  cancel-in-progress: false
+
+jobs:
+  bust:
+    name: Drop Rust caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # rust-cache prefixes every key it writes with `prefix-key`, which is
+          # left at its default. Matching on that keeps Turbo and any other
+          # cache in this repository untouched.
+          ids="$(gh api --paginate "/repos/$REPO/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.key | startswith("v0-rust")) | .id')"
+
+          if [ -z "$ids" ]; then
+            echo "No Rust caches to drop."
+            echo "No Rust caches to drop." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          count=0
+          while read -r id; do
+            [ -n "$id" ] || continue
+            gh api -X DELETE "/repos/$REPO/actions/caches/$id"
+            count=$((count + 1))
+          done <<< "$ids"
+
+          echo "Dropped $count Rust cache entries."
+          echo "Dropped $count Rust cache entries." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Request a fresh warm run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Rebuild immediately rather than leaving every branch cold until the
+          # next merge or the Monday schedule.
+          gh workflow run turbo-cache-warm.yml --repo "$REPO" --ref main
+          echo "Dispatched Turbo Cache Warm on main." >> "$GITHUB_STEP_SUMMARY"

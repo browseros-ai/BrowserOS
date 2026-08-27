@@ -1,5 +1,5 @@
 import type { WindowInfo } from '@browseros/browser-core/core/windows'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
 
 const ACTIONS = ['list', 'create', 'close', 'activate'] as const
@@ -8,14 +8,16 @@ export const windows = defineTool({
   name: 'windows',
   description:
     'Manage browser windows: list, create, close, or activate a window.',
-  input: z.object({
-    action: z.enum(ACTIONS).default('list'),
-    windowId: z
-      .number()
-      .int()
-      .optional()
-      .describe('Window id for close and activate.'),
-  }),
+  input: z
+    .object({
+      action: z.enum(ACTIONS).default('list'),
+      windowId: z
+        .number()
+        .int()
+        .optional()
+        .describe('Window id for close and activate.'),
+    })
+    .strict(),
   annotations: {
     title: 'Manage windows',
     destructiveHint: true,

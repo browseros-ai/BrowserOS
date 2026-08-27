@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { type Tool, tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import {
   executeWithMetrics,
   resolveWorkspaceWritePath,

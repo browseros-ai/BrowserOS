@@ -26,7 +26,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 sha2 = "0.10"
 jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
 toml_edit = "0.22"
-rmcp = { version = "2.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
 axum = "0.8"
 http = "1"
@@ -65,6 +65,15 @@ expect_used = "deny"
 print_stdout = "warn"
 print_stderr = "warn"
 dbg_macro = "warn"
+
+[profile.dev]
+# Dependencies are never stepped into, so their DWARF is pure disk cost: a strip
+# probe put debug info at 81% of the largest dependency rlib. Workspace crates
+# keep line tables so panics and backtraces still resolve to file and line.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 lto = "thin"
