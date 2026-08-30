@@ -140,8 +140,9 @@ commonly fail with `User interaction not allowed`.
 The machine needs:
 
 - A persistent BrowserOS checkout.
-- A persistent pristine Chromium `src` checkout at the repository pin, used
-  only as the APFS clone base.
+- A persistent Chromium `src` checkout at the repository pin, dedicated to CI
+  as the APFS clone base. Its local changes and BrowserOS outputs are
+  disposable.
 - `uv`, `gh`, depot_tools, Xcode tools, and Chrome.
 - The macOS signing identity and notarization credentials.
 - Enough disk for Chromium outputs and DMGs.
@@ -151,19 +152,22 @@ Set these repository variables:
 | Variable | Meaning |
 | --- | --- |
 | `BROWSEROS_REPO_PATH` | Absolute path to the persistent BrowserOS checkout |
-| `BROWSEROS_CHROMIUM_SRC` | Absolute path to the warm pristine Chromium base `src` |
+| `BROWSEROS_CHROMIUM_SRC` | Absolute path to the warm, CI-owned Chromium clone-base `src` |
 
 Component, R2, signing, and notarization credentials come from GitHub Actions
 secrets. `SLACK_WEBHOOK_URL` is optional and receives failures after the Mac job
 has started.
 
 Before each signed browser build, `.github/scripts/macos-chromium-workspace.sh`
-validates the base checkout and creates a run/attempt-specific APFS
-copy-on-write clone of the whole gclient root under
+proves that the base is at the configured Chromium tag, destructively resets
+tracked and untracked state in the base and nested gclient repositories, and
+removes BrowserOS-owned output directories. It then creates a
+run/attempt-specific APFS copy-on-write clone of the whole gclient root under
 `../browseros-ci-apfs-workspaces/`. `bos_build` receives the clone's `src`, so
 cleaning, patching, compiling, signing, packaging, and universal merge outputs
 stay inside the disposable workspace. Cleanup runs with `if: always()`, and the
-next setup reaps abandoned owned workspaces from killed jobs.
+next setup reaps abandoned owned workspaces from killed jobs. Never point
+`BROWSEROS_CHROMIUM_SRC` at a developer checkout.
 
 ## Troubleshooting
 
@@ -182,8 +186,9 @@ verify `MACOS_KEYCHAIN_PASSWORD` and the signing identity.
 
 APFS workspace setup fails: confirm the base checkout is on APFS, the helper can
 create a same-volume `browseros-ci-apfs-workspaces` sibling directory, the base
-`src` is at `packages/browseros/CHROMIUM_VERSION`, and the base has no
-BrowserOS output directories or tracked patch/resource changes.
+`src` is checked out at `packages/browseros/CHROMIUM_VERSION`, and that pinned
+tag exists locally. Ordinary tracked changes, untracked files, nested-repository
+changes, and BrowserOS output directories are repaired automatically.
 
 No browser version commit: inspect the hosted `Reserve new browser version on
 main` job. It requires `contents: write` and `pull-requests: write`, plus branch

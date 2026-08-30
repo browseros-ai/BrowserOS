@@ -1641,6 +1641,7 @@ class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
         self.github_env = self.root / "github_env"
         self.github_output = self.root / "github_output"
         self.git_log = self.root / "git.log"
+        self.git_clean_log = self.root / "git-clean.log"
         self.cp_log = self.root / "cp.log"
         self.version_file = self.root / "CHROMIUM_VERSION"
         self.version_file.write_text(
@@ -1701,6 +1702,14 @@ if [ "${1:-}" = "-C" ]; then
 fi
 cmd="${1:-}"
 shift || true
+repo="${repo:-.}"
+repo_was_cleaned() {
+  [ -f "$GIT_CLEAN_LOG" ] || return 1
+  while IFS= read -r cleaned_repo; do
+    [ "$cleaned_repo" = "$repo" ] && return 0
+  done < "$GIT_CLEAN_LOG"
+  return 1
+}
 case "$cmd" in
   rev-parse)
     target="${1:-}"
@@ -1717,6 +1726,7 @@ case "$cmd" in
     esac
     ;;
   status)
+    repo_was_cleaned && exit 0
     if [ -n "${GIT_DIRTY_REPO:-}" ]; then
       if [ "$repo" = "$GIT_DIRTY_REPO" ]; then
         printf '%b' "${GIT_DIRTY_STATUS:- M nested-change\\n}"
@@ -1724,6 +1734,9 @@ case "$cmd" in
     else
       printf '%b' "${GIT_STATUS:-}"
     fi
+    ;;
+  clean)
+    printf '%s\\n' "$repo" >> "$GIT_CLEAN_LOG"
     ;;
 esac
 """
@@ -1761,6 +1774,7 @@ esac
                 "BROWSEROS_CHROMIUM_VERSION_FILE": str(self.version_file),
                 "CP_LOG": str(self.cp_log),
                 "GIT_HEAD": self.head,
+                "GIT_CLEAN_LOG": str(self.git_clean_log),
                 "GIT_LOG": str(self.git_log),
                 "GITHUB_ENV": str(self.github_env),
                 "GITHUB_OUTPUT": str(self.github_output),
@@ -1874,7 +1888,7 @@ esac
         self.assertTrue(Path(self._outputs()["workspace_root"]).exists())
         self.assertTrue(self.base_root.exists())
 
-    def test_setup_reaps_stale_workspaces_before_dirty_base_failure(self):
+    def test_setup_reaps_stale_workspaces_before_repairing_dirty_base(self):
         parent = self._workspace_parent()
         parent.mkdir()
         stale = self._workspace_root("old-1")
@@ -1888,10 +1902,9 @@ esac
             GIT_STATUS=" M chrome/app/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(stale.exists())
-        self.assertFalse(self._workspace_root().exists())
+        self.assertTrue(self._workspace_root().exists())
         self.assertTrue(self.base_root.exists())
 
     def test_cleanup_ignores_unsafe_state_target(self):
@@ -1969,29 +1982,27 @@ esac
         self.assertIn("does not match pinned", result.stderr + result.stdout)
         self.assertFalse(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_tracked_changes(self):
+    def test_setup_repairs_base_with_tracked_changes(self):
         result = self._run_helper(
             "setup",
             self.base_src,
             GIT_STATUS=" M chrome/app/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_untracked_changes(self):
+    def test_setup_repairs_base_with_untracked_changes(self):
         result = self._run_helper(
             "setup",
             self.base_src,
             GIT_STATUS="?? chrome/browser/browseros/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_nested_gclient_repo_has_changes(self):
+    def test_setup_repairs_nested_gclient_repo_with_changes(self):
         nested_repo = self.base_src / "third_party" / "v8"
         nested_repo.mkdir(parents=True)
         (nested_repo / ".git").mkdir()
@@ -2003,20 +2014,18 @@ esac
             GIT_DIRTY_STATUS=" M src/builtins/generated.cc\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(str(nested_repo.resolve()), result.stderr + result.stdout)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_browseros_output_dirs(self):
+    def test_setup_removes_browseros_output_dirs_from_base(self):
         out_dir = self.base_src / "out" / "Default_browseros_arm64"
         out_dir.mkdir(parents=True)
 
         result = self._run_helper("setup", self.base_src)
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("BrowserOS output state", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertFalse(out_dir.exists())
+        self.assertTrue(self._workspace_root().exists())
 
 
 @unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
