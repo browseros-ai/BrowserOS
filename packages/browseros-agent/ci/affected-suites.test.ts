@@ -70,9 +70,12 @@ describe('computeAffectedSuites', () => {
         ['packages/browseros-agent/scripts/release/commit-update-snapshot.sh'],
       ),
     ).toEqual(['release'])
-    expect(suiteNames([], ['.github/workflows/nightly-browseros.yml'])).toEqual(
-      ['release'],
-    )
+    for (const familyWorkflow of [
+      '.github/workflows/nightly.yml',
+      '.github/workflows/nightly-macos-product.yml',
+    ]) {
+      expect(suiteNames([], [familyWorkflow])).toEqual(['release'])
+    }
   })
 
   it('runs the full matrix on a test-harness change', () => {

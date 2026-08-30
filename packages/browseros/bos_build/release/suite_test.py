@@ -195,6 +195,41 @@ class SuiteIdentityTest(unittest.TestCase):
             )
         )
 
+    def test_closed_suite_pr_keeps_browser_version_reserved(self) -> None:
+        record = suite_record()
+        closed_pull_request = {
+            "body": record.pull_request_body(),
+            "baseRefName": record.default_branch,
+            "headRefName": record.branch,
+            "headRefOid": record.state_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": record.pull_request_number,
+            "url": record.pull_request_url,
+            "state": "CLOSED",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = GitHubSuiteBackend(Path(tmp), "browseros-ai/BrowserOS", "main")
+            with mock.patch(
+                "bos_build.release.suite.list_pull_requests",
+                return_value=[closed_pull_request],
+            ) as list_prs:
+                allocations = backend.discover_browser_allocations()
+
+        list_prs.assert_called_once_with("browseros-ai/BrowserOS", state="all")
+        self.assertEqual(
+            allocations,
+            (
+                BrowserAllocation(
+                    transaction_id=record.transaction_id,
+                    browser_version=record.browser_version,
+                    build_offset=record.build_offset,
+                ),
+            ),
+        )
+
 
 class SuiteReconcileTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -525,6 +560,41 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             self.assertEqual(
                 backend.reconcile_state(reconciled, state_root), reconciled
             )
+
+            # A later Actions job starts from a fresh main checkout. Inspection
+            # must fetch the open transaction branch before reading state bytes.
+            fresh = Path(temp_dir) / "fresh"
+            self._git(
+                Path(temp_dir),
+                "clone",
+                "--branch",
+                "main",
+                str(remote),
+                str(fresh),
+            )
+            fresh_backend = GitHubSuiteBackend(fresh, "owner/repo", "main")
+            pull_request = {
+                "body": reconciled.pull_request_body(),
+                "baseRefName": "main",
+                "headRefName": reconciled.branch,
+                "headRefOid": reconciled.state_sha,
+                "headRepository": {"nameWithOwner": "owner/repo"},
+                "isCrossRepository": False,
+                "number": reconciled.pull_request_number,
+                "url": reconciled.pull_request_url,
+                "state": "OPEN",
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+            with mock.patch(
+                "bos_build.release.suite.list_pull_requests",
+                return_value=[pull_request],
+            ):
+                inspected = fresh_backend.find_transaction(request)
+            self.assertIsNotNone(inspected)
+            assert inspected is not None
+            self.assertEqual(inspected.state_sha, reconciled.state_sha)
+            self.assertEqual(inspected.state_checksums, reconciled.state_checksums)
 
             (state_root / SUITE_STATE_PATHS[0]).write_text(
                 "conflicting replay\n", encoding="utf-8"

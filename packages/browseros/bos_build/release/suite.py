@@ -671,9 +671,29 @@ class GitHubSuiteBackend:
             )
         record = records[0]
         _validate_record(record, request)
-        checksum_ref = (
-            record.merge_sha if record.state == "merged" else record.state_sha
-        )
+        if record.state == "merged":
+            self._git(
+                "fetch",
+                "--no-tags",
+                self.remote,
+                f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
+            )
+            checksum_ref = record.merge_sha
+        else:
+            # A fresh Actions runner has only the frozen source checkout. Fetch
+            # the advertised suite head before deriving its mutable state SHA.
+            self._git(
+                "fetch",
+                "--no-tags",
+                self.remote,
+                f"refs/heads/{record.branch}:refs/remotes/{self.remote}/{record.branch}",
+            )
+            advertised = self._git(
+                "rev-parse", f"refs/remotes/{self.remote}/{record.branch}"
+            )
+            if advertised != record.state_sha:
+                raise ValueError("Suite branch changed while it was being inspected")
+            checksum_ref = record.state_sha
         return replace(record, state_checksums=self._state_checksums(checksum_ref))
 
     def discover_allocations(self) -> Sequence[AllocationRecord]:
@@ -691,7 +711,12 @@ class GitHubSuiteBackend:
 
     def discover_browser_allocations(self) -> Sequence[BrowserAllocation]:
         allocations = []
-        for pull_request in list_pull_requests(self.repo, state="open"):
+        # A suite PR is the durable browser-version reservation even if a human
+        # closes it after immutable artifacts have escaped. Scanning all PR
+        # states prevents that closed transaction from silently releasing its
+        # version back to a different source; merged versions are harmlessly
+        # redundant with the version already visible on the default branch.
+        for pull_request in list_pull_requests(self.repo, state="all"):
             record = suite_record_from_pull_request(pull_request, self.repo)
             if record is not None:
                 allocations.append(

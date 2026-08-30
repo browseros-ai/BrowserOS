@@ -470,7 +470,23 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         self.assertEqual(allocations[0].kind, "candidate")
         self.assertEqual(allocations[0].version, suite.component_versions["server"])
         self.assertEqual(allocations[0].candidate_id, suite.branch)
-        self.assertEqual(allocations[0].source_sha, suite.reservation_sha)
+        self.assertEqual(allocations[0].source_sha, suite.source_sha)
+        self.assertEqual(allocations[0].reference, "agent-server/v0.0.147")
+        self.assertTrue(allocations[0].reusable)
+
+        release_operations = FakeOperations()
+        release_operations.records = allocations
+        release = resolve_standalone_release(
+            StandaloneReleaseRequest(
+                component="server",
+                event_name="workflow_call",
+                default_branch="main",
+                requested_version=suite.component_versions["server"],
+                release_ref=suite.source_sha,
+            ),
+            release_operations,
+        )
+        self.assertEqual(release.version, suite.component_versions["server"])
 
 
 if __name__ == "__main__":

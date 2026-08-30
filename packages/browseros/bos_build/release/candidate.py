@@ -601,6 +601,7 @@ class GitHubCandidateBackend:
                 versions = record.component_versions
                 source_sha = record.candidate_sha
                 candidate_id = record.branch
+                suite_reservation = False
             else:
                 suite = suite_record_from_pull_request(pull_request, self.repo)
                 if suite is None:
@@ -611,8 +612,9 @@ class GitHubCandidateBackend:
                     for component, version in suite.component_versions.items()
                     if component in product_components
                 }
-                source_sha = suite.reservation_sha
+                source_sha = suite.source_sha
                 candidate_id = suite.branch
+                suite_reservation = True
             for component, version in versions.items():
                 if component not in {spec.id for spec in specs}:
                     continue
@@ -623,7 +625,12 @@ class GitHubCandidateBackend:
                         kind="candidate",
                         source_sha=source_sha,
                         candidate_id=candidate_id,
-                        reference=candidate_id,
+                        reference=(
+                            component_by_id(component).tag_prefix + version
+                            if suite_reservation
+                            else candidate_id
+                        ),
+                        reusable=suite_reservation,
                     )
                 )
         return tuple(allocations)

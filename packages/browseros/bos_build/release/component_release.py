@@ -371,8 +371,13 @@ class GitComponentReleaseOperations:
                 # PR marker. Their live state head may advance with snapshots, so
                 # the allocation remains bound to the reservation commit.
                 version = suite.component_versions[component]
-                source_sha = suite.reservation_sha
+                source_sha = suite.source_sha
                 candidate_id = suite.branch
+                reference = component_by_id(component).tag_prefix + version
+                reusable = True
+            if record is not None and component in record.component_versions:
+                reference = candidate_id
+                reusable = False
             allocations.append(
                 AllocationRecord(
                     component=component,
@@ -380,7 +385,8 @@ class GitComponentReleaseOperations:
                     kind="candidate",
                     source_sha=source_sha,
                     candidate_id=candidate_id,
-                    reference=candidate_id,
+                    reference=reference,
+                    reusable=reusable,
                 )
             )
         return tuple(allocations)

@@ -217,9 +217,9 @@ export function computeAffectedSuites(
       (f) =>
         f.startsWith(`${AGENT}scripts/release/`) ||
         f === '.github/workflows/build-browseros.yml' ||
-        f.startsWith('.github/workflows/nightly-browser') ||
+        f === '.github/workflows/nightly.yml' ||
+        f === '.github/workflows/nightly-macos-product.yml' ||
         f === '.github/workflows/publish-server-ota.yml' ||
-        f === '.github/workflows/reserve-nightly-browser-version.yml' ||
         f.startsWith('.github/workflows/release-'),
     )
   )
