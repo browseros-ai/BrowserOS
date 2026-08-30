@@ -88,6 +88,7 @@ def _release_provenance(ctx: Context) -> dict[str, object]:
         }
     provenance.update(
         {
+            "reservation_sha": os.environ.get("BROWSEROS_BUILD_RESERVATION_SHA", ""),
             "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
             "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
         }
@@ -114,6 +115,10 @@ class UploadModule(Step):
     description = "Upload build artifacts to Cloudflare R2"
 
     def validate(self, ctx: Context) -> None:
+        # Family nightlies persist the complete receipt in Actions first and
+        # publish it only after both signed builds and the state merge pass.
+        if os.environ.get("BROWSEROS_DEFER_R2_UPLOAD") == "1":
+            return
         if not BOTO3_AVAILABLE:
             raise ValidationError(
                 "boto3 library not installed - run: pip install boto3"
@@ -196,6 +201,7 @@ def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
 
     provenance_fields = (
         "source_sha",
+        "reservation_sha",
         "parent_sha",
         "component_versions",
         "common_manifest_digest",
@@ -303,14 +309,15 @@ def upload_release_artifacts(
     extra_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[bool, Optional[Dict]]:
     """Upload release artifacts and their metadata to R2."""
-    if not BOTO3_AVAILABLE:
+    deferred = os.environ.get("BROWSEROS_DEFER_R2_UPLOAD") == "1"
+    if not deferred and not BOTO3_AVAILABLE:
         log_warning("boto3 not installed. Skipping R2 upload.")
         log_info("Install with: pip install boto3")
         return True, None
 
     env = ctx.env
 
-    if not env.has_r2_config():
+    if not deferred and not env.has_r2_config():
         log_warning("R2 configuration not set. Skipping upload.")
         return True, None
 
@@ -322,23 +329,16 @@ def upload_release_artifacts(
     platform = _get_platform()
     release_path = ctx.get_release_path(platform)
 
-    log_info(f"\nUploading to R2: {env.r2_bucket}/{release_path}")
+    if deferred:
+        log_info("\nPreparing deferred immutable release receipt")
+    else:
+        log_info(f"\nUploading to R2: {env.r2_bucket}/{release_path}")
     log_info(f"Found {len(artifacts)} artifact(s):")
     for artifact in artifacts:
         log_info(f"  - {artifact.name}")
 
-    client = get_r2_client(env)
-    if not client:
-        log_error("Failed to create R2 client")
-        return False, None
-
     artifact_metadata = []
     for artifact_path in artifacts:
-        r2_key = f"{release_path}{artifact_path.name}"
-
-        if not upload_file_to_r2(client, artifact_path, r2_key, env.r2_bucket):
-            return False, None
-
         metadata = {
             "filename": artifact_path.name,
             "size": artifact_path.stat().st_size,
@@ -351,11 +351,30 @@ def upload_release_artifacts(
         artifact_metadata.append(metadata)
 
     release_data = generate_release_json(ctx, artifact_metadata, platform)
+    release_json_path = ctx.get_dist_dir() / "release.json"
+    release_json_path.write_text(json.dumps(release_data, indent=2))
+    if deferred:
+        # The receipt and DMG travel together as one Actions artifact. Keeping
+        # this step local prevents either product from becoming public before
+        # its sibling build and the family state transaction have succeeded.
+        ctx.artifact_registry.add("release_metadata", release_data)
+        log_success("Prepared release receipt for deferred immutable publication")
+        return True, release_data
+
+    client = get_r2_client(env)
+    if not client:
+        log_error("Failed to create R2 client")
+        return False, None
+
+    for artifact_path in artifacts:
+        r2_key = f"{release_path}{artifact_path.name}"
+        if not upload_file_to_r2(client, artifact_path, r2_key, env.r2_bucket):
+            return False, None
+
     existing_release_data = get_release_json(
         ctx.get_semantic_version(), platform, env, ctx.product.id
     )
     release_data = merge_release_metadata(existing_release_data, release_data)
-    release_json_path = ctx.get_dist_dir() / "release.json"
     release_json_path.write_text(json.dumps(release_data, indent=2))
 
     r2_key = f"{release_path}release.json"

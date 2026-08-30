@@ -165,8 +165,12 @@ class SuiteIdentityTest(unittest.TestCase):
 
     def test_pull_request_parser_accepts_only_canonical_same_repo_record(self) -> None:
         record = suite_record()
+        # PR creation writes this body before GitHub has assigned its number and
+        # URL. Recovery must hydrate both from the same live PR object and must
+        # not depend on a second body-edit request completing.
+        provisional = replace(record, pull_request_number=0, pull_request_url="")
         pull_request = {
-            "body": record.pull_request_body(),
+            "body": provisional.pull_request_body(),
             "baseRefName": "main",
             "headRefName": BRANCH,
             "headRefOid": STATE_SHA,
@@ -182,6 +186,9 @@ class SuiteIdentityTest(unittest.TestCase):
         parsed = suite_record_from_pull_request(pull_request, "browseros-ai/BrowserOS")
 
         self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.pull_request_number, 77)
+        self.assertEqual(parsed.pull_request_url, record.pull_request_url)
         self.assertEqual(parsed.state_sha, STATE_SHA)
         self.assertEqual(parsed.reservation_sha, RESERVATION_SHA)
         self.assertIsNone(
@@ -464,6 +471,30 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
                 self.backend,
             )
 
+    def test_new_merge_rejects_mismatched_squash_tree(self) -> None:
+        record = suite_record(state_sha=STATE_SHA)
+        self.backend.pr = replace(self.backend.pr, head_sha=STATE_SHA)
+        self.backend.merge_matches = False
+        gate = {
+            "schema": "browseros-release-suite-gate-v1",
+            "passed": True,
+            "transaction_id": record.transaction_id,
+            "source_sha": record.source_sha,
+            "state_sha": record.state_sha,
+            "browser_version": record.browser_version,
+            "component_versions": dict(record.component_versions),
+            "state_checksums": dict(record.state_checksums),
+            "products": ["browseros", "browserclaw"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "merge commit"):
+            merge_transaction(record, gate, self.backend)
+
+        # The merge already happened, but publication is stopped until recovery
+        # proves that the returned squash tree is the complete transaction.
+        self.assertEqual(self.backend.readied, [77])
+        self.assertEqual(self.backend.merged, [(77, STATE_SHA)])
+
     def test_merge_rejects_changed_head_and_superseded_state(self) -> None:
         record = suite_record(state_sha=STATE_SHA)
         gate = {
@@ -597,7 +628,6 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                     "bos_build.release.suite.create_pull_request",
                     return_value="https://github.com/owner/repo/pull/77",
                 ) as create_pr,
-                mock.patch("bos_build.release.suite.edit_pull_request_body"),
             ):
                 record = backend.create_transaction(
                     request,
@@ -671,11 +701,62 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             self.assertEqual(inspected.state_sha, reconciled.state_sha)
             self.assertEqual(inspected.state_checksums, reconciled.state_checksums)
 
+            # A same-repository writer can push to the suite branch. Recovery
+            # must reject an arbitrary code overlay before workflow outputs make
+            # that head available to either signed browser build.
+            attack = Path(temp_dir) / "attack"
+            self._git(
+                repo, "worktree", "add", "--detach", str(attack), reconciled.state_sha
+            )
+            try:
+                injected = attack / "packages/browseros/INJECTED.txt"
+                injected.write_text("not frozen source\n", encoding="utf-8")
+                self._git(attack, "add", injected.relative_to(attack).as_posix())
+                self._git(attack, "commit", "-m", "inject code")
+                attacked_sha = self._git(attack, "rev-parse", "HEAD")
+                self._git(attack, "push", "origin", f"HEAD:refs/heads/{record.branch}")
+            finally:
+                self._git(repo, "worktree", "remove", "--force", str(attack))
+            with (
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests",
+                    return_value=[{**pull_request, "headRefOid": attacked_sha}],
+                ),
+                self.assertRaisesRegex(ValueError, "unexpected files"),
+            ):
+                fresh_backend.find_transaction(request)
+
+            # Restore the safe tree with a forward-only revert so this test also
+            # obeys the production rule that suite branches are never force-pushed.
+            repair = Path(temp_dir) / "repair"
+            self._git(repo, "worktree", "add", "--detach", str(repair), attacked_sha)
+            try:
+                self._git(repair, "revert", "--no-edit", "HEAD")
+                repaired_sha = self._git(repair, "rev-parse", "HEAD")
+                self._git(repair, "push", "origin", f"HEAD:refs/heads/{record.branch}")
+            finally:
+                self._git(repo, "worktree", "remove", "--force", str(repair))
+            reconciled = replace(reconciled, state_sha=repaired_sha)
+            pull_request = {**pull_request, "headRefOid": repaired_sha}
+
             (state_root / SUITE_STATE_PATHS[0]).write_text(
                 "conflicting replay\n", encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "conflicts"):
                 backend.reconcile_state(reconciled, state_root)
+
+            # A standalone feed writer can land while this long transaction is
+            # building. The suite must detect that foreign snapshot commit
+            # before making its draft PR ready, then recover after a true revert.
+            foreign_path = repo / SUITE_STATE_PATHS[0]
+            foreign_path.write_text("newer standalone snapshot\n", encoding="utf-8")
+            self._git(repo, "add", SUITE_STATE_PATHS[0])
+            self._git(repo, "commit", "-m", "foreign feed update")
+            self._git(repo, "push", "origin", "main")
+            self.assertTrue(backend.default_branch_contains_transaction(reconciled))
+            self._git(repo, "revert", "--no-edit", "HEAD")
+            self._git(repo, "push", "origin", "main")
+            self.assertFalse(backend.default_branch_contains_transaction(reconciled))
 
             # The exact PR-head ref outlives GitHub's deletion of the same-repo
             # source branch. A full workflow retry recovers reservation metadata
@@ -708,7 +789,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             assert merged is not None
             self.assertEqual(merged.state_sha, reconciled.state_sha)
             self.assertEqual(merged.merge_sha, merge_sha)
-            self.assertEqual(merged.build_state_ref(), "refs/pull/77/head")
+            self.assertEqual(merged.state_ref(), "refs/pull/77/head")
             self.assertEqual(
                 self._git(
                     repo,
@@ -723,7 +804,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                 fresh,
                 "fetch",
                 "origin",
-                f"{merged.build_state_ref()}:refs/remotes/origin/release-state",
+                f"{merged.state_ref()}:refs/remotes/origin/release-state",
             )
             self.assertEqual(
                 self._git(fresh, "rev-parse", "refs/remotes/origin/release-state"),

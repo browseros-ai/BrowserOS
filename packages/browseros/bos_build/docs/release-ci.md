@@ -12,6 +12,10 @@ this first production slice migrates the nightly entrypoint only. The existing
 `release-browseros.yml` and `release-browserclaw.yml` full-release entrypoints
 remain per-product until their native lane orchestration moves behind the same
 suite boundary. See `nightly-macos-ci.md` for that transaction and retry model.
+Both signed browser jobs build the exact reservation commit (the frozen source
+plus its deterministic version overlay); later feed/appcast state commits and
+the squash merge commit are never browser build inputs. Versioned browser R2
+objects are conditionally published only after both builds and the suite merge.
 
 ## Full-release graph
 

@@ -76,28 +76,82 @@ def list_pull_requests(
     head: str = "",
     runner: CommandRunner = subprocess.run,
 ) -> List[Mapping[str, object]]:
-    """List pull requests with candidate reconciliation fields."""
-    command = [
-        "gh",
-        "pr",
-        "list",
-        "--repo",
-        repo,
-        "--state",
-        state,
-        "--limit",
-        "100",
-        "--json",
-        "number,url,state,isDraft,headRefName,headRefOid,baseRefName,body,mergedAt,mergeCommit,mergeable,isCrossRepository,headRepository",
-    ]
-    if head:
-        command.extend(["--head", head])
-    document = json.loads(_run_gh(command, runner) or "[]")
-    if not isinstance(document, list) or not all(
-        isinstance(item, dict) for item in document
-    ):
-        raise RuntimeError("GitHub pull request response must be an array")
-    return document
+    """List every matching pull request with reconciliation fields.
+
+    Suite PRs are a durable version-allocation ledger, including closed records.
+    GraphQL cursor pagination avoids silently releasing old allocations after an
+    arbitrary fixed number of newer repository PRs.
+    """
+    try:
+        owner, name = repo.split("/", 1)
+        states = {
+            "open": "OPEN",
+            "closed": "CLOSED",
+            "merged": "MERGED",
+            "all": "OPEN, CLOSED, MERGED",
+        }[state]
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"Unsupported pull request query: repo={repo}, state={state}"
+        ) from exc
+    query = f"""
+query($owner: String!, $name: String!, $endCursor: String) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequests(
+      first: 100
+      after: $endCursor
+      states: [{states}]
+      orderBy: {{field: CREATED_AT, direction: DESC}}
+    ) {{
+      nodes {{
+        number url state isDraft headRefName headRefOid baseRefName body
+        mergedAt mergeCommit {{ oid }} mergeable isCrossRepository
+        headRepository {{ nameWithOwner }}
+      }}
+      pageInfo {{ hasNextPage endCursor }}
+    }}
+  }}
+}}
+""".strip()
+    pages = json.loads(
+        _run_gh(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "--paginate",
+                "--slurp",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"name={name}",
+                "-f",
+                f"query={query}",
+            ],
+            runner,
+        )
+        or "[]"
+    )
+    if not isinstance(pages, list):
+        raise RuntimeError("GitHub pull request response must contain pages")
+    records: List[Mapping[str, object]] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            raise RuntimeError("GitHub pull request page must be an object")
+        data = page.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        connection = (
+            repository.get("pullRequests") if isinstance(repository, dict) else None
+        )
+        nodes = connection.get("nodes") if isinstance(connection, dict) else None
+        if not isinstance(nodes, list) or not all(
+            isinstance(item, dict) for item in nodes
+        ):
+            raise RuntimeError("GitHub pull request page contains invalid nodes")
+        records.extend(
+            item for item in nodes if not head or item.get("headRefName") == head
+        )
+    return records
 
 
 def create_pull_request(

@@ -369,7 +369,7 @@ class GitComponentReleaseOperations:
                     continue
                 # Suite reservations are validated by their immutable same-repo
                 # PR marker. Their live state head may advance with snapshots, so
-                # the allocation remains bound to the reservation commit.
+                # the allocation remains bound to the frozen artifact source.
                 version = suite.component_versions[component]
                 source_sha = suite.source_sha
                 candidate_id = suite.branch

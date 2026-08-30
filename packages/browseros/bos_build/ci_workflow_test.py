@@ -1339,6 +1339,14 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             },
         )
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(
+            transaction["concurrency"],
+            {
+                "group": "release-component-allocation",
+                "cancel-in-progress": False,
+                "queue": "max",
+            },
+        )
         for token in (
             '"$DEFAULT_BRANCH" != "main"',
             '"$SOURCE_REF" != "refs/heads/main"',
@@ -1347,6 +1355,8 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             "release suite reconcile",
             "--mode nightly",
             '--source-sha "$source_sha"',
+            'if [ "$(jq -r \'.state\' "$RUNNER_TEMP/release-suite.json")" = "merged" ]; then',
+            "Re-run failed jobs",
         ):
             self.assertIn(token, reconcile["run"])
         self.assertNotIn("GITHUB_RUN_ATTEMPT", text)
@@ -1412,9 +1422,10 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
                 "${{ needs.transaction.outputs.source_sha }}",
             )
             self.assertEqual(
-                build["with"]["state_sha"],
-                "${{ needs.transaction.outputs.state_sha }}",
+                build["with"]["reservation_sha"],
+                "${{ needs.transaction.outputs.reservation_sha }}",
             )
+            self.assertNotIn("state_sha", build["with"])
             self.assertEqual(
                 build["with"]["state_ref"],
                 "${{ needs.transaction.outputs.state_ref }}",
@@ -1463,6 +1474,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             self.assertEqual(job["uses"], "./.github/workflows/publish-server-ota.yml")
             self.assertEqual(job["with"]["product"], product)
             self.assertEqual(job["with"]["state_owner"], "suite")
+            self.assertEqual(job["permissions"], {"contents": "read"})
 
         reconcile = jobs["reconcile-state"]
         self.assertTrue(set(finalizers).issubset(set(reconcile["needs"])))
@@ -1487,6 +1499,15 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             set(publish["needs"]),
             {"transaction", "reconcile-state", "build-browseros", "build-browserclaw"},
         )
+        self.assertEqual(
+            publish["concurrency"],
+            {
+                "group": "release-feed-snapshots",
+                "cancel-in-progress": False,
+                "queue": "max",
+            },
+        )
+        self.assertEqual(publish["permissions"]["pull-requests"], "read")
         checkout = next(
             step
             for step in publish["steps"]
@@ -1514,6 +1535,31 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
                 workflow, "reconcile-state", "Render shared extension feeds"
             )["run"],
         )
+        immutable = self.named_step(
+            workflow, "publish", "Publish immutable signed browser artifacts"
+        )["run"]
+        self.assertEqual(immutable.count("publish-browser-artifact"), 2)
+        self.assertIn("--product browseros", immutable)
+        self.assertIn("--product browserclaw", immutable)
+        recover = self.named_step(
+            workflow, "publish", "Recover merged transaction record"
+        )
+        self.assertEqual(
+            recover["env"]["EXPECTED_MERGE_SHA"],
+            "${{ needs.reconcile-state.outputs.merge_sha }}",
+        )
+        for assertion in (
+            "jq -r '.state'",
+            "jq -r '.merge_sha'",
+            'git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
+        ):
+            self.assertIn(assertion, recover["run"])
+        publish_steps = publish["steps"]
+        recover_index = publish_steps.index(recover)
+        feed_index = publish_steps.index(
+            self.named_step(workflow, "publish", "Publish committed family feeds")
+        )
+        self.assertLess(recover_index, feed_index)
 
     def test_rolling_publication_is_source_and_checksum_aware(self):
         workflow = self.load_workflow("nightly.yml")
@@ -1542,7 +1588,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             rolling.index("gh release delete"),
         )
 
-    def test_internal_builder_uses_state_overlay_and_frozen_artifact_source(self):
+    def test_internal_builder_uses_reservation_and_frozen_artifact_source(self):
         workflow = self.load_workflow("nightly-macos-product.yml")
         triggers = workflow.get("on", workflow.get(True))
         self.assertNotIn("workflow_dispatch", triggers)
@@ -1552,7 +1598,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
                 "product",
                 "state_ref",
                 "source_sha",
-                "state_sha",
+                "reservation_sha",
                 "browser_version",
                 "server_version",
                 "extension_version",
@@ -1565,17 +1611,35 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             {"group": "macos-build", "cancel-in-progress": False, "queue": "max"},
         )
         sync = self.named_step(
-            workflow, "build", "Sync build repo to transaction state"
+            workflow, "build", "Sync build repo to transaction reservation"
         )
         build = self.named_step(workflow, "build", "Build signed nightly")
         text = (WORKFLOW_DIR / "nightly-macos-product.yml").read_text(encoding="utf-8")
         self.assertIn("refs/pull/[1-9][0-9]*/head", sync["run"])
         self.assertIn('"+$STATE_REF:$state_remote_ref"', sync["run"])
-        self.assertIn('git rev-parse "$state_remote_ref"', sync["run"])
-        self.assertIn('git checkout --detach "$STATE_SHA"', sync["run"])
+        self.assertIn('git checkout --detach "$RESERVATION_SHA"', sync["run"])
         self.assertIn(
-            'git merge-base --is-ancestor "$SOURCE_SHA" "$STATE_SHA"', sync["run"]
+            'test "$(git rev-parse "${RESERVATION_SHA}^")" = "$SOURCE_SHA"',
+            sync["run"],
         )
+        self.assertIn(
+            'git merge-base --is-ancestor "$RESERVATION_SHA" "$state_remote_ref"',
+            sync["run"],
+        )
+        self.assertNotIn("STATE_SHA", text)
+        self.assertEqual(
+            build["env"]["BROWSEROS_BUILD_RESERVATION_SHA"],
+            "${{ inputs.reservation_sha }}",
+        )
+        self.assertEqual(build["env"]["BROWSEROS_DEFER_R2_UPLOAD"], "1")
+        for secret in (
+            "R2_ACCESS_KEY_ID",
+            "R2_ACCOUNT_ID",
+            "R2_BUCKET",
+            "R2_SECRET_ACCESS_KEY",
+        ):
+            self.assertNotIn(secret, triggers["workflow_call"].get("secrets", {}))
+            self.assertNotIn(secret, build["env"])
         self.assertEqual(
             build["env"]["BROWSEROS_BUILD_SOURCE_SHA"],
             "${{ inputs.source_sha }}",
@@ -1590,6 +1654,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
         self.assertIn("Clean up disposable Chromium workspace", text)
         self.assertIn("Clean up macOS signing keychain", text)
         self.assertIn("actions/upload-artifact@v7", text)
+        self.assertIn("release.json", text)
         self.assertNotIn("gh release create", text)
 
     def test_family_nightly_changes_trigger_build_system_tests(self):
@@ -2379,6 +2444,7 @@ class ReleaseDocumentationTest(unittest.TestCase):
             ".github/workflows/nightly.yml",
             "nightly-<source-sha>",
             "Source SHA",
+            "Reservation SHA",
             "State SHA",
             "Merge SHA",
             "refs/pull/<PR_NUMBER>/head",
@@ -2386,6 +2452,8 @@ class ReleaseDocumentationTest(unittest.TestCase):
             "Open, closed, and\nmerged canonical suite records",
             "superseded/no-op",
             "--allow-downgrade",
+            "Re-run failed\njobs",
+            "conditionally creates",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.nightly)

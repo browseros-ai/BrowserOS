@@ -10,6 +10,8 @@ from typing import Optional
 import typer
 
 from ..lib.paths import get_package_root
+from ..lib.env import EnvConfig
+from ..lib.r2 import get_r2_client
 from ..lib.utils import log_error
 from ..release.suite import (
     GitHubSuiteBackend,
@@ -18,6 +20,10 @@ from ..release.suite import (
     inspect_transaction,
     merge_transaction,
     reconcile_transaction,
+)
+from ..release.suite_artifact import (
+    R2ImmutableObjectBackend,
+    publish_suite_browser_artifact,
 )
 
 
@@ -63,7 +69,7 @@ def _write_outputs(path: Optional[Path], record: SuiteRecord) -> None:
         "source_sha": record.source_sha,
         "reservation_sha": record.reservation_sha,
         "state_sha": record.state_sha,
-        "state_ref": record.build_state_ref(),
+        "state_ref": record.state_ref(),
         "branch": record.branch,
         "browser_version": record.browser_version,
         "build_offset": str(record.build_offset),
@@ -115,6 +121,32 @@ def _backend(repo_root: Optional[Path], repo: str, default_branch: str):
 def _handle_error(exc: Exception) -> None:
     log_error(str(exc))
     raise typer.Exit(1)
+
+
+@app.command("publish-browser-artifact")
+def publish_browser_artifact(
+    record_path: Path = typer.Option(..., "--record"),
+    product: str = typer.Option(..., "--product"),
+    artifact_root: Path = typer.Option(..., "--artifact-root"),
+) -> None:
+    """Conditionally publish one signed suite artifact and its exact receipt."""
+    try:
+        record = SuiteRecord.from_path(record_path)
+        env = EnvConfig()
+        if not env.has_r2_config():
+            raise RuntimeError("R2 configuration not set")
+        client = get_r2_client(env)
+        if client is None:
+            raise RuntimeError("Failed to create R2 client")
+        publication = publish_suite_browser_artifact(
+            record,
+            product,
+            artifact_root,
+            R2ImmutableObjectBackend(client, env.r2_bucket),
+        )
+        typer.echo(publication.to_json(), nl=False)
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        _handle_error(exc)
 
 
 @app.command("inspect")

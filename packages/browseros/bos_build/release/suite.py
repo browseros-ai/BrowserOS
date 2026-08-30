@@ -32,7 +32,6 @@ from .components import (
 )
 from .github import (
     create_pull_request,
-    edit_pull_request_body,
     list_pull_requests,
     mark_pull_request_ready,
 )
@@ -128,8 +127,9 @@ class SuiteRecord:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
     def _marker_dict(self) -> dict[str, object]:
-        # Mutable state_sha/checksums come from the PR head. Keeping them out of
-        # the marker removes an atomicity requirement between Git push and PR edit.
+        # Mutable state and live PR identity come from the same GitHub PR object.
+        # Keeping both out removes crash windows between Git push, PR creation,
+        # and a second body edit while preserving one immutable reservation marker.
         return {
             "schema": self.schema,
             "transaction_id": self.transaction_id,
@@ -141,8 +141,6 @@ class SuiteRecord:
             "browser_version": self.browser_version,
             "build_offset": self.build_offset,
             "component_versions": dict(self.component_versions),
-            "pull_request_number": self.pull_request_number,
-            "pull_request_url": self.pull_request_url,
         }
 
     def pull_request_body(self) -> str:
@@ -183,8 +181,8 @@ class SuiteRecord:
             f"- State: `{self.state}`{merge}\n"
         )
 
-    def build_state_ref(self) -> str:
-        """Return the ref whose tree is the frozen source plus suite overlay."""
+    def state_ref(self) -> str:
+        """Return the durable ref that makes the transaction history reachable."""
         if self.state == "merged":
             # GitHub retains the synthetic PR-head ref after deleting the source
             # branch. The squash merge is intentionally not used: unrelated
@@ -561,12 +559,21 @@ def merge_transaction(
         backend.mark_pull_request_ready(record.pull_request_number)
     merge_sha = backend.merge_pull_request(record.pull_request_number, record.state_sha)
     _validate_sha(merge_sha, "merge_sha")
+    # The default branch can advance while the merge helper waits. Re-read the
+    # resulting squash tree before publication so a mixed or lost-update merge
+    # can never be treated as the committed transaction state.
+    if not backend.merge_commit_matches_transaction(record, merge_sha):
+        raise ValueError("Suite merge commit does not match transaction state")
     return replace(record, state="merged", draft=False, merge_sha=merge_sha)
 
 
 def _marker_record(document: Mapping[str, object]) -> SuiteRecord:
     full = {
         **document,
+        # Old markers included these fields; new markers intentionally derive
+        # them from the live same-repository PR object at the parser boundary.
+        "pull_request_number": document.get("pull_request_number", 0),
+        "pull_request_url": document.get("pull_request_url", ""),
         "state_sha": document.get("reservation_sha", ""),
         "state": "open",
         "merge_sha": "",
@@ -614,8 +621,8 @@ def suite_record_from_pull_request(
         ):
             return None
         if (
-            number != record.pull_request_number
-            or url != record.pull_request_url
+            record.pull_request_number not in (0, number)
+            or record.pull_request_url not in ("", url)
             or pull_request.get("headRefName") != record.branch
             or pull_request.get("baseRefName") != record.default_branch
         ):
@@ -633,6 +640,8 @@ def suite_record_from_pull_request(
             merge_sha = value if isinstance(value, str) else ""
         return replace(
             record,
+            pull_request_number=number,
+            pull_request_url=url,
             state_sha=head_sha,
             state=state,
             draft=draft_value,
@@ -724,13 +733,16 @@ class GitHubSuiteBackend:
         record = records[0]
         _validate_record(record, request)
         if record.state == "merged":
+            # GitHub retains this synthetic ref after deleting the suite branch.
+            # It is the original frozen-source overlay; the squash tree may also
+            # contain unrelated default-branch commits and is not a build input.
             self._git(
                 "fetch",
                 "--no-tags",
                 self.remote,
-                f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
+                f"refs/pull/{record.pull_request_number}/head",
             )
-            checksum_ref = record.merge_sha
+            advertised = self._git("rev-parse", "FETCH_HEAD")
         else:
             # A fresh Actions runner has only the frozen source checkout. Fetch
             # the advertised suite head before deriving its mutable state SHA.
@@ -743,10 +755,14 @@ class GitHubSuiteBackend:
             advertised = self._git(
                 "rev-parse", f"refs/remotes/{self.remote}/{record.branch}"
             )
-            if advertised != record.state_sha:
-                raise ValueError("Suite branch changed while it was being inspected")
-            checksum_ref = record.state_sha
-        return replace(record, state_checksums=self._state_checksums(checksum_ref))
+        if advertised != record.state_sha:
+            raise ValueError("Suite branch changed while it was being inspected")
+        # A same-repository PR is writable by maintainers. Prove both overlay
+        # stages before exposing build outputs so ancestry alone cannot bless an
+        # arbitrary code commit as the frozen source.
+        self._validate_reservation_history(record)
+        self._validate_state_history(record, record.state_sha)
+        return replace(record, state_checksums=self._state_checksums(record.state_sha))
 
     def discover_allocations(self) -> Sequence[AllocationRecord]:
         # Legacy candidates, tags, releases, and suite reservations all share
@@ -836,6 +852,93 @@ class GitHubSuiteBackend:
             raise ValueError(f"Remote suite branch {branch} has conflicting content")
         return fetched
 
+    def _stage_reservation(
+        self,
+        worktree: Path,
+        component_versions: Mapping[str, str],
+        browser_version: str,
+        build_offset: int,
+    ) -> tuple[str, ...]:
+        """Apply the deterministic source overlay owned by the reservation."""
+        package_root = worktree / "packages/browseros"
+        current = load_semantic_version(package_root)
+        current_offset = int(load_build_offset(package_root))
+        while _browser_version_key(current) < _browser_version_key(browser_version):
+            current = bump_version(package_root, "offset+build")
+            current_offset += 1
+        if current != browser_version or current_offset != build_offset:
+            raise ValueError(
+                "Resolved browser reservation cannot be staged from source"
+            )
+
+        changed = {
+            Path("packages/browseros/resources/BROWSEROS_VERSION"),
+            Path("packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"),
+        }
+        for component in SUITE_RELEASE_COMPONENTS:
+            changed.update(
+                path.relative_to(worktree)
+                for path in stamp_component(
+                    worktree, component, component_versions[component]
+                )
+            )
+        return tuple(sorted(path.as_posix() for path in changed))
+
+    def _validate_reservation_history(self, record: SuiteRecord) -> None:
+        """Prove the reservation is exactly one deterministic source overlay."""
+        parents = self._git(
+            "rev-list", "--parents", "-n", "1", record.reservation_sha
+        ).split()
+        if parents != [record.reservation_sha, record.source_sha]:
+            raise ValueError(
+                "Suite reservation does not have the frozen source as parent"
+            )
+
+        expected_paths = {
+            "packages/browseros/resources/BROWSEROS_VERSION",
+            "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
+            *(
+                path.as_posix()
+                for component in SUITE_RELEASE_COMPONENTS
+                for path in (
+                    component_by_id(component).manifest_path,
+                    component_by_id(component).lockfile_path,
+                )
+            ),
+        }
+        changed = set(
+            self._git(
+                "diff",
+                "--name-only",
+                f"{record.source_sha}..{record.reservation_sha}",
+            ).splitlines()
+        )
+        if changed != expected_paths:
+            raise ValueError("Suite reservation contains unexpected files")
+
+        # Recreate the overlay from the immutable marker and compare whole-tree
+        # identity. This catches payload changes hidden inside an allowed
+        # manifest or lockfile, not just extra path names.
+        with tempfile.TemporaryDirectory(prefix="browseros-suite-proof-") as temp_dir:
+            worktree = Path(temp_dir) / "repo"
+            self._git("worktree", "add", "--detach", str(worktree), record.source_sha)
+            try:
+                relative = self._stage_reservation(
+                    worktree,
+                    record.component_versions,
+                    record.browser_version,
+                    record.build_offset,
+                )
+                if set(relative) != expected_paths:
+                    raise ValueError("Suite reservation path contract is inconsistent")
+                self._git("add", "--", *relative, cwd=worktree)
+                expected_tree = self._git("write-tree", cwd=worktree)
+            finally:
+                self._git("worktree", "remove", "--force", str(worktree))
+        actual_tree = self._git("rev-parse", f"{record.reservation_sha}^{{tree}}")
+        if actual_tree != expected_tree:
+            raise ValueError("Suite reservation content does not match its record")
+
     def create_transaction(
         self,
         request: SuiteRequest,
@@ -848,31 +951,9 @@ class GitHubSuiteBackend:
             worktree = Path(temp_dir) / "repo"
             self._git("worktree", "add", "--detach", str(worktree), request.source_sha)
             try:
-                package_root = worktree / "packages/browseros"
-                current = load_semantic_version(package_root)
-                current_offset = int(load_build_offset(package_root))
-                while _browser_version_key(current) < _browser_version_key(
-                    browser_version
-                ):
-                    current = bump_version(package_root, "offset+build")
-                    current_offset += 1
-                if current != browser_version or current_offset != build_offset:
-                    raise ValueError(
-                        "Resolved browser reservation cannot be staged from source"
-                    )
-
-                changed = {
-                    Path("packages/browseros/resources/BROWSEROS_VERSION"),
-                    Path("packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"),
-                }
-                for component in SUITE_RELEASE_COMPONENTS:
-                    changed.update(
-                        path.relative_to(worktree)
-                        for path in stamp_component(
-                            worktree, component, component_versions[component]
-                        )
-                    )
-                relative = sorted(path.as_posix() for path in changed)
+                relative = self._stage_reservation(
+                    worktree, component_versions, browser_version, build_offset
+                )
                 self._git("add", "--", *relative, cwd=worktree)
                 staged = set(
                     self._git(
@@ -928,11 +1009,6 @@ class GitHubSuiteBackend:
             provisional,
             pull_request_number=int(match.group(1)),
             pull_request_url=url,
-        )
-        edit_pull_request_body(
-            repo=self.repo,
-            number=record.pull_request_number,
-            body=record.pull_request_body(),
         )
         return record
 
@@ -1097,10 +1173,17 @@ class GitHubSuiteBackend:
             record.source_sha
         ):
             return True
-        return any(
+        if any(
             self._component_version_at_ref(component, default_ref)
             != self._component_version_at_ref(component, record.source_sha)
             for component in SUITE_RELEASE_COMPONENTS
+        ):
+            return True
+        # The suite snapshots are a compare-and-swap set. A standalone release
+        # may update one while the Mac builds run; merging source-derived bytes
+        # over that newer commit would lose state even if all versions match.
+        return self._state_checksums(default_ref) != self._state_checksums(
+            record.source_sha
         )
 
     def merge_pull_request(self, number: int, expected_head_sha: str) -> str:

@@ -29,7 +29,44 @@ class RecordingRunner:
 
 class PullRequestAdapterTest(unittest.TestCase):
     def test_lists_pull_requests_as_json(self) -> None:
-        runner = RecordingRunner(stdout=json.dumps([{"number": 42}]))
+        runner = RecordingRunner(
+            stdout=json.dumps(
+                [
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequests": {
+                                    "nodes": [
+                                        {
+                                            "number": 41,
+                                            "headRefName": "unrelated",
+                                        },
+                                        {
+                                            "number": 42,
+                                            "headRefName": "bot/release-browseros",
+                                        },
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequests": {
+                                    "nodes": [
+                                        {
+                                            "number": 43,
+                                            "headRefName": "bot/release-browseros",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                ]
+            )
+        )
 
         records = list_pull_requests(
             "browseros-ai/BrowserOS",
@@ -38,11 +75,11 @@ class PullRequestAdapterTest(unittest.TestCase):
             runner=runner,
         )
 
-        self.assertEqual(records, [{"number": 42}])
+        self.assertEqual([record["number"] for record in records], [42, 43])
         command = runner.calls[0][0]
-        self.assertEqual(command[:3], ["gh", "pr", "list"])
-        self.assertIn("--head", command)
-        self.assertIn("--json", command)
+        self.assertEqual(command[:3], ["gh", "api", "graphql"])
+        self.assertIn("--paginate", command)
+        self.assertIn("--slurp", command)
 
     def test_creates_and_edits_pull_request_without_changing_git(self) -> None:
         create_runner = RecordingRunner(

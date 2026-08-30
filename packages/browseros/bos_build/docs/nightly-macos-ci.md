@@ -46,20 +46,29 @@ run ID or `GITHUB_RUN_ATTEMPT`, so rerunning the same frozen source recovers the
 same browser version, build offset, component pins, branch, and pull request.
 The deterministic branch is `bot/release-nightly-<12-source-chars>`.
 
-Three Git identities must not be conflated:
+Four Git identities must not be conflated:
 
 | Identity | Meaning | Used for |
 | --- | --- | --- |
 | Source SHA | Frozen `main` commit selected by the dispatch | Artifact provenance and every component build |
-| State SHA | Exact transaction PR head: source plus reserved versions and reconciled snapshots | Browser checkout overlay and exact-head merge validation |
+| Reservation SHA | One child of source containing only the deterministic browser/component version overlay | Both signed browser checkouts |
+| State SHA | Exact transaction PR head: reservation plus reconciled snapshots | Snapshot checksums, gate identity, and exact-head merge validation |
 | Merge SHA | Squash commit that makes the tracked state visible on `main` | Publishing the committed feed files |
 
-The merge SHA is not a browser build source. Other commits can reach `main`
-between dispatch and merge, so the squash tree may include unrelated changes.
-Before merge, builders fetch the deterministic transaction branch and verify it
-resolves to the recorded state SHA. After GitHub deletes that branch, retries
-fetch `refs/pull/<PR_NUMBER>/head` and verify the same SHA. GitHub retains this
-PR-head ref after merge in this repository.
+Neither the mutable state SHA nor the merge SHA is a browser build source.
+Other commits can reach `main` between dispatch and merge, so the squash tree
+may include unrelated changes, and state reconciliation intentionally adds
+tracked feed/appcast bytes that the browser does not need. Builders fetch the
+deterministic transaction branch only to make the reservation reachable,
+verify the reservation is its ancestor, and check out the exact reservation
+SHA. After GitHub deletes that branch, retries fetch
+`refs/pull/<PR_NUMBER>/head`; GitHub retains this PR-head ref after merge in
+this repository.
+
+Suite inspection proves that the reservation has exactly source as its parent,
+contains only the expected version paths with record-derived content, and that
+the live state head descends from it with changes limited to the five suite
+state paths. This proof runs before workflow outputs are exposed to builders.
 
 The transaction PR is created as a draft. The suite will not recover an
 unexpected ready PR during initial reconciliation. Final recovery accepts a
@@ -121,13 +130,23 @@ uv run browseros build \
 
 The profile sets `preset: release` and `resource_mode: published`. Each job gets
 the exact product server, product extension, and onboarding pins from the suite
-record. `BROWSEROS_BUILD_SOURCE_SHA` remains the frozen source SHA even though
-the checkout includes the version/state overlay. The build does not use mutable
-`latest` or live feed resolution to choose component versions.
+record. The checkout is the immutable reservation overlay, while
+`BROWSEROS_BUILD_SOURCE_SHA` remains the frozen source SHA. Reconciled tracked
+state is never a browser input. The build does not use mutable `latest` or live
+feed resolution to choose component versions.
 
-Each successful product build uploads one signed DMG as a 14-day Actions
-artifact. The final publish job replaces a rolling prerelease only after the
-suite state has merged and its exact feed bytes have been published.
+Each successful product build uploads one signed DMG and its checksum-bearing
+release receipt as a 14-day Actions artifact; signing runners do not write R2.
+After both builds and the state merge, the final publisher conditionally creates
+the versioned DMG and receipt in R2. Existing identical bytes and transaction
+bindings are success, while any conflict fails without overwrite. The same job
+then reconciles rolling prereleases.
+
+A new whole-workflow run fails closed once the suite is merged. Recover a
+post-build or post-merge publication failure with GitHub's **Re-run failed
+jobs** action on the original run. That preserves successful build jobs and
+reuses their exact Actions artifacts; do not use **Re-run all jobs** as an
+artifact retry mechanism.
 
 ## Resumable and non-regressing publication
 
@@ -135,6 +154,8 @@ GitHub and R2 effects form a resumable saga, not an atomic transaction:
 
 - An existing effect with the same source identity and checksums is success.
 - A conflicting source binding or checksum is fatal.
+- Versioned browser DMGs and `release.json` use conditional creation and exact
+  byte verification; they are never overwritten by a retry.
 - Live feed publication uses the default downgrade guard; the suite never
   passes `--allow-downgrade`.
 - A rolling tag already carrying a newer embedded browser version is

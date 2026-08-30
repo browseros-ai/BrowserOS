@@ -20,11 +20,18 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    concurrency:
+      # Suite and standalone allocators must observe one serialized component
+      # namespace between discovery and their durable reservation write.
+      group: release-component-allocation
+      cancel-in-progress: false
+      queue: max
     outputs:
       transaction_id: ${{ steps.transaction.outputs.transaction_id }}
       branch: ${{ steps.transaction.outputs.branch }}
       state_ref: ${{ steps.transaction.outputs.state_ref }}
       source_sha: ${{ steps.transaction.outputs.source_sha }}
+      reservation_sha: ${{ steps.transaction.outputs.reservation_sha }}
       state_sha: ${{ steps.transaction.outputs.state_sha }}
       browser_version: ${{ steps.transaction.outputs.browser_version }}
       server_version: ${{ steps.transaction.outputs.server_version }}
@@ -66,6 +73,10 @@ jobs:
             --dispatch-ref "$DEFAULT_BRANCH" \
             --repo "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/release-suite.json"
+          if [ "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" = "merged" ]; then
+            echo "::error::This transaction is already merged. Recover post-build publication with Re-run failed jobs on its original workflow run."
+            exit 1
+          fi
 
   prepare-server:
     name: Prepare exact BrowserOS server
@@ -173,7 +184,7 @@ jobs:
       product: browseros
       state_ref: ${{ needs.transaction.outputs.state_ref }}
       source_sha: ${{ needs.transaction.outputs.source_sha }}
-      state_sha: ${{ needs.transaction.outputs.state_sha }}
+      reservation_sha: ${{ needs.transaction.outputs.reservation_sha }}
       browser_version: ${{ needs.transaction.outputs.browser_version }}
       server_version: ${{ needs.transaction.outputs.server_version }}
       extension_version: ${{ needs.transaction.outputs.agent_version }}
@@ -188,7 +199,7 @@ jobs:
       product: browserclaw
       state_ref: ${{ needs.transaction.outputs.state_ref }}
       source_sha: ${{ needs.transaction.outputs.source_sha }}
-      state_sha: ${{ needs.transaction.outputs.state_sha }}
+      reservation_sha: ${{ needs.transaction.outputs.reservation_sha }}
       browser_version: ${{ needs.transaction.outputs.browser_version }}
       server_version: ${{ needs.transaction.outputs.claw_server_version }}
       extension_version: ${{ needs.transaction.outputs.browserclaw_version }}
@@ -260,6 +271,8 @@ jobs:
     name: Assemble BrowserOS server alpha snapshot
     needs: [transaction, finalize-server]
     uses: ./.github/workflows/publish-server-ota.yml
+    permissions:
+      contents: read
     with:
       product: browseros
       version: ${{ needs.transaction.outputs.server_version }}
@@ -272,6 +285,8 @@ jobs:
     name: Assemble BrowserOS neo server alpha snapshot
     needs: [transaction, finalize-claw-server]
     uses: ./.github/workflows/publish-server-ota.yml
+    permissions:
+      contents: read
     with:
       product: browserclaw
       version: ${{ needs.transaction.outputs.claw_server_version }}
@@ -385,6 +400,13 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      pull-requests: read
+    concurrency:
+      # Standalone and suite feed publishers share mutable alpha aliases. The
+      # monotonic checks are meaningful only while this lock spans read+write.
+      group: release-feed-snapshots
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v7
         with:
@@ -392,6 +414,26 @@ jobs:
           ref: ${{ needs.reconcile-state.outputs.merge_sha }}
 
       - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Recover merged transaction record
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_MERGE_SHA: ${{ needs.reconcile-state.outputs.merge_sha }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          uv run browseros release suite inspect \
+            --mode nightly \
+            --source-sha "$SOURCE_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --dispatch-ref "$DEFAULT_BRANCH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/release-suite.json"
+          test "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" = "merged"
+          test "$(jq -r '.merge_sha' "$RUNNER_TEMP/release-suite.json")" = "$EXPECTED_MERGE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Publish committed family feeds
         working-directory: packages/browseros
@@ -419,6 +461,24 @@ jobs:
         with:
           name: ${{ needs.build-browserclaw.outputs.artifact_name }}
           path: ${{ runner.temp }}/nightly-browserclaw
+
+      - name: Publish immutable signed browser artifacts
+        working-directory: packages/browseros
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release suite publish-browser-artifact \
+            --record "$RUNNER_TEMP/release-suite.json" \
+            --product browseros \
+            --artifact-root "$RUNNER_TEMP/nightly-browseros"
+          uv run browseros release suite publish-browser-artifact \
+            --record "$RUNNER_TEMP/release-suite.json" \
+            --product browserclaw \
+            --artifact-root "$RUNNER_TEMP/nightly-browserclaw"
 
       - name: Reconcile rolling nightly releases
         env:
