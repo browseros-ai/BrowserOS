@@ -117,6 +117,11 @@ class EnvConfig:
         return os.environ.get("PROD_MACOS_NOTARIZATION_TEAM_ID")
 
     @property
+    def macos_team_id(self) -> Optional[str]:
+        """Team ID used to configure Chromium's macOS branding."""
+        return os.environ.get("MACOS_TEAM_ID") or self.macos_notarization_team_id
+
+    @property
     def macos_notarization_password(self) -> Optional[str]:
         """App-specific password for macOS notarization"""
         return os.environ.get("PROD_MACOS_NOTARIZATION_PWD")

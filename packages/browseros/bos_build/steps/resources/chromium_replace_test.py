@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Tests for chromium file replacement against a mock checkout."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest import mock
 
+from . import chromium_replace as chromium_replace_module
 from .chromium_replace import ChromiumReplaceModule, replace_chromium_files_impl
 from ...core.context import Context
 from ...core.step import ValidationError
@@ -97,6 +100,35 @@ class ReplaceChromiumFilesTest(unittest.TestCase):
         self.assertEqual(
             (chromium.src / "chrome" / "common" / "branding.h").read_text(),
             "// product\n",
+        )
+
+    def test_macos_team_id_is_applied_after_product_overlay(self):
+        chromium, root, ctx = self._make("release")
+        chromium.add_file(
+            "chrome/app/theme/chromium/BRANDING",
+            "MAC_BUNDLE_ID=com.browseros.BrowserOS\nMAC_TEAM_ID=\n",
+        )
+        root.add_replacement_file(
+            "chrome/app/theme/chromium/BRANDING.release",
+            "MAC_BUNDLE_ID=com.browseros.BrowserOS\nMAC_TEAM_ID=\n",
+        )
+
+        with (
+            mock.patch.object(chromium_replace_module, "IS_MACOS", return_value=True),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MACOS_TEAM_ID": "",
+                    "PROD_MACOS_NOTARIZATION_TEAM_ID": "TEAM123456",
+                },
+                clear=False,
+            ),
+        ):
+            self.assertTrue(replace_chromium_files_impl(ctx))
+
+        self.assertIn(
+            "MAC_TEAM_ID=TEAM123456\n",
+            (chromium.src / "chrome/app/theme/chromium/BRANDING").read_text(),
         )
 
 

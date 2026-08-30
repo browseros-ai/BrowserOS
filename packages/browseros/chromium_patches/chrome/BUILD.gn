@@ -2,6 +2,18 @@ diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
 index 973a46b2a34bb170e49417f4f76f8b2d899317d8..ce9284adddeaaa706d50356b521d36e6f26b11ee 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
+@@ -731,7 +731,10 @@ if (is_mac) {
+   compile_entitlements("entitlements") {
+     entitlements_templates = [ "app/app-entitlements.plist" ]
+-    if (is_chrome_branded && include_branded_entitlements) {
++    # BrowserOS is unbranded Chromium but still needs the macOS
++    # WebAuthn/Touch ID entitlements.
++    if (defined(browseros_product) ||
++        (is_chrome_branded && include_branded_entitlements)) {
+       # These entitlements are bound to the official Google Chrome signing
+       # certificate and will not necessarily work in any other build.
+       entitlements_templates += [ "app/app-entitlements-chrome.plist" ]
+     }
 @@ -15,7 +15,9 @@ import("//build/config/win/console_app.gni")
  import("//build/config/win/manifest.gni")
  import("//build/private_code_test/private_code_test.gni")

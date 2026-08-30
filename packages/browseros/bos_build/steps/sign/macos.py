@@ -723,6 +723,54 @@ def sign_component(
         return False
 
 
+def find_app_entitlements(
+    root_dir: Path, app_path: Path, ctx: Optional[Context] = None
+) -> Optional[Path]:
+    """Find generated app entitlements before falling back to static templates."""
+    generated_paths: List[Path] = []
+    if ctx:
+        generated_relative = Path("gen") / "chrome" / "app-entitlements.plist"
+        generated_paths.append(ctx.chromium_src / ctx.out_dir / generated_relative)
+
+        # The universal app is merged after the two architecture builds and
+        # therefore has no independent GN output directory of its own.
+        if ctx.architecture == "universal":
+            for arch in ("arm64", "x64"):
+                generated_paths.append(
+                    ctx.chromium_src
+                    / "out"
+                    / f"Default_{ctx.product.id}_{arch}"
+                    / generated_relative
+                )
+
+    for entitlements_path in generated_paths:
+        if entitlements_path.is_file():
+            log_info(f"  Using generated entitlements: {entitlements_path}")
+            return entitlements_path
+
+    entitlements_names = ["app-entitlements.plist", "app-entitlements-chrome.plist"]
+    entitlements_dirs: List[Path] = []
+    if ctx:
+        entitlements_dirs.append(ctx.get_entitlements_dir())
+    else:
+        entitlements_dirs.append(root_dir / "resources" / "entitlements")
+    entitlements_dirs.extend(
+        [
+            root_dir / "entitlements",  # Legacy location
+            app_path.parent.parent.parent / "chrome" / "app",  # Chromium source
+        ]
+    )
+
+    for entitlements_name in entitlements_names:
+        for entitlements_dir in entitlements_dirs:
+            entitlements_path = entitlements_dir / entitlements_name
+            if entitlements_path.is_file():
+                log_info(f"  Using entitlements: {entitlements_path}")
+                return entitlements_path
+
+    return None
+
+
 def sign_all_components(
     app_path: Path,
     certificate_name: str,
@@ -907,33 +955,7 @@ def sign_all_components(
         "certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */"
     )
 
-    # Try multiple locations for app entitlements
-    entitlements = None
-    entitlements_names = ["app-entitlements.plist", "app-entitlements-chrome.plist"]
-    entitlements_dirs = []
-    if ctx:
-        entitlements_dirs.append(ctx.get_entitlements_dir())
-    else:
-        entitlements_dirs.append(join_paths(root_dir, "resources", "entitlements"))
-    # Add fallback locations
-    entitlements_dirs.extend(
-        [
-            join_paths(root_dir, "entitlements"),  # Legacy location
-            join_paths(
-                app_path.parent.parent.parent, "chrome", "app"
-            ),  # Chromium source
-        ]
-    )
-
-    for ent_name in entitlements_names:
-        for ent_dir in entitlements_dirs:
-            ent_path = join_paths(ent_dir, ent_name)
-            if ent_path.exists():
-                entitlements = ent_path
-                log_info(f"  Using entitlements: {entitlements}")
-                break
-        if entitlements:
-            break
+    entitlements = find_app_entitlements(root_dir, app_path, ctx)
 
     cmd = [
         "codesign",

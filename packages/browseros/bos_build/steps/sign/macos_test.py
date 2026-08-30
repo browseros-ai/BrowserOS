@@ -11,12 +11,14 @@ from unittest import mock
 import yaml
 
 from ...core.context import Context
+from ...lib.testing import MockBrowserOSRoot, MockChromium, make_context
 from . import macos as macos_module
 from .macos import (
     SERVER_RESOURCES_SOURCE_REL,
     MacOSSignModule,
     check_environment,
     find_components_to_sign,
+    find_app_entitlements,
     notarize_app,
     sign_component,
     unlock_keychain,
@@ -85,6 +87,47 @@ class MacOSSignDiscoveryTest(unittest.TestCase):
                 executables,
             )
             self.assertNotIn(claw_bin / "not-registered", executables)
+
+
+class AppEntitlementsDiscoveryTest(unittest.TestCase):
+    def test_generated_entitlements_win_over_static_templates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chromium = MockChromium(Path(tmp) / "chromium")
+            root = MockBrowserOSRoot(Path(tmp) / "browseros")
+            ctx = make_context(chromium, root, build_type="release")
+            app_path = ctx.get_app_path()
+
+            _write_file(
+                root.root / "resources" / "entitlements" / "app-entitlements.plist",
+                "static\n",
+            )
+            generated = (
+                chromium.src / ctx.out_dir / "gen" / "chrome" / "app-entitlements.plist"
+            )
+            _write_file(generated, "generated\n")
+
+            self.assertEqual(find_app_entitlements(root.root, app_path, ctx), generated)
+
+    def test_universal_signing_uses_architecture_entitlements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chromium = MockChromium(Path(tmp) / "chromium")
+            root = MockBrowserOSRoot(Path(tmp) / "browseros")
+            ctx = make_context(
+                chromium, root, architecture="universal", build_type="release"
+            )
+            app_path = ctx.get_app_path()
+
+            generated = (
+                chromium.src
+                / "out"
+                / "Default_browseros_arm64"
+                / "gen"
+                / "chrome"
+                / "app-entitlements.plist"
+            )
+            _write_file(generated, "generated-arm64\n")
+
+            self.assertEqual(find_app_entitlements(root.root, app_path, ctx), generated)
 
 
 class VerifyServerResourcesBundleTest(unittest.TestCase):
