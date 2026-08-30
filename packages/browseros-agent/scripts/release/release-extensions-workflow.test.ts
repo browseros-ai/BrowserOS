@@ -259,6 +259,8 @@ describe('release-extensions workflow', () => {
     expect(job).toMatch(
       /permissions:\n\s+contents: write\n\s+pull-requests: write/,
     )
+    expect(job).toMatch(/uses: actions\/checkout@[0-9a-f]{40} # v7/)
+    expect(job).toMatch(/uses: astral-sh\/setup-uv@[0-9a-f]{40} # v8\.3\.2/)
     expect(job).toContain('timeout-minutes: 40')
     expect(job).toContain('fetch-depth: 0')
     expect(job).toContain(
