@@ -25,7 +25,7 @@
     },
     "apps/app": {
       "name": "@browseros/app",
-      "version": "0.0.139",
+      "version": "0.0.140",
       "dependencies": {
         "@ai-sdk/react": "^4.0.0",
         "@browseros/server": "workspace:*",
