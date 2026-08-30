@@ -15,6 +15,7 @@ from bos_build.release.component_release import (
 )
 from bos_build.release.candidate import CandidateRecord
 from bos_build.release.components import AllocationRecord
+from bos_build.release.suite_test import STATE_SHA, suite_record
 
 
 SOURCE_SHA = "1" * 40
@@ -426,6 +427,50 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         self.assertEqual(allocations[0].version, "0.0.128")
         self.assertFalse(allocations[0].public)
         validate_candidate.assert_called_once_with(candidate)
+
+    def test_open_family_suite_is_discovered_as_a_reservation(self) -> None:
+        suite = suite_record(state_sha=STATE_SHA)
+        pull_request = {
+            "body": suite.pull_request_body(),
+            "baseRefName": suite.default_branch,
+            "headRefName": suite.branch,
+            "headRefOid": suite.state_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": suite.pull_request_number,
+            "url": suite.pull_request_url,
+            "state": "OPEN",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp), "browseros-ai/BrowserOS"
+            )
+            with (
+                mock.patch.object(operations, "_git", return_value=""),
+                mock.patch(
+                    "bos_build.release.component_release.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=0, stdout="[]", stderr=""
+                    ),
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_pull_requests",
+                    return_value=[pull_request],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=[],
+                ),
+            ):
+                allocations = operations.allocations("server")
+
+        self.assertEqual(len(allocations), 1)
+        self.assertEqual(allocations[0].kind, "candidate")
+        self.assertEqual(allocations[0].version, suite.component_versions["server"])
+        self.assertEqual(allocations[0].candidate_id, suite.branch)
+        self.assertEqual(allocations[0].source_sha, suite.reservation_sha)
 
 
 if __name__ == "__main__":

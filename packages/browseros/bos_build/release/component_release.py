@@ -18,6 +18,7 @@ from .components import (
 )
 from .github import list_github_releases, list_pull_requests
 from .r2_allocations import discover_r2_component_allocation
+from .suite import suite_record_from_pull_request
 
 
 @dataclass(frozen=True)
@@ -352,22 +353,34 @@ class GitComponentReleaseOperations:
 
         for pull_request in list_pull_requests(self.repo, state="open"):
             record = candidate_record_from_pull_request(pull_request, self.repo)
-            if record is None or component not in record.component_versions:
-                continue
-            GitHubCandidateBackend(
-                self.repo_root,
-                self.repo,
-                record.default_branch,
-                self.remote,
-            ).validate_candidate(record)
+            if record is not None and component in record.component_versions:
+                GitHubCandidateBackend(
+                    self.repo_root,
+                    self.repo,
+                    record.default_branch,
+                    self.remote,
+                ).validate_candidate(record)
+                version = record.component_versions[component]
+                source_sha = record.candidate_sha
+                candidate_id = record.branch
+            else:
+                suite = suite_record_from_pull_request(pull_request, self.repo)
+                if suite is None or component not in suite.component_versions:
+                    continue
+                # Suite reservations are validated by their immutable same-repo
+                # PR marker. Their live state head may advance with snapshots, so
+                # the allocation remains bound to the reservation commit.
+                version = suite.component_versions[component]
+                source_sha = suite.reservation_sha
+                candidate_id = suite.branch
             allocations.append(
                 AllocationRecord(
                     component=component,
-                    version=record.component_versions[component],
+                    version=version,
                     kind="candidate",
-                    source_sha=record.candidate_sha,
-                    candidate_id=record.branch,
-                    reference=record.branch,
+                    source_sha=source_sha,
+                    candidate_id=candidate_id,
+                    reference=candidate_id,
                 )
             )
         return tuple(allocations)

@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Mapping, Protocol, Sequence
 
@@ -115,12 +115,8 @@ class SuiteRecord:
     pull_request_url: str
     state: str = "open"
     merge_sha: str = ""
-    state_checksums: Mapping[str, str] = None  # type: ignore[assignment]
+    state_checksums: Mapping[str, str] = field(default_factory=dict)
     schema: str = _SCHEMA
-
-    def __post_init__(self) -> None:
-        if self.state_checksums is None:
-            object.__setattr__(self, "state_checksums", {})
 
     def to_dict(self) -> dict[str, object]:
         return dict(asdict(self))
@@ -691,22 +687,6 @@ class GitHubSuiteBackend:
         )
         for product in SUITE_PRODUCTS:
             allocations.extend(legacy.discover_allocations(product))
-        for pull_request in list_pull_requests(self.repo, state="open"):
-            record = suite_record_from_pull_request(pull_request, self.repo)
-            if record is None:
-                continue
-            allocations.extend(
-                AllocationRecord(
-                    component=component,
-                    version=version,
-                    kind="candidate",
-                    source_sha=record.reservation_sha,
-                    candidate_id=record.branch,
-                    reference=record.branch,
-                )
-                for component, version in record.component_versions.items()
-                if component in SUITE_RELEASE_COMPONENTS
-            )
         return tuple(allocations)
 
     def discover_browser_allocations(self) -> Sequence[BrowserAllocation]:
