@@ -246,6 +246,9 @@ gh workflow run release-extension-feeds.yml \
 Pins are optional; extensions not set carry over from the live manifests. The
 per-product browser release orchestrators still only stage extension feed
 previews; the standalone extension workflow is the automatic alpha entrypoint.
+With `publish=true`, the feed workflow merges the exact generated snapshots into
+the default branch before it uploads those same files to R2. A failed snapshot
+merge therefore leaves the live feeds untouched.
 
 Locally there are two commands, and the difference matters:
 
@@ -259,7 +262,9 @@ browseros release extensions --channel alpha --set browserclaw=0.1.4 --publish
 ```
 
 `release extensions` regenerates the update manifest, `extensions.json`, and the
-bundled manifest together, so they cannot drift apart.
+bundled manifest together, so they cannot drift apart. Local `--publish` is an
+emergency escape hatch and does not persist `updates/` through git; use the feed
+workflow for normal publication.
 
 ## Servers and nightlies
 
