@@ -953,6 +953,11 @@ class GitHubSuiteBackend:
                     f"Remote suite branch {branch} changed while being inspected"
                 )
             record = self._record_from_reservation_branch(branch, head_sha)
+            # Canonical branches are the write-ahead allocation ledger before a
+            # PR exists, so an off-main source cannot be dismissed as stale: its
+            # versions may already name immutable external effects. Rewriting
+            # main is unsupported; recovery must fail closed until an operator
+            # audits and explicitly removes the invalid reservation.
             source_on_default = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", record.source_sha, default_ref],
                 cwd=self.repo_root,

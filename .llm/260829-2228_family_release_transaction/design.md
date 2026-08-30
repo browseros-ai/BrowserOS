@@ -54,6 +54,7 @@ The publication tail checks out the returned merge commit, conditionally creates
 ## Risks / trade-offs
 
 - Git push and draft-PR creation are separate external writes. The remote transaction branch burns every reserved version during that crash window; later PR-marker and branch views must agree. Tests interrupt immediately after push and cover browser, standalone, and legacy candidate discovery.
+- Main history rewrites are unsupported. A canonical reservation whose source is no longer on main fails allocation closed because its versions may already identify immutable effects; recovery is an explicit, audited removal rather than automatic stale-branch filtering.
 - `state_sha` changes when snapshots are reconciled. The immutable PR marker stores reservation identity, while inspection derives the current state head from GitHub, avoiding an impossible atomic update across Git and PR metadata.
 - GitHub and R2 cannot commit atomically with main. The ordered saga can leave already-valid effects after a later failure, but stable identity and exact-content checks make the next attempt resume safely.
 - The full-release workflows remain product-specific in this slice. Supporting `full` in the record schema avoids baking “nightly” into branch/retry identity, but full workflow migration is intentionally deferred.

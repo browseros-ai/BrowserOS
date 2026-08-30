@@ -2624,6 +2624,8 @@ class ReleaseDocumentationTest(unittest.TestCase):
             "before exposing any mutable feeds",
             "release record and its live tag must resolve to the same source",
             "partial draft resumes",
+            "Rewriting `main` history is unsupported",
+            "audit those effects and explicitly remove",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.nightly)

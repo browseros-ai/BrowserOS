@@ -117,6 +117,12 @@ same branch and reservation; a later source allocates beyond it. Once the PR
 exists, its marker and the branch are duplicate views of one allocation and
 must agree.
 
+Rewriting `main` history is unsupported. If a canonical reservation's frozen
+source is no longer an ancestor of `main`, allocation fails closed instead of
+ignoring that reservation: immutable effects may already use its versions.
+Recovery requires an operator to audit those effects and explicitly remove the
+invalid reservation; discovery never performs that cleanup automatically.
+
 ## Dispatch
 
 Dispatch from `main`:
