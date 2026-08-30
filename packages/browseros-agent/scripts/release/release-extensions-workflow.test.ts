@@ -27,6 +27,15 @@ function section(start: string, end?: string): string {
   return workflow.slice(startIndex, endIndex >= 0 ? endIndex : undefined)
 }
 
+function feedSection(start: string, end?: string): string {
+  const startIndex = feedWorkflow.indexOf(start)
+  expect(startIndex).toBeGreaterThanOrEqual(0)
+  const endIndex = end
+    ? feedWorkflow.indexOf(end, startIndex + start.length)
+    : -1
+  return feedWorkflow.slice(startIndex, endIndex >= 0 ? endIndex : undefined)
+}
+
 describe('release-extensions workflow', () => {
   it('exposes optional allocation and build/finalize outputs', () => {
     const dispatch = section('  workflow_dispatch:', '  workflow_call:')
@@ -218,6 +227,40 @@ describe('release-extensions workflow', () => {
       /concurrency:\n\s+group: release-extensions-and-feeds\n\s+cancel-in-progress: false/,
     )
     expect(section('on:', '\npermissions:')).not.toMatch(/\n {2}push:/)
+  })
+
+  it('persists manual feed snapshots before publishing their exact files', () => {
+    const job = feedSection('  feeds:')
+    const generation = feedSection(
+      '- name: Generate extension update feeds',
+      '- name: Persist and publish extension update feeds',
+    )
+    const publication = feedSection(
+      '- name: Persist and publish extension update feeds',
+    )
+
+    expect(job).toMatch(
+      /permissions:\n\s+contents: write\n\s+pull-requests: write/,
+    )
+    expect(job).toContain('fetch-depth: 0')
+    expect(job).toContain(
+      `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
+    )
+    expect(generation).toContain('browseros release extensions')
+    expect(generation).not.toContain('--publish')
+    expect(generation).toContain('updates/extensions/update-manifest.alpha.xml')
+    expect(generation).toContain('updates/extensions/extensions.alpha.json')
+    expect(generation).toContain('updates/extensions/update-manifest.xml')
+    expect(generation).toContain('updates/extensions/extensions.json')
+    expect(generation).toContain('updates/extensions/bundled-manifest.xml')
+    expect(publication).toContain('if [ "$PUBLISH" != "true" ]')
+    expect(publication).toContain('commit-update-snapshot.sh')
+    expect(publication).toContain('release feeds publish-local')
+    expect(publication).toContain('--publish')
+    expect(publication).toContain('--allow-downgrade')
+    expect(publication.indexOf('commit-update-snapshot.sh')).toBeLessThan(
+      publication.indexOf('release feeds publish-local'),
+    )
   })
 
   it('requires the BrowserClaw PostHog key and keeps the host optional', () => {

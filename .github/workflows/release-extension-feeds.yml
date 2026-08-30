@@ -67,13 +67,17 @@ concurrency:
 jobs:
   feeds:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
@@ -83,25 +87,27 @@ jobs:
         env:
           CHANNEL: ${{ inputs.channel }}
           PINS: ${{ inputs.pins }}
-          PUBLISH: ${{ inputs.publish }}
           ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-        # Inputs are validated and appended to an args array, never a command string.
+        # Rendering is the pre-publication boundary: these exact files cross the
+        # snapshot-PR handoff below, so R2 must remain untouched in this step.
         run: |
           set -euo pipefail
 
           case "$CHANNEL" in
-            alpha|prod|both) ;;
+            alpha) channels=(alpha) ;;
+            prod) channels=(prod) ;;
+            both) channels=(alpha prod) ;;
             *)
               echo "::error::Invalid channel '$CHANNEL'; expected alpha, prod, or both" >&2
               exit 1
               ;;
           esac
 
-          args=(--channel "$CHANNEL")
+          base_args=()
           normalized=${PINS//,/ }
           normalized=${normalized//$'\n'/ }
           normalized=${normalized//$'\r'/ }
@@ -111,32 +117,90 @@ jobs:
               echo "::error::Invalid pin '$pin'; expected name=version (for example, agent=0.0.119)" >&2
               exit 1
             fi
-            args+=(--set "$pin")
+            base_args+=(--set "$pin")
           done
-          if [ "$PUBLISH" = "true" ]; then
-            args+=(--publish)
-          fi
           if [ "$ALLOW_DOWNGRADE" = "true" ]; then
-            args+=(--allow-downgrade)
+            base_args+=(--allow-downgrade)
           fi
 
-          if [ "$CHANNEL" = "both" ]; then
-            for ch in alpha prod; do
-              args[1]="$ch"
-              {
-                echo "### Extension feed command ($ch)"
-                echo '```bash'
-                echo "browseros release extensions ${args[*]}"
-                echo '```'
-              } >> "$GITHUB_STEP_SUMMARY"
-              uv run browseros release extensions "${args[@]}"
-            done
-          else
+          snapshot_paths_file="$RUNNER_TEMP/extension-feed-snapshot-paths"
+          feed_keys_file="$RUNNER_TEMP/extension-feed-keys"
+          : > "$snapshot_paths_file"
+          : > "$feed_keys_file"
+
+          for feed_channel in "${channels[@]}"; do
+            args=(--channel "$feed_channel" "${base_args[@]}")
             {
-              echo "### Extension feed command"
+              echo "### Extension feed command ($feed_channel)"
               echo '```bash'
               echo "browseros release extensions ${args[*]}"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             uv run browseros release extensions "${args[@]}"
+
+            if [ "$feed_channel" = "alpha" ]; then
+              printf '%s\n' \
+                updates/extensions/update-manifest.alpha.xml \
+                updates/extensions/extensions.alpha.json \
+                >> "$snapshot_paths_file"
+              printf '%s\n' \
+                extensions/update-manifest.alpha.xml \
+                extensions/extensions.alpha.json \
+                >> "$feed_keys_file"
+            else
+              printf '%s\n' \
+                updates/extensions/update-manifest.xml \
+                updates/extensions/extensions.json \
+                >> "$snapshot_paths_file"
+              printf '%s\n' \
+                extensions/update-manifest.xml \
+                extensions/extensions.json \
+                >> "$feed_keys_file"
+            fi
+          done
+
+          printf '%s\n' updates/extensions/bundled-manifest.xml \
+            >> "$snapshot_paths_file"
+          printf '%s\n' extensions/bundled-manifest.xml >> "$feed_keys_file"
+
+      - name: Persist and publish extension update feeds
+        env:
+          ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
+          CHANNEL: ${{ inputs.channel }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: ${{ inputs.publish }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # The merged snapshot is the durability barrier. If publication fails
+        # afterward, rerunning is safe; publishing first would recreate drift.
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" != "true" ]; then
+            echo "Dry run complete; snapshots were not committed or published"
+            exit 0
           fi
+
+          mapfile -t snapshot_paths \
+            < "$RUNNER_TEMP/extension-feed-snapshot-paths"
+          mapfile -t feed_keys < "$RUNNER_TEMP/extension-feed-keys"
+          if [ "${#snapshot_paths[@]}" -eq 0 ] || [ "${#feed_keys[@]}" -eq 0 ]; then
+            echo "::error::Generation did not select any extension feed files" >&2
+            exit 1
+          fi
+
+          packages/browseros-agent/scripts/release/commit-update-snapshot.sh \
+            "$DEFAULT_BRANCH" \
+            "chore(release): update extension ${CHANNEL} feeds" \
+            "${snapshot_paths[@]}"
+
+          publish_flags=(--publish)
+          if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+            publish_flags+=(--allow-downgrade)
+          fi
+          uv run --directory packages/browseros browseros \
+            release feeds publish-local \
+            "${feed_keys[@]}" \
+            "${publish_flags[@]}"
