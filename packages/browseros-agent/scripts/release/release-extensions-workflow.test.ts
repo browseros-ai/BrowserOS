@@ -240,9 +240,17 @@ describe('release-extensions workflow', () => {
       'uv run --directory packages/browseros browseros \\',
       `              release extensions "\${args[@]}"`,
     ].join('\n')
+    const commitCommand = [
+      'packages/browseros-agent/scripts/release/commit-update-snapshot.sh \\',
+      '              "$DEFAULT_BRANCH" \\',
+      `              "chore(release): update extension \${feed_channel} feeds" \\`,
+      `              "\${snapshot_paths[@]}"`,
+    ].join('\n')
     const publishCommand = [
       'uv run --directory packages/browseros browseros \\',
       '              release feeds publish-local \\',
+      `              "\${feed_keys[@]}" \\`,
+      `              "\${publish_flags[@]}"`,
     ].join('\n')
     const channelLoopEnd = channelLoop.indexOf(
       '\n          done\n\n          if [ "$PUBLISH"',
@@ -272,16 +280,19 @@ describe('release-extensions workflow', () => {
     expect(transaction).toContain('commit-update-snapshot.sh')
     expect(transaction).toContain('release feeds publish-local')
     expect(transaction).toContain('--publish')
-    expect(transaction).toContain('--allow-downgrade')
     expect(transaction).not.toContain('base_args+=(--publish)')
     expect(transaction).not.toContain('args+=(--publish)')
+    expect(transaction).toContain('base_args+=(--allow-downgrade)')
+    expect(transaction).toContain('publish_flags=(--publish)')
+    expect(transaction).toContain('publish_flags+=(--allow-downgrade)')
     expect(channelLoop.indexOf(renderCommand)).toBeGreaterThanOrEqual(0)
+    expect(channelLoop.indexOf(commitCommand)).toBeGreaterThanOrEqual(0)
     expect(channelLoop.indexOf(publishCommand)).toBeGreaterThanOrEqual(0)
     expect(channelLoopEnd).toBeGreaterThanOrEqual(0)
     expect(channelLoop.indexOf(renderCommand)).toBeLessThan(
-      channelLoop.indexOf('commit-update-snapshot.sh'),
+      channelLoop.indexOf(commitCommand),
     )
-    expect(channelLoop.indexOf('commit-update-snapshot.sh')).toBeLessThan(
+    expect(channelLoop.indexOf(commitCommand)).toBeLessThan(
       channelLoop.indexOf(publishCommand),
     )
     expect(channelLoop.indexOf(publishCommand)).toBeLessThan(channelLoopEnd)
