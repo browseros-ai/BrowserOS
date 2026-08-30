@@ -1093,6 +1093,63 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         )
         self.assertIn("needs.publish_alpha.result == 'success'", reflect["if"])
 
+    def test_reusable_components_have_one_validated_state_owner(self):
+        for workflow_name in (
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-extensions.yml",
+        ):
+            workflow = self.load_workflow(workflow_name)
+            triggers = workflow.get("on", workflow.get(True))
+            call_inputs = triggers["workflow_call"]["inputs"]
+            dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+            validate = self.named_step(
+                workflow, "prepare", "Validate lifecycle inputs"
+            )
+            reflect = workflow["jobs"]["reflect-version"]
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(call_inputs["state_owner"]["default"], "component")
+                self.assertNotIn("state_owner", dispatch_inputs)
+                self.assertEqual(
+                    validate["env"]["STATE_OWNER"],
+                    "${{ inputs.state_owner || 'component' }}",
+                )
+                self.assertIn("component|suite", validate["run"])
+                self.assertIn("inputs.state_owner != 'suite'", reflect["if"])
+
+    def test_server_ota_hands_assembled_snapshot_to_suite_owner(self):
+        workflow = self.load_workflow("publish-server-ota.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        validate = self.named_step(
+            workflow, "validate", "Validate product snapshot ownership"
+        )
+        persist = self.named_step(
+            workflow, "publish", "Persist alpha appcast snapshot"
+        )
+        publish = self.named_step(
+            workflow, "publish", "Publish committed alpha appcast"
+        )
+        upload = self.named_step(
+            workflow, "publish", "Hand alpha appcast to release suite"
+        )
+
+        self.assertEqual(inputs["state_owner"]["default"], "component")
+        self.assertEqual(
+            validate["env"]["STATE_OWNER"],
+            "${{ inputs.state_owner || 'component' }}",
+        )
+        self.assertIn("component|suite", validate["run"])
+        self.assertEqual(persist["if"], "inputs.state_owner != 'suite'")
+        self.assertEqual(publish["if"], "inputs.state_owner != 'suite'")
+        self.assertEqual(upload["if"], "inputs.state_owner == 'suite'")
+        self.assertTrue(str(upload["uses"]).startswith("actions/upload-artifact@"))
+        self.assertEqual(
+            upload["with"]["name"],
+            "server-ota-snapshot-${{ inputs.product }}",
+        )
+        self.assertEqual(upload["with"]["path"], "${{ inputs.snapshot_path }}")
+
     def test_extension_version_is_resolved_once(self):
         workflow = self.load_workflow("release-extensions.yml")
         resolve = self.named_step(workflow, "prepare", "Resolve extension release")[

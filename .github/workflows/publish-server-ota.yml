@@ -15,6 +15,11 @@ on:
       snapshot_path:
         required: true
         type: string
+      state_owner:
+        description: "Tracked release-state owner: component or suite"
+        required: false
+        type: string
+        default: "component"
     secrets:
       R2_ACCOUNT_ID:
         required: true
@@ -61,6 +66,7 @@ jobs:
         env:
           PRODUCT: ${{ inputs.product }}
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          STATE_OWNER: ${{ inputs.state_owner || 'component' }}
         run: |
           set -euo pipefail
           case "$PRODUCT:$SNAPSHOT_PATH" in
@@ -68,6 +74,13 @@ jobs:
             browserclaw:updates/server/appcast-claw-server.alpha.xml) ;;
             *)
               echo "::error::Invalid product snapshot ownership"
+              exit 1
+              ;;
+          esac
+          case "$STATE_OWNER" in
+            component|suite) ;;
+            *)
+              echo "::error::state_owner must be component or suite"
               exit 1
               ;;
           esac
@@ -337,6 +350,7 @@ jobs:
             "${fragments[@]}"
 
       - name: Persist alpha appcast snapshot
+        if: inputs.state_owner != 'suite'
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -348,6 +362,7 @@ jobs:
             "$SNAPSHOT_PATH"
 
       - name: Publish committed alpha appcast
+        if: inputs.state_owner != 'suite'
         working-directory: packages/browseros
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -360,3 +375,14 @@ jobs:
             --channel alpha \
             --product "$PRODUCT" \
             --publish
+
+      # Suite callers need the exact assembled bytes, but the family transaction
+      # is the only process allowed to put them on a Git branch or into live R2.
+      - name: Hand alpha appcast to release suite
+        if: inputs.state_owner == 'suite'
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-ota-snapshot-${{ inputs.product }}
+          path: ${{ inputs.snapshot_path }}
+          if-no-files-found: error
+          overwrite: true

@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      state_owner:
+        description: "Tracked release-state owner: component or suite"
+        required: false
+        type: string
+        default: "component"
       version:
         description: "Explicit release version; required for finalize mode"
         required: false
@@ -112,6 +117,7 @@ jobs:
         env:
           MODE: ${{ inputs.mode || 'build' }}
           REF: ${{ inputs.ref || '' }}
+          STATE_OWNER: ${{ inputs.state_owner || 'component' }}
           VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -119,6 +125,13 @@ jobs:
             echo "::error::mode must be build or finalize"
             exit 1
           fi
+          case "$STATE_OWNER" in
+            component|suite) ;;
+            *)
+              echo "::error::state_owner must be component or suite"
+              exit 1
+              ;;
+          esac
           if [ "$MODE" = "finalize" ] && { [ -z "$VERSION" ] || [ -z "$REF" ]; }; then
             echo "::error::finalize mode requires explicit version and ref inputs"
             exit 1
@@ -884,7 +897,7 @@ jobs:
       - prepare
       - finalize
       - publish-ota
-    if: ${{ always() && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
+    if: ${{ always() && inputs.state_owner != 'suite' && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

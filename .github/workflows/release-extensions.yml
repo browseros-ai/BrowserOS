@@ -69,6 +69,11 @@ on:
         required: false
         type: boolean
         default: false
+      state_owner:
+        description: "Tracked release-state owner: component or suite"
+        required: false
+        type: string
+        default: "component"
       publish_alpha_feed:
         description: "Publish and persist the alpha feed after finalization"
         required: false
@@ -167,6 +172,7 @@ jobs:
           DEFER_FINALIZE: ${{ inputs.defer_finalize }}
           EXTENSION: ${{ inputs.extension }}
           MODE: ${{ inputs.mode || 'build' }}
+          STATE_OWNER: ${{ inputs.state_owner || 'component' }}
           VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -181,6 +187,13 @@ jobs:
             echo "::error::mode must be build or finalize"
             exit 1
           fi
+          case "$STATE_OWNER" in
+            component|suite) ;;
+            *)
+              echo "::error::state_owner must be component or suite"
+              exit 1
+              ;;
+          esac
           if [ "$MODE" = "finalize" ]; then
             if [ -z "$VERSION" ] || [[ ! "$BRANCH" =~ ^[0-9a-fA-F]{40}$ ]]; then
               echo "::error::finalize mode requires an explicit version and the prepared 40-character source SHA in branch"
@@ -754,7 +767,7 @@ jobs:
       - prepare
       - finalize
       - publish_alpha
-    if: ${{ always() && needs.prepare.result == 'success' && needs.finalize.result == 'success' && (needs.publish_alpha.result == 'success' || needs.publish_alpha.result == 'skipped') }}
+    if: ${{ always() && inputs.state_owner != 'suite' && needs.prepare.result == 'success' && needs.finalize.result == 'success' && (needs.publish_alpha.result == 'success' || needs.publish_alpha.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
