@@ -20,20 +20,15 @@ const browserClawWorkflow = readFileSync(
   'utf8',
 )
 
-function section(start: string, end?: string): string {
-  const startIndex = workflow.indexOf(start)
+function section(
+  start: string,
+  end?: string,
+  source: string = workflow,
+): string {
+  const startIndex = source.indexOf(start)
   expect(startIndex).toBeGreaterThanOrEqual(0)
-  const endIndex = end ? workflow.indexOf(end, startIndex + start.length) : -1
-  return workflow.slice(startIndex, endIndex >= 0 ? endIndex : undefined)
-}
-
-function feedSection(start: string, end?: string): string {
-  const startIndex = feedWorkflow.indexOf(start)
-  expect(startIndex).toBeGreaterThanOrEqual(0)
-  const endIndex = end
-    ? feedWorkflow.indexOf(end, startIndex + start.length)
-    : -1
-  return feedWorkflow.slice(startIndex, endIndex >= 0 ? endIndex : undefined)
+  const endIndex = end ? source.indexOf(end, startIndex + start.length) : -1
+  return source.slice(startIndex, endIndex >= 0 ? endIndex : undefined)
 }
 
 describe('release-extensions workflow', () => {
@@ -230,14 +225,17 @@ describe('release-extensions workflow', () => {
   })
 
   it('persists manual feed snapshots before publishing their exact files', () => {
-    const job = feedSection('  feeds:')
-    const generation = feedSection(
-      '- name: Generate extension update feeds',
-      '- name: Persist and publish extension update feeds',
+    const job = section('  feeds:', undefined, feedWorkflow)
+    const transaction = section(
+      '- name: Generate, persist, and publish extension update feeds',
+      undefined,
+      feedWorkflow,
     )
-    const publication = feedSection(
-      '- name: Persist and publish extension update feeds',
+    const channelLoopStart = transaction.indexOf(
+      `for feed_channel in "\${channels[@]}"`,
     )
+    expect(channelLoopStart).toBeGreaterThanOrEqual(0)
+    const channelLoop = transaction.slice(channelLoopStart)
 
     expect(job).toMatch(
       /permissions:\n\s+contents: write\n\s+pull-requests: write/,
@@ -246,20 +244,28 @@ describe('release-extensions workflow', () => {
     expect(job).toContain(
       `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
     )
-    expect(generation).toContain('browseros release extensions')
-    expect(generation).not.toContain('--publish')
-    expect(generation).toContain('updates/extensions/update-manifest.alpha.xml')
-    expect(generation).toContain('updates/extensions/extensions.alpha.json')
-    expect(generation).toContain('updates/extensions/update-manifest.xml')
-    expect(generation).toContain('updates/extensions/extensions.json')
-    expect(generation).toContain('updates/extensions/bundled-manifest.xml')
-    expect(publication).toContain('if [ "$PUBLISH" != "true" ]')
-    expect(publication).toContain('commit-update-snapshot.sh')
-    expect(publication).toContain('release feeds publish-local')
-    expect(publication).toContain('--publish')
-    expect(publication).toContain('--allow-downgrade')
-    expect(publication.indexOf('commit-update-snapshot.sh')).toBeLessThan(
-      publication.indexOf('release feeds publish-local'),
+    expect(transaction).toContain('both) channels=(alpha prod)')
+    expect(transaction).toContain('extensions/update-manifest.alpha.xml')
+    expect(transaction).toContain('extensions/extensions.alpha.json')
+    expect(transaction).toContain('extensions/update-manifest.xml')
+    expect(transaction).toContain('extensions/extensions.json')
+    expect(transaction).toContain('extensions/bundled-manifest.xml')
+    expect(transaction).toContain('snapshot_paths+=("updates/$feed_key")')
+    expect(transaction).not.toContain('updates/extensions/update-manifest')
+    expect(transaction).toContain('if [ "$PUBLISH" != "true" ]')
+    expect(transaction).toContain('continue')
+    expect(transaction).toContain('commit-update-snapshot.sh')
+    expect(transaction).toContain('release feeds publish-local')
+    expect(transaction).toContain('--publish')
+    expect(transaction).toContain('--allow-downgrade')
+    expect(channelLoop.indexOf('release extensions')).toBeLessThan(
+      channelLoop.indexOf('commit-update-snapshot.sh'),
+    )
+    expect(channelLoop.indexOf('commit-update-snapshot.sh')).toBeLessThan(
+      channelLoop.indexOf('release feeds publish-local'),
+    )
+    expect(channelLoop.indexOf('release feeds publish-local')).toBeLessThan(
+      channelLoop.lastIndexOf('done'),
     )
   })
 
