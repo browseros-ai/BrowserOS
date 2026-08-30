@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from . import macos as macos_module
+from ...lib.notarization import NOTARYTOOL_WAIT_TIMEOUT
 from .macos import notarize_dmg, sign_dmg
 
 
@@ -40,7 +41,7 @@ class MacOSPackageKeychainTest(unittest.TestCase):
                 str(keychain),
             )
 
-    def test_notarize_dmg_passes_configured_keychain_to_notarytool(self):
+    def test_notarize_dmg_passes_keychain_and_bounded_wait_to_notarytool(self):
         with tempfile.TemporaryDirectory() as tmp:
             dmg_path = Path(tmp) / "BrowserOS.dmg"
             dmg_path.write_text("dmg")
@@ -69,8 +70,50 @@ class MacOSPackageKeychainTest(unittest.TestCase):
                 submit[submit.index("--keychain") + 1],
                 str(keychain),
             )
+            self.assertEqual(
+                submit[submit.index("--timeout") + 1],
+                NOTARYTOOL_WAIT_TIMEOUT,
+            )
+
+    def test_notarize_dmg_bounds_direct_credentials_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg_path = Path(tmp) / "BrowserOS.dmg"
+            dmg_path.write_text("dmg")
+            calls = []
+            submit_count = 0
+
+            def run(cmd, cwd=None, check=True):
+                nonlocal submit_count
+                calls.append(cmd)
+                if cmd[:3] == ["xcrun", "notarytool", "submit"]:
+                    submit_count += 1
+                    if submit_count == 1:
+                        return _completed(cmd, returncode=1)
+                    return _completed(cmd, stdout="status: Accepted\n")
+                return _completed(cmd)
+
+            with mock.patch.object(macos_module, "run_command", run):
+                self.assertTrue(
+                    notarize_dmg(
+                        dmg_path,
+                        notarization_env={
+                            "apple_id": "release@example.com",
+                            "team_id": "TEAMID",
+                            "notarization_pwd": "app-password",
+                        },
+                    )
+                )
+
+            submit_calls = [
+                call for call in calls if call[:3] == ["xcrun", "notarytool", "submit"]
+            ]
+            self.assertEqual(len(submit_calls), 2)
+            for submit in submit_calls:
+                self.assertEqual(
+                    submit[submit.index("--timeout") + 1],
+                    NOTARYTOOL_WAIT_TIMEOUT,
+                )
 
 
 if __name__ == "__main__":
     unittest.main()
-

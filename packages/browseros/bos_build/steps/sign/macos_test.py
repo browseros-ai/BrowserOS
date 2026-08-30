@@ -11,6 +11,7 @@ from unittest import mock
 import yaml
 
 from ...core.context import Context
+from ...lib.notarization import NOTARYTOOL_WAIT_TIMEOUT
 from . import macos as macos_module
 from .macos import (
     SERVER_RESOURCES_SOURCE_REL,
@@ -398,6 +399,46 @@ class MacOSKeychainSelectionTest(unittest.TestCase):
             for cmd in (store, submit):
                 self.assertIn("--keychain", cmd)
                 self.assertEqual(cmd[cmd.index("--keychain") + 1], str(keychain))
+            self.assertEqual(
+                submit[submit.index("--timeout") + 1],
+                NOTARYTOOL_WAIT_TIMEOUT,
+            )
+
+    def test_notarize_app_bounds_direct_credentials_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_path = Path(tmp) / "BrowserOS.app"
+            app_path.mkdir()
+            calls = []
+
+            def run(cmd, cwd=None, check=True):
+                calls.append(cmd)
+                if cmd[0] == "ditto":
+                    Path(cmd[-1]).write_text("zip")
+                    return _completed(cmd)
+                if cmd[:3] == ["xcrun", "notarytool", "store-credentials"]:
+                    return _completed(cmd, returncode=1)
+                if cmd[:3] == ["xcrun", "notarytool", "submit"]:
+                    return _completed(cmd, stdout="status: Accepted\n")
+                return _completed(cmd)
+
+            env_vars = {
+                "apple_id": "dev@example.com",
+                "team_id": "TEAMID1234",
+                "notarization_pwd": "notary-password",
+                "keychain_profile": "notarytool-profile",
+            }
+
+            with mock.patch.object(macos_module, "run_command", run):
+                self.assertTrue(notarize_app(app_path, Path(tmp), env_vars))
+
+            submit = next(
+                c for c in calls if c[:3] == ["xcrun", "notarytool", "submit"]
+            )
+            self.assertIn("--apple-id", submit)
+            self.assertEqual(
+                submit[submit.index("--timeout") + 1],
+                NOTARYTOOL_WAIT_TIMEOUT,
+            )
 
     def test_notarize_app_requires_profile_storage_for_configured_keychain(self):
         with tempfile.TemporaryDirectory() as tmp:
