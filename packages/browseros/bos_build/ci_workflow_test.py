@@ -1134,6 +1134,10 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertIn("already newer", script)
                 self.assertIn("already matches version, source, and checksum", script)
                 self.assertIn("conflicts at version", script)
+                self.assertIn(
+                    'test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"))',
+                    script,
+                )
                 self.assertIn("copy-object", script)
                 self.assertLess(
                     script.index("already newer"), script.index("copy-object")
