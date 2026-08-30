@@ -121,12 +121,16 @@ version. Successful earlier stages are not rebuilt, and downstream browser
 lanes stay gated until the failed stage succeeds.
 
 For the combined signed nightly, rerun failed jobs in the original run when
-possible. The stable transaction identity is `nightly-<source-sha>`, so a full
-run retry also recovers the same suite record. Before merge, browser jobs build
-the exact transaction-branch head. After merge deletes that branch, they fetch
-`refs/pull/<PR_NUMBER>/head` and verify it still resolves to the recorded state
-SHA. They never rebuild from the squash merge SHA, whose tree may include
-unrelated `main` commits.
+possible. The stable transaction identity is `nightly-<source-sha>`. Browser
+jobs fetch the transaction branch before merge, or
+`refs/pull/<PR_NUMBER>/head` after branch deletion, only to make the proven
+transaction history reachable. They verify that history contains the recorded
+reservation, then always check out `reservation_sha`: the frozen source plus
+the exact version/component overlay, without the later tracked-state commit.
+They never rebuild from the squash merge SHA, whose tree may include unrelated
+`main` commits. A new whole-run invocation that finds the transaction already
+merged fails closed; post-merge recovery must rerun failed jobs so it reuses the
+successful signed artifacts from the original run.
 
 If browser draft creation alone fails, rerun that job in the original run. It
 uses the R2 metadata written by the three native lanes and verifies the same

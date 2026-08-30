@@ -44,6 +44,11 @@ class AllocationRecord:
     candidate_id: str = ""
     reference: str = ""
     reusable: bool = False
+    # A closed/merged suite owns this identity permanently even if another
+    # effect (such as its still-draft GitHub release) would normally authorize
+    # same-source reuse. This explicit veto avoids collapsing lifecycle
+    # ownership into the weaker generic ``reusable`` signal.
+    reuse_forbidden: bool = False
     blocks: bool = True
     public: bool = False
 
@@ -74,9 +79,7 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         id="claw-server-rust",
         display_name="BrowserOS neo server",
         version_scheme="semver",
-        manifest_path=Path(
-            "packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
-        ),
+        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
         lockfile_path=Path("packages/browseros-agent/Cargo.lock"),
         package_name="claw-server-rust",
         tag_prefix="claw-server/v",
@@ -155,7 +158,10 @@ def increment_component_version(component_id: str, version: str) -> str:
     normalized = normalize_component_version(component_id, version)
     parts = [int(part) for part in normalized.split(".")]
     index = 2
-    if parts[index] == 65535 and component_by_id(component_id).version_scheme == "chrome":
+    if (
+        parts[index] == 65535
+        and component_by_id(component_id).version_scheme == "chrome"
+    ):
         raise ValueError(f"Cannot increment component version '{normalized}'")
     parts[index] += 1
     if len(parts) == 4:
@@ -189,14 +195,17 @@ def component_version_from_package(component_id: str, version: str) -> str:
 
 def _version_key(component_id: str, version: str) -> tuple[int, ...]:
     return tuple(
-        int(part) for part in normalize_component_version(component_id, version).split(".")
+        int(part)
+        for part in normalize_component_version(component_id, version).split(".")
     )
 
 
 def _component_allocations(
     component_id: str, allocations: Sequence[AllocationRecord]
 ) -> tuple[AllocationRecord, ...]:
-    records = tuple(record for record in allocations if record.component == component_id)
+    records = tuple(
+        record for record in allocations if record.component == component_id
+    )
     for record in records:
         normalize_component_version(component_id, record.version)
     return records
@@ -280,9 +289,7 @@ def resolve_standalone_version(
                 public_versions,
                 key=lambda value: _version_key(component_id, value),
             )
-            if _version_key(component_id, version) < _version_key(
-                component_id, newest
-            ):
+            if _version_key(component_id, version) < _version_key(component_id, newest):
                 raise ValueError(
                     f"{component_id} version {version} is older than newest "
                     f"public version {newest}"
@@ -299,12 +306,18 @@ def resolve_standalone_version(
         ]
         if not collisions:
             return require_not_older(requested)
+        if any(record.reuse_forbidden for record in collisions):
+            raise ValueError(f"{component_id} version {requested} is already allocated")
         canonical_reference = component_by_id(component_id).tag_prefix + requested
-        if source_sha and all(
-            record.reference == canonical_reference
-            and record.source_sha == source_sha
-            for record in collisions
-        ) and any(record.reusable for record in collisions):
+        if (
+            source_sha
+            and all(
+                record.reference == canonical_reference
+                and record.source_sha == source_sha
+                for record in collisions
+            )
+            and any(record.reusable for record in collisions)
+        ):
             return require_not_older(requested)
         raise ValueError(f"{component_id} version {requested} is already allocated")
 
@@ -318,6 +331,14 @@ def resolve_standalone_version(
         key=lambda version: _version_key(component_id, version),
         reverse=True,
     ):
+        same_version = [
+            record
+            for record in records
+            if normalize_component_version(component_id, record.version)
+            == reusable_version
+        ]
+        if any(record.reuse_forbidden for record in same_version):
+            continue
         resources = [
             record
             for record in records
@@ -378,7 +399,9 @@ def _stamp_bun_lock(path: Path, workspace_path: str, version: str) -> None:
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     marker = f'    "{workspace_path}": {{'
     try:
-        start = next(index for index, line in enumerate(lines) if line.rstrip() == marker)
+        start = next(
+            index for index, line in enumerate(lines) if line.rstrip() == marker
+        )
     except StopIteration as exc:
         raise ValueError(f"Workspace {workspace_path} not found in {path}") from exc
     end = len(lines)
@@ -392,7 +415,9 @@ def _stamp_bun_lock(path: Path, workspace_path: str, version: str) -> None:
         if re.fullmatch(r'\s+"version": "[^"]+",?\r?\n?', lines[index])
     ]
     if len(matches) != 1:
-        raise ValueError(f"Expected one version for workspace {workspace_path} in {path}")
+        raise ValueError(
+            f"Expected one version for workspace {workspace_path} in {path}"
+        )
     index = matches[0]
     newline = "\n" if lines[index].endswith("\n") else ""
     comma = "," if lines[index].rstrip().endswith(",") else ""
@@ -431,7 +456,9 @@ def _replace_package_version(
     return text[: block.start()] + replacement + text[block.end() :]
 
 
-def stamp_component(repo_root: Path, component_id: str, version: str) -> tuple[Path, Path]:
+def stamp_component(
+    repo_root: Path, component_id: str, version: str
+) -> tuple[Path, Path]:
     """Stamp a component manifest and its matching lockfile entry."""
     spec = component_by_id(component_id)
     normalized = normalize_component_version(component_id, version)

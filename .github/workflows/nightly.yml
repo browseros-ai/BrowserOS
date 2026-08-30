@@ -73,8 +73,8 @@ jobs:
             --dispatch-ref "$DEFAULT_BRANCH" \
             --repo "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/release-suite.json"
-          if [ "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" = "merged" ]; then
-            echo "::error::This transaction is already merged. Recover post-build publication with Re-run failed jobs on its original workflow run."
+          if [ "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" != "open" ]; then
+            echo "::error::Only an open transaction can start builds. Recover post-build publication with Re-run failed jobs on its original workflow run."
             exit 1
           fi
 
@@ -435,23 +435,6 @@ jobs:
           test "$(jq -r '.merge_sha' "$RUNNER_TEMP/release-suite.json")" = "$EXPECTED_MERGE_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
-      - name: Publish committed family feeds
-        working-directory: packages/browseros
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          uv run browseros release feeds publish-local \
-            server/appcast-server.alpha.xml \
-            server/appcast-claw-server.alpha.xml \
-            extensions/update-manifest.alpha.xml \
-            extensions/extensions.alpha.json \
-            extensions/bundled-manifest.xml \
-            --publish
-
       - uses: actions/download-artifact@v7
         with:
           name: ${{ needs.build-browseros.outputs.artifact_name }}
@@ -480,123 +463,48 @@ jobs:
             --product browserclaw \
             --artifact-root "$RUNNER_TEMP/nightly-browserclaw"
 
+      - name: Publish committed family feeds
+        working-directory: packages/browseros
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release feeds publish-local \
+            server/appcast-server.alpha.xml \
+            server/appcast-claw-server.alpha.xml \
+            extensions/update-manifest.alpha.xml \
+            extensions/extensions.alpha.json \
+            extensions/bundled-manifest.xml \
+            --publish
+
       - name: Reconcile rolling nightly releases
+        working-directory: packages/browseros
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
           VERSION: ${{ needs.transaction.outputs.browser_version }}
         run: |
           set -euo pipefail
-
-          reconcile_release() {
-            local tag="$1" title="$2" asset_root="$3"
-            local status body current_target current_version newest_version
-            local remote_assets local_assets
-            local -a files
-            mapfile -t files < <(find "$asset_root" -type f -name '*.dmg' -print | sort)
-            if [ "${#files[@]}" -ne 1 ]; then
-              echo "::error::$tag expected exactly one DMG, found ${#files[@]}"
-              return 1
-            fi
-
-            response_file="$(mktemp)"
-            if gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$response_file" 2>&1; then
-              status="$(head -n 1 "$response_file" | awk '{print $2}')"
-            else
-              status="$(head -n 1 "$response_file" | awk '{print $2}')"
-            fi
-            case "$status" in
-              200)
-                body="$(awk 'found {print} /^\r?$/ {found=1}' "$response_file")"
-                current_target="$(jq -er '.target_commitish' <<< "$body")"
-                if [ "$current_target" = "$SOURCE_SHA" ]; then
-                  # GitHub exposes the immutable asset digests through this API.
-                  # A retry is complete only when both identity and bytes agree.
-                  remote_assets="$(jq -c '[.assets[] | {name, digest}] | sort_by(.name)' <<< "$body")"
-                  local_assets="$(
-                    for file in "${files[@]}"; do
-                      # shellcheck disable=SC2016
-                      jq -cn \
-                        --arg name "$(basename "$file")" \
-                        --arg digest "sha256:$(sha256sum "$file" | awk '{print $1}')" \
-                        '{name: $name, digest: $digest}'
-                    done | jq -sc 'sort_by(.name)'
-                  )"
-                  if [ "$remote_assets" = "$local_assets" ]; then
-                    echo "$tag already matches source and checksums"
-                    return 0
-                  fi
-                  echo "::error::$tag same source has conflicting assets"
-                  return 1
-                fi
-
-                # Rolling tags are mutable, but release transactions are not.
-                # A stale saga may resume after a newer nightly has published;
-                # compare the embedded allocation before considering deletion.
-                # shellcheck disable=SC2016
-                current_version="$(
-                  jq -r '.body // ""' <<< "$body" \
-                    | sed -n 's/^Browser version: `\([^`]*\)`$/\1/p' \
-                    | head -n 1
-                )"
-                if [ -z "$current_version" ]; then
-                  # Releases created before suite transactions used this title
-                  # sentence as their only machine-readable version identity.
-                  current_version="$(
-                    jq -r '.body // ""' <<< "$body" \
-                      | sed -n 's/^Automated signed .* macOS arm64 nightly for v\([^ ]*\)\.$/\1/p' \
-                      | head -n 1
-                  )"
-                fi
-                if ! [[ "$current_version" =~ ^[0-9]+(\.[0-9]+){2,3}$ ]]; then
-                  echo "::error::$tag has no trustworthy browser version; refusing to move it"
-                  return 1
-                fi
-                if [ "$current_version" = "$VERSION" ]; then
-                  echo "::error::$tag same version belongs to a different source"
-                  return 1
-                fi
-                newest_version="$(printf '%s\n%s\n' "$VERSION" "$current_version" | sort -V | tail -n 1)"
-                if [ "$newest_version" = "$current_version" ]; then
-                  echo "$tag is superseded by newer version $current_version; leaving it unchanged"
-                  return 0
-                fi
-                if ! git merge-base --is-ancestor "$current_target" "$SOURCE_SHA"; then
-                  echo "::error::$tag target is not an ancestor of this transaction; refusing to move it"
-                  return 1
-                fi
-                gh release delete "$tag" --cleanup-tag --yes
-                ;;
-              404) ;;
-              *)
-                echo "::error::Could not inspect $tag (HTTP ${status:-unknown})"
-                cat "$response_file" >&2
-                return 1
-                ;;
-            esac
-
-            notes_file="$(mktemp)"
-            # Backticks are release-note formatting, not command substitution.
-            # shellcheck disable=SC2016
-            printf 'Automated signed family macOS arm64 nightly for v%s.\n\nBrowser version: `%s`\nTransaction source: `%s`\n' \
-              "$VERSION" "$VERSION" "$SOURCE_SHA" > "$notes_file"
-            gh release create "$tag" \
-              --prerelease \
-              --latest=false \
-              --target "$SOURCE_SHA" \
-              --title "$title" \
-              --notes-file "$notes_file" \
-              "${files[@]}"
-          }
-
-          reconcile_release \
-            nightly-browseros \
-            "BrowserOS Nightly (signed macOS arm64)" \
-            "$RUNNER_TEMP/nightly-browseros"
-          reconcile_release \
-            nightly-browserclaw \
-            "BrowserOS neo Nightly (signed macOS arm64)" \
-            "$RUNNER_TEMP/nightly-browserclaw"
+          # Each command exposes draft creation, upload, tag cleanup, and final
+          # publication as a read-after-write saga. A surviving tag or partial
+          # draft is therefore classified before the retry performs any write.
+          uv run browseros release suite reconcile-rolling-release \
+            --tag nightly-browseros \
+            --title "BrowserOS Nightly (signed macOS arm64)" \
+            --source-sha "$SOURCE_SHA" \
+            --browser-version "$VERSION" \
+            --artifact-root "$RUNNER_TEMP/nightly-browseros" \
+            --repo "$GITHUB_REPOSITORY"
+          uv run browseros release suite reconcile-rolling-release \
+            --tag nightly-browserclaw \
+            --title "BrowserOS neo Nightly (signed macOS arm64)" \
+            --source-sha "$SOURCE_SHA" \
+            --browser-version "$VERSION" \
+            --artifact-root "$RUNNER_TEMP/nightly-browserclaw" \
+            --repo "$GITHUB_REPOSITORY"
 
   notify-failure:
     name: Notify family nightly failure

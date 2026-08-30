@@ -43,6 +43,7 @@ _SCHEMA = "browseros-release-suite-v1"
 _GATE_SCHEMA = "browseros-release-suite-gate-v1"
 _MARKER_RE = re.compile(r"<!-- browseros-release-suite-v1\n(.*?)\n-->", re.DOTALL)
 _SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+_TRANSACTION_BRANCH_RE = re.compile(r"^bot/release-(nightly|full)-([0-9a-f]{12})$")
 _BROWSER_VERSION_RE = re.compile(
     r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?"
 )
@@ -374,6 +375,95 @@ def _validate_request(request: SuiteRequest) -> None:
         )
 
 
+def merge_suite_component_allocations(
+    allocations: Sequence[AllocationRecord],
+    records: Sequence[SuiteRecord],
+    components: Sequence[str],
+) -> tuple[AllocationRecord, ...]:
+    """Merge validated branch-ledger reservations into component allocation state.
+
+    A suite reservation is visible first through its remote branch and later
+    through both that branch and its PR marker. Keeping conversion and dedupe
+    here makes every candidate/standalone allocator enforce one shared identity
+    rule instead of independently translating the aggregate.
+    """
+    component_ids = tuple(sorted(set(components)))
+    for component in component_ids:
+        component_by_id(component)
+
+    combined = list(allocations)
+    pr_candidate_keys: set[tuple[str, str]] = set()
+    for allocation in combined:
+        if allocation.kind != "candidate":
+            continue
+        key = (allocation.component, allocation.candidate_id)
+        if key in pr_candidate_keys:
+            # Canonical PR history is the durable lifecycle ledger. Two PR
+            # markers for one suite branch are corruption, not duplicate views:
+            # accepting the newest could hide an older closed ownership veto.
+            raise ValueError(
+                "Multiple pull requests contain the same suite component allocation"
+            )
+        pr_candidate_keys.add(key)
+
+    for record in records:
+        if record.pull_request_number != 0 or record.pull_request_url:
+            raise ValueError(
+                "Suite branch ledger record unexpectedly contains a pull request"
+            )
+        reusable = False
+        for component in component_ids:
+            if component not in record.component_versions:
+                continue
+            version = record.component_versions[component]
+            combined.append(
+                AllocationRecord(
+                    component=component,
+                    version=version,
+                    kind="candidate",
+                    source_sha=record.source_sha,
+                    candidate_id=record.branch,
+                    reference=component_by_id(component).tag_prefix + version,
+                    # The suite's open PR authorizes its own component
+                    # finalizers to reuse the reservation. A pre-PR branch or
+                    # closed/merged PR remains collision history only.
+                    reusable=reusable,
+                    reuse_forbidden=not reusable,
+                )
+            )
+
+    deduplicated: list[AllocationRecord] = []
+    candidate_indexes: dict[tuple[str, str], int] = {}
+    for allocation in combined:
+        if allocation.kind != "candidate":
+            deduplicated.append(allocation)
+            continue
+        key = (allocation.component, allocation.candidate_id)
+        previous_index = candidate_indexes.get(key)
+        if previous_index is None:
+            candidate_indexes[key] = len(deduplicated)
+            deduplicated.append(allocation)
+        else:
+            previous = deduplicated[previous_index]
+            # The only tolerated duplicate is the independently reconstructed
+            # branch view. The pre-PR view is deliberately non-reusable; once
+            # one open PR exists, its otherwise identical view carries
+            # authorization for suite component finalization. No identity field
+            # may differ.
+            if (
+                replace(
+                    allocation,
+                    reusable=previous.reusable,
+                    reuse_forbidden=previous.reuse_forbidden,
+                )
+                != previous
+            ):
+                raise ValueError(
+                    "Suite branch and pull request contain conflicting component allocations"
+                )
+    return tuple(deduplicated)
+
+
 def _allocate_browser(
     transaction: str,
     committed_version: str,
@@ -480,6 +570,17 @@ def reconcile_transaction(
             build_offset,
         )
     _validate_record(existing, request)
+    if state_root is None and existing.state != "open":
+        # Closed suite PRs remain durable allocation records, but they are not
+        # executable release transactions. Merged records are inspectable by
+        # publication recovery; neither may emit fresh pre-build outputs.
+        raise ValueError(
+            f"Initial suite reconciliation requires an open pull request, got {existing.state}"
+        )
+    if state_root is not None and existing.state not in ("open", "merged"):
+        raise ValueError(
+            f"Final suite reconciliation requires an open or merged pull request, got {existing.state}"
+        )
     if existing.state == "open" and not existing.draft:
         if state_root is None:
             raise ValueError(
@@ -651,6 +752,29 @@ def suite_record_from_pull_request(
         return None
 
 
+def suite_allocation_record_from_pull_request(
+    pull_request: Mapping[str, object], repo: str
+) -> SuiteRecord | None:
+    """Return a canonical suite allocation or fail on corrupted ledger state."""
+    repository = pull_request.get("headRepository")
+    branch = pull_request.get("headRefName")
+    canonical = (
+        pull_request.get("isCrossRepository") is False
+        and isinstance(repository, dict)
+        and str(repository.get("nameWithOwner", "")).lower() == repo.lower()
+        and isinstance(branch, str)
+        and _TRANSACTION_BRANCH_RE.fullmatch(branch) is not None
+    )
+    record = suite_record_from_pull_request(pull_request, repo)
+    if canonical and record is None:
+        # Closed PRs are a durable ledger after their source branch is deleted.
+        # Silently ignoring a malformed marker would release every reservation.
+        raise ValueError(
+            f"Canonical suite pull request {branch} has invalid allocation metadata"
+        )
+    return record
+
+
 class GitHubSuiteBackend:
     """Git/GitHub persistence for the family transaction aggregate.
 
@@ -777,24 +901,159 @@ class GitHubSuiteBackend:
             allocations.extend(legacy.discover_allocations(product))
         return tuple(allocations)
 
+    def discover_branch_reservations(self) -> Sequence[SuiteRecord]:
+        """Recover reservations persisted by the branch push before PR creation.
+
+        Git push and draft-PR creation are separate external writes. The remote
+        branch is therefore the allocation ledger for that crash window; its
+        reservation commit is accepted only after reconstructing the exact
+        source overlay and validating every later commit as suite-owned state.
+        """
+        output = self._git(
+            "ls-remote",
+            "--heads",
+            self.remote,
+            "refs/heads/bot/release-nightly-*",
+            "refs/heads/bot/release-full-*",
+        )
+        advertised: dict[str, str] = {}
+        for line in output.splitlines():
+            fields = line.split()
+            if len(fields) != 2 or not fields[1].startswith("refs/heads/"):
+                raise ValueError("Remote suite branch returned invalid metadata")
+            branch = fields[1].removeprefix("refs/heads/")
+            if _TRANSACTION_BRANCH_RE.fullmatch(branch) is None:
+                continue
+            _validate_sha(fields[0], "remote suite SHA")
+            if branch in advertised:
+                raise ValueError(
+                    f"Remote suite branch {branch} resolved more than once"
+                )
+            advertised[branch] = fields[0].lower()
+
+        records = []
+        if advertised:
+            self._git(
+                "fetch",
+                "--no-tags",
+                self.remote,
+                f"refs/heads/{self.default_branch}:refs/remotes/{self.remote}/{self.default_branch}",
+            )
+        default_ref = f"refs/remotes/{self.remote}/{self.default_branch}"
+        for branch, advertised_sha in sorted(advertised.items()):
+            self._git(
+                "fetch",
+                "--no-tags",
+                self.remote,
+                f"refs/heads/{branch}",
+            )
+            head_sha = self._git("rev-parse", "FETCH_HEAD")
+            if head_sha != advertised_sha:
+                raise ValueError(
+                    f"Remote suite branch {branch} changed while being inspected"
+                )
+            record = self._record_from_reservation_branch(branch, head_sha)
+            source_on_default = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", record.source_sha, default_ref],
+                cwd=self.repo_root,
+                capture_output=True,
+            )
+            if source_on_default.returncode != 0:
+                raise ValueError(
+                    f"Remote suite branch {branch} source is not on {self.default_branch}"
+                )
+            records.append(record)
+        return tuple(records)
+
+    def _record_from_reservation_branch(
+        self, branch: str, head_sha: str
+    ) -> SuiteRecord:
+        match = _TRANSACTION_BRANCH_RE.fullmatch(branch)
+        if match is None:
+            raise ValueError(f"Non-canonical suite branch: {branch}")
+        mode = match.group(1)
+
+        # Reconciled branches advance beyond the reservation. Walk their
+        # first-parent history until the branch identity and the commit parent
+        # agree; that commit remains the immutable source overlay.
+        reservation_sha = ""
+        source_sha = ""
+        for candidate_sha in self._git(
+            "rev-list", "--first-parent", head_sha
+        ).splitlines():
+            parents = self._git(
+                "rev-list", "--parents", "-n", "1", candidate_sha
+            ).split()
+            if len(parents) != 2:
+                continue
+            candidate_source = parents[1]
+            if transaction_branch(mode, candidate_source) == branch:
+                reservation_sha = candidate_sha
+                source_sha = candidate_source
+                break
+        if not reservation_sha:
+            raise ValueError(
+                f"Remote suite branch {branch} has no canonical reservation commit"
+            )
+
+        offset_text = self._git(
+            "show",
+            f"{reservation_sha}:packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
+        )
+        if not offset_text.isdigit():
+            raise ValueError("Suite reservation build offset is invalid")
+        record = SuiteRecord(
+            transaction_id=transaction_id(mode, source_sha),
+            mode=mode,
+            source_sha=source_sha,
+            reservation_sha=reservation_sha,
+            state_sha=head_sha,
+            default_branch=self.default_branch,
+            branch=branch,
+            browser_version=self._browser_version_at_ref(reservation_sha),
+            build_offset=int(offset_text),
+            component_versions={
+                component: self._component_version_at_ref(component, reservation_sha)
+                for component in SUITE_COMPONENTS
+            },
+            pull_request_number=0,
+            pull_request_url="",
+            state_checksums=self._state_checksums(head_sha),
+        )
+        _validate_record(record)
+        self._validate_reservation_history(record)
+        self._validate_state_history(record, head_sha)
+        return record
+
     def discover_browser_allocations(self) -> Sequence[BrowserAllocation]:
-        allocations = []
+        allocations: dict[str, BrowserAllocation] = {}
+        for record in self.discover_branch_reservations():
+            allocation = BrowserAllocation(
+                record.transaction_id,
+                record.browser_version,
+                record.build_offset,
+            )
+            allocations[record.transaction_id] = allocation
         # A suite PR is the durable browser-version reservation even if a human
         # closes it after immutable artifacts have escaped. Scanning all PR
         # states prevents that closed transaction from silently releasing its
         # version back to a different source; merged versions are harmlessly
         # redundant with the version already visible on the default branch.
         for pull_request in list_pull_requests(self.repo, state="all"):
-            record = suite_record_from_pull_request(pull_request, self.repo)
+            record = suite_allocation_record_from_pull_request(pull_request, self.repo)
             if record is not None:
-                allocations.append(
-                    BrowserAllocation(
-                        record.transaction_id,
-                        record.browser_version,
-                        record.build_offset,
-                    )
+                allocation = BrowserAllocation(
+                    record.transaction_id,
+                    record.browser_version,
+                    record.build_offset,
                 )
-        return tuple(allocations)
+                previous = allocations.get(record.transaction_id)
+                if previous is not None and previous != allocation:
+                    raise ValueError(
+                        "Suite branch and pull request contain conflicting browser allocations"
+                    )
+                allocations[record.transaction_id] = allocation
+        return tuple(allocations.values())
 
     def read_committed_versions(self) -> Mapping[str, str]:
         return {

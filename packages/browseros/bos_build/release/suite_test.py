@@ -14,11 +14,13 @@ from bos_build.release.suite import (
     BrowserAllocation,
     GitHubSuiteBackend,
     SUITE_COMPONENTS,
+    SUITE_RELEASE_COMPONENTS,
     SUITE_STATE_PATHS,
     SuitePullRequest,
     SuiteRecord,
     SuiteRequest,
     inspect_transaction,
+    merge_suite_component_allocations,
     merge_transaction,
     reconcile_transaction,
     suite_record_from_pull_request,
@@ -152,6 +154,9 @@ class FakeBackend:
 
 
 class SuiteIdentityTest(unittest.TestCase):
+    def test_summary_prints_browser_version_once(self) -> None:
+        self.assertEqual(suite_record().summary().count("- Browser version:"), 1)
+
     def test_identity_uses_mode_and_source_but_not_run_attempt(self) -> None:
         self.assertEqual(transaction_id("nightly", SOURCE_SHA), f"nightly-{SOURCE_SHA}")
         self.assertEqual(transaction_branch("nightly", SOURCE_SHA), BRANCH)
@@ -225,10 +230,15 @@ class SuiteIdentityTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             backend = GitHubSuiteBackend(Path(tmp), "browseros-ai/BrowserOS", "main")
-            with mock.patch(
-                "bos_build.release.suite.list_pull_requests",
-                return_value=[closed_pull_request],
-            ) as list_prs:
+            with (
+                mock.patch.object(
+                    backend, "discover_branch_reservations", return_value=()
+                ),
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests",
+                    return_value=[closed_pull_request],
+                ) as list_prs,
+            ):
                 allocations = backend.discover_browser_allocations()
 
         list_prs.assert_called_once_with("browseros-ai/BrowserOS", state="all")
@@ -242,6 +252,103 @@ class SuiteIdentityTest(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_malformed_closed_suite_pr_fails_instead_of_releasing_version(self) -> None:
+        record = suite_record(state="closed")
+        malformed = {
+            "body": "closed suite marker was corrupted",
+            "baseRefName": record.default_branch,
+            "headRefName": record.branch,
+            "headRefOid": record.state_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": record.pull_request_number,
+            "url": record.pull_request_url,
+            "state": "CLOSED",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = GitHubSuiteBackend(Path(tmp), "browseros-ai/BrowserOS", "main")
+            with (
+                mock.patch.object(
+                    backend, "discover_branch_reservations", return_value=()
+                ),
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests",
+                    return_value=[malformed],
+                ),
+                self.assertRaisesRegex(ValueError, "invalid allocation metadata"),
+            ):
+                backend.discover_browser_allocations()
+
+    def test_branch_and_pr_component_allocations_must_be_identical(self) -> None:
+        record = suite_record()
+        allocation = AllocationRecord(
+            component="server",
+            version=record.component_versions["server"],
+            kind="candidate",
+            source_sha=record.source_sha,
+            candidate_id=record.branch,
+            reference="agent-server/v" + record.component_versions["server"],
+            reusable=True,
+        )
+
+        self.assertEqual(
+            merge_suite_component_allocations(
+                (allocation,),
+                (replace(record, pull_request_number=0, pull_request_url=""),),
+                ("server",),
+            ),
+            (allocation,),
+        )
+        closed_allocation = replace(allocation, reusable=False)
+        self.assertEqual(
+            merge_suite_component_allocations(
+                (closed_allocation,),
+                (
+                    replace(
+                        record,
+                        pull_request_number=0,
+                        pull_request_url="",
+                        state="open",
+                    ),
+                ),
+                ("server",),
+            ),
+            (closed_allocation,),
+        )
+        with self.assertRaisesRegex(ValueError, "conflicting component allocations"):
+            merge_suite_component_allocations(
+                (replace(allocation, source_sha="9" * 40),),
+                (replace(record, pull_request_number=0, pull_request_url=""),),
+                ("server",),
+            )
+
+    def test_open_and_closed_prs_for_one_branch_cannot_mask_reuse_veto(self) -> None:
+        draft = AllocationRecord(
+            component="server",
+            version="0.0.147",
+            kind="release",
+            source_sha=SOURCE_SHA,
+            reference="agent-server/v0.0.147",
+            reusable=True,
+        )
+        open_pr = AllocationRecord(
+            component="server",
+            version="0.0.147",
+            kind="candidate",
+            source_sha=SOURCE_SHA,
+            candidate_id=suite_record().branch,
+            reference="agent-server/v0.0.147",
+            reusable=True,
+        )
+        closed_pr = replace(open_pr, reusable=False, reuse_forbidden=True)
+
+        with self.assertRaisesRegex(ValueError, "Multiple pull requests"):
+            merge_suite_component_allocations(
+                (draft, open_pr, closed_pr), (), ("server",)
+            )
 
 
 class SuiteReconcileTest(unittest.TestCase):
@@ -310,6 +417,15 @@ class SuiteReconcileTest(unittest.TestCase):
 
         self.assertEqual(record, self.backend.existing)
         self.assertEqual(self.backend.created, [])
+
+    def test_closed_transaction_is_allocation_only_and_cannot_restart(self) -> None:
+        self.backend.existing = suite_record(state="closed")
+
+        with self.assertRaisesRegex(ValueError, "requires an open pull request"):
+            reconcile_transaction(self.request, self.backend)
+
+        self.assertEqual(self.backend.created, [])
+        self.assertEqual(self.backend.reconciled, [])
 
     def test_ready_reservation_cannot_restart_before_final_reconcile(self) -> None:
         self.backend.existing = replace(suite_record(), draft=False)
@@ -604,6 +720,149 @@ class GitHubSuiteBackendTest(unittest.TestCase):
         self._git(repo, "commit", "-m", "source")
         self._git(repo, "push", "-u", "origin", "main")
         return repo, remote, self._git(repo, "rev-parse", "HEAD")
+
+    def test_branch_push_before_pr_creation_burns_every_reserved_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, remote, source_sha = self._repository(Path(temp_dir))
+            backend = GitHubSuiteBackend(repo, "owner/repo", "main")
+            committed = backend.read_committed_versions()
+            versions = {
+                component: (
+                    committed[component]
+                    if component == "claw-onboard"
+                    else increment_component_version(component, committed[component])
+                )
+                for component in SUITE_COMPONENTS
+            }
+            major, minor, build = backend.read_browser_version().split(".")[:3]
+            browser_version = f"{major}.{minor}.{int(build) + 1}"
+            offset = backend.read_build_offset() + 1
+            request = SuiteRequest("nightly", source_sha, "main", "main")
+
+            # The branch push succeeds before the draft-PR API call. Simulate a
+            # runner death at exactly that second external write.
+            with (
+                mock.patch(
+                    "bos_build.release.suite.create_pull_request",
+                    side_effect=RuntimeError("runner stopped before PR creation"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "before PR creation"),
+            ):
+                backend.create_transaction(
+                    request,
+                    transaction_branch("nightly", source_sha),
+                    versions,
+                    browser_version,
+                    offset,
+                )
+
+            branch = transaction_branch("nightly", source_sha)
+            self.assertTrue(
+                self._git(remote, "show-ref", "--verify", f"refs/heads/{branch}")
+            )
+            with (
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests", return_value=[]
+                ),
+                mock.patch(
+                    "bos_build.release.candidate.list_pull_requests", return_value=[]
+                ),
+                mock.patch(
+                    "bos_build.release.candidate.list_github_releases",
+                    return_value=[],
+                ),
+            ):
+                browser_allocations = backend.discover_browser_allocations()
+                component_allocations = backend.discover_allocations()
+
+            self.assertEqual(
+                browser_allocations,
+                (
+                    BrowserAllocation(
+                        transaction_id=transaction_id("nightly", source_sha),
+                        browser_version=browser_version,
+                        build_offset=offset,
+                    ),
+                ),
+            )
+            self.assertEqual(
+                {
+                    (item.component, item.version, item.candidate_id)
+                    for item in component_allocations
+                },
+                {
+                    (component, versions[component], branch)
+                    for component in SUITE_RELEASE_COMPONENTS
+                },
+            )
+
+            # A later frozen source must allocate strictly beyond the orphan,
+            # even though GitHub still has no PR marker for the first branch.
+            note = repo / "later-source.txt"
+            note.write_text("later source\n", encoding="utf-8")
+            self._git(repo, "add", note.name)
+            self._git(repo, "commit", "-m", "later source")
+            self._git(repo, "push", "origin", "main")
+            later_source = self._git(repo, "rev-parse", "HEAD")
+            later_request = SuiteRequest("nightly", later_source, "main", "main")
+            with (
+                mock.patch(
+                    "bos_build.release.suite.list_pull_requests", return_value=[]
+                ),
+                mock.patch(
+                    "bos_build.release.candidate.list_pull_requests", return_value=[]
+                ),
+                mock.patch(
+                    "bos_build.release.candidate.list_github_releases",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "bos_build.release.suite.create_pull_request",
+                    return_value="https://github.com/owner/repo/pull/78",
+                ),
+            ):
+                later = reconcile_transaction(later_request, backend)
+
+            self.assertNotEqual(later.browser_version, browser_version)
+            self.assertGreater(later.build_offset, offset)
+            for component in SUITE_RELEASE_COMPONENTS:
+                self.assertNotEqual(
+                    later.component_versions[component], versions[component]
+                )
+
+    def test_orphan_reservation_source_must_be_on_default_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, _, _ = self._repository(Path(temp_dir))
+            off_main = repo / "off-main.txt"
+            off_main.write_text("not on the remote default branch\n", encoding="utf-8")
+            self._git(repo, "add", off_main.name)
+            self._git(repo, "commit", "-m", "off-main source")
+            source_sha = self._git(repo, "rev-parse", "HEAD")
+            backend = GitHubSuiteBackend(repo, "owner/repo", "main")
+            committed = backend.read_committed_versions()
+            versions = {
+                component: (
+                    committed[component]
+                    if component == "claw-onboard"
+                    else increment_component_version(component, committed[component])
+                )
+                for component in SUITE_COMPONENTS
+            }
+            major, minor, build = backend.read_browser_version().split(".")[:3]
+            with mock.patch(
+                "bos_build.release.suite.create_pull_request",
+                return_value="https://github.com/owner/repo/pull/79",
+            ):
+                backend.create_transaction(
+                    SuiteRequest("nightly", source_sha, "main", "main"),
+                    transaction_branch("nightly", source_sha),
+                    versions,
+                    f"{major}.{minor}.{int(build) + 1}",
+                    backend.read_build_offset() + 1,
+                )
+
+            with self.assertRaisesRegex(ValueError, "source is not on main"):
+                backend.discover_branch_reservations()
 
     def test_reservation_branch_and_state_reconcile_recover_exact_effects(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

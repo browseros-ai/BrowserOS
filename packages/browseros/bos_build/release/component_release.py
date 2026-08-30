@@ -18,7 +18,7 @@ from .components import (
 )
 from .github import list_github_releases, list_pull_requests
 from .r2_allocations import discover_r2_component_allocation
-from .suite import suite_record_from_pull_request
+from .suite import suite_allocation_record_from_pull_request
 
 
 @dataclass(frozen=True)
@@ -221,6 +221,7 @@ class GitComponentReleaseOperations:
         self.repo_root = repo_root.resolve()
         self.repo = repo
         self.remote = remote
+        self.default_branch = ""
         self.r2_client = r2_client
         self.r2_bucket = r2_bucket
 
@@ -235,6 +236,7 @@ class GitComponentReleaseOperations:
         return result.stdout.strip()
 
     def sync(self, default_branch: str) -> None:
+        self.default_branch = default_branch
         self._git(
             "fetch",
             self.remote,
@@ -297,6 +299,8 @@ class GitComponentReleaseOperations:
         return result.returncode == 0
 
     def allocations(self, component: str) -> Sequence[AllocationRecord]:
+        from .suite import GitHubSuiteBackend, merge_suite_component_allocations
+
         spec = component_by_id(component)
         allocations = []
         prefixes = (spec.tag_prefix, *spec.legacy_tag_prefixes)
@@ -351,9 +355,17 @@ class GitComponentReleaseOperations:
                 )
             )
 
-        for pull_request in list_pull_requests(self.repo, state="open"):
+        for pull_request in list_pull_requests(self.repo, state="all"):
             record = candidate_record_from_pull_request(pull_request, self.repo)
-            if record is not None and component in record.component_versions:
+            suite_reservation = False
+            candidate_is_open = pull_request.get(
+                "state"
+            ) == "OPEN" and not pull_request.get("mergedAt")
+            if (
+                record is not None
+                and component in record.component_versions
+                and candidate_is_open
+            ):
                 GitHubCandidateBackend(
                     self.repo_root,
                     self.repo,
@@ -364,7 +376,9 @@ class GitComponentReleaseOperations:
                 source_sha = record.candidate_sha
                 candidate_id = record.branch
             else:
-                suite = suite_record_from_pull_request(pull_request, self.repo)
+                suite = suite_allocation_record_from_pull_request(
+                    pull_request, self.repo
+                )
                 if suite is None or component not in suite.component_versions:
                     continue
                 # Suite reservations are validated by their immutable same-repo
@@ -374,8 +388,13 @@ class GitComponentReleaseOperations:
                 source_sha = suite.source_sha
                 candidate_id = suite.branch
                 reference = component_by_id(component).tag_prefix + version
-                reusable = True
-            if record is not None and component in record.component_versions:
+                reusable = suite.state == "open"
+                suite_reservation = True
+            if (
+                record is not None
+                and component in record.component_versions
+                and candidate_is_open
+            ):
                 reference = candidate_id
                 reusable = False
             allocations.append(
@@ -387,7 +406,24 @@ class GitComponentReleaseOperations:
                     candidate_id=candidate_id,
                     reference=reference,
                     reusable=reusable,
+                    reuse_forbidden=suite_reservation and not reusable,
                 )
+            )
+
+        # sync() records the resolved default branch before allocation. The
+        # remote transaction branch is the durable ledger during the interval
+        # after its reservation push and before GitHub creates the draft PR.
+        if self.default_branch:
+            suite_backend = GitHubSuiteBackend(
+                self.repo_root,
+                self.repo,
+                self.default_branch,
+                self.remote,
+            )
+            return merge_suite_component_allocations(
+                allocations,
+                suite_backend.discover_branch_reservations(),
+                (component,),
             )
         return tuple(allocations)
 

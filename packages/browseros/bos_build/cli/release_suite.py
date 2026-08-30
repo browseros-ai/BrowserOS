@@ -25,6 +25,11 @@ from ..release.suite_artifact import (
     R2ImmutableObjectBackend,
     publish_suite_browser_artifact,
 )
+from ..release.suite_rolling import (
+    GitHubRollingReleaseBackend,
+    RollingReleaseRequest,
+    reconcile_rolling_release,
+)
 
 
 app = typer.Typer(
@@ -146,6 +151,46 @@ def publish_browser_artifact(
         )
         typer.echo(publication.to_json(), nl=False)
     except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        _handle_error(exc)
+
+
+@app.command("reconcile-rolling-release")
+def reconcile_rolling_release_command(
+    tag: str = typer.Option(..., "--tag"),
+    title: str = typer.Option(..., "--title"),
+    source_sha: str = typer.Option(..., "--source-sha"),
+    browser_version: str = typer.Option(..., "--browser-version"),
+    artifact_root: Path = typer.Option(..., "--artifact-root"),
+    repo: str = typer.Option(..., "--repo"),
+    repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
+) -> None:
+    """Monotonically create, resume, or verify one rolling nightly release."""
+    try:
+        artifacts = sorted(artifact_root.rglob("*.dmg"))
+        if len(artifacts) != 1:
+            raise ValueError(
+                f"Rolling release expects exactly one DMG, found {len(artifacts)}"
+            )
+        request = RollingReleaseRequest(
+            tag=tag,
+            title=title,
+            source_sha=source_sha,
+            browser_version=browser_version,
+            asset=artifacts[0],
+        )
+        outcome = reconcile_rolling_release(
+            request,
+            GitHubRollingReleaseBackend(repo, _repo_root(repo_root)),
+        )
+        typer.echo(outcome)
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as exc:
         _handle_error(exc)
 
 

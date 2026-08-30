@@ -19,6 +19,48 @@ runner = CliRunner()
 
 
 class SuiteCliTest(unittest.TestCase):
+    @patch("bos_build.cli.release_suite.GitHubRollingReleaseBackend")
+    @patch("bos_build.cli.release_suite.reconcile_rolling_release")
+    def test_rolling_release_command_selects_one_signed_dmg(
+        self, reconcile, backend
+    ) -> None:
+        reconcile.return_value = "reused"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifact_root = root / "artifact"
+            artifact_root.mkdir()
+            dmg = artifact_root / "BrowserOS_v1.2.3_arm64.dmg"
+            dmg.write_bytes(b"signed")
+            result = runner.invoke(
+                app,
+                [
+                    "release",
+                    "suite",
+                    "reconcile-rolling-release",
+                    "--tag",
+                    "nightly-browseros",
+                    "--title",
+                    "BrowserOS Nightly",
+                    "--source-sha",
+                    SOURCE_SHA,
+                    "--browser-version",
+                    "1.2.3",
+                    "--artifact-root",
+                    str(artifact_root),
+                    "--repo",
+                    "browseros-ai/BrowserOS",
+                    "--repo-root",
+                    str(root),
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.output, "reused\n")
+        request = reconcile.call_args.args[0]
+        self.assertEqual(request.asset, dmg)
+        self.assertEqual(request.source_sha, SOURCE_SHA)
+        backend.assert_called_once_with("browseros-ai/BrowserOS", root.resolve())
+
     @patch("bos_build.cli.release_suite.GitHubSuiteBackend")
     @patch("bos_build.cli.release_suite.reconcile_transaction")
     def test_reconcile_writes_record_summary_and_distinct_identities(

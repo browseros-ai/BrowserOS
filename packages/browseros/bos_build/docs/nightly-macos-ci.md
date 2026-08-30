@@ -26,6 +26,7 @@ dispatch from main
   -> assemble both server appcasts and render shared extension feeds once
   -> reconcile five tracked snapshots on the transaction PR
   -> validate the complete gate, mark the PR ready, and exact-head squash merge
+  -> conditionally create or verify both immutable signed browser artifacts
   -> publish the committed feeds and reconcile both rolling prereleases
 ```
 
@@ -33,7 +34,10 @@ The prepare phase may create private GitHub drafts and immutable versioned R2
 objects because the browsers need exact downloadable resources. It does not
 publish component releases, update `latest`, publish live feeds, or write
 tracked state. Those public effects wait until both failure-prone Mac builds
-have completed.
+have completed. Suite and standalone server finalizers share their retained
+per-server workflow concurrency groups. Inside that serialized boundary,
+`latest` advances only when the existing alias is older or missing, verifies
+identical version/source/checksum bindings, and leaves newer aliases unchanged.
 
 The component workflows remain independently dispatchable. Suite callers pass
 `state_owner: suite`, which suppresses the component-owned reflection and feed
@@ -99,7 +103,19 @@ most one squash commit for the combined nightly state.
 Suite PRs are also the durable browser-allocation ledger. Open, closed, and
 merged canonical suite records all burn their browser version and build offset;
 closing a failed transaction cannot make an already-uploaded version available
-to another source.
+to another source. A closed record is allocation history only and cannot emit
+build outputs or restart release execution. The same all-state PR ledger burns
+the four releasable component pins after branch deletion. Closed/merged and
+pre-PR branch records block collisions but never authorize standalone reuse.
+
+The deterministic remote transaction branch is the allocation ledger before
+the draft PR exists. Git push and PR creation are separate external writes, so
+a runner may stop between them. Every browser, candidate, and standalone
+component allocator scans those canonical refs, reconstructs and validates the
+exact reservation commit, and treats its versions as burned. A retry reuses the
+same branch and reservation; a later source allocates beyond it. Once the PR
+exists, its marker and the branch are duplicate views of one allocation and
+must agree.
 
 ## Dispatch
 
@@ -138,9 +154,10 @@ feed resolution to choose component versions.
 Each successful product build uploads one signed DMG and its checksum-bearing
 release receipt as a 14-day Actions artifact; signing runners do not write R2.
 After both builds and the state merge, the final publisher conditionally creates
-the versioned DMG and receipt in R2. Existing identical bytes and transaction
-bindings are success, while any conflict fails without overwrite. The same job
-then reconciles rolling prereleases.
+the versioned DMG and receipt in R2 before exposing any mutable feeds. Existing
+identical bytes and transaction bindings are success, while any conflict fails
+without overwrite. The same job then publishes committed feeds and reconciles
+rolling prereleases.
 
 A new whole-workflow run fails closed once the suite is merged. Recover a
 post-build or post-merge publication failure with GitHub's **Re-run failed
@@ -164,12 +181,19 @@ GitHub and R2 effects form a resumable saga, not an atomic transaction:
 - Replacing an older rolling tag additionally requires its target to be an
   ancestor of the frozen source SHA.
 - A legacy rolling release whose browser version cannot be parsed fails closed.
+- A release record and its live tag must resolve to the same source. If release
+  deletion left only a tag, that tag gets the same ancestry classification
+  before the reconciler may remove it.
+- Draft creation, DMG upload, and publication are resumable writes. An exact
+  partial draft resumes, and success requires a fresh read of the published
+  tag, release identity, and asset digest. A published release missing its tag
+  is verified and safely recreated instead of being mistaken for success.
 
 The release notes embed the browser version and transaction source so future
 retries can make this decision without relying on workflow-attempt identity.
-If publication alone fails after merge, rerun the failed jobs. A full-run retry
-recovers the merged suite record and its durable PR-head build ref; it does not
-need the deleted transaction branch.
+If publication alone fails after merge, rerun the failed jobs on the original
+run. That recovery revalidates the merged suite through its durable PR-head ref
+without rerunning successful signing jobs; a new full run fails before builds.
 
 ## Browser version policy
 

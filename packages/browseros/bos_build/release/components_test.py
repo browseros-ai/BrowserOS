@@ -133,9 +133,7 @@ class ComponentPlanningTest(unittest.TestCase):
                 component_id="server",
                 committed_version="0.0.127",
                 allocations=(
-                    AllocationRecord(
-                        component="server", version="0.0.127", kind="tag"
-                    ),
+                    AllocationRecord(component="server", version="0.0.127", kind="tag"),
                 ),
             ),
             "0.0.128",
@@ -221,6 +219,44 @@ class ComponentPlanningTest(unittest.TestCase):
                 source_sha="1" * 40,
             ),
             "0.0.128",
+        )
+
+    def test_closed_suite_ownership_vetoes_same_source_draft_reuse(self) -> None:
+        allocations = (
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="release",
+                source_sha="1" * 40,
+                reference="agent-server/v0.0.128",
+                reusable=True,
+            ),
+            AllocationRecord(
+                component="server",
+                version="0.0.128",
+                kind="candidate",
+                source_sha="1" * 40,
+                reference="agent-server/v0.0.128",
+                reuse_forbidden=True,
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "already allocated"):
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=allocations,
+                source_sha="1" * 40,
+                requested_version="0.0.128",
+            )
+        self.assertEqual(
+            resolve_standalone_version(
+                component_id="server",
+                committed_version="0.0.127",
+                allocations=allocations,
+                source_sha="1" * 40,
+            ),
+            "0.0.129",
         )
 
     def test_standalone_rejects_versions_older_than_public_history(self) -> None:

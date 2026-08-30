@@ -1114,6 +1114,157 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertIn("component|suite", validate["run"])
                 self.assertIn("inputs.state_owner != 'suite'", reflect["if"])
 
+    def test_server_latest_aliases_reconcile_monotonically_inside_retained_lock(self):
+        expected_groups = {
+            "release-server.yml": "release-server",
+            "release-claw-server.yml": "release-claw-server-rust",
+        }
+        for workflow_name, group in expected_groups.items():
+            workflow = self.load_workflow(workflow_name)
+            latest = self.named_step(
+                workflow, "finalize", "Copy versioned objects to latest"
+            )
+            script = latest["run"]
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(workflow["concurrency"]["group"], group)
+                self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
+                self.assertNotIn("if", latest)
+                self.assertIn("current_version", script)
+                self.assertIn("sort -V", script)
+                self.assertIn("already newer", script)
+                self.assertIn("already matches version, source, and checksum", script)
+                self.assertIn("conflicts at version", script)
+                self.assertIn("copy-object", script)
+                self.assertLess(
+                    script.index("already newer"), script.index("copy-object")
+                )
+
+    def test_server_latest_alias_behavior_covers_missing_older_same_and_newer(self):
+        fake_aws = r"""#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def option(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+
+operation = sys.argv[2]
+key = option("--key")
+state = Path(os.environ["FAKE_AWS_STATE"])
+targets = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+target = next(value for value in targets if key.endswith(f"-{value}.zip"))
+component = "artifacts/server" if key.startswith("artifacts/server/") else "claw-server-rust/prod-resources"
+marker = state / target
+
+if operation == "copy-object":
+    marker.touch()
+    with (state / "copies").open("a", encoding="utf-8") as stream:
+        stream.write(key + "\n")
+    print("{}")
+    raise SystemExit(0)
+
+if operation != "head-object":
+    raise SystemExit(f"unexpected fake aws operation: {operation}")
+
+is_latest = "/latest/" in key
+if is_latest and not marker.exists() and os.environ["FAKE_DEST_VERSION"] == "missing":
+    print("An error occurred (404) when calling HeadObject: Not Found", file=sys.stderr)
+    raise SystemExit(44)
+
+if is_latest and not marker.exists():
+    version = os.environ["FAKE_DEST_VERSION"]
+    release_sha = os.environ["FAKE_DEST_SOURCE"]
+    checksum = os.environ["FAKE_DEST_CHECKSUM"]
+    if checksum == "exact":
+        checksum = hashlib.sha256(target.encode()).hexdigest()
+else:
+    version = os.environ["VERSION"]
+    release_sha = os.environ["RELEASE_SHA"]
+    checksum = hashlib.sha256(target.encode()).hexdigest()
+print(json.dumps({
+    "ContentLength": 100,
+    "Metadata": {
+        "component": component,
+        "target": target,
+        "version": version,
+        "release-sha": release_sha,
+        "sha256": checksum,
+    },
+}))
+"""
+        cases = (
+            ("missing", "9" * 40, "f" * 64, 5, True),
+            ("0.0.1", "9" * 40, "f" * 64, 5, True),
+            ("1.2.3", "1" * 40, "exact", 0, True),
+            ("9.0.0", "9" * 40, "f" * 64, 0, True),
+            ("1.2.3", "9" * 40, "exact", 0, False),
+            ("1.2.3", "1" * 40, "f" * 64, 0, False),
+        )
+        for workflow_name in ("release-server.yml", "release-claw-server.yml"):
+            script = self.named_step(
+                self.load_workflow(workflow_name),
+                "finalize",
+                "Copy versioned objects to latest",
+            )["run"]
+            for (
+                destination_version,
+                destination_source,
+                destination_checksum,
+                copy_count,
+                succeeds,
+            ) in cases:
+                with (
+                    self.subTest(
+                        workflow=workflow_name,
+                        destination_version=destination_version,
+                        destination_source=destination_source,
+                    ),
+                    tempfile.TemporaryDirectory() as temp_dir,
+                ):
+                    temp_root = Path(temp_dir)
+                    fake_bin = temp_root / "bin"
+                    fake_bin.mkdir()
+                    aws = fake_bin / "aws"
+                    aws.write_text(fake_aws, encoding="utf-8")
+                    aws.chmod(0o755)
+                    state = temp_root / "state"
+                    state.mkdir()
+                    environment = {
+                        **os.environ,
+                        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                        "FAKE_AWS_STATE": str(state),
+                        "FAKE_DEST_VERSION": destination_version,
+                        "FAKE_DEST_SOURCE": destination_source,
+                        "FAKE_DEST_CHECKSUM": destination_checksum,
+                        "R2_ENDPOINT": "https://r2.invalid",
+                        "R2_BUCKET": "bucket",
+                        "RELEASE_SHA": "1" * 40,
+                        "VERSION": "1.2.3",
+                    }
+                    result = subprocess.run(
+                        [git_bash_path(), "-c", script],
+                        cwd=REPO_ROOT,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode == 0,
+                        succeeds,
+                        msg=result.stdout + result.stderr,
+                    )
+                    copies = state / "copies"
+                    copied = (
+                        copies.read_text(encoding="utf-8").splitlines()
+                        if copies.exists()
+                        else []
+                    )
+                    self.assertEqual(len(copied), copy_count)
+
     def test_server_ota_hands_assembled_snapshot_to_suite_owner(self):
         workflow = self.load_workflow("publish-server-ota.yml")
         triggers = workflow.get("on", workflow.get(True))
@@ -1355,7 +1506,8 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             "release suite reconcile",
             "--mode nightly",
             '--source-sha "$source_sha"',
-            'if [ "$(jq -r \'.state\' "$RUNNER_TEMP/release-suite.json")" = "merged" ]; then',
+            'if [ "$(jq -r \'.state\' "$RUNNER_TEMP/release-suite.json")" != "open" ]; then',
+            "Only an open transaction can start builds",
             "Re-run failed jobs",
         ):
             self.assertIn(token, reconcile["run"])
@@ -1556,37 +1708,47 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             self.assertIn(assertion, recover["run"])
         publish_steps = publish["steps"]
         recover_index = publish_steps.index(recover)
+        download_indexes = [
+            index
+            for index, step in enumerate(publish_steps)
+            if str(step.get("uses", "")).startswith("actions/download-artifact@")
+        ]
+        immutable_index = publish_steps.index(
+            self.named_step(
+                workflow, "publish", "Publish immutable signed browser artifacts"
+            )
+        )
         feed_index = publish_steps.index(
             self.named_step(workflow, "publish", "Publish committed family feeds")
         )
-        self.assertLess(recover_index, feed_index)
+        rolling_index = publish_steps.index(
+            self.named_step(workflow, "publish", "Reconcile rolling nightly releases")
+        )
+        self.assertEqual(len(download_indexes), 2)
+        self.assertTrue(all(recover_index < index for index in download_indexes))
+        self.assertTrue(all(index < immutable_index for index in download_indexes))
+        self.assertLess(immutable_index, feed_index)
+        self.assertLess(feed_index, rolling_index)
 
     def test_rolling_publication_is_source_and_checksum_aware(self):
         workflow = self.load_workflow("nightly.yml")
-        rolling = self.named_step(
+        rolling_step = self.named_step(
             workflow, "publish", "Reconcile rolling nightly releases"
-        )["run"]
+        )
+        self.assertEqual(rolling_step["working-directory"], "packages/browseros")
+        rolling = rolling_step["run"]
         for token in (
             "nightly-browseros",
             "nightly-browserclaw",
-            "target_commitish",
-            "sha256sum",
-            'if [ "$current_target" = "$SOURCE_SHA" ]',
-            "same source has conflicting assets",
-            "Browser version: `%s`",
-            "current_version",
-            "sort -V",
-            "superseded by newer version",
-            "same version belongs to a different source",
-            'git merge-base --is-ancestor "$current_target" "$SOURCE_SHA"',
-            "gh release delete",
-            "gh release create",
+            "release suite reconcile-rolling-release",
+            '--source-sha "$SOURCE_SHA"',
+            '--browser-version "$VERSION"',
+            '--repo "$GITHUB_REPOSITORY"',
         ):
             self.assertIn(token, rolling)
-        self.assertLess(
-            rolling.index("superseded by newer version"),
-            rolling.index("gh release delete"),
-        )
+        self.assertEqual(rolling.count("reconcile-rolling-release"), 2)
+        self.assertNotIn("gh release delete", rolling)
+        self.assertNotIn("gh release create", rolling)
 
     def test_internal_builder_uses_reservation_and_frozen_artifact_source(self):
         workflow = self.load_workflow("nightly-macos-product.yml")
@@ -2454,12 +2616,30 @@ class ReleaseDocumentationTest(unittest.TestCase):
             "--allow-downgrade",
             "Re-run failed\njobs",
             "conditionally creates",
+            "existing alias is older or missing",
+            "before exposing any mutable feeds",
+            "release record and its live tag must resolve to the same source",
+            "partial draft resumes",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.nightly)
+        self.assertLess(
+            self.nightly.index(
+                "conditionally create or verify both immutable signed browser artifacts"
+            ),
+            self.nightly.index(
+                "publish the committed feeds and reconcile both rolling prereleases"
+            ),
+        )
         self.assertIn("first production slice migrates the nightly", self.release)
+        for token in (
+            "always check out `reservation_sha`",
+            "new whole-run invocation that finds the transaction already\nmerged fails closed",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
 
-    def test_primary_docs_do_not_describe_retired_resource_staging(self):
+    def test_primary_docs_do_not_describe_retired_release_behavior(self):
         text = "\n".join((self.readme, self.release, self.nightly, self.warp))
         for token in (
             "bundle_local_extensions",
@@ -2468,6 +2648,8 @@ class ReleaseDocumentationTest(unittest.TestCase):
             "Stage BrowserOS nightly resources",
             "claw-server-rust-local.sh",
             "BROWSEROS_NIGHTLY_REF",
+            "build the exact transaction-branch head",
+            "verify it still resolves to the recorded state\nSHA",
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
