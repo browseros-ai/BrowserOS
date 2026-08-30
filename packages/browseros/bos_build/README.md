@@ -246,9 +246,12 @@ gh workflow run release-extension-feeds.yml \
 Pins are optional; extensions not set carry over from the live manifests. The
 per-product browser release orchestrators still only stage extension feed
 previews; the standalone extension workflow is the automatic alpha entrypoint.
-With `publish=true`, the feed workflow merges the exact generated snapshots into
-the default branch before it uploads those same files to R2. A failed snapshot
-merge therefore leaves the live feeds untouched.
+With `publish=true`, the feed workflow merges each channel's exact generated
+snapshots into the default branch before it uploads those same files to R2. A
+failed snapshot merge therefore leaves that channel's live feeds untouched. For
+`channel=both`, alpha completes before production so production sees alpha's
+newer bundled versions. If production later fails, alpha remains durably
+committed and published; rerun the workflow to resume production.
 
 Locally there are two commands, and the difference matters:
 

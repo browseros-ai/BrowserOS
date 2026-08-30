@@ -67,7 +67,8 @@ concurrency:
 jobs:
   feeds:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # `both` can consume two independent 15-minute snapshot-PR retry budgets.
+    timeout-minutes: 40
     permissions:
       contents: write
       pull-requests: write

@@ -236,10 +236,22 @@ describe('release-extensions workflow', () => {
     )
     expect(channelLoopStart).toBeGreaterThanOrEqual(0)
     const channelLoop = transaction.slice(channelLoopStart)
+    const renderCommand = [
+      'uv run --directory packages/browseros browseros \\',
+      `              release extensions "\${args[@]}"`,
+    ].join('\n')
+    const publishCommand = [
+      'uv run --directory packages/browseros browseros \\',
+      '              release feeds publish-local \\',
+    ].join('\n')
+    const channelLoopEnd = channelLoop.indexOf(
+      '\n          done\n\n          if [ "$PUBLISH"',
+    )
 
     expect(job).toMatch(
       /permissions:\n\s+contents: write\n\s+pull-requests: write/,
     )
+    expect(job).toContain('timeout-minutes: 40')
     expect(job).toContain('fetch-depth: 0')
     expect(job).toContain(
       `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
@@ -250,6 +262,9 @@ describe('release-extensions workflow', () => {
     expect(transaction).toContain('extensions/update-manifest.xml')
     expect(transaction).toContain('extensions/extensions.json')
     expect(transaction).toContain('extensions/bundled-manifest.xml')
+    expect(
+      transaction.match(/extensions\/bundled-manifest\.xml/g),
+    ).toHaveLength(2)
     expect(transaction).toContain('snapshot_paths+=("updates/$feed_key")')
     expect(transaction).not.toContain('updates/extensions/update-manifest')
     expect(transaction).toContain('if [ "$PUBLISH" != "true" ]')
@@ -258,15 +273,18 @@ describe('release-extensions workflow', () => {
     expect(transaction).toContain('release feeds publish-local')
     expect(transaction).toContain('--publish')
     expect(transaction).toContain('--allow-downgrade')
-    expect(channelLoop.indexOf('release extensions')).toBeLessThan(
+    expect(transaction).not.toContain('base_args+=(--publish)')
+    expect(transaction).not.toContain('args+=(--publish)')
+    expect(channelLoop.indexOf(renderCommand)).toBeGreaterThanOrEqual(0)
+    expect(channelLoop.indexOf(publishCommand)).toBeGreaterThanOrEqual(0)
+    expect(channelLoopEnd).toBeGreaterThanOrEqual(0)
+    expect(channelLoop.indexOf(renderCommand)).toBeLessThan(
       channelLoop.indexOf('commit-update-snapshot.sh'),
     )
     expect(channelLoop.indexOf('commit-update-snapshot.sh')).toBeLessThan(
-      channelLoop.indexOf('release feeds publish-local'),
+      channelLoop.indexOf(publishCommand),
     )
-    expect(channelLoop.indexOf('release feeds publish-local')).toBeLessThan(
-      channelLoop.lastIndexOf('done'),
-    )
+    expect(channelLoop.indexOf(publishCommand)).toBeLessThan(channelLoopEnd)
   })
 
   it('requires the BrowserClaw PostHog key and keeps the host optional', () => {
