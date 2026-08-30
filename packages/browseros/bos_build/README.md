@@ -131,7 +131,7 @@ Profiles are saved switch sets in `profiles/`:
 | --- | --- | --- |
 | `release-ci` | `build-browseros.yml`, the reusable Linux/Windows lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
 | `nightly-ci` | unsigned cloud nightlies | the same, plus `sign: false`, `upload: false` |
-| `nightly-macos` | the two signed mac nightlies | `preset: release`, `resource_mode: published` |
+| `nightly-macos` | both products in the signed family nightly | `preset: release`, `resource_mode: published` |
 
 `release-macos.yml` runs `--preset release` against the persistent checkout on
 the self-hosted Mac and receives source or published mode from its caller.
@@ -244,8 +244,9 @@ gh workflow run release-extension-feeds.yml \
 ```
 
 Pins are optional; extensions not set carry over from the live manifests. The
-per-product browser release orchestrators still only stage extension feed
-previews; the standalone extension workflow is the automatic alpha entrypoint.
+family nightly renders both in-repository extension pins together and publishes
+them only after its one tracked-state squash merge; the standalone extension
+workflow remains the independent automatic alpha entrypoint.
 With `publish=true`, the feed workflow merges each channel's exact generated
 snapshots into the default branch before it uploads those same files to R2. A
 failed snapshot merge therefore leaves that channel's live feeds untouched. For
@@ -284,11 +285,13 @@ BrowserClaw browser builds and server OTA both consume the server bundles
 published under the historical `claw-server-rust/prod-resources` key. Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
-Two signed macOS nightlies run on the self-hosted Mac and publish rolling
-prereleases anyone can download: `nightly-browseros` (04:17 UTC) and
-`nightly-browserclaw` (06:47 UTC). Nightlies and full releases first publish
-the product server and extension to alpha, then build the browser from those
-published resources. See
+One dispatch-only family workflow builds both signed macOS nightlies on the
+self-hosted Mac and publishes the `nightly-browseros` and
+`nightly-browserclaw` rolling prereleases. It freezes one source SHA, reserves
+one shared browser version in a draft transaction PR, prepares exact private
+component resources, and builds both products before public component
+finalization. Five tracked server/extension snapshots then reach `main` in one
+exact-head squash commit. See
 [`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md).
 
 ## Patches and products
@@ -326,6 +329,7 @@ non-interactive Python surface the build steps depend on.
 | Patch stack map | `packages/browseros/chromium_patches/.features.yaml` |
 | Which source resources ship | `products/resource_sources.py`, `release/server_resources.py`, `config/copy_resources.yaml` |
 | Published-resource compatibility | `config/download_resources.yaml` |
+| Family release transaction identity and state | `release/suite.py` |
 | Local secrets | `packages/browseros/.env` (copy `.env.example`) |
 | Repo secrets | synced by `tools/release_secrets/sync.py` |
 

@@ -2374,6 +2374,23 @@ class ReleaseDocumentationTest(unittest.TestCase):
         self.assertIn("`queue: max`", self.nightly)
         self.assertIn("Published mode deliberately retains", self.warp)
 
+    def test_nightly_runbook_covers_family_transaction_and_retry_identities(self):
+        for token in (
+            ".github/workflows/nightly.yml",
+            "nightly-<source-sha>",
+            "Source SHA",
+            "State SHA",
+            "Merge SHA",
+            "refs/pull/<PR_NUMBER>/head",
+            "created as a draft",
+            "Open, closed, and\nmerged canonical suite records",
+            "superseded/no-op",
+            "--allow-downgrade",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.nightly)
+        self.assertIn("first production slice migrates the nightly", self.release)
+
     def test_primary_docs_do_not_describe_retired_resource_staging(self):
         text = "\n".join((self.readme, self.release, self.nightly, self.warp))
         for token in (
