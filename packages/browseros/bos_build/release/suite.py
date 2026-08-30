@@ -34,6 +34,7 @@ from .github import (
     create_pull_request,
     edit_pull_request_body,
     list_pull_requests,
+    mark_pull_request_ready,
 )
 
 
@@ -94,6 +95,7 @@ class SuitePullRequest:
     head_branch: str
     base_branch: str
     mergeable: bool
+    draft: bool
     merge_sha: str = ""
 
 
@@ -114,6 +116,7 @@ class SuiteRecord:
     pull_request_number: int
     pull_request_url: str
     state: str = "open"
+    draft: bool = True
     merge_sha: str = ""
     state_checksums: Mapping[str, str] = field(default_factory=dict)
     schema: str = _SCHEMA
@@ -180,6 +183,15 @@ class SuiteRecord:
             f"- State: `{self.state}`{merge}\n"
         )
 
+    def build_state_ref(self) -> str:
+        """Return the ref whose tree is the frozen source plus suite overlay."""
+        if self.state == "merged":
+            # GitHub retains the synthetic PR-head ref after deleting the source
+            # branch. The squash merge is intentionally not used: unrelated
+            # default-branch commits may have entered its first-parent tree.
+            return f"refs/pull/{self.pull_request_number}/head"
+        return self.branch
+
     @classmethod
     def from_dict(cls, document: Mapping[str, object]) -> "SuiteRecord":
         if document.get("schema") != _SCHEMA:
@@ -206,13 +218,17 @@ class SuiteRecord:
             raise ValueError("Suite record contains invalid string fields")
         number = document.get("pull_request_number")
         offset = document.get("build_offset")
+        draft = document.get("draft", True)
         if not isinstance(number, int) or not isinstance(offset, int):
             raise ValueError("Suite record contains invalid numeric fields")
+        if not isinstance(draft, bool):
+            raise ValueError("Suite record contains invalid draft state")
         record = cls(
             **string_fields,
             build_offset=offset,
             component_versions=versions,
             pull_request_number=number,
+            draft=draft,
             state_checksums=checksums,
         )
         _validate_record(record)
@@ -257,6 +273,8 @@ class SuiteBackend(Protocol):
     def inspect_pull_request(self, number: int) -> SuitePullRequest: ...
 
     def default_branch_contains_transaction(self, record: SuiteRecord) -> bool: ...
+
+    def mark_pull_request_ready(self, number: int) -> None: ...
 
     def merge_pull_request(self, number: int, expected_head_sha: str) -> str: ...
 
@@ -464,6 +482,22 @@ def reconcile_transaction(
             build_offset,
         )
     _validate_record(existing, request)
+    if existing.state == "open" and not existing.draft:
+        if state_root is None:
+            raise ValueError(
+                "Ready suite pull request can only be recovered with complete final state"
+            )
+        desired = {
+            path: hashlib.sha256((state_root / path).read_bytes()).hexdigest()
+            for path in SUITE_STATE_PATHS
+        }
+        if dict(existing.state_checksums) != desired:
+            raise ValueError(
+                "Ready suite pull request does not match the complete final state"
+            )
+        # A ready PR is immutable from the suite's perspective. The only next
+        # mutation allowed is the separately gated exact-head merge.
+        return existing
     if state_root is None:
         return existing
     reconciled = backend.reconcile_state(existing, state_root)
@@ -496,6 +530,8 @@ def merge_transaction(
     """Squash-merge one unchanged family state PR after its complete gate."""
     _validate_record(record)
     _validate_gate(record, gate)
+    if set(record.state_checksums) != set(SUITE_STATE_PATHS):
+        raise ValueError("Suite merge requires the complete final state checksum set")
     pull_request = backend.inspect_pull_request(record.pull_request_number)
     if (
         pull_request.url != record.pull_request_url
@@ -509,16 +545,23 @@ def merge_transaction(
             record, pull_request.merge_sha
         ):
             raise ValueError("Suite merge commit does not match transaction state")
-        return replace(record, state="merged", merge_sha=pull_request.merge_sha)
+        return replace(
+            record, state="merged", draft=False, merge_sha=pull_request.merge_sha
+        )
     if pull_request.state != "open":
         raise ValueError(f"Suite pull request is not open: {pull_request.state}")
     if not pull_request.mergeable:
         raise ValueError("Suite pull request is not mergeable")
     if backend.default_branch_contains_transaction(record):
         raise ValueError("Suite transaction was superseded on the default branch")
+    # The ready transition is deliberately adjacent to the exact-head merge.
+    # If the process dies between them, a retry may proceed only through this
+    # same complete-checksum, matching-gate path; initial reconciliation fails.
+    if pull_request.draft:
+        backend.mark_pull_request_ready(record.pull_request_number)
     merge_sha = backend.merge_pull_request(record.pull_request_number, record.state_sha)
     _validate_sha(merge_sha, "merge_sha")
-    return replace(record, state="merged", merge_sha=merge_sha)
+    return replace(record, state="merged", draft=False, merge_sha=merge_sha)
 
 
 def _marker_record(document: Mapping[str, object]) -> SuiteRecord:
@@ -580,12 +623,21 @@ def suite_record_from_pull_request(
         _validate_sha(head_sha, "state_sha")
         merged = bool(pull_request.get("mergedAt"))
         state = "merged" if merged else str(pull_request.get("state", "")).lower()
+        draft_value = pull_request.get("isDraft", True)
+        if not isinstance(draft_value, bool):
+            return None
         merge_document = pull_request.get("mergeCommit")
         merge_sha = ""
         if isinstance(merge_document, dict):
             value = merge_document.get("oid")
             merge_sha = value if isinstance(value, str) else ""
-        return replace(record, state_sha=head_sha, state=state, merge_sha=merge_sha)
+        return replace(
+            record,
+            state_sha=head_sha,
+            state=state,
+            draft=draft_value,
+            merge_sha=merge_sha,
+        )
     except (json.JSONDecodeError, TypeError, ValueError):
         return None
 
@@ -867,6 +919,7 @@ class GitHubSuiteBackend:
             base=request.default_branch,
             title=f"chore(release): {request.mode} BrowserOS family transaction",
             body=provisional.pull_request_body(),
+            draft=True,
         )
         match = re.search(r"/(\d+)$", url)
         if match is None:
@@ -977,7 +1030,7 @@ class GitHubSuiteBackend:
                 "--repo",
                 self.repo,
                 "--json",
-                "number,url,state,headRefOid,headRefName,baseRefName,mergeable,mergedAt,mergeCommit",
+                "number,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergedAt,mergeCommit",
             ],
             capture_output=True,
             text=True,
@@ -998,8 +1051,12 @@ class GitHubSuiteBackend:
             head_branch=str(document["headRefName"]),
             base_branch=str(document["baseRefName"]),
             mergeable=document.get("mergeable") == "MERGEABLE",
+            draft=document.get("isDraft") is True,
             merge_sha=merge_sha,
         )
+
+    def mark_pull_request_ready(self, number: int) -> None:
+        mark_pull_request_ready(self.repo, number)
 
     def _component_version_at_ref(self, component: str, ref: str) -> str:
         spec = component_by_id(component)

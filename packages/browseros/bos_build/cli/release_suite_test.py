@@ -65,6 +65,7 @@ class SuiteCliTest(unittest.TestCase):
             self.assertEqual(outputs["source_sha"], SOURCE_SHA)
             self.assertEqual(outputs["reservation_sha"], suite_record().reservation_sha)
             self.assertEqual(outputs["state_sha"], STATE_SHA)
+            self.assertEqual(outputs["state_ref"], suite_record().branch)
             self.assertEqual(outputs["server_version"], "0.0.147")
             self.assertEqual(outputs["agent_version"], "0.0.121.0")
             self.assertEqual(outputs["claw_server_version"], "0.0.46")
@@ -144,7 +145,12 @@ class SuiteCliTest(unittest.TestCase):
 
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(SuiteRecord.from_path(record_path), merged)
-            self.assertIn(f"merge_sha={merged.merge_sha}", github_output.read_text())
+            outputs = dict(
+                line.split("=", 1) for line in github_output.read_text().splitlines()
+            )
+            self.assertEqual(outputs["merge_sha"], merged.merge_sha)
+            self.assertEqual(outputs["state_sha"], STATE_SHA)
+            self.assertEqual(outputs["state_ref"], "refs/pull/77/head")
 
 
 if __name__ == "__main__":

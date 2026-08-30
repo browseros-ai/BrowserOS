@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Family release transaction lifecycle tests."""
 
+import hashlib
+import shutil
 import tempfile
 import unittest
-import shutil
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -77,6 +78,7 @@ class FakeBackend:
         self.created = []
         self.reconciled = []
         self.merged = []
+        self.readied = []
         self.superseded = False
         self.merge_matches = True
         self.pr = SuitePullRequest(
@@ -87,6 +89,7 @@ class FakeBackend:
             head_branch=BRANCH,
             base_branch="main",
             mergeable=True,
+            draft=True,
         )
 
     def current_sha(self) -> str:
@@ -140,6 +143,9 @@ class FakeBackend:
     def merge_pull_request(self, number, expected_head_sha):
         self.merged.append((number, expected_head_sha))
         return MERGE_SHA
+
+    def mark_pull_request_ready(self, number):
+        self.readied.append(number)
 
     def merge_commit_matches_transaction(self, record, merge_sha):
         return self.merge_matches
@@ -298,6 +304,45 @@ class SuiteReconcileTest(unittest.TestCase):
         self.assertEqual(record, self.backend.existing)
         self.assertEqual(self.backend.created, [])
 
+    def test_ready_reservation_cannot_restart_before_final_reconcile(self) -> None:
+        self.backend.existing = replace(suite_record(), draft=False)
+
+        with self.assertRaisesRegex(ValueError, "complete final state"):
+            reconcile_transaction(self.request, self.backend)
+
+        self.assertEqual(self.backend.created, [])
+        self.assertEqual(self.backend.reconciled, [])
+
+    def test_ready_recovery_accepts_only_identical_final_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_root = Path(temp_dir)
+            checksums = {}
+            for path in SUITE_STATE_PATHS:
+                target = state_root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"final {path}\n", encoding="utf-8")
+                checksums[path] = hashlib.sha256(target.read_bytes()).hexdigest()
+            ready = replace(
+                suite_record(state_sha=STATE_SHA),
+                draft=False,
+                state_checksums=checksums,
+            )
+            self.backend.existing = ready
+
+            self.assertEqual(
+                reconcile_transaction(
+                    self.request, self.backend, state_root=state_root
+                ),
+                ready,
+            )
+            (state_root / SUITE_STATE_PATHS[0]).write_text(
+                "different\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                reconcile_transaction(self.request, self.backend, state_root=state_root)
+
+        self.assertEqual(self.backend.reconciled, [])
+
     def test_rejects_wrong_ref_checkout_and_unexpected_dirty_files(self) -> None:
         with self.assertRaisesRegex(ValueError, "default branch"):
             reconcile_transaction(
@@ -386,10 +431,38 @@ class SuiteInspectAndMergeTest(unittest.TestCase):
 
         self.assertEqual(merged.state, "merged")
         self.assertEqual(merged.merge_sha, MERGE_SHA)
+        self.assertEqual(self.backend.readied, [77])
         self.assertEqual(self.backend.merged, [(77, STATE_SHA)])
 
         with self.assertRaisesRegex(ValueError, "state_sha"):
             merge_transaction(record, {**gate, "state_sha": "9" * 40}, self.backend)
+
+    def test_ready_recovery_requires_complete_exact_final_gate(self) -> None:
+        record = suite_record(state_sha=STATE_SHA)
+        self.backend.pr = replace(self.backend.pr, head_sha=STATE_SHA, draft=False)
+        gate = {
+            "schema": "browseros-release-suite-gate-v1",
+            "passed": True,
+            "transaction_id": record.transaction_id,
+            "source_sha": record.source_sha,
+            "state_sha": record.state_sha,
+            "browser_version": record.browser_version,
+            "component_versions": dict(record.component_versions),
+            "state_checksums": dict(record.state_checksums),
+            "products": ["browseros", "browserclaw"],
+        }
+
+        merged = merge_transaction(record, gate, self.backend)
+
+        self.assertEqual(merged.merge_sha, MERGE_SHA)
+        self.assertEqual(self.backend.readied, [])
+        incomplete = replace(record, state_checksums={})
+        with self.assertRaisesRegex(ValueError, "complete final state"):
+            merge_transaction(
+                incomplete,
+                {**gate, "state_checksums": {}},
+                self.backend,
+            )
 
     def test_merge_rejects_changed_head_and_superseded_state(self) -> None:
         record = suite_record(state_sha=STATE_SHA)
@@ -523,7 +596,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                 mock.patch(
                     "bos_build.release.suite.create_pull_request",
                     return_value="https://github.com/owner/repo/pull/77",
-                ),
+                ) as create_pr,
                 mock.patch("bos_build.release.suite.edit_pull_request_body"),
             ):
                 record = backend.create_transaction(
@@ -533,6 +606,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                     browser_version,
                     backend.read_build_offset() + 1,
                 )
+
                 # This is the interrupted-push window: the same reservation tree
                 # is recovered from the deterministic remote branch.
                 recovered = backend.create_transaction(
@@ -543,6 +617,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                     backend.read_build_offset() + 1,
                 )
 
+            self.assertTrue(create_pr.call_args.kwargs["draft"])
             self.assertEqual(recovered.reservation_sha, record.reservation_sha)
             self.assertEqual(
                 self._git(remote, "rev-parse", f"refs/heads/{record.branch}"),
@@ -601,6 +676,59 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "conflicts"):
                 backend.reconcile_state(reconciled, state_root)
+
+            # The exact PR-head ref outlives GitHub's deletion of the same-repo
+            # source branch. A full workflow retry recovers reservation metadata
+            # from the merged PR and still builds the original overlay tree.
+            self._git(
+                repo,
+                "push",
+                "origin",
+                f"{reconciled.state_sha}:refs/pull/77/head",
+            )
+            self._git(repo, "checkout", "main")
+            self._git(repo, "merge", "--squash", reconciled.state_sha)
+            self._git(repo, "commit", "-m", "merge suite state")
+            merge_sha = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "push", "origin", "main")
+            self._git(repo, "push", "origin", "--delete", reconciled.branch)
+            merged_pull_request = {
+                **pull_request,
+                "isDraft": False,
+                "state": "MERGED",
+                "mergedAt": "2026-08-29T00:00:00Z",
+                "mergeCommit": {"oid": merge_sha},
+            }
+            with mock.patch(
+                "bos_build.release.suite.list_pull_requests",
+                return_value=[merged_pull_request],
+            ):
+                merged = fresh_backend.find_transaction(request)
+            self.assertIsNotNone(merged)
+            assert merged is not None
+            self.assertEqual(merged.state_sha, reconciled.state_sha)
+            self.assertEqual(merged.merge_sha, merge_sha)
+            self.assertEqual(merged.build_state_ref(), "refs/pull/77/head")
+            self.assertEqual(
+                self._git(
+                    repo,
+                    "ls-remote",
+                    "--heads",
+                    "origin",
+                    f"refs/heads/{reconciled.branch}",
+                ),
+                "",
+            )
+            self._git(
+                fresh,
+                "fetch",
+                "origin",
+                f"{merged.build_state_ref()}:refs/remotes/origin/release-state",
+            )
+            self.assertEqual(
+                self._git(fresh, "rev-parse", "refs/remotes/origin/release-state"),
+                reconciled.state_sha,
+            )
 
 
 if __name__ == "__main__":

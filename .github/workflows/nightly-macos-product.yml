@@ -7,8 +7,8 @@ on:
         description: Internal product topology key
         required: true
         type: string
-      transaction_branch:
-        description: Deterministic suite branch containing the state overlay
+      state_ref:
+        description: Suite branch or durable pull-request head containing the state overlay
         required: true
         type: string
       source_sha:
@@ -97,7 +97,7 @@ jobs:
           SERVER_VERSION: ${{ inputs.server_version }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           STATE_SHA: ${{ inputs.state_sha }}
-          TRANSACTION_BRANCH: ${{ inputs.transaction_branch }}
+          STATE_REF: ${{ inputs.state_ref }}
         run: |
           set -euo pipefail
           repo="${BROWSEROS_REPO:-}"
@@ -130,7 +130,9 @@ jobs:
           [[ "$SERVER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$EXTENSION_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$ONBOARDING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          git check-ref-format --branch "$TRANSACTION_BRANCH" >/dev/null
+          if ! [[ "$STATE_REF" =~ ^refs/pull/[1-9][0-9]*/head$ ]]; then
+            git check-ref-format --branch "$STATE_REF" >/dev/null
+          fi
           {
             echo "browseros_repo=${repo/#\~/$HOME}"
             echo "chromium_src=${chromium_src/#\~/$HOME}"
@@ -143,16 +145,25 @@ jobs:
           BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           STATE_SHA: ${{ inputs.state_sha }}
-          TRANSACTION_BRANCH: ${{ inputs.transaction_branch }}
+          STATE_REF: ${{ inputs.state_ref }}
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO"
+          if [[ "$STATE_REF" =~ ^refs/pull/[1-9][0-9]*/head$ ]]; then
+            state_remote_ref="refs/remotes/origin/release-state"
+            state_refspec="+$STATE_REF:$state_remote_ref"
+          else
+            state_remote_ref="refs/remotes/origin/$STATE_REF"
+            state_refspec="+refs/heads/$STATE_REF:$state_remote_ref"
+          fi
           git fetch origin --tags --prune --prune-tags --force \
             '+refs/heads/main:refs/remotes/origin/main' \
-            "+refs/heads/$TRANSACTION_BRANCH:refs/remotes/origin/$TRANSACTION_BRANCH"
+            "$state_refspec"
           git reset --hard
           git clean -fd
-          test "$(git rev-parse "origin/$TRANSACTION_BRANCH")" = "$STATE_SHA"
+          # The PR-head ref survives source-branch deletion. Exact resolution
+          # prevents a reopened or advanced PR from changing artifact inputs.
+          test "$(git rev-parse "$state_remote_ref")" = "$STATE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" "$STATE_SHA"
           git checkout --detach "$STATE_SHA"

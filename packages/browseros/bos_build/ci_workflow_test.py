@@ -1416,6 +1416,10 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
                 "${{ needs.transaction.outputs.state_sha }}",
             )
             self.assertEqual(
+                build["with"]["state_ref"],
+                "${{ needs.transaction.outputs.state_ref }}",
+            )
+            self.assertEqual(
                 build["with"]["browser_version"],
                 "${{ needs.transaction.outputs.browser_version }}",
             )
@@ -1546,7 +1550,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             set(triggers["workflow_call"]["inputs"]),
             {
                 "product",
-                "transaction_branch",
+                "state_ref",
                 "source_sha",
                 "state_sha",
                 "browser_version",
@@ -1565,7 +1569,9 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
         )
         build = self.named_step(workflow, "build", "Build signed nightly")
         text = (WORKFLOW_DIR / "nightly-macos-product.yml").read_text(encoding="utf-8")
-        self.assertIn("refs/heads/$TRANSACTION_BRANCH", sync["run"])
+        self.assertIn("refs/pull/[1-9][0-9]*/head", sync["run"])
+        self.assertIn('"+$STATE_REF:$state_remote_ref"', sync["run"])
+        self.assertIn('git rev-parse "$state_remote_ref"', sync["run"])
         self.assertIn('git checkout --detach "$STATE_SHA"', sync["run"])
         self.assertIn(
             'git merge-base --is-ancestor "$SOURCE_SHA" "$STATE_SHA"', sync["run"]

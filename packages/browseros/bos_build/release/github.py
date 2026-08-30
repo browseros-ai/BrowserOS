@@ -107,27 +107,28 @@ def create_pull_request(
     base: str,
     title: str,
     body: str,
+    draft: bool = False,
     runner: CommandRunner = subprocess.run,
 ) -> str:
     """Create a pull request and return its URL."""
-    return _run_gh(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--repo",
-            repo,
-            "--head",
-            head,
-            "--base",
-            base,
-            "--title",
-            title,
-            "--body",
-            body,
-        ],
-        runner,
-    )
+    command = [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        repo,
+        "--head",
+        head,
+        "--base",
+        base,
+        "--title",
+        title,
+        "--body",
+        body,
+    ]
+    if draft:
+        command.append("--draft")
+    return _run_gh(command, runner)
 
 
 def edit_pull_request_body(
@@ -149,6 +150,19 @@ def edit_pull_request_body(
             "--body",
             body,
         ],
+        runner,
+    )
+
+
+def mark_pull_request_ready(
+    repo: str,
+    number: int,
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> None:
+    """Move a draft pull request to ready without changing its branch."""
+    _run_gh(
+        ["gh", "pr", "ready", str(number), "--repo", repo],
         runner,
     )
 

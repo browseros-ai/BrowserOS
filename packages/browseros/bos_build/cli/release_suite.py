@@ -63,6 +63,7 @@ def _write_outputs(path: Optional[Path], record: SuiteRecord) -> None:
         "source_sha": record.source_sha,
         "reservation_sha": record.reservation_sha,
         "state_sha": record.state_sha,
+        "state_ref": record.build_state_ref(),
         "branch": record.branch,
         "browser_version": record.browser_version,
         "build_offset": str(record.build_offset),

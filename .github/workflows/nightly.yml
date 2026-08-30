@@ -23,6 +23,7 @@ jobs:
     outputs:
       transaction_id: ${{ steps.transaction.outputs.transaction_id }}
       branch: ${{ steps.transaction.outputs.branch }}
+      state_ref: ${{ steps.transaction.outputs.state_ref }}
       source_sha: ${{ steps.transaction.outputs.source_sha }}
       state_sha: ${{ steps.transaction.outputs.state_sha }}
       browser_version: ${{ steps.transaction.outputs.browser_version }}
@@ -170,7 +171,7 @@ jobs:
     uses: ./.github/workflows/nightly-macos-product.yml
     with:
       product: browseros
-      transaction_branch: ${{ needs.transaction.outputs.branch }}
+      state_ref: ${{ needs.transaction.outputs.state_ref }}
       source_sha: ${{ needs.transaction.outputs.source_sha }}
       state_sha: ${{ needs.transaction.outputs.state_sha }}
       browser_version: ${{ needs.transaction.outputs.browser_version }}
@@ -185,7 +186,7 @@ jobs:
     uses: ./.github/workflows/nightly-macos-product.yml
     with:
       product: browserclaw
-      transaction_branch: ${{ needs.transaction.outputs.branch }}
+      state_ref: ${{ needs.transaction.outputs.state_ref }}
       source_sha: ${{ needs.transaction.outputs.source_sha }}
       state_sha: ${{ needs.transaction.outputs.state_sha }}
       browser_version: ${{ needs.transaction.outputs.browser_version }}
