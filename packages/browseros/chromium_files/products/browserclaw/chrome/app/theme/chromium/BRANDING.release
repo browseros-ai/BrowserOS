@@ -7,4 +7,4 @@ PRODUCT_INSTALLER_SHORTNAME=BrowserOS neo Installer
 COPYRIGHT=Copyright @LASTCHANGE_YEAR@ BrowserOS. All rights reserved.
 MAC_BUNDLE_ID=com.browseros.BrowserClaw
 MAC_CREATOR_CODE=Cr24
-MAC_TEAM_ID=
+MAC_TEAM_ID=8YMKWU47S5
