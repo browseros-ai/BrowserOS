@@ -173,8 +173,8 @@ export class ChatService {
     return await this.conversationRuns.stop(conversationId)
   }
 
-  subscribePanels() {
-    return this.conversationRuns.subscribePanels()
+  subscribePanelAssignments() {
+    return this.conversationRuns.subscribePanelAssignments()
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction

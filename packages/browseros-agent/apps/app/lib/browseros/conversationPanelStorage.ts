@@ -1,7 +1,7 @@
-import type { ConversationPanel } from '@browseros/shared/schemas/conversation-panels'
+import type { ConversationPanelAssignment } from '@browseros/shared/schemas/conversation-panels'
 import { storage } from '@wxt-dev/storage'
 
-export type ConversationPanelViews = Record<string, ConversationPanel>
+export type ConversationPanelViews = Record<string, ConversationPanelAssignment>
 
 /**
  * Background-owned tab routing table consumed by thin side-panel views.
@@ -17,6 +17,6 @@ export const conversationPanelViewsStorage =
 export function conversationForTab(
   views: ConversationPanelViews,
   tabId: number | undefined,
-): ConversationPanel | undefined {
+): ConversationPanelAssignment | undefined {
   return tabId === undefined ? undefined : views[String(tabId)]
 }

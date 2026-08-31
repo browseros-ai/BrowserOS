@@ -20,5 +20,9 @@ export function createConversationPanelBroker(): ConversationPanelBroker {
     },
     hasShownConfetti: () => firstRunConfettiShownStorage.getValue(),
     markConfettiShown: () => firstRunConfettiShownStorage.setValue(true),
+    reportError: (error, context) => {
+      // biome-ignore lint/suspicious/noConsole: MV3 background failures otherwise have no durable diagnostic surface.
+      console.warn('[conversation-panel-broker]', context, error)
+    },
   })
 }

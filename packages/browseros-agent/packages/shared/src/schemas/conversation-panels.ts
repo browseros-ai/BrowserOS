@@ -13,7 +13,7 @@ export const ConversationRunStatusSchema = z.enum([
   'failed',
 ])
 
-export const ConversationPanelSchema = z.object({
+export const ConversationPanelAssignmentSchema = z.object({
   tabId: z.number().int(),
   conversationId: z.string(),
   runId: z.string(),
@@ -21,15 +21,18 @@ export const ConversationPanelSchema = z.object({
 })
 
 /**
- * The server's complete tab-to-conversation projection. Every SSE message has
- * this same shape, so reconnect and live reconciliation follow one code path.
+ * The server's complete current panel routing table. Every SSE message carries
+ * all assignments, so a reconnect or heartbeat can repair missed client work
+ * without replaying an event history.
  */
-export const ConversationPanelSnapshotSchema = z.object({
-  tabs: z.array(ConversationPanelSchema),
+export const ConversationPanelAssignmentsSchema = z.object({
+  assignments: z.array(ConversationPanelAssignmentSchema),
 })
 
 export type ConversationRunStatus = z.infer<typeof ConversationRunStatusSchema>
-export type ConversationPanel = z.infer<typeof ConversationPanelSchema>
-export type ConversationPanelSnapshot = z.infer<
-  typeof ConversationPanelSnapshotSchema
+export type ConversationPanelAssignment = z.infer<
+  typeof ConversationPanelAssignmentSchema
+>
+export type ConversationPanelAssignments = z.infer<
+  typeof ConversationPanelAssignmentsSchema
 >

@@ -5,12 +5,14 @@
  */
 
 import type {
-  ConversationPanelSnapshot,
+  ConversationPanelAssignments,
   ConversationRunStatus,
 } from '@browseros/shared/schemas/conversation-panels'
 import type { UIMessage, UIMessageChunk } from 'ai'
 
 export type { ConversationRunStatus } from '@browseros/shared/schemas/conversation-panels'
+
+const DEFAULT_PANEL_ASSIGNMENTS_HEARTBEAT_MS = 5_000
 
 export interface ConversationRunSnapshot {
   conversationId: string
@@ -87,6 +89,17 @@ interface ConversationRunRecord {
   resolveFinished: () => void
 }
 
+interface PanelAssignmentsSubscriber {
+  controller: ReadableStreamDefaultController<ConversationPanelAssignments>
+  heartbeat?: ReturnType<typeof setInterval>
+}
+
+interface ConversationRunsDeps {
+  activity?: ConversationRunActivity
+  /** Lower values heal clients faster at the cost of more loopback traffic. */
+  panelAssignmentsHeartbeatMs?: number
+}
+
 export class ConversationRunAlreadyActiveError extends Error {
   constructor() {
     super('A conversation run is already active')
@@ -109,13 +122,9 @@ export class ConversationRunNotFoundError extends Error {
 export class ConversationRuns {
   private readonly runs = new Map<string, ConversationRunRecord>()
   private readonly panelByTab = new Map<number, ConversationRunRecord>()
-  private readonly panelSubscribers = new Set<
-    ReadableStreamDefaultController<ConversationPanelSnapshot>
-  >()
+  private readonly panelSubscribers = new Set<PanelAssignmentsSubscriber>()
 
-  constructor(
-    private readonly deps: { activity?: ConversationRunActivity } = {},
-  ) {}
+  constructor(private readonly deps: ConversationRunsDeps = {}) {}
 
   async start(
     input: StartConversationRunInput,
@@ -215,19 +224,24 @@ export class ConversationRuns {
     })
   }
 
-  /** Every subscriber receives an authoritative full snapshot, including first. */
-  subscribePanels(): ReadableStream<ConversationPanelSnapshot> {
-    let subscriber:
-      | ReadableStreamDefaultController<ConversationPanelSnapshot>
-      | undefined
-    return new ReadableStream<ConversationPanelSnapshot>({
+  /**
+   * Streams the complete current assignment set immediately, on each change,
+   * and periodically so a client can repair transient browser-side failures.
+   */
+  subscribePanelAssignments(): ReadableStream<ConversationPanelAssignments> {
+    let subscriber: PanelAssignmentsSubscriber | undefined
+    return new ReadableStream<ConversationPanelAssignments>({
       start: (controller) => {
-        subscriber = controller
-        controller.enqueue(this.panelSnapshot())
-        this.panelSubscribers.add(controller)
+        subscriber = { controller }
+        this.panelSubscribers.add(subscriber)
+        this.enqueuePanelAssignments(subscriber)
+        subscriber.heartbeat = setInterval(() => {
+          if (subscriber) this.enqueuePanelAssignments(subscriber)
+        }, this.deps.panelAssignmentsHeartbeatMs ??
+          DEFAULT_PANEL_ASSIGNMENTS_HEARTBEAT_MS)
       },
       cancel: () => {
-        if (subscriber) this.panelSubscribers.delete(subscriber)
+        if (subscriber) this.removePanelAssignmentsSubscriber(subscriber)
       },
     })
   }
@@ -279,7 +293,7 @@ export class ConversationRuns {
       this.panelByTab.delete(tabId)
       panelsChanged = true
     }
-    if (panelsChanged) this.publishPanels()
+    if (panelsChanged) this.publishPanelAssignments()
     return true
   }
 
@@ -341,7 +355,7 @@ export class ConversationRuns {
     }
     if (tabIds.size === 0) return
     for (const tabId of tabIds) this.panelByTab.set(tabId, record)
-    this.publishPanels()
+    this.publishPanelAssignments()
   }
 
   private associateTabs(
@@ -363,13 +377,13 @@ export class ConversationRuns {
       this.panelByTab.set(tabId, record)
       changed = true
     }
-    if (changed) this.publishPanels()
+    if (changed) this.publishPanelAssignments()
     return true
   }
 
-  private panelSnapshot(): ConversationPanelSnapshot {
+  private currentPanelAssignments(): ConversationPanelAssignments {
     return {
-      tabs: [...this.panelByTab.entries()]
+      assignments: [...this.panelByTab.entries()]
         .map(([tabId, record]) => ({
           tabId,
           conversationId: record.conversationId,
@@ -380,15 +394,32 @@ export class ConversationRuns {
     }
   }
 
-  private publishPanels(): void {
-    const snapshot = this.panelSnapshot()
+  private publishPanelAssignments(): void {
+    const assignments = this.currentPanelAssignments()
     for (const subscriber of [...this.panelSubscribers]) {
-      try {
-        subscriber.enqueue(snapshot)
-      } catch {
-        this.panelSubscribers.delete(subscriber)
-      }
+      this.enqueuePanelAssignments(subscriber, assignments)
     }
+  }
+
+  private enqueuePanelAssignments(
+    subscriber: PanelAssignmentsSubscriber,
+    assignments = this.currentPanelAssignments(),
+  ): void {
+    try {
+      subscriber.controller.enqueue(assignments)
+    } catch {
+      this.removePanelAssignmentsSubscriber(subscriber)
+    }
+  }
+
+  private removePanelAssignmentsSubscriber(
+    subscriber: PanelAssignmentsSubscriber,
+  ): void {
+    // The timer belongs to this HTTP stream. Clearing it on cancellation avoids
+    // retaining a dead controller and the run graph behind its closure.
+    if (subscriber.heartbeat) clearInterval(subscriber.heartbeat)
+    this.panelSubscribers.delete(subscriber)
+    subscriber.heartbeat = undefined
   }
 
   private async pump(record: ConversationRunRecord): Promise<void> {
@@ -445,7 +476,9 @@ export class ConversationRuns {
     }
     record.subscribers.clear()
 
-    if ([...this.panelByTab.values()].includes(record)) this.publishPanels()
+    if ([...this.panelByTab.values()].includes(record)) {
+      this.publishPanelAssignments()
+    }
     try {
       if (record.activityStarted) this.deps.activity?.endChatStream()
     } finally {

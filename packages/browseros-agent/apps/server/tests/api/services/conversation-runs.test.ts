@@ -19,11 +19,11 @@ const secondChunk: UIMessageChunk = {
 }
 
 describe('ConversationRuns', () => {
-  it('publishes one canonical run to streams and panel snapshots', async () => {
+  it('publishes one canonical run to streams and panel assignments', async () => {
     const source = controlledSource()
     const runs = new ConversationRuns()
-    const panels = runs.subscribePanels().getReader()
-    expect((await panels.read()).value).toEqual({ tabs: [] })
+    const panels = runs.subscribePanelAssignments().getReader()
+    expect((await panels.read()).value).toEqual({ assignments: [] })
 
     const started = await runs.start({
       conversationId: 'conversation-1',
@@ -33,7 +33,7 @@ describe('ConversationRuns', () => {
     })
 
     expect((await panels.read()).value).toEqual({
-      tabs: [
+      assignments: [
         {
           tabId: 10,
           conversationId: 'conversation-1',
@@ -51,15 +51,15 @@ describe('ConversationRuns', () => {
 
     const pinnedRun = runs.activeRun('conversation-1')
     expect(pinnedRun?.associateTabs([12])).toBe(true)
-    expect((await panels.read()).value?.tabs.map((tab) => tab.tabId)).toEqual([
-      10, 11, 12,
-    ])
+    expect(
+      (await panels.read()).value?.assignments.map((tab) => tab.tabId),
+    ).toEqual([10, 11, 12])
 
     const streamed = collect(runs.subscribe('conversation-1'))
     source.write(firstChunk)
     source.close()
     expect(await streamed).toEqual([firstChunk])
-    expect((await panels.read()).value?.tabs).toEqual([
+    expect((await panels.read()).value?.assignments).toEqual([
       expect.objectContaining({ tabId: 10, status: 'completed' }),
       expect.objectContaining({ tabId: 11, status: 'completed' }),
       expect.objectContaining({ tabId: 12, status: 'completed' }),
@@ -77,6 +77,37 @@ describe('ConversationRuns', () => {
     expect(pinnedRun?.associateTabs([13])).toBe(false)
     await runs.stop('conversation-1')
     await panels.cancel()
+  })
+
+  it('periodically repeats current panel assignments for client healing', async () => {
+    const source = controlledSource()
+    const runs = new ConversationRuns({ panelAssignmentsHeartbeatMs: 20 })
+    const panels = runs.subscribePanelAssignments().getReader()
+    expect((await panels.read()).value).toEqual({ assignments: [] })
+
+    const started = await runs.start({
+      conversationId: 'conversation-heartbeat',
+      messages: [],
+      panelTabIds: [14],
+      createStream: () => source.stream,
+    })
+    const changed = (await panels.read()).value
+    const heartbeat = (await panels.read()).value
+
+    expect(changed).toEqual({
+      assignments: [
+        {
+          tabId: 14,
+          conversationId: 'conversation-heartbeat',
+          runId: started.runId,
+          status: 'running',
+        },
+      ],
+    })
+    expect(heartbeat).toEqual(changed)
+
+    await panels.cancel()
+    await runs.stop('conversation-heartbeat')
   })
 
   it('keeps replay, multicast, explicit cancellation, and preparation races server-owned', async () => {
@@ -143,10 +174,10 @@ describe('ConversationRuns', () => {
     expect(runs.getSnapshot('conversation-3')?.status).toBe('completed')
   })
 
-  it('marks an AI SDK error chunk as a failed run and panel snapshot', async () => {
+  it('marks an AI SDK error chunk as a failed run and panel assignment', async () => {
     const source = controlledSource()
     const runs = new ConversationRuns()
-    const panels = runs.subscribePanels().getReader()
+    const panels = runs.subscribePanelAssignments().getReader()
     await panels.read()
     await runs.start({
       conversationId: 'conversation-error',
@@ -159,7 +190,7 @@ describe('ConversationRuns', () => {
     source.write({ type: 'error', errorText: 'provider unavailable' })
     source.close()
 
-    expect((await panels.read()).value?.tabs[0]?.status).toBe('failed')
+    expect((await panels.read()).value?.assignments[0]?.status).toBe('failed')
     expect(runs.getSnapshot('conversation-error')?.status).toBe('failed')
     await panels.cancel()
   })
@@ -227,8 +258,8 @@ describe('ConversationRuns', () => {
       createStream: () => second.stream,
     })
 
-    const snapshot = await currentPanels(runs)
-    expect(snapshot.tabs).toEqual([
+    const assignments = await currentPanelAssignments(runs)
+    expect(assignments.assignments).toEqual([
       expect.objectContaining({ tabId: 20, conversationId: 'older' }),
       expect.objectContaining({ tabId: 21, conversationId: 'newer' }),
     ])
@@ -248,7 +279,7 @@ describe('ConversationRuns', () => {
     })
 
     expect(runs.activeRun('scheduled')?.associateTabs([31])).toBe(false)
-    expect(await currentPanels(runs)).toEqual({ tabs: [] })
+    expect(await currentPanelAssignments(runs)).toEqual({ assignments: [] })
     await runs.stop('scheduled')
   })
 
@@ -339,11 +370,11 @@ function controlledSource() {
   }
 }
 
-async function currentPanels(runs: ConversationRuns) {
-  const reader = runs.subscribePanels().getReader()
-  const snapshot = (await reader.read()).value ?? { tabs: [] }
+async function currentPanelAssignments(runs: ConversationRuns) {
+  const reader = runs.subscribePanelAssignments().getReader()
+  const assignments = (await reader.read()).value ?? { assignments: [] }
   await reader.cancel()
-  return snapshot
+  return assignments
 }
 
 async function collect(

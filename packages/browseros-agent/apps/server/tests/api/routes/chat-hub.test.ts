@@ -70,7 +70,7 @@ describe('/chat server-owned run routes', () => {
     expect(await response.text()).toContain('"type":"text-start"')
   })
 
-  it('exposes panels as an extension-only snapshot-first SSE feed', async () => {
+  it('streams complete panel assignments to the extension over SSE', async () => {
     const runs = new ConversationRuns()
     await runs.start({
       conversationId: crypto.randomUUID(),
@@ -88,6 +88,7 @@ describe('/chat server-owned run routes', () => {
     const reader = response.body?.getReader()
     const first = await reader?.read()
     const text = new TextDecoder().decode(first?.value)
+    expect(text).toContain('"assignments"')
     expect(text).toContain('"tabId":42')
     await reader?.cancel()
   })

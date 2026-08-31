@@ -1,11 +1,16 @@
 import {
-  type ConversationPanel,
-  type ConversationPanelSnapshot,
-  ConversationPanelSnapshotSchema,
+  type ConversationPanelAssignment,
+  type ConversationPanelAssignments,
+  ConversationPanelAssignmentsSchema,
 } from '@browseros/shared/schemas/conversation-panels'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 import type { GlowMessage } from '@/entrypoints/glow.content/GlowMessage'
 import type { ConversationPanelViews } from './conversationPanelStorage'
+
+export interface ConversationPanelBrokerErrorContext {
+  phase: 'stream' | 'open-panel' | 'completion-effect'
+  tabId?: number
+}
 
 export interface ConversationPanelBrokerDeps {
   resolveServerUrl(): Promise<string>
@@ -17,6 +22,10 @@ export interface ConversationPanelBrokerDeps {
   sendGlow(tabId: number, message: GlowMessage): Promise<void> | void
   hasShownConfetti(): Promise<boolean>
   markConfettiShown(): Promise<void>
+  reportError?(
+    error: unknown,
+    context: ConversationPanelBrokerErrorContext,
+  ): void
   wait?(milliseconds: number, signal: AbortSignal): Promise<void>
 }
 
@@ -28,10 +37,12 @@ export interface ConversationPanelBrokerDeps {
 export class ConversationPanelBroker {
   private views: ConversationPanelViews = {}
   private loadPromise: Promise<void> | undefined
+  // Panel opening is safe to reassert, but glow activation restarts animation.
+  // Track that non-idempotent effect separately from authoritative assignments.
+  private readonly activatedRunByTab = new Map<number, string>()
   private loopPromise: Promise<void> | undefined
   private connectAbort: AbortController | undefined
   private stopped = true
-  private hasServerSnapshot = false
 
   constructor(private readonly deps: ConversationPanelBrokerDeps) {}
 
@@ -49,63 +60,86 @@ export class ConversationPanelBroker {
     this.connectAbort?.abort()
   }
 
-  /** Reconciles one authoritative server snapshot in stream order. */
-  async accept(snapshot: ConversationPanelSnapshot): Promise<void> {
+  /** Makes local storage and browser effects match one complete assignment set. */
+  async reconcile(assignments: ConversationPanelAssignments): Promise<void> {
     await this.ensureLoaded()
 
     const previous = this.views
-    const firstServerSnapshot = !this.hasServerSnapshot
     const next = Object.fromEntries(
-      snapshot.tabs.map((tab) => [String(tab.tabId), tab]),
+      assignments.assignments.map((assignment) => [
+        String(assignment.tabId),
+        assignment,
+      ]),
     )
-    const stopped = Object.values(previous).filter((panel) => {
-      if (panel.status !== 'running') return false
-      const replacement = next[String(panel.tabId)]
-      return !sameRunningPanel(panel, replacement)
+    const stopped = Object.values(previous).filter((assignment) => {
+      if (assignment.status !== 'running') return false
+      const replacement = next[String(assignment.tabId)]
+      return !sameRunningAssignment(assignment, replacement)
     })
-    const started = snapshot.tabs.filter((panel) => {
-      if (panel.status !== 'running') return false
-      return (
-        firstServerSnapshot ||
-        !sameRunningPanel(previous[String(panel.tabId)], panel)
-      )
-    })
+    const running = assignments.assignments.filter(
+      (assignment) => assignment.status === 'running',
+    )
 
-    // Storage is a browser-process cache, never a second source of truth. Write
-    // the complete projection before asynchronous Chrome side effects run.
+    // Storage is the handoff to independently mounted React panels. Commit it
+    // before opening anything, but do not advance memory if the write fails:
+    // the next heartbeat must still see the old state and retry the full handoff.
+    await this.deps.writeViews(next)
     this.views = next
-    this.hasServerSnapshot = true
-    await this.persistViews()
+
+    for (const assignment of stopped) {
+      this.activatedRunByTab.delete(assignment.tabId)
+    }
     await this.deactivate(stopped, next)
-    for (const panel of started) await this.activate(panel)
+    // `open: true` is idempotent. Reassert every running assignment so an SSE
+    // reconnect or heartbeat repairs a transient Chrome-side failure.
+    for (const assignment of running) await this.activate(assignment)
   }
 
   private async deactivate(
-    stopped: ConversationPanel[],
+    stopped: ConversationPanelAssignment[],
     next: ConversationPanelViews,
   ): Promise<void> {
-    const completed = stopped.filter((panel) => {
-      const replacement = next[String(panel.tabId)]
+    const completed = stopped.filter((assignment) => {
+      const replacement = next[String(assignment.tabId)]
       return (
-        replacement?.conversationId === panel.conversationId &&
-        replacement.runId === panel.runId &&
+        replacement?.conversationId === assignment.conversationId &&
+        replacement.runId === assignment.runId &&
         replacement.status === 'completed'
       )
     })
-    const showCompletion =
-      completed.length > 0 && !(await this.deps.hasShownConfetti())
+    let showCompletion = false
+    if (completed.length > 0) {
+      try {
+        showCompletion = !(await this.deps.hasShownConfetti())
+      } catch (error) {
+        this.reportError(error, { phase: 'completion-effect' })
+      }
+    }
     const confettiTabId = completed[0]?.tabId
 
-    for (const panel of stopped) {
-      await this.deps.sendGlow(panel.tabId, {
-        conversationId: panel.conversationId,
-        isActive: false,
-        ...(showCompletion && {
-          showConfetti: panel.tabId === confettiTabId,
-        }),
-      })
+    for (const assignment of stopped) {
+      try {
+        await this.deps.sendGlow(assignment.tabId, {
+          conversationId: assignment.conversationId,
+          isActive: false,
+          ...(showCompletion && {
+            showConfetti: assignment.tabId === confettiTabId,
+          }),
+        })
+      } catch (error) {
+        this.reportError(error, {
+          phase: 'completion-effect',
+          tabId: assignment.tabId,
+        })
+      }
     }
-    if (showCompletion) await this.deps.markConfettiShown()
+    if (showCompletion) {
+      try {
+        await this.deps.markConfettiShown()
+      } catch (error) {
+        this.reportError(error, { phase: 'completion-effect' })
+      }
+    }
   }
 
   private async runReconnectLoop(): Promise<void> {
@@ -113,10 +147,11 @@ export class ConversationPanelBroker {
     while (!this.stopped) {
       this.connectAbort = new AbortController()
       try {
-        await this.consumeSnapshots(this.connectAbort.signal)
+        await this.consumeAssignments(this.connectAbort.signal)
         retryDelayMs = 250
-      } catch {
+      } catch (error) {
         if (this.stopped || this.connectAbort.signal.aborted) break
+        this.reportError(error, { phase: 'stream' })
       }
       if (this.stopped) break
       await (this.deps.wait ?? waitFor)(
@@ -127,7 +162,7 @@ export class ConversationPanelBroker {
     }
   }
 
-  private async consumeSnapshots(signal: AbortSignal): Promise<void> {
+  private async consumeAssignments(signal: AbortSignal): Promise<void> {
     const serverUrl = await this.deps.resolveServerUrl()
     const response = await this.deps.fetch(`${serverUrl}/chat/panels`, {
       headers: { Accept: 'text/event-stream' },
@@ -137,8 +172,8 @@ export class ConversationPanelBroker {
       throw new Error(`Conversation panels unavailable (${response.status})`)
     }
 
-    // The parser buffers arbitrary fetch chunk boundaries; each parsed event is
-    // awaited so storage and panel effects preserve server ordering.
+    // The parser buffers arbitrary fetch chunk boundaries. Each full assignment
+    // set is reconciled in stream order, including periodic healing heartbeats.
     const events = response.body
       .pipeThrough(new TextDecoderStream())
       .pipeThrough(new EventSourceParserStream())
@@ -149,44 +184,76 @@ export class ConversationPanelBroker {
       } catch {
         continue
       }
-      const snapshot = ConversationPanelSnapshotSchema.safeParse(decoded)
-      if (snapshot.success) await this.accept(snapshot.data)
+      const assignments = ConversationPanelAssignmentsSchema.safeParse(decoded)
+      if (assignments.success) await this.reconcile(assignments.data)
     }
   }
 
-  private async activate(tab: ConversationPanel): Promise<void> {
+  private async activate(
+    assignment: ConversationPanelAssignment,
+  ): Promise<void> {
     try {
-      const browserTab = await this.deps.getTab(tab.tabId)
+      const browserTab = await this.deps.getTab(assignment.tabId)
       await this.deps.openPanel({
-        tabId: tab.tabId,
+        tabId: assignment.tabId,
         windowId: browserTab.windowId,
       })
-    } catch {
+    } catch (error) {
       // The server may report an effect immediately before a tab closes. The
-      // retained mapping is harmless and can still be replaced by a later run.
+      // retained mapping is harmless; a heartbeat retries other transient errors.
+      this.reportError(error, {
+        phase: 'open-panel',
+        tabId: assignment.tabId,
+      })
       return
     }
-    await this.deps.sendGlow(tab.tabId, {
-      conversationId: tab.conversationId,
+
+    if (this.activatedRunByTab.get(assignment.tabId) === assignment.runId) {
+      return
+    }
+    await this.deps.sendGlow(assignment.tabId, {
+      conversationId: assignment.conversationId,
       isActive: true,
     })
+    this.activatedRunByTab.set(assignment.tabId, assignment.runId)
   }
 
   private async ensureLoaded(): Promise<void> {
-    this.loadPromise ??= this.deps.readViews().then((views) => {
-      this.views = views
-    })
+    if (!this.loadPromise) {
+      const loading = this.deps.readViews().then((views) => {
+        // Session storage carries the last assignment set across MV3 worker
+        // suspension, allowing reconciliation to stop glows from a finished run.
+        this.views = views
+      })
+      this.loadPromise = loading
+      try {
+        await loading
+      } catch (error) {
+        // Storage can be briefly unavailable during extension startup. A failed
+        // read must not poison every later SSE reconnect with the same promise.
+        if (this.loadPromise === loading) this.loadPromise = undefined
+        throw error
+      }
+      return
+    }
     await this.loadPromise
   }
 
-  private async persistViews(): Promise<void> {
-    await this.deps.writeViews({ ...this.views })
+  private reportError(
+    error: unknown,
+    context: ConversationPanelBrokerErrorContext,
+  ): void {
+    try {
+      this.deps.reportError?.(error, context)
+    } catch {
+      // Diagnostics must never become another failure in the reconciliation path.
+    }
   }
 }
 
-function sameRunningPanel(
-  left: ConversationPanel | undefined,
-  right: ConversationPanel | undefined,
+function sameRunningAssignment(
+  left: ConversationPanelAssignment | undefined,
+  right: ConversationPanelAssignment | undefined,
 ): boolean {
   return (
     left?.status === 'running' &&

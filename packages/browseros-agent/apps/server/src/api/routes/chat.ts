@@ -1,5 +1,5 @@
 import type { Browser } from '@browseros/browser-core/browser'
-import type { ConversationPanelSnapshot } from '@browseros/shared/schemas/conversation-panels'
+import type { ConversationPanelAssignments } from '@browseros/shared/schemas/conversation-panels'
 import { zValidator } from '@hono/zod-validator'
 import { createUIMessageStreamResponse } from 'ai'
 import { Hono } from 'hono'
@@ -102,7 +102,7 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     if (!isTrustedAppRequest(c)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
-    return panelSnapshotResponse(service.subscribePanels())
+    return panelAssignmentsResponse(service.subscribePanelAssignments())
   })
   app.get('/:conversationId/state', async (c) => {
     // Keep this handler's type shallow: combining an awaited response with the
@@ -170,16 +170,16 @@ function isBrowserOsChatRequest(
   return request.target.type === 'browseros'
 }
 
-/** Encodes authoritative background-only panel snapshots as reconnectable SSE. */
-function panelSnapshotResponse(
-  stream: ReadableStream<ConversationPanelSnapshot>,
+/** Encodes the current background-only panel assignments as reconnectable SSE. */
+function panelAssignmentsResponse(
+  stream: ReadableStream<ConversationPanelAssignments>,
 ): Response {
   const encoder = new TextEncoder()
   const body = stream.pipeThrough(
-    new TransformStream<ConversationPanelSnapshot, Uint8Array>({
-      transform(snapshot, controller) {
+    new TransformStream<ConversationPanelAssignments, Uint8Array>({
+      transform(assignments, controller) {
         controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`),
+          encoder.encode(`data: ${JSON.stringify(assignments)}\n\n`),
         )
       },
     }),
