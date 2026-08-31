@@ -239,6 +239,14 @@ Run the Mac runner in the logged-in GUI user's session. Codesign and
   BrowserOS's base64-encoded Developer ID provisioning profile. The signing
   helper decodes it into runner-owned temporary storage; BrowserOS validates
   and embeds it, and unconditional cleanup removes the temporary copy.
+- The `PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` repository secret containing
+  BrowserOS neo's profile for `com.browseros.BrowserClaw`. Apple profiles are
+  App-ID-specific, so the BrowserOS profile cannot be reused for neo even though
+  both apps use the same signing team and certificate.
+- Both profile secrets are optional while Apple approval is pending. A missing
+  profile leaves the corresponding app normally signed and usable but without
+  macOS platform passkeys. A configured but invalid profile fails before the
+  long build so releases cannot silently ship the wrong App ID authorization.
 - Enough disk for two Chromium outputs and DMGs.
 
 Set these repository variables:

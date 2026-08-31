@@ -111,6 +111,8 @@ on:
         required: false
       PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64:
         required: false
+      PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64:
+        required: false
       SPARKLE_PRIVATE_KEY:
         required: false
       SLACK_WEBHOOK_URL:
@@ -338,6 +340,7 @@ jobs:
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}
+          PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64 }}
         shell: bash
         run: bash .github/scripts/macos-signing-keychain.sh setup
 
@@ -357,7 +360,8 @@ jobs:
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
-          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.passkey_profile_path }}
+          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}
+          PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browserclaw_passkey_profile_path }}
           PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
           PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

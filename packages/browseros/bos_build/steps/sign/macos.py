@@ -53,13 +53,11 @@ SERVER_RESOURCES_BUNDLE_REL = all_server_bundles()[0].macos_bundle_resources_roo
 # Finder droppings in the staged tree must not fail the nightly sign.
 SERVER_RESOURCES_JUNK_FILES = {".DS_Store"}
 
-BROWSEROS_PASSKEY_PRODUCT_ID = "browseros"
-BROWSEROS_PASSKEY_ENTITLEMENTS_NAME = "app-entitlements-browseros.plist"
-BROWSEROS_PASSKEY_PROFILE_ENV = "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"
+BROWSER_PASSKEY_ENTITLEMENTS_NAME = "app-entitlements-browseros.plist"
 BROWSER_PASSKEY_ENTITLEMENT = (
     "com.apple.developer.web-browser.public-key-credential"
 )
-BROWSEROS_KEYCHAIN_GROUP_SUFFIXES = (
+BROWSER_KEYCHAIN_GROUP_SUFFIXES = (
     "devicetrust",
     "secure-payment-confirmation",
     "unexportable-keys",
@@ -69,7 +67,33 @@ BROWSEROS_KEYCHAIN_GROUP_SUFFIXES = (
 
 
 @dataclass(frozen=True)
-class BrowserOSPasskeySigningInputs:
+class BrowserPasskeyProductConfig:
+    """Bind a release product to its app-specific Apple authorization profile.
+
+    BrowserOS and BrowserOS neo use the same certificate and team, but Apple
+    grants the managed capability to an exact App ID. Keeping the environment
+    mapping product-owned prevents either profile from being used for the
+    other bundle.
+    """
+
+    profile_env: str
+    env_attr: str
+
+
+BROWSER_PASSKEY_PRODUCTS = {
+    "browseros": BrowserPasskeyProductConfig(
+        profile_env="PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH",
+        env_attr="macos_browseros_passkey_profile_path",
+    ),
+    "browserclaw": BrowserPasskeyProductConfig(
+        profile_env="PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH",
+        env_attr="macos_browserclaw_passkey_profile_path",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class BrowserPasskeySigningInputs:
     """Validated inputs crossing Chromium's compile and Apple's signing boundary.
 
     Chromium bakes the keychain group into the framework, while codesign and the
@@ -172,28 +196,27 @@ def get_macos_keychain_path(env: Optional[EnvConfig] = None) -> Optional[Path]:
     return Path(value).expanduser()
 
 
-def requires_browseros_passkey_signing(ctx: Optional[Context]) -> bool:
-    """Whether this artifact must ship the BrowserOS managed passkey capability."""
+def requires_browser_passkey_signing(ctx: Optional[Context]) -> bool:
+    """Whether this release artifact may opt into the managed passkey capability."""
     return bool(
         ctx
-        and ctx.product.id == BROWSEROS_PASSKEY_PRODUCT_ID
+        and ctx.product.id in BROWSER_PASSKEY_PRODUCTS
         and ctx.build_type == "release"
     )
 
 
-def browseros_passkey_groups(team_id: str, bundle_id: str) -> tuple[str, ...]:
-    """Return every keychain group Chromium compiles for BrowserOS features."""
+def browser_passkey_groups(team_id: str, bundle_id: str) -> tuple[str, ...]:
+    """Return every keychain group Chromium compiles for browser features."""
     prefix = f"{team_id}.{bundle_id}"
-    return tuple(f"{prefix}.{suffix}" for suffix in BROWSEROS_KEYCHAIN_GROUP_SUFFIXES)
+    return tuple(f"{prefix}.{suffix}" for suffix in BROWSER_KEYCHAIN_GROUP_SUFFIXES)
 
 
-def get_browseros_passkey_profile_path(env: Optional[EnvConfig]) -> Optional[Path]:
-    """Resolve the uncommitted Developer ID profile used by release signing."""
-    value = (
-        env.macos_browseros_passkey_profile_path
-        if env
-        else os.environ.get(BROWSEROS_PASSKEY_PROFILE_ENV)
-    )
+def get_browser_passkey_profile_path(
+    env: Optional[EnvConfig], product_id: str
+) -> Optional[Path]:
+    """Resolve the uncommitted, app-specific profile used by release signing."""
+    config = BROWSER_PASSKEY_PRODUCTS[product_id]
+    value = getattr(env, config.env_attr) if env else os.environ.get(config.profile_env)
     return Path(value).expanduser() if value else None
 
 
@@ -232,7 +255,7 @@ def _profile_allows_value(patterns: Any, value: str) -> bool:
     )
 
 
-def validate_browseros_passkey_profile(
+def validate_browser_passkey_profile(
     profile: Dict[str, Any], team_id: str, bundle_id: str
 ) -> None:
     """Validate Apple's profile allowlist before it is sealed into the app."""
@@ -247,7 +270,7 @@ def validate_browseros_passkey_profile(
     if app_id != expected_app_id:
         raise RuntimeError(
             "Provisioning profile application identifier does not match "
-            f"BrowserOS: expected {expected_app_id}, got {app_id or '<missing>'}"
+            f"the browser: expected {expected_app_id}, got {app_id or '<missing>'}"
         )
 
     profile_team = entitlements.get("com.apple.developer.team-identifier")
@@ -265,20 +288,20 @@ def validate_browseros_passkey_profile(
     allowed_groups = entitlements.get("keychain-access-groups")
     missing_groups = [
         group
-        for group in browseros_passkey_groups(team_id, bundle_id)
+        for group in browser_passkey_groups(team_id, bundle_id)
         if not _profile_allows_value(allowed_groups, group)
     ]
     if missing_groups:
         raise RuntimeError(
-            "Provisioning profile does not authorize BrowserOS keychain groups: "
+            "Provisioning profile does not authorize browser keychain groups: "
             + ", ".join(missing_groups)
         )
 
 
-def validate_browseros_passkey_entitlements(
+def validate_browser_passkey_entitlements(
     entitlements: Dict[str, Any], team_id: str, bundle_id: str, source: str
 ) -> None:
-    """Check the concrete claims that codesign will attach to BrowserOS."""
+    """Check the concrete claims that codesign will attach to a browser app."""
     expected_app_id = f"{team_id}.{bundle_id}"
     if entitlements.get("com.apple.application-identifier") != expected_app_id:
         raise RuntimeError(
@@ -286,17 +309,17 @@ def validate_browseros_passkey_entitlements(
         )
 
     claimed_groups = entitlements.get("keychain-access-groups")
-    expected_groups = set(browseros_passkey_groups(team_id, bundle_id))
+    expected_groups = set(browser_passkey_groups(team_id, bundle_id))
     if not isinstance(claimed_groups, list) or not expected_groups.issubset(
         set(claimed_groups)
     ):
-        raise RuntimeError(f"{source} is missing BrowserOS keychain access groups")
+        raise RuntimeError(f"{source} is missing browser keychain access groups")
 
     if entitlements.get(BROWSER_PASSKEY_ENTITLEMENT) is not True:
         raise RuntimeError(f"{source} is missing {BROWSER_PASSKEY_ENTITLEMENT}")
 
 
-def render_browseros_passkey_entitlements(
+def render_browser_passkey_entitlements(
     template_path: Path, output_path: Path, team_id: str, bundle_id: str
 ) -> None:
     """Resolve Chromium's signing placeholders into a codesign-ready plist."""
@@ -320,7 +343,7 @@ def render_browseros_passkey_entitlements(
         raise RuntimeError(f"Rendered passkey entitlements are invalid: {exc}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Rendered passkey entitlements are not a dictionary")
-    validate_browseros_passkey_entitlements(
+    validate_browser_passkey_entitlements(
         payload, team_id, bundle_id, "Rendered passkey entitlements"
     )
     output_path.write_text(rendered, encoding="utf-8")
@@ -338,7 +361,7 @@ def _file_contains(path: Path, value: bytes) -> bool:
     return False
 
 
-def verify_compiled_browseros_passkey_identity(
+def verify_compiled_browser_passkey_identity(
     app_path: Path, ctx: Context, team_id: str
 ) -> None:
     """Prove the built framework expects the group the signer will authorize."""
@@ -361,36 +384,48 @@ def verify_compiled_browseros_passkey_identity(
         )
 
 
-def validate_browseros_passkey_signing_inputs(
+def validate_browser_passkey_signing_inputs(
     app_path: Path, ctx: Optional[Context], team_id: str
-) -> Optional[BrowserOSPasskeySigningInputs]:
+) -> Optional[BrowserPasskeySigningInputs]:
     """Resolve and validate every release-only passkey signing input."""
-    if not requires_browseros_passkey_signing(ctx):
+    if not requires_browser_passkey_signing(ctx):
         return None
     assert ctx is not None
     if not team_id:
-        raise RuntimeError("BrowserOS passkey signing requires a macOS team ID")
+        raise RuntimeError(
+            f"{ctx.product.display_name} passkey signing requires a macOS team ID"
+        )
 
-    profile_path = get_browseros_passkey_profile_path(ctx.env)
+    config = BROWSER_PASSKEY_PRODUCTS[ctx.product.id]
+    profile_path = get_browser_passkey_profile_path(ctx.env, ctx.product.id)
     if profile_path is None:
-        raise RuntimeError(f"{BROWSEROS_PASSKEY_PROFILE_ENV} is required")
+        # Managed-capability approval can lag a release by weeks. Preserve a
+        # normally signed, fully usable browser while the profile is absent;
+        # only platform passkeys are unavailable in this fallback mode.
+        log_warning(
+            f"{config.profile_env} is not configured; signing "
+            f"{ctx.product.display_name} without macOS platform passkeys"
+        )
+        return None
     if not profile_path.is_file():
-        raise RuntimeError(f"BrowserOS passkey profile not found: {profile_path}")
+        raise RuntimeError(
+            f"{ctx.product.display_name} passkey profile not found: {profile_path}"
+        )
 
     entitlements_template = (
-        ctx.chromium_src / "chrome" / "app" / BROWSEROS_PASSKEY_ENTITLEMENTS_NAME
+        ctx.chromium_src / "chrome" / "app" / BROWSER_PASSKEY_ENTITLEMENTS_NAME
     )
     if not entitlements_template.is_file():
         raise RuntimeError(
-            f"BrowserOS passkey entitlement template not found: {entitlements_template}"
+            f"Browser passkey entitlement template not found: {entitlements_template}"
         )
 
     bundle_id = ctx.product.mac_bundle_id(ctx.build_type)
-    validate_browseros_passkey_profile(
+    validate_browser_passkey_profile(
         decode_provisioning_profile(profile_path), team_id, bundle_id
     )
-    verify_compiled_browseros_passkey_identity(app_path, ctx, team_id)
-    return BrowserOSPasskeySigningInputs(
+    verify_compiled_browser_passkey_identity(app_path, ctx, team_id)
+    return BrowserPasskeySigningInputs(
         team_id=team_id,
         bundle_id=bundle_id,
         profile_path=profile_path,
@@ -401,7 +436,7 @@ def validate_browseros_passkey_signing_inputs(
 def _find_generic_app_entitlements(
     app_path: Path, root_dir: Path, ctx: Optional[Context]
 ) -> Optional[Path]:
-    """Retain the existing unrestricted entitlement path for non-release apps."""
+    """Find the standard entitlements used when managed passkeys are disabled."""
     entitlements_dirs = []
     if ctx:
         entitlements_dirs.extend(
@@ -432,10 +467,18 @@ def resolved_app_entitlements(
     app_path: Path,
     root_dir: Path,
     ctx: Optional[Context],
-    passkey_inputs: Optional[BrowserOSPasskeySigningInputs],
+    passkey_inputs: Optional[BrowserPasskeySigningInputs],
 ) -> Iterator[Optional[Path]]:
     """Yield the final plist and keep temporary rendered claims alive for codesign."""
     if passkey_inputs is None:
+        if ctx and ctx.product.id in BROWSER_PASSKEY_PRODUCTS:
+            # Persistent Chromium outputs can retain bundle contents from an
+            # earlier signing run. A build that omits the profile must not
+            # silently reseal that stale authorization file, including when a
+            # developer switches the same output between release and debug.
+            (app_path / "Contents" / "embedded.provisionprofile").unlink(
+                missing_ok=True
+            )
         yield _find_generic_app_entitlements(app_path, root_dir, ctx)
         return
 
@@ -444,11 +487,11 @@ def resolved_app_entitlements(
     # the codesign handoff and never enter release artifacts or source control.
     embedded_profile = app_path / "Contents" / "embedded.provisionprofile"
     shutil.copy2(passkey_inputs.profile_path, embedded_profile)
-    log_info(f"  Embedded BrowserOS passkey profile: {embedded_profile}")
+    log_info(f"  Embedded browser passkey profile: {embedded_profile}")
 
-    with tempfile.TemporaryDirectory(prefix="browseros-passkey-entitlements-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="browser-passkey-entitlements-") as tmp:
         rendered_path = Path(tmp) / "app-entitlements-browseros.plist"
-        render_browseros_passkey_entitlements(
+        render_browser_passkey_entitlements(
             passkey_inputs.entitlements_template,
             rendered_path,
             passkey_inputs.team_id,
@@ -457,13 +500,13 @@ def resolved_app_entitlements(
         yield rendered_path
 
 
-def _browseros_release_team_id(ctx: Context) -> str:
+def _product_release_team_id(ctx: Context) -> str:
     """Read the team Chromium will compile from the release branding overlay."""
     branding = (
         ctx.root_dir
         / "chromium_files"
         / "products"
-        / BROWSEROS_PASSKEY_PRODUCT_ID
+        / ctx.product.id
         / "chrome"
         / "app"
         / "theme"
@@ -471,14 +514,20 @@ def _browseros_release_team_id(ctx: Context) -> str:
         / "BRANDING.release"
     )
     if not branding.is_file():
-        raise RuntimeError(f"BrowserOS release branding not found: {branding}")
+        raise RuntimeError(
+            f"{ctx.product.display_name} release branding not found: {branding}"
+        )
     for line in branding.read_text(encoding="utf-8").splitlines():
         key, separator, value = line.partition("=")
         if separator and key == "MAC_TEAM_ID":
             if not value:
-                raise RuntimeError("BrowserOS release MAC_TEAM_ID is empty")
+                raise RuntimeError(
+                    f"{ctx.product.display_name} release MAC_TEAM_ID is empty"
+                )
             return value
-    raise RuntimeError("BrowserOS release branding has no MAC_TEAM_ID")
+    raise RuntimeError(
+        f"{ctx.product.display_name} release branding has no MAC_TEAM_ID"
+    )
 
 
 def unlock_keychain(env: Optional[EnvConfig] = None) -> None:
@@ -545,25 +594,33 @@ class MacOSSignModule(Step):
 
     def preflight(self, ctx: Context) -> None:
         """Reject an unusable managed-capability profile before the long build."""
-        if not requires_browseros_passkey_signing(ctx):
+        if not requires_browser_passkey_signing(ctx):
             return
 
-        profile_path = get_browseros_passkey_profile_path(ctx.env)
+        config = BROWSER_PASSKEY_PRODUCTS[ctx.product.id]
+        profile_path = get_browser_passkey_profile_path(ctx.env, ctx.product.id)
         if profile_path is None:
-            raise ValidationError(f"{BROWSEROS_PASSKEY_PROFILE_ENV} is required")
+            log_warning(
+                f"{config.profile_env} is not configured; "
+                f"{ctx.product.display_name} will be released without macOS "
+                "platform passkeys"
+            )
+            return
         if not profile_path.is_file():
-            raise ValidationError(f"BrowserOS passkey profile not found: {profile_path}")
+            raise ValidationError(
+                f"{ctx.product.display_name} passkey profile not found: {profile_path}"
+            )
 
         try:
-            compiled_team_id = _browseros_release_team_id(ctx)
+            compiled_team_id = _product_release_team_id(ctx)
             configured_team_id = ctx.env.macos_notarization_team_id or ""
             if configured_team_id != compiled_team_id:
                 raise RuntimeError(
-                    "Notarization team does not match BrowserOS release branding: "
+                    "Notarization team does not match product release branding: "
                     f"expected {compiled_team_id}, got "
                     f"{configured_team_id or '<missing>'}"
                 )
-            validate_browseros_passkey_profile(
+            validate_browser_passkey_profile(
                 decode_provisioning_profile(profile_path),
                 compiled_team_id,
                 ctx.product.mac_bundle_id(ctx.build_type),
@@ -1125,11 +1182,11 @@ def sign_all_components(
     # stale debug build or wrong Apple profile would otherwise leave an app
     # half-resigned before failing at the outer bundle.
     try:
-        passkey_inputs = validate_browseros_passkey_signing_inputs(
+        passkey_inputs = validate_browser_passkey_signing_inputs(
             app_path, ctx, team_id
         )
     except RuntimeError as exc:
-        log_error(f"BrowserOS passkey signing validation failed: {exc}")
+        log_error(f"Browser passkey signing validation failed: {exc}")
         return False
 
     # Print summary
@@ -1333,7 +1390,7 @@ def sign_all_components(
     return True
 
 
-def verify_browseros_passkey_signature(
+def verify_browser_passkey_signature(
     app_path: Path, ctx: Optional[Context], team_id: str
 ) -> None:
     """Verify the signed app, embedded profile, and compiled identity agree.
@@ -1342,15 +1399,17 @@ def verify_browseros_passkey_signature(
     passkeys. The OS also requires the managed entitlement and keychain groups
     to be authorized by the profile sealed into the outer app bundle.
     """
-    if not requires_browseros_passkey_signing(ctx):
+    if not requires_browser_passkey_signing(ctx):
         return
     assert ctx is not None
+    if get_browser_passkey_profile_path(ctx.env, ctx.product.id) is None:
+        return
 
     signature = run_command(
         ["codesign", "--display", "--verbose=4", str(app_path)], check=False
     )
     if signature.returncode != 0:
-        raise RuntimeError("Could not inspect the BrowserOS code signature")
+        raise RuntimeError("Could not inspect the browser code signature")
     team_match = re.search(r"(?:^|\n)TeamIdentifier=([^\n]+)", signature.stdout)
     signed_team_id = team_match.group(1).strip() if team_match else ""
     if signed_team_id != team_id:
@@ -1371,18 +1430,18 @@ def verify_browseros_passkey_signature(
         check=False,
     )
     if claims.returncode != 0:
-        raise RuntimeError("Could not inspect the BrowserOS signed entitlements")
-    validate_browseros_passkey_entitlements(
+        raise RuntimeError("Could not inspect the browser signed entitlements")
+    validate_browser_passkey_entitlements(
         _plist_from_command_output(claims.stdout, "signed entitlements"),
         team_id,
         ctx.product.mac_bundle_id(ctx.build_type),
-        "Signed BrowserOS entitlements",
+        f"Signed {ctx.product.display_name} entitlements",
     )
 
     embedded_profile = app_path / "Contents" / "embedded.provisionprofile"
     if not embedded_profile.is_file():
-        raise RuntimeError("Signed BrowserOS app has no embedded provisioning profile")
-    validate_browseros_passkey_profile(
+        raise RuntimeError("Signed browser app has no embedded provisioning profile")
+    validate_browser_passkey_profile(
         decode_provisioning_profile(embedded_profile),
         team_id,
         ctx.product.mac_bundle_id(ctx.build_type),
@@ -1421,9 +1480,9 @@ def verify_signature(
             return False
 
     try:
-        verify_browseros_passkey_signature(app_path, ctx, team_id)
+        verify_browser_passkey_signature(app_path, ctx, team_id)
     except RuntimeError as exc:
-        log_error(f"BrowserOS passkey signature verification failed: {exc}")
+        log_error(f"Browser passkey signature verification failed: {exc}")
         return False
 
     log_success("Signature verification passed")

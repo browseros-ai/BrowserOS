@@ -50,6 +50,10 @@ def _env(**values):
 
 PASSKEY_TEAM_ID = "8YMKWU47S5"
 PASSKEY_BUNDLE_ID = "com.browseros.BrowserOS"
+PASSKEY_BUNDLE_IDS = {
+    "browseros": PASSKEY_BUNDLE_ID,
+    "browserclaw": "com.browseros.BrowserClaw",
+}
 
 
 def _passkey_profile(
@@ -76,7 +80,7 @@ def _write_passkey_template(path: Path) -> None:
         "com.apple.application-identifier": prefix,
         "keychain-access-groups": [
             f"{prefix}.{suffix}"
-            for suffix in macos_module.BROWSEROS_KEYCHAIN_GROUP_SUFFIXES
+            for suffix in macos_module.BROWSER_KEYCHAIN_GROUP_SUFFIXES
         ],
         macos_module.BROWSER_PASSKEY_ENTITLEMENT: True,
     }
@@ -691,21 +695,30 @@ class SignComponentPerSliceTest(unittest.TestCase):
             )
 
 
-class BrowserOSPasskeySigningTest(unittest.TestCase):
-    def _context(self, root: Path, *, build_type: str = "release") -> Context:
+class BrowserPasskeySigningTest(unittest.TestCase):
+    def _context(
+        self,
+        root: Path,
+        *,
+        product_id: str = "browseros",
+        build_type: str = "release",
+    ) -> Context:
         return cast(
             Context,
             SimpleNamespace(
                 build_type=build_type,
                 chromium_src=root / "chromium",
-                env=_env(macos_browseros_passkey_profile_path=None),
-                product=get_product_descriptor("browseros"),
+                env=_env(
+                    macos_browseros_passkey_profile_path=None,
+                    macos_browserclaw_passkey_profile_path=None,
+                ),
+                product=get_product_descriptor(product_id),
                 root_dir=root / "browseros",
             ),
         )
 
     def test_profile_accepts_app_specific_wildcard_groups(self):
-        macos_module.validate_browseros_passkey_profile(
+        macos_module.validate_browser_passkey_profile(
             _passkey_profile(), PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
         )
 
@@ -720,7 +733,7 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
         for profile, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(RuntimeError, message):
-                    macos_module.validate_browseros_passkey_profile(
+                    macos_module.validate_browser_passkey_profile(
                         profile, PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
                     )
 
@@ -760,21 +773,85 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
             ):
                 MacOSSignModule().preflight(ctx)
 
-    def test_passkey_profile_is_required_only_for_browseros_release(self):
+    def test_each_product_can_build_without_a_passkey_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            debug_ctx = self._context(root, build_type="debug")
-            claw_ctx = self._context(root)
-            claw_ctx.product = get_product_descriptor("browserclaw")
+            for product_id in macos_module.BROWSER_PASSKEY_PRODUCTS:
+                with self.subTest(product=product_id, build_type="debug"):
+                    MacOSSignModule().preflight(
+                        self._context(root, product_id=product_id, build_type="debug")
+                    )
 
-            MacOSSignModule().preflight(debug_ctx)
-            MacOSSignModule().preflight(claw_ctx)
+                with self.subTest(product=product_id, build_type="release"):
+                    MacOSSignModule().preflight(
+                        self._context(root, product_id=product_id)
+                    )
 
-            with self.assertRaisesRegex(
-                macos_module.ValidationError,
-                macos_module.BROWSEROS_PASSKEY_PROFILE_ENV,
-            ):
-                MacOSSignModule().preflight(self._context(root))
+    def test_configured_missing_profile_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for product_id, config in macos_module.BROWSER_PASSKEY_PRODUCTS.items():
+                with self.subTest(product=product_id):
+                    ctx = self._context(root, product_id=product_id)
+                    setattr(ctx.env, config.env_attr, str(root / "missing.profile"))
+                    with self.assertRaisesRegex(
+                        macos_module.ValidationError,
+                        "profile not found",
+                    ):
+                        MacOSSignModule().preflight(ctx)
+
+    def test_release_preflight_accepts_each_products_own_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for product_id, bundle_id in PASSKEY_BUNDLE_IDS.items():
+                with self.subTest(product=product_id):
+                    ctx = self._context(root, product_id=product_id)
+                    config = macos_module.BROWSER_PASSKEY_PRODUCTS[product_id]
+                    profile_path = root / f"{product_id}.provisionprofile"
+                    profile_path.write_bytes(b"profile")
+                    setattr(ctx.env, config.env_attr, str(profile_path))
+                    ctx.env.macos_notarization_team_id = PASSKEY_TEAM_ID
+                    branding = (
+                        ctx.root_dir
+                        / "chromium_files"
+                        / "products"
+                        / product_id
+                        / "chrome"
+                        / "app"
+                        / "theme"
+                        / "chromium"
+                        / "BRANDING.release"
+                    )
+                    branding.parent.mkdir(parents=True)
+                    branding.write_text(f"MAC_TEAM_ID={PASSKEY_TEAM_ID}\n")
+
+                    with mock.patch.object(
+                        macos_module,
+                        "decode_provisioning_profile",
+                        return_value=_passkey_profile(bundle_id=bundle_id),
+                    ):
+                        MacOSSignModule().preflight(ctx)
+
+    def test_missing_profile_uses_standard_entitlements_and_removes_stale_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = self._context(root)
+            ctx.get_entitlements_dir = lambda: root / "entitlements"
+            app_path = root / "BrowserOS.app"
+            stale_profile = app_path / "Contents" / "embedded.provisionprofile"
+            stale_profile.parent.mkdir(parents=True)
+            stale_profile.write_bytes(b"stale profile")
+            generic_entitlements = (
+                ctx.chromium_src / "chrome" / "app" / "app-entitlements.plist"
+            )
+            generic_entitlements.parent.mkdir(parents=True)
+            generic_entitlements.write_text("standard entitlements")
+
+            with macos_module.resolved_app_entitlements(
+                app_path, root, ctx, None
+            ) as resolved:
+                self.assertEqual(resolved, generic_entitlements)
+                self.assertFalse(stale_profile.exists())
 
     def test_resolved_entitlements_embed_profile_and_resolve_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -785,7 +862,7 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
             profile_path.write_bytes(b"profile payload")
             template_path = root / "app-entitlements-browseros.plist"
             _write_passkey_template(template_path)
-            inputs = macos_module.BrowserOSPasskeySigningInputs(
+            inputs = macos_module.BrowserPasskeySigningInputs(
                 team_id=PASSKEY_TEAM_ID,
                 bundle_id=PASSKEY_BUNDLE_ID,
                 profile_path=profile_path,
@@ -798,7 +875,7 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
                 self.assertIsNotNone(rendered_path)
                 assert rendered_path is not None
                 rendered = plistlib.loads(rendered_path.read_bytes())
-                macos_module.validate_browseros_passkey_entitlements(
+                macos_module.validate_browser_passkey_entitlements(
                     rendered,
                     PASSKEY_TEAM_ID,
                     PASSKEY_BUNDLE_ID,
@@ -812,32 +889,49 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
                 b"profile payload",
             )
 
-    def test_compiled_framework_must_contain_the_signing_identity(self):
+    def test_each_compiled_framework_must_contain_its_signing_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            ctx = self._context(root)
-            app_path = root / "BrowserOS.app"
-            framework = (
-                app_path
-                / "Contents"
-                / "Frameworks"
-                / ctx.product.mac_framework_name(ctx.build_type)
-                / "Versions"
-                / "Current"
-                / "BrowserOS Framework"
-            )
-            framework.parent.mkdir(parents=True)
-            framework.write_bytes(
-                f"{PASSKEY_TEAM_ID}.{PASSKEY_BUNDLE_ID}.webauthn".encode()
-            )
+            for product_id, bundle_id in PASSKEY_BUNDLE_IDS.items():
+                with self.subTest(product=product_id):
+                    ctx = self._context(root, product_id=product_id)
+                    app_path = root / f"{product_id}.app"
+                    framework_name = ctx.product.mac_framework_name(ctx.build_type)
+                    framework = (
+                        app_path
+                        / "Contents"
+                        / "Frameworks"
+                        / framework_name
+                        / "Versions"
+                        / "Current"
+                        / framework_name.removesuffix(".framework")
+                    )
+                    framework.parent.mkdir(parents=True)
+                    framework.write_bytes(
+                        f"{PASSKEY_TEAM_ID}.{bundle_id}.webauthn".encode()
+                    )
 
-            macos_module.verify_compiled_browseros_passkey_identity(
-                app_path, ctx, PASSKEY_TEAM_ID
-            )
-            with self.assertRaisesRegex(RuntimeError, "WRONGTEAM1"):
-                macos_module.verify_compiled_browseros_passkey_identity(
-                    app_path, ctx, "WRONGTEAM1"
-                )
+                    macos_module.verify_compiled_browser_passkey_identity(
+                        app_path, ctx, PASSKEY_TEAM_ID
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "WRONGTEAM1"):
+                        macos_module.verify_compiled_browser_passkey_identity(
+                            app_path, ctx, "WRONGTEAM1"
+                        )
+
+    def test_product_profile_path_selection_does_not_cross_app_ids(self):
+        env = _env(
+            macos_browseros_passkey_profile_path="/profiles/browseros.provisionprofile",
+            macos_browserclaw_passkey_profile_path="/profiles/browserclaw.provisionprofile",
+        )
+        self.assertEqual(
+            macos_module.get_browser_passkey_profile_path(env, "browseros"),
+            Path("/profiles/browseros.provisionprofile"),
+        )
+        self.assertEqual(
+            macos_module.get_browser_passkey_profile_path(env, "browserclaw"),
+            Path("/profiles/browserclaw.provisionprofile"),
+        )
 
     def test_post_sign_verification_checks_team_claims_and_embedded_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -847,11 +941,10 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
             profile_path = app_path / "Contents" / "embedded.provisionprofile"
             profile_path.parent.mkdir(parents=True)
             profile_path.write_bytes(b"profile")
+            ctx.env.macos_browseros_passkey_profile_path = str(profile_path)
             claims = dict(_passkey_profile()["Entitlements"])
             claims["keychain-access-groups"] = list(
-                macos_module.browseros_passkey_groups(
-                    PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
-                )
+                macos_module.browser_passkey_groups(PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID)
             )
 
             def run(cmd, cwd=None, check=True):
@@ -871,7 +964,7 @@ class BrowserOSPasskeySigningTest(unittest.TestCase):
                     return_value=_passkey_profile(),
                 ),
             ):
-                macos_module.verify_browseros_passkey_signature(
+                macos_module.verify_browser_passkey_signature(
                     app_path, ctx, PASSKEY_TEAM_ID
                 )
 
