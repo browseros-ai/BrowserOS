@@ -19,6 +19,7 @@ on:
       - ".github/workflows/nightly-macos-product.yml"
       - ".github/workflows/publish-server-ota.yml"
       - ".github/workflows/repair-update-feed.yml"
+      - ".github/workflows/release-app-onboard.yml"
       - ".github/workflows/release-browseros.yml"
       - ".github/workflows/release-browserclaw.yml"
       - ".github/workflows/release-claw-onboard.yml"

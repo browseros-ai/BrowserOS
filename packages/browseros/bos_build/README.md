@@ -287,13 +287,14 @@ workflow for normal publication.
 
 ## Servers and nightlies
 
-Server bundles version independently of the browser, each from its own package
-file:
+Server and onboarding bundles version independently of the browser, each from
+its own package file:
 
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
 | BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
 | BrowserClaw server | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server.yml` | `claw-server-rust/v*` |
+| BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
 BrowserClaw browser builds and server OTA both consume the server bundles

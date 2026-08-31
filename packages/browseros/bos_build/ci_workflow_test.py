@@ -817,6 +817,16 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             pull_request_paths,
         )
 
+    def test_app_onboard_release_changes_trigger_build_system_tests(self):
+        test_workflow = self.load_workflow("bos-build-tests.yml")
+        triggers = test_workflow.get("on", test_workflow.get(True))
+        pull_request_paths = triggers["pull_request"]["paths"]
+
+        self.assertIn(
+            ".github/workflows/release-app-onboard.yml",
+            pull_request_paths,
+        )
+
     def test_macos_signing_helper_changes_trigger_build_system_tests(self):
         test_workflow = self.load_workflow("bos-build-tests.yml")
         triggers = test_workflow.get("on", test_workflow.get(True))
@@ -2630,6 +2640,18 @@ class ReleaseDocumentationTest(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.release)
+
+    def test_readme_lists_both_independent_onboarding_bundles(self):
+        for token in (
+            "apps/app-onboard/package.json",
+            "release-app-onboard.yml",
+            "app-onboard/v*",
+            "apps/claw-onboard/package.json",
+            "release-claw-onboard.yml",
+            "claw-onboard/v*",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.readme)
 
     def test_runbooks_state_native_host_and_publication_boundaries(self):
         for token in (
