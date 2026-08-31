@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..d1e1eea1df751
+index 0000000000000..274fa0c0a3d79
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,125 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23,8 +23,6 @@ index 0000000000000..d1e1eea1df751
 +
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 +  const bool show_toolbar_controls_by_default = !IsBrowserClawProduct();
-+  const bool show_tab_groups_in_bookmark_bar_by_default =
-+      !IsBrowserClawProduct();
 +
 +  registry->RegisterBooleanPref(prefs::kShowLLMChat,
 +                                show_toolbar_controls_by_default);
@@ -33,8 +31,7 @@ index 0000000000000..d1e1eea1df751
 +  registry->RegisterBooleanPref(prefs::kShowToolbarLabels,
 +                                show_toolbar_controls_by_default);
 +  registry->RegisterBooleanPref(prefs::kVerticalTabsEnabled, true);
-+  registry->RegisterBooleanPref(prefs::kShowTabGroupsInBookmarkBar,
-+                                show_tab_groups_in_bookmark_bar_by_default);
++  registry->RegisterBooleanPref(prefs::kShowTabGroupsInBookmarkBar, false);
 +
 +  registry->RegisterStringPref(prefs::kProviders, "");
 +  registry->RegisterStringPref(prefs::kCustomProviders, "[]");
