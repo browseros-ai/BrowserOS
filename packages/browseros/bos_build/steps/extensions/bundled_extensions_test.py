@@ -310,6 +310,7 @@ class BundledExtensionsTest(unittest.TestCase):
 
         component = "agent" if product == "browseros" else "browserclaw"
         server = "server" if product == "browseros" else "claw-server-rust"
+        onboarding = "app-onboard" if product == "browseros" else "claw-onboard"
         return PreparedResourcesManifest(
             product=product,
             parent_sha="1" * 40,
@@ -318,7 +319,7 @@ class BundledExtensionsTest(unittest.TestCase):
             component_versions={
                 server: "0.0.1",
                 component: product_version,
-                "claw-onboard": "0.0.1",
+                onboarding: "0.0.1",
             },
             files={
                 "product_crx": prepared(product_path, product_version, product_id),

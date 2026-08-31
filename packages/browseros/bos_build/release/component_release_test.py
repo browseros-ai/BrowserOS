@@ -378,7 +378,7 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
             component_versions={
                 "server": "0.0.128",
                 "agent": "0.0.101.0",
-                "claw-onboard": "0.0.12",
+                "app-onboard": "0.0.12",
             },
             pull_request_number=42,
             pull_request_url="https://github.com/browseros-ai/BrowserOS/pull/42",

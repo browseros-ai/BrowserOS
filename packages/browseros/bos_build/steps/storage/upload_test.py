@@ -196,7 +196,7 @@ class UploadMetadataTest(unittest.TestCase):
                 component_versions={
                     "server": "0.0.128",
                     "agent": "0.0.116.0",
-                    "claw-onboard": "0.0.12",
+                    "app-onboard": "0.0.12",
                 },
                 files={},
             )

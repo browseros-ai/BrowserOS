@@ -6,13 +6,13 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SourceResources:
-    """In-repository and external resources embedded by one product."""
+    """Product-owned inputs selected before shared resource staging."""
 
     product_id: str
     server_component: str
     extension_component: str
     extension_name: str
-    onboarding_component: str = "claw-onboard"
+    onboarding_component: str
     external_extension_names: tuple[str, ...] = ("bugreporter",)
 
 
@@ -29,6 +29,7 @@ SOURCE_RESOURCES = {
         server_component="claw-server-rust",
         extension_component="browserclaw",
         extension_name="browserclaw",
+        onboarding_component="claw-onboard",
     ),
 }
 
