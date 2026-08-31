@@ -1,7 +1,12 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
-import { executeTool } from './framework'
+import {
+  executeTool,
+  type ToolContext,
+  type ToolDefinition,
+  type ToolResult,
+} from './framework'
 import {
   type BrowserOutputFileAccess,
   withBrowserOutputFileAccess,
@@ -61,6 +66,14 @@ interface BrowserToolLogger {
 }
 
 export interface BrowserToolRegistrationOptions {
+  /** Tool catalog exposed by this server. Defaults to the full browser surface. */
+  tools?: readonly ToolDefinition[]
+  /**
+   * Optional policy-aware executor. The server runtime uses this seam to keep
+   * guards, output grants, and post-execution effects on the authoritative side
+   * of the HTTP boundary.
+   */
+  executor?: BrowserToolExecutor
   includeStructuredContent?: boolean
   outputFileAccess?: BrowserOutputFileAccess
   onToolExecutionStart?: (event: BrowserToolLifecycleEvent) => void
@@ -72,6 +85,12 @@ export interface BrowserToolRegistrationOptions {
   /** When set, expose an optional server-minted session handle argument for caller session identity (2026-07-28). */
   sessionIdentity?: boolean
 }
+
+export type BrowserToolExecutor = (
+  tool: ToolDefinition,
+  args: Record<string, unknown>,
+  context: ToolContext,
+) => Promise<ToolResult>
 
 export interface BrowserToolLifecycleEvent extends Record<string, unknown> {
   tool_name: string
@@ -153,8 +172,9 @@ export function registerBrowserTools(
   options: BrowserToolRegistrationOptions = {},
 ): void {
   const register = server.registerTool.bind(server) as unknown as RegisterFn
+  const tools = options.tools ?? BROWSER_TOOLS
 
-  for (const tool of BROWSER_TOOLS) {
+  for (const tool of tools) {
     const inputSchema = options.sessionIdentity
       ? tool.input.extend({
           session: z.string().optional().describe(SESSION_ARG_DESCRIPTION),
@@ -197,15 +217,16 @@ export function registerBrowserTools(
         })
         options.onToolExecutionStart?.(lifecycleEvent)
         try {
-          const result = await withBrowserOutputFileAccess(
-            options.outputFileAccess,
-            () =>
-              executeTool(tool, toolArgs, {
-                session,
-                ...defaults,
-                signal: extra?.mcpReq?.signal,
-              }),
-          )
+          const context = {
+            session,
+            ...defaults,
+            signal: extra?.mcpReq?.signal,
+          }
+          const result = options.executor
+            ? await options.executor(tool, toolArgs, context)
+            : await withBrowserOutputFileAccess(options.outputFileAccess, () =>
+                executeTool(tool, toolArgs, context),
+              )
           options.onToolExecuted?.({
             tool_name: tool.name,
             duration_ms: duration(),
@@ -272,8 +293,8 @@ export function registerBrowserTools(
 
   if (options.shouldLogToolRegistration?.()) {
     options.logger?.info?.('Registered browser MCP tools', {
-      count: BROWSER_TOOLS.length,
-      toolNames: BROWSER_TOOLS.map((t) => t.name),
+      count: tools.length,
+      toolNames: tools.map((t) => t.name),
       source: options.source ?? 'mcp',
     })
   }
