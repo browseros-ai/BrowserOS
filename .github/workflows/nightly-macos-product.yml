@@ -56,6 +56,8 @@ on:
         required: true
       PROD_MACOS_NOTARIZATION_TEAM_ID:
         required: true
+      PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64:
+        required: false
       SENTRY_DSN:
         required: true
       SPARKLE_PRIVATE_KEY:
@@ -200,6 +202,7 @@ jobs:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}
         shell: bash
         run: bash .github/scripts/macos-signing-keychain.sh setup
 
@@ -222,6 +225,7 @@ jobs:
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.passkey_profile_path }}
           PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
           PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
           PRODUCT: ${{ inputs.product }}

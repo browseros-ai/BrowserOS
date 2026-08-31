@@ -235,6 +235,10 @@ Run the Mac runner in the logged-in GUI user's session. Codesign and
   as the APFS clone base.
 - `uv`, `gh`, depot_tools, Xcode tools, and Chrome.
 - The macOS signing identity and notarization credentials.
+- The `PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` repository secret containing
+  BrowserOS's base64-encoded Developer ID provisioning profile. The signing
+  helper decodes it into runner-owned temporary storage; BrowserOS validates
+  and embeds it, and unconditional cleanup removes the temporary copy.
 - Enough disk for two Chromium outputs and DMGs.
 
 Set these repository variables:

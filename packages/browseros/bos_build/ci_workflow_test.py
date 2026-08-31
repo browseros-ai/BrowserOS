@@ -275,6 +275,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertIn("MACOS_CERTIFICATE_P12", secrets)
         self.assertIn("MACOS_CERTIFICATE_PWD", secrets)
+        self.assertIn("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64", secrets)
         self.assertLess(setup_index, build_index)
         self.assertLess(build_index, cleanup_index)
         self.assertLess(cleanup_index, upload_index)
@@ -285,6 +286,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             "MACOS_CERTIFICATE_P12",
             "MACOS_CERTIFICATE_PWD",
             "MACOS_KEYCHAIN_PASSWORD",
+            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
         ):
             self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
         self.assertEqual(
@@ -294,6 +296,10 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertEqual(
             build["env"]["MACOS_CERTIFICATE_NAME"],
             "${{ steps.macos_signing.outputs.codesign_identity }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.passkey_profile_path }}",
         )
         self.assertEqual(cleanup["if"], "always()")
         self.assertEqual(
@@ -1847,6 +1853,21 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             build["env"]["ONBOARDING_RESOURCE_VERSION"],
             "${{ inputs.onboarding_version }}",
         )
+        self.assertIn(
+            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
+            triggers["workflow_call"]["secrets"],
+        )
+        setup = self.named_step(
+            workflow, "build", "Import macOS signing certificate"
+        )
+        self.assertEqual(
+            setup["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64"],
+            "${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.passkey_profile_path }}",
+        )
         self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build["env"])
         for secret in (
             "R2_ACCESS_KEY_ID",
@@ -2432,6 +2453,7 @@ fi
         smoke_path = self.runner_temp / "browseros-ci-codesign-smoke-123-4"
 
         self.assertEqual(outputs["codesign_identity"], self.identity_sha1)
+        self.assertEqual(outputs["passkey_profile_path"], "")
         self.assertTrue(keychain_path.exists())
         self.assertTrue(state_path.exists())
         self.assertFalse(cert_path.exists())
@@ -2466,6 +2488,28 @@ fi
         self.assertIn(f"--verify --verbose=2 {smoke_path}", codesign_log)
         self.assertFalse(keychain_path.exists())
         self.assertFalse(state_path.exists())
+
+    def test_setup_decodes_passkey_profile_and_cleanup_removes_it(self):
+        result = self._run_helper(
+            "setup",
+            PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64="cHJvZmlsZS1ieXRlcw==",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        outputs = self._outputs()
+        profile_path = Path(outputs["passkey_profile_path"])
+        self.assertEqual(profile_path.read_bytes(), b"profile-bytes")
+        self.assertEqual(profile_path.stat().st_mode & 0o777, 0o600)
+        self.assertIn(
+            f"PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH={profile_path}",
+            self.github_env.read_text(encoding="utf-8").splitlines(),
+        )
+
+        cleanup = self._run_helper(
+            "cleanup",
+            MACOS_SIGNING_STATE_PATH=outputs["state_path"],
+        )
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
+        self.assertFalse(profile_path.exists())
 
     def test_setup_uses_fingerprint_when_common_name_is_duplicated(self):
         result = self._run_helper("setup", CODESIGN_REJECT_COMMON_NAME="1")

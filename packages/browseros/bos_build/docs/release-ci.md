@@ -210,7 +210,14 @@ matching signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses
 repository variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus
-the signing and notarization secrets on the persistent builder.
+the signing and notarization secrets on the persistent builder. Signed
+BrowserOS releases also require `PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64`, a
+base64-encoded Developer ID provisioning profile for
+`com.browseros.BrowserOS`. The profile must authorize team `8YMKWU47S5`, the
+BrowserOS keychain groups, and
+`com.apple.developer.web-browser.public-key-credential`; the build validates
+those claims before signing. BrowserOS neo does not consume this app-specific
+profile.
 `BROWSEROS_CHROMIUM_SRC` is a dedicated, CI-owned APFS clone base. Setup keeps
 its pinned Chromium identity strict but repairs local Git changes and
 BrowserOS-owned output directories before the release runs against a disposable
