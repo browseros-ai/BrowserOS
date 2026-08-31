@@ -13,6 +13,10 @@ export const ConversationRunStatusSchema = z.enum([
   'failed',
 ])
 
+/**
+ * Maps one browser tab's side panel to the conversation run it should display.
+ * The server owns this assignment so clients never infer it from tool output.
+ */
 export const ConversationPanelAssignmentSchema = z.object({
   tabId: z.number().int(),
   conversationId: z.string(),
