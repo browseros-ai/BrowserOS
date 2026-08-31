@@ -4,6 +4,7 @@
 import unittest
 import tempfile
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -51,6 +52,42 @@ def _upload_ctx(
 
 
 class UploadMetadataTest(unittest.TestCase):
+    def test_deferred_upload_writes_exact_receipt_without_r2_mutation(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.BOTO3_AVAILABLE", False),
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: True),
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "BROWSEROS_DEFER_R2_UPLOAD": "1",
+                    "BROWSEROS_BUILD_SOURCE_SHA": "a" * 40,
+                    "BROWSEROS_BUILD_RESERVATION_SHA": "b" * 40,
+                },
+                clear=False,
+            ),
+            mock.patch("bos_build.steps.storage.upload.get_r2_client") as get_client,
+            mock.patch(
+                "bos_build.steps.storage.upload.upload_file_to_r2"
+            ) as upload_file,
+        ):
+            root = Path(tmp)
+            filename = "BrowserOS_v1.2.3_arm64.dmg"
+            (root / filename).write_bytes(b"signed-dmg")
+            ctx = _upload_ctx(root)
+
+            success, release = upload_release_artifacts(
+                ctx,
+                {filename: {"sparkle_signature": "SIG==", "sparkle_length": 10}},
+            )
+            persisted = json.loads((root / "release.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(success)
+        self.assertEqual(release["reservation_sha"], "b" * 40)
+        self.assertEqual(persisted, release)
+        get_client.assert_not_called()
+        upload_file.assert_not_called()
+
     def test_release_json_records_actions_provenance(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

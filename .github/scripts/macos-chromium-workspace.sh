@@ -248,7 +248,7 @@ check_no_browseros_outputs() {
       \( -name 'Default_browseros_*' -o -name 'Default_browserclaw_*' \) \
       -print -quit
   )"
-  [ -z "$found" ] || die "Persistent Chromium base contains BrowserOS output state: $found; remove BrowserOS out dirs from the base before rerunning"
+  [ -z "$found" ] || die "Could not remove BrowserOS output state from the CI-owned Chromium base: $found"
 }
 
 check_git_repo_clean() {
@@ -256,21 +256,44 @@ check_git_repo_clean() {
   local status
 
   status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
-  [ -z "$status" ] || die "Persistent Chromium base has tracked or untracked changes in $repo; reset the warm base checkout before rerunning"
+  [ -z "$status" ] || die "Could not restore the CI-owned Chromium base repository to a clean state: $repo"
 }
 
-check_nested_git_repos_clean() {
+repair_git_repo() {
+  local repo="$1"
+  local ref="$2"
+
+  git -C "$repo" reset --hard "$ref"
+  git -C "$repo" clean -fd
+  check_git_repo_clean "$repo"
+}
+
+repair_nested_git_repos() {
   local git_meta repo
 
   while IFS= read -r git_meta; do
     repo="$(resolve_existing_dir "$(dirname "$git_meta")")" || continue
     [ "$repo" != "$base_src" ] || continue
-    check_git_repo_clean "$repo"
+    repair_git_repo "$repo" HEAD
   done < <(
     find "$base_root" \
       \( -path "$base_src/out" -o -path "$base_src/out/*" \) -prune -o \
       -name .git -print -prune
   )
+}
+
+remove_browseros_outputs() {
+  local out_dir="$1/out"
+  local output
+
+  [ -d "$out_dir" ] || return 0
+  for output in \
+    "$out_dir"/Default_browseros_* \
+    "$out_dir"/Default_browserclaw_*; do
+    [ -d "$output" ] || continue
+    rm -rf "$output"
+  done
+  check_no_browseros_outputs "$1"
 }
 
 verify_cow_clone_support() {
@@ -293,9 +316,9 @@ verify_cow_clone_support() {
   rm -rf "$probe_dir"
 }
 
-verify_base() {
+prepare_base() {
   local version_file="$1"
-  local pin_head
+  local current_head pin_head
 
   [ -f "$base_root/.gclient" ] || die "Chromium base root is missing .gclient: $base_root"
   [ -e "$base_src/.git" ] || die "Chromium base src is missing .git: $base_src"
@@ -303,15 +326,19 @@ verify_base() {
 
   chromium_version="$(read_chromium_version "$version_file")" \
     || die "Could not parse Chromium version file: $version_file"
-  base_head="$(git -C "$base_src" rev-parse HEAD)"
+  current_head="$(git -C "$base_src" rev-parse HEAD)"
   pin_head="$(git -C "$base_src" rev-parse "refs/tags/$chromium_version^{commit}")" \
     || die "Chromium base is missing pinned tag $chromium_version; refresh the warm base checkout before rerunning"
-  [ "$base_head" = "$pin_head" ] \
-    || die "Chromium base HEAD $base_head does not match pinned $chromium_version ($pin_head); refresh the warm base checkout before rerunning"
+  [ "$current_head" = "$pin_head" ] \
+    || die "Chromium base HEAD $current_head does not match pinned $chromium_version ($pin_head); refresh the warm base checkout before rerunning"
 
-  check_git_repo_clean "$base_src"
-  check_nested_git_repos_clean
-  check_no_browseros_outputs "$base_src"
+  # BROWSEROS_CHROMIUM_SRC is infrastructure-owned clone input, never a
+  # developer workspace. Resetting it is intentionally destructive: all build
+  # mutations belong in the disposable APFS clone created after this seam.
+  repair_git_repo "$base_src" "$pin_head"
+  repair_nested_git_repos
+  remove_browseros_outputs "$base_src"
+  base_head="$(git -C "$base_src" rev-parse HEAD)"
 }
 
 cleanup_after_setup_error() {
@@ -359,7 +386,7 @@ setup_workspace() {
   tag="$(run_tag)"
   reap_stale_workspaces "$workspace_parent" "$tag" "$base_root"
   version_file="${version_file:-$(default_version_file)}"
-  verify_base "$version_file"
+  prepare_base "$version_file"
 
   workspace_root="$workspace_parent/$workspace_prefix$tag"
   workspace_src="$workspace_root/src"

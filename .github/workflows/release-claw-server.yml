@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      state_owner:
+        description: "Tracked release-state owner: component or suite"
+        required: false
+        type: string
+        default: "component"
       version:
         description: "Explicit release version; required for finalize mode"
         required: false
@@ -112,6 +117,7 @@ jobs:
         env:
           MODE: ${{ inputs.mode || 'build' }}
           REF: ${{ inputs.ref || '' }}
+          STATE_OWNER: ${{ inputs.state_owner || 'component' }}
           VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
@@ -119,6 +125,13 @@ jobs:
             echo "::error::mode must be build or finalize"
             exit 1
           fi
+          case "$STATE_OWNER" in
+            component|suite) ;;
+            *)
+              echo "::error::state_owner must be component or suite"
+              exit 1
+              ;;
+          esac
           if [ "$MODE" = "finalize" ] && { [ -z "$VERSION" ] || [ -z "$REF" ]; }; then
             echo "::error::finalize mode requires explicit version and ref inputs"
             exit 1
@@ -840,15 +853,81 @@ jobs:
             name="browseros-claw-server-rust-resources-${target}.zip"
             source="claw-server-rust/prod-resources/${VERSION}/${name}"
             destination="claw-server-rust/prod-resources/latest/${name}"
-            aws s3api copy-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --copy-source "$R2_BUCKET/$source" --metadata-directive COPY --key "$destination" >/dev/null
-            metadata="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$destination" --query Metadata --output json)"
+
+            # The workflow-level concurrency group serializes suite and
+            # standalone finalizers across this entire compare/copy seam.
+            source_head="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$source" --output json)"
             if ! jq -e \
               --arg component "claw-server-rust/prod-resources" \
               --arg release_sha "$RELEASE_SHA" \
               --arg target "$target" \
               --arg version "$VERSION" \
-              '.["release-sha"] == $release_sha and .component == $component and .target == $target and .version == $version and ((.sha256 // "") | test("^[0-9a-f]{64}$"))' \
-              <<< "$metadata" >/dev/null; then
+              '.Metadata["release-sha"] == $release_sha and .Metadata.component == $component and .Metadata.target == $target and .Metadata.version == $version and ((.Metadata.sha256 // "") | test("^[0-9a-f]{64}$")) and (.ContentLength > 0)' \
+              <<< "$source_head" >/dev/null; then
+              echo "::error::Invalid immutable R2 binding for $source"
+              exit 1
+            fi
+            source_checksum="$(jq -r '.Metadata.sha256' <<< "$source_head")"
+            source_size="$(jq -r '.ContentLength' <<< "$source_head")"
+
+            destination_head_file="$(mktemp)"
+            destination_error_file="$(mktemp)"
+            if aws s3api head-object \
+              --endpoint-url "$R2_ENDPOINT" \
+              --region auto \
+              --bucket "$R2_BUCKET" \
+              --key "$destination" \
+              --output json >"$destination_head_file" 2>"$destination_error_file"; then
+              destination_head="$(cat "$destination_head_file")"
+            elif grep -Eq '(404|Not Found|NoSuchKey)' "$destination_error_file"; then
+              destination_head=""
+            else
+              cat "$destination_error_file" >&2
+              echo "::error::Could not inspect $destination"
+              exit 1
+            fi
+
+            if [ -n "$destination_head" ]; then
+              if ! jq -e \
+                --arg component "claw-server-rust/prod-resources" \
+                --arg target "$target" \
+                '.Metadata.component == $component and .Metadata.target == $target and ((.Metadata.version // "") | test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$")) and ((.Metadata["release-sha"] // "") | test("^[0-9a-f]{40}$")) and ((.Metadata.sha256 // "") | test("^[0-9a-f]{64}$")) and (.ContentLength > 0)' \
+                <<< "$destination_head" >/dev/null; then
+                echo "::error::Latest R2 alias has an invalid binding: $destination"
+                exit 1
+              fi
+              current_version="$(jq -r '.Metadata.version' <<< "$destination_head")"
+              if [ "$current_version" = "$VERSION" ]; then
+                if ! jq -e \
+                  --arg release_sha "$RELEASE_SHA" \
+                  --arg checksum "$source_checksum" \
+                  --argjson size "$source_size" \
+                  '.Metadata["release-sha"] == $release_sha and .Metadata.sha256 == $checksum and .ContentLength == $size' \
+                  <<< "$destination_head" >/dev/null; then
+                  echo "::error::Latest R2 alias conflicts at version $VERSION: $destination"
+                  exit 1
+                fi
+                echo "$destination already matches version, source, and checksum"
+                continue
+              fi
+              newest_version="$(printf '%s\n%s\n' "$VERSION" "$current_version" | sort -V | tail -n 1)"
+              if [ "$newest_version" = "$current_version" ]; then
+                echo "$destination is already newer at $current_version; leaving it unchanged"
+                continue
+              fi
+            fi
+
+            aws s3api copy-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --copy-source "$R2_BUCKET/$source" --metadata-directive COPY --key "$destination" >/dev/null
+            copied_head="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --region auto --bucket "$R2_BUCKET" --key "$destination" --output json)"
+            if ! jq -e \
+              --arg component "claw-server-rust/prod-resources" \
+              --arg release_sha "$RELEASE_SHA" \
+              --arg checksum "$source_checksum" \
+              --arg target "$target" \
+              --arg version "$VERSION" \
+              --argjson size "$source_size" \
+              '.Metadata["release-sha"] == $release_sha and .Metadata.component == $component and .Metadata.target == $target and .Metadata.version == $version and .Metadata.sha256 == $checksum and .ContentLength == $size' \
+              <<< "$copied_head" >/dev/null; then
               echo "::error::Latest R2 binding was not preserved for $destination"
               exit 1
             fi
@@ -884,7 +963,7 @@ jobs:
       - prepare
       - finalize
       - publish-ota
-    if: ${{ always() && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
+    if: ${{ always() && inputs.state_owner != 'suite' && needs.finalize.result == 'success' && (needs.publish-ota.result == 'success' || needs.publish-ota.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

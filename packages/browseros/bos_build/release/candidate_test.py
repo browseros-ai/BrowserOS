@@ -17,7 +17,8 @@ from bos_build.release.candidate import (
     ensure_candidate,
     merge_candidate,
 )
-from bos_build.release.components import AllocationRecord
+from bos_build.release.components import AllocationRecord, resolve_candidate_versions
+from bos_build.release.suite_test import STATE_SHA, suite_record
 
 
 PARENT_SHA = "1" * 40
@@ -202,13 +203,11 @@ class CandidateEnsureTest(unittest.TestCase):
 
             self.assertEqual(backend.read_browser_version(), "0.49.2")
 
-    def test_accepts_only_same_repository_canonical_candidate_pull_requests(self) -> None:
+    def test_accepts_only_same_repository_canonical_candidate_pull_requests(
+        self,
+    ) -> None:
         record = candidate_record()
-        body = (
-            "<!-- browseros-release-candidate-v1\n"
-            f"{record.to_json().strip()}\n"
-            "-->"
-        )
+        body = f"<!-- browseros-release-candidate-v1\n{record.to_json().strip()}\n-->"
         pull_request = {
             "body": body,
             "baseRefName": "main",
@@ -219,9 +218,7 @@ class CandidateEnsureTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            candidate_record_from_pull_request(
-                pull_request, "browseros-ai/BrowserOS"
-            ),
+            candidate_record_from_pull_request(pull_request, "browseros-ai/BrowserOS"),
             record,
         )
         self.assertIsNone(
@@ -406,6 +403,107 @@ class CandidateBackendVersionGuardTest(unittest.TestCase):
                         )
                     )
 
+    def test_new_product_candidate_sees_open_family_suite_reservations(self) -> None:
+        suite = suite_record(state_sha=STATE_SHA)
+        pull_request = {
+            "body": suite.pull_request_body(),
+            "baseRefName": suite.default_branch,
+            "headRefName": suite.branch,
+            "headRefOid": suite.state_sha,
+            "headRepository": {"nameWithOwner": "owner/repo"},
+            "isCrossRepository": False,
+            "number": suite.pull_request_number,
+            "url": suite.pull_request_url,
+            "state": "OPEN",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with (
+            patch.object(self.backend, "_git", return_value=""),
+            patch("bos_build.release.candidate.list_github_releases", return_value=[]),
+            patch(
+                "bos_build.release.candidate.list_pull_requests",
+                return_value=[pull_request],
+            ),
+            patch(
+                "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
+                return_value=(
+                    replace(suite, pull_request_number=0, pull_request_url=""),
+                ),
+            ),
+        ):
+            allocations = self.backend.discover_allocations("browseros")
+
+        self.assertEqual(
+            {(item.component, item.version) for item in allocations},
+            {
+                ("server", suite.component_versions["server"]),
+                ("agent", suite.component_versions["agent"]),
+            },
+        )
+        self.assertTrue(all(item.candidate_id == suite.branch for item in allocations))
+
+    def test_closed_family_suite_without_branch_blocks_later_component_versions(
+        self,
+    ) -> None:
+        suite = suite_record(state="closed", state_sha=STATE_SHA)
+        pull_request = {
+            "body": suite.pull_request_body(),
+            "baseRefName": suite.default_branch,
+            "headRefName": suite.branch,
+            "headRefOid": suite.state_sha,
+            "headRepository": {"nameWithOwner": "owner/repo"},
+            "isCrossRepository": False,
+            "number": suite.pull_request_number,
+            "url": suite.pull_request_url,
+            "state": "CLOSED",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        expected = {
+            "browseros": {"server": "0.0.148", "agent": "0.0.122.0"},
+            "browserclaw": {
+                "claw-server-rust": "0.0.47",
+                "browserclaw": "0.0.84.0",
+            },
+        }
+        committed = {
+            "server": "0.0.146",
+            "agent": "0.0.120.0",
+            "claw-server-rust": "0.0.45",
+            "browserclaw": "0.0.82.0",
+            "claw-onboard": "0.0.15",
+        }
+        for product in ("browseros", "browserclaw"):
+            with (
+                self.subTest(product=product),
+                patch.object(self.backend, "_git", return_value=""),
+                patch(
+                    "bos_build.release.candidate.list_github_releases",
+                    return_value=[],
+                ),
+                patch(
+                    "bos_build.release.candidate.list_pull_requests",
+                    return_value=[pull_request],
+                ) as list_prs,
+                patch(
+                    "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
+                    return_value=(),
+                ),
+            ):
+                allocations = self.backend.discover_allocations(product)
+            self.assertTrue(allocations)
+            self.assertTrue(all(not item.reusable for item in allocations))
+            list_prs.assert_called_once_with("owner/repo", state="all")
+            later = resolve_candidate_versions(
+                product_id=product,
+                committed_versions=committed,
+                allocations=allocations,
+                candidate_id=f"bot/release-{product}-later",
+            )
+            for component, version in expected[product].items():
+                self.assertEqual(later[component], version)
+
 
 class CandidateMergeTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -468,12 +566,8 @@ class CandidateMergeTest(unittest.TestCase):
             ("browser_version", "0.32.0"),
             ("component_versions", {"server": "0.0.999"}),
         ):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ValueError, field
-            ):
-                merge_candidate(
-                    self.record, {**self.gate, field: value}, self.backend
-                )
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                merge_candidate(self.record, {**self.gate, field: value}, self.backend)
 
     def test_rejects_unmergeable_or_superseded_candidate(self) -> None:
         self.backend.pr = PullRequestState(

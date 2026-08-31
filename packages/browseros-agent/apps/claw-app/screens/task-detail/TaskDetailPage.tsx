@@ -121,6 +121,11 @@ export function TaskDetailPage() {
         items={items}
         defaultId={pickDefaultTabId(groups)}
         listVariant="line"
+        // Many-tab sessions (one tab per browser page) overflow the fixed
+        // page width; scroll the strip horizontally instead of spilling
+        // off-screen, keep each trigger at its natural width, and hide the
+        // scrollbar so the strip scrolls cleanly with no visible track.
+        listClassName="w-full max-w-full justify-start overflow-x-auto [&_button]:shrink-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       />
       <ScreenshotLightbox
         sessionId={sessionId}

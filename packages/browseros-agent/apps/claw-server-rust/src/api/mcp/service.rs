@@ -46,8 +46,10 @@ use uuid::Uuid;
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
-const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", plus a `category` for the kind of task. Tabs are grouped as <client>/<name>; the label stays on this machine and only the category is used for anonymous aggregate analytics. Call again to update.";
+const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
+const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
+const SUMMARY_MAX_LEN: usize = 200;
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
@@ -144,6 +146,14 @@ impl ClawMcpService {
                 .into_call_tool_result();
             }
         };
+        // Scrub structural PII from any provided summary before it is stored, indexed for
+        // search, or recorded on the task-declared analytics event. Last write wins locally.
+        let scrubbed_summary = raw_args
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+            .map(scrub_summary);
         if let Some(category) = raw_args
             .get("category")
             .and_then(Value::as_str)
@@ -153,14 +163,33 @@ impl ClawMcpService {
             // At most once per session: a later name_session rename must not
             // re-declare and overcount the category mix or the declaration rate.
             if started.session.try_mark_task_declared() {
+                let mut properties = json!({
+                    "task_category": category,
+                    "client_name": started.session.client_name(),
+                });
+                // The scrubbed summary rides along with the category declaration; the
+                // analytics layer bounds it defensively before it leaves the machine.
+                if let Some(summary) = scrubbed_summary
+                    .as_deref()
+                    .filter(|summary| !summary.is_empty())
+                {
+                    properties["task_summary"] = Value::String(summary.to_string());
+                }
                 self.state.analytics.capture(
                     crate::analytics::events::AGENT_SESSION_TASK_DECLARED,
-                    json!({
-                        "task_category": category,
-                        "client_name": started.session.client_name(),
-                    }),
+                    properties,
                 );
             }
+        }
+        if let Some(clean) = scrubbed_summary.as_deref()
+            && !clean.is_empty()
+            && let Err(error) = self
+                .state
+                .audit_log
+                .set_task_summary(started.session.id().as_str(), clean)
+                .await
+        {
+            warn!(error = %error, "failed to store task summary");
         }
         let browser = self.state.browser.session().await;
         apply_agent_tab_group_title(
@@ -172,13 +201,19 @@ impl ClawMcpService {
         )
         .await;
         let result = ToolResult::text(rename.response, None);
+        // The audit dispatch persists the raw tool arguments; substitute the scrubbed
+        // summary so the unsanitized text never reaches the audit detail timeline.
+        let dispatch_args = match scrubbed_summary.as_deref() {
+            Some(clean) => with_scrubbed_summary(raw_args, clean),
+            None => raw_args.clone(),
+        };
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: NAME_SESSION_TOOL_NAME,
-                raw_args,
+                raw_args: &dispatch_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
                 dispatch_id: dispatch_id.clone(),
@@ -659,6 +694,62 @@ async fn rename_session(
     })
 }
 
+/// Best-effort structural PII scrub for an agent-provided task summary before it is
+/// stored and indexed for search: drops any whitespace token that looks like an email,
+/// URL, file path, bare domain/filename, or a long digit run (phone / card / account
+/// number). Collapses whitespace and caps the length. Free prose and names are kept;
+/// the agent is instructed to omit those, and the summary never leaves this machine.
+fn scrub_summary(raw: &str) -> String {
+    let scrubbed = raw
+        .split_whitespace()
+        .filter(|token| !is_pii_token(token))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if scrubbed.chars().count() > SUMMARY_MAX_LEN {
+        scrubbed
+            .chars()
+            .take(SUMMARY_MAX_LEN)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    } else {
+        scrubbed
+    }
+}
+
+/// Clones the tool arguments with the `summary` field replaced by its already-scrubbed
+/// form, so the audit dispatch timeline persists the sanitized summary rather than the raw
+/// one the scrubber removed from `tasks.task_summary` and the search index.
+fn with_scrubbed_summary(raw_args: &Value, clean: &str) -> Value {
+    let mut owned = raw_args.clone();
+    if let Some(object) = owned.as_object_mut() {
+        object.insert("summary".to_string(), Value::String(clean.to_string()));
+    }
+    owned
+}
+
+fn is_pii_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    if token.contains('@')
+        || lower.contains("://")
+        || lower.starts_with("www.")
+        || token.contains('/')
+        || token.contains('\\')
+    {
+        return true;
+    }
+    if token.chars().filter(|c| c.is_ascii_digit()).count() >= 7 {
+        return true;
+    }
+    // bare domains / filenames: example.com, crm.internal.acme.com, report.pdf
+    if let Some((prefix, suffix)) = lower.rsplit_once('.') {
+        return !prefix.is_empty()
+            && (2..=24).contains(&suffix.len())
+            && suffix.chars().all(|c| c.is_ascii_alphabetic());
+    }
+    false
+}
+
 fn name_session_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
@@ -668,6 +759,11 @@ fn name_session_tool() -> Tool {
                 "type": "string",
                 "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
                 "description": NAME_SESSION_CATEGORY_DESCRIPTION
+            },
+            "summary": {
+                "type": "string",
+                "maxLength": SUMMARY_MAX_LEN,
+                "description": NAME_SESSION_SUMMARY_DESCRIPTION
             }
         },
         "required": ["name"]
@@ -1119,7 +1215,7 @@ mod tests {
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
-            "- Name your session early with name_session: a 2-3 word task label plus the\n  category that best fits the task; tabs group as <client>/<name>."
+            "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <client>/<name>."
         ));
         assert!(instructions.contains(
             "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
@@ -1185,6 +1281,11 @@ mod tests {
                         "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
                         "description": NAME_SESSION_CATEGORY_DESCRIPTION
                     },
+                    "summary": {
+                        "type": "string",
+                        "maxLength": SUMMARY_MAX_LEN,
+                        "description": NAME_SESSION_SUMMARY_DESCRIPTION
+                    },
                     "session": { "type": "string", "description": SESSION_ARG_DESCRIPTION }
                 },
                 "required": ["name"]
@@ -1200,6 +1301,40 @@ mod tests {
             )
         );
         Ok(())
+    }
+
+    #[test]
+    fn scrub_summary_drops_structural_pii_and_keeps_prose() {
+        let raw = "Downloaded invoices for john@acme.com from \
+                   https://billing.acme.com/portal ref 4155551234 saved to /home/user/out.pdf";
+        let clean = scrub_summary(raw);
+        assert!(!clean.contains('@'));
+        assert!(!clean.contains("://"));
+        assert!(!clean.contains('/'));
+        assert!(!clean.contains("4155551234"));
+        assert!(!clean.to_ascii_lowercase().contains("acme.com"));
+        assert!(clean.contains("Downloaded"));
+        assert!(clean.contains("invoices"));
+    }
+
+    #[test]
+    fn scrub_summary_caps_length() {
+        let raw = "word ".repeat(200);
+        assert!(scrub_summary(&raw).chars().count() <= SUMMARY_MAX_LEN);
+    }
+
+    #[test]
+    fn with_scrubbed_summary_replaces_summary_and_keeps_other_args() {
+        let raw = "Emailed john@acme.com the invoices";
+        let clean = scrub_summary(raw);
+        let sanitized =
+            with_scrubbed_summary(&json!({ "name": "invoice sync", "summary": raw }), &clean);
+        // The recorded dispatch args carry the scrubbed copy, never the raw one.
+        assert_eq!(sanitized["summary"].as_str(), Some(clean.as_str()));
+        assert!(!clean.contains('@'));
+        assert!(!clean.to_ascii_lowercase().contains("acme.com"));
+        // Unrelated arguments are preserved verbatim.
+        assert_eq!(sanitized["name"].as_str(), Some("invoice sync"));
     }
 
     #[tokio::test]

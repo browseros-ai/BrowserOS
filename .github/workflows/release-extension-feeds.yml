@@ -67,41 +67,51 @@ concurrency:
 jobs:
   feeds:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # `both` can consume two independent 15-minute snapshot-PR retry budgets.
+    timeout-minutes: 40
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch || 'main' }}
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
-      - name: Generate extension update feeds
-        working-directory: packages/browseros
+      - name: Generate, persist, and publish extension update feeds
         env:
+          ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
           CHANNEL: ${{ inputs.channel }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PINS: ${{ inputs.pins }}
           PUBLISH: ${{ inputs.publish }}
-          ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
-        # Inputs are validated and appended to an args array, never a command string.
+        # Each channel is one ordered transaction. For `both`, alpha must be live
+        # before prod renders because bundled resolution carries newer versions
+        # across channels from live R2; batching both renders can lose that state.
         run: |
           set -euo pipefail
 
           case "$CHANNEL" in
-            alpha|prod|both) ;;
+            alpha) channels=(alpha) ;;
+            prod) channels=(prod) ;;
+            both) channels=(alpha prod) ;;
             *)
               echo "::error::Invalid channel '$CHANNEL'; expected alpha, prod, or both" >&2
               exit 1
               ;;
           esac
 
-          args=(--channel "$CHANNEL")
+          base_args=()
           normalized=${PINS//,/ }
           normalized=${normalized//$'\n'/ }
           normalized=${normalized//$'\r'/ }
@@ -111,32 +121,63 @@ jobs:
               echo "::error::Invalid pin '$pin'; expected name=version (for example, agent=0.0.119)" >&2
               exit 1
             fi
-            args+=(--set "$pin")
+            base_args+=(--set "$pin")
           done
-          if [ "$PUBLISH" = "true" ]; then
-            args+=(--publish)
-          fi
           if [ "$ALLOW_DOWNGRADE" = "true" ]; then
-            args+=(--allow-downgrade)
+            base_args+=(--allow-downgrade)
           fi
 
-          if [ "$CHANNEL" = "both" ]; then
-            for ch in alpha prod; do
-              args[1]="$ch"
-              {
-                echo "### Extension feed command ($ch)"
-                echo '```bash'
-                echo "browseros release extensions ${args[*]}"
-                echo '```'
-              } >> "$GITHUB_STEP_SUMMARY"
-              uv run browseros release extensions "${args[@]}"
-            done
-          else
+          for feed_channel in "${channels[@]}"; do
+            args=(--channel "$feed_channel" "${base_args[@]}")
             {
-              echo "### Extension feed command"
+              echo "### Extension feed command ($feed_channel)"
               echo '```bash'
               echo "browseros release extensions ${args[*]}"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            uv run browseros release extensions "${args[@]}"
+            uv run --directory packages/browseros browseros \
+              release extensions "${args[@]}"
+
+            if [ "$feed_channel" = "alpha" ]; then
+              feed_keys=(
+                extensions/update-manifest.alpha.xml
+                extensions/extensions.alpha.json
+                extensions/bundled-manifest.xml
+              )
+            else
+              feed_keys=(
+                extensions/update-manifest.xml
+                extensions/extensions.json
+                extensions/bundled-manifest.xml
+              )
+            fi
+
+            snapshot_paths=()
+            for feed_key in "${feed_keys[@]}"; do
+              snapshot_paths+=("updates/$feed_key")
+            done
+
+            if [ "$PUBLISH" != "true" ]; then
+              continue
+            fi
+
+            # The merged snapshot is the durability barrier. A later R2 failure
+            # is retryable; publishing before this returns would recreate drift.
+            packages/browseros-agent/scripts/release/commit-update-snapshot.sh \
+              "$DEFAULT_BRANCH" \
+              "chore(release): update extension ${feed_channel} feeds" \
+              "${snapshot_paths[@]}"
+
+            publish_flags=(--publish)
+            if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+              publish_flags+=(--allow-downgrade)
+            fi
+            uv run --directory packages/browseros browseros \
+              release feeds publish-local \
+              "${feed_keys[@]}" \
+              "${publish_flags[@]}"
+          done
+
+          if [ "$PUBLISH" != "true" ]; then
+            echo "Dry run complete; snapshots were not committed or published"
           fi

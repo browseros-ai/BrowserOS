@@ -159,27 +159,46 @@ def _is_empty_appcast_shell(content: str) -> bool:
         root = ET.fromstring(content)
     except ET.ParseError:
         return False
-    if root.tag != "rss":
-        return False
-    if not _has_single_direct_channel(root):
-        return False
-    channel = next(
-        element for element in root if _xml_local_name(element.tag) == "channel"
-    )
-    direct_items = [
-        element for element in channel if _xml_local_name(element.tag) == "item"
-    ]
-    all_items = [
-        element for element in root.iter() if _xml_local_name(element.tag) == "item"
-    ]
-    if len(all_items) != len(direct_items) or any(
-        item not in direct_items for item in all_items
+    if (
+        root.tag != "rss"
+        or root.attrib != {"version": "2.0"}
+        or (root.text or "").strip()
+        or (root.tail or "").strip()
     ):
         return False
-    return all(
-        not item.attrib and not list(item) and not (item.text or "").strip()
-        for item in direct_items
-    )
+
+    root_children = list(root)
+    if len(root_children) != 1 or root_children[0].tag != "channel":
+        return False
+    channel = root_children[0]
+    if channel.attrib or (channel.text or "").strip() or (channel.tail or "").strip():
+        return False
+
+    metadata_counts: dict[str, int] = {}
+    allowed_metadata = {"title", "link", "description", "language"}
+    item_count = 0
+    for child in channel:
+        if (child.tail or "").strip():
+            return False
+        if child.tag == "item":
+            item_count += 1
+            if (
+                item_count > 1
+                or child.attrib
+                or list(child)
+                or (child.text or "").strip()
+            ):
+                return False
+            continue
+        # Versionless placeholders have no downgrade comparison. Treat only
+        # the exact RSS shell as empty; extra structure or mixed content could
+        # be malformed release data outside an <item>.
+        if child.tag not in allowed_metadata or child.attrib or list(child):
+            return False
+        metadata_counts[child.tag] = metadata_counts.get(child.tag, 0) + 1
+        if metadata_counts[child.tag] > 1:
+            return False
+    return True
 
 
 def _default_http_head(url: str) -> int:
@@ -398,14 +417,14 @@ class FeedPublisher:
         if not self._check_channel_metadata(spec, content):
             return False
 
-        # Every appcast item must carry exactly one strict version, even on a
-        # first publish to an absent key — the guard below only runs live.
+        new_empty_appcast = False
         if spec.kind in ("browser", "server"):
             new_versions = _strict_appcast_versions(content)
-            if not new_versions:
+            new_empty_appcast = _is_empty_appcast_shell(content)
+            if not new_versions and not new_empty_appcast:
                 self._log_appcast_version_error(spec, content)
                 return False
-            if not _has_complete_appcast_download_urls(content):
+            if new_versions and not _has_complete_appcast_download_urls(content):
                 log_error(
                     f"{spec.key}: every appcast item must have an enclosure "
                     "and every enclosure must have a download URL"
@@ -427,6 +446,11 @@ class FeedPublisher:
             return False
 
         live = self.fetch_live(spec.key)
+        if live is None and new_empty_appcast:
+            # A placeholder may migrate metadata on an existing empty object,
+            # but must not establish a versionless feed at a new CDN key.
+            self._log_appcast_version_error(spec, content)
+            return False
         if live is not None and not self._check_version_guard(
             spec,
             content,
@@ -571,6 +595,21 @@ class FeedPublisher:
     ) -> bool:
         new_versions = _strict_appcast_versions(content)
         if not new_versions:
+            if _is_empty_appcast_shell(content) and _is_empty_appcast_shell(live):
+                title, link = extract_channel_metadata(live)
+                if title == spec.title and link == spec.link:
+                    return True
+                if title in spec.legacy_titles and link == spec.link:
+                    # Empty appcasts have no version to compare. Restrict this
+                    # path to a registered title migration on the same key so
+                    # it cannot become an escape hatch for erasing releases.
+                    log_warning(
+                        f"{spec.key}: migrating live channel title {title!r} "
+                        f"to {spec.title!r}"
+                    )
+                    return True
+                self._check_channel_metadata(spec, live)
+                return False
             self._log_appcast_version_error(spec, content)
             return False
         new_version = max(

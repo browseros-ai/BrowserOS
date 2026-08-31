@@ -28,6 +28,7 @@ from . import (
     release_component,
     release_feeds,
     release_resources,
+    release_suite,
 )
 
 app = typer.Typer(
@@ -49,6 +50,7 @@ app.add_typer(release_candidate.app, name="candidate")
 app.add_typer(release_browser.app, name="browser")
 app.add_typer(release_component.app, name="component")
 app.add_typer(release_resources.app, name="resources")
+app.add_typer(release_suite.app, name="suite")
 
 _PRODUCT_HELP = f"Product to operate on ({', '.join(PRODUCTS)})"
 
@@ -233,7 +235,10 @@ def download(
         None, "--os", help="Filter by OS: macos, windows, linux"
     ),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Output directory for downloads (default: temp dir)"
+        None,
+        "--output",
+        "-o",
+        help="Output directory for downloads (default: temp dir)",
     ),
     product: Optional[str] = typer.Option(None, "--product", help=_PRODUCT_HELP),
 ):
@@ -268,7 +273,10 @@ def github_create(
         None, "--title", "-t", help="Release title (default: v{version})"
     ),
     publish_to_download: bool = typer.Option(
-        False, "--publish", "-p", help="Also publish to download/ paths after creating release"
+        False,
+        "--publish",
+        "-p",
+        help="Also publish to download/ paths after creating release",
     ),
     product: Optional[str] = typer.Option(None, "--product", help=_PRODUCT_HELP),
     platforms: Optional[str] = typer.Option(

@@ -25,6 +25,7 @@ from .render import (
     render_update_manifest,
 )
 from .spec import (
+    EXTENSIONS,
     all_feeds,
     browser_feeds_for_product,
     feed_by_key,
@@ -129,6 +130,21 @@ def _empty_item_mac_appcast():
         "  </channel>",
         "    <item>\n    </item>\n  </channel>",
     )
+
+
+def _empty_browserclaw_win_arm_appcast():
+    spec = feed_by_key("appcast-claw-win-arm64.xml")
+    return f"""\
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>{spec.title}</title>
+    <link>{spec.link}</link>
+    <item>
+    </item>
+  </channel>
+</rss>
+"""
 
 
 def _server_appcast(bundle_id, channel, version):
@@ -472,6 +488,66 @@ class PublisherTestCase(unittest.TestCase):
                 ("put", spec.key, "application/xml"),
             ],
         )
+
+    def test_browserclaw_legacy_title_migrates_on_empty_placeholder(self):
+        spec = feed_by_key("appcast-claw-win-arm64.xml")
+        canonical = _empty_browserclaw_win_arm_appcast()
+        legacy = canonical.replace(spec.title, spec.legacy_titles[0])
+        publisher = self._publisher({spec.key: legacy.encode()})
+
+        ok = publisher.publish(spec, canonical, publish=True)
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            self.client.calls,
+            [
+                (
+                    "copy",
+                    spec.key,
+                    f"feeds-history/{spec.key}.20260701T120000Z",
+                ),
+                ("put", spec.key, "application/xml"),
+            ],
+        )
+
+    def test_empty_placeholder_migration_rejects_release_markers(self):
+        spec = feed_by_key("appcast-claw-win-arm64.xml")
+        canonical = _empty_browserclaw_win_arm_appcast()
+        legacy = canonical.replace(spec.title, spec.legacy_titles[0])
+        malformed_live = {
+            "channel release children": legacy.replace(
+                "    <item>\n    </item>",
+                "    <sparkle:version>10000.0.99.0</sparkle:version>\n"
+                '    <enclosure url="https://cdn.browseros.com/release.dmg"/>',
+            ),
+            "root release child": legacy.replace(
+                "</rss>",
+                "  <sparkle:version>10000.0.99.0</sparkle:version>\n</rss>",
+            ),
+            "root release attribute": legacy.replace(
+                '<rss version="2.0"',
+                '<rss version="2.0" release-version="10000.0.99.0"',
+            ),
+            "channel release attribute": legacy.replace(
+                "  <channel>", '  <channel release-version="10000.0.99.0">'
+            ),
+            "channel mixed content": legacy.replace(
+                "  <channel>\n", "  <channel>release-version=10000.0.99.0\n"
+            ),
+            "metadata tail content": legacy.replace(
+                f"<title>{spec.legacy_titles[0]}</title>",
+                f"<title>{spec.legacy_titles[0]}</title>release-version=10000.0.99.0",
+            ),
+        }
+
+        for label, live in malformed_live.items():
+            with self.subTest(shape=label):
+                publisher = self._publisher({spec.key: live.encode()})
+
+                ok = publisher.publish(spec, canonical, publish=True)
+
+                self.assertFalse(ok)
+                self.assertEqual(self.client.calls, [])
 
     def test_browserclaw_legacy_title_migration_refuses_downgrade(self):
         spec = feed_by_key("appcast-claw.xml")
@@ -1075,69 +1151,43 @@ class PublisherTestCase(unittest.TestCase):
         )
         self.assertEqual(self.client.calls, [])
 
-    def test_repaired_snapshots_preserve_versions_and_original_payloads(self):
+    def test_tracked_snapshots_have_canonical_metadata(self):
         updates = Path(__file__).resolve().parents[5] / "updates"
-        server_cases = (
-            (
-                "appcast-server.xml",
-                "0.0.127",
-                (
-                    ("BrowserOS Server", "BrowserOS Server (Alpha)"),
-                    ("appcast-server.xml", "appcast-server.alpha.xml"),
-                    (
-                        "BrowserOS Server binary updates",
-                        "BrowserOS Server (Alpha) binary updates",
-                    ),
-                ),
-                "45a2ee4835b11d964584bdfc6c8d3c555d1384cbcbc91e7eb14aa97c3ba8fedf",
-            ),
-            (
-                "appcast-claw-server.xml",
-                "0.0.15",
-                (
-                    (
-                        "BrowserOS Claw Server",
-                        "BrowserOS Claw Server (Alpha)",
-                    ),
-                    (
-                        "appcast-claw-server.xml",
-                        "appcast-claw-server.alpha.xml",
-                    ),
-                    (
-                        "BrowserOS Claw Server binary updates",
-                        "BrowserOS Claw Server (Alpha) binary updates",
-                    ),
-                ),
-                "1df47182d63006294b87323d276896e489f141f2aed1f0266a2119c9ffef3eef",
-            ),
-        )
 
-        for filename, version, replacements, old_hash in server_cases:
-            with self.subTest(filename=filename):
-                content = (updates / "server" / filename).read_text()
-                spec = feed_by_key(filename)
+        # These files are release outputs, so pin stable schema and ownership
+        # invariants instead of versions or whole-file hashes. Otherwise every
+        # valid snapshot promotion makes the default branch's test suite stale.
+        for bundle_id in ("browseros-server", "browserclaw-server"):
+            spec = server_feed(bundle_id, "prod")
+            with self.subTest(key=spec.key):
+                content = (updates / "server" / spec.key).read_text()
                 self.assertEqual((spec.kind, spec.channel), ("server", "prod"))
-                self.assertEqual(extract_appcast_version(content), version)
-                original = content
-                for corrected, invalid in replacements:
-                    original = original.replace(corrected, invalid, 1)
                 self.assertEqual(
-                    hashlib.sha256(original.encode()).hexdigest(), old_hash
+                    extract_channel_metadata(content),
+                    (spec.title, spec.link),
                 )
+                self.assertIn(
+                    f"<description>{spec.title} binary updates</description>",
+                    content,
+                )
+                self.assertIsNotNone(extract_appcast_version(content))
 
-        manifest_path = updates / "extensions" / "update-manifest.alpha.xml"
-        manifest = manifest_path.read_text()
-        spec = feed_by_key("extensions/update-manifest.alpha.xml")
-        self.assertEqual((spec.kind, spec.channel), ("extensions", "alpha"))
-        self.assertEqual(
-            set(extract_manifest_versions(manifest).values()),
-            {"0.0.139.0", "54.0.0.0", "0.2.15.0"},
-        )
-        original = manifest.replace("</gupdate>", "  </app>\n</gupdate>")
-        self.assertEqual(
-            hashlib.sha256(original.encode()).hexdigest(),
-            "d2a7b386ea9928cb4ae4f0a8537f304db19e7e17e51178feecbe2f5a90f08fb7",
-        )
+        expected_extension_ids = {
+            extension.extension_id
+            for extension in EXTENSIONS
+            if extension.in_update_feed
+        }
+        for channel in ("alpha", "prod"):
+            spec = update_manifest_feed(channel)
+            with self.subTest(key=spec.key):
+                manifest = (updates / spec.key).read_text()
+                self.assertEqual(
+                    (spec.kind, spec.channel), ("extensions", channel)
+                )
+                self.assertEqual(
+                    set(extract_manifest_versions(manifest)),
+                    expected_extension_ids,
+                )
 
     def test_browserclaw_snapshots_use_current_product_title(self):
         updates = Path(__file__).resolve().parents[5] / "updates" / "browser"

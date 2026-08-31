@@ -22,7 +22,67 @@ impl MigratorTrait for Migrator {
             Box::new(m0013_add_parent_dispatch_id::Migration),
             Box::new(m0014_add_skills_and_runs::Migration),
             Box::new(m0015_add_skill_run_marks::Migration),
+            Box::new(m0016_add_task_summary::Migration),
         ]
+    }
+}
+
+mod m0016_add_task_summary {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0016_add_task_summary"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Canonical, PII-scrubbed summary shown in the audit UI. Nullable: existing
+            // rows and sessions that never declared one stay NULL.
+            if !manager.has_column("tasks", "task_summary").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tasks"))
+                            .add_column(ColumnDef::new(Alias::new("task_summary")).text())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            // Full-text search index over the summary, kept in sync by AuditLog::set_task_summary.
+            // Standalone (not external-content) because tasks is keyed by a String session_id;
+            // session_id is stored UNINDEXED only to map a MATCH hit back to its task.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS task_search USING fts5(\
+                        session_id UNINDEXED, summary, tokenize = 'porter unicode61')",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("DROP TABLE IF EXISTS task_search")
+                .await?;
+            if manager.has_column("tasks", "task_summary").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("tasks"))
+                            .drop_column(Alias::new("task_summary"))
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
     }
 }
 

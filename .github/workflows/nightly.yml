@@ -1,0 +1,533 @@
+name: "Nightly: BrowserOS family macOS (signed)"
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # One family transaction owns every shared version/feed namespace. Retaining
+  # queued runs is essential: cancellation can strand valid saga effects.
+  group: release-suite
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  transaction:
+    name: Freeze and reserve family transaction
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      # Suite and standalone allocators must observe one serialized component
+      # namespace between discovery and their durable reservation write.
+      group: release-component-allocation
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      transaction_id: ${{ steps.transaction.outputs.transaction_id }}
+      branch: ${{ steps.transaction.outputs.branch }}
+      state_ref: ${{ steps.transaction.outputs.state_ref }}
+      source_sha: ${{ steps.transaction.outputs.source_sha }}
+      reservation_sha: ${{ steps.transaction.outputs.reservation_sha }}
+      state_sha: ${{ steps.transaction.outputs.state_sha }}
+      browser_version: ${{ steps.transaction.outputs.browser_version }}
+      server_version: ${{ steps.transaction.outputs.server_version }}
+      agent_version: ${{ steps.transaction.outputs.agent_version }}
+      claw_server_version: ${{ steps.transaction.outputs.claw_server_version }}
+      browserclaw_version: ${{ steps.transaction.outputs.browserclaw_version }}
+      onboarding_version: ${{ steps.transaction.outputs.onboarding_version }}
+      app_onboarding_version: ${{ steps.transaction.outputs.app_onboarding_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Reconcile family transaction
+        id: transaction
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$DEFAULT_BRANCH" != "main" ]; then
+            echo "::error::Nightlies require main to be the repository default branch"
+            exit 1
+          fi
+          if [ "$SOURCE_REF" != "refs/heads/main" ]; then
+            echo "::error::Nightlies must run from refs/heads/main"
+            exit 1
+          fi
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          uv run browseros release suite reconcile \
+            --mode nightly \
+            --source-sha "$source_sha" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --dispatch-ref "$DEFAULT_BRANCH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/release-suite.json"
+          if [ "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" != "open" ]; then
+            echo "::error::Only an open transaction can start builds. Recover post-build publication with Re-run failed jobs on its original workflow run."
+            exit 1
+          fi
+
+  prepare-server:
+    name: Prepare exact BrowserOS server
+    needs: transaction
+    uses: ./.github/workflows/release-server.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      mode: build
+      defer_finalize: true
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.server_version }}
+      ref: ${{ needs.transaction.outputs.source_sha }}
+      publish_ota: false
+    secrets: inherit
+
+  prepare-claw-server:
+    name: Prepare exact BrowserOS neo server
+    needs: transaction
+    uses: ./.github/workflows/release-claw-server.yml
+    permissions:
+      contents: write
+    with:
+      mode: build
+      defer_finalize: true
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.claw_server_version }}
+      ref: ${{ needs.transaction.outputs.source_sha }}
+      publish_ota: false
+    secrets: inherit
+
+  prepare-agent:
+    name: Prepare exact agent extension
+    needs: transaction
+    uses: ./.github/workflows/release-extensions.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      extension: agent
+      branch: ${{ needs.transaction.outputs.source_sha }}
+      mode: build
+      defer_finalize: true
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.agent_version }}
+      publish_alpha_feed: false
+    secrets: inherit
+
+  prepare-browserclaw:
+    name: Prepare exact BrowserOS neo extension
+    needs: transaction
+    uses: ./.github/workflows/release-extensions.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      extension: browserclaw
+      branch: ${{ needs.transaction.outputs.source_sha }}
+      mode: build
+      defer_finalize: true
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.browserclaw_version }}
+      publish_alpha_feed: false
+    secrets: inherit
+
+  verify-components:
+    name: Verify exact prepared family components
+    needs:
+      - transaction
+      - prepare-server
+      - prepare-claw-server
+      - prepare-agent
+      - prepare-browserclaw
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify source and version identities
+        env:
+          SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
+          SERVER_SHA: ${{ needs.prepare-server.outputs.release_sha }}
+          SERVER_VERSION: ${{ needs.prepare-server.outputs.version }}
+          CLAW_SERVER_SHA: ${{ needs.prepare-claw-server.outputs.release_sha }}
+          CLAW_SERVER_VERSION: ${{ needs.prepare-claw-server.outputs.version }}
+          AGENT_SHA: ${{ needs.prepare-agent.outputs.release_sha }}
+          AGENT_VERSION: ${{ needs.prepare-agent.outputs.version }}
+          BROWSERCLAW_SHA: ${{ needs.prepare-browserclaw.outputs.release_sha }}
+          BROWSERCLAW_VERSION: ${{ needs.prepare-browserclaw.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$SERVER_SHA" = "$SOURCE_SHA"
+          test "$CLAW_SERVER_SHA" = "$SOURCE_SHA"
+          test "$AGENT_SHA" = "$SOURCE_SHA"
+          test "$BROWSERCLAW_SHA" = "$SOURCE_SHA"
+          test "$SERVER_VERSION" = "${{ needs.transaction.outputs.server_version }}"
+          test "$CLAW_SERVER_VERSION" = "${{ needs.transaction.outputs.claw_server_version }}"
+          test "$AGENT_VERSION" = "${{ needs.transaction.outputs.agent_version }}"
+          test "$BROWSERCLAW_VERSION" = "${{ needs.transaction.outputs.browserclaw_version }}"
+
+  build-browseros:
+    name: Build signed BrowserOS nightly
+    needs: [transaction, verify-components]
+    uses: ./.github/workflows/nightly-macos-product.yml
+    with:
+      product: browseros
+      state_ref: ${{ needs.transaction.outputs.state_ref }}
+      source_sha: ${{ needs.transaction.outputs.source_sha }}
+      reservation_sha: ${{ needs.transaction.outputs.reservation_sha }}
+      browser_version: ${{ needs.transaction.outputs.browser_version }}
+      server_version: ${{ needs.transaction.outputs.server_version }}
+      extension_version: ${{ needs.transaction.outputs.agent_version }}
+      onboarding_version: ${{ needs.transaction.outputs.app_onboarding_version }}
+    secrets: inherit
+
+  build-browserclaw:
+    name: Build signed BrowserOS neo nightly
+    needs: [transaction, verify-components]
+    uses: ./.github/workflows/nightly-macos-product.yml
+    with:
+      product: browserclaw
+      state_ref: ${{ needs.transaction.outputs.state_ref }}
+      source_sha: ${{ needs.transaction.outputs.source_sha }}
+      reservation_sha: ${{ needs.transaction.outputs.reservation_sha }}
+      browser_version: ${{ needs.transaction.outputs.browser_version }}
+      server_version: ${{ needs.transaction.outputs.claw_server_version }}
+      extension_version: ${{ needs.transaction.outputs.browserclaw_version }}
+      onboarding_version: ${{ needs.transaction.outputs.onboarding_version }}
+    secrets: inherit
+
+  finalize-server:
+    name: Finalize exact BrowserOS server
+    needs: [transaction, build-browseros, build-browserclaw]
+    uses: ./.github/workflows/release-server.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      mode: finalize
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.server_version }}
+      ref: ${{ needs.transaction.outputs.source_sha }}
+      publish_ota: false
+    secrets: inherit
+
+  finalize-claw-server:
+    name: Finalize exact BrowserOS neo server
+    needs: [transaction, build-browseros, build-browserclaw]
+    uses: ./.github/workflows/release-claw-server.yml
+    permissions:
+      contents: write
+    with:
+      mode: finalize
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.claw_server_version }}
+      ref: ${{ needs.transaction.outputs.source_sha }}
+      publish_ota: false
+    secrets: inherit
+
+  finalize-agent:
+    name: Finalize exact agent extension
+    needs: [transaction, build-browseros, build-browserclaw]
+    uses: ./.github/workflows/release-extensions.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      extension: agent
+      branch: ${{ needs.transaction.outputs.source_sha }}
+      mode: finalize
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.agent_version }}
+      publish_alpha_feed: false
+    secrets: inherit
+
+  finalize-browserclaw:
+    name: Finalize exact BrowserOS neo extension
+    needs: [transaction, build-browseros, build-browserclaw]
+    uses: ./.github/workflows/release-extensions.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      extension: browserclaw
+      branch: ${{ needs.transaction.outputs.source_sha }}
+      mode: finalize
+      state_owner: suite
+      version: ${{ needs.transaction.outputs.browserclaw_version }}
+      publish_alpha_feed: false
+    secrets: inherit
+
+  server-ota:
+    name: Assemble BrowserOS server alpha snapshot
+    needs: [transaction, finalize-server]
+    uses: ./.github/workflows/publish-server-ota.yml
+    permissions:
+      contents: read
+    with:
+      product: browseros
+      version: ${{ needs.transaction.outputs.server_version }}
+      release_sha: ${{ needs.transaction.outputs.source_sha }}
+      snapshot_path: updates/server/appcast-server.alpha.xml
+      state_owner: suite
+    secrets: inherit
+
+  claw-server-ota:
+    name: Assemble BrowserOS neo server alpha snapshot
+    needs: [transaction, finalize-claw-server]
+    uses: ./.github/workflows/publish-server-ota.yml
+    permissions:
+      contents: read
+    with:
+      product: browserclaw
+      version: ${{ needs.transaction.outputs.claw_server_version }}
+      release_sha: ${{ needs.transaction.outputs.source_sha }}
+      snapshot_path: updates/server/appcast-claw-server.alpha.xml
+      state_owner: suite
+    secrets: inherit
+
+  reconcile-state:
+    name: Reconcile and merge family state
+    needs:
+      - transaction
+      - build-browseros
+      - build-browserclaw
+      - finalize-server
+      - finalize-claw-server
+      - finalize-agent
+      - finalize-browserclaw
+      - server-ota
+      - claw-server-ota
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.transaction.outputs.source_sha }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: server-ota-snapshot-browseros
+          path: ${{ runner.temp }}/server-ota-browseros
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: server-ota-snapshot-browserclaw
+          path: ${{ runner.temp }}/server-ota-browserclaw
+
+      - name: Restore exact server snapshots
+        run: |
+          set -euo pipefail
+          browseros_snapshot="$(find "$RUNNER_TEMP/server-ota-browseros" -type f -name 'appcast-server.alpha.xml' -print -quit)"
+          browserclaw_snapshot="$(find "$RUNNER_TEMP/server-ota-browserclaw" -type f -name 'appcast-claw-server.alpha.xml' -print -quit)"
+          test -n "$browseros_snapshot"
+          test -n "$browserclaw_snapshot"
+          cp "$browseros_snapshot" updates/server/appcast-server.alpha.xml
+          cp "$browserclaw_snapshot" updates/server/appcast-claw-server.alpha.xml
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Render shared extension feeds
+        working-directory: packages/browseros
+        env:
+          AGENT_VERSION: ${{ needs.transaction.outputs.agent_version }}
+          BROWSERCLAW_VERSION: ${{ needs.transaction.outputs.browserclaw_version }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release extensions \
+            --channel alpha \
+            --set "agent=$AGENT_VERSION" \
+            --set "browserclaw=$BROWSERCLAW_VERSION"
+
+      - name: Reconcile and merge family state
+        id: merge
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          record="$RUNNER_TEMP/release-suite.json"
+          gate="$RUNNER_TEMP/release-suite-gate.json"
+          uv run browseros release suite reconcile \
+            --mode nightly \
+            --source-sha "$SOURCE_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --dispatch-ref "$DEFAULT_BRANCH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --state-root "$GITHUB_WORKSPACE" \
+            --output "$record"
+          jq '{
+            schema: "browseros-release-suite-gate-v1",
+            passed: true,
+            transaction_id,
+            source_sha,
+            state_sha,
+            browser_version,
+            component_versions,
+            state_checksums,
+            products: ["browseros", "browserclaw"]
+          }' "$record" > "$gate"
+          uv run browseros release suite merge \
+            --record "$record" \
+            --gate "$gate" \
+            --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    name: Publish committed family state and rolling nightlies
+    needs: [transaction, reconcile-state, build-browseros, build-browserclaw]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+    concurrency:
+      # Standalone and suite feed publishers share mutable alpha aliases. The
+      # monotonic checks are meaningful only while this lock spans read+write.
+      group: release-feed-snapshots
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.reconcile-state.outputs.merge_sha }}
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Recover merged transaction record
+        working-directory: packages/browseros
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_MERGE_SHA: ${{ needs.reconcile-state.outputs.merge_sha }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          uv run browseros release suite inspect \
+            --mode nightly \
+            --source-sha "$SOURCE_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --dispatch-ref "$DEFAULT_BRANCH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/release-suite.json"
+          test "$(jq -r '.state' "$RUNNER_TEMP/release-suite.json")" = "merged"
+          test "$(jq -r '.merge_sha' "$RUNNER_TEMP/release-suite.json")" = "$EXPECTED_MERGE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build-browseros.outputs.artifact_name }}
+          path: ${{ runner.temp }}/nightly-browseros
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build-browserclaw.outputs.artifact_name }}
+          path: ${{ runner.temp }}/nightly-browserclaw
+
+      - name: Publish immutable signed browser artifacts
+        working-directory: packages/browseros
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release suite publish-browser-artifact \
+            --record "$RUNNER_TEMP/release-suite.json" \
+            --product browseros \
+            --artifact-root "$RUNNER_TEMP/nightly-browseros"
+          uv run browseros release suite publish-browser-artifact \
+            --record "$RUNNER_TEMP/release-suite.json" \
+            --product browserclaw \
+            --artifact-root "$RUNNER_TEMP/nightly-browserclaw"
+
+      - name: Publish committed family feeds
+        working-directory: packages/browseros
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          uv run browseros release feeds publish-local \
+            server/appcast-server.alpha.xml \
+            server/appcast-claw-server.alpha.xml \
+            extensions/update-manifest.alpha.xml \
+            extensions/extensions.alpha.json \
+            extensions/bundled-manifest.xml \
+            --publish
+
+      - name: Reconcile rolling nightly releases
+        working-directory: packages/browseros
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.transaction.outputs.source_sha }}
+          VERSION: ${{ needs.transaction.outputs.browser_version }}
+        run: |
+          set -euo pipefail
+          # Each command exposes draft creation, upload, tag cleanup, and final
+          # publication as a read-after-write saga. A surviving tag or partial
+          # draft is therefore classified before the retry performs any write.
+          uv run browseros release suite reconcile-rolling-release \
+            --tag nightly-browseros \
+            --title "BrowserOS Nightly (signed macOS arm64)" \
+            --source-sha "$SOURCE_SHA" \
+            --browser-version "$VERSION" \
+            --artifact-root "$RUNNER_TEMP/nightly-browseros" \
+            --repo "$GITHUB_REPOSITORY"
+          uv run browseros release suite reconcile-rolling-release \
+            --tag nightly-browserclaw \
+            --title "BrowserOS neo Nightly (signed macOS arm64)" \
+            --source-sha "$SOURCE_SHA" \
+            --browser-version "$VERSION" \
+            --artifact-root "$RUNNER_TEMP/nightly-browserclaw" \
+            --repo "$GITHUB_REPOSITORY"
+
+  notify-failure:
+    name: Notify family nightly failure
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    needs:
+      - transaction
+      - prepare-server
+      - prepare-claw-server
+      - prepare-agent
+      - prepare-browserclaw
+      - build-browseros
+      - build-browserclaw
+      - reconcile-state
+      - publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack failure ping
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then exit 0; fi
+          payload="$(jq -cn --arg url "$RUN_URL" '{text: (":x: BrowserOS family nightly failed — " + $url)}')"
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "$payload" "$SLACK_WEBHOOK_URL"

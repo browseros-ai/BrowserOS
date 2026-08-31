@@ -2,7 +2,9 @@
 //!
 //! Producers can select one of these opaque definitions, but cannot construct a
 //! new wire event or widen its property schema. Free-form input is reduced to
-//! fixed tokens here before the delivery service ever sees it.
+//! fixed tokens here before the delivery service ever sees it. The sole
+//! exception is the agent-declared `task_summary`, a free-text property that is
+//! PII-scrubbed and length-capped upstream and only bounded defensively here.
 
 use serde_json::{Map, Value};
 use std::{
@@ -12,6 +14,7 @@ use std::{
 
 const CLIENT_NAME: &str = "client_name";
 const TASK_CATEGORY: &str = "task_category";
+const TASK_SUMMARY: &str = "task_summary";
 const HARNESS: &str = "harness";
 const KIND: &str = "kind";
 const TOOL_NAME: &str = "tool_name";
@@ -33,6 +36,11 @@ const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// Hard cap on the free-text task summary before it leaves the machine. The
+/// summary is already PII-scrubbed and length-capped upstream; this is the
+/// final defensive bound at the analytics boundary.
+pub(crate) const TASK_SUMMARY_MAX_CHARS: usize = 200;
 
 const KNOWN_CLIENTS: [&str; 15] = [
     "claude-desktop",
@@ -95,6 +103,7 @@ pub(crate) const TASK_CATEGORY_VALUES: [&str; 11] = [
 enum PropertyKind {
     ClientName,
     TaskCategory,
+    TaskSummary,
     Harness,
     EndKind,
     ToolName,
@@ -106,11 +115,26 @@ enum PropertyKind {
 struct PropertyDefinition {
     name: &'static str,
     kind: PropertyKind,
+    /// When true, the event still validates and sends if this property is
+    /// absent; when present it must still normalize.
+    optional: bool,
 }
 
 impl PropertyDefinition {
     const fn new(name: &'static str, kind: PropertyKind) -> Self {
-        Self { name, kind }
+        Self {
+            name,
+            kind,
+            optional: false,
+        }
+    }
+
+    const fn optional(name: &'static str, kind: PropertyKind) -> Self {
+        Self {
+            name,
+            kind,
+            optional: true,
+        }
     }
 
     fn normalize(self, value: &Value) -> Option<Value> {
@@ -124,6 +148,15 @@ impl PropertyDefinition {
                     "other"
                 };
                 Some(Value::String(category.to_string()))
+            }
+            PropertyKind::TaskSummary => {
+                // The one free-text property: the agent-authored summary is already
+                // PII-scrubbed and length-capped upstream; here it is only bounded
+                // defensively and passed through as-is.
+                let raw = value.as_str()?;
+                Some(Value::String(
+                    raw.chars().take(TASK_SUMMARY_MAX_CHARS).collect(),
+                ))
             }
             PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
@@ -193,8 +226,19 @@ impl EventDefinition {
         let input = properties.as_object()?;
         let mut output = Map::new();
         for property in self.properties {
-            let value = input.get(property.name)?;
-            output.insert(property.name.to_string(), property.normalize(value)?);
+            let Some(value) = input.get(property.name) else {
+                if property.optional {
+                    continue;
+                }
+                return None;
+            };
+            let Some(normalized) = property.normalize(value) else {
+                if property.optional {
+                    continue;
+                }
+                return None;
+            };
+            output.insert(property.name.to_string(), normalized);
         }
         Some(Value::Object(output))
     }
@@ -204,10 +248,11 @@ impl EventDefinition {
         properties: &HashMap<String, Value>,
     ) -> bool {
         self.properties.iter().all(|property| {
-            let Some(current) = properties.get(property.name) else {
-                return false;
-            };
-            property.normalize(current).as_ref() == Some(current)
+            match properties.get(property.name) {
+                Some(current) => property.normalize(current).as_ref() == Some(current),
+                // Absent is acceptable only for optional properties.
+                None => property.optional,
+            }
         })
     }
 
@@ -229,6 +274,7 @@ pub const AGENT_SESSION_TASK_DECLARED: EventDefinition = EventDefinition::new(
     &[
         PropertyDefinition::new(TASK_CATEGORY, PropertyKind::TaskCategory),
         PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::optional(TASK_SUMMARY, PropertyKind::TaskSummary),
     ],
 );
 pub const AGENT_SESSION_ENDED: EventDefinition = EventDefinition::new(
@@ -375,7 +421,7 @@ mod tests {
         );
         assert_eq!(
             AGENT_SESSION_TASK_DECLARED.property_names(),
-            vec!["task_category", "client_name"]
+            vec!["task_category", "client_name", "task_summary"]
         );
         assert_eq!(
             AGENT_SESSION_ENDED.property_names(),
@@ -519,6 +565,47 @@ mod tests {
                 .sanitize(&json!({ "task_category": 7, "client_name": "cursor" })),
             None
         );
+    }
+
+    #[test]
+    fn task_declared_passes_through_the_free_text_summary() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED.sanitize(&json!({
+                "task_category": "shopping",
+                "client_name": "cursor",
+                "task_summary": "Compared warranty terms across three retailers.",
+            })),
+            Some(json!({
+                "task_category": "shopping",
+                "client_name": "cursor",
+                "task_summary": "Compared warranty terms across three retailers.",
+            }))
+        );
+    }
+
+    #[test]
+    fn task_declared_still_sends_when_the_optional_summary_is_absent() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED
+                .sanitize(&json!({ "task_category": "research", "client_name": "codex" })),
+            Some(json!({ "task_category": "research", "client_name": "codex" }))
+        );
+    }
+
+    #[test]
+    fn task_summary_is_capped_at_the_boundary() {
+        let long = "x".repeat(TASK_SUMMARY_MAX_CHARS + 50);
+        let sanitized = AGENT_SESSION_TASK_DECLARED.sanitize(&json!({
+            "task_category": "other",
+            "client_name": "codex",
+            "task_summary": long,
+        }));
+        let summary = sanitized
+            .as_ref()
+            .and_then(|value| value.get("task_summary"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(summary.chars().count(), TASK_SUMMARY_MAX_CHARS);
     }
 
     #[test]

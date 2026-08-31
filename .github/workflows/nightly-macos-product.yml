@@ -1,0 +1,271 @@
+name: Build one signed family nightly
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: Internal product topology key
+        required: true
+        type: string
+      state_ref:
+        description: Suite branch or durable pull-request head making the reservation reachable
+        required: true
+        type: string
+      source_sha:
+        description: Frozen main commit represented by release artifacts
+        required: true
+        type: string
+      reservation_sha:
+        description: Exact immutable version overlay to build
+        required: true
+        type: string
+      browser_version:
+        required: true
+        type: string
+      server_version:
+        required: true
+        type: string
+      extension_version:
+        required: true
+        type: string
+      onboarding_version:
+        required: true
+        type: string
+    outputs:
+      artifact_name:
+        description: Actions artifact containing the signed DMG
+        value: ${{ jobs.build.outputs.artifact_name }}
+    secrets:
+      BROWSEROS_CONFIG_URL:
+        required: true
+      CLAW_POSTHOG_KEY:
+        required: true
+      MACOS_CERTIFICATE_NAME:
+        required: true
+      MACOS_CERTIFICATE_P12:
+        required: true
+      MACOS_CERTIFICATE_PWD:
+        required: true
+      MACOS_KEYCHAIN_PASSWORD:
+        required: true
+      POSTHOG_API_KEY:
+        required: true
+      PROD_MACOS_NOTARIZATION_APPLE_ID:
+        required: true
+      PROD_MACOS_NOTARIZATION_PWD:
+        required: true
+      PROD_MACOS_NOTARIZATION_TEAM_ID:
+        required: true
+      SENTRY_DSN:
+        required: true
+      SPARKLE_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed ${{ inputs.product }} nightly
+    runs-on: [self-hosted, macOS, ARM64, browseros-builder]
+    concurrency:
+      group: macos-build
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 600
+    outputs:
+      artifact_name: ${{ steps.inputs.outputs.artifact_name }}
+    env:
+      BROWSEROS_REPO: ${{ vars.BROWSEROS_REPO_PATH }}
+      CHROMIUM_SRC: ${{ vars.BROWSEROS_CHROMIUM_SRC }}
+    steps:
+      - name: Resolve and validate build inputs
+        id: inputs
+        env:
+          BROWSER_VERSION: ${{ inputs.browser_version }}
+          EXTENSION_VERSION: ${{ inputs.extension_version }}
+          ONBOARDING_VERSION: ${{ inputs.onboarding_version }}
+          PRODUCT: ${{ inputs.product }}
+          SERVER_VERSION: ${{ inputs.server_version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RESERVATION_SHA: ${{ inputs.reservation_sha }}
+          STATE_REF: ${{ inputs.state_ref }}
+        run: |
+          set -euo pipefail
+          repo="${BROWSEROS_REPO:-}"
+          chromium_src="${CHROMIUM_SRC:-}"
+          if [ -z "$repo" ] || [ ! -d "${repo/#\~/$HOME}/.git" ]; then
+            echo "::error::BROWSEROS_REPO_PATH must point to a Git checkout"
+            exit 1
+          fi
+          if [ -z "$chromium_src" ] || [ ! -d "${chromium_src/#\~/$HOME}" ]; then
+            echo "::error::BROWSEROS_CHROMIUM_SRC must point to Chromium"
+            exit 1
+          fi
+          case "$PRODUCT" in
+            browseros)
+              artifact_name="BrowserOS_v${BROWSER_VERSION}_arm64"
+              artifact_glob="BrowserOS_*.dmg"
+              ;;
+            browserclaw)
+              artifact_name="BrowserOS_neo_v${BROWSER_VERSION}_arm64"
+              artifact_glob="BrowserOS_neo_*.dmg"
+              ;;
+            *)
+              echo "::error::Unknown family product: $PRODUCT"
+              exit 1
+              ;;
+          esac
+          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$RESERVATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$BROWSER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          [[ "$SERVER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$EXTENSION_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ONBOARDING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if ! [[ "$STATE_REF" =~ ^refs/pull/[1-9][0-9]*/head$ ]]; then
+            git check-ref-format --branch "$STATE_REF" >/dev/null
+          fi
+          {
+            echo "browseros_repo=${repo/#\~/$HOME}"
+            echo "chromium_src=${chromium_src/#\~/$HOME}"
+            echo "artifact_name=$artifact_name"
+            echo "artifact_glob=$artifact_glob"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sync build repo to transaction reservation
+        env:
+          BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
+          RESERVATION_SHA: ${{ inputs.reservation_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          STATE_REF: ${{ inputs.state_ref }}
+        run: |
+          set -euo pipefail
+          cd "$BROWSEROS_REPO"
+          if [[ "$STATE_REF" =~ ^refs/pull/[1-9][0-9]*/head$ ]]; then
+            state_remote_ref="refs/remotes/origin/release-state"
+            state_refspec="+$STATE_REF:$state_remote_ref"
+          else
+            state_remote_ref="refs/remotes/origin/$STATE_REF"
+            state_refspec="+refs/heads/$STATE_REF:$state_remote_ref"
+          fi
+          git fetch origin --tags --prune --prune-tags --force \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            "$state_refspec"
+          git reset --hard
+          git clean -fd
+          # The PR-head ref survives source-branch deletion and makes the
+          # immutable reservation object reachable. Later state-only commits
+          # are never browser inputs, even when this is a full-run retry.
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          test "$(git rev-parse "${RESERVATION_SHA}^")" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$RESERVATION_SHA" "$state_remote_ref"
+          git checkout --detach "$RESERVATION_SHA"
+          git reset --hard "$RESERVATION_SHA"
+          test "$(git rev-parse HEAD)" = "$RESERVATION_SHA"
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup disposable Chromium workspace
+        id: chromium_workspace
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}
+        shell: bash
+        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}"
+
+      - name: Verify shared browser version
+        env:
+          BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
+          EXPECTED_VERSION: ${{ inputs.browser_version }}
+        run: |
+          set -euo pipefail
+          cd "$BROWSEROS_REPO/packages/browseros"
+          version="$(uv run python bos_build/scripts/bump_version.py --mode none)"
+          test "$version" = "$EXPECTED_VERSION"
+
+      - name: Remove stale nightly DMGs
+        env:
+          BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
+          VERSION: ${{ inputs.browser_version }}
+        run: |
+          set -euo pipefail
+          release_dir="$BROWSEROS_REPO/packages/browseros/releases/$VERSION"
+          if [ -d "$release_dir" ]; then
+            find "$release_dir" -maxdepth 1 -type f -name 'BrowserOS_*.dmg' -delete
+          fi
+
+      - name: Import macOS signing certificate
+        id: macos_signing
+        working-directory: ${{ steps.inputs.outputs.browseros_repo }}
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: bash .github/scripts/macos-signing-keychain.sh setup
+
+      - name: Build signed nightly
+        env:
+          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
+          BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server_version || '' }}
+          BROWSEROS_BUILD_RESERVATION_SHA: ${{ inputs.reservation_sha }}
+          BROWSEROS_BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
+          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          BROWSEROS_DEFER_R2_UPLOAD: "1"
+          BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
+          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server_version || '' }}
+          BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ steps.inputs.outputs.browseros_repo }}/updates/extensions/bundled-manifest.xml
+          BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
+          CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.chromium_src }}
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+          MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
+          MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
+          PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
+          PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
+          PRODUCT: ${{ inputs.product }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          cd "$BROWSEROS_REPO/packages/browseros"
+          uv run browseros build \
+            --profile nightly-macos \
+            --product "$PRODUCT" \
+            --arch arm64 \
+            --resource-mode published \
+            --chromium-src "$CHROMIUM_SRC"
+
+      # Both cleanups are unconditional because the self-hosted runner outlives
+      # this job; leaking either resource poisons the next queued product build.
+      - name: Clean up disposable Chromium workspace
+        if: always()
+        env:
+          MACOS_CHROMIUM_WORKSPACE_STATE_PATH: ${{ steps.chromium_workspace.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.inputs.outputs.browseros_repo }}/.github/scripts/macos-chromium-workspace.sh"
+          if [ -f "$script" ]; then bash "$script" cleanup; fi
+
+      - name: Clean up macOS signing keychain
+        if: always()
+        env:
+          MACOS_SIGNING_STATE_PATH: ${{ steps.macos_signing.outputs.state_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script="${{ steps.inputs.outputs.browseros_repo }}/.github/scripts/macos-signing-keychain.sh"
+          if [ -f "$script" ]; then bash "$script" cleanup; fi
+
+      - name: Upload signed nightly DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.inputs.outputs.artifact_name }}
+          path: |
+            ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ inputs.browser_version }}/${{ steps.inputs.outputs.artifact_glob }}
+            ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros/releases/${{ inputs.browser_version }}/release.json
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true

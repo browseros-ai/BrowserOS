@@ -123,6 +123,23 @@ describe('Audit screen', () => {
     // (LIVE / FAILED / STOPPED) render a chip in the agent cell.
   })
 
+  it('renders the task summary snippet under the target when present', () => {
+    dataOverride = {
+      ...baseData,
+      tasks: [
+        {
+          ...sampleTask,
+          taskSummary:
+            'Compared two invoicing tools and noted their pricing tiers.',
+        },
+      ],
+    }
+    const html = renderApp()
+    expect(html).toContain(
+      'Compared two invoicing tools and noted their pricing tiers.',
+    )
+  })
+
   it('hides token usage from the task list', () => {
     dataOverride = {
       ...baseData,

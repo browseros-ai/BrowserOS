@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Tuple
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.env import EnvConfig
+from ...lib.notarization import notarytool_wait_args
 from ...products.server_binaries import (
     all_server_bundles,
     ServerBundle,
@@ -1056,7 +1057,7 @@ def notarize_app(
             str(notarize_zip),
             "--keychain-profile",
             profile,
-            "--wait",
+            *notarytool_wait_args(),
         ]
         if keychain_path:
             submit_cmd.extend(["--keychain", str(keychain_path)])
@@ -1073,7 +1074,7 @@ def notarize_app(
             env_vars["team_id"],
             "--password",
             env_vars["notarization_pwd"],
-            "--wait",
+            *notarytool_wait_args(),
         ]
     result = run_command(submit_cmd, check=False)
 

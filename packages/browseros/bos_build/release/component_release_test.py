@@ -4,6 +4,7 @@
 import unittest
 import subprocess
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,7 @@ from bos_build.release.component_release import (
 )
 from bos_build.release.candidate import CandidateRecord
 from bos_build.release.components import AllocationRecord
+from bos_build.release.suite_test import STATE_SHA, suite_record
 
 
 SOURCE_SHA = "1" * 40
@@ -408,6 +410,8 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
                                 "nameWithOwner": "browseros-ai/BrowserOS"
                             },
                             "isCrossRepository": False,
+                            "state": "OPEN",
+                            "mergedAt": None,
                         }
                     ],
                 ),
@@ -426,6 +430,168 @@ class ComponentAllocationDiscoveryTest(unittest.TestCase):
         self.assertEqual(allocations[0].version, "0.0.128")
         self.assertFalse(allocations[0].public)
         validate_candidate.assert_called_once_with(candidate)
+
+    def test_open_family_suite_is_discovered_as_a_reservation(self) -> None:
+        suite = suite_record(state_sha=STATE_SHA)
+        pull_request = {
+            "body": suite.pull_request_body(),
+            "baseRefName": suite.default_branch,
+            "headRefName": suite.branch,
+            "headRefOid": suite.state_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": suite.pull_request_number,
+            "url": suite.pull_request_url,
+            "state": "OPEN",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp), "browseros-ai/BrowserOS"
+            )
+            operations.default_branch = "main"
+            with (
+                mock.patch.object(operations, "_git", return_value=""),
+                mock.patch(
+                    "bos_build.release.component_release.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=0, stdout="[]", stderr=""
+                    ),
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_pull_requests",
+                    return_value=[pull_request],
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
+                    return_value=(
+                        replace(suite, pull_request_number=0, pull_request_url=""),
+                    ),
+                ),
+            ):
+                allocations = operations.allocations("server")
+
+        self.assertEqual(len(allocations), 1)
+        self.assertEqual(allocations[0].kind, "candidate")
+        self.assertEqual(allocations[0].version, suite.component_versions["server"])
+        self.assertEqual(allocations[0].candidate_id, suite.branch)
+        self.assertEqual(allocations[0].source_sha, suite.source_sha)
+        self.assertEqual(allocations[0].reference, "agent-server/v0.0.147")
+        self.assertTrue(allocations[0].reusable)
+
+        release_operations = FakeOperations()
+        release_operations.records = allocations
+        release = resolve_standalone_release(
+            StandaloneReleaseRequest(
+                component="server",
+                event_name="workflow_call",
+                default_branch="main",
+                requested_version=suite.component_versions["server"],
+                release_ref=suite.source_sha,
+            ),
+            release_operations,
+        )
+        self.assertEqual(release.version, suite.component_versions["server"])
+
+    def test_closed_family_suite_without_branch_blocks_standalone_reuse(self) -> None:
+        suite = suite_record(state="closed", state_sha=STATE_SHA)
+        pull_request = {
+            "body": suite.pull_request_body(),
+            "baseRefName": suite.default_branch,
+            "headRefName": suite.branch,
+            "headRefOid": suite.state_sha,
+            "headRepository": {"nameWithOwner": "browseros-ai/BrowserOS"},
+            "isCrossRepository": False,
+            "number": suite.pull_request_number,
+            "url": suite.pull_request_url,
+            "state": "CLOSED",
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            operations = GitComponentReleaseOperations(
+                Path(tmp), "browseros-ai/BrowserOS"
+            )
+            operations.default_branch = "main"
+            with (
+                mock.patch.object(operations, "_git", return_value=""),
+                mock.patch(
+                    "bos_build.release.component_release.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=0, stdout="[]", stderr=""
+                    ),
+                ),
+                mock.patch(
+                    "bos_build.release.component_release.list_pull_requests",
+                    return_value=[pull_request],
+                ) as list_prs,
+                mock.patch(
+                    "bos_build.release.component_release.list_github_releases",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "bos_build.release.suite.GitHubSuiteBackend.discover_branch_reservations",
+                    return_value=(),
+                ),
+            ):
+                allocations = operations.allocations("server")
+
+        list_prs.assert_called_once_with("browseros-ai/BrowserOS", state="all")
+        self.assertEqual(len(allocations), 1)
+        self.assertFalse(allocations[0].reusable)
+        self.assertTrue(allocations[0].reuse_forbidden)
+        release_operations = FakeOperations()
+        release_operations.records = allocations
+        with self.assertRaisesRegex(ValueError, "already allocated"):
+            resolve_standalone_release(
+                StandaloneReleaseRequest(
+                    component="server",
+                    event_name="workflow_call",
+                    default_branch="main",
+                    requested_version=suite.component_versions["server"],
+                    release_ref=suite.source_sha,
+                ),
+                release_operations,
+            )
+
+    def test_closed_suite_vetoes_reuse_of_its_existing_component_draft(self) -> None:
+        suite = suite_record(state="closed", state_sha=STATE_SHA)
+        release_operations = FakeOperations()
+        release_operations.records = (
+            AllocationRecord(
+                component="server",
+                version=suite.component_versions["server"],
+                kind="release",
+                source_sha=suite.source_sha,
+                reference="agent-server/v0.0.147",
+                reusable=True,
+            ),
+            AllocationRecord(
+                component="server",
+                version=suite.component_versions["server"],
+                kind="candidate",
+                source_sha=suite.source_sha,
+                reference="agent-server/v0.0.147",
+                reuse_forbidden=True,
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "already allocated"):
+            resolve_standalone_release(
+                StandaloneReleaseRequest(
+                    component="server",
+                    event_name="workflow_call",
+                    default_branch="main",
+                    requested_version=suite.component_versions["server"],
+                    release_ref=suite.source_sha,
+                ),
+                release_operations,
+            )
 
 
 if __name__ == "__main__":

@@ -111,6 +111,11 @@ SessionSummary:
       type: string
     site:
       type: string
+    taskSummary:
+      type: string
+      description: >-
+        Agent-declared, PII-scrubbed one-or-two-line summary of the task, used
+        for audit search. Absent when the session never declared one.
     startedAt:
       type: integer
       format: int64

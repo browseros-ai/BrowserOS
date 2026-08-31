@@ -487,7 +487,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", plus a `category` for the kind of task. Tabs are grouped as <client>/<name>; the label stays on this machine and only the category is used for anonymous aggregate analytics. Call again to update."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
@@ -511,6 +511,11 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
                         "other"
                     ],
                     "description": "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list."
+                },
+                "summary": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers."
                 },
                 "session": {
                     "type": "string",
