@@ -138,6 +138,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             self.assertIn(value, build_step["run"])
         self.assertEqual(upload["if"], "inputs.resource-mode == 'source'")
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertEqual(
+            build_step["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding-version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build_step["env"])
 
     def test_reusable_platform_workflows_forward_source_contract(self):
         for workflow_name in ("release-linux.yml", "release-windows.yml"):
@@ -233,6 +238,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         ):
             self.assertIn(value, build_step["run"])
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertEqual(
+            build_step["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding_version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build_step["env"])
 
     def test_macos_release_sets_up_ci_keychain_before_build_and_cleans_up(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -308,6 +318,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             build["env"]["BROWSEROS_BUILD_SOURCE_SHA"],
             "${{ steps.source.outputs.sha }}",
         )
+        self.assertEqual(
+            build["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding-version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build["env"])
 
     def test_browser_lanes_do_not_receive_extension_build_secrets(self):
         secret_names = (
@@ -849,11 +864,13 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "product": "browseros",
             "server_workflow": "release-server.yml",
             "extension": "agent",
+            "onboarding_manifest": "apps/app-onboard/package.json",
         },
         "release-browserclaw.yml": {
             "product": "browserclaw",
             "server_workflow": "release-claw-server.yml",
             "extension": "browserclaw",
+            "onboarding_manifest": "apps/claw-onboard/package.json",
         },
     }
 
@@ -884,7 +901,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertEqual(workflow["permissions"], {})
 
     def test_preflight_freezes_the_default_branch_dispatch_sha(self):
-        for workflow_name in self.RELEASES:
+        for workflow_name, config in self.RELEASES.items():
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 preflight = workflow["jobs"]["preflight"]
@@ -907,6 +924,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     'source_sha="$(git rev-parse HEAD)"',
                     'test "$source_sha" = "$GITHUB_SHA"',
                     "bump_version.py --mode none",
+                    config["onboarding_manifest"],
                 ):
                     self.assertIn(token, resolve["run"])
 
@@ -1815,6 +1833,11 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             "${{ inputs.reservation_sha }}",
         )
         self.assertEqual(build["env"]["BROWSEROS_DEFER_R2_UPLOAD"], "1")
+        self.assertEqual(
+            build["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding_version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build["env"])
         for secret in (
             "R2_ACCESS_KEY_ID",
             "R2_ACCOUNT_ID",

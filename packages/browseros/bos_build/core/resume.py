@@ -335,7 +335,7 @@ def _resource_identity(ctx: Context) -> dict[str, Any]:
     components = {
         source.server_component: server_version,
         source.extension_component: ctx.env.bundled_product_extension_version,
-        source.onboarding_component: ctx.env.browserclaw_onboard_resource_version,
+        source.onboarding_component: ctx.env.onboarding_resource_version,
     }
     missing = [name for name, value in components.items() if not value]
     if missing:

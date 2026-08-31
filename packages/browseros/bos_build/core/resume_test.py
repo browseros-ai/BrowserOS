@@ -53,7 +53,7 @@ class ResumeCheckpointTest(unittest.TestCase):
             {
                 "BROWSEROS_SERVER_RESOURCE_VERSION": "0.0.138",
                 "BUNDLED_PRODUCT_EXTENSION_VERSION": "0.0.132.0",
-                "BROWSERCLAW_ONBOARD_RESOURCE_VERSION": "0.0.36",
+                "ONBOARDING_RESOURCE_VERSION": "0.0.36",
             },
         )
         self.env.start()
@@ -117,6 +117,18 @@ class ResumeCheckpointTest(unittest.TestCase):
         validate_resume_before_execution([(resumed, ("sign_macos",))])
 
         self.assertEqual(resumed.artifact_registry.get("built_app"), app)
+
+    def test_published_checkpoint_records_product_owned_onboarding_pin(self):
+        ctx = self._context()
+
+        self.assertEqual(
+            ctx.resume_state.candidate["resources"]["component_versions"],
+            {
+                "server": "0.0.138",
+                "agent": "0.0.132.0",
+                "app-onboard": "0.0.36",
+            },
+        )
 
     def test_modified_artifact_fails_before_resume(self):
         _ctx, app = self._write_compile_checkpoint()

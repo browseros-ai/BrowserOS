@@ -36,13 +36,13 @@ RESOURCE_VERSION_FAMILIES = (
     ),
     (
         ("claw-onboard", "prod-resources"),
-        "browserclaw_onboard_resource_version",
+        "onboarding_resource_version",
     ),
     # One build bakes one onboarding component, so both families read the same
     # per-build version; the product-gated download key decides which applies.
     (
         ("app-onboard", "prod-resources"),
-        "browserclaw_onboard_resource_version",
+        "onboarding_resource_version",
     ),
 )
 

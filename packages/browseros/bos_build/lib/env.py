@@ -82,9 +82,9 @@ class EnvConfig:
         return os.environ.get("BROWSERCLAW_SERVER_RESOURCE_VERSION")
 
     @property
-    def browserclaw_onboard_resource_version(self) -> Optional[str]:
-        """Exact BrowserClaw onboarding resource version for release builds."""
-        return os.environ.get("BROWSERCLAW_ONBOARD_RESOURCE_VERSION")
+    def onboarding_resource_version(self) -> Optional[str]:
+        """Exact product-selected onboarding version for release builds."""
+        return os.environ.get("ONBOARDING_RESOURCE_VERSION")
 
     @property
     def bundled_extensions_manifest_url(self) -> Optional[str]:

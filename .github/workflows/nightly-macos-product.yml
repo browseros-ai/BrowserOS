@@ -205,7 +205,7 @@ jobs:
 
       - name: Build signed nightly
         env:
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
+          ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server_version || '' }}
           BROWSEROS_BUILD_RESERVATION_SHA: ${{ inputs.reservation_sha }}
           BROWSEROS_BUILD_SOURCE_SHA: ${{ inputs.source_sha }}

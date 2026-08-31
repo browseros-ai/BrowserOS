@@ -391,7 +391,7 @@ class ResourceVersionOverrideTest(unittest.TestCase):
                 env=SimpleNamespace(
                     browseros_server_resource_version=browseros,
                     browserclaw_server_resource_version=browserclaw,
-                    browserclaw_onboard_resource_version=onboard,
+                    onboarding_resource_version=onboard,
                 )
             ),
         )
@@ -433,7 +433,7 @@ class ResourceVersionOverrideTest(unittest.TestCase):
                         r2_bucket="browseros",
                         browseros_server_resource_version=override,
                         browserclaw_server_resource_version="",
-                        browserclaw_onboard_resource_version="",
+                        onboarding_resource_version="",
                     ),
                     get_download_resources_config=lambda: config_path,
                 ),

@@ -45,7 +45,7 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           test "$source_sha" = "$GITHUB_SHA"
           version="$(uv run python bos_build/scripts/bump_version.py --mode none)"
-          onboarding_version="$(jq -er '.version' "$GITHUB_WORKSPACE/packages/browseros-agent/apps/claw-onboard/package.json")"
+          onboarding_version="$(jq -er '.version' "$GITHUB_WORKSPACE/packages/browseros-agent/apps/app-onboard/package.json")"
           {
             echo "onboarding_version=$onboarding_version"
             echo "source_sha=$source_sha"

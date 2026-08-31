@@ -390,7 +390,7 @@ jobs:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.source.outputs.sha }}
           BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server-version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server-version || '' }}
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
+          ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension-version && format('{0}/updates/extensions/bundled-manifest.xml', github.workspace) || '' }}
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension-version }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

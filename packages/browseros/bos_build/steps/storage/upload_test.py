@@ -28,7 +28,7 @@ def _upload_ctx(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         env=SimpleNamespace(
-            browserclaw_onboard_resource_version=None,
+            onboarding_resource_version=None,
             browserclaw_server_resource_version=None,
             browseros_server_resource_version=None,
             bundled_product_extension_version=None,
@@ -136,7 +136,7 @@ class UploadMetadataTest(unittest.TestCase):
             ctx = _upload_ctx(Path(tmp))
             ctx.env.browseros_server_resource_version = "0.0.129"
             ctx.env.bundled_product_extension_version = "0.0.125.0"
-            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+            ctx.env.onboarding_resource_version = "0.0.15"
 
             release = generate_release_json(
                 ctx,
@@ -163,7 +163,7 @@ class UploadMetadataTest(unittest.TestCase):
             )
             ctx.env.browserclaw_server_resource_version = "0.0.29"
             ctx.env.bundled_product_extension_version = "0.2.2.0"
-            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+            ctx.env.onboarding_resource_version = "0.0.15"
 
             release = generate_release_json(
                 ctx,

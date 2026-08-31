@@ -74,7 +74,7 @@ def _release_provenance(ctx: Context) -> dict[str, object]:
         component_versions = {
             source.server_component: server_version,
             source.extension_component: ctx.env.bundled_product_extension_version,
-            source.onboarding_component: ctx.env.browserclaw_onboard_resource_version,
+            source.onboarding_component: ctx.env.onboarding_resource_version,
         }
         if all(component_versions.values()):
             provenance["component_versions"] = component_versions
