@@ -1,6 +1,7 @@
 import { storage } from '@wxt-dev/storage'
 import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
+import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
   ensureSidePanelRuntimeStateLoaded,
@@ -49,6 +50,11 @@ const cleanupLegacyToolApprovalStorage = async () => {
 }
 
 export default defineBackground(() => {
+  // One background broker owns the long-lived server subscription and all
+  // panel-routing effects; individual React panels can come and go freely.
+  const conversationPanelBroker = createConversationPanelBroker()
+  void conversationPanelBroker.start()
+
   registerSidePanelOpenStateListeners()
   ensureSidePanelRuntimeStateLoaded().catch(() => null)
 

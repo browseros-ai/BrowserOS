@@ -126,11 +126,10 @@ export async function ensureSidePanelRuntimeStateLoaded(): Promise<void> {
 async function openTabSidePanel({
   tabId,
 }: SidePanelTarget): Promise<SidePanelToggleResult> {
-  const isAlreadyOpen = await chrome.sidePanel.browserosIsOpen({ tabId })
-  if (isAlreadyOpen) {
-    return { opened: true }
-  }
-  return await chrome.sidePanel.browserosToggle({ tabId })
+  // This is an idempotent command, not a check-then-toggle sequence. The
+  // background conversation broker may race with a user click; `open: true`
+  // guarantees that either ordering leaves the touched tab's panel open.
+  return await chrome.sidePanel.browserosToggle({ tabId, open: true })
 }
 
 async function toggleTabSidePanel({

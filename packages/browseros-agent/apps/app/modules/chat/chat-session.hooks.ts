@@ -5,6 +5,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import {
+  conversationForTab,
+  conversationPanelViewsStorage,
+} from '@/lib/browseros/conversationPanelStorage'
 import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   getWindowConversation,
@@ -55,8 +59,11 @@ import {
 import { restoreServerConversation } from './chat-session-restore'
 import type { ChatMode } from './chat-types'
 import { addContentFilterNotice } from './content-filter-notice'
+import {
+  conversationReconnectUrl,
+  fetchConversationRunState,
+} from './conversation-run-client'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
-import { useNotifyActiveTab } from './notify-active-tab.hooks'
 import { useRemoteConversationSave } from './remote-conversation-save.hooks'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
@@ -352,6 +359,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
   if (!transportRef.current) {
     transportRef.current = new DefaultChatTransport<UIMessage>({
+      prepareReconnectToStreamRequest: async () => {
+        const serverUrl = await resolveAgentServerUrlWithRetry()
+        return {
+          api: conversationReconnectUrl(serverUrl, conversationIdRef.current),
+        }
+      },
       prepareSendMessagesRequest: async ({ messages }) => {
         const target = selectedChatTargetRef.current
         const fallbackProvider =
@@ -443,7 +456,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     sendMessage: baseSendMessage,
     setMessages,
     status,
-    stop,
+    stop: detachStream,
+    resumeStream,
     error: chatError,
     regenerate,
   } = useChat({
@@ -467,6 +481,134 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     },
   })
 
+  const statusRef = useRef(status)
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  const stop = useCallback(async () => {
+    // First detach this view so the UI responds immediately, then cancel the
+    // server-owned run explicitly. Aborting the fetch alone is intentionally
+    // no longer a lifecycle signal.
+    await detachStream()
+    try {
+      const serverUrl =
+        agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
+      const response = await fetch(
+        `${serverUrl}/chat/${encodeURIComponent(conversationIdRef.current)}/stop`,
+        { method: 'POST' },
+      )
+      if (!response.ok) {
+        throw new Error(`Conversation stop failed (${response.status})`)
+      }
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: {
+          conversationId: conversationIdRef.current,
+          operation: 'stop-server-conversation',
+        },
+      })
+    }
+  }, [detachStream])
+
+  const attachedPanelRunRef = useRef('')
+  // The background broker owns routing; this view only hydrates the broker's
+  // selected conversation and reconnects to its server stream. Switching tabs
+  // detaches the old subscriber without stopping either server-owned run.
+  useEffect(() => {
+    if (optionsRef.current?.origin === 'newtab') return
+
+    let cancelled = false
+    let attachEpoch = 0
+    let panelTabId: number | undefined
+    let panelWindowId: number | undefined
+    const attachForViews = async (
+      views: Awaited<ReturnType<typeof conversationPanelViewsStorage.getValue>>,
+    ) => {
+      const view = conversationForTab(views, panelTabId)
+      if (!view) return
+      const runKey = `${view.conversationId}:${view.runId}`
+      if (attachedPanelRunRef.current === runKey) return
+
+      // The panel that submitted this turn already owns the POST stream. The
+      // presence event only teaches it the server run id for future deduping.
+      if (
+        view.conversationId === conversationIdRef.current &&
+        (statusRef.current === 'submitted' || statusRef.current === 'streaming')
+      ) {
+        attachedPanelRunRef.current = runKey
+        return
+      }
+
+      attachedPanelRunRef.current = runKey
+      const epoch = ++attachEpoch
+      try {
+        const serverUrl =
+          agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
+        const state = await fetchConversationRunState(
+          serverUrl,
+          view.conversationId,
+        )
+        if (cancelled || epoch !== attachEpoch) return
+
+        await detachStream()
+        conversationIdRef.current = view.conversationId as ReturnType<
+          typeof crypto.randomUUID
+        >
+        messagesRef.current = state.messages
+        setConversationId(
+          view.conversationId as ReturnType<typeof crypto.randomUUID>,
+        )
+        setMessages(state.messages)
+        setSearchParams({}, { replace: true })
+        if (state.status === 'running') await resumeStream()
+      } catch (error) {
+        if (cancelled || epoch !== attachEpoch) return
+        attachedPanelRunRef.current = ''
+        sentry.captureException(error, {
+          extra: {
+            conversationId: view.conversationId,
+            operation: 'attach-panel-conversation',
+          },
+        })
+      }
+    }
+
+    const refreshForActiveTab = async () => {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      })
+      if (cancelled || tab?.id === undefined) return
+      panelTabId = tab.id
+      panelWindowId = tab.windowId
+      await attachForViews(await conversationPanelViewsStorage.getValue())
+    }
+
+    const unwatch = conversationPanelViewsStorage.watch((views) => {
+      void attachForViews(views)
+    })
+    const onActivated = (activeInfo: { tabId: number; windowId: number }) => {
+      if (
+        panelWindowId !== undefined &&
+        activeInfo.windowId !== panelWindowId
+      ) {
+        return
+      }
+      panelTabId = activeInfo.tabId
+      void conversationPanelViewsStorage.getValue().then(attachForViews)
+    }
+    chrome.tabs.onActivated.addListener(onActivated)
+    void refreshForActiveTab()
+
+    return () => {
+      cancelled = true
+      attachEpoch += 1
+      unwatch()
+      chrome.tabs.onActivated.removeListener(onActivated)
+    }
+  }, [detachStream, resumeStream, setMessages, setSearchParams])
+
   // Two cleanups once a turn is no longer streaming: drop messages with
   // empty parts (interrupted responses trip AI SDK validation on the next
   // send), and strip retained base64 image tool outputs from older turns.
@@ -481,12 +623,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const cleaned = stripImageToolOutputs(nonEmpty, { keepLastMessage: true })
     if (cleaned !== messages) setMessages(cleaned)
   }, [messages, status, setMessages])
-
-  useNotifyActiveTab({
-    messages,
-    status,
-    conversationId: conversationIdRef.current,
-  })
 
   const {
     data: remoteConversationData,
@@ -569,6 +705,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       const windowId = tab?.windowId
       if (windowId == null || cancelled) return
       windowIdRef.current = windowId
+      // A live server presence mapping is newer than the window's last manual
+      // conversation. The broker attachment effect above will restore it.
+      const panelViews = await conversationPanelViewsStorage.getValue()
+      if (conversationForTab(panelViews, tab.id)) return
       const stored = await getWindowConversation(windowId)
       if (cancelled) return
       if (stored && stored !== conversationIdRef.current) {
@@ -813,11 +953,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
       })
   }, [])
-
-  useEffect(
-    () => () => discardServerSession(conversationIdRef.current),
-    [discardServerSession],
-  )
 
   const resetConversationState = () => {
     const previousConversationId = conversationIdRef.current

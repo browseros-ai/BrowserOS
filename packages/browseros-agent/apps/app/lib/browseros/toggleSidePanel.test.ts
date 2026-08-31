@@ -185,8 +185,8 @@ describe('side panel scope routing', () => {
     const result = await openSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
-    expect(browserosIsOpenCalls).toEqual([{ tabId: 7 }])
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
+    expect(browserosIsOpenCalls).toEqual([])
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
     expect(openCalls).toEqual([])
     expect(closeCalls).toEqual([])
   })
@@ -198,8 +198,8 @@ describe('side panel scope routing', () => {
     const result = await openSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
-    expect(browserosIsOpenCalls).toEqual([{ tabId: 7 }])
-    expect(browserosToggleCalls).toEqual([])
+    expect(browserosIsOpenCalls).toEqual([])
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
     expect(openCalls).toEqual([])
     expect(closeCalls).toEqual([])
   })
