@@ -159,41 +159,46 @@ def _is_empty_appcast_shell(content: str) -> bool:
         root = ET.fromstring(content)
     except ET.ParseError:
         return False
-    if root.tag != "rss":
-        return False
-    if not _has_single_direct_channel(root):
-        return False
-    channel = next(
-        element for element in root if _xml_local_name(element.tag) == "channel"
-    )
-    metadata_counts: dict[str, int] = {}
-    allowed_metadata = {"title", "link", "description", "language"}
-    for child in channel:
-        name = _xml_local_name(child.tag)
-        if name == "item":
-            continue
-        # Versionless placeholders have no downgrade comparison. Treat only
-        # scalar channel metadata as empty; unknown, attributed, or nested
-        # children could be malformed release data outside an <item>.
-        if name not in allowed_metadata or child.attrib or list(child):
-            return False
-        metadata_counts[name] = metadata_counts.get(name, 0) + 1
-        if metadata_counts[name] > 1:
-            return False
-    direct_items = [
-        element for element in channel if _xml_local_name(element.tag) == "item"
-    ]
-    all_items = [
-        element for element in root.iter() if _xml_local_name(element.tag) == "item"
-    ]
-    if len(all_items) != len(direct_items) or any(
-        item not in direct_items for item in all_items
+    if (
+        root.tag != "rss"
+        or root.attrib != {"version": "2.0"}
+        or (root.text or "").strip()
+        or (root.tail or "").strip()
     ):
         return False
-    return all(
-        not item.attrib and not list(item) and not (item.text or "").strip()
-        for item in direct_items
-    )
+
+    root_children = list(root)
+    if len(root_children) != 1 or root_children[0].tag != "channel":
+        return False
+    channel = root_children[0]
+    if channel.attrib or (channel.text or "").strip() or (channel.tail or "").strip():
+        return False
+
+    metadata_counts: dict[str, int] = {}
+    allowed_metadata = {"title", "link", "description", "language"}
+    item_count = 0
+    for child in channel:
+        if (child.tail or "").strip():
+            return False
+        if child.tag == "item":
+            item_count += 1
+            if (
+                item_count > 1
+                or child.attrib
+                or list(child)
+                or (child.text or "").strip()
+            ):
+                return False
+            continue
+        # Versionless placeholders have no downgrade comparison. Treat only
+        # the exact RSS shell as empty; extra structure or mixed content could
+        # be malformed release data outside an <item>.
+        if child.tag not in allowed_metadata or child.attrib or list(child):
+            return False
+        metadata_counts[child.tag] = metadata_counts.get(child.tag, 0) + 1
+        if metadata_counts[child.tag] > 1:
+            return False
+    return True
 
 
 def _default_http_head(url: str) -> int:
