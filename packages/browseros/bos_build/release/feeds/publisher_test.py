@@ -510,6 +510,21 @@ class PublisherTestCase(unittest.TestCase):
             ],
         )
 
+    def test_empty_placeholder_migration_rejects_release_markers(self):
+        spec = feed_by_key("appcast-claw-win-arm64.xml")
+        canonical = _empty_browserclaw_win_arm_appcast()
+        live = canonical.replace(spec.title, spec.legacy_titles[0]).replace(
+            "    <item>\n    </item>",
+            "    <sparkle:version>10000.0.99.0</sparkle:version>\n"
+            '    <enclosure url="https://cdn.browseros.com/release.dmg"/>',
+        )
+        publisher = self._publisher({spec.key: live.encode()})
+
+        ok = publisher.publish(spec, canonical, publish=True)
+
+        self.assertFalse(ok)
+        self.assertEqual(self.client.calls, [])
+
     def test_browserclaw_legacy_title_migration_refuses_downgrade(self):
         spec = feed_by_key("appcast-claw.xml")
         publisher = self._publisher(

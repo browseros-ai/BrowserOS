@@ -166,6 +166,20 @@ def _is_empty_appcast_shell(content: str) -> bool:
     channel = next(
         element for element in root if _xml_local_name(element.tag) == "channel"
     )
+    metadata_counts: dict[str, int] = {}
+    allowed_metadata = {"title", "link", "description", "language"}
+    for child in channel:
+        name = _xml_local_name(child.tag)
+        if name == "item":
+            continue
+        # Versionless placeholders have no downgrade comparison. Treat only
+        # scalar channel metadata as empty; unknown, attributed, or nested
+        # children could be malformed release data outside an <item>.
+        if name not in allowed_metadata or child.attrib or list(child):
+            return False
+        metadata_counts[name] = metadata_counts.get(name, 0) + 1
+        if metadata_counts[name] > 1:
+            return False
     direct_items = [
         element for element in channel if _xml_local_name(element.tag) == "item"
     ]
