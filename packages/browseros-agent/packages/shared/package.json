@@ -74,9 +74,9 @@
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
     },
-    "./schemas/conversation-presence": {
-      "types": "./src/schemas/conversation-presence.ts",
-      "default": "./src/schemas/conversation-presence.ts"
+    "./schemas/conversation-panels": {
+      "types": "./src/schemas/conversation-panels.ts",
+      "default": "./src/schemas/conversation-panels.ts"
     },
     "./mcp/claude-code-transport-tag": {
       "types": "./src/mcp/claude-code-transport-tag.ts",

@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
-import type { ConversationPresenceEvent } from '@browseros/shared/schemas/conversation-presence'
+import type { ConversationPanelSnapshot } from '@browseros/shared/schemas/conversation-panels'
 import {
   ConversationPanelBroker,
   type ConversationPanelBrokerDeps,
@@ -9,7 +9,12 @@ describe('ConversationPanelBroker', () => {
   it('opens every touched tab and retains its conversation mapping', async () => {
     const fixture = createFixture()
 
-    await fixture.broker.accept(runStarted('conversation-1', 'run-1', [10, 11]))
+    await fixture.broker.accept(
+      snapshot([
+        tab(10, 'conversation-1', 'run-1', 'running'),
+        tab(11, 'conversation-1', 'run-1', 'running'),
+      ]),
+    )
 
     expect(fixture.opened).toEqual([
       { tabId: 10, windowId: 1 },
@@ -28,10 +33,14 @@ describe('ConversationPanelBroker', () => {
 
   it('does not let an older run overwrite a tab claimed by a newer run', async () => {
     const fixture = createFixture()
-    await fixture.broker.accept(runStarted('older', 'old-run', [20]))
-    await fixture.broker.accept(runStarted('newer', 'new-run', [20]))
+    await fixture.broker.accept(
+      snapshot([tab(20, 'older', 'old-run', 'running')]),
+    )
+    const newer = snapshot([tab(20, 'newer', 'new-run', 'running')])
+    await fixture.broker.accept(newer)
 
-    await fixture.broker.accept(runFinished('older', 'old-run', [20]))
+    // A stale run finishing cannot appear in the server's canonical mapping.
+    await fixture.broker.accept(newer)
 
     expect(fixture.views['20']).toMatchObject({
       conversationId: 'newer',
@@ -48,9 +57,7 @@ describe('ConversationPanelBroker', () => {
     const fixture = createFixture({
       '99': tab(99, 'stale', 'stale-run', 'running'),
     })
-    const event: ConversationPresenceEvent = {
-      type: 'snapshot',
-      runs: [],
+    const event: ConversationPanelSnapshot = {
       tabs: [
         tab(30, 'active', 'active-run', 'running'),
         tab(31, 'done', 'done-run', 'completed'),
@@ -71,10 +78,18 @@ describe('ConversationPanelBroker', () => {
 
   it('deactivates a finished run and shows first-run confetti once', async () => {
     const fixture = createFixture()
-    await fixture.broker.accept(runStarted('conversation-4', 'run-4', [40, 41]))
+    await fixture.broker.accept(
+      snapshot([
+        tab(40, 'conversation-4', 'run-4', 'running'),
+        tab(41, 'conversation-4', 'run-4', 'running'),
+      ]),
+    )
 
     await fixture.broker.accept(
-      runFinished('conversation-4', 'run-4', [40, 41]),
+      snapshot([
+        tab(40, 'conversation-4', 'run-4', 'completed'),
+        tab(41, 'conversation-4', 'run-4', 'completed'),
+      ]),
     )
 
     expect(fixture.glow.slice(-2)).toEqual([
@@ -140,33 +155,11 @@ function tab(
   runId: string,
   status: 'running' | 'completed',
 ) {
-  return { tabId, conversationId, runId, status, updatedAt: 1 }
+  return { tabId, conversationId, runId, status }
 }
 
-function runStarted(
-  conversationId: string,
-  runId: string,
-  tabIds: number[],
-): ConversationPresenceEvent {
-  return {
-    type: 'run-started',
-    run: { conversationId, runId, status: 'running', tabIds, updatedAt: 1 },
-  }
-}
-
-function runFinished(
-  conversationId: string,
-  runId: string,
-  tabIds: number[],
-): ConversationPresenceEvent {
-  return {
-    type: 'run-finished',
-    run: {
-      conversationId,
-      runId,
-      status: 'completed',
-      tabIds,
-      updatedAt: 2,
-    },
-  }
+function snapshot(
+  tabs: ConversationPanelSnapshot['tabs'],
+): ConversationPanelSnapshot {
+  return { tabs }
 }

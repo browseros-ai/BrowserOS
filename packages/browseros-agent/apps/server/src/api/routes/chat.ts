@@ -1,4 +1,5 @@
 import type { Browser } from '@browseros/browser-core/browser'
+import type { ConversationPanelSnapshot } from '@browseros/shared/schemas/conversation-panels'
 import { zValidator } from '@hono/zod-validator'
 import { createUIMessageStreamResponse } from 'ai'
 import { Hono } from 'hono'
@@ -8,13 +9,9 @@ import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
-import type { ConversationHub } from '../services/conversation-hub'
-import type {
-  ConversationPresence,
-  ConversationPresenceEvent,
-} from '../services/conversation-presence'
+import type { ConversationRuns } from '../services/conversation-runs'
 import type { KlavisService } from '../services/klavis'
-import type { BrowserToolRuntime } from '../services/mcp/browser-tool-runtime'
+import type { BrowserMcpModule } from '../services/mcp/browser-mcp-module'
 import type { ServerActivity } from '../services/server-activity'
 import {
   type BrowserOsChatRequest,
@@ -27,7 +24,7 @@ import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
   browser: Browser
-  browserToolRuntime: BrowserToolRuntime
+  browserMcp: BrowserMcpModule
   browserosId?: string
   klavis?: KlavisService
   aiSdkDevtoolsEnabled?: boolean
@@ -35,8 +32,7 @@ interface ChatRouteDeps {
   resourcesDir?: string | null
   activity?: ServerActivity
   acpRuntime?: AcpAgentRuntime
-  conversationHub?: ConversationHub
-  conversationPresence?: ConversationPresence
+  conversationRuns?: ConversationRuns
 }
 
 // /chat deliberately exposes a plain Hono type. Its AI SDK stream payloads are
@@ -50,15 +46,14 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     sessionStore,
     klavis: deps.klavis,
     browser: deps.browser,
-    browserToolRuntime: deps.browserToolRuntime,
+    browserMcp: deps.browserMcp,
     browserosId,
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
     activity: deps.activity,
     acpRuntime: deps.acpRuntime,
-    conversationHub: deps.conversationHub,
-    conversationPresence: deps.conversationPresence,
+    conversationRuns: deps.conversationRuns,
   })
 
   const app = new Hono<Env>()
@@ -103,23 +98,23 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
 
     return service.processMessage(request, c.req.raw.signal)
   })
-  app.get('/presence', (c) => {
+  app.get('/panels', (c) => {
     if (!isTrustedAppRequest(c)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
-    return presenceEventResponse(service.subscribePresence())
+    return panelSnapshotResponse(service.subscribePanels())
   })
-  app.get(
-    '/:conversationId/state',
-    zValidator('param', ConversationIdParamSchema),
-    (c) => {
-      const { conversationId } = c.req.valid('param')
-      const snapshot = service.getRunSnapshot(conversationId)
-      if (!snapshot) return c.json({ error: 'Conversation not found' }, 404)
-      c.header('Cache-Control', 'no-store')
-      return c.json(snapshot)
-    },
-  )
+  app.get('/:conversationId/state', async (c) => {
+    // Keep this handler's type shallow: combining an awaited response with the
+    // Zod middleware overload exceeds TypeScript's depth in the composed API.
+    const parsed = ConversationIdParamSchema.safeParse(c.req.param())
+    if (!parsed.success)
+      return c.json({ error: 'Invalid conversation id' }, 400)
+    const snapshot = await service.getRunSnapshot(parsed.data.conversationId)
+    if (!snapshot) return c.json({ error: 'Conversation not found' }, 404)
+    c.header('Cache-Control', 'no-store')
+    return c.json(snapshot)
+  })
   app.get(
     '/:conversationId/stream',
     zValidator('param', ConversationIdParamSchema),
@@ -175,15 +170,17 @@ function isBrowserOsChatRequest(
   return request.target.type === 'browseros'
 }
 
-/** Encodes the background-only presence feed as reconnectable SSE. */
-function presenceEventResponse(
-  stream: ReadableStream<ConversationPresenceEvent>,
+/** Encodes authoritative background-only panel snapshots as reconnectable SSE. */
+function panelSnapshotResponse(
+  stream: ReadableStream<ConversationPanelSnapshot>,
 ): Response {
   const encoder = new TextEncoder()
   const body = stream.pipeThrough(
-    new TransformStream<ConversationPresenceEvent, Uint8Array>({
-      transform(event, controller) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+    new TransformStream<ConversationPanelSnapshot, Uint8Array>({
+      transform(snapshot, controller) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`),
+        )
       },
     }),
   )

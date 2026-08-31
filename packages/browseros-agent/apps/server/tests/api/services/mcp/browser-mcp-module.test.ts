@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
+import type { ActiveConversationRun } from '../../../../src/api/services/conversation-runs'
 import { KlavisService } from '../../../../src/api/services/klavis/service'
-import { BrowserToolRuntime } from '../../../../src/api/services/mcp/browser-tool-runtime'
+import { BrowserMcpModule } from '../../../../src/api/services/mcp/browser-mcp-module'
 import { createReadTool } from '../../../../src/tools/filesystem/read'
 
 type RegisteredTool = {
@@ -67,18 +68,16 @@ function browserSession(): BrowserSession {
   } as unknown as BrowserSession
 }
 
-describe('BrowserToolRuntime', () => {
+describe('BrowserMcpModule', () => {
   it('treats a read-only lease as an authoritative permission ceiling', async () => {
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-    })
+    const { browserMcp: runtime, runs } = moduleFixture()
+    const conversationId = crypto.randomUUID()
     const lease = runtime.createLease({
-      conversationId: crypto.randomUUID(),
+      conversationId,
       readOnly: true,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
-    lease.setActiveRun('read-only-run')
+    runs.start(conversationId, 'read-only-run')
 
     const server = inspect(
       runtime.createMcpServer({
@@ -109,10 +108,7 @@ describe('BrowserToolRuntime', () => {
   })
 
   it('lets an external MCP client request the same read-only surface', () => {
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-    })
+    const { browserMcp: runtime } = moduleFixture()
 
     const server = inspect(runtime.createMcpServer({ requestedReadOnly: true }))
 
@@ -120,54 +116,44 @@ describe('BrowserToolRuntime', () => {
     expect(Object.keys(server._registeredTools)).toContain('tabs')
   })
 
-  it('runs tab-presence effects for the active run but not for tabs list', async () => {
-    const touched: Array<{
-      conversationId: string
-      runId?: string
-      tabId: number
-    }> = []
+  it('runs conversation-tab effects for the active run but not for tabs list', async () => {
     const conversationId = crypto.randomUUID()
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-      onTabTouched: (event) => touched.push(event),
-    })
+    const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
       conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
-    lease.setActiveRun('run-1')
+    runs.start(conversationId, 'run-1')
     const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
 
     await server._registeredTools.tabs.handler({ action: 'list' })
-    expect(touched).toEqual([])
+    expect(runs.associated).toEqual([])
 
     await server._registeredTools.tabs.handler({ action: 'active' })
-    expect(touched).toEqual([{ conversationId, runId: 'run-1', tabId: 101 }])
+    expect(runs.associated).toEqual([
+      { conversationId, runId: 'run-1', tabIds: [101] },
+    ])
   })
 
   it('observes pages touched indirectly through the run browser SDK', async () => {
-    const touched: BrowserTabTouch[] = []
     const conversationId = crypto.randomUUID()
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-      onTabTouched: (event) => touched.push(event),
-    })
+    const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
       conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
-    lease.setActiveRun('run-2')
+    runs.start(conversationId, 'run-2')
     const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
 
     await server._registeredTools.run.handler({
       code: 'await browser.nav(1).reload(); return "done"',
     })
 
-    expect(touched).toEqual([{ conversationId, runId: 'run-2', tabId: 101 }])
+    expect(runs.associated).toEqual([
+      { conversationId, runId: 'run-2', tabIds: [101] },
+    ])
   })
 
   it('attributes a late tool effect to the run that authorized the call', async () => {
@@ -180,71 +166,59 @@ describe('BrowserToolRuntime', () => {
       ({
         reload: async () => await reloadBlocked,
       }) as ReturnType<BrowserSession['nav']>
-    const touched: BrowserTabTouch[] = []
     const conversationId = crypto.randomUUID()
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: session,
-      onTabTouched: (event) => touched.push(event),
-    })
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
     const lease = runtime.createLease({
       conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
-    lease.setActiveRun('run-a')
+    runs.start(conversationId, 'run-a')
     const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
 
     const execution = server._registeredTools.run.handler({
       code: 'await browser.nav(1).reload(); return "done"',
     })
     await Promise.resolve()
-    lease.setActiveRun('run-b')
+    runs.start(conversationId, 'run-b')
     finishReload()
     await execution
 
-    expect(touched).toEqual([{ conversationId, runId: 'run-a', tabId: 101 }])
+    expect(runs.associated).toEqual([])
   })
 
   it('rejects stale internal lease tokens instead of falling back to full access', () => {
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-    })
+    const { browserMcp: runtime } = moduleFixture()
 
     expect(() =>
       runtime.createMcpServer({ leaseToken: 'stale-token' }),
     ).toThrow('Invalid or expired BrowserOS tool lease')
   })
 
-  it('rejects calls from an MCP server whose lease was later revoked', async () => {
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-    })
+  it('does not add a per-call lease-liveness guard', async () => {
+    const { browserMcp: runtime, runs } = moduleFixture()
+    const conversationId = crypto.randomUUID()
     const lease = runtime.createLease({
-      conversationId: crypto.randomUUID(),
+      conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
-    lease.setActiveRun('revoked-run')
+    runs.start(conversationId, 'revoked-run')
     const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
 
     lease.revoke()
     const result = await server._registeredTools.tabs.handler({
-      action: 'new',
-      url: 'https://browseros.com',
+      action: 'active',
     })
 
-    expect(result.isError).toBe(true)
-    expect(result.content[0]?.text).toContain('expired')
+    expect(result.isError).toBeUndefined()
+    expect(() => runtime.createMcpServer({ leaseToken: lease.token })).toThrow(
+      'Invalid or expired BrowserOS tool lease',
+    )
   })
 
   it('does not execute through a valid lease outside its active run', async () => {
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
-    })
+    const { browserMcp: runtime } = moduleFixture()
     const lease = runtime.createLease({
       conversationId: crypto.randomUUID(),
       readOnly: false,
@@ -261,18 +235,17 @@ describe('BrowserToolRuntime', () => {
     expect(result.content[0]?.text).toContain('active conversation run')
   })
 
-  it('applies the lease lifecycle guard to managed connector tools', async () => {
+  it('applies conversation-running and read-only guards to managed connectors', async () => {
     const getUserIntegrations = mock(async () => [])
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: browserSession(),
+    const { browserMcp: runtime, runs } = moduleFixture({
       klavis: new KlavisService({
         browserosId: 'browseros-test',
         client: { getUserIntegrations } as never,
       }),
     })
+    const conversationId = crypto.randomUUID()
     const lease = runtime.createLease({
-      conversationId: crypto.randomUUID(),
+      conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
     })
@@ -283,18 +256,33 @@ describe('BrowserToolRuntime', () => {
     expect(inactive.isError).toBe(true)
     expect(getUserIntegrations).not.toHaveBeenCalled()
 
-    lease.setActiveRun('connector-run')
+    runs.start(conversationId, 'connector-run')
     const active = await server._registeredTools.connector_mcp_servers.handler(
       {},
     )
     expect(active.isError).toBeUndefined()
     expect(getUserIntegrations).toHaveBeenCalledTimes(1)
 
-    lease.revoke()
-    const revoked = await server._registeredTools.connector_mcp_servers.handler(
-      {},
+    runs.finish(conversationId)
+    const finished =
+      await server._registeredTools.connector_mcp_servers.handler({})
+    expect(finished.isError).toBe(true)
+    expect(getUserIntegrations).toHaveBeenCalledTimes(1)
+
+    const readOnlyConversationId = crypto.randomUUID()
+    const readOnlyLease = runtime.createLease({
+      conversationId: readOnlyConversationId,
+      readOnly: true,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    runs.start(readOnlyConversationId, 'read-only-connector-run')
+    const readOnlyServer = inspect(
+      runtime.createMcpServer({ leaseToken: readOnlyLease.token }),
     )
-    expect(revoked.isError).toBe(true)
+    const readOnly =
+      await readOnlyServer._registeredTools.connector_mcp_servers.handler({})
+    expect(readOnly.isError).toBe(true)
+    expect(readOnly.content[0]?.text).toContain('read-only')
     expect(getUserIntegrations).toHaveBeenCalledTimes(1)
   })
 
@@ -305,19 +293,17 @@ describe('BrowserToolRuntime', () => {
       openedInWindow = options?.windowId
       return 2
     }
-    const runtime = new BrowserToolRuntime({
-      version: 'test',
-      browserSession: session,
-    })
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
     const lease = runtime.createLease({
-      conversationId: crypto.randomUUID(),
+      conversationId,
       readOnly: false,
       outputFileAccess: createBrowserOutputFileAccess(),
       browserContext: { windowId: 1 },
     })
 
     lease.updateBrowserContext({ windowId: 22 })
-    lease.setActiveRun('context-run')
+    runs.start(conversationId, 'context-run')
     const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
     await server._registeredTools.tabs.handler({
       action: 'new',
@@ -328,7 +314,7 @@ describe('BrowserToolRuntime', () => {
   })
 
   it('grants filesystem readback for output created through loopback MCP', async () => {
-    const browserosDir = mkdtempSync(join(tmpdir(), 'browser-tool-runtime-'))
+    const browserosDir = mkdtempSync(join(tmpdir(), 'browser-mcp-module-'))
     const previousBrowserosDir = process.env.BROWSEROS_DIR
     process.env.BROWSEROS_DIR = browserosDir
     try {
@@ -349,16 +335,14 @@ describe('BrowserToolRuntime', () => {
         },
       } as unknown as BrowserSession
       const outputFileAccess = createBrowserOutputFileAccess()
-      const runtime = new BrowserToolRuntime({
-        version: 'test',
-        browserSession: session,
-      })
+      const { browserMcp: runtime, runs } = moduleFixture({ session })
+      const conversationId = crypto.randomUUID()
       const lease = runtime.createLease({
-        conversationId: crypto.randomUUID(),
+        conversationId,
         readOnly: false,
         outputFileAccess,
       })
-      lease.setActiveRun('output-run')
+      runs.start(conversationId, 'output-run')
       const server = inspect(
         runtime.createMcpServer({ leaseToken: lease.token }),
       )
@@ -437,16 +421,14 @@ describe('BrowserToolRuntime', () => {
         },
       } as unknown as BrowserSession
       const outputFileAccess = createBrowserOutputFileAccess()
-      const runtime = new BrowserToolRuntime({
-        version: 'test',
-        browserSession: session,
-      })
+      const { browserMcp: runtime, runs } = moduleFixture({ session })
+      const conversationId = crypto.randomUUID()
       const lease = runtime.createLease({
-        conversationId: crypto.randomUUID(),
+        conversationId,
         readOnly: false,
         outputFileAccess,
       })
-      lease.setActiveRun('download-run')
+      runs.start(conversationId, 'download-run')
       const server = inspect(
         runtime.createMcpServer({ leaseToken: lease.token }),
       )
@@ -478,8 +460,51 @@ describe('BrowserToolRuntime', () => {
   })
 })
 
-type BrowserTabTouch = {
-  conversationId: string
-  runId?: string
-  tabId: number
+class TestConversationRuns {
+  readonly associated: Array<{
+    conversationId: string
+    runId: string
+    tabIds: number[]
+  }> = []
+  private readonly active = new Map<string, ActiveConversationRun>()
+
+  activeRun(conversationId: string): ActiveConversationRun | undefined {
+    return this.active.get(conversationId)
+  }
+
+  start(conversationId: string, runId: string): ActiveConversationRun {
+    const abortController = new AbortController()
+    let run!: ActiveConversationRun
+    run = {
+      conversationId,
+      runId,
+      panelsVisible: true,
+      tabGroup: { title: 'browseros/test', colorKey: 'browseros' },
+      signal: abortController.signal,
+      associateTabs: (tabIds) => {
+        if (this.active.get(conversationId) !== run) return false
+        this.associated.push({ conversationId, runId, tabIds: [...tabIds] })
+        return true
+      },
+    }
+    this.active.set(conversationId, run)
+    return run
+  }
+
+  finish(conversationId: string): void {
+    this.active.delete(conversationId)
+  }
+}
+
+function moduleFixture(
+  options: { session?: BrowserSession; klavis?: KlavisService } = {},
+) {
+  const runs = new TestConversationRuns()
+  const browserMcp = new BrowserMcpModule({
+    version: 'test',
+    browserSession: options.session ?? browserSession(),
+    conversationRuns: runs,
+    klavis: options.klavis,
+  })
+  return { browserMcp, runs }
 }

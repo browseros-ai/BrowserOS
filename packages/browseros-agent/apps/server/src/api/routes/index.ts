@@ -9,10 +9,9 @@ import { cors } from 'hono/cors'
 import { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
 import { requireTrustedOrigin } from '../middleware/require-trusted-origin'
-import { ConversationHub } from '../services/conversation-hub'
-import { ConversationPresence } from '../services/conversation-presence'
+import { ConversationRuns } from '../services/conversation-runs'
 import type { KlavisService } from '../services/klavis'
-import { BrowserToolRuntime } from '../services/mcp/browser-tool-runtime'
+import { BrowserMcpModule } from '../services/mcp/browser-mcp-module'
 import type { Env, HttpServerConfig } from '../types'
 import { defaultCorsConfig } from '../utils/cors'
 import { requireTrustedAppOrigin } from '../utils/request-auth'
@@ -54,18 +53,15 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
     config
   const { activity } = config
   const acpRuntime = new AcpAgentRuntime({ serverPort: port, resourcesDir })
-  const conversationHub = new ConversationHub()
-  const conversationPresence = new ConversationPresence()
-  // One runtime instance owns every browser-tool lease and execution effect;
+  const conversationRuns = new ConversationRuns({ activity })
+  // One deep module owns every browser-tool lease and execution effect;
   // both /chat and /mcp must share it for loopback calls to recover context.
-  const browserToolRuntime = new BrowserToolRuntime({
+  const browserMcp = new BrowserMcpModule({
     version,
     browserSession,
+    conversationRuns,
     klavis,
     activity,
-    onTabTouched: (event) => {
-      conversationPresence.touchTab(event)
-    },
   })
   const resolvedAgentRoutes =
     agentRoutes ??
@@ -105,7 +101,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route(
         '/mcp',
         createMcpRoutes({
-          runtime: browserToolRuntime,
+          browserMcp,
         }),
       )
       .route(
@@ -119,7 +115,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         '/chat',
         createChatRoutes({
           browser,
-          browserToolRuntime,
+          browserMcp,
           browserosId,
           klavis,
           aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
@@ -127,8 +123,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
           resourcesDir,
           activity,
           acpRuntime,
-          conversationHub,
-          conversationPresence,
+          conversationRuns,
         }),
       )
       // Protected routes. The extension-origin auth middleware is applied per

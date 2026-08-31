@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { UIMessageChunk } from 'ai'
 import { createChatRoutes } from '../../../src/api/routes/chat'
-import { ConversationHub } from '../../../src/api/services/conversation-hub'
-import { ConversationPresence } from '../../../src/api/services/conversation-presence'
+import { ConversationRuns } from '../../../src/api/services/conversation-runs'
 
 const localServer = {
   server: {
@@ -12,11 +11,10 @@ const localServer = {
 
 describe('/chat server-owned run routes', () => {
   it('serves canonical state and a reconnect stream from the same hub', async () => {
-    const hub = new ConversationHub()
-    const presence = new ConversationPresence()
+    const runs = new ConversationRuns()
     const conversationId = crypto.randomUUID()
     let source!: ReadableStreamDefaultController<UIMessageChunk>
-    await hub.start({
+    await runs.start({
       conversationId,
       messages: [{ id: 'user-1', role: 'user', parts: [] }],
       createStream: () =>
@@ -26,7 +24,7 @@ describe('/chat server-owned run routes', () => {
           },
         }),
     })
-    const app = route(hub, presence)
+    const app = route(runs)
 
     const stateResponse = await app.request(`/${conversationId}/state`)
     expect(stateResponse.status).toBe(200)
@@ -47,10 +45,10 @@ describe('/chat server-owned run routes', () => {
   })
 
   it('replays a run that finishes between state hydration and reconnect', async () => {
-    const hub = new ConversationHub()
+    const runs = new ConversationRuns()
     const conversationId = crypto.randomUUID()
     let source!: ReadableStreamDefaultController<UIMessageChunk>
-    await hub.start({
+    await runs.start({
       conversationId,
       messages: [{ id: 'user-1', role: 'user', parts: [] }],
       createStream: () =>
@@ -63,28 +61,26 @@ describe('/chat server-owned run routes', () => {
     source.enqueue({ type: 'text-start', id: 'answer-1' })
     source.close()
     await eventually(() =>
-      expect(hub.getSnapshot(conversationId)?.status).toBe('completed'),
+      expect(runs.getSnapshot(conversationId)?.status).toBe('completed'),
     )
 
-    const response = await route(hub, new ConversationPresence()).request(
-      `/${conversationId}/stream`,
-    )
+    const response = await route(runs).request(`/${conversationId}/stream`)
 
     expect(response.status).toBe(200)
     expect(await response.text()).toContain('"type":"text-start"')
   })
 
-  it('exposes presence as an extension-only snapshot-first SSE feed', async () => {
-    const hub = new ConversationHub()
-    const presence = new ConversationPresence()
-    presence.startRun({
+  it('exposes panels as an extension-only snapshot-first SSE feed', async () => {
+    const runs = new ConversationRuns()
+    await runs.start({
       conversationId: crypto.randomUUID(),
-      runId: 'run-1',
-      tabIds: [42],
+      messages: [],
+      panelTabIds: [42],
+      createStream: () => new ReadableStream<UIMessageChunk>(),
     })
 
-    const response = await route(hub, presence).request(
-      'http://localhost/presence',
+    const response = await route(runs).request(
+      'http://localhost/panels',
       { headers: { Host: 'localhost' } },
       localServer,
     )
@@ -92,37 +88,34 @@ describe('/chat server-owned run routes', () => {
     const reader = response.body?.getReader()
     const first = await reader?.read()
     const text = new TextDecoder().decode(first?.value)
-    expect(text).toContain('"type":"snapshot"')
     expect(text).toContain('"tabId":42')
     await reader?.cancel()
   })
 
   it('cancels a run through the explicit stop endpoint', async () => {
-    const hub = new ConversationHub()
+    const runs = new ConversationRuns()
     const conversationId = crypto.randomUUID()
-    await hub.start({
+    await runs.start({
       conversationId,
       messages: [],
       createStream: () => new ReadableStream<UIMessageChunk>(),
     })
 
-    const response = await route(hub, new ConversationPresence()).request(
-      `/${conversationId}/stop`,
-      { method: 'POST' },
-    )
+    const response = await route(runs).request(`/${conversationId}/stop`, {
+      method: 'POST',
+    })
 
     expect(await response.json()).toEqual({ stopped: true })
-    expect(hub.getSnapshot(conversationId)?.status).toBe('aborted')
+    expect(runs.getSnapshot(conversationId)?.status).toBe('aborted')
   })
 })
 
-function route(hub: ConversationHub, presence: ConversationPresence) {
+function route(runs: ConversationRuns) {
   return createChatRoutes({
     browser: {} as never,
-    browserToolRuntime: {} as never,
+    browserMcp: {} as never,
     serverPort: 9000,
-    conversationHub: hub,
-    conversationPresence: presence,
+    conversationRuns: runs,
   })
 }
 

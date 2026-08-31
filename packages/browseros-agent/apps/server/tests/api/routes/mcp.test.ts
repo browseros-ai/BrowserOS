@@ -44,8 +44,8 @@ function createTestMcpRoutes(
   overrides: Partial<Parameters<typeof createMcpRoutes>[0]> = {},
 ) {
   return createMcpRoutes({
-    runtime: {
-      hasLease: () => true,
+    browserMcp: {
+      validateLeaseToken: () => {},
       createMcpServer: createMcpServerSpy,
     } as never,
     createMcpTransport: createMcpTransportSpy as never,

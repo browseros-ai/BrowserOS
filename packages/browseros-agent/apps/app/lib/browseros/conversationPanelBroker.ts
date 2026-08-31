@@ -1,9 +1,8 @@
 import {
-  type ConversationPresenceEvent,
-  ConversationPresenceEventSchema,
-  type ConversationPresenceRun,
-  type TabConversationPresence,
-} from '@browseros/shared/schemas/conversation-presence'
+  type ConversationPanel,
+  type ConversationPanelSnapshot,
+  ConversationPanelSnapshotSchema,
+} from '@browseros/shared/schemas/conversation-panels'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 import type { GlowMessage } from '@/entrypoints/glow.content/GlowMessage'
 import type { ConversationPanelViews } from './conversationPanelStorage'
@@ -22,7 +21,7 @@ export interface ConversationPanelBrokerDeps {
 }
 
 /**
- * Bridges server conversation presence into browser UI routing. It is the only
+ * Bridges server conversation state into browser UI routing. It is the only
  * extension component that opens panels or mutates tab-to-conversation state;
  * React panels merely render the mapping it publishes.
  */
@@ -32,6 +31,7 @@ export class ConversationPanelBroker {
   private loopPromise: Promise<void> | undefined
   private connectAbort: AbortController | undefined
   private stopped = true
+  private hasServerSnapshot = false
 
   constructor(private readonly deps: ConversationPanelBrokerDeps) {}
 
@@ -49,81 +49,63 @@ export class ConversationPanelBroker {
     this.connectAbort?.abort()
   }
 
-  /** Applies one validated server event in stream order. */
-  async accept(event: ConversationPresenceEvent): Promise<void> {
+  /** Reconciles one authoritative server snapshot in stream order. */
+  async accept(snapshot: ConversationPanelSnapshot): Promise<void> {
     await this.ensureLoaded()
 
-    switch (event.type) {
-      case 'snapshot': {
-        const nextViews = Object.fromEntries(
-          event.tabs.map((tab) => [String(tab.tabId), tab]),
-        )
-        const staleRunning = Object.values(this.views).filter((tab) => {
-          const next = nextViews[String(tab.tabId)]
-          return (
-            tab.status === 'running' &&
-            (!next ||
-              next.conversationId !== tab.conversationId ||
-              next.runId !== tab.runId)
-          )
-        })
-        this.views = nextViews
-        await this.persistViews()
-        for (const tab of staleRunning) {
-          await this.deps.sendGlow(tab.tabId, {
-            conversationId: tab.conversationId,
-            isActive: false,
-          })
-        }
-        for (const tab of event.tabs) {
-          if (tab.status === 'running') await this.activate(tab)
-        }
-        return
-      }
-      case 'run-started': {
-        const tabs = event.run.tabIds.map((tabId) =>
-          tabViewFromRun(tabId, event.run),
-        )
-        for (const tab of tabs) this.views[String(tab.tabId)] = tab
-        await this.persistViews()
-        for (const tab of tabs) await this.activate(tab)
-        return
-      }
-      case 'tab-touched': {
-        this.views[String(event.tab.tabId)] = event.tab
-        await this.persistViews()
-        await this.activate(event.tab)
-        return
-      }
-      case 'run-finished': {
-        const currentTabs = event.run.tabIds
-          .map((tabId) => this.views[String(tabId)])
-          .filter(
-            (tab): tab is TabConversationPresence =>
-              tab?.conversationId === event.run.conversationId &&
-              tab.runId === event.run.runId,
-          )
-        for (const tab of currentTabs) {
-          this.views[String(tab.tabId)] = {
-            ...tab,
-            status: event.run.status,
-            updatedAt: event.run.updatedAt,
-          }
-        }
-        await this.persistViews()
-        await this.deactivate(event.run, currentTabs)
-        return
-      }
-      case 'conversation-forgotten': {
-        for (const tabId of event.tabIds) {
-          const current = this.views[String(tabId)]
-          if (current?.conversationId === event.conversationId) {
-            delete this.views[String(tabId)]
-          }
-        }
-        await this.persistViews()
-      }
+    const previous = this.views
+    const firstServerSnapshot = !this.hasServerSnapshot
+    const next = Object.fromEntries(
+      snapshot.tabs.map((tab) => [String(tab.tabId), tab]),
+    )
+    const stopped = Object.values(previous).filter((panel) => {
+      if (panel.status !== 'running') return false
+      const replacement = next[String(panel.tabId)]
+      return !sameRunningPanel(panel, replacement)
+    })
+    const started = snapshot.tabs.filter((panel) => {
+      if (panel.status !== 'running') return false
+      return (
+        firstServerSnapshot ||
+        !sameRunningPanel(previous[String(panel.tabId)], panel)
+      )
+    })
+
+    // Storage is a browser-process cache, never a second source of truth. Write
+    // the complete projection before asynchronous Chrome side effects run.
+    this.views = next
+    this.hasServerSnapshot = true
+    await this.persistViews()
+    await this.deactivate(stopped, next)
+    for (const panel of started) await this.activate(panel)
+  }
+
+  private async deactivate(
+    stopped: ConversationPanel[],
+    next: ConversationPanelViews,
+  ): Promise<void> {
+    const completed = stopped.filter((panel) => {
+      const replacement = next[String(panel.tabId)]
+      return (
+        replacement?.conversationId === panel.conversationId &&
+        replacement.runId === panel.runId &&
+        replacement.status === 'completed'
+      )
+    })
+    const showCompletion =
+      completed.length > 0 && !(await this.deps.hasShownConfetti())
+    const confettiTabId = completed[0]?.tabId
+
+    for (const panel of stopped) {
+      await this.deps.sendGlow(panel.tabId, {
+        conversationId: panel.conversationId,
+        isActive: false,
+        ...(showCompletion && {
+          showConfetti: panel.tabId === confettiTabId,
+        }),
+      })
     }
+    if (showCompletion) await this.deps.markConfettiShown()
   }
 
   private async runReconnectLoop(): Promise<void> {
@@ -131,7 +113,7 @@ export class ConversationPanelBroker {
     while (!this.stopped) {
       this.connectAbort = new AbortController()
       try {
-        await this.consumePresence(this.connectAbort.signal)
+        await this.consumeSnapshots(this.connectAbort.signal)
         retryDelayMs = 250
       } catch {
         if (this.stopped || this.connectAbort.signal.aborted) break
@@ -145,14 +127,14 @@ export class ConversationPanelBroker {
     }
   }
 
-  private async consumePresence(signal: AbortSignal): Promise<void> {
+  private async consumeSnapshots(signal: AbortSignal): Promise<void> {
     const serverUrl = await this.deps.resolveServerUrl()
-    const response = await this.deps.fetch(`${serverUrl}/chat/presence`, {
+    const response = await this.deps.fetch(`${serverUrl}/chat/panels`, {
       headers: { Accept: 'text/event-stream' },
       signal,
     })
     if (!response.ok || !response.body) {
-      throw new Error(`Conversation presence unavailable (${response.status})`)
+      throw new Error(`Conversation panels unavailable (${response.status})`)
     }
 
     // The parser buffers arbitrary fetch chunk boundaries; each parsed event is
@@ -167,12 +149,12 @@ export class ConversationPanelBroker {
       } catch {
         continue
       }
-      const event = ConversationPresenceEventSchema.safeParse(decoded)
-      if (event.success) await this.accept(event.data)
+      const snapshot = ConversationPanelSnapshotSchema.safeParse(decoded)
+      if (snapshot.success) await this.accept(snapshot.data)
     }
   }
 
-  private async activate(tab: TabConversationPresence): Promise<void> {
+  private async activate(tab: ConversationPanel): Promise<void> {
     try {
       const browserTab = await this.deps.getTab(tab.tabId)
       await this.deps.openPanel({
@@ -190,24 +172,6 @@ export class ConversationPanelBroker {
     })
   }
 
-  private async deactivate(
-    run: ConversationPresenceRun,
-    tabs: TabConversationPresence[],
-  ): Promise<void> {
-    const showCompletion =
-      run.status === 'completed' &&
-      tabs.length > 0 &&
-      !(await this.deps.hasShownConfetti())
-    for (const [index, tab] of tabs.entries()) {
-      await this.deps.sendGlow(tab.tabId, {
-        conversationId: run.conversationId,
-        isActive: false,
-        showConfetti: showCompletion && index === 0,
-      })
-    }
-    if (showCompletion) await this.deps.markConfettiShown()
-  }
-
   private async ensureLoaded(): Promise<void> {
     this.loadPromise ??= this.deps.readViews().then((views) => {
       this.views = views
@@ -220,17 +184,16 @@ export class ConversationPanelBroker {
   }
 }
 
-function tabViewFromRun(
-  tabId: number,
-  run: ConversationPresenceRun,
-): TabConversationPresence {
-  return {
-    tabId,
-    conversationId: run.conversationId,
-    runId: run.runId,
-    status: run.status,
-    updatedAt: run.updatedAt,
-  }
+function sameRunningPanel(
+  left: ConversationPanel | undefined,
+  right: ConversationPanel | undefined,
+): boolean {
+  return (
+    left?.status === 'running' &&
+    right?.status === 'running' &&
+    left.conversationId === right.conversationId &&
+    left.runId === right.runId
+  )
 }
 
 function waitFor(milliseconds: number, signal: AbortSignal): Promise<void> {

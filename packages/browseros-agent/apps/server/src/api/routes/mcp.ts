@@ -17,8 +17,9 @@ import { Sentry } from '../../lib/sentry'
 import { rejectBrowserFetch } from '../middleware/reject-browser-fetch'
 import {
   BROWSEROS_TOOL_LEASE_HEADER,
-  type BrowserToolRuntime,
-} from '../services/mcp/browser-tool-runtime'
+  type BrowserMcpModule,
+  InvalidBrowserToolLeaseError,
+} from '../services/mcp/browser-mcp-module'
 import type { Env } from '../types'
 
 export { BROWSEROS_TOOL_LEASE_HEADER }
@@ -30,7 +31,7 @@ type CreateMcpTransportFn = (
 ) => InstanceType<typeof WebStandardStreamableHTTPServerTransport>
 
 interface McpRouteDeps {
-  runtime: Pick<BrowserToolRuntime, 'createMcpServer' | 'hasLease'>
+  browserMcp: Pick<BrowserMcpModule, 'createMcpServer' | 'validateLeaseToken'>
   createMcpTransport?: CreateMcpTransportFn
 }
 
@@ -80,7 +81,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
           includeStructuredContent: false,
           requestedReadOnly: false,
         }
-    return deps.runtime.createMcpServer({
+    return deps.browserMcp.createMcpServer({
       leaseToken: scope.leaseToken,
       requestedReadOnly: scope.requestedReadOnly,
       includeStructuredContent: scope.includeStructuredContent,
@@ -103,19 +104,17 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   app.post('/', async (c) => {
     const raw = c.req.raw
     const { leaseToken, logContext } = readScope(raw)
-    if (leaseToken && !deps.runtime.hasLease(leaseToken)) {
-      logger.warn('MCP request rejected for invalid lease', logContext)
-      return c.json(
-        {
-          jsonrpc: '2.0',
-          error: {
-            code: -32001,
-            message: 'Invalid or expired BrowserOS tool lease',
-          },
-          id: null,
-        },
-        401,
-      )
+    if (leaseToken) {
+      try {
+        // Modern createMcpHandler converts factory exceptions into a generic
+        // 500, so preserve the module's typed authorization result at ingress.
+        deps.browserMcp.validateLeaseToken(leaseToken)
+      } catch (error) {
+        if (error instanceof InvalidBrowserToolLeaseError) {
+          return invalidLeaseResponse(error, logContext)
+        }
+        throw error
+      }
     }
 
     metrics.log('mcp.request', { leased: leaseToken !== undefined })
@@ -150,6 +149,9 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       })
       return response
     } catch (error) {
+      if (error instanceof InvalidBrowserToolLeaseError) {
+        return invalidLeaseResponse(error, logContext)
+      }
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('leased', leaseToken !== undefined)
@@ -172,4 +174,19 @@ export function createMcpRoutes(deps: McpRouteDeps) {
   })
 
   return app
+}
+
+function invalidLeaseResponse(
+  error: InvalidBrowserToolLeaseError,
+  logContext: McpRequestLogContext,
+): Response {
+  logger.warn('MCP request rejected for invalid lease', logContext)
+  return Response.json(
+    {
+      jsonrpc: '2.0',
+      error: { code: -32001, message: error.message },
+      id: null,
+    },
+    { status: 401 },
+  )
 }

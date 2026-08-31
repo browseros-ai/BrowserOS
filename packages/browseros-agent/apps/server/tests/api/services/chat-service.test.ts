@@ -118,12 +118,11 @@ const { ServerActivity } = await import(
 )
 
 let leaseSequence = 0
-function createBrowserToolRuntimeStub() {
+function createBrowserMcpStub() {
   return {
     createLease: mock(() => ({
       token: `test-lease-${++leaseSequence}`,
       updateBrowserContext: mock(() => {}),
-      setActiveRun: mock(() => {}),
       revoke: mock(() => {}),
     })),
   }
@@ -136,7 +135,7 @@ const ChatService = class extends RealChatService {
   constructor(deps: ConstructorParameters<typeof RealChatService>[0]) {
     super({
       serverPort: 32123,
-      browserToolRuntime: createBrowserToolRuntimeStub() as never,
+      browserMcp: createBrowserMcpStub() as never,
       ...deps,
     })
   }

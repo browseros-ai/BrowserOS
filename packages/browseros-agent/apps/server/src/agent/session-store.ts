@@ -1,12 +1,12 @@
 import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import type { BrowserToolLease } from '../api/services/mcp/browser-tool-runtime'
+import type { BrowserToolLease } from '../api/services/mcp/browser-mcp-module'
 import { logger } from '../lib/logger'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
   agent: AiSdkAgent
-  /** Revoked with the session so stale loopback clients cannot regain access. */
+  /** Revoked with the session so the token cannot open another MCP transport. */
   browserToolLease: BrowserToolLease
   scheduledPageId?: number
   /** Latest resolved browser context used by the conversation's tool lease. */

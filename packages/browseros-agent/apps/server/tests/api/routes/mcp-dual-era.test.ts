@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { createMcpRoutes } from '../../../src/api/routes/mcp'
-import { BrowserToolRuntime } from '../../../src/api/services/mcp/browser-tool-runtime'
+import { BrowserMcpModule } from '../../../src/api/services/mcp/browser-mcp-module'
 
 const BASE = {
   'Content-Type': 'application/json',
@@ -14,9 +14,10 @@ const CLIENT_META = {
 
 function route(browserSession: unknown = {}) {
   return createMcpRoutes({
-    runtime: new BrowserToolRuntime({
+    browserMcp: new BrowserMcpModule({
       version: '0.0.0-test',
       browserSession: browserSession as never,
+      conversationRuns: { activeRun: () => undefined },
     }),
   })
 }

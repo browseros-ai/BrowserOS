@@ -186,7 +186,7 @@ export class AiSdkAgent {
         reservedInternalToolNames,
       )
 
-      // Custom MCP servers remain outside BrowserToolRuntime, so their metrics
+      // Custom MCP servers remain outside BrowserMcpModule, so their metrics
       // stay at this adapter boundary. Managed connectors arrive through the
       // internal MCP client and are already instrumented server-side.
       const externalMcpTools: ToolSet = {}

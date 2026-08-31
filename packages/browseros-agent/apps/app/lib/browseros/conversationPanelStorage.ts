@@ -1,7 +1,7 @@
-import type { TabConversationPresence } from '@browseros/shared/schemas/conversation-presence'
+import type { ConversationPanel } from '@browseros/shared/schemas/conversation-panels'
 import { storage } from '@wxt-dev/storage'
 
-export type ConversationPanelViews = Record<string, TabConversationPresence>
+export type ConversationPanelViews = Record<string, ConversationPanel>
 
 /**
  * Background-owned tab routing table consumed by thin side-panel views.
@@ -17,6 +17,6 @@ export const conversationPanelViewsStorage =
 export function conversationForTab(
   views: ConversationPanelViews,
   tabId: number | undefined,
-): TabConversationPresence | undefined {
+): ConversationPanel | undefined {
   return tabId === undefined ? undefined : views[String(tabId)]
 }

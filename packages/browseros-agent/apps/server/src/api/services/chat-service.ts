@@ -43,9 +43,9 @@ import {
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
 import type {
+  BrowserMcpModule,
   BrowserToolLease,
-  BrowserToolRuntime,
-} from '../services/mcp/browser-tool-runtime'
+} from '../services/mcp/browser-mcp-module'
 import type { ServerActivity } from '../services/server-activity'
 import type {
   AcpChatRequest,
@@ -60,17 +60,17 @@ import {
   describeWorkspaceChange,
 } from './chat-service.helpers'
 import {
-  ConversationHub,
   ConversationRunAlreadyActiveError,
   type ConversationRunSnapshot,
-} from './conversation-hub'
-import { ConversationPresence } from './conversation-presence'
+  ConversationRuns,
+  type ConversationTabGroupPresentation,
+} from './conversation-runs'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
   klavis?: KlavisService
   browser: Browser
-  browserToolRuntime: Pick<BrowserToolRuntime, 'createLease'>
+  browserMcp: Pick<BrowserMcpModule, 'createLease'>
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
   serverPort: number
@@ -79,8 +79,7 @@ export interface ChatServiceDeps {
   acpAgentStore?: Pick<AcpAgentStore, 'get'>
   acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'close'>
   conversationStore?: Pick<ConversationStore, 'get' | 'save'>
-  conversationHub?: ConversationHub
-  conversationPresence?: ConversationPresence
+  conversationRuns?: ConversationRuns
 }
 
 export class ChatService {
@@ -98,70 +97,30 @@ export class ChatService {
     }
   >()
   private conversationStore: Pick<ConversationStore, 'get' | 'save'> | undefined
-  private readonly conversationHub: ConversationHub
-  private readonly conversationPresence: ConversationPresence
+  private readonly conversationRuns: ConversationRuns
 
   constructor(private deps: ChatServiceDeps) {
     this.acpAgentStore = deps.acpAgentStore
     this.acpRuntime = deps.acpRuntime
     this.conversationStore = deps.conversationStore
-    this.conversationHub = deps.conversationHub ?? new ConversationHub()
-    this.conversationPresence =
-      deps.conversationPresence ?? new ConversationPresence()
+    this.conversationRuns =
+      deps.conversationRuns ?? new ConversationRuns({ activity: deps.activity })
   }
 
   async processMessage(
     request: ChatRequest,
     _requestAbortSignal: AbortSignal,
   ): Promise<Response> {
-    let activeLease: BrowserToolLease | undefined
-    let presencePrepared = false
-    let presenceStarted = false
-    let activityStarted = false
-
     try {
-      await this.conversationHub.start({
+      await this.conversationRuns.start({
         conversationId: request.conversationId,
         messages: [],
-        createStream: async (abortSignal, runId, updateMessages) => {
-          this.deps.activity?.beginChatStream()
-          activityStarted = true
-
-          const onPrepared = (
-            lease: BrowserToolLease,
-            messages: UIMessage[],
-          ) => {
-            if (!request.isScheduledTask) {
-              this.conversationPresence.prepareRun({
-                conversationId: request.conversationId,
-                runId,
-                tabIds: browserContextTabIds(request.browserContext),
-              })
-              presencePrepared = true
-            }
-            activeLease = lease
-            lease.setActiveRun(runId)
-            updateMessages(messages)
-          }
-
-          const onStreamReady = () => {
-            // A stop can arrive while provider/MCP setup is still awaiting.
-            // The hub will finalize once this factory returns; do not flash a
-            // newly started panel presence for work that is already cancelled.
-            if (abortSignal.aborted) return
-
-            // Scheduled jobs execute invisibly in background pages; opening UI
-            // panels for those unattended runs would be disruptive.
-            if (!request.isScheduledTask) {
-              this.conversationPresence.startRun({
-                conversationId: request.conversationId,
-                runId,
-                tabIds: browserContextTabIds(request.browserContext),
-              })
-              presenceStarted = true
-            }
-          }
-
+        panelTabIds: browserContextTabIds(request.browserContext),
+        panelsVisible: !request.isScheduledTask,
+        tabGroup: request.isScheduledTask
+          ? undefined
+          : conversationTabGroup(request),
+        createStream: async (abortSignal, _runId, updateMessages) => {
           if (
             request.target.type === 'claude' ||
             request.target.type === 'codex' ||
@@ -171,8 +130,6 @@ export class ChatService {
               request as AcpChatRequest,
               abortSignal,
               updateMessages,
-              onPrepared,
-              onStreamReady,
             )
           }
 
@@ -180,20 +137,7 @@ export class ChatService {
             request as BrowserOsChatRequest,
             abortSignal,
             updateMessages,
-            onPrepared,
-            onStreamReady,
           )
-        },
-        onEnd: (status, runId) => {
-          activeLease?.setActiveRun(undefined)
-          if (presencePrepared || presenceStarted) {
-            this.conversationPresence.finishRun(
-              request.conversationId,
-              runId,
-              status,
-            )
-          }
-          if (activityStarted) this.deps.activity?.endChatStream()
         },
       })
     } catch (error) {
@@ -208,27 +152,29 @@ export class ChatService {
     }
 
     return createUIMessageStreamResponse({
-      stream: this.conversationHub.subscribe(request.conversationId),
+      stream: this.conversationRuns.subscribe(request.conversationId),
     })
   }
 
-  getRunSnapshot(conversationId: string): ConversationRunSnapshot | undefined {
-    return this.conversationHub.getSnapshot(conversationId)
+  async getRunSnapshot(
+    conversationId: string,
+  ): Promise<ConversationRunSnapshot | undefined> {
+    return await this.conversationRuns.getPreparedSnapshot(conversationId)
   }
 
   subscribe(
     conversationId: string,
   ): ReadableStream<UIMessageChunk> | undefined {
-    if (!this.conversationHub.getSnapshot(conversationId)) return undefined
-    return this.conversationHub.subscribe(conversationId)
+    if (!this.conversationRuns.getSnapshot(conversationId)) return undefined
+    return this.conversationRuns.subscribe(conversationId)
   }
 
   async stop(conversationId: string): Promise<boolean> {
-    return await this.conversationHub.stop(conversationId)
+    return await this.conversationRuns.stop(conversationId)
   }
 
-  subscribePresence() {
-    return this.conversationPresence.subscribe()
+  subscribePanels() {
+    return this.conversationRuns.subscribePanels()
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction
@@ -236,8 +182,6 @@ export class ChatService {
     request: BrowserOsChatRequest,
     abortSignal: AbortSignal,
     updateMessages: (messages: UIMessage[]) => boolean,
-    onPrepared: (lease: BrowserToolLease, messages: UIMessage[]) => void,
-    onStreamReady: () => void,
   ): Promise<ReadableStream<UIMessageChunk>> {
     const { sessionStore } = this.deps
 
@@ -488,9 +432,9 @@ export class ChatService {
         : message,
     )
 
-    // Activate the lease before agent.stream starts model work; ToolLoopAgent
-    // may begin consuming a provider stream before this factory returns.
-    onPrepared(session.browserToolLease, session.agent.messages)
+    // Publish canonical display history before model work can call loopback MCP
+    // or a second panel hydrates this server-owned run.
+    updateMessages(session.agent.messages)
 
     try {
       const stream = await createAgentUIStream({
@@ -553,10 +497,6 @@ export class ChatService {
         },
       })
 
-      // Presence is delayed until construction succeeds. A newly opened panel
-      // can hydrate the already-published base, then attach before the hub
-      // starts reading buffered/live chunks.
-      onStreamReady()
       return stream
     } catch (error) {
       session.agent.messages = messagesBeforeTurn
@@ -568,8 +508,7 @@ export class ChatService {
   async deleteSession(
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
-    const runDeleted = await this.conversationHub.delete(conversationId)
-    this.conversationPresence.forgetConversation(conversationId)
+    const runDeleted = await this.conversationRuns.delete(conversationId)
     let acpDeleted = false
     const acpAgentId = this.acpConversationAgents.get(conversationId)
     if (acpAgentId) {
@@ -604,8 +543,6 @@ export class ChatService {
     request: AcpChatRequest,
     abortSignal: AbortSignal,
     updateMessages: (messages: UIMessage[]) => boolean,
-    onPrepared: (lease: BrowserToolLease, messages: UIMessage[]) => void,
-    onStreamReady: () => void,
   ): Promise<ReadableStream<UIMessageChunk>> {
     const agent = await this.getAcpAgentStore().get(request.target.agentId)
     if (!agent) {
@@ -697,9 +634,9 @@ export class ChatService {
         })
       },
     }
-    // The persistent ACP process can call its configured MCP server as soon as
-    // stream setup begins, so its lease must be active before that handoff.
-    onPrepared(acpToolLease, history)
+    // The run already authorizes this conversation before ACP stream setup;
+    // publish display history before the persistent process can call MCP.
+    updateMessages(history)
     let stream: ReadableStream<UIMessageChunk>
     try {
       stream = await this.getAcpRuntime().stream(streamInput)
@@ -721,9 +658,6 @@ export class ChatService {
         },
       })
     }
-    // As with the native agent, panel presence begins only once an executable
-    // stream exists. This avoids opening panels for a rejected or busy session.
-    onStreamReady()
     return stream
   }
 
@@ -758,7 +692,7 @@ export class ChatService {
     existing?.lease.revoke()
     const outputFileAccess =
       existing?.outputFileAccess ?? createBrowserOutputFileAccess()
-    const lease = this.deps.browserToolRuntime.createLease({
+    const lease = this.deps.browserMcp.createLease({
       conversationId: request.conversationId,
       readOnly,
       outputFileAccess,
@@ -881,7 +815,7 @@ export class ChatService {
     browserContext: BrowserContext | undefined,
     outputFileAccess: BrowserOutputFileAccess,
   ): Promise<{ agent: AiSdkAgent; browserToolLease: BrowserToolLease }> {
-    const browserToolLease = this.deps.browserToolRuntime.createLease({
+    const browserToolLease = this.deps.browserMcp.createLease({
       conversationId: agentConfig.conversationId,
       readOnly: agentConfig.chatMode ?? false,
       outputFileAccess,
@@ -917,7 +851,7 @@ export class ChatService {
   }
 }
 
-/** Carries an intentional HTTP result through the hub's stream factory. */
+/** Carries an intentional HTTP result through the run's stream factory. */
 class ChatRequestError extends Error {
   constructor(readonly response: Response) {
     super(`Chat request failed with status ${response.status}`)
@@ -932,4 +866,17 @@ function browserContextTabIds(browserContext?: BrowserContext): number[] {
   for (const tab of browserContext.selectedTabs ?? []) tabIds.add(tab.id)
   for (const tab of browserContext.tabs ?? []) tabIds.add(tab.id)
   return [...tabIds]
+}
+
+function conversationTabGroup(
+  request: ChatRequest,
+): ConversationTabGroupPresentation {
+  const words = request.message.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  const task = words.slice(0, 5).join('-').slice(0, 40) || 'task'
+  const prefix = request.target.type
+  const colorKey =
+    request.target.type === 'browseros'
+      ? 'browseros'
+      : `${request.target.type}:${request.target.agentId}`
+  return { title: `${prefix}/${task}`, colorKey }
 }

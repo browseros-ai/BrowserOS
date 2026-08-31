@@ -3,6 +3,7 @@ import {
   BROWSEROS_TOOL_LEASE_HEADER,
   createMcpRoutes,
 } from '../../../src/api/routes/mcp'
+import { InvalidBrowserToolLeaseError } from '../../../src/api/services/mcp/browser-mcp-module'
 
 class FakeTransport {
   handleRequest = async () => Response.json({ ok: true })
@@ -20,17 +21,16 @@ async function post(
   })
 }
 
-describe('/mcp BrowserToolRuntime adapter', () => {
-  it('passes the lease and read-only request to the runtime', async () => {
+describe('/mcp BrowserMcpModule adapter', () => {
+  it('passes the lease and read-only request to the module', async () => {
     const createMcpServer = mock(() => ({
       connect: async () => undefined,
     }))
-    const runtime = {
-      hasLease: (token: string) => token === 'lease-1',
-      createMcpServer,
-    }
     const app = createMcpRoutes({
-      runtime: runtime as never,
+      browserMcp: {
+        createMcpServer,
+        validateLeaseToken: mock(() => {}),
+      } as never,
       createMcpTransport: (() => new FakeTransport()) as never,
     })
 
@@ -46,15 +46,13 @@ describe('/mcp BrowserToolRuntime adapter', () => {
     })
   })
 
-  it('rejects an expired lease before constructing an MCP server', async () => {
-    const createMcpServer = mock(() => ({
-      connect: async () => undefined,
-    }))
+  it('rejects an invalid capability at transport admission', async () => {
+    const createMcpServer = mock(() => ({ connect: async () => undefined }))
+    const validateLeaseToken = mock(() => {
+      throw new InvalidBrowserToolLeaseError()
+    })
     const app = createMcpRoutes({
-      runtime: {
-        hasLease: () => false,
-        createMcpServer,
-      } as never,
+      browserMcp: { createMcpServer, validateLeaseToken } as never,
       createMcpTransport: (() => new FakeTransport()) as never,
     })
 
@@ -63,6 +61,7 @@ describe('/mcp BrowserToolRuntime adapter', () => {
     })
 
     expect(response.status).toBe(401)
+    expect(validateLeaseToken).toHaveBeenCalledWith('expired')
     expect(createMcpServer).not.toHaveBeenCalled()
   })
 })
