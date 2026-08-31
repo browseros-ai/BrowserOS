@@ -204,6 +204,37 @@ describe('side panel scope routing', () => {
     expect(closeCalls).toEqual([])
   })
 
+  it('falls back to the standard open API when BrowserOS tab open APIs are unavailable', async () => {
+    Reflect.deleteProperty(chrome.sidePanel, 'browserosIsOpen')
+
+    const result = await openSidePanel({ tabId: 7, windowId: 3 })
+
+    expect(result).toEqual({ opened: true })
+    expect(openCalls).toEqual([{ tabId: 7 }])
+    expect(browserosToggleCalls).toEqual([])
+  })
+
+  it('falls back to the standard open API when BrowserOS tab toggle is unavailable', async () => {
+    Reflect.deleteProperty(chrome.sidePanel, 'browserosToggle')
+
+    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
+
+    expect(result).toEqual({ opened: true })
+    expect(openCalls).toEqual([{ tabId: 7 }])
+  })
+
+  it('keeps an open window panel open when Chromium cannot close it', async () => {
+    storedSidePanelPerWindow = true
+    storedOpenWindowIds = [3]
+    await refreshSidePanelRuntimeState()
+    Reflect.deleteProperty(chrome.sidePanel, 'close')
+
+    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
+
+    expect(result).toEqual({ opened: true })
+    expect(closeCalls).toEqual([])
+  })
+
   it('refreshes the cached scope from extension storage outside the click path', async () => {
     storedSidePanelPerWindow = true
 
