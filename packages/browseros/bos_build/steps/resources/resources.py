@@ -33,13 +33,18 @@ class ResourcesModule(Step):
 
 
 def stage_prepared_onboarding(ctx: Context) -> Path:
-    """Extract validated onboarding resources into the managed source path."""
+    """Normalize the product-selected source archive into the copy-stage path.
+
+    Source preparation records which app produced the archive; after this seam
+    the Chromium copy is deliberately product-neutral because both apps satisfy
+    the same WebUI resource contract.
+    """
     manifest = validated_common_resources(ctx)
     prepared = manifest.files["onboarding"]
     if ctx.prepared_resources is None:
         raise RuntimeError("Prepared resources were not registered")
     archive = ctx.prepared_resources / prepared.path
-    destination = ctx.root_dir / "resources/binaries/browseros_claw_onboard"
+    destination = ctx.root_dir / "resources/binaries/browseros_onboarding"
     clear_path(destination)
     extract_artifact_zip(archive, destination)
     ctx.artifact_registry.add("onboarding_resources", destination)

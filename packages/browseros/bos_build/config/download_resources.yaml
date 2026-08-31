@@ -109,16 +109,17 @@ download_operations:
     arch: ["x64"]
 
   # Onboarding static resources - platform-independent, feeds the onboarding
-  # grit pak. Each product bakes its own onboarding SPA, so these are gated by
-  # product and land in separate destinations.
+  # grit pak. Each product selects its own independently versioned SPA, then
+  # both archives normalize into one staging path because Chromium consumes one
+  # product-neutral WebUI resource contract.
   - name: "BrowserOS Onboarding Resources"
     r2_key: "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip"
-    destination: "resources/binaries/browseros_app_onboard"
+    destination: "resources/binaries/browseros_onboarding"
     download_type: "artifact_zip"
     product: "browseros"
 
   - name: "BrowserOS Claw Onboarding Resources"
     r2_key: "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip"
-    destination: "resources/binaries/browseros_claw_onboard"
+    destination: "resources/binaries/browseros_onboarding"
     download_type: "artifact_zip"
     product: "browserclaw"

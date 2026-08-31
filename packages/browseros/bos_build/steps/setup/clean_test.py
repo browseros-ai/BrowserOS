@@ -186,7 +186,7 @@ class CleanPruneOrphanBinariesTest(unittest.TestCase):
             },
             {
                 "name": "Onboard",
-                "destination": "resources/binaries/browseros_claw_onboard",
+                "destination": "resources/binaries/browseros_onboarding",
             },
         ]
     }
@@ -219,6 +219,18 @@ class CleanPruneOrphanBinariesTest(unittest.TestCase):
             staged.mkdir(parents=True)
             (staged / "browseros_claw_server_rust").write_text("binary")
 
+            onboarding = binaries / "browseros_onboarding" / "resources"
+            onboarding.mkdir(parents=True)
+            (onboarding / "index.html").write_text("onboarding")
+
+            retired_onboarding = [
+                binaries / "browseros_app_onboard",
+                binaries / "browseros_claw_onboard",
+            ]
+            for retired in retired_onboarding:
+                retired.mkdir()
+                (retired / "stale").write_text("stale")
+
             loose_file = binaries / "README.txt"
             loose_file.write_text("not a family dir")
 
@@ -227,6 +239,8 @@ class CleanPruneOrphanBinariesTest(unittest.TestCase):
             self.assertFalse(orphan.exists())
             self.assertTrue(managed.exists())
             self.assertTrue(staged.exists())
+            self.assertTrue(onboarding.exists())
+            self.assertTrue(all(not retired.exists() for retired in retired_onboarding))
             self.assertTrue(loose_file.exists())
 
     def test_empty_managed_set_prunes_nothing(self):

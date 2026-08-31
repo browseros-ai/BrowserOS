@@ -245,20 +245,13 @@ copy_operations:
     os: ["windows"]
     arch: ["x64"]
 
-  - name: "BrowserOS Onboarding Resources"
-    source: "resources/binaries/browseros_app_onboard/resources"
+  # Product selection happens while building or downloading the archive. Both
+  # apps implement the same Chromium WebUI contract, so the copy layer consumes
+  # one normalized directory and never requires the non-selected app.
+  - name: "Browser Onboarding Resources"
+    source: "resources/binaries/browseros_onboarding/resources"
     destination: "chrome/browser/browseros/onboarding/resources"
     type: "directory"
     managed: true
     required: true
     clear_destination: true
-    product: "browseros"
-
-  - name: "BrowserOS Claw Onboarding Resources"
-    source: "resources/binaries/browseros_claw_onboard/resources"
-    destination: "chrome/browser/browseros/onboarding/resources"
-    type: "directory"
-    managed: true
-    required: true
-    clear_destination: true
-    product: "browserclaw"
