@@ -10,6 +10,7 @@ import typer
 
 from ..lib.paths import get_package_root
 from ..lib.utils import log_error
+from ..products.resource_sources import source_resources_for_product
 from ..release.candidate import CandidateRecord
 from ..release.components import read_component_version
 from ..release.prepared_resources import (
@@ -102,9 +103,10 @@ def prepare(
                 raise ValueError(
                     "Local preparation requires --product, --source-sha, and --browser-version"
                 )
-        if "claw-onboard" not in versions:
-            versions["claw-onboard"] = read_component_version(
-                root, "claw-onboard"
+        onboarding_component = source_resources_for_product(product).onboarding_component
+        if onboarding_component not in versions:
+            versions[onboarding_component] = read_component_version(
+                root, onboarding_component
             )
         request = PreparationRequest(
             product=product,

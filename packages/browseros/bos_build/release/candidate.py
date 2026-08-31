@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
 from ..lib.versions import load_semantic_version
+from ..products.resource_sources import source_resources_for_product
 from .components import (
     AllocationRecord,
     component_by_id,
@@ -189,9 +190,10 @@ def _validate_recovered(
     if record.default_branch != request.default_branch or record.branch != branch:
         raise ValueError("Recovered candidate branch metadata does not match")
     _validate_sha(record.candidate_sha, "candidate_sha")
+    source = source_resources_for_product(request.product)
     expected = {
         *(spec.id for spec in components_for_candidate(request.product)),
-        "claw-onboard",
+        source.onboarding_component,
     }
     if set(record.component_versions) != expected:
         raise ValueError("Recovered candidate component set is incomplete")
@@ -224,7 +226,12 @@ def ensure_candidate(
         allocations=backend.discover_allocations(request.product),
         candidate_id=branch,
     )
-    versions["claw-onboard"] = committed_versions["claw-onboard"]
+    # Onboarding releases independently, so a browser candidate freezes the
+    # committed product-owned version without allocating a new app version.
+    onboarding_component = source_resources_for_product(
+        request.product
+    ).onboarding_component
+    versions[onboarding_component] = committed_versions[onboarding_component]
     created = backend.create_candidate(
         request,
         branch,
@@ -666,8 +673,9 @@ class GitHubCandidateBackend:
             spec.id: read_component_version(self.repo_root, spec.id)
             for spec in components_for_candidate(product)
         }
-        versions["claw-onboard"] = read_component_version(
-            self.repo_root, "claw-onboard"
+        onboarding_component = source_resources_for_product(product).onboarding_component
+        versions[onboarding_component] = read_component_version(
+            self.repo_root, onboarding_component
         )
         return versions
 

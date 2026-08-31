@@ -17,10 +17,11 @@ runner = CliRunner()
 
 
 class ReleaseResourcesCliTest(unittest.TestCase):
+    @patch("bos_build.cli.release_resources.read_component_version")
     @patch("bos_build.cli.release_resources.LocalPreparationOperations")
     @patch("bos_build.cli.release_resources.prepare_common_resources")
     def test_prepare_accepts_candidate_record_and_emits_manifest_digest(
-        self, prepare, operations
+        self, prepare, operations, read_version
     ) -> None:
         manifest = PreparedResourcesManifest(
             product="browseros",
@@ -30,7 +31,7 @@ class ReleaseResourcesCliTest(unittest.TestCase):
             component_versions={
                 "server": "0.0.128",
                 "agent": "0.0.101.0",
-                "claw-onboard": "0.0.12",
+                "app-onboard": "0.0.0",
             },
             files={},
         )
@@ -66,6 +67,67 @@ class ReleaseResourcesCliTest(unittest.TestCase):
             self.assertEqual(values["prepared_resources"], str(output.resolve()))
             self.assertEqual(values["manifest_sha256"], manifest.digest())
             operations.assert_called_once()
+            request = prepare.call_args.args[0]
+            self.assertEqual(request.component_versions, manifest.component_versions)
+            read_version.assert_not_called()
+
+    def test_explicit_prepare_fills_the_products_onboarding_version(self) -> None:
+        cases = {
+            "browseros": "app-onboard",
+            "browserclaw": "claw-onboard",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for product, onboarding_component in cases.items():
+                with (
+                    self.subTest(product=product),
+                    patch(
+                        "bos_build.cli.release_resources.read_component_version",
+                        return_value="0.0.9",
+                    ) as read_version,
+                    patch(
+                        "bos_build.cli.release_resources.LocalPreparationOperations"
+                    ),
+                    patch(
+                        "bos_build.cli.release_resources.prepare_common_resources"
+                    ) as prepare,
+                ):
+                    manifest = PreparedResourcesManifest(
+                        product=product,
+                        parent_sha="",
+                        source_sha="1" * 40,
+                        browser_version="0.31.0",
+                        component_versions={onboarding_component: "0.0.9"},
+                        files={},
+                    )
+                    prepare.return_value = manifest
+                    result = runner.invoke(
+                        app,
+                        [
+                            "release",
+                            "resources",
+                            "prepare",
+                            "--product",
+                            product,
+                            "--source-sha",
+                            "1" * 40,
+                            "--browser-version",
+                            "0.31.0",
+                            "--output",
+                            str(root / product),
+                            "--repo-root",
+                            str(root),
+                        ],
+                    )
+
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    request = prepare.call_args.args[0]
+                    self.assertEqual(
+                        request.component_versions[onboarding_component], "0.0.9"
+                    )
+                    read_version.assert_called_once_with(
+                        root.resolve(), onboarding_component
+                    )
 
 
 if __name__ == "__main__":
