@@ -75,8 +75,8 @@ The agent loop uses the [Vercel AI SDK](https://sdk.vercel.ai) to orchestrate mu
 - **Multi-provider support** — OpenAI, Anthropic, Google, Azure, Bedrock, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint
 - **Session management** — conversations persist in a local SQLite database
 - **Context overflow handling** — automatic message compaction when context windows fill up
-- **MCP client** — connects to external MCP servers for additional tool access (40+ app integrations)
-- **Tool adapter** — bridges MCP tool definitions to AI SDK tool format
+- **MCP clients** — use the same loopback `/mcp` runtime for BrowserOS tools and connect to external MCP servers for additional integrations
+- **Server-owned execution** — browser permissions, output grants, metrics, and tab-presence effects live behind `BrowserToolRuntime`
 
 ### Provider Factory
 
@@ -95,8 +95,9 @@ apps/server/
 │   │   ├── provider-factory.ts# LLM provider factory
 │   │   ├── session-store.ts   # Conversation persistence
 │   │   ├── compaction.ts      # Context window management
-│   │   ├── mcp-builder.ts     # External MCP client setup
-│   │   └── tool-adapter.ts    # MCP → AI SDK tool bridge
+│   │   └── mcp-builder.ts     # Internal and external MCP client setup
+│   ├── api/services/mcp/
+│   │   └── browser-tool-runtime.ts # Browser tool leases, guards, execution, and effects
 │   ├── browser/               # Browser connection layer
 │   ├── tools/                 # MCP tool implementations
 │   │   ├── navigation.ts

@@ -4,7 +4,7 @@ import { defineTool, errorResult, textResult } from './framework'
 export const tabs = defineTool({
   name: 'tabs',
   description:
-    "Manage browser tabs. `list` returns every open page grouped by ownership: `Your tabs` (pages you opened via `tabs new`), `User's tabs` (pages the operator opened), and `Other agents' tabs` (pages another AI agent opened). You can act freely on your own tabs. Page-targeted tools (snapshot, act, navigate, close, etc.) reject dispatches on pages you do not own with an error asking you to call `tabs new`. `active` shows the current front page; `new` opens a fresh page; `close` closes one of yours.",
+    'Manage browser tabs. `list` returns every open page, `active` shows the current front page, `new` opens a fresh page, and `close` closes a page. When a task would disrupt a tab the user is actively using, prefer cloning it: copy its URL from `list` into `tabs new`, then work in the new page.',
   input: z
     .object({
       action: z.enum(['list', 'active', 'new', 'close']).default('list'),
