@@ -156,6 +156,26 @@ describe('BrowserMcpModule', () => {
     ])
   })
 
+  it('groups the first tab created by an agent call', async () => {
+    const conversationId = crypto.randomUUID()
+    const { addCreatedPages, browserMcp: runtime, runs } = moduleFixture()
+    const run = runs.start(conversationId, 'group-run')
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com',
+    })
+
+    expect(addCreatedPages).toHaveBeenCalledTimes(1)
+    expect(addCreatedPages).toHaveBeenCalledWith(run, [2])
+  })
+
   it('attributes a late tool effect to the run that authorized the call', async () => {
     let finishReload!: () => void
     const reloadBlocked = new Promise<void>((resolve) => {
@@ -500,11 +520,13 @@ function moduleFixture(
   options: { session?: BrowserSession; klavis?: KlavisService } = {},
 ) {
   const runs = new TestConversationRuns()
+  const addCreatedPages = mock(() => {})
   const browserMcp = new BrowserMcpModule({
     version: 'test',
     browserSession: options.session ?? browserSession(),
     conversationRuns: runs,
     klavis: options.klavis,
+    tabGroups: { addCreatedPages },
   })
-  return { browserMcp, runs }
+  return { addCreatedPages, browserMcp, runs }
 }

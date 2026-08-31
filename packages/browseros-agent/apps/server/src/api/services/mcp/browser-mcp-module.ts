@@ -21,6 +21,7 @@ import type { ConversationRuns } from '../conversation-runs'
 import type { KlavisService } from '../klavis'
 import type { ServerActivity } from '../server-activity'
 import { dispatchBrowserTool } from './browser-tool-dispatch'
+import { ConversationTabGroups } from './conversation-tab-groups'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
 
 export { BROWSEROS_TOOL_LEASE_HEADER } from '../../../lib/browser-tool-lease'
@@ -31,6 +32,7 @@ export interface BrowserMcpModuleDeps {
   conversationRuns: Pick<ConversationRuns, 'activeRun'>
   klavis?: KlavisService
   activity?: ServerActivity
+  tabGroups?: Pick<ConversationTabGroups, 'addCreatedPages'>
 }
 
 export interface BrowserToolLeaseInput {
@@ -91,13 +93,17 @@ export class InvalidBrowserToolLeaseError extends Error {
 
 /**
  * Deep server module behind `/mcp`: it owns leases, catalogue policy, ordered
- * dispatch, output grants, and panel effects. HTTP remains a thin protocol
- * adapter and both native and ACP agents use this one production path.
+ * dispatch, output grants, panel effects, and tab grouping. HTTP remains a thin
+ * protocol adapter and both native and ACP agents use this one production path.
  */
 export class BrowserMcpModule {
   private readonly leases = new Map<string, LeaseRecord>()
+  private readonly tabGroups: Pick<ConversationTabGroups, 'addCreatedPages'>
 
-  constructor(private readonly deps: BrowserMcpModuleDeps) {}
+  constructor(private readonly deps: BrowserMcpModuleDeps) {
+    this.tabGroups =
+      deps.tabGroups ?? new ConversationTabGroups(deps.browserSession)
+  }
 
   createLease(input: BrowserToolLeaseInput): BrowserToolLease {
     const record: LeaseRecord = { ...input, token: crypto.randomUUID() }
@@ -202,6 +208,7 @@ export class BrowserMcpModule {
       run,
       readOnly,
       source,
+      tabGroups: this.tabGroups,
     })
   }
 }

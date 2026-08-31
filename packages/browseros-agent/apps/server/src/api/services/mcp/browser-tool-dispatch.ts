@@ -22,7 +22,9 @@ import {
 } from '@browseros/browser-mcp/tools/framework'
 import { logger } from '../../../lib/logger'
 import type { ActiveConversationRun } from '../conversation-runs'
+import type { ConversationTabGroups } from './conversation-tab-groups'
 import { applyConversationTabs } from './effects/conversation-tabs'
+import { applyTabGroups } from './effects/tab-groups'
 import { guardConversationRunning } from './guards/conversation-running'
 import { guardReadOnly } from './guards/read-only'
 import { observeToolTelemetry } from './observers/tool-telemetry'
@@ -50,6 +52,7 @@ export interface BrowserToolCall {
   readOnly: boolean
   source: string
   trace: BrowserToolPageTrace
+  tabGroups: Pick<ConversationTabGroups, 'addCreatedPages'>
 }
 
 export interface BrowserToolEffectContext {
@@ -95,6 +98,7 @@ const GUARDS: readonly NamedToolGuard[] = [
 
 const EFFECTS: readonly NamedToolEffect[] = [
   { name: 'conversation-tabs', run: applyConversationTabs },
+  { name: 'tab-groups', run: applyTabGroups },
 ]
 
 const OBSERVERS: readonly NamedToolObserver[] = [
