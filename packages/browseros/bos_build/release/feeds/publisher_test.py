@@ -132,6 +132,21 @@ def _empty_item_mac_appcast():
     )
 
 
+def _empty_browserclaw_win_arm_appcast():
+    spec = feed_by_key("appcast-claw-win-arm64.xml")
+    return f"""\
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>{spec.title}</title>
+    <link>{spec.link}</link>
+    <item>
+    </item>
+  </channel>
+</rss>
+"""
+
+
 def _server_appcast(bundle_id, channel, version):
     spec = server_feed(bundle_id, channel)
     artifact = SignedArtifact(
@@ -460,6 +475,27 @@ class PublisherTestCase(unittest.TestCase):
         )
 
         ok = publisher.publish(spec, _browserclaw_appcast(), publish=True)
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            self.client.calls,
+            [
+                (
+                    "copy",
+                    spec.key,
+                    f"feeds-history/{spec.key}.20260701T120000Z",
+                ),
+                ("put", spec.key, "application/xml"),
+            ],
+        )
+
+    def test_browserclaw_legacy_title_migrates_on_empty_placeholder(self):
+        spec = feed_by_key("appcast-claw-win-arm64.xml")
+        canonical = _empty_browserclaw_win_arm_appcast()
+        legacy = canonical.replace(spec.title, spec.legacy_titles[0])
+        publisher = self._publisher({spec.key: legacy.encode()})
+
+        ok = publisher.publish(spec, canonical, publish=True)
 
         self.assertTrue(ok)
         self.assertEqual(

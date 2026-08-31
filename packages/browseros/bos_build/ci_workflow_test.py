@@ -10,6 +10,7 @@ from unittest import mock
 
 import yaml
 
+from bos_build.release.feeds.spec import all_feeds
 from bos_build.steps.source import provision
 
 
@@ -2724,6 +2725,55 @@ class ChromiumGitRunbookTest(unittest.TestCase):
         self.assertIn("index flags", troubleshooting)
         self.assertIn("`--repair-cached-depot-tools`", troubleshooting)
         self.assertIn("`v2`", troubleshooting)
+
+
+class RepairUpdateFeedWorkflowTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = WORKFLOW_DIR / "repair-update-feed.yml"
+        cls.workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_dispatch_only_selects_registered_appcasts(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+        inputs = triggers["workflow_dispatch"]["inputs"]
+        self.assertEqual(
+            inputs["feed"]["options"],
+            [feed.key for feed in all_feeds() if feed.kind in ("browser", "server")],
+        )
+        self.assertFalse(inputs["publish"]["default"])
+        self.assertFalse(inputs["repair_invalid_live"]["default"])
+        self.assertNotIn("allow_downgrade", inputs)
+
+    def test_uses_tracked_default_branch_and_guarded_publisher(self):
+        self.assertEqual(
+            self.workflow["concurrency"],
+            {
+                "group": "release-feed-snapshots",
+                "cancel-in-progress": False,
+                "queue": "max",
+            },
+        )
+        job = self.workflow["jobs"]["repair"]
+        self.assertEqual(job["permissions"], {"contents": "read"})
+        checkout = next(
+            step
+            for step in job["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        self.assertEqual(
+            checkout["with"]["ref"],
+            "${{ github.event.repository.default_branch || 'main' }}",
+        )
+        publish = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Publish tracked appcast"
+        )["run"]
+        self.assertIn('args=("$FEED")', publish)
+        self.assertIn("args+=(--repair-invalid-live)", publish)
+        self.assertIn("args+=(--publish)", publish)
+        self.assertIn('release feeds publish-local "${args[@]}"', publish)
+        self.assertNotIn("--allow-downgrade", publish)
 
 
 if __name__ == "__main__":

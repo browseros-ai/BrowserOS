@@ -1,0 +1,78 @@
+name: "Repair: Tracked update appcast"
+
+on:
+  workflow_dispatch:
+    inputs:
+      feed:
+        description: "Tracked appcast to validate against live R2"
+        required: true
+        type: choice
+        options:
+          - appcast.xml
+          - appcast-x86_64.xml
+          - appcast-win.xml
+          - appcast-win-arm64.xml
+          - appcast-claw.xml
+          - appcast-claw-x86_64.xml
+          - appcast-claw-win.xml
+          - appcast-claw-win-arm64.xml
+          - appcast-server.xml
+          - appcast-server.alpha.xml
+          - appcast-claw-server.xml
+          - appcast-claw-server.alpha.xml
+      publish:
+        description: "Write to R2 after validation and backup (unchecked = dry run)"
+        required: false
+        type: boolean
+        default: false
+      repair_invalid_live:
+        description: "Replace malformed or wrong-channel live metadata when version-safe"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Server alpha publication uses the same group. A manual repair must not race
+# another appcast writer between validation, backup, and replacement.
+concurrency:
+  group: release-feed-snapshots
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout tracked feed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Publish tracked appcast
+        env:
+          FEED: ${{ inputs.feed }}
+          PUBLISH: ${{ inputs.publish }}
+          REPAIR_INVALID_LIVE: ${{ inputs.repair_invalid_live }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          args=("$FEED")
+          if [ "$REPAIR_INVALID_LIVE" = "true" ]; then
+            args+=(--repair-invalid-live)
+          fi
+          if [ "$PUBLISH" = "true" ]; then
+            args+=(--publish)
+          fi
+          uv run --directory packages/browseros browseros \
+            release feeds publish-local "${args[@]}"

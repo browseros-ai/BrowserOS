@@ -33,6 +33,7 @@ live.
 | Make a staged release live | `browseros release publish`, then `browseros release appcast --publish` |
 | Release an extension CRX to alpha | `gh workflow run release-extensions.yml` |
 | Preview or promote extension feeds | `gh workflow run release-extension-feeds.yml` |
+| Repair a tracked browser/server appcast | `gh workflow run repair-update-feed.yml` |
 | Grab today's signed mac build | Download the `nightly-browseros` / `nightly-browserclaw` prerelease |
 | Check the patch stack | `browseros dev doctor` |
 
@@ -253,6 +254,20 @@ failed snapshot merge therefore leaves that channel's live feeds untouched. For
 `channel=both`, alpha completes before production so production sees alpha's
 newer bundled versions. If production later fails, alpha remains durably
 committed and published; rerun the workflow to resume production.
+
+To republish one tracked browser or server appcast through the same validation,
+backup, and downgrade guards:
+
+```bash
+gh workflow run repair-update-feed.yml \
+  -f feed=appcast-server.xml \
+  -f repair_invalid_live=true \
+  -f publish=true
+```
+
+Leave `publish` unchecked for a full dry-run diff. Enable
+`repair_invalid_live` only when the live object is malformed or carries the
+wrong channel metadata; the repair path still refuses a recoverable downgrade.
 
 Locally there are two commands, and the difference matters:
 
