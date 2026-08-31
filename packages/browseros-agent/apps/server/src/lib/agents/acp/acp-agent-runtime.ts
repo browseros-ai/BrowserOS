@@ -38,6 +38,8 @@ export interface AcpAgentRuntimeOptions {
 export interface AcpAgentStreamInput {
   agent: AcpAgentDefinition
   conversationId: string
+  browserToolLeaseToken: string
+  readOnly: boolean
   messages: UIMessage[]
   browserContext?: BrowserContext
   abortSignal?: AbortSignal
@@ -109,6 +111,8 @@ export class AcpAgentRuntime {
         agent: input.agent,
         conversationId: input.conversationId,
         serverPort: this.serverPort,
+        browserToolLeaseToken: input.browserToolLeaseToken,
+        readOnly: input.readOnly,
         browserContext: input.browserContext,
         resourcesDir: this.resourcesDir,
         browserosDir: this.browserosDir,

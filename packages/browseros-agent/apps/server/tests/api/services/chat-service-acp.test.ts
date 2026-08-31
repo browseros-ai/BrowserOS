@@ -87,7 +87,14 @@ function deps(
     browser: {
       resolveTabIds: mock(async () => new Map<number, number>()),
     } as never,
-    browserSession: {} as never,
+    browserToolRuntime: {
+      createLease: mock(() => ({
+        token: 'acp-test-lease',
+        updateBrowserContext: mock(() => {}),
+        setActiveRun: mock(() => {}),
+        revoke: mock(() => {}),
+      })),
+    } as never,
     serverPort: 9100,
     acpAgentStore: {
       get: mock(async () =>

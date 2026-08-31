@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import type { UIMessageChunk } from 'ai'
 import * as _ai from 'ai'
 import type { KlavisProxyStatus } from '../../../src/api/services/klavis'
 
@@ -41,14 +42,35 @@ const createAgentSpy = mock(async (config: unknown) => {
   return agentToReturn
 })
 
-const createAgentUIStreamResponseSpy = mock(
-  async (options: StreamResponseOptions) => {
-    if (!streamResponseHandler) {
-      throw new Error('No stream response handler configured')
-    }
-    return await streamResponseHandler(options)
-  },
-)
+const createAgentUIStreamSpy = mock(async (options: StreamResponseOptions) => {
+  if (!streamResponseHandler) {
+    throw new Error('No stream response handler configured')
+  }
+  const response = await streamResponseHandler(options)
+  const reader = response.body?.getReader()
+  const decoder = new TextDecoder()
+  return new ReadableStream<UIMessageChunk>({
+    async pull(controller) {
+      if (!reader) {
+        controller.close()
+        return
+      }
+      const { done, value } = await reader.read()
+      if (done) {
+        controller.close()
+        return
+      }
+      controller.enqueue({
+        type: 'text-delta',
+        id: 'mock-answer',
+        delta: decoder.decode(value),
+      })
+    },
+    async cancel(reason) {
+      await reader?.cancel(reason)
+    },
+  })
+})
 
 const resolveLLMConfigSpy = mock(async () => ({
   provider: 'openai',
@@ -66,7 +88,7 @@ const resolveLLMConfigSpy = mock(async () => ({
 // 2026-07-17 test reliability audit for the failure mechanism.
 mock.module('ai', () => ({
   ..._ai,
-  createAgentUIStreamResponse: createAgentUIStreamResponseSpy,
+  createAgentUIStream: createAgentUIStreamSpy,
 }))
 
 mock.module('../../../src/agent/ai-sdk-agent', () => ({
@@ -88,10 +110,37 @@ mock.module('../../../src/lib/logger', () => ({
   },
 }))
 
-const { ChatService } = await import('../../../src/api/services/chat-service')
+const { ChatService: RealChatService } = await import(
+  '../../../src/api/services/chat-service'
+)
 const { ServerActivity } = await import(
   '../../../src/api/services/server-activity'
 )
+
+let leaseSequence = 0
+function createBrowserToolRuntimeStub() {
+  return {
+    createLease: mock(() => ({
+      token: `test-lease-${++leaseSequence}`,
+      updateBrowserContext: mock(() => {}),
+      setActiveRun: mock(() => {}),
+      revoke: mock(() => {}),
+    })),
+  }
+}
+
+// Individual tests only specify dependencies relevant to their behavior. Keep
+// the new authoritative runtime seam real at the constructor boundary without
+// repeating an unrelated lease stub in every fixture.
+const ChatService = class extends RealChatService {
+  constructor(deps: ConstructorParameters<typeof RealChatService>[0]) {
+    super({
+      serverPort: 32123,
+      browserToolRuntime: createBrowserToolRuntimeStub() as never,
+      ...deps,
+    })
+  }
+}
 
 function createKlavisStub(
   getStatus: () => KlavisProxyStatus = () => ({
@@ -151,7 +200,7 @@ function createFakeAgent() {
 }
 
 describe('ChatService activity tracking', () => {
-  it('returns to idle when a chat stream is aborted mid-response', async () => {
+  it('stays busy when a subscriber disconnects and idles on explicit stop', async () => {
     resolveLLMConfigSpy.mockImplementation(async () => ({
       provider: 'openai',
       model: 'gpt-5',
@@ -159,18 +208,12 @@ describe('ChatService activity tracking', () => {
     }))
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
-    const abortController = new AbortController()
     streamResponseHandler = async () => {
       const encoder = new TextEncoder()
       return new Response(
         new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode('data: partial\n\n'))
-            abortController.signal.addEventListener(
-              'abort',
-              () => controller.close(),
-              { once: true },
-            )
           },
         }),
       )
@@ -190,10 +233,11 @@ describe('ChatService activity tracking', () => {
       activity,
     })
 
+    const conversationId = crypto.randomUUID()
     const response = await service.processMessage(
       {
         target: BROWSEROS_TARGET,
-        conversationId: crypto.randomUUID(),
+        conversationId,
         message: 'stop after the first chunk',
         isScheduledTask: false,
         mode: 'agent',
@@ -206,17 +250,18 @@ describe('ChatService activity tracking', () => {
           },
         },
       } as never,
-      abortController.signal,
+      new AbortController().signal,
     )
 
     expect(activity.isBusy()).toBe(true)
     const reader = response.body?.getReader()
     await reader?.read()
 
-    abortController.abort()
-
-    expect(activity.isBusy()).toBe(false)
     await reader?.cancel()
+    expect(activity.isBusy()).toBe(true)
+
+    expect(await service.stop(conversationId)).toBe(true)
+    expect(activity.isBusy()).toBe(false)
   })
 })
 
@@ -396,7 +441,7 @@ describe('ChatService scheduled task page lifecycle', () => {
 })
 
 describe('ChatService browser tool config', () => {
-  it('passes browser session into new and rebuilt agent sessions', async () => {
+  it('passes fresh lease tokens into new and rebuilt agent sessions', async () => {
     const firstAgent = createFakeAgent()
     const secondAgent = createFakeAgent()
     agentToReturn = firstAgent
@@ -450,8 +495,17 @@ describe('ChatService browser tool config', () => {
     const createCalls = createAgentSpy.mock.calls.slice(createCallsBefore)
     expect(createCalls).toHaveLength(2)
     for (const [config] of createCalls) {
-      expect(config).toMatchObject({ browserSession: { pages: {} } })
+      expect(config).toMatchObject({
+        serverPort: 32123,
+        browserToolLeaseToken: expect.stringContaining('test-lease-'),
+      })
+      expect(config).not.toHaveProperty('browserSession')
     }
+    const leaseTokens = createCalls.map(
+      ([config]) =>
+        (config as { browserToolLeaseToken: string }).browserToolLeaseToken,
+    )
+    expect(leaseTokens[0]).not.toBe(leaseTokens[1])
   })
 })
 

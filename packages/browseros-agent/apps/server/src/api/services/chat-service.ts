@@ -5,11 +5,12 @@
  */
 
 import type { Browser } from '@browseros/browser-core/browser'
-import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import {
-  consumeStream,
-  createAgentUIStreamResponse,
+  type BrowserOutputFileAccess,
+  createBrowserOutputFileAccess,
+} from '@browseros/browser-mcp/output-file'
+import {
+  createAgentUIStream,
   createUIMessageStream,
   createUIMessageStreamResponse,
   type UIMessage,
@@ -41,6 +42,10 @@ import {
 } from '../../lib/conversations/conversation-store'
 import { logger } from '../../lib/logger'
 import type { KlavisService } from '../services/klavis'
+import type {
+  BrowserToolLease,
+  BrowserToolRuntime,
+} from '../services/mcp/browser-tool-runtime'
 import type { ServerActivity } from '../services/server-activity'
 import type {
   AcpChatRequest,
@@ -54,12 +59,18 @@ import {
   describeModeChange,
   describeWorkspaceChange,
 } from './chat-service.helpers'
+import {
+  ConversationHub,
+  ConversationRunAlreadyActiveError,
+  type ConversationRunSnapshot,
+} from './conversation-hub'
+import { ConversationPresence } from './conversation-presence'
 
 export interface ChatServiceDeps {
   sessionStore: SessionStore
   klavis?: KlavisService
   browser: Browser
-  browserSession: BrowserSession
+  browserToolRuntime: Pick<BrowserToolRuntime, 'createLease'>
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
   serverPort: number
@@ -68,6 +79,8 @@ export interface ChatServiceDeps {
   acpAgentStore?: Pick<AcpAgentStore, 'get'>
   acpRuntime?: Pick<AcpAgentRuntime, 'stream' | 'close'>
   conversationStore?: Pick<ConversationStore, 'get' | 'save'>
+  conversationHub?: ConversationHub
+  conversationPresence?: ConversationPresence
 }
 
 export class ChatService {
@@ -75,37 +88,157 @@ export class ChatService {
   private acpRuntime: Pick<AcpAgentRuntime, 'stream' | 'close'> | undefined
   private readonly acpMessages = new Map<string, UIMessage[]>()
   private readonly acpConversationAgents = new Map<string, string>()
+  private readonly acpToolLeases = new Map<
+    string,
+    {
+      agentId: string
+      fingerprint: string
+      lease: BrowserToolLease
+      outputFileAccess: BrowserOutputFileAccess
+    }
+  >()
   private conversationStore: Pick<ConversationStore, 'get' | 'save'> | undefined
+  private readonly conversationHub: ConversationHub
+  private readonly conversationPresence: ConversationPresence
 
   constructor(private deps: ChatServiceDeps) {
     this.acpAgentStore = deps.acpAgentStore
     this.acpRuntime = deps.acpRuntime
     this.conversationStore = deps.conversationStore
+    this.conversationHub = deps.conversationHub ?? new ConversationHub()
+    this.conversationPresence =
+      deps.conversationPresence ?? new ConversationPresence()
   }
 
   async processMessage(
     request: ChatRequest,
-    abortSignal: AbortSignal,
+    _requestAbortSignal: AbortSignal,
   ): Promise<Response> {
-    if (
-      request.target.type === 'claude' ||
-      request.target.type === 'codex' ||
-      request.target.type === 'custom'
-    ) {
-      return this.processAcpMessage(request as AcpChatRequest, abortSignal)
+    let activeLease: BrowserToolLease | undefined
+    let presencePrepared = false
+    let presenceStarted = false
+    let activityStarted = false
+
+    try {
+      await this.conversationHub.start({
+        conversationId: request.conversationId,
+        messages: [],
+        createStream: async (abortSignal, runId, updateMessages) => {
+          this.deps.activity?.beginChatStream()
+          activityStarted = true
+
+          const onPrepared = (
+            lease: BrowserToolLease,
+            messages: UIMessage[],
+          ) => {
+            if (!request.isScheduledTask) {
+              this.conversationPresence.prepareRun({
+                conversationId: request.conversationId,
+                runId,
+                tabIds: browserContextTabIds(request.browserContext),
+              })
+              presencePrepared = true
+            }
+            activeLease = lease
+            lease.setActiveRun(runId)
+            updateMessages(messages)
+          }
+
+          const onStreamReady = () => {
+            // A stop can arrive while provider/MCP setup is still awaiting.
+            // The hub will finalize once this factory returns; do not flash a
+            // newly started panel presence for work that is already cancelled.
+            if (abortSignal.aborted) return
+
+            // Scheduled jobs execute invisibly in background pages; opening UI
+            // panels for those unattended runs would be disruptive.
+            if (!request.isScheduledTask) {
+              this.conversationPresence.startRun({
+                conversationId: request.conversationId,
+                runId,
+                tabIds: browserContextTabIds(request.browserContext),
+              })
+              presenceStarted = true
+            }
+          }
+
+          if (
+            request.target.type === 'claude' ||
+            request.target.type === 'codex' ||
+            request.target.type === 'custom'
+          ) {
+            return await this.processAcpMessage(
+              request as AcpChatRequest,
+              abortSignal,
+              updateMessages,
+              onPrepared,
+              onStreamReady,
+            )
+          }
+
+          return await this.processBrowserOsMessage(
+            request as BrowserOsChatRequest,
+            abortSignal,
+            updateMessages,
+            onPrepared,
+            onStreamReady,
+          )
+        },
+        onEnd: (status, runId) => {
+          activeLease?.setActiveRun(undefined)
+          if (presencePrepared || presenceStarted) {
+            this.conversationPresence.finishRun(
+              request.conversationId,
+              runId,
+              status,
+            )
+          }
+          if (activityStarted) this.deps.activity?.endChatStream()
+        },
+      })
+    } catch (error) {
+      if (error instanceof ConversationRunAlreadyActiveError) {
+        return Response.json(
+          { error: 'An agent turn is already running' },
+          { status: 409 },
+        )
+      }
+      if (error instanceof ChatRequestError) return error.response
+      throw error
     }
 
-    return this.processBrowserOsMessage(
-      request as BrowserOsChatRequest,
-      abortSignal,
-    )
+    return createUIMessageStreamResponse({
+      stream: this.conversationHub.subscribe(request.conversationId),
+    })
+  }
+
+  getRunSnapshot(conversationId: string): ConversationRunSnapshot | undefined {
+    return this.conversationHub.getSnapshot(conversationId)
+  }
+
+  subscribe(
+    conversationId: string,
+  ): ReadableStream<UIMessageChunk> | undefined {
+    if (!this.conversationHub.getSnapshot(conversationId)) return undefined
+    return this.conversationHub.subscribe(conversationId)
+  }
+
+  async stop(conversationId: string): Promise<boolean> {
+    return await this.conversationHub.stop(conversationId)
+  }
+
+  subscribePresence() {
+    return this.conversationPresence.subscribe()
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction
   private async processBrowserOsMessage(
     request: BrowserOsChatRequest,
     abortSignal: AbortSignal,
-  ): Promise<Response> {
+    updateMessages: (messages: UIMessage[]) => boolean,
+    onPrepared: (lease: BrowserToolLease, messages: UIMessage[]) => void,
+    onStreamReady: () => void,
+  ): Promise<ReadableStream<UIMessageChunk>> {
     const { sessionStore } = this.deps
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
@@ -255,17 +388,14 @@ export class ChatService {
       }
 
       const outputFileAccess = createBrowserOutputFileAccess()
-      const agent = await AiSdkAgent.create({
-        resolvedConfig: agentConfig,
-        browserSession: this.deps.browserSession,
+      const { agent, browserToolLease } = await this.createBrowserOsAgent(
+        agentConfig,
         browserContext,
-        klavis: this.deps.klavis,
-        browserosId: this.deps.browserosId,
-        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
         outputFileAccess,
-      })
+      )
       session = {
         agent,
+        browserToolLease,
         scheduledPageId,
         browserContext,
         mcpServerKey,
@@ -315,6 +445,11 @@ export class ChatService {
     const resolvedMessageContext = request.isScheduledTask
       ? messageContext
       : await resolveBrowserContextPageIds(this.deps.browser, messageContext)
+    // The native MCP client survives across turns, while the active browser
+    // window does not. Refresh server-owned context before activating this run
+    // so request-scoped MCP servers use the current targeting defaults.
+    session.browserContext = resolvedMessageContext
+    session.browserToolLease.updateBrowserContext(resolvedMessageContext)
     const userContent = formatUserMessage(
       request.message,
       resolvedMessageContext,
@@ -333,6 +468,7 @@ export class ChatService {
     // <selected_text> + <USER_QUERY>) is built as a transient prompt
     // copy below — the LLM sees it, the user-visible state never
     // does.
+    const messagesBeforeTurn = [...session.agent.messages]
     session.agent.appendUserMessage(request.message)
     const promptUserText = contextPrefix + userContent
     const wrappedUserMessageId =
@@ -352,73 +488,88 @@ export class ChatService {
         : message,
     )
 
-    const response = await createAgentUIStreamResponse({
-      agent: session.agent.toolLoopAgent,
-      uiMessages: promptUiMessages,
-      abortSignal,
-      // Without this the SDK substitutes its masking default, which discards
-      // the status code, provider code, and message of every mid-stream
-      // failure - including every rate limit and credit exhaustion.
-      onError: (error: unknown) => {
-        logger.error('Agent stream failed', {
-          conversationId: request.conversationId,
-          provider: agentConfig.provider,
-          model: agentConfig.model,
-          message: error instanceof Error ? error.message : String(error),
-        })
-        return toChatErrorText(error, { provider: agentConfig.provider })
-      },
-      onFinish: async ({ messages }: { messages: UIMessage[] }) => {
-        const restored = messages.map((message) =>
-          message.id === wrappedUserMessageId && message.role === 'user'
-            ? {
-                ...message,
-                parts: [{ type: 'text' as const, text: request.message }],
-              }
-            : message,
-        )
-        session.agent.messages = filterValidMessages(restored)
+    // Activate the lease before agent.stream starts model work; ToolLoopAgent
+    // may begin consuming a provider stream before this factory returns.
+    onPrepared(session.browserToolLease, session.agent.messages)
 
-        // Only persist a turn that produced an assistant reply. A stream that
-        // errored before any output leaves the history ending on the user
-        // message; persisting that corrupts durable history, because the next
-        // turn reloads it and appends another user message, and the provider
-        // rejects back-to-back user messages.
-        const turnCompleted =
-          session.agent.messages[session.agent.messages.length - 1]?.role ===
-          'assistant'
-
-        logger.info('Agent execution complete', {
-          conversationId: request.conversationId,
-          totalMessages: session.agent.messages.length,
-          turnCompleted,
-        })
-
-        if (request.historyMode === 'local' && turnCompleted) {
-          await this.persistConversation({
-            id: request.conversationId,
-            messages: session.agent.messages,
-            targetType: 'browseros',
-            origin: request.origin,
+    try {
+      const stream = await createAgentUIStream({
+        agent: session.agent.toolLoopAgent,
+        uiMessages: promptUiMessages,
+        abortSignal,
+        // Without this the SDK substitutes its masking default, which discards
+        // the status code, provider code, and message of every mid-stream
+        // failure - including every rate limit and credit exhaustion.
+        onError: (error: unknown) => {
+          logger.error('Agent stream failed', {
+            conversationId: request.conversationId,
+            provider: agentConfig.provider,
+            model: agentConfig.model,
+            message: error instanceof Error ? error.message : String(error),
           })
-        }
+          return toChatErrorText(error, { provider: agentConfig.provider })
+        },
+        onFinish: async ({ messages }: { messages: UIMessage[] }) => {
+          const restored = messages.map((message) =>
+            message.id === wrappedUserMessageId && message.role === 'user'
+              ? {
+                  ...message,
+                  parts: [{ type: 'text' as const, text: request.message }],
+                }
+              : message,
+          )
+          session.agent.messages = filterValidMessages(restored)
+          updateMessages(session.agent.messages)
 
-        if (session.scheduledPageId) {
-          const pageId = session.scheduledPageId
-          session.scheduledPageId = undefined
-          this.closeScheduledPage(pageId, request.conversationId)
-        }
-      },
-    })
+          // Only persist a turn that produced an assistant reply. A stream that
+          // errored before any output leaves the history ending on the user
+          // message; persisting that corrupts durable history, because the next
+          // turn reloads it and appends another user message, and the provider
+          // rejects back-to-back user messages.
+          const turnCompleted =
+            session.agent.messages[session.agent.messages.length - 1]?.role ===
+            'assistant'
 
-    return (
-      this.deps.activity?.trackChatResponse(response, abortSignal) ?? response
-    )
+          logger.info('Agent execution complete', {
+            conversationId: request.conversationId,
+            totalMessages: session.agent.messages.length,
+            turnCompleted,
+          })
+
+          if (request.historyMode === 'local' && turnCompleted) {
+            await this.persistConversation({
+              id: request.conversationId,
+              messages: session.agent.messages,
+              targetType: 'browseros',
+              origin: request.origin,
+            })
+          }
+
+          if (session.scheduledPageId) {
+            const pageId = session.scheduledPageId
+            session.scheduledPageId = undefined
+            this.closeScheduledPage(pageId, request.conversationId)
+          }
+        },
+      })
+
+      // Presence is delayed until construction succeeds. A newly opened panel
+      // can hydrate the already-published base, then attach before the hub
+      // starts reading buffered/live chunks.
+      onStreamReady()
+      return stream
+    } catch (error) {
+      session.agent.messages = messagesBeforeTurn
+      updateMessages(messagesBeforeTurn)
+      throw error
+    }
   }
 
   async deleteSession(
     conversationId: string,
   ): Promise<{ deleted: boolean; sessionCount: number }> {
+    const runDeleted = await this.conversationHub.delete(conversationId)
+    this.conversationPresence.forgetConversation(conversationId)
     let acpDeleted = false
     const acpAgentId = this.acpConversationAgents.get(conversationId)
     if (acpAgentId) {
@@ -427,6 +578,8 @@ export class ChatService {
       })
       this.acpConversationAgents.delete(conversationId)
       this.acpMessages.delete(`${acpAgentId}:${conversationId}`)
+      this.acpToolLeases.get(conversationId)?.lease.revoke()
+      this.acpToolLeases.delete(conversationId)
       acpDeleted = true
     }
 
@@ -438,7 +591,7 @@ export class ChatService {
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
     return {
-      deleted: deleted || acpDeleted,
+      deleted: deleted || acpDeleted || runDeleted,
       sessionCount: this.deps.sessionStore.count(),
     }
   }
@@ -450,17 +603,30 @@ export class ChatService {
   private async processAcpMessage(
     request: AcpChatRequest,
     abortSignal: AbortSignal,
-  ): Promise<Response> {
+    updateMessages: (messages: UIMessage[]) => boolean,
+    onPrepared: (lease: BrowserToolLease, messages: UIMessage[]) => void,
+    onStreamReady: () => void,
+  ): Promise<ReadableStream<UIMessageChunk>> {
     const agent = await this.getAcpAgentStore().get(request.target.agentId)
-    if (!agent)
-      return Response.json({ error: 'Unknown agent' }, { status: 404 })
+    if (!agent) {
+      throw new ChatRequestError(
+        Response.json({ error: 'Unknown agent' }, { status: 404 }),
+      )
+    }
     if (agent.type !== request.target.type) {
-      return Response.json({ error: 'Agent type mismatch' }, { status: 400 })
+      throw new ChatRequestError(
+        Response.json({ error: 'Agent type mismatch' }, { status: 400 }),
+      )
     }
 
     const browserContext = await resolveBrowserContextPageIds(
       this.deps.browser,
       request.browserContext,
+    )
+    const acpToolLease = this.getOrCreateAcpToolLease(
+      agent.id,
+      request,
+      browserContext,
     )
     const userContent = formatUserMessage(
       request.message,
@@ -511,6 +677,8 @@ export class ChatService {
         workingDirectory: request.userWorkingDir ?? agent.workingDirectory,
       },
       conversationId: request.conversationId,
+      browserToolLeaseToken: acpToolLease.token,
+      readOnly: request.mode === 'chat',
       messages: promptMessages,
       browserContext,
       abortSignal,
@@ -519,6 +687,7 @@ export class ChatService {
         history.push(
           ...messages.filter((message) => !existingIds.has(message.id)),
         )
+        updateMessages(history)
         await this.persistConversation({
           id: request.conversationId,
           messages: history,
@@ -528,15 +697,21 @@ export class ChatService {
         })
       },
     }
+    // The persistent ACP process can call its configured MCP server as soon as
+    // stream setup begins, so its lease must be active before that handoff.
+    onPrepared(acpToolLease, history)
     let stream: ReadableStream<UIMessageChunk>
     try {
       stream = await this.getAcpRuntime().stream(streamInput)
     } catch (error) {
       history.length = priorHistoryLength
+      updateMessages(history)
       if (error instanceof AcpAgentSessionBusyError) {
-        return Response.json(
-          { error: 'An agent turn is already running' },
-          { status: 409 },
+        throw new ChatRequestError(
+          Response.json(
+            { error: 'An agent turn is already running' },
+            { status: 409 },
+          ),
         )
       }
       if (!(error instanceof AcpAgentPreparationError)) throw error
@@ -546,13 +721,10 @@ export class ChatService {
         },
       })
     }
-    const response = createUIMessageStreamResponse({
-      stream,
-      consumeSseStream: consumeStream,
-    })
-    return (
-      this.deps.activity?.trackChatResponse(response, abortSignal) ?? response
-    )
+    // As with the native agent, panel presence begins only once an executable
+    // stream exists. This avoids opening panels for a rejected or busy session.
+    onStreamReady()
+    return stream
   }
 
   private getAcpAgentStore(): Pick<AcpAgentStore, 'get'> {
@@ -571,6 +743,35 @@ export class ChatService {
   private getConversationStore(): Pick<ConversationStore, 'get' | 'save'> {
     this.conversationStore ??= new DbConversationStore()
     return this.conversationStore
+  }
+
+  private getOrCreateAcpToolLease(
+    agentId: string,
+    request: AcpChatRequest,
+    browserContext: BrowserContext | undefined,
+  ): BrowserToolLease {
+    const readOnly = request.mode === 'chat'
+    const fingerprint = JSON.stringify({ agentId, readOnly, browserContext })
+    const existing = this.acpToolLeases.get(request.conversationId)
+    if (existing?.fingerprint === fingerprint) return existing.lease
+
+    existing?.lease.revoke()
+    const outputFileAccess =
+      existing?.outputFileAccess ?? createBrowserOutputFileAccess()
+    const lease = this.deps.browserToolRuntime.createLease({
+      conversationId: request.conversationId,
+      readOnly,
+      outputFileAccess,
+      browserContext,
+      source: 'acp',
+    })
+    this.acpToolLeases.set(request.conversationId, {
+      agentId,
+      fingerprint,
+      lease,
+      outputFileAccess,
+    })
+    return lease
   }
 
   // Best-effort: a persistence failure must not fail an already-streamed turn.
@@ -633,8 +834,11 @@ export class ChatService {
     mcpServerKey: string,
   ): Promise<AgentSession> {
     const previousMessages = session.agent.messages
-    await session.agent.dispose()
+    // The old capability stops authorizing calls before the replacement agent
+    // performs any asynchronous MCP cleanup.
+    session.browserToolLease.revoke()
     this.deps.sessionStore.remove(request.conversationId)
+    await session.agent.dispose()
 
     const browserContext = agentConfig.isScheduledTask
       ? (session.browserContext ??
@@ -648,17 +852,14 @@ export class ChatService {
         )
     const outputFileAccess =
       session.outputFileAccess ?? createBrowserOutputFileAccess()
-    const agent = await AiSdkAgent.create({
-      resolvedConfig: agentConfig,
-      browserSession: this.deps.browserSession,
+    const { agent, browserToolLease } = await this.createBrowserOsAgent(
+      agentConfig,
       browserContext,
-      klavis: this.deps.klavis,
-      browserosId: this.deps.browserosId,
-      aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
       outputFileAccess,
-    })
+    )
     const newSession: AgentSession = {
       agent,
+      browserToolLease,
       scheduledPageId: session.scheduledPageId,
       browserContext,
       mcpServerKey,
@@ -674,6 +875,36 @@ export class ChatService {
     return newSession
   }
 
+  /** Mints the capability before constructing the loopback MCP client. */
+  private async createBrowserOsAgent(
+    agentConfig: ResolvedAgentConfig,
+    browserContext: BrowserContext | undefined,
+    outputFileAccess: BrowserOutputFileAccess,
+  ): Promise<{ agent: AiSdkAgent; browserToolLease: BrowserToolLease }> {
+    const browserToolLease = this.deps.browserToolRuntime.createLease({
+      conversationId: agentConfig.conversationId,
+      readOnly: agentConfig.chatMode ?? false,
+      outputFileAccess,
+      browserContext,
+      source: 'chat',
+    })
+    try {
+      const agent = await AiSdkAgent.create({
+        resolvedConfig: agentConfig,
+        serverPort: this.deps.serverPort,
+        browserToolLeaseToken: browserToolLease.token,
+        browserContext,
+        browserosId: this.deps.browserosId,
+        aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+        outputFileAccess,
+      })
+      return { agent, browserToolLease }
+    } catch (error) {
+      browserToolLease.revoke()
+      throw error
+    }
+  }
+
   private buildMcpServerKey(browserContext?: BrowserContext): string {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
@@ -684,4 +915,21 @@ export class ChatService {
         : null
     return [klavisState, ...managed, ...custom].filter(Boolean).join(',')
   }
+}
+
+/** Carries an intentional HTTP result through the hub's stream factory. */
+class ChatRequestError extends Error {
+  constructor(readonly response: Response) {
+    super(`Chat request failed with status ${response.status}`)
+    this.name = 'ChatRequestError'
+  }
+}
+
+function browserContextTabIds(browserContext?: BrowserContext): number[] {
+  if (!browserContext) return []
+  const tabIds = new Set<number>()
+  if (browserContext.activeTab) tabIds.add(browserContext.activeTab.id)
+  for (const tab of browserContext.selectedTabs ?? []) tabIds.add(tab.id)
+  for (const tab of browserContext.tabs ?? []) tabIds.add(tab.id)
+  return [...tabIds]
 }

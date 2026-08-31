@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import { buildAcpAgentPolicy } from '../../../../src/lib/agents/acp/acp-agent-policy'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
+import { BROWSEROS_TOOL_LEASE_HEADER } from '../../../../src/lib/browser-tool-lease'
 
 const SKILL = [
   '---',
@@ -73,6 +74,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-1',
       serverPort: 9001,
+      browserToolLeaseToken: 'lease-1',
+      readOnly: true,
       resourcesDir,
       browserosDir: '/state/browseros',
       browserContext: {
@@ -97,11 +100,9 @@ describe('buildAcpAgentPolicy', () => {
     expect(policy.mcpServers[0]).toEqual({
       type: 'http',
       name: 'browseros',
-      url: 'http://127.0.0.1:9001/mcp',
+      url: 'http://127.0.0.1:9001/mcp?read_only=1',
       headers: {
-        'X-BrowserOS-Scope-Id': 'conversation-1',
-        'X-BrowserOS-Default-Window-Id': '42',
-        'X-BrowserOS-Managed-Mcp-Servers': 'Slack',
+        [BROWSEROS_TOOL_LEASE_HEADER]: 'lease-1',
       },
     })
     expect(policy.sessionOptions).toEqual({
@@ -120,6 +121,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-2',
       serverPort: 9002,
+      browserToolLeaseToken: 'lease-2',
+      readOnly: false,
       resourcesDir,
       browserosDir: '/state/browseros',
       browserContext: {
@@ -199,6 +202,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-1',
       serverPort: 9001,
+      browserToolLeaseToken: 'lease-3',
+      readOnly: false,
       resourcesDir,
       browserosDir: '/state/browseros',
     })
@@ -229,6 +234,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-1',
       serverPort: 9001,
+      browserToolLeaseToken: 'lease-4',
+      readOnly: false,
       resourcesDir,
       browserosDir: '/state/browseros',
     })

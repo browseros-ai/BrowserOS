@@ -20,7 +20,7 @@ import type { UIMessage } from 'ai'
  *      as semantically empty, even though the SDK schema allows it
  *
  * This function guards against both layers so callers can filter
- * messages before passing them to `createAgentUIStreamResponse`.
+ * messages before passing them to `createAgentUIStream`.
  */
 export function hasMessageContent(message: UIMessage): boolean {
   if (message.parts.length === 0) return false

@@ -38,6 +38,11 @@ export interface KlavisToolAdapterDeps {
   getUserIntegrations: () => Promise<UserIntegration[]>
 }
 
+export interface KlavisMcpRegistrationOptions {
+  /** Returns a user-facing rejection when the current MCP caller lacks authority. */
+  authorizeCall?: () => string | undefined
+}
+
 type ConnectorToolPayload =
   | ConnectorInventory
   | {
@@ -259,6 +264,7 @@ function remoteJsonInputSchema(schema: Parameters<typeof fromJsonSchema>[0]) {
 export function registerKlavisTools(
   mcpServer: McpServer,
   deps: KlavisToolAdapterDeps,
+  options: KlavisMcpRegistrationOptions = {},
 ): void {
   mcpServer.registerTool(
     'connector_mcp_servers',
@@ -270,6 +276,9 @@ export function registerKlavisTools(
       ),
     },
     async (args: Record<string, unknown>) => {
+      const rejection = rejectUnauthorizedMcpCall(options)
+      if (rejection) return rejection
+
       const startTime = performance.now()
       const selectedServers = selectedServerNames(deps.scope)
       const logBase = {
@@ -356,6 +365,9 @@ export function registerKlavisTools(
         ),
       },
       async (args: Record<string, unknown>) => {
+        const rejection = rejectUnauthorizedMcpCall(options)
+        if (rejection) return rejection
+
         const startTime = performance.now()
         const logBase = {
           toolName: strataTool.name,
@@ -426,4 +438,14 @@ export function registerKlavisTools(
     selectedServers,
     selectedServerCount: selectedServers.length,
   })
+}
+
+/** Keeps connector handlers behind the same lease as browser-tool handlers. */
+function rejectUnauthorizedMcpCall(options: KlavisMcpRegistrationOptions) {
+  const message = options.authorizeCall?.()
+  if (!message) return undefined
+  return {
+    content: [{ type: 'text' as const, text: message }],
+    isError: true,
+  }
 }

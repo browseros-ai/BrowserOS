@@ -2,6 +2,7 @@ import { createMCPClient } from '@ai-sdk/mcp'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import type { ToolSet } from 'ai'
+import { BROWSEROS_TOOL_LEASE_HEADER } from '../lib/browser-tool-lease'
 import { logger } from '../lib/logger'
 import {
   detectMcpTransport,
@@ -13,6 +14,14 @@ export interface McpServerSpec {
   url: string
   transport: McpTransportType
   headers?: Record<string, string>
+  /** A required server failing to connect aborts agent construction. */
+  required?: boolean
+}
+
+export interface InternalBrowserMcpSpecInput {
+  serverPort: number
+  leaseToken: string
+  readOnly: boolean
 }
 
 export interface McpServerSpecDeps {
@@ -22,6 +31,21 @@ export interface McpServerSpecDeps {
 export interface McpClientBundle {
   clients: Array<{ close(): Promise<void> }>
   tools: ToolSet
+}
+
+/** Builds the sole production browser-tool connection used by BrowserOS chat. */
+export function buildInternalBrowserMcpSpec(
+  input: InternalBrowserMcpSpecInput,
+): McpServerSpec {
+  const query = new URLSearchParams({ structured: '1' })
+  if (input.readOnly) query.set('read_only', '1')
+  return {
+    name: 'browseros',
+    url: `http://127.0.0.1:${input.serverPort}/mcp?${query.toString()}`,
+    transport: 'streamable-http',
+    headers: { [BROWSEROS_TOOL_LEASE_HEADER]: input.leaseToken },
+    required: true,
+  }
 }
 
 function summarizeMcpUrl(value: string): string {
@@ -79,6 +103,7 @@ async function connectMcpClient(
     timeoutMs: timeout,
   }
   logger.debug('Connecting MCP client', logContext)
+  let connectedClient: { close(): Promise<void> } | undefined
   try {
     const client = await Promise.race([
       createMCPClient({
@@ -98,6 +123,7 @@ async function connectMcpClient(
         ),
       ),
     ])
+    connectedClient = client
     const clientTools = await Promise.race([
       client.tools(),
       new Promise<never>((_, reject) =>
@@ -123,15 +149,26 @@ async function connectMcpClient(
     // `clientTools` IS a `ToolSet` at runtime.
     return { client, tools: clientTools as ToolSet }
   } catch (error) {
-    logger.warn('Failed to connect MCP client, skipping', {
+    // A transport can connect successfully and then fail during tools/list.
+    // Until this function returns, it still owns that partial client.
+    await connectedClient?.close().catch(() => undefined)
+    const message = spec.required
+      ? 'Failed to connect required MCP client'
+      : 'Failed to connect MCP client, skipping'
+    logger.warn(message, {
       ...logContext,
       error: error instanceof Error ? error.message : String(error),
     })
+    if (spec.required) {
+      throw new Error(`Required MCP server "${spec.name}" is unavailable.`, {
+        cause: error,
+      })
+    }
     return null
   }
 }
 
-/** Connects custom MCP servers and returns their merged toolset. */
+/** Connects MCP servers and returns their merged toolset. */
 export async function createMcpClients(
   specs: McpServerSpec[],
 ): Promise<McpClientBundle> {
@@ -144,7 +181,26 @@ export async function createMcpClients(
       serverNames: specs.map((spec) => spec.name),
     })
   }
-  const results = await Promise.all(specs.map(connectMcpClient))
+  // Connections are parallel, but ownership transfers only if the whole batch
+  // settles successfully. A required failure must close siblings that happened
+  // to connect first instead of leaking transports during agent construction.
+  const settled = await Promise.allSettled(specs.map(connectMcpClient))
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  )
+  if (rejected) {
+    await Promise.allSettled(
+      settled.flatMap((result) =>
+        result.status === 'fulfilled' && result.value
+          ? [result.value.client.close()]
+          : [],
+      ),
+    )
+    throw rejected.reason
+  }
+  const results = settled.flatMap((result) =>
+    result.status === 'fulfilled' ? [result.value] : [],
+  )
   for (const result of results) {
     if (result) {
       clients.push(result.client)

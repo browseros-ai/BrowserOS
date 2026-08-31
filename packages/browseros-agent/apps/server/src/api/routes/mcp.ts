@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
   createMcpHandler,
   isLegacyRequest,
@@ -16,14 +15,14 @@ import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import { rejectBrowserFetch } from '../middleware/reject-browser-fetch'
-import type { KlavisService } from '../services/klavis'
-import { createMcpServer } from '../services/mcp/mcp-server'
-import type { ServerActivity } from '../services/server-activity'
+import {
+  BROWSEROS_TOOL_LEASE_HEADER,
+  type BrowserToolRuntime,
+} from '../services/mcp/browser-tool-runtime'
 import type { Env } from '../types'
 
-export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
+export { BROWSEROS_TOOL_LEASE_HEADER }
 
-type CreateMcpServerFn = typeof createMcpServer
 type CreateMcpTransportFn = (
   options: ConstructorParameters<
     typeof WebStandardStreamableHTTPServerTransport
@@ -31,90 +30,41 @@ type CreateMcpTransportFn = (
 ) => InstanceType<typeof WebStandardStreamableHTTPServerTransport>
 
 interface McpRouteDeps {
-  version: string
-  browserSession: BrowserSession
-  klavis?: KlavisService
-  createMcpServer?: CreateMcpServerFn
+  runtime: Pick<BrowserToolRuntime, 'createMcpServer' | 'hasLease'>
   createMcpTransport?: CreateMcpTransportFn
-  activity?: ServerActivity
 }
 
 interface McpRequestLogContext extends Record<string, unknown> {
-  scopeId: string
-  selectedServerNames: string[]
-  selectedServerCount: number
-  defaultWindowId?: number
-  defaultTabGroupId?: string
-}
-
-function parseOptionalNumber(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined
-  const n = Number(value)
-  // CDP window ids are integers; `Number.isFinite('1.5')` would be true
-  // and silently route to a non-integer that CDP rejects with an opaque
-  // protocol error. Require an integer at the parse boundary.
-  return Number.isInteger(n) ? n : undefined
-}
-
-/** Parses the internal ACP managed-connector scope header. */
-export function parseManagedMcpServersHeader(
-  value: string | undefined,
-): string[] {
-  if (!value?.trim()) {
-    return []
-  }
-  const out: string[] = []
-  for (const part of value.split(',')) {
-    if (!part) continue
-    try {
-      const decoded = decodeURIComponent(part)
-      if (decoded) {
-        out.push(decoded)
-      }
-    } catch {
-      return []
-    }
-  }
-  return out
+  leased: boolean
+  requestedReadOnly: boolean
+  includeStructuredContent: boolean
 }
 
 /** Creates the Hono routes that expose BrowserOS as a request-scoped MCP server. */
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
   app.use('/*', rejectBrowserFetch())
-  const makeMcpServer = deps.createMcpServer ?? createMcpServer
   const makeMcpTransport =
     deps.createMcpTransport ??
     ((options) => new WebStandardStreamableHTTPServerTransport(options))
 
-  // Reads the per-request BrowserOS scope from headers + query. Used by the
-  // POST handler (metrics/logging on every request, including rejected ones)
-  // and by the factory (per-request server construction).
+  // The URL selects response/catalog shape. Conversation permissions and
+  // mutable context are resolved from the opaque, server-owned lease.
   function readScope(req: Request) {
     const url = new URL(req.url)
-    const scopeId = req.headers.get('X-BrowserOS-Scope-Id') || 'ephemeral'
+    const leaseToken =
+      req.headers.get(BROWSEROS_TOOL_LEASE_HEADER)?.trim() || undefined
     const includeStructuredContent = url.searchParams.get('structured') === '1'
-    const defaultWindowId = parseOptionalNumber(
-      req.headers.get('X-BrowserOS-Default-Window-Id') ?? undefined,
-    )
-    const defaultTabGroupId =
-      req.headers.get('X-BrowserOS-Default-Tab-Group-Id') ?? undefined
-    const selectedServerNames = parseManagedMcpServersHeader(
-      req.headers.get(MANAGED_MCP_SERVERS_HEADER) ?? undefined,
-    )
+    const requestedReadOnly = url.searchParams.get('read_only') === '1'
     const logContext: McpRequestLogContext = {
-      scopeId,
-      selectedServerNames,
-      selectedServerCount: selectedServerNames.length,
-      defaultWindowId,
-      defaultTabGroupId,
+      leased: leaseToken !== undefined,
+      requestedReadOnly,
+      includeStructuredContent,
     }
     return {
-      scopeId,
+      leaseToken,
       includeStructuredContent,
-      defaultWindowId,
-      defaultTabGroupId,
-      selectedServerNames,
+      requestedReadOnly,
       logContext,
     }
   }
@@ -126,20 +76,14 @@ export function createMcpRoutes(deps: McpRouteDeps) {
     const scope = ctx.requestInfo
       ? readScope(ctx.requestInfo)
       : {
+          leaseToken: undefined,
           includeStructuredContent: false,
-          defaultWindowId: undefined,
-          defaultTabGroupId: undefined,
-          selectedServerNames: [] as string[],
+          requestedReadOnly: false,
         }
-    return makeMcpServer({
-      version: deps.version,
-      browserSession: deps.browserSession,
-      klavis: deps.klavis,
-      connectorScope: { selectedServerNames: scope.selectedServerNames },
-      defaultWindowId: scope.defaultWindowId,
-      defaultTabGroupId: scope.defaultTabGroupId,
+    return deps.runtime.createMcpServer({
+      leaseToken: scope.leaseToken,
+      requestedReadOnly: scope.requestedReadOnly,
       includeStructuredContent: scope.includeStructuredContent,
-      activity: deps.activity,
     })
   }
 
@@ -158,8 +102,23 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
   app.post('/', async (c) => {
     const raw = c.req.raw
-    const { scopeId, logContext } = readScope(raw)
-    metrics.log('mcp.request', { scopeId })
+    const { leaseToken, logContext } = readScope(raw)
+    if (leaseToken && !deps.runtime.hasLease(leaseToken)) {
+      logger.warn('MCP request rejected for invalid lease', logContext)
+      return c.json(
+        {
+          jsonrpc: '2.0',
+          error: {
+            code: -32001,
+            message: 'Invalid or expired BrowserOS tool lease',
+          },
+          id: null,
+        },
+        401,
+      )
+    }
+
+    metrics.log('mcp.request', { leased: leaseToken !== undefined })
     logger.debug('MCP request received', logContext)
 
     try {
@@ -193,7 +152,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
     } catch (error) {
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
-        scope.setTag('scopeId', scopeId)
+        scope.setTag('leased', leaseToken !== undefined)
         Sentry.captureException(error)
       })
       logger.error('Error handling MCP request', {

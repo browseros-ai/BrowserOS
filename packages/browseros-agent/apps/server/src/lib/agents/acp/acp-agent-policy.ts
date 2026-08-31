@@ -21,6 +21,8 @@ export interface BuildAcpAgentPolicyInput {
   agent: AcpAgentDefinition
   conversationId: string
   serverPort: number
+  browserToolLeaseToken: string
+  readOnly: boolean
   browserContext?: BrowserContext
   resourcesDir?: string | null
   browserosDir?: string | null
@@ -64,7 +66,8 @@ export async function buildAcpAgentPolicy(
     agentRegistryOverrides: { [adapter]: launcher.argv },
     mcpServers: buildAcpMcpServers({
       serverPort: input.serverPort,
-      conversationId: input.conversationId,
+      browserToolLeaseToken: input.browserToolLeaseToken,
+      readOnly: input.readOnly,
       browserContext: input.browserContext,
     }),
     sessionOptions: buildSessionOptions(input.agent, skill),

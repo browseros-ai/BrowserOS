@@ -24,7 +24,11 @@ import {
   type ConnectKlavisStrataSessionDeps,
   connectKlavisStrataSession,
 } from './strata-session'
-import { buildKlavisToolSet, registerKlavisTools } from './tool-adapters'
+import {
+  buildKlavisToolSet,
+  type KlavisMcpRegistrationOptions,
+  registerKlavisTools,
+} from './tool-adapters'
 import type {
   ConnectorConnectionIntent,
   ConnectorInventory,
@@ -185,7 +189,11 @@ export class KlavisService {
     return buildKlavisToolSet(this.toolAdapterDeps(scope))
   }
 
-  registerMcpTools(server: McpServer, scope: ConnectorToolScope = {}): void {
+  registerMcpTools(
+    server: McpServer,
+    scope: ConnectorToolScope = {},
+    options: KlavisMcpRegistrationOptions = {},
+  ): void {
     if (!this.browserosId) {
       logger.debug('Skipping Klavis MCP tools registration', {
         reason: 'missing_browseros_id',
@@ -198,7 +206,7 @@ export class KlavisService {
       selectedServers: selectedServerNames(scope),
       sessionToolCount: this.session?.tools.length ?? 0,
     })
-    registerKlavisTools(server, this.toolAdapterDeps(scope))
+    registerKlavisTools(server, this.toolAdapterDeps(scope), options)
   }
 
   private async attemptConnect(attemptIndex: number): Promise<void> {

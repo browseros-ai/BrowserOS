@@ -41,6 +41,7 @@ const SKILL = [
 ].join('\n')
 
 const temporaryDirectories: string[] = []
+const BROWSER_TOOL_LEASE_TOKEN = 'runtime-test-lease'
 
 afterEach(async () => {
   await Promise.all(
@@ -121,6 +122,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-1',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'say hello')],
         browserContext: { windowId: 7 },
         abortSignal: abortController.signal,
@@ -150,8 +153,7 @@ describe('AcpAgentRuntime', () => {
           name: 'browseros',
           url: 'http://127.0.0.1:9100/mcp',
           headers: {
-            'X-BrowserOS-Scope-Id': 'conversation-1',
-            'X-BrowserOS-Default-Window-Id': '7',
+            'X-BrowserOS-Internal-Lease': BROWSER_TOOL_LEASE_TOKEN,
           },
         },
       ],
@@ -192,6 +194,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-2',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: initialMessages,
       }),
     )
@@ -199,6 +203,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-2',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           ...initialMessages,
           textMessage('assistant-2', 'assistant', 'first answer'),
@@ -261,6 +267,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'legacy-conversation',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           textMessage('user-old', 'user', 'previous UI prompt'),
           textMessage('assistant-old', 'assistant', 'previous UI answer'),
@@ -292,6 +300,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-3',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'work')],
       }),
     )
@@ -321,6 +331,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-text-file',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           {
             id: 'user-1',
@@ -356,6 +368,8 @@ describe('AcpAgentRuntime', () => {
       fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-4',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     ).rejects.toBeInstanceOf(AcpAgentPreparationError)
@@ -384,6 +398,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-turn-failure',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )
@@ -403,6 +419,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-5',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )
@@ -425,6 +443,8 @@ describe('AcpAgentRuntime', () => {
     const input = {
       agent: fixture.agent,
       conversationId: 'conversation-6',
+      browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+      readOnly: false,
       messages: [textMessage('user-1', 'user', 'hello')],
     }
     const firstStream = await fixture.runtime.stream(input)
@@ -453,6 +473,8 @@ describe('AcpAgentRuntime', () => {
         await fixture.runtime.stream({
           agent: fixture.agent,
           conversationId,
+          browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+          readOnly: false,
           messages: [textMessage(`user-${conversationId}`, 'user', 'hello')],
         }),
       )
@@ -475,6 +497,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-9',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )

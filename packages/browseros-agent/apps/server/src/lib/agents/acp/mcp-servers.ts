@@ -6,12 +6,14 @@
 
 import type { AcpxMcpServerConfig } from '@browseros/acpx-ai-provider'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
+import { BROWSEROS_TOOL_LEASE_HEADER } from '../../browser-tool-lease'
 
 const BROWSEROS_MCP_NAME = 'browseros'
 
 export interface BuildAcpMcpServersInput {
   serverPort: number
-  conversationId: string
+  browserToolLeaseToken: string
+  readOnly: boolean
   browserContext?: BrowserContext
 }
 
@@ -19,23 +21,16 @@ export function buildAcpMcpServers(
   input: BuildAcpMcpServersInput,
 ): AcpxMcpServerConfig[] {
   const headers: Record<string, string> = {
-    'X-BrowserOS-Scope-Id': input.conversationId,
+    [BROWSEROS_TOOL_LEASE_HEADER]: input.browserToolLeaseToken,
   }
   const browserContext = input.browserContext
-
-  if (browserContext?.windowId !== undefined) {
-    headers['X-BrowserOS-Default-Window-Id'] = String(browserContext.windowId)
-  }
-  if (browserContext?.enabledMcpServers?.length) {
-    headers['X-BrowserOS-Managed-Mcp-Servers'] =
-      browserContext.enabledMcpServers.map(encodeURIComponent).join(',')
-  }
+  const readOnlyQuery = input.readOnly ? '?read_only=1' : ''
 
   const servers: AcpxMcpServerConfig[] = [
     {
       type: 'http',
       name: BROWSEROS_MCP_NAME,
-      url: `http://127.0.0.1:${input.serverPort}/mcp`,
+      url: `http://127.0.0.1:${input.serverPort}/mcp${readOnlyQuery}`,
       headers,
     },
   ]

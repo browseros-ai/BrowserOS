@@ -1,12 +1,15 @@
 import type { BrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
+import type { BrowserToolLease } from '../api/services/mcp/browser-tool-runtime'
 import { logger } from '../lib/logger'
 import type { AiSdkAgent } from './ai-sdk-agent'
 
 export interface AgentSession {
   agent: AiSdkAgent
+  /** Revoked with the session so stale loopback clients cannot regain access. */
+  browserToolLease: BrowserToolLease
   scheduledPageId?: number
-  /** Browser context scoped to the scheduled background page. */
+  /** Latest resolved browser context used by the conversation's tool lease. */
   browserContext?: BrowserContext
   /** MCP server names used when the session was created, for change detection. */
   mcpServerKey?: string
@@ -60,8 +63,11 @@ export class SessionStore {
     const session = this.sessions.get(conversationId)
     if (!session) return false
 
-    await session.agent.dispose()
+    // Revoke and detach before asynchronous client cleanup so a slow MCP close
+    // cannot leave an otherwise-deleted capability usable.
+    session.browserToolLease.revoke()
     this.sessions.delete(conversationId)
+    await session.agent.dispose()
     logger.info('Session deleted', {
       conversationId,
       remainingSessions: this.sessions.size,

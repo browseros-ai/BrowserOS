@@ -1,6 +1,6 @@
 import type { Browser } from '@browseros/browser-core/browser'
-import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { zValidator } from '@hono/zod-validator'
+import { createUIMessageStreamResponse } from 'ai'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
 import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
@@ -8,7 +8,13 @@ import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
+import type { ConversationHub } from '../services/conversation-hub'
+import type {
+  ConversationPresence,
+  ConversationPresenceEvent,
+} from '../services/conversation-presence'
 import type { KlavisService } from '../services/klavis'
+import type { BrowserToolRuntime } from '../services/mcp/browser-tool-runtime'
 import type { ServerActivity } from '../services/server-activity'
 import {
   type BrowserOsChatRequest,
@@ -21,7 +27,7 @@ import { ConversationIdParamSchema } from '../utils/validation'
 
 interface ChatRouteDeps {
   browser: Browser
-  browserSession: BrowserSession
+  browserToolRuntime: BrowserToolRuntime
   browserosId?: string
   klavis?: KlavisService
   aiSdkDevtoolsEnabled?: boolean
@@ -29,9 +35,14 @@ interface ChatRouteDeps {
   resourcesDir?: string | null
   activity?: ServerActivity
   acpRuntime?: AcpAgentRuntime
+  conversationHub?: ConversationHub
+  conversationPresence?: ConversationPresence
 }
 
-export function createChatRoutes(deps: ChatRouteDeps) {
+// /chat deliberately exposes a plain Hono type. Its AI SDK stream payloads are
+// not an RPC contract, and carrying every inferred route through the root app
+// exceeds TypeScript's instantiation depth.
+export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
   const { browserosId } = deps
 
   const sessionStore = new SessionStore()
@@ -39,85 +50,148 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     sessionStore,
     klavis: deps.klavis,
     browser: deps.browser,
-    browserSession: deps.browserSession,
+    browserToolRuntime: deps.browserToolRuntime,
     browserosId,
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
     activity: deps.activity,
     acpRuntime: deps.acpRuntime,
+    conversationHub: deps.conversationHub,
+    conversationPresence: deps.conversationPresence,
   })
 
-  return new Hono<Env>()
-    .post('/', zValidator('json', ChatRequestSchema), async (c) => {
-      const request = c.req.valid('json')
-      const browserRequest = isBrowserOsChatRequest(request) ? request : null
-      if (!browserRequest && !isTrustedAppRequest(c)) {
+  const app = new Hono<Env>()
+  app.post('/', zValidator('json', ChatRequestSchema), async (c) => {
+    const request = c.req.valid('json')
+    const browserRequest = isBrowserOsChatRequest(request) ? request : null
+    if (!browserRequest && !isTrustedAppRequest(c)) {
+      return c.json({ error: 'Forbidden' }, 403)
+    }
+    const provider = browserRequest?.provider ?? request.target.type
+    const model = browserRequest?.model
+    const baseUrl = browserRequest?.baseUrl
+
+    Sentry.getCurrentScope().setTag(
+      'request-type',
+      request.isScheduledTask ? 'schedule' : 'chat',
+    )
+    Sentry.setContext('request', {
+      provider,
+      model,
+      baseUrl: baseUrl
+        ? (() => {
+            try {
+              return new URL(baseUrl).origin
+            } catch {
+              return undefined
+            }
+          })()
+        : undefined,
+    })
+
+    metrics.log('chat.request', {
+      provider,
+      model,
+    })
+
+    logger.info('Chat request received', {
+      conversationId: request.conversationId,
+      provider,
+      model,
+    })
+
+    return service.processMessage(request, c.req.raw.signal)
+  })
+  app.get('/presence', (c) => {
+    if (!isTrustedAppRequest(c)) {
+      return c.json({ error: 'Forbidden' }, 403)
+    }
+    return presenceEventResponse(service.subscribePresence())
+  })
+  app.get(
+    '/:conversationId/state',
+    zValidator('param', ConversationIdParamSchema),
+    (c) => {
+      const { conversationId } = c.req.valid('param')
+      const snapshot = service.getRunSnapshot(conversationId)
+      if (!snapshot) return c.json({ error: 'Conversation not found' }, 404)
+      c.header('Cache-Control', 'no-store')
+      return c.json(snapshot)
+    },
+  )
+  app.get(
+    '/:conversationId/stream',
+    zValidator('param', ConversationIdParamSchema),
+    (c) => {
+      const { conversationId } = c.req.valid('param')
+      // The run may finish after a panel hydrates `state` but before this GET.
+      // Completed records still replay their buffered chunks, closing that race
+      // without making the panel reconstruct an assistant message itself.
+      const stream = service.subscribe(conversationId)
+      return stream
+        ? createUIMessageStreamResponse({ stream })
+        : new Response(null, { status: 204 })
+    },
+  )
+  app.post(
+    '/:conversationId/stop',
+    zValidator('param', ConversationIdParamSchema),
+    async (c) => {
+      const { conversationId } = c.req.valid('param')
+      return c.json({ stopped: await service.stop(conversationId) })
+    },
+  )
+  app.delete(
+    '/:conversationId',
+    zValidator('param', ConversationIdParamSchema),
+    async (c) => {
+      const { conversationId } = c.req.valid('param')
+      if (service.isAcpSession(conversationId) && !isTrustedAppRequest(c)) {
         return c.json({ error: 'Forbidden' }, 403)
       }
-      const provider = browserRequest?.provider ?? request.target.type
-      const model = browserRequest?.model
-      const baseUrl = browserRequest?.baseUrl
+      const result = await service.deleteSession(conversationId)
 
-      Sentry.getCurrentScope().setTag(
-        'request-type',
-        request.isScheduledTask ? 'schedule' : 'chat',
+      if (result.deleted) {
+        return c.json({
+          success: true,
+          message: `Session ${conversationId} deleted`,
+          sessionCount: result.sessionCount,
+        })
+      }
+
+      return c.json(
+        { success: false, message: `Session ${conversationId} not found` },
+        404,
       )
-      Sentry.setContext('request', {
-        provider,
-        model,
-        baseUrl: baseUrl
-          ? (() => {
-              try {
-                return new URL(baseUrl).origin
-              } catch {
-                return undefined
-              }
-            })()
-          : undefined,
-      })
-
-      metrics.log('chat.request', {
-        provider,
-        model,
-      })
-
-      logger.info('Chat request received', {
-        conversationId: request.conversationId,
-        provider,
-        model,
-      })
-
-      return service.processMessage(request, c.req.raw.signal)
-    })
-    .delete(
-      '/:conversationId',
-      zValidator('param', ConversationIdParamSchema),
-      async (c) => {
-        const { conversationId } = c.req.valid('param')
-        if (service.isAcpSession(conversationId) && !isTrustedAppRequest(c)) {
-          return c.json({ error: 'Forbidden' }, 403)
-        }
-        const result = await service.deleteSession(conversationId)
-
-        if (result.deleted) {
-          return c.json({
-            success: true,
-            message: `Session ${conversationId} deleted`,
-            sessionCount: result.sessionCount,
-          })
-        }
-
-        return c.json(
-          { success: false, message: `Session ${conversationId} not found` },
-          404,
-        )
-      },
-    )
+    },
+  )
+  return app
 }
 
 function isBrowserOsChatRequest(
   request: ChatRequest,
 ): request is BrowserOsChatRequest {
   return request.target.type === 'browseros'
+}
+
+/** Encodes the background-only presence feed as reconnectable SSE. */
+function presenceEventResponse(
+  stream: ReadableStream<ConversationPresenceEvent>,
+): Response {
+  const encoder = new TextEncoder()
+  const body = stream.pipeThrough(
+    new TransformStream<ConversationPresenceEvent, Uint8Array>({
+      transform(event, controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+      },
+    }),
+  )
+  return new Response(body, {
+    headers: {
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'Content-Type': 'text/event-stream',
+    },
+  })
 }

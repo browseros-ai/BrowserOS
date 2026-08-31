@@ -6,12 +6,10 @@ import {
   realpathSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { registerBrowserTools } from '@browseros/browser-mcp/register'
 import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 import {
@@ -26,10 +24,6 @@ import {
 } from '@browseros/browser-mcp/tools/framework'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { z } from 'zod'
-import { CHAT_MODE_ALLOWED_TOOLS } from '../../../src/agent/chat-mode'
-import { buildBrowserToolSet } from '../../../src/agent/tool-adapter'
-import { logger } from '../../../src/lib/logger'
-import { createReadTool } from '../../../src/tools/filesystem/read'
 
 type RegisteredHandler = (args: Record<string, unknown>) => Promise<{
   content: unknown
@@ -1792,233 +1786,7 @@ return 'late'
   })
 })
 
-describe('buildBrowserToolSet', () => {
-  it('builds the compact browser tool surface', () => {
-    const session = { pages: {} } as unknown as BrowserSession
-    const tools = buildBrowserToolSet(session)
-
-    expect(tools.tabs).toBeDefined()
-    expect(tools.new_page).toBeUndefined()
-    expect(Object.keys(tools)).toEqual(BROWSER_TOOLS.map((t) => t.name))
-  })
-
-  it('records generated output paths from AI SDK browser tools', async () => {
-    await withBrowserosDir(async () => {
-      const outputFileAccess = createBrowserOutputFileAccess()
-      const largeText = 'x'.repeat(
-        TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS + 1,
-      )
-      const session = {
-        pages: {
-          getSession: async () => ({
-            session: {
-              Runtime: {
-                evaluate: async () => ({ result: { value: largeText } }),
-              },
-            },
-          }),
-          getInfo: () => ({ url: 'https://example.com' }),
-        },
-      } as unknown as BrowserSession
-      const tools = buildBrowserToolSet(session, { outputFileAccess })
-
-      const result = await tools.read.execute?.({ page: 1, format: 'text' }, {
-        abortSignal: new AbortController().signal,
-      } as never)
-      const text =
-        (result as { content?: Array<{ type: string; text: string }> }).content
-          ?.filter((item) => item.type === 'text')
-          .map((item) => item.text)
-          .join('\n') ?? ''
-      const savedPath = text.match(/saved to: (.+\.txt)/)?.[1]
-
-      expect(savedPath).toBeTruthy()
-      await expectBrowserToolOutputPath(savedPath)
-      expect(outputFileAccess.paths.has(savedPath ?? '')).toBe(true)
-    })
-  })
-
-  it('allows no-workspace filesystem readback for AI SDK downloads', async () => {
-    await withBrowserosDir(async () => {
-      const outputFileAccess = createBrowserOutputFileAccess()
-      const behaviors: string[] = []
-      const clicks: string[] = []
-      let downloadDir = ''
-      type DownloadHandler = (params: Record<string, unknown>) => void
-      const handlers: Record<string, DownloadHandler> = {}
-      const session = {
-        input: () => ({
-          click: async (ref: string) => {
-            clicks.push(ref)
-            writeFileSync(
-              join(downloadDir, 'report.csv'),
-              'name,value\nbrowseros,1\n',
-            )
-            handlers.downloadWillBegin?.({
-              guid: 'g1',
-              suggestedFilename: 'report.csv',
-            })
-            handlers.downloadProgress?.({ guid: 'g1', state: 'completed' })
-          },
-        }),
-        pages: {
-          getSession: async () => ({
-            session: {
-              Page: {
-                setDownloadBehavior: async (params: {
-                  behavior: string
-                  downloadPath?: string
-                }) => {
-                  behaviors.push(params.behavior)
-                  if (params.downloadPath) downloadDir = params.downloadPath
-                },
-                on: (event: string, handler: DownloadHandler) => {
-                  handlers[event] = handler
-                  return () => {
-                    delete handlers[event]
-                  }
-                },
-              },
-            },
-          }),
-        },
-      } as unknown as BrowserSession
-      const tools = buildBrowserToolSet(session, { outputFileAccess })
-      const readTool = createReadTool(undefined, {
-        allowedOutputPaths: outputFileAccess.paths,
-      }) as unknown as {
-        execute(params: Record<string, unknown>): Promise<{ text: string }>
-      }
-
-      const downloadResult = await tools.download.execute?.(
-        { page: 1, ref: 'e12' },
-        { abortSignal: new AbortController().signal } as never,
-      )
-      const text =
-        (
-          downloadResult as { content?: Array<{ type: string; text: string }> }
-        ).content
-          ?.filter((item) => item.type === 'text')
-          .map((item) => item.text)
-          .join('\n') ?? ''
-      const savedPath = text.match(/to: (.+report\.csv)/)?.[1]
-      const readResult = await readTool.execute({ path: savedPath })
-
-      expect(clicks).toEqual(['e12'])
-      expect(behaviors).toEqual(['allow', 'default'])
-      expect(savedPath).toBeTruthy()
-      expect(outputFileAccess.paths.has(savedPath ?? '')).toBe(true)
-      expect(readResult.text).toContain('[UNTRUSTED_PAGE_CONTENT')
-      expect(readResult.text).toContain('[END_UNTRUSTED_PAGE_CONTENT')
-      expect(readResult.text).toContain('browseros,1')
-    })
-  })
-
-  it('allows chat mode to read tabs without allowing tab mutation', async () => {
-    expect(CHAT_MODE_ALLOWED_TOOLS.has('tabs')).toBe(true)
-    const calls: string[] = []
-    const activePage = {
-      pageId: 1,
-      targetId: 'target-1',
-      tabId: 11,
-      url: 'https://example.com',
-      title: 'Example',
-      isActive: true,
-      isLoading: false,
-      loadProgress: 1,
-      isPinned: false,
-    }
-    const session = {
-      pages: {
-        list: async () => [activePage],
-        getActive: async () => activePage,
-        newPage: async () => {
-          calls.push('newPage')
-          return 2
-        },
-      },
-    } as unknown as BrowserSession
-    const tools = buildBrowserToolSet(session, { readOnly: true })
-
-    const listResult = await tools.tabs.execute?.({ action: 'list' }, {
-      abortSignal: new AbortController().signal,
-    } as never)
-    const activeResult = await tools.tabs.execute?.({ action: 'active' }, {
-      abortSignal: new AbortController().signal,
-    } as never)
-    const newResult = await tools.tabs.execute?.(
-      { action: 'new', url: 'https://example.com' },
-      { abortSignal: new AbortController().signal } as never,
-    )
-
-    expect(listResult).toMatchObject({ isError: false })
-    expect(activeResult).toMatchObject({ isError: false })
-    expect(newResult).toMatchObject({ isError: true })
-    expect(calls).toEqual([])
-  })
-
-  it('logs browser chat returned errors without raw result text', async () => {
-    const originalInfo = logger.info
-    const infoLogs: Array<{ message: string; meta?: Record<string, unknown> }> =
-      []
-    logger.info = ((message: string, meta?: Record<string, unknown>) => {
-      infoLogs.push({ message, meta })
-    }) as typeof logger.info
-
-    try {
-      const tools = buildBrowserToolSet(
-        { pages: {} } as unknown as BrowserSession,
-        { readOnly: true },
-      )
-      const result = await tools.tabs.execute?.(
-        { action: 'new', url: 'https://example.com' },
-        { abortSignal: new AbortController().signal } as never,
-      )
-
-      expect(result).toMatchObject({ isError: true })
-      expect(JSON.stringify(infoLogs)).not.toContain('chat mode only supports')
-      expect(
-        infoLogs.find(
-          (log) => log.message === 'Browser chat tool returned error',
-        ),
-      ).toEqual(
-        expect.objectContaining({
-          meta: expect.objectContaining({
-            toolName: 'tabs',
-            source: 'chat',
-            errorSummary: expect.objectContaining({
-              contentCount: expect.any(Number),
-              textBlockCount: expect.any(Number),
-              textLength: expect.any(Number),
-              lineCount: expect.any(Number),
-            }),
-          }),
-        }),
-      )
-    } finally {
-      logger.info = originalInfo
-    }
-  })
-
-  it('propagates AI SDK abort signals into browser tools', async () => {
-    const session = { pages: {} } as unknown as BrowserSession
-    const tools = buildBrowserToolSet(session)
-    const controller = new AbortController()
-    controller.abort(new Error('cancelled'))
-
-    let caught: unknown
-    try {
-      await tools.wait.execute?.({ page: 1, for: 'time', value: '1000' }, {
-        abortSignal: controller.signal,
-      } as never)
-    } catch (error) {
-      caught = error
-    }
-
-    expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toBe('cancelled')
-  })
-
+describe('executeTool cancellation', () => {
   it('stops awaiting in-flight browser tools when aborted', async () => {
     const slowTool = defineTool({
       name: 'slow',

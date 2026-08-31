@@ -3,7 +3,6 @@ import type {
   LanguageModelV4,
   LanguageModelV4Middleware,
 } from '@ai-sdk/provider'
-import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
   type BrowserOutputFileAccess,
   createBrowserOutputFileAccess,
@@ -19,14 +18,16 @@ import {
   type UIMessage,
   wrapLanguageModel,
 } from 'ai'
-import type { KlavisService } from '../api/services/klavis'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
 import { createReadTool } from '../tools/filesystem/read'
-import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
-import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
+import {
+  buildInternalBrowserMcpSpec,
+  buildMcpServerSpecs,
+  createMcpClients,
+} from './mcp-builder'
 import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
@@ -35,14 +36,13 @@ import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
 import { buildAgentReasoningConfig } from './reasoning-config'
-import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
 export interface AiSdkAgentConfig {
   resolvedConfig: ResolvedAgentConfig
-  browserSession: BrowserSession
+  serverPort: number
+  browserToolLeaseToken: string
   browserContext?: BrowserContext
-  klavis?: KlavisService
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
   outputFileAccess?: BrowserOutputFileAccess
@@ -161,202 +161,201 @@ export class AiSdkAgent {
     const outputFileAccess =
       config.outputFileAccess ?? createBrowserOutputFileAccess()
 
-    const allBrowserTools = buildBrowserToolSet(config.browserSession, {
-      readOnly: config.resolvedConfig.chatMode,
-      outputFileAccess,
-    })
-    const reservedBrowserToolNames = new Set(Object.keys(allBrowserTools))
-    const chatModeAllowedTools = CHAT_MODE_ALLOWED_TOOLS
-    const browserTools = config.resolvedConfig.chatMode
-      ? Object.fromEntries(
-          Object.entries(allBrowserTools).filter(([name]) =>
-            chatModeAllowedTools.has(name),
-          ),
-        )
-      : allBrowserTools
-    if (config.resolvedConfig.chatMode) {
-      logger.info('Chat mode enabled, restricting to read-only browser tools', {
-        allowedTools: Array.from(chatModeAllowedTools),
+    const connectedMcpClients: Array<{ close(): Promise<void> }> = []
+    let clientsTransferred = false
+    try {
+      // BrowserOS tools and managed connectors use the same required loopback
+      // MCP path as ACP/external clients. This keeps guards, effects, metrics,
+      // and generated-output grants behind one server-owned seam.
+      const internalSpec = buildInternalBrowserMcpSpec({
+        serverPort: config.serverPort,
+        leaseToken: config.browserToolLeaseToken,
+        readOnly: config.resolvedConfig.chatMode ?? false,
       })
-    }
+      const internalMcp = await createMcpClients([internalSpec])
+      connectedMcpClients.push(...internalMcp.clients)
+      const reservedInternalToolNames = new Set(Object.keys(internalMcp.tools))
 
-    const klavisTools = config.klavis
-      ? config.klavis.buildAiSdkToolSet({
-          selectedServerNames: config.browserContext?.enabledMcpServers,
-        })
-      : {}
-
-    const specs = await buildMcpServerSpecs({
-      browserContext: config.browserContext,
-    })
-    const { clients, tools: customMcpTools } = await createMcpClients(specs)
-    const klavisCollidingToolNames = Object.keys(customMcpTools).filter(
-      (name) => name in klavisTools,
-    )
-    if (klavisCollidingToolNames.length > 0) {
-      logger.warn('Custom MCP tools override Klavis tools', {
-        toolNames: klavisCollidingToolNames,
+      const customSpecs = await buildMcpServerSpecs({
+        browserContext: config.browserContext,
       })
-    }
-    const rawExternalMcpTools = withoutReservedBrowserToolNames(
-      { ...klavisTools, ...customMcpTools },
-      reservedBrowserToolNames,
-    )
+      const customMcp = await createMcpClients(customSpecs)
+      connectedMcpClients.push(...customMcp.clients)
+      const rawExternalMcpTools = withoutReservedInternalToolNames(
+        customMcp.tools,
+        reservedInternalToolNames,
+      )
 
-    // Wrap external MCP tools (Klavis, custom) with metrics
-    const externalMcpTools: ToolSet = {}
-    for (const [name, t] of Object.entries(rawExternalMcpTools)) {
-      const originalExecute = t.execute
-      externalMcpTools[name] = {
-        ...t,
-        execute: originalExecute
-          ? async (
-              ...args: Parameters<NonNullable<typeof originalExecute>>
-            ) => {
-              const startTime = performance.now()
-              const logBase = {
-                toolName: name,
-                source: 'chat',
-                conversationId: config.resolvedConfig.conversationId,
-                provider: config.resolvedConfig.provider,
-              }
-              logger.debug('External MCP chat tool started', {
-                ...logBase,
-                args: summarizeToolInput(args[0]),
-              })
-              try {
-                const result = await originalExecute(...args)
-                const durationMs = Math.round(performance.now() - startTime)
-                const isError = toolResultIsError(result)
-                metrics.log('tool_executed', {
-                  tool_name: name,
-                  duration_ms: durationMs,
-                  success: !isError,
+      // Custom MCP servers remain outside BrowserToolRuntime, so their metrics
+      // stay at this adapter boundary. Managed connectors arrive through the
+      // internal MCP client and are already instrumented server-side.
+      const externalMcpTools: ToolSet = {}
+      for (const [name, t] of Object.entries(rawExternalMcpTools)) {
+        const originalExecute = t.execute
+        externalMcpTools[name] = {
+          ...t,
+          execute: originalExecute
+            ? async (
+                ...args: Parameters<NonNullable<typeof originalExecute>>
+              ) => {
+                const startTime = performance.now()
+                const logBase = {
+                  toolName: name,
                   source: 'chat',
-                })
-                logger.debug('External MCP chat tool completed', {
+                  conversationId: config.resolvedConfig.conversationId,
+                  provider: config.resolvedConfig.provider,
+                }
+                logger.debug('External MCP chat tool started', {
                   ...logBase,
-                  durationMs,
-                  isError,
+                  args: summarizeToolInput(args[0]),
                 })
-                if (isError) {
-                  logger.info('External MCP chat tool returned error', {
+                try {
+                  const result = await originalExecute(...args)
+                  const durationMs = Math.round(performance.now() - startTime)
+                  const isError = toolResultIsError(result)
+                  metrics.log('tool_executed', {
+                    tool_name: name,
+                    duration_ms: durationMs,
+                    success: !isError,
+                    source: 'chat',
+                  })
+                  logger.debug('External MCP chat tool completed', {
                     ...logBase,
                     durationMs,
-                    errorSummary: summarizeToolResultError(result),
+                    isError,
                   })
+                  if (isError) {
+                    logger.info('External MCP chat tool returned error', {
+                      ...logBase,
+                      durationMs,
+                      errorSummary: summarizeToolResultError(result),
+                    })
+                  }
+                  return result
+                } catch (error) {
+                  const errorText =
+                    error instanceof Error ? error.message : String(error)
+                  const durationMs = Math.round(performance.now() - startTime)
+                  metrics.log('tool_executed', {
+                    tool_name: name,
+                    duration_ms: durationMs,
+                    success: false,
+                    error_message: errorText,
+                    source: 'chat',
+                  })
+                  logger.info('External MCP chat tool threw', {
+                    ...logBase,
+                    durationMs,
+                    error: errorText,
+                  })
+                  throw error
                 }
-                return result
-              } catch (error) {
-                const errorText =
-                  error instanceof Error ? error.message : String(error)
-                const durationMs = Math.round(performance.now() - startTime)
-                metrics.log('tool_executed', {
-                  tool_name: name,
-                  duration_ms: durationMs,
-                  success: false,
-                  error_message: errorText,
-                  source: 'chat',
-                })
-                logger.info('External MCP chat tool threw', {
-                  ...logBase,
-                  durationMs,
-                  error: errorText,
-                })
-                throw error
               }
-            }
-          : undefined,
+            : undefined,
+        }
       }
-    }
 
-    const filesystemTools = buildAgentFilesystemToolSet(config.resolvedConfig, {
-      outputFileAccess,
-    })
-    const workspaceDirForPrompt =
-      !config.resolvedConfig.chatMode && 'filesystem_write' in filesystemTools
-        ? config.resolvedConfig.workingDir
-        : undefined
-    const tools = {
-      ...browserTools,
-      ...externalMcpTools,
-      ...filesystemTools,
-      ...buildNudgeToolSet(),
-    }
+      const filesystemTools = buildAgentFilesystemToolSet(
+        config.resolvedConfig,
+        {
+          outputFileAccess,
+        },
+      )
+      const workspaceDirForPrompt =
+        !config.resolvedConfig.chatMode && 'filesystem_write' in filesystemTools
+          ? config.resolvedConfig.workingDir
+          : undefined
+      const tools = {
+        ...internalMcp.tools,
+        ...externalMcpTools,
+        ...filesystemTools,
+        ...buildNudgeToolSet(),
+      }
 
-    if (
-      config.resolvedConfig.isScheduledTask ||
-      config.resolvedConfig.chatMode
-    ) {
-      delete tools.suggest_schedule
-      delete tools.suggest_app_connection
-    }
+      if (
+        config.resolvedConfig.isScheduledTask ||
+        config.resolvedConfig.chatMode
+      ) {
+        delete tools.suggest_schedule
+        delete tools.suggest_app_connection
+      }
 
-    // Build system prompt with optional section exclusions
-    const excludeSections: string[] = []
-    if (
-      config.resolvedConfig.isScheduledTask ||
-      config.resolvedConfig.chatMode
-    ) {
-      excludeSections.push('nudges')
-    }
-    const instructions = buildSystemPrompt({
-      userSystemPrompt: config.resolvedConfig.userSystemPrompt,
-      exclude: excludeSections,
-      isScheduledTask: config.resolvedConfig.isScheduledTask,
-      scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
-      workspaceDir: workspaceDirForPrompt,
-      chatMode: config.resolvedConfig.chatMode,
-      connectedApps: config.browserContext?.enabledMcpServers,
-      declinedApps: config.resolvedConfig.declinedApps,
-      origin: config.resolvedConfig.origin,
-      generatedOutputReadAvailable: 'filesystem_read' in filesystemTools,
-    })
-
-    // Configure compaction for context window management
-    const compactionPrepareStep = createCompactionPrepareStep({
-      contextWindow,
-    })
-    const normalizationOptions = getMessageNormalizationOptions(
-      config.resolvedConfig,
-    )
-    const prepareStep = async (options: {
-      messages: ModelMessage[]
-      steps: ReadonlyArray<StepWithUsage>
-      model: LanguageModel
-      runtimeContext: unknown
-    }) =>
-      compactionPrepareStep({
-        ...options,
-        messages: normalizeMessagesForModel(
-          options.messages,
-          normalizationOptions,
-        ),
+      // Build system prompt with optional section exclusions
+      const excludeSections: string[] = []
+      if (
+        config.resolvedConfig.isScheduledTask ||
+        config.resolvedConfig.chatMode
+      ) {
+        excludeSections.push('nudges')
+      }
+      const instructions = buildSystemPrompt({
+        userSystemPrompt: config.resolvedConfig.userSystemPrompt,
+        exclude: excludeSections,
+        isScheduledTask: config.resolvedConfig.isScheduledTask,
+        scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
+        workspaceDir: workspaceDirForPrompt,
+        chatMode: config.resolvedConfig.chatMode,
+        connectedApps: config.browserContext?.enabledMcpServers,
+        declinedApps: config.resolvedConfig.declinedApps,
+        origin: config.resolvedConfig.origin,
+        generatedOutputReadAvailable: 'filesystem_read' in filesystemTools,
       })
 
-    const agent = new ToolLoopAgent({
-      model,
-      instructions,
-      tools,
-      stopWhen: [stepCountIs(AGENT_LIMITS.MAX_TURNS)],
-      prepareStep,
-      ...buildAgentReasoningConfig(config.resolvedConfig),
-    })
+      // Configure compaction for context window management
+      const compactionPrepareStep = createCompactionPrepareStep({
+        contextWindow,
+      })
+      const normalizationOptions = getMessageNormalizationOptions(
+        config.resolvedConfig,
+      )
+      const prepareStep = async (options: {
+        messages: ModelMessage[]
+        steps: ReadonlyArray<StepWithUsage>
+        model: LanguageModel
+        runtimeContext: unknown
+      }) =>
+        compactionPrepareStep({
+          ...options,
+          messages: normalizeMessagesForModel(
+            options.messages,
+            normalizationOptions,
+          ),
+        })
 
-    logger.info('Agent session created (v2)', {
-      conversationId: config.resolvedConfig.conversationId,
-      provider: config.resolvedConfig.provider,
-      model: config.resolvedConfig.model,
-      toolCount: Object.keys(tools).length,
-    })
+      const agent = new ToolLoopAgent({
+        model,
+        instructions,
+        tools,
+        stopWhen: [stepCountIs(AGENT_LIMITS.MAX_TURNS)],
+        prepareStep,
+        ...buildAgentReasoningConfig(config.resolvedConfig),
+      })
 
-    return new AiSdkAgent(
-      agent,
-      [],
-      clients,
-      config.resolvedConfig.conversationId,
-      new Set(Object.keys(tools)),
-    )
+      logger.info('Agent session created (v2)', {
+        conversationId: config.resolvedConfig.conversationId,
+        provider: config.resolvedConfig.provider,
+        model: config.resolvedConfig.model,
+        toolCount: Object.keys(tools).length,
+      })
+
+      const result = new AiSdkAgent(
+        agent,
+        [],
+        connectedMcpClients,
+        config.resolvedConfig.conversationId,
+        new Set(Object.keys(tools)),
+      )
+      clientsTransferred = true
+      return result
+    } finally {
+      // Before the AiSdkAgent is returned, this factory owns every connected
+      // transport. Close them if prompt/tool construction fails midway.
+      if (!clientsTransferred) {
+        await Promise.allSettled(
+          connectedMcpClients.map((client) => client.close()),
+        )
+      }
+    }
   }
 
   get toolLoopAgent(): ToolLoopAgent {
@@ -387,7 +386,7 @@ export class AiSdkAgent {
   }
 }
 
-function withoutReservedBrowserToolNames(
+function withoutReservedInternalToolNames(
   tools: ToolSet,
   reservedNames: Set<string>,
 ): ToolSet {
