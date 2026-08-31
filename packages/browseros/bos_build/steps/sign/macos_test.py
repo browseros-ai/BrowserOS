@@ -2,15 +2,19 @@
 """Tests for macOS app signing discovery."""
 
 import os
+import plistlib
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest import mock
 
 import yaml
 
 from ...core.context import Context
+from ...core.products import get_product_descriptor
 from ...lib.notarization import NOTARYTOOL_WAIT_TIMEOUT
 from . import macos as macos_module
 from .macos import (
@@ -42,6 +46,41 @@ def _env(**values):
     for name, value in values.items():
         setattr(env, name, value)
     return env
+
+
+PASSKEY_TEAM_ID = "8YMKWU47S5"
+PASSKEY_BUNDLE_ID = "com.browseros.BrowserOS"
+
+
+def _passkey_profile(
+    *,
+    team_id: str = PASSKEY_TEAM_ID,
+    bundle_id: str = PASSKEY_BUNDLE_ID,
+    browser_capability: bool = True,
+) -> dict:
+    """Return the allowlist shape Apple embeds in a provisioning profile."""
+    return {
+        "Entitlements": {
+            "com.apple.application-identifier": f"{team_id}.{bundle_id}",
+            "com.apple.developer.team-identifier": team_id,
+            "keychain-access-groups": [f"{team_id}.{bundle_id}.*"],
+            macos_module.BROWSER_PASSKEY_ENTITLEMENT: browser_capability,
+        }
+    }
+
+
+def _write_passkey_template(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "${CHROMIUM_TEAM_ID}.${CHROMIUM_BUNDLE_ID}"
+    payload = {
+        "com.apple.application-identifier": prefix,
+        "keychain-access-groups": [
+            f"{prefix}.{suffix}"
+            for suffix in macos_module.BROWSEROS_KEYCHAIN_GROUP_SUFFIXES
+        ],
+        macos_module.BROWSER_PASSKEY_ENTITLEMENT: True,
+    }
+    path.write_bytes(plistlib.dumps(payload))
 
 
 class MacOSSignDiscoveryTest(unittest.TestCase):
@@ -650,6 +689,191 @@ class SignComponentPerSliceTest(unittest.TestCase):
             self.assertEqual(
                 sorted(p.name for p in Path(tmp).iterdir()), ["tool"]
             )
+
+
+class BrowserOSPasskeySigningTest(unittest.TestCase):
+    def _context(self, root: Path, *, build_type: str = "release") -> Context:
+        return cast(
+            Context,
+            SimpleNamespace(
+                build_type=build_type,
+                chromium_src=root / "chromium",
+                env=_env(macos_browseros_passkey_profile_path=None),
+                product=get_product_descriptor("browseros"),
+                root_dir=root / "browseros",
+            ),
+        )
+
+    def test_profile_accepts_app_specific_wildcard_groups(self):
+        macos_module.validate_browseros_passkey_profile(
+            _passkey_profile(), PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
+        )
+
+    def test_profile_rejects_wrong_app_and_missing_managed_capability(self):
+        cases = (
+            (
+                _passkey_profile(bundle_id="com.example.Other"),
+                "application identifier",
+            ),
+            (_passkey_profile(browser_capability=False), "does not authorize"),
+        )
+        for profile, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RuntimeError, message):
+                    macos_module.validate_browseros_passkey_profile(
+                        profile, PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
+                    )
+
+    def test_release_preflight_rejects_team_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile_path = root / "BrowserOS.provisionprofile"
+            profile_path.write_bytes(b"profile")
+            ctx = self._context(root)
+            ctx.env = _env(
+                macos_browseros_passkey_profile_path=str(profile_path),
+                macos_notarization_team_id="WRONGTEAM1",
+            )
+            branding = (
+                ctx.root_dir
+                / "chromium_files"
+                / "products"
+                / "browseros"
+                / "chrome"
+                / "app"
+                / "theme"
+                / "chromium"
+                / "BRANDING.release"
+            )
+            branding.parent.mkdir(parents=True)
+            branding.write_text(f"MAC_TEAM_ID={PASSKEY_TEAM_ID}\n")
+
+            with (
+                mock.patch.object(
+                    macos_module,
+                    "decode_provisioning_profile",
+                    return_value=_passkey_profile(),
+                ),
+                self.assertRaisesRegex(
+                    macos_module.ValidationError, "does not match.*release branding"
+                ),
+            ):
+                MacOSSignModule().preflight(ctx)
+
+    def test_passkey_profile_is_required_only_for_browseros_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            debug_ctx = self._context(root, build_type="debug")
+            claw_ctx = self._context(root)
+            claw_ctx.product = get_product_descriptor("browserclaw")
+
+            MacOSSignModule().preflight(debug_ctx)
+            MacOSSignModule().preflight(claw_ctx)
+
+            with self.assertRaisesRegex(
+                macos_module.ValidationError,
+                macos_module.BROWSEROS_PASSKEY_PROFILE_ENV,
+            ):
+                MacOSSignModule().preflight(self._context(root))
+
+    def test_resolved_entitlements_embed_profile_and_resolve_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_path = root / "BrowserOS.app"
+            (app_path / "Contents").mkdir(parents=True)
+            profile_path = root / "BrowserOS.provisionprofile"
+            profile_path.write_bytes(b"profile payload")
+            template_path = root / "app-entitlements-browseros.plist"
+            _write_passkey_template(template_path)
+            inputs = macos_module.BrowserOSPasskeySigningInputs(
+                team_id=PASSKEY_TEAM_ID,
+                bundle_id=PASSKEY_BUNDLE_ID,
+                profile_path=profile_path,
+                entitlements_template=template_path,
+            )
+
+            with macos_module.resolved_app_entitlements(
+                app_path, root, None, inputs
+            ) as rendered_path:
+                self.assertIsNotNone(rendered_path)
+                assert rendered_path is not None
+                rendered = plistlib.loads(rendered_path.read_bytes())
+                macos_module.validate_browseros_passkey_entitlements(
+                    rendered,
+                    PASSKEY_TEAM_ID,
+                    PASSKEY_BUNDLE_ID,
+                    "test entitlements",
+                )
+                temporary_path = rendered_path
+
+            self.assertFalse(temporary_path.exists())
+            self.assertEqual(
+                (app_path / "Contents" / "embedded.provisionprofile").read_bytes(),
+                b"profile payload",
+            )
+
+    def test_compiled_framework_must_contain_the_signing_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = self._context(root)
+            app_path = root / "BrowserOS.app"
+            framework = (
+                app_path
+                / "Contents"
+                / "Frameworks"
+                / ctx.product.mac_framework_name(ctx.build_type)
+                / "Versions"
+                / "Current"
+                / "BrowserOS Framework"
+            )
+            framework.parent.mkdir(parents=True)
+            framework.write_bytes(
+                f"{PASSKEY_TEAM_ID}.{PASSKEY_BUNDLE_ID}.webauthn".encode()
+            )
+
+            macos_module.verify_compiled_browseros_passkey_identity(
+                app_path, ctx, PASSKEY_TEAM_ID
+            )
+            with self.assertRaisesRegex(RuntimeError, "WRONGTEAM1"):
+                macos_module.verify_compiled_browseros_passkey_identity(
+                    app_path, ctx, "WRONGTEAM1"
+                )
+
+    def test_post_sign_verification_checks_team_claims_and_embedded_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = self._context(root)
+            app_path = root / "BrowserOS.app"
+            profile_path = app_path / "Contents" / "embedded.provisionprofile"
+            profile_path.parent.mkdir(parents=True)
+            profile_path.write_bytes(b"profile")
+            claims = dict(_passkey_profile()["Entitlements"])
+            claims["keychain-access-groups"] = list(
+                macos_module.browseros_passkey_groups(
+                    PASSKEY_TEAM_ID, PASSKEY_BUNDLE_ID
+                )
+            )
+
+            def run(cmd, cwd=None, check=True):
+                if "--verbose=4" in cmd:
+                    return _completed(cmd, stdout=f"TeamIdentifier={PASSKEY_TEAM_ID}")
+                if "--entitlements" in cmd:
+                    return _completed(
+                        cmd, stdout=plistlib.dumps(claims).decode("utf-8")
+                    )
+                self.fail(f"unexpected command: {cmd}")
+
+            with (
+                mock.patch.object(macos_module, "run_command", run),
+                mock.patch.object(
+                    macos_module,
+                    "decode_provisioning_profile",
+                    return_value=_passkey_profile(),
+                ),
+            ):
+                macos_module.verify_browseros_passkey_signature(
+                    app_path, ctx, PASSKEY_TEAM_ID
+                )
 
 
 class VerifySignatureComponentTest(unittest.TestCase):

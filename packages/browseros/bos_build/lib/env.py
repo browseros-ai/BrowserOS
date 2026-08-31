@@ -24,6 +24,7 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
         "MACOS_CERTIFICATE_PWD",
         "MACOS_KEYCHAIN_PASSWORD",
         "POSTHOG_API_KEY",
+        "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
         "PROD_MACOS_NOTARIZATION_PWD",
         "R2_SECRET_ACCESS_KEY",
         "SENTRY_AUTH_TOKEN",
@@ -120,6 +121,11 @@ class EnvConfig:
     def macos_notarization_password(self) -> Optional[str]:
         """App-specific password for macOS notarization"""
         return os.environ.get("PROD_MACOS_NOTARIZATION_PWD")
+
+    @property
+    def macos_browseros_passkey_profile_path(self) -> Optional[str]:
+        """Developer ID profile authorizing BrowserOS platform passkeys."""
+        return os.environ.get("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH")
 
     @property
     def macos_keychain_password(self) -> Optional[str]:
