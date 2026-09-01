@@ -126,6 +126,7 @@ export class MockAcpRuntime implements AcpRuntime {
 
     return {
       requestId,
+      promptStarted: Promise.resolve(),
       events: eventIterable,
       result: script?.resultError
         ? Promise.reject(script.resultError)

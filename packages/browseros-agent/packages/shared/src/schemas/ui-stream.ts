@@ -188,31 +188,7 @@ const FileEventSchema: z.ZodObject<{
  * Zod schema for UIMessageStreamEvent validation.
  * The type is derived from this schema - single source of truth.
  */
-export const UIMessageStreamEventSchema: z.ZodDiscriminatedUnion<
-  'type',
-  [
-    typeof StartEventSchema,
-    typeof StartStepEventSchema,
-    typeof FinishStepEventSchema,
-    typeof FinishEventSchema,
-    typeof AbortEventSchema,
-    typeof ErrorEventSchema,
-    typeof TextStartEventSchema,
-    typeof TextDeltaEventSchema,
-    typeof TextEndEventSchema,
-    typeof ReasoningStartEventSchema,
-    typeof ReasoningDeltaEventSchema,
-    typeof ReasoningEndEventSchema,
-    typeof ToolInputStartEventSchema,
-    typeof ToolInputDeltaEventSchema,
-    typeof ToolInputAvailableEventSchema,
-    typeof ToolInputErrorEventSchema,
-    typeof ToolOutputAvailableEventSchema,
-    typeof ToolOutputErrorEventSchema,
-    typeof SourceUrlEventSchema,
-    typeof FileEventSchema,
-  ]
-> = z.discriminatedUnion('type', [
+export const UIMessageStreamEventSchema = z.discriminatedUnion('type', [
   StartEventSchema,
   StartStepEventSchema,
   FinishStepEventSchema,

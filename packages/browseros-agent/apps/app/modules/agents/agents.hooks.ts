@@ -33,7 +33,13 @@ function agentsClient(baseUrl: string) {
   return hc<AgentRoutes>(`${baseUrl}/agents`)
 }
 
-async function agentRequestError(response: Response): Promise<Error> {
+// Accept the minimal shape this reads rather than the full `Response`: the Hono
+// client returns a `ClientResponse`, which is not structurally the global
+// `Response` under the current lib types.
+async function agentRequestError(response: {
+  status: number
+  json: () => Promise<unknown>
+}): Promise<Error> {
   const body = (await response.json().catch(() => ({}))) as { error?: string }
   return new Error(
     body.error ?? `Request failed with status ${response.status}`,

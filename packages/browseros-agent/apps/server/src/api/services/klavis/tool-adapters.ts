@@ -249,8 +249,11 @@ function toV2InputSchema(rawShape: z.ZodRawShape) {
   // The bridged value is a StandardSchemaWithJSON; type it as a raw shape so
   // registerTool's overload and handler typing resolve as before. At runtime
   // v2 accepts the real object via the Standard Schema path.
+  // zod-to-json-schema is typed for Zod v3; under v4 its generic return type
+  // instantiates too deeply (TS2589), so call it through an `unknown` signature.
+  const toJsonSchema = zodToJsonSchema as (schema: unknown) => unknown
   return fromJsonSchema(
-    zodToJsonSchema(z.object(rawShape)) as never,
+    toJsonSchema(z.object(rawShape)) as never,
   ) as unknown as Record<string, never>
 }
 
