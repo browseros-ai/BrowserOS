@@ -24,8 +24,8 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
         Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, SubscriptionFilter, Tool,
-        ToolAnnotations,
+        MetaObject, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+        SubscriptionFilter, Tool, ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -52,7 +52,11 @@ const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
 const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
-const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.";
+/// `_meta` key the stateless session handle is returned under, per the MCP `_meta`
+/// convention (namespaced by owner). Clients read it from a tool result and echo it
+/// as the `session` argument on subsequent calls.
+const SESSION_META_KEY: &str = "com.browseros.neo/session";
+const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
@@ -972,15 +976,13 @@ fn attach_session_handle(
         return result;
     };
     result.map(|mut call_result| {
-        let handle = handle.to_string();
-        match &mut call_result.structured_content {
-            Some(Value::Object(map)) => {
-                map.insert("session".to_string(), Value::String(handle));
-            }
-            _ => {
-                call_result.structured_content = Some(json!({ "session": handle }));
-            }
-        }
+        // The stateless handle is transport identity, not tool output: return it in
+        // `_meta` so it never collides with a tool's `output_schema` and never
+        // overwrites the tool's structured content.
+        call_result.meta.get_or_insert_with(MetaObject::new).insert(
+            SESSION_META_KEY.to_string(),
+            Value::String(handle.to_string()),
+        );
         call_result
     })
 }
@@ -1113,7 +1115,10 @@ mod tests {
     }
 
     #[test]
-    fn attach_session_handle_adds_the_handle_only_for_modern_calls() -> anyhow::Result<()> {
+    fn attach_session_handle_puts_the_handle_in_meta_not_structured_content() -> anyhow::Result<()>
+    {
+        // The handle must ride in `_meta`, never in `structured_content`, so it cannot
+        // collide with a tool's output_schema or overwrite the tool's real result.
         let modern = attach_session_handle(
             Ok(CallToolResult::success(vec![
                 rmcp::model::ContentBlock::text("ok"),
@@ -1121,11 +1126,18 @@ mod tests {
             Some(SessionId::new("handle-xyz")),
         )
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let structured = modern
-            .structured_content
-            .ok_or_else(|| anyhow::anyhow!("modern result carries the session handle"))?;
-        assert_eq!(structured["session"], json!("handle-xyz"));
+        assert!(
+            modern.structured_content.is_none(),
+            "handle must not touch structured_content"
+        );
+        let handle = modern
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get(SESSION_META_KEY))
+            .and_then(Value::as_str);
+        assert_eq!(handle, Some("handle-xyz"));
 
+        // Legacy calls (no handle) get neither _meta nor structured_content touched.
         let legacy = attach_session_handle(
             Ok(CallToolResult::success(vec![
                 rmcp::model::ContentBlock::text("ok"),
@@ -1134,6 +1146,7 @@ mod tests {
         )
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert!(legacy.structured_content.is_none());
+        assert!(legacy.meta.is_none());
         Ok(())
     }
 
