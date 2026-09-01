@@ -322,7 +322,10 @@ async fn dispatch_tool_call_with(
         let cancellation = operator_cancellation_result();
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
-        return Ok(wire_result(cancellation, has_output_schema));
+        // The operator-cancellation envelope is a dispatch-layer error, not the tool's
+        // promised output, so it must stay content-only even for schema-bearing tools;
+        // forwarding its structured content would violate the tool's output_schema.
+        return Ok(wire_result(cancellation, false));
     }
     call.dispatch_cancel.cancel();
     call.cancel.cancel();
@@ -1146,6 +1149,16 @@ mod tests {
             kept.structured_content,
             Some(json!({ "ok": true, "logs": [] }))
         );
+    }
+
+    #[test]
+    fn wire_result_drops_operator_cancellation_structured_content_for_schema_bearing_tools() {
+        // A schema-bearing tool (e.g. `run`) cancelled mid-teardown must not forward the
+        // cancellation envelope's structured content: it does not match the tool's
+        // output_schema and a spec-compliant client would reject the whole result.
+        let wire = wire_result(operator_cancellation_result(), false);
+        assert_eq!(wire.is_error, Some(true));
+        assert_eq!(wire.structured_content, None);
     }
 
     #[tokio::test]
