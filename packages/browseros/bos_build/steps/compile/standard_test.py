@@ -127,12 +127,37 @@ class AutoninjaCommandTest(unittest.TestCase):
 
 
 class CompileModuleExecuteTest(unittest.TestCase):
+    def test_execute_builds_linux_sandbox_required_by_packaging(self):
+        ctx = mock.Mock()
+        ctx.out_dir = "out/Default_browseros_x64"
+        ctx.chromium_src = Path("/tmp/chromium-src")
+        with (
+            mock.patch.object(standard, "run_command") as run_cmd,
+            mock.patch.object(standard, "IS_LINUX", return_value=True),
+            mock.patch.object(standard, "IS_WINDOWS", return_value=False),
+            mock.patch.object(standard.CompileModule, "_create_version_file"),
+            mock.patch.dict("os.environ", {}, clear=True),
+        ):
+            standard.CompileModule().execute(ctx)
+        self.assertEqual(
+            run_cmd.call_args.args[0],
+            [
+                "autoninja",
+                "-C",
+                "out/Default_browseros_x64",
+                "chrome",
+                "chromedriver",
+                "chrome_sandbox",
+            ],
+        )
+
     def test_execute_builds_chrome_via_shared_argv_builder(self):
         ctx = mock.Mock()
         ctx.out_dir = "out/Default_x64"
         ctx.chromium_src = Path("/tmp/chromium-src")
         with (
             mock.patch.object(standard, "run_command") as run_cmd,
+            mock.patch.object(standard, "IS_LINUX", return_value=False),
             mock.patch.object(standard, "IS_WINDOWS", return_value=False),
             mock.patch.object(standard.CompileModule, "_create_version_file"),
             mock.patch.dict("os.environ", {}, clear=True),

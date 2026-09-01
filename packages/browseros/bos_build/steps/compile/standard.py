@@ -15,6 +15,7 @@ from ...lib.utils import (
     log_success,
     log_warning,
     join_paths,
+    IS_LINUX,
     IS_WINDOWS,
 )
 
@@ -124,10 +125,14 @@ class CompileModule(Step):
 
         self._create_version_file(ctx)
 
-        run_command(
-            autoninja_command(ctx.out_dir, ["chrome", "chromedriver"]),
-            cwd=ctx.chromium_src,
-        )
+        targets = ["chrome", "chromedriver"]
+        if IS_LINUX():
+            # Chromium's Linux chrome target does not depend on the setuid
+            # sandbox executable. Both package formats require it in the
+            # verified runtime, so make the compile/package handoff explicit.
+            targets.append("chrome_sandbox")
+
+        run_command(autoninja_command(ctx.out_dir, targets), cwd=ctx.chromium_src)
 
         app_path = ctx.get_chromium_app_path()
         built_app_path = app_path
