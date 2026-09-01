@@ -422,7 +422,18 @@ impl ClawMcpService {
         if let Some(handle) = provided
             && let Some(session) = self.state.sessions.lookup(&handle).await
         {
-            return Ok((started_session_from(session, &client), handle));
+            // A reused session keeps the identity it was minted with. This request's
+            // inline clientInfo is optional and may be absent or differ, so relabeling
+            // from it would flip the same session's audit attribution between the real
+            // client and "agent" across dispatches; take the label from the session.
+            let agent_label = session.agent().label().to_string();
+            return Ok((
+                StartedSession {
+                    session,
+                    agent_label,
+                },
+                handle,
+            ));
         }
         let handle = SessionId::new(Uuid::new_v4().to_string());
         let started = self.start_session_in_store(handle.clone(), client).await?;
@@ -1155,11 +1166,21 @@ mod tests {
             version: "9.9.9".to_string(),
             title: None,
         };
-        let (named, _) = service
+        let (named, handle) = service
             .resolve_modern_session(None, Some(client))
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(named.session.agent().slug(), "test-harness-client");
+        assert_eq!(named.agent_label, "test-harness-client");
+
+        // Reusing that handle without clientInfo keeps the minted identity and label,
+        // so a session's audit attribution never flips to "agent" mid-conversation.
+        let (reused, _) = service
+            .resolve_modern_session(Some(handle), None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(reused.session.agent().slug(), "test-harness-client");
+        assert_eq!(reused.agent_label, "test-harness-client");
 
         // A stateless client that sends no clientInfo falls back to "agent".
         let (anon, _) = service
