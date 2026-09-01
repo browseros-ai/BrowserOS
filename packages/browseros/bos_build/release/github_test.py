@@ -9,11 +9,13 @@ from unittest import mock
 from bos_build.release.github import (
     create_pull_request,
     edit_pull_request_body,
+    github_release_tag,
     inspect_github_release,
     list_github_releases,
     list_pull_requests,
     mark_pull_request_ready,
     merge_pull_request,
+    normalize_version,
 )
 
 
@@ -155,6 +157,21 @@ class PullRequestAdapterTest(unittest.TestCase):
 
 
 class ReleaseAdapterTest(unittest.TestCase):
+    def test_release_tag_preserves_nonzero_browser_patch(self) -> None:
+        self.assertEqual(normalize_version("0.50.0.3"), "0.50.0.3")
+        self.assertEqual(
+            github_release_tag("0.50.0.3", "browseros"),
+            "v0.50.0.3",
+        )
+        self.assertEqual(
+            github_release_tag("0.50.0.3", "browserclaw"),
+            "browserclaw/v0.50.0.3",
+        )
+
+    def test_release_tag_omits_zero_browser_patch(self) -> None:
+        self.assertEqual(normalize_version("0.50.0.0"), "0.50.0")
+        self.assertEqual(github_release_tag("0.50.0.0", "browseros"), "v0.50.0")
+
     def test_lists_paginated_releases_with_normalized_fields(self) -> None:
         runner = RecordingRunner(
             stdout=json.dumps(

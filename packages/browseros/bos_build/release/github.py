@@ -333,9 +333,9 @@ def upload_to_github_release(tag: str, repo: str, file_path: Path) -> bool:
 
 
 def normalize_version(version: str) -> str:
-    """Normalize version to MAJOR.MINOR.BUILD (strip patch if present)"""
+    """Omit an explicit zero patch while preserving nonzero patch releases."""
     parts = version.split(".")
-    if len(parts) >= 3:
+    if len(parts) == 4 and parts[-1] == "0":
         return ".".join(parts[:3])
     return version
 
