@@ -88,8 +88,9 @@ class SubprocessLinuxToolchain:
     ) -> None:
         env = os.environ.copy()
         env["ARCH"] = architecture
+        # The pinned 1.9.1 tools bundle a zstd-only mksquashfs implementation.
         self._run(
-            (str(tool), "--comp", "gzip", str(appdir), str(output)),
+            (str(tool), "--comp", "zstd", str(appdir), str(output)),
             env=env,
         )
 

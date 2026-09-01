@@ -250,6 +250,34 @@ class _RealDebFakeAppImageToolchain(_FakeLinuxToolchain):
 
 
 class LinuxToolchainAdapterTest(unittest.TestCase):
+    def test_appimagetool_uses_compressor_supported_by_pinned_tool(self) -> None:
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "bos_build.steps.package.linux_packaging.system.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            SubprocessLinuxToolchain().build_appimage(
+                Path("/tools/appimagetool"),
+                Path("/staging/AppDir"),
+                Path("/dist/BrowserOS.AppImage"),
+                "x86_64",
+            )
+
+        self.assertEqual(
+            run.call_args.args[0],
+            (
+                "/tools/appimagetool",
+                "--comp",
+                "zstd",
+                "/staging/AppDir",
+                "/dist/BrowserOS.AppImage",
+            ),
+        )
+        self.assertEqual(run.call_args.kwargs["env"]["ARCH"], "x86_64")
+
     def test_ldd_uses_a_stable_locale_and_checks_both_output_streams(self) -> None:
         completed = SimpleNamespace(
             returncode=0,
