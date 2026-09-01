@@ -22,9 +22,10 @@ use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
         Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, Tool, ToolAnnotations,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, SubscriptionFilter, Tool,
+        ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -497,7 +498,10 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
 
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
-        let capabilities = ServerCapabilities::builder().enable_tools().build();
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build();
         let mut implementation = Implementation::new(SERVER_NAME, VERSION);
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
@@ -531,9 +535,32 @@ impl ServerHandler for ClawMcpService {
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        std::future::ready(Ok(ListToolsResult::with_all_items(self.listed_tools())))
+        // SEP-2549: 2026-07-28 clients require ttlMs + cacheScope on list results;
+        // emit them only for that revision so legacy peers keep the old wire shape
+        // (mirrors rmcp's #[tool_handler] macro). ttl 0 = do-not-cache; the tool
+        // catalog is identical across users, so the scope is public.
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        let mut result = ListToolsResult::with_all_items(self.listed_tools());
+        if supports_cache_hints {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        std::future::ready(Ok(result))
+    }
+
+    // Accept the 2026-07-28 `subscriptions/listen` stream instead of returning
+    // method-not-found. rmcp's default `accepted_subscription_filter` returns None,
+    // which becomes JSON-RPC -32601 and an HTTP 404 that kills the transport before
+    // tools/list can run. Returning the capability-supported subset opens the stream;
+    // the default `listen` holds it until the client cancels or the server shuts down.
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.supported_by(&self.get_info().capabilities))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -1002,6 +1029,23 @@ mod tests {
     fn supported_protocol_versions_includes_modern_and_legacy() {
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
+    }
+
+    #[tokio::test]
+    async fn subscriptions_listen_is_accepted_not_method_not_found() -> anyhow::Result<()> {
+        // rmcp turns a None subscription filter into JSON-RPC -32601 for subscriptions/listen,
+        // which its streamable-http transport maps to a 404 that kills the connection. Accepting
+        // the capability-supported subset opens the stream instead.
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let requested = SubscriptionFilter::builder().tools_list_changed().build();
+        let accepted = service.accepted_subscription_filter(&requested);
+        assert_eq!(
+            accepted.and_then(|filter| filter.tools_list_changed),
+            Some(true),
+            "subscriptions/listen must be accepted (Some), not method-not-found"
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -481,6 +481,16 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    // SEP-2549 ttlMs/cacheScope are 2026-07-28-only; a legacy (2025-06-18) peer must
+    // not receive them (they are emitted only when the negotiated revision is 2026-07-28).
+    assert!(
+        body["result"]["ttlMs"].is_null(),
+        "ttlMs leaked to legacy peer"
+    );
+    assert!(
+        body["result"]["cacheScope"].is_null(),
+        "cacheScope leaked to legacy peer"
+    );
     let tool = body["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "name_session"))
