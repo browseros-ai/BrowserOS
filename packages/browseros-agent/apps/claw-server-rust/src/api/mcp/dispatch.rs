@@ -317,15 +317,16 @@ async fn dispatch_tool_call_with(
     } else {
         (false, false)
     };
+    let has_output_schema = call.tool().output_schema.is_some();
     if teardown_before_finish && operator_stop_requested {
         let cancellation = operator_cancellation_result();
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
-        return Ok(wire_result(cancellation));
+        return Ok(wire_result(cancellation, has_output_schema));
     }
     call.dispatch_cancel.cancel();
     call.cancel.cancel();
-    result.map(wire_result)
+    result.map(|result| wire_result(result, has_output_schema))
 }
 
 async fn run_guards(call: &ToolCall, guards: &[ToolGuard]) -> Option<ToolResult> {
@@ -477,14 +478,23 @@ pub(super) fn operator_cancellation_result() -> ToolResult {
     }
 }
 
-fn wire_result(result: ToolResult) -> CallToolResult {
+fn wire_result(result: ToolResult, has_output_schema: bool) -> CallToolResult {
     // Ordered effects retain structured content internally; the default BrowserClaw
-    // wire envelope deliberately exposes content blocks only.
-    if result.is_error {
+    // wire envelope exposes content blocks only. The exception is a tool that
+    // advertises an output_schema (e.g. `run`): a spec-compliant client rejects the
+    // call unless the promised structured content is actually delivered, so keep it.
+    let structured = if has_output_schema {
+        result.structured_content
+    } else {
+        None
+    };
+    let mut call_result = if result.is_error {
         CallToolResult::error(result.content)
     } else {
         CallToolResult::success(result.content)
-    }
+    };
+    call_result.structured_content = structured;
+    call_result
 }
 
 #[must_use]
@@ -896,7 +906,7 @@ mod tests {
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
-        let wire = wire_result(final_result.clone());
+        let wire = wire_result(final_result.clone(), false);
         assert_eq!(wire.content.len(), 2);
         assert_eq!(wire.structured_content, None);
 
@@ -1116,14 +1126,26 @@ mod tests {
     }
 
     #[test]
-    fn wire_result_strips_structured_content_and_metadata() {
-        let result = wire_result(ToolResult::text(
-            "ok",
-            Some(json!({ "page": 7, "secret": true })),
-        ));
-        assert_eq!(result.is_error, Some(false));
-        assert_eq!(result.structured_content, None);
-        assert_eq!(result.meta, None);
+    fn wire_result_strips_structured_content_unless_the_tool_has_an_output_schema() {
+        // No output_schema: content-only envelope, structured content dropped.
+        let stripped = wire_result(
+            ToolResult::text("ok", Some(json!({ "page": 7, "secret": true }))),
+            false,
+        );
+        assert_eq!(stripped.is_error, Some(false));
+        assert_eq!(stripped.structured_content, None);
+        assert_eq!(stripped.meta, None);
+
+        // With output_schema (e.g. `run`): the promised structured content is delivered
+        // so spec-compliant clients accept the result.
+        let kept = wire_result(
+            ToolResult::text("ok", Some(json!({ "ok": true, "logs": [] }))),
+            true,
+        );
+        assert_eq!(
+            kept.structured_content,
+            Some(json!({ "ok": true, "logs": [] }))
+        );
     }
 
     #[tokio::test]

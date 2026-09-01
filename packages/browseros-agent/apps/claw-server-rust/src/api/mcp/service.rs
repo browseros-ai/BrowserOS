@@ -975,14 +975,20 @@ fn attach_session_handle(
     let Some(handle) = handle else {
         return result;
     };
+    let handle = handle.to_string();
     result.map(|mut call_result| {
-        // The stateless handle is transport identity, not tool output: return it in
-        // `_meta` so it never collides with a tool's `output_schema` and never
-        // overwrites the tool's structured content.
-        call_result.meta.get_or_insert_with(MetaObject::new).insert(
-            SESSION_META_KEY.to_string(),
-            Value::String(handle.to_string()),
-        );
+        // The stateless handle is transport identity, not tool output, so it rides in
+        // `_meta` (never colliding with a tool's output_schema). But MCP clients do not
+        // surface result `_meta` to the model, so also append it as a content line the
+        // model always sees, otherwise the agent never learns the handle to echo back
+        // and loses tab ownership across stateless calls.
+        call_result
+            .meta
+            .get_or_insert_with(MetaObject::new)
+            .insert(SESSION_META_KEY.to_string(), Value::String(handle.clone()));
+        call_result.content.push(rmcp::model::ContentBlock::text(format!(
+            "[browseros-neo session: {handle}. Pass this exact value as the `session` argument on every following call to keep this browser session and its tab ownership.]"
+        )));
         call_result
     })
 }
@@ -1136,6 +1142,14 @@ mod tests {
             .and_then(|meta| meta.get(SESSION_META_KEY))
             .and_then(Value::as_str);
         assert_eq!(handle, Some("handle-xyz"));
+        // The handle is also appended to content so the model (which does not see _meta)
+        // reads and echoes it.
+        let content_has_handle = modern.content.iter().any(|block| {
+            block
+                .as_text()
+                .is_some_and(|text| text.text.contains("handle-xyz"))
+        });
+        assert!(content_has_handle, "handle must also appear in content");
 
         // Legacy calls (no handle) get neither _meta nor structured_content touched.
         let legacy = attach_session_handle(
