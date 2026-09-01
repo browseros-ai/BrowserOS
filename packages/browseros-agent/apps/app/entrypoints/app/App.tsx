@@ -16,6 +16,7 @@ import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
+import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 import { UsagePage } from '@/screens/usage/UsagePage'
@@ -88,6 +89,13 @@ export const App: FC = () => {
         </Route>
 
         <Route path="features" element={<FeaturesPage />} />
+
+        {/* First-run setup, opened by the native onboarding on completion.
+            Outside every layout route on purpose: no sidebar, no chrome. */}
+        <Route path="onboarding">
+          <Route path="ai" element={<OnboardingAiPage />} />
+          <Route index element={<Navigate to="/onboarding/ai" replace />} />
+        </Route>
 
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route

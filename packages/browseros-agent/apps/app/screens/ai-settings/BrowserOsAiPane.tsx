@@ -15,39 +15,20 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
-import {
-  CHATGPT_PRO_OAUTH_COMPLETED_EVENT,
-  CHATGPT_PRO_OAUTH_DISCONNECTED_EVENT,
-  CHATGPT_PRO_OAUTH_STARTED_EVENT,
-  GITHUB_COPILOT_OAUTH_COMPLETED_EVENT,
-  GITHUB_COPILOT_OAUTH_DISCONNECTED_EVENT,
-  GITHUB_COPILOT_OAUTH_STARTED_EVENT,
-  QWEN_CODE_OAUTH_COMPLETED_EVENT,
-  QWEN_CODE_OAUTH_DISCONNECTED_EVENT,
-  QWEN_CODE_OAUTH_STARTED_EVENT,
-} from '@/lib/constants/analyticsEvents'
 import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
 import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
-import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-display-names'
-import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { sentry } from '@/lib/sentry/sentry'
-import type { AcpAgent, AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
-import {
-  type OAuthProviderFlowConfig,
-  useOAuthProviderFlow,
-} from '@/modules/llm-providers/oauth-provider-flow.hooks'
 import { AddProviderSection } from './AddProviderSection'
+import { AddProviderDialogs, useAddProvider } from './add-provider.hooks'
 import { ConfiguredTargetsList } from './ConfiguredTargetsList'
-import { CustomCodingAgentDialog } from './CustomCodingAgentDialog'
 import { useCodingAgents } from './coding-agents.hooks'
-import { DeviceCodeDialog } from './DeviceCodeDialog'
 import { useDefaultChatTarget } from './default-chat-target.hooks'
 import {
   DeleteRemoteLlmProviderDocument,
@@ -56,50 +37,8 @@ import {
 import type { IncompleteProvider } from './IncompleteProviderCard'
 import { IncompleteProvidersList } from './IncompleteProvidersList'
 import { McpPromoBanner } from './McpPromoBanner'
-import { NewCodingAgentDialog } from './NewCodingAgentDialog'
 import { NewProviderDialog } from './NewProviderDialog'
 import { partitionSyncedProviders } from './synced-providers'
-
-// All OAuth providers share the same flow via useOAuthProviderFlow
-const OAUTH_PROVIDERS_CONFIG: Record<string, OAuthProviderFlowConfig> = {
-  'chatgpt-pro': {
-    providerType: 'chatgpt-pro',
-    displayName: CHATGPT_PROVIDER_DISPLAY_NAME,
-    startedEvent: CHATGPT_PRO_OAUTH_STARTED_EVENT,
-    completedEvent: CHATGPT_PRO_OAUTH_COMPLETED_EVENT,
-    disconnectedEvent: CHATGPT_PRO_OAUTH_DISCONNECTED_EVENT,
-  },
-  'github-copilot': {
-    providerType: 'github-copilot',
-    displayName: 'GitHub Copilot',
-    startedEvent: GITHUB_COPILOT_OAUTH_STARTED_EVENT,
-    completedEvent: GITHUB_COPILOT_OAUTH_COMPLETED_EVENT,
-    disconnectedEvent: GITHUB_COPILOT_OAUTH_DISCONNECTED_EVENT,
-    clientAuth: {
-      deviceCodeEndpoint: 'https://github.com/login/device/code',
-      tokenEndpoint: 'https://github.com/login/oauth/access_token',
-      clientId: 'Ov23li8tweQw6odWQebz',
-      scopes: 'read:user',
-      requiresPKCE: false,
-      contentType: 'json',
-    },
-  },
-  'qwen-code': {
-    providerType: 'qwen-code',
-    displayName: 'Qwen Code',
-    startedEvent: QWEN_CODE_OAUTH_STARTED_EVENT,
-    completedEvent: QWEN_CODE_OAUTH_COMPLETED_EVENT,
-    disconnectedEvent: QWEN_CODE_OAUTH_DISCONNECTED_EVENT,
-    clientAuth: {
-      deviceCodeEndpoint: 'https://chat.qwen.ai/api/v1/oauth2/device/code',
-      tokenEndpoint: 'https://chat.qwen.ai/api/v1/oauth2/token',
-      clientId: 'f0304373b74a44d2b584a3fb70ca9e56',
-      scopes: 'openid profile email model.completion',
-      requiresPKCE: true,
-      contentType: 'form',
-    },
-  },
-}
 
 /**
  * BrowserOS AI pane — manage LLM providers and the default model.
@@ -181,16 +120,7 @@ export const BrowserOsAiPane: FC = () => {
     }
   }, [deleteRemoteProvider, retiredProviderIds])
 
-  const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
-  const [newAgentType, setNewAgentType] = useState<AcpAgentType | null>(null)
-  const [customAgentDialogOpen, setCustomAgentDialogOpen] = useState(false)
-  const [editingCustomAgent, setEditingCustomAgent] = useState<AcpAgent | null>(
-    null,
-  )
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
-  const [templateValues, setTemplateValues] = useState<
-    Partial<LlmProviderConfig> | undefined
-  >()
   const [editingProvider, setEditingProvider] =
     useState<LlmProviderConfig | null>(null)
   const [providerToDelete, setProviderToDelete] =
@@ -201,96 +131,8 @@ export const BrowserOsAiPane: FC = () => {
     null,
   )
 
-  // OAuth flows — shared hook eliminates per-provider duplication
-  const chatgptPro = useOAuthProviderFlow(
-    OAUTH_PROVIDERS_CONFIG['chatgpt-pro'],
-    providers,
-    saveProvider,
-  )
-  const copilot = useOAuthProviderFlow(
-    OAUTH_PROVIDERS_CONFIG['github-copilot'],
-    providers,
-    saveProvider,
-  )
-  const qwenCode = useOAuthProviderFlow(
-    OAUTH_PROVIDERS_CONFIG['qwen-code'],
-    providers,
-    saveProvider,
-  )
-
-  const activeDeviceCode =
-    chatgptPro.pendingDeviceCode ??
-    copilot.pendingDeviceCode ??
-    qwenCode.pendingDeviceCode
-  const clearActiveDeviceCode = () => {
-    chatgptPro.clearDeviceCode()
-    copilot.clearDeviceCode()
-    qwenCode.clearDeviceCode()
-  }
-
-  const oauthFlows: Record<
-    string,
-    {
-      startOAuthFlow: (url: string | undefined) => Promise<void>
-      disconnect: () => Promise<void>
-      disconnectedEvent: string
-    }
-  > = {
-    'chatgpt-pro': {
-      startOAuthFlow: chatgptPro.startOAuthFlow,
-      disconnect: chatgptPro.disconnect,
-      disconnectedEvent: CHATGPT_PRO_OAUTH_DISCONNECTED_EVENT,
-    },
-    'github-copilot': {
-      startOAuthFlow: copilot.startOAuthFlow,
-      disconnect: copilot.disconnect,
-      disconnectedEvent: GITHUB_COPILOT_OAUTH_DISCONNECTED_EVENT,
-    },
-    'qwen-code': {
-      startOAuthFlow: qwenCode.startOAuthFlow,
-      disconnect: qwenCode.disconnect,
-      disconnectedEvent: QWEN_CODE_OAUTH_DISCONNECTED_EVENT,
-    },
-  }
-
-  const handleAddProvider = () => {
-    setTemplateValues(undefined)
-    setIsNewDialogOpen(true)
-  }
-
-  const handleUseTemplate = (template: ProviderTemplate) => {
-    // OAuth providers: trigger OAuth flow
-    const oauthFlow = oauthFlows[template.id]
-    if (oauthFlow) {
-      oauthFlow.startOAuthFlow(agentServerUrl ?? undefined)
-      return
-    }
-
-    setTemplateValues({
-      type: template.id,
-      name: template.name,
-      baseUrl: template.defaultBaseUrl,
-      modelId: template.defaultModelId,
-      supportsImages: template.supportsImages,
-      contextWindow: template.contextWindow,
-      temperature: 0.2,
-    })
-    setIsNewDialogOpen(true)
-  }
-
-  const handleUseCodingAgentTemplate = (type: AcpAgentType) => {
-    setNewAgentType(type)
-  }
-
-  const handleCreateCustomAgent = () => {
-    setEditingCustomAgent(null)
-    setCustomAgentDialogOpen(true)
-  }
-
-  const handleEditCustomAgent = (agent: AcpAgent) => {
-    setEditingCustomAgent(agent)
-    setCustomAgentDialogOpen(true)
-  }
+  const addProvider = useAddProvider({ providers, saveProvider })
+  const { oauthFlows } = addProvider
 
   const handleEditProvider = (provider: LlmProviderConfig) => {
     setEditingProvider(provider)
@@ -319,7 +161,7 @@ export const BrowserOsAiPane: FC = () => {
 
   const handleAddKeysToIncomplete = (provider: IncompleteProvider) => {
     const timestamp = Date.now()
-    setTemplateValues({
+    addProvider.openProviderForm({
       id: provider.rowId,
       type: provider.type as LlmProviderConfig['type'],
       name: provider.name,
@@ -333,7 +175,6 @@ export const BrowserOsAiPane: FC = () => {
       createdAt: timestamp,
       updatedAt: timestamp,
     })
-    setIsNewDialogOpen(true)
   }
 
   const handleDeleteIncompleteProvider = (provider: IncompleteProvider) => {
@@ -423,7 +264,7 @@ export const BrowserOsAiPane: FC = () => {
               ({providers.length + coding.agents.length})
             </span>
           </h3>
-          <Button onClick={handleAddProvider}>
+          <Button onClick={() => addProvider.openProviderForm()}>
             <Plus className="size-4" />
             Add
           </Button>
@@ -440,14 +281,14 @@ export const BrowserOsAiPane: FC = () => {
           onTestProvider={handleTestProvider}
           onEditProvider={handleEditProvider}
           onDeleteProvider={handleDeleteProvider}
-          onEditAgent={handleEditCustomAgent}
+          onEditAgent={addProvider.openCustomAgentEditor}
         />
       </section>
 
       <AddProviderSection
-        onCreateAgent={handleUseCodingAgentTemplate}
-        onCreateCustomAgent={handleCreateCustomAgent}
-        onUseTemplate={handleUseTemplate}
+        onCreateAgent={addProvider.onCreateAgent}
+        onCreateCustomAgent={addProvider.onCreateCustomAgent}
+        onUseTemplate={addProvider.onUseTemplate}
       />
 
       <McpPromoBanner />
@@ -458,26 +299,7 @@ export const BrowserOsAiPane: FC = () => {
         onDelete={handleDeleteIncompleteProvider}
       />
 
-      <NewProviderDialog
-        open={isNewDialogOpen}
-        onOpenChange={setIsNewDialogOpen}
-        initialValues={templateValues}
-        onSave={handleSaveProvider}
-      />
-
-      <NewCodingAgentDialog
-        type={newAgentType}
-        open={newAgentType !== null}
-        onOpenChange={(open) => {
-          if (!open) setNewAgentType(null)
-        }}
-      />
-
-      <CustomCodingAgentDialog
-        open={customAgentDialogOpen}
-        onOpenChange={setCustomAgentDialogOpen}
-        agent={editingCustomAgent}
-      />
+      <AddProviderDialogs controller={addProvider} />
 
       <NewProviderDialog
         open={isEditDialogOpen}
@@ -528,11 +350,6 @@ export const BrowserOsAiPane: FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <DeviceCodeDialog
-        deviceCode={activeDeviceCode}
-        onClose={clearActiveDeviceCode}
-      />
     </div>
   )
 }
