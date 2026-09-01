@@ -362,8 +362,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          # libfuse2: appimagetool is itself an AppImage and needs FUSE
-          sudo apt-get install -y libfuse2
+          # These are runtime seams of the packaging verifier, not merely
+          # incidental runner state: appimagetool needs FUSE, dpkg-deb builds
+          # and inspects the archive, and libc-bin supplies ldd.
+          sudo apt-get install -y libfuse2 dpkg libc-bin
           "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
 
       - name: Install SSL.com CodeSignTool

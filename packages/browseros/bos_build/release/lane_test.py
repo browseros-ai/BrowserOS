@@ -100,6 +100,61 @@ def _complete_lanes() -> list[LaneManifest]:
 
 
 class LaneManifestTest(unittest.TestCase):
+    def test_linux_lane_attests_the_exact_registered_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            common = PreparedResourcesManifest(
+                product="browseros",
+                parent_sha=PARENT_SHA,
+                source_sha=CANDIDATE_SHA,
+                browser_version="0.31.0",
+                component_versions={"server": "0.0.128"},
+                files={},
+            )
+            (root / "prepared-resources.json").write_text(common.to_json())
+            appimage = root / "BrowserOS_v0.31.0_x64.AppImage"
+            deb = root / "BrowserOS_v0.31.0_amd64.deb"
+            appimage.write_bytes(b"appimage")
+            appimage.chmod(0o755)
+            deb.write_bytes(b"deb")
+            (root / "BrowserOS_v0.31.0_old.AppImage").write_bytes(b"stale")
+            registry = ArtifactRegistry()
+            registry.add("appimage", appimage)
+            registry.add("deb", deb)
+            registry.add(
+                "server_resources",
+                {"linux-x64": SimpleNamespace(manifest_sha256="5" * 64)},
+            )
+            context = SimpleNamespace(
+                resource_mode="source",
+                prepared_resources=root,
+                artifact_registry=registry,
+                architecture="x64",
+                get_dist_dir=lambda: root,
+                get_artifact_name=lambda kind: (
+                    appimage.name if kind == "appimage" else deb.name
+                ),
+            )
+            with (
+                mock.patch("bos_build.release.lane.get_platform", return_value="linux"),
+                mock.patch(
+                    "bos_build.steps.storage.upload.IS_MACOS",
+                    return_value=False,
+                ),
+                mock.patch(
+                    "bos_build.steps.storage.upload.IS_WINDOWS",
+                    return_value=False,
+                ),
+            ):
+                lane = build_lane_manifest([context], {"runner": "warp"})
+
+        self.assertEqual(lane.lane_id, "linux-x64")
+        self.assertEqual(
+            lane.outcomes["linux-x64"].artifacts,
+            (appimage.name, deb.name),
+        )
+        self.assertEqual(set(lane.artifacts), {appimage.name, deb.name})
+
     def test_completed_macos_build_emits_packages_signatures_and_toolchain(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -1,0 +1,10 @@
+# AppArmor profile for @@DISPLAY_NAME@@
+# Ubuntu 23.10+ requires a named profile with userns for Chromium sandboxing.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile @@APPARMOR_PROFILE@@ @@LIB_DIR@@/@@BROWSER_NAME@@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/@@APPARMOR_PROFILE@@>
+}

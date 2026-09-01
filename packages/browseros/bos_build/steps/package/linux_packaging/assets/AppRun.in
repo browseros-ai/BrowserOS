@@ -1,0 +1,6 @@
+#!/bin/sh
+THIS="$(readlink -f "$0")"
+HERE="$(dirname "$THIS")"
+export LD_LIBRARY_PATH="${HERE}@@APP_DIR@@${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CHROME_WRAPPER="$THIS"
+exec "${HERE}@@APP_DIR@@/@@BROWSER_NAME@@" "$@"

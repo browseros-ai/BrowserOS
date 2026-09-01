@@ -30,6 +30,7 @@ from ...release.prepared_resources import (
     load_prepared_resources,
 )
 from ...products.resource_sources import source_resources_for_product
+from ..package.linux_packaging import require_linux_artifacts
 
 
 def _sha256(path: Path) -> str:
@@ -179,7 +180,10 @@ def generate_release_json(
 
     for artifact in artifacts:
         filename = artifact["filename"]
-        artifact_key = _get_artifact_key(filename, platform)
+        artifact_key = artifact.get("release_key") or _get_artifact_key(
+            filename,
+            platform,
+        )
 
         artifact_data = {
             "filename": filename,
@@ -187,7 +191,7 @@ def generate_release_json(
         }
 
         for key, value in artifact.items():
-            if key != "filename":
+            if key not in ("filename", "release_key"):
                 artifact_data[key] = value
 
         release_data["artifacts"][artifact_key] = artifact_data
@@ -286,6 +290,12 @@ def _filter_product_artifacts(ctx: Context, artifacts: List[Path]) -> List[Path]
 
 def detect_artifacts(ctx: Context) -> List[Path]:
     """Find the active product's artifacts for the current platform."""
+    if not IS_MACOS() and not IS_WINDOWS():
+        # Linux is one correlated release result. The resolver handles both
+        # in-process registry handoff and deliberate exact-name disk recovery;
+        # allowing a glob here would make partial packages publishable again.
+        return list(require_linux_artifacts(ctx).paths)
+
     dist_dir = ctx.get_dist_dir()
     if not dist_dir.exists():
         return []
@@ -297,10 +307,6 @@ def detect_artifacts(ctx: Context) -> List[Path]:
     elif IS_WINDOWS():
         artifacts.extend(dist_dir.glob("*.exe"))
         artifacts.extend(dist_dir.glob("*.zip"))
-    else:
-        artifacts.extend(dist_dir.glob("*.AppImage"))
-        artifacts.extend(dist_dir.glob("*.deb"))
-
     return sorted(_filter_product_artifacts(ctx, artifacts))
 
 
@@ -321,12 +327,12 @@ def upload_release_artifacts(
         log_warning("R2 configuration not set. Skipping upload.")
         return True, None
 
+    platform = _get_platform()
     artifacts = detect_artifacts(ctx)
     if not artifacts:
         log_info("No artifacts found to upload")
         return True, None
 
-    platform = _get_platform()
     release_path = ctx.get_release_path(platform)
 
     if deferred:
@@ -338,7 +344,7 @@ def upload_release_artifacts(
         log_info(f"  - {artifact.name}")
 
     artifact_metadata = []
-    for artifact_path in artifacts:
+    for index, artifact_path in enumerate(artifacts):
         metadata = {
             "filename": artifact_path.name,
             "size": artifact_path.stat().st_size,
@@ -347,6 +353,14 @@ def upload_release_artifacts(
 
         if extra_metadata and artifact_path.name in extra_metadata:
             metadata.update(extra_metadata[artifact_path.name])
+
+        if platform == "linux":
+            # `detect_artifacts` returns LinuxArtifactPair.paths in this fixed
+            # order, so release identity comes from the deep interface rather
+            # than reparsing architecture tokens from filenames. Write this
+            # after optional metadata so callers cannot redefine identity.
+            format_name = ("appimage", "deb")[index]
+            metadata["release_key"] = f"{ctx.architecture}_{format_name}"
 
         artifact_metadata.append(metadata)
 

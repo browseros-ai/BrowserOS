@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    update-alternatives --remove x-www-browser /usr/bin/@@LAUNCHER_NAME@@ 2>/dev/null || true
+    update-alternatives --remove gnome-www-browser /usr/bin/@@LAUNCHER_NAME@@ 2>/dev/null || true
+fi
+
+if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/@@APPARMOR_PROFILE@@ ]; then
+    apparmor_parser -R /etc/apparmor.d/@@APPARMOR_PROFILE@@ 2>/dev/null || true
+fi
+
+exit 0

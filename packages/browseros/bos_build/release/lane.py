@@ -521,10 +521,7 @@ def _outcomes_for_platform(
                 bool(signable) and all(name in signed_names for name in signable),
             )
         }
-    names = matching("_x64", (".AppImage", ".deb")) + matching(
-        "_amd64", (".deb",)
-    )
-    return {"linux-x64": LaneOutcome("linux-x64", names, False)}
+    raise ValueError(f"Filename-derived outcomes are unsupported for {platform_name}")
 
 
 def build_lane_manifest(
@@ -565,9 +562,26 @@ def build_lane_manifest(
             sparkle_signature=str(signature),
         )
     platform_name = get_platform()
-    outcomes = _outcomes_for_platform(
-        platform_name, tuple(sorted(evidence)), signed_names
-    )
+    if platform_name == "linux":
+        if contexts[-1].architecture != "x64":
+            raise ValueError(
+                "The Linux release lane supports only the x64 artifact pair"
+            )
+        # `detect_artifacts` obtains these paths from LinuxArtifactPair. Do not
+        # throw away that correlation and reconstruct it from filename tokens.
+        outcomes = {
+            "linux-x64": LaneOutcome(
+                "linux-x64",
+                tuple(path.name for path in paths),
+                False,
+            )
+        }
+    else:
+        outcomes = _outcomes_for_platform(
+            platform_name,
+            tuple(sorted(evidence)),
+            signed_names,
+        )
     if any(not outcome.artifacts for outcome in outcomes.values()):
         missing = [name for name, outcome in outcomes.items() if not outcome.artifacts]
         raise ValueError(f"Lane is missing browser artifacts: {', '.join(missing)}")

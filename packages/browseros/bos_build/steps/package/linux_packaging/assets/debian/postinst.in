@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if [ -f @@LIB_DIR@@/chrome_sandbox ]; then
+    chmod 4755 @@LIB_DIR@@/chrome_sandbox
+fi
+
+if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -r -T -W /etc/apparmor.d/@@APPARMOR_PROFILE@@ 2>/dev/null || true
+fi
+
+if [ "$1" = "configure" ]; then
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/@@LAUNCHER_NAME@@ 40
+    update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/@@LAUNCHER_NAME@@ 40
+fi
+
+exit 0

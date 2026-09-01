@@ -11,6 +11,7 @@ from unittest import mock
 
 from bos_build.core.context import ArtifactRegistry
 from bos_build.release.prepared_resources import PreparedResourcesManifest
+from bos_build.steps.package.linux_packaging import LinuxPackagingError
 from bos_build.steps.storage.upload import (
     _get_artifact_key,
     generate_release_json,
@@ -42,16 +43,79 @@ def _upload_ctx(
             display_name=display_name,
             artifact_prefix=artifact_prefix,
         ),
+        architecture="x64",
         chromium_version="136.0.0.0",
         browseros_chromium_version="136.0.0.0.1",
         get_dist_dir=lambda: dist_dir,
         get_semantic_version=lambda: "1.2.3",
+        get_artifact_name=lambda kind: (
+            f"{artifact_prefix}_v1.2.3_x64.AppImage"
+            if kind == "appimage"
+            else f"{artifact_prefix}_v1.2.3_amd64.deb"
+        ),
         get_sparkle_version=lambda: "10000.1.2.3",
         get_release_path=lambda platform: (f"releases/{product_id}/1.2.3/{platform}/"),
     )
 
 
 class UploadMetadataTest(unittest.TestCase):
+    def test_deferred_linux_upload_rejects_partial_registered_pair(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: False),
+            mock.patch("bos_build.steps.storage.upload.IS_WINDOWS", lambda: False),
+            mock.patch.dict(
+                "os.environ",
+                {"BROWSEROS_DEFER_R2_UPLOAD": "1"},
+                clear=False,
+            ),
+        ):
+            root = Path(tmp)
+            ctx = _upload_ctx(root)
+            appimage = root / ctx.get_artifact_name("appimage")
+            appimage.write_bytes(b"appimage")
+            appimage.chmod(0o755)
+            ctx.artifact_registry.add("appimage", appimage)
+
+            with self.assertRaisesRegex(
+                LinuxPackagingError,
+                "registry is partial",
+            ):
+                upload_release_artifacts(ctx)
+
+    def test_deferred_linux_upload_uses_only_the_registered_exact_pair(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: False),
+            mock.patch("bos_build.steps.storage.upload.IS_WINDOWS", lambda: False),
+            mock.patch.dict(
+                "os.environ",
+                {"BROWSEROS_DEFER_R2_UPLOAD": "1"},
+                clear=False,
+            ),
+        ):
+            root = Path(tmp)
+            ctx = _upload_ctx(root)
+            appimage = root / ctx.get_artifact_name("appimage")
+            deb = root / ctx.get_artifact_name("deb")
+            appimage.write_bytes(b"registered-appimage")
+            appimage.chmod(0o755)
+            deb.write_bytes(b"registered-deb")
+            (root / "BrowserOS_v1.2.3_old.AppImage").write_bytes(b"stale")
+            (root / "BrowserOS_neo_v1.2.3_x64.AppImage").write_bytes(b"sibling")
+            ctx.artifact_registry.add("appimage", appimage)
+            ctx.artifact_registry.add("deb", deb)
+
+            success, release = upload_release_artifacts(ctx)
+
+        self.assertTrue(success)
+        self.assertEqual(set(release["artifacts"]), {"x64_appimage", "x64_deb"})
+        self.assertEqual(
+            release["artifacts"]["x64_appimage"]["filename"],
+            appimage.name,
+        )
+        self.assertEqual(release["artifacts"]["x64_deb"]["filename"], deb.name)
+
     def test_deferred_upload_writes_exact_receipt_without_r2_mutation(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

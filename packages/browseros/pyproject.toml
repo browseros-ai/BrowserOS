@@ -25,7 +25,7 @@ browseros = "bos_build.browseros:app"
 include = ["bos_build*"]
 
 [tool.setuptools.package-data]
-bos_build = ["**/*.yaml", "**/*.yml", "**/*.gn", "**/*.xml", "config/BROWSEROS_BUILD_OFFSET"]
+bos_build = ["**/*.yaml", "**/*.yml", "**/*.gn", "**/*.xml", "**/*.in", "config/BROWSEROS_BUILD_OFFSET"]
 
 [tool.black]
 line-length = 88

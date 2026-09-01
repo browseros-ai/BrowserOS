@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@@METAINFO_ID@@</id>
+  <launchable type="desktop-id">@@DESKTOP_ID@@</launchable>
+  <name>@@DISPLAY_NAME@@</name>
+  <developer id="com.browseros">
+    <name>BrowserOS Team</name>
+  </developer>
+  <summary>@@SUMMARY@@</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or LGPL-2.0)</project_license>
+  <url type="homepage">@@HOMEPAGE_URL@@</url>
+  <url type="bugtracker">@@BUGTRACKER_URL@@</url>
+  <url type="help">@@SUPPORT_URL@@</url>
+  <description>
+    <p>@@DESCRIPTION@@</p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <keywords>
+    <keyword>web browser</keyword>
+    <keyword>chromium</keyword>
+    <keyword>ai</keyword>
+    <keyword>agentic</keyword>
+    <keyword>privacy</keyword>
+  </keywords>
+  <releases>
+    <release version="@@VERSION@@" />
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>
