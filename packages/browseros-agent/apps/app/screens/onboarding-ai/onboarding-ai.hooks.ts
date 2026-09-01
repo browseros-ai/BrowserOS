@@ -1,47 +1,50 @@
 import { useEffect, useRef } from 'react'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
-import { hasUserConnectedTarget } from './onboarding-ai.helpers'
+import { countUserConnectedTargets } from './onboarding-ai.helpers'
 
 /**
- * Hands off to `onConnected` the first time the user connects something.
+ * Hands off to `onConnected` once the user connects something on this visit.
  *
- * Fires on the transition, never on the state. Two reasons: an OAuth template
- * takes the user off the page and back, so the moment of success is a change
- * in the provider list rather than the return of a submit handler; and a user
- * who opens this route with providers already configured must not be bounced
- * away before the page renders.
+ * Compares against a baseline taken when the lists first settle, so it fires
+ * for a user who already had a provider and adds another. An earlier version
+ * fired only on a not-connected to connected transition, which meant anyone
+ * arriving with a provider already configured could never hand off.
+ *
+ * Deleting does not trigger it: the count has to grow, not merely change.
+ *
+ * The baseline needs both lists settled, not just the providers. They load on
+ * separate async chains, and `useAcpAgents` documents that its `loading` flag
+ * briefly reads false while the list is still empty, so a baseline taken too
+ * early would miss existing agents and hand off the moment they arrived.
  */
 export function useConnectionHandoff(input: {
   providers: readonly LlmProviderConfig[]
   agents: readonly AcpAgent[]
-  /** False while the lists are still loading, so we do not judge too early. */
+  /** Both lists have loaded. A baseline taken before this is meaningless. */
   ready: boolean
   onConnected: () => void
 }): void {
   const { providers, agents, ready, onConnected } = input
-  const wasConnected = useRef<boolean | null>(null)
+  const baseline = useRef<number | null>(null)
   const handedOff = useRef(false)
 
-  // Subscribing to an external store's transitions: the provider list changes
-  // from an OAuth round trip and from dialogs this page does not own, so there
-  // is no single handler to hang this on.
+  // Watching an external store: the lists change from an OAuth round trip and
+  // from dialogs this page does not own, so there is no single handler to
+  // hang this on.
   useEffect(() => {
     if (!ready || handedOff.current) return
 
-    const connected = hasUserConnectedTarget({ providers, agents })
+    const count = countUserConnectedTargets({ providers, agents })
 
-    // First settled read establishes the baseline rather than counting as a
-    // transition, which is what keeps a returning user on the page.
-    if (wasConnected.current === null) {
-      wasConnected.current = connected
+    if (baseline.current === null) {
+      baseline.current = count
       return
     }
 
-    if (connected && !wasConnected.current) {
+    if (count > baseline.current) {
       handedOff.current = true
       onConnected()
     }
-    wasConnected.current = connected
   }, [providers, agents, ready, onConnected])
 }

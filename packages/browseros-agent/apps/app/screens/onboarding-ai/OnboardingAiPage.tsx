@@ -1,12 +1,12 @@
 import type { FC } from 'react'
 import { useNavigate } from 'react-router'
+import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { AddProviderSection } from '@/screens/ai-settings/AddProviderSection'
 import {
   AddProviderDialogs,
   useAddProvider,
 } from '@/screens/ai-settings/add-provider.hooks'
-import { useCodingAgents } from '@/screens/ai-settings/coding-agents.hooks'
 import { useConnectionHandoff } from './onboarding-ai.hooks'
 
 /**
@@ -20,15 +20,18 @@ import { useConnectionHandoff } from './onboarding-ai.hooks'
 export const OnboardingAiPage: FC = () => {
   const navigate = useNavigate()
   const { providers, saveProvider, isLoading } = useLlmProviders()
-  const coding = useCodingAgents()
+  // `settled` rather than `loading`: the agents hook documents that `loading`
+  // reads false for a render while the list is still empty, which would let
+  // the handoff take its baseline before existing agents have arrived.
+  const { agents, settled: agentsSettled } = useAcpAgents()
   const addProvider = useAddProvider({ providers, saveProvider })
 
   const goHome = () => navigate('/home', { replace: true })
 
   useConnectionHandoff({
     providers,
-    agents: coding.agents,
-    ready: !isLoading,
+    agents,
+    ready: !isLoading && agentsSettled,
     onConnected: goHome,
   })
 
