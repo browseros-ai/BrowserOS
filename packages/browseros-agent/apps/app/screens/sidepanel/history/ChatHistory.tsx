@@ -1,132 +1,36 @@
-import { keepPreviousData, useQueryClient } from '@tanstack/react-query'
-import type { UIMessage } from 'ai'
-import { Loader2 } from 'lucide-react'
 import type { FC } from 'react'
 import { useMemo } from 'react'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
-import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
-import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
-import { useChatSessionContext } from '@/modules/chat/chat-session-context'
-import { useLegacyConversationMigration } from '@/modules/conversations/conversations-migration'
-import { useGraphqlInfiniteQuery } from '@/modules/graphql/graphql-infinite-query.hooks'
-import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
-import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
-import { ConversationList } from './components/ConversationList'
-import type { HistoryConversation } from './components/types'
-import { extractLastUserMessage, groupConversations } from './components/utils'
-import {
-  DeleteConversationDocument,
-  GetConversationsForHistoryDocument,
-} from './graphql/chatHistoryDocument'
+import { useServerConversations } from '@/modules/conversations/conversations.hooks'
+import { CloudChatHistory } from './cloud/CloudChatHistory'
 import { LocalChatHistory } from './local/LocalChatHistory'
 
-const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
-  const { conversationId: activeConversationId } = useChatSessionContext()
-  const queryClient = useQueryClient()
-
-  const { data: profileData } = useGraphqlQuery(GetProfileIdByUserIdDocument, {
-    userId,
-  })
-  const profileId = profileData?.profileByUserId?.rowId
-
-  const {
-    data: graphqlData,
-    isLoading: isLoadingConversations,
-    isFetching,
-    hasNextPage,
-    isFetchingNextPage,
-    fetchNextPage,
-  } = useGraphqlInfiniteQuery(
-    GetConversationsForHistoryDocument,
-    // biome-ignore lint/style/noNonNullAssertion: guarded by enabled
-    (cursor) => ({ profileId: profileId!, after: cursor }),
-    {
-      enabled: !!profileId,
-      initialPageParam: undefined,
-      getNextPageParam: (lastPage) =>
-        lastPage.conversations?.pageInfo.hasNextPage
-          ? lastPage.conversations.pageInfo.endCursor
-          : undefined,
-      placeholderData: keepPreviousData,
-    },
-  )
-
-  const deleteConversationMutation = useGraphqlMutation(
-    DeleteConversationDocument,
-    {
-      onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: [
-            getQueryKeyFromDocument(GetConversationsForHistoryDocument),
-          ],
-        })
-      },
-    },
-  )
-
-  const handleDelete = (id: string) => {
-    deleteConversationMutation.mutate({ rowId: id })
-  }
-
-  const conversations = useMemo<HistoryConversation[]>(() => {
-    if (!graphqlData?.pages) return []
-
-    return graphqlData.pages.flatMap((page) =>
-      (page.conversations?.nodes ?? [])
-        .filter((node): node is NonNullable<typeof node> => node !== null)
-        .map((node) => {
-          const messages = node.conversationMessages.nodes
-            .filter((m): m is NonNullable<typeof m> => m !== null)
-            .map((m) => m.message as UIMessage)
-
-          const timestamp = node.lastMessagedAt.endsWith('Z')
-            ? node.lastMessagedAt
-            : `${node.lastMessagedAt}Z`
-
-          return {
-            id: node.rowId,
-            lastMessagedAt: new Date(timestamp).getTime(),
-            lastUserMessage: extractLastUserMessage(messages),
-          }
-        }),
-    )
-  }, [graphqlData])
-
-  const groupedConversations = useMemo(
-    () => groupConversations(conversations),
-    [conversations],
-  )
-
-  if (!profileId || isLoadingConversations) {
-    return (
-      <div className="flex flex-1 items-center justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  return (
-    <ConversationList
-      groupedConversations={groupedConversations}
-      activeConversationId={activeConversationId}
-      onDelete={handleDelete}
-      hasNextPage={hasNextPage}
-      isFetchingNextPage={isFetchingNextPage}
-      onLoadMore={fetchNextPage}
-      isRefreshing={isFetching && !isLoadingConversations}
-    />
-  )
-}
-
+/**
+ * History is the union of what is on this machine and what is still in the
+ * account, with the local list first and always present.
+ *
+ * It used to be one or the other: signed in showed only the cloud, signed out
+ * showed only the local server. That meant a signed-in user could not see the
+ * conversations their own machine was storing.
+ */
 export const ChatHistory: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const userId = sessionInfo.user?.id
-  // Drain any pre-upgrade local:conversations into the local server.
-  useLegacyConversationMigration()
+  // Same query key as LocalChatHistory, so this shares its cache rather than
+  // fetching a second time. Only the ids are needed, to keep a conversation
+  // that exists in both places from being listed twice.
+  const { data: localConversations = [] } = useServerConversations()
+  const localIds = useMemo(
+    () => new Set(localConversations.map((conversation) => conversation.id)),
+    [localConversations],
+  )
 
-  if (userId) {
-    return <RemoteChatHistory userId={userId} />
-  }
-
-  return <LocalChatHistory />
+  // One scroll area for both lists. Each list used to own its own, which
+  // worked while only ever one of them rendered.
+  return (
+    <main className="mt-4 flex h-full flex-1 flex-col overflow-y-auto">
+      <LocalChatHistory />
+      {userId ? <CloudChatHistory userId={userId} localIds={localIds} /> : null}
+    </main>
+  )
 }
