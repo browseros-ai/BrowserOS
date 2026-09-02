@@ -42,13 +42,12 @@ export async function loadOrCreateInstallationId(
 
   const temporaryFile = await open(temporaryPath, 'wx', 0o600)
   try {
-    await temporaryFile.writeFile(contents, 'utf8')
-    await temporaryFile.sync()
-  } finally {
-    await temporaryFile.close()
-  }
-
-  try {
+    try {
+      await temporaryFile.writeFile(contents, 'utf8')
+      await temporaryFile.sync()
+    } finally {
+      await temporaryFile.close()
+    }
     try {
       await link(temporaryPath, installationPath)
       return candidateId
