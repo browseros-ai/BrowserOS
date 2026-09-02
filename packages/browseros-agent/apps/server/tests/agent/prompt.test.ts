@@ -4,7 +4,7 @@
  *
  * System Prompt v7 Test Suite
  *
- * v7 (TKT-947) reduces the prompt to non-duplicated cross-cutting rules. Tool
+ * v7 reduces the prompt to non-duplicated cross-cutting rules. Tool
  * usage, per-tool security, and per-tool recovery moved into the tool
  * descriptions and the runtime untrusted-content fence, so the prompt no longer
  * carries a tool catalog, tool-selection tables, per-tool error recovery, or a

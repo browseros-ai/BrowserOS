@@ -7,7 +7,7 @@
 /**
  * BrowserOS Agent System Prompt v7
  *
- * v7 reduces the prompt to non-duplicated cross-cutting rules (TKT-947). Tool
+ * v7 reduces the prompt to non-duplicated cross-cutting rules. Tool
  * usage, per-tool security, and per-tool recovery now live in the tool
  * descriptions and the runtime untrusted-content fence, so the prompt no longer
  * narrates a tool catalog, tool-selection tables, or per-tool error recovery.
