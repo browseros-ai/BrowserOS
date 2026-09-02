@@ -1,5 +1,8 @@
 tmp-shot-*/
 tmp-upload-*/
 .devtools
-db/
-identity/
+# Runtime directories at the app root. Anchored with a leading slash: an
+# unanchored `db/` also matches src/lib/db/ and tests/lib/db/, which silently
+# swallowed new schema files and migrations until they were force-added.
+/db/
+/identity/
