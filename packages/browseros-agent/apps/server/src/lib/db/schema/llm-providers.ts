@@ -5,7 +5,13 @@
  */
 
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm'
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import {
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+} from 'drizzle-orm/sqlite-core'
 
 /**
  * LLM providers, mirroring the shape the extension holds today.

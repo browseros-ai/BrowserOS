@@ -54,10 +54,6 @@ mock.module('@/lib/browseros/prefs', () => ({
   BROWSEROS_PREFS: { PROVIDERS: 'browseros.providers' },
 }))
 
-mock.module('./uploadLlmProvidersToGraphql', () => ({
-  uploadLlmProvidersToGraphql: async () => {},
-}))
-
 let loadProviders: typeof import('./storage').loadProviders
 let providersStorage: typeof import('./storage').providersStorage
 

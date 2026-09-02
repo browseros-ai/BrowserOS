@@ -3,8 +3,8 @@
  * Copyright 2025 BrowserOS
  */
 
-import { afterEach, describe, expect, it } from 'bun:test'
 import { Database as BunDatabase } from 'bun:sqlite'
+import { afterEach, describe, expect, it } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

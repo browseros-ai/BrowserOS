@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import {
   conversationForTab,
   conversationPanelViewsStorage,
@@ -24,12 +25,7 @@ import {
   MESSAGE_SENT_EVENT,
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
-import {
-  bufferActiveConversation,
-  flushActiveConversationBuffer,
-} from '@/lib/conversations/active-conversation-buffer'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
-import { uploadConversations } from '@/lib/conversations/uploadConversationsToGraphql'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
@@ -64,7 +60,6 @@ import {
   fetchConversationRunState,
 } from './conversation-run-client'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
-import { useRemoteConversationSave } from './remote-conversation-save.hooks'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
 
@@ -218,23 +213,24 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     error: agentUrlError,
   } = useAgentServerUrl()
 
-  const {
-    isLoggedIn,
-    userId,
-    saveConversation: saveRemoteConversation,
-    resetConversation: resetRemoteConversation,
-    markMessagesAsSaved,
-  } = useRemoteConversationSave()
+  // Identity is still needed to read a cloud conversation back. Nothing on
+  // this screen writes to the cloud any more.
+  const { sessionInfo } = useSessionInfo()
+  const userId = sessionInfo.user?.id
+  const isLoggedIn = !!userId
   const [searchParams, setSearchParams] = useSearchParams()
   const conversationIdParam = searchParams.get('conversationId')
 
-  // 'local': the local server owns history (persisted during /chat, loaded from
-  // SQLite); 'cloud': the client owns it (logged-in cloud sync, or incognito).
+  // 'local': the local server owns history, persisting it to SQLite during
+  // /chat. Every signed-in user now takes this path too, where the client used
+  // to upload their turns to the cloud instead. 'cloud' survives only as the
+  // incognito case, where it means nothing is persisted at all, because the
+  // client no longer writes anywhere.
   // Read via a ref because the transport closure below is created only once.
   const historyModeRef = useRef<'local' | 'cloud'>('cloud')
   useEffect(() => {
-    historyModeRef.current = !isLoggedIn && persistHistory ? 'local' : 'cloud'
-  }, [isLoggedIn, persistHistory])
+    historyModeRef.current = persistHistory ? 'local' : 'cloud'
+  }, [persistHistory])
 
   const agentUrlRef = useRef(agentServerUrl)
 
@@ -657,7 +653,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversationIdParam as ReturnType<typeof crypto.randomUUID>,
         )
         setMessages(restoredMessages)
-        markMessagesAsSaved(conversationIdParam, restoredMessages)
       }
       setRestoredConversationId(conversationIdParam)
       setSearchParams({}, { replace: true })
@@ -766,66 +761,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
-    // Skip all history writes in incognito so the chat never becomes durable
-    // (neither local nor cloud) and can't surface in a normal window (#1189).
-    // Logged-out history is owned by the local server (persisted during /chat
-    // in local mode), so only the cloud lane writes from the client now.
-    if (persistHistory && isLoggedIn) {
-      // Buffer the settled turn durably before the fire-and-forget cloud
-      // write, so an interrupted navigation still lets the next mount sync it
-      // (#559).
-      if (userId) {
-        void bufferActiveConversation({
-          id: conversationIdRef.current,
-          messages: messagesToSave,
-          lastMessagedAt: Date.now(),
-          userId,
-        })
-      }
-      saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    }
+    // The local server persists every turn during /chat, so the client has no
+    // history write of its own left. Incognito still writes nowhere (#1189).
 
     invalidateCredits()
   }, [status])
 
   // Save the in-flight conversation before it can be lost: on page hide (full
   // navigation, tab switch, close) and on unmount, because an in-app SPA route
-  // change to Settings unmounts the chat while the page stays visible, so
-  // visibilitychange never fires. Reads the latest messages either way; the next
-  // mount then syncs it to the cloud (#559). The settled turn is also buffered
-  // at turn end above. This effect's deps are the auth pair, not messages, so
-  // the unmount write runs once, not on every token.
-  useEffect(() => {
-    if (!persistHistory || !isLoggedIn || !userId) return
-    const writeBuffer = () => {
-      const latest = getPersistableMessages(messagesRef.current)
-      if (latest.length === 0) return
-      void bufferActiveConversation({
-        id: conversationIdRef.current,
-        messages: latest,
-        lastMessagedAt: Date.now(),
-        userId,
-      })
-    }
-    const onHide = () => {
-      if (document.visibilityState === 'hidden') writeBuffer()
-    }
-    document.addEventListener('visibilitychange', onHide)
-    return () => {
-      document.removeEventListener('visibilitychange', onHide)
-      writeBuffer()
-    }
-  }, [persistHistory, isLoggedIn, userId])
-
-  // On mount (and on sign-in), push any buffered in-flight conversations for the
-  // current user to the cloud so an interrupted chat still lands in history. It
-  // is never restored into the active conversation; recovery is via history.
-  useEffect(() => {
-    if (!persistHistory || !isLoggedIn || !userId) return
-    void flushActiveConversationBuffer(userId, (conversations) =>
-      uploadConversations(conversations, userId),
-    )
-  }, [persistHistory, isLoggedIn, userId])
+  // The durable turn buffer and its flush lived here to survive an
+  // interrupted cloud upload. The local server persists each turn during
+  // /chat, so there is nothing left to buffer.
 
   useEffect(() => {
     if (chatError) invalidateCredits()
@@ -969,7 +915,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     // (via the restore effect's cleanup), so a stale response can't revive the
     // old conversation over this new blank session.
     setSearchParams({}, { replace: true })
-    resetRemoteConversation()
   }
 
   const handleSelectProvider = (provider: Provider) => {

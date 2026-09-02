@@ -91,10 +91,6 @@ mock.module('../../lib/llm-providers/storage', () => ({
   },
 }))
 
-mock.module('@/lib/llm-providers/uploadLlmProvidersToGraphql', () => ({
-  uploadLlmProvidersToGraphql: async () => {},
-}))
-
 const timestamp = 1000
 
 function providerConfig(

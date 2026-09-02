@@ -51,9 +51,12 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
     if (migrationsDir) {
       migrate(db, { migrationsFolder: migrationsDir })
     } else {
-      logger.warn('Drizzle migrations unavailable; bootstrapping current schema', {
-        dbPath: options.dbPath,
-      })
+      logger.warn(
+        'Drizzle migrations unavailable; bootstrapping current schema',
+        {
+          dbPath: options.dbPath,
+        },
+      )
       bootstrapCurrentSchema(sqlite)
     }
   }
@@ -97,7 +100,9 @@ export function resolveMigrationsDir(
 
 /** Accepts only migration folders Drizzle can read without filesystem errors. */
 function hasCompleteMigrationSet(migrationsDir: string): boolean {
-  const journal = readDrizzleJournal(join(migrationsDir, 'meta', '_journal.json'))
+  const journal = readDrizzleJournal(
+    join(migrationsDir, 'meta', '_journal.json'),
+  )
   if (!journal) return false
 
   const journalTags = new Set(journal.entries.map((entry) => entry.tag))

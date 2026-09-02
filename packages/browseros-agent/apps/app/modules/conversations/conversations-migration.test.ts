@@ -1,236 +1,154 @@
-import { describe, expect, it, mock } from 'bun:test'
-import type { UIMessage } from 'ai'
+import { describe, expect, it } from 'bun:test'
 import type { Conversation } from '@/lib/conversations/conversationStorage'
 import {
-  collectServerConversations,
   createSerialRunner,
   migrateLegacyConversations,
-  promoteServerConversations,
 } from './conversations-migration.helpers'
 
-function conversation(id: string): Conversation {
-  const messages: UIMessage[] = [
-    { id: `${id}-m`, role: 'user', parts: [{ type: 'text', text: id }] },
-  ]
-  return { id, messages, lastMessagedAt: 1 }
+function conversation(id: string, messageIds: string[] = ['m1']): Conversation {
+  return {
+    id,
+    messages: messageIds.map((mid) => ({ id: mid })),
+    lastMessagedAt: 1,
+  } as unknown as Conversation
+}
+
+const neverLoaded = async () => {
+  throw new Error('should not read the server row')
 }
 
 describe('migrateLegacyConversations', () => {
-  it('does nothing when there are no conversations', async () => {
-    const importToServer = mock(async () => {})
-    const uploadToCloud = mock(async () => [])
-
-    expect(
-      await migrateLegacyConversations({
-        conversations: [],
-        isLoggedIn: false,
-        userId: undefined,
-        importToServer,
-        uploadToCloud,
-      }),
-    ).toEqual([])
-    expect(importToServer).not.toHaveBeenCalled()
-    expect(uploadToCloud).not.toHaveBeenCalled()
+  it('does nothing when there is nothing to migrate', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [],
+      importToServer: async () => {
+        throw new Error('should not be called')
+      },
+      loadFromServer: neverLoaded,
+    })
+    expect(handled).toEqual([])
   })
 
-  it('uploads to the cloud when logged in', async () => {
-    const importToServer = mock(async () => {})
-    const uploadToCloud = mock(async () => ['a'])
-
+  it('imports every conversation into the local server', async () => {
+    const imported: string[] = []
     const handled = await migrateLegacyConversations({
       conversations: [conversation('a'), conversation('b')],
-      isLoggedIn: true,
-      userId: 'user-1',
-      importToServer,
-      uploadToCloud,
+      importToServer: async (c) => {
+        imported.push(c.id)
+        return { imported: true }
+      },
+      loadFromServer: neverLoaded,
     })
-
-    expect(handled).toEqual(['a'])
-    expect(uploadToCloud).toHaveBeenCalledWith(
-      [conversation('a'), conversation('b')],
-      'user-1',
-    )
-    expect(importToServer).not.toHaveBeenCalled()
-  })
-
-  it('imports to the server when logged out', async () => {
-    const importToServer = mock(async () => {})
-    const uploadToCloud = mock(async () => [])
-
-    const handled = await migrateLegacyConversations({
-      conversations: [conversation('a'), conversation('b')],
-      isLoggedIn: false,
-      userId: undefined,
-      importToServer,
-      uploadToCloud,
-    })
-
+    expect(imported).toEqual(['a', 'b'])
     expect(handled).toEqual(['a', 'b'])
-    expect(importToServer).toHaveBeenCalledTimes(2)
-    expect(uploadToCloud).not.toHaveBeenCalled()
   })
 
-  it('only reports the conversations that imported successfully', async () => {
-    const importToServer = mock(async (conv: Conversation) => {
-      if (conv.id === 'b') throw new Error('server down')
-    })
-
+  // A conversation that fails is left in storage so the next attempt retries
+  // it, rather than being dropped as handled.
+  it('reports only the conversations that imported', async () => {
     const handled = await migrateLegacyConversations({
       conversations: [conversation('a'), conversation('b'), conversation('c')],
-      isLoggedIn: false,
-      userId: undefined,
-      importToServer,
-      uploadToCloud: mock(async () => []),
+      importToServer: async (c) => {
+        if (c.id === 'b') throw new Error('server unavailable')
+        return { imported: true }
+      },
+      loadFromServer: neverLoaded,
     })
-
     expect(handled).toEqual(['a', 'c'])
   })
 
-  it('does not touch the server for a logged-in state that lacks a user id', async () => {
-    const importToServer = mock(async () => {})
-    const uploadToCloud = mock(async () => [])
+  it('reports nothing when the server is unreachable', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a')],
+      importToServer: async () => {
+        throw new Error('server unavailable')
+      },
+      loadFromServer: neverLoaded,
+    })
+    expect(handled).toEqual([])
+  })
+})
 
-    expect(
-      await migrateLegacyConversations({
-        conversations: [conversation('a')],
-        isLoggedIn: true,
-        userId: undefined,
-        importToServer,
-        uploadToCloud,
+// The import is insert-if-absent: an id already on the server answers with a
+// success that wrote nothing. Draining on that alone deletes the legacy copy
+// against a row that may be an older, shorter version of it.
+describe('migrateLegacyConversations when the import is skipped', () => {
+  const skipped = async () => ({ imported: false })
+
+  it('drains when the server row already holds every message', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({
+        messages: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
       }),
-    ).toEqual([])
-    expect(importToServer).not.toHaveBeenCalled()
-    expect(uploadToCloud).not.toHaveBeenCalled()
-  })
-})
-
-describe('collectServerConversations', () => {
-  it('pairs each summary with its detail and carries lastMessagedAt', async () => {
-    const listSummaries = mock(async () => [
-      { id: 'a', lastMessagedAt: 10 },
-      { id: 'b', lastMessagedAt: 20 },
-    ])
-    const loadDetail = mock(async (id: string) => ({
-      id,
-      messages: [{ id: `${id}-m`, role: 'user', parts: [] }] as UIMessage[],
-    }))
-
-    const result = await collectServerConversations({
-      listSummaries,
-      loadDetail,
     })
+    expect(handled).toEqual(['a'])
+  })
 
-    expect(result).toEqual([
-      {
-        id: 'a',
-        lastMessagedAt: 10,
-        messages: [{ id: 'a-m', role: 'user', parts: [] }],
+  it('keeps the legacy copy when the server row is missing messages', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({ messages: [{ id: 'm1' }] }),
+    })
+    expect(handled).toEqual([])
+  })
+
+  // Same length, different messages: a count comparison would wrongly drain.
+  it('keeps the legacy copy when the server row differs but is the same size', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({
+        messages: [{ id: 'm1' }, { id: 'other' }],
+      }),
+    })
+    expect(handled).toEqual([])
+  })
+
+  it('keeps the legacy copy when the server row cannot be read', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a')],
+      importToServer: skipped,
+      loadFromServer: async () => null,
+    })
+    expect(handled).toEqual([])
+  })
+
+  it('does not drain when reading the server row throws', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a')],
+      importToServer: skipped,
+      loadFromServer: async () => {
+        throw new Error('server unavailable')
       },
-      {
-        id: 'b',
-        lastMessagedAt: 20,
-        messages: [{ id: 'b-m', role: 'user', parts: [] }],
-      },
-    ])
-  })
-
-  it('drops a conversation deleted before its detail loaded', async () => {
-    const listSummaries = mock(async () => [
-      { id: 'a', lastMessagedAt: 10 },
-      { id: 'gone', lastMessagedAt: 5 },
-    ])
-    const loadDetail = mock(async (id: string) =>
-      id === 'gone' ? null : { id, messages: [] as UIMessage[] },
-    )
-
-    const result = await collectServerConversations({
-      listSummaries,
-      loadDetail,
     })
-
-    expect(result.map((conversation) => conversation.id)).toEqual(['a'])
-  })
-})
-
-describe('promoteServerConversations', () => {
-  it('does nothing when the server has no conversations', async () => {
-    const upload = mock(async () => [])
-    const drain = mock(async () => {})
-
-    const result = await promoteServerConversations({
-      userId: 'u1',
-      collect: mock(async () => []),
-      upload,
-      drain,
-    })
-
-    expect(result).toEqual({ uploadedIds: [], allUploaded: true })
-    expect(upload).not.toHaveBeenCalled()
-    expect(drain).not.toHaveBeenCalled()
-  })
-
-  it('drains every conversation the cloud confirms', async () => {
-    const drain = mock((_id: string) => Promise.resolve())
-
-    const result = await promoteServerConversations({
-      userId: 'u1',
-      collect: mock(async () => [conversation('a'), conversation('b')]),
-      upload: mock(async () => ['a', 'b']),
-      drain,
-    })
-
-    expect(result).toEqual({ uploadedIds: ['a', 'b'], allUploaded: true })
-    expect(drain.mock.calls.map((call) => call[0]).sort()).toEqual(['a', 'b'])
-  })
-
-  it('keeps a failed conversation on the server and reports incomplete', async () => {
-    const drain = mock(async () => {})
-
-    const result = await promoteServerConversations({
-      userId: 'u1',
-      collect: mock(async () => [conversation('a'), conversation('b')]),
-      upload: mock(async () => ['a']),
-      drain,
-    })
-
-    expect(result).toEqual({ uploadedIds: ['a'], allUploaded: false })
-    expect(drain).toHaveBeenCalledTimes(1)
-    expect(drain).toHaveBeenCalledWith('a')
+    expect(handled).toEqual([])
   })
 })
 
 describe('createSerialRunner', () => {
-  it('runs tasks one at a time', async () => {
+  it('runs tasks one at a time in order', async () => {
     const run = createSerialRunner()
     const order: string[] = []
+    const task = (id: string, ms: number) => async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      order.push(id)
+      return id
+    }
 
-    const first = run(async () => {
-      order.push('1-start')
-      await Promise.resolve()
-      order.push('1-end')
-    })
-    const second = run(async () => {
-      order.push('2-start')
-      order.push('2-end')
-    })
-    await Promise.all([first, second])
+    await Promise.all([run(task('slow', 20)), run(task('fast', 1))])
 
-    expect(order).toEqual(['1-start', '1-end', '2-start', '2-end'])
+    expect(order).toEqual(['slow', 'fast'])
   })
 
-  it('runs the next task even when the previous one rejects', async () => {
+  it('keeps running after a task rejects', async () => {
     const run = createSerialRunner()
-    const ran: string[] = []
-
-    const first = run(async () => {
+    await run(async () => {
       throw new Error('boom')
-    })
-    const second = run(async () => {
-      ran.push('second')
-    })
+    }).catch(() => undefined)
 
-    await expect(first).rejects.toThrow('boom')
-    await second
-    expect(ran).toEqual(['second'])
+    await expect(run(async () => 'next')).resolves.toBe('next')
   })
 })

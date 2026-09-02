@@ -1,5 +1,4 @@
 import { storage } from '@wxt-dev/storage'
-import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
@@ -12,11 +11,7 @@ import {
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import {
-  setupLlmProvidersBackupToBrowserOS,
-  setupLlmProvidersSyncToBackend,
-  syncLlmProviders,
-} from '@/lib/llm-providers/storage'
+import { setupLlmProvidersBackupToBrowserOS } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
@@ -25,10 +20,6 @@ import {
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
-import {
-  setupScheduledJobsSyncToBackend,
-  syncScheduledJobs,
-} from '@/lib/schedules/syncSchedulesToBackend'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
@@ -59,8 +50,6 @@ export default defineBackground(() => {
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
-  setupLlmProvidersSyncToBackend()
-  setupScheduledJobsSyncToBackend()
 
   scheduledJobRuns()
 
@@ -149,17 +138,6 @@ export default defineBackground(() => {
         selectedTextStorage.setValue(rest)
       }
     })
-  })
-
-  sessionStorage.watch(async (newSession) => {
-    if (newSession?.user?.id) {
-      try {
-        await syncLlmProviders()
-      } catch {}
-      try {
-        await syncScheduledJobs()
-      } catch {}
-    }
   })
 
   onServerMessage('checkHealth', async () => {
