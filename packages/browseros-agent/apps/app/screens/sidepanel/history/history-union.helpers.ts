@@ -26,3 +26,23 @@ export function hasAnyConversation(grouped: GroupedConversations): boolean {
     grouped.older.length > 0
   )
 }
+
+/**
+ * Whether the cloud section should pull the next page on its own.
+ *
+ * Pagination is normally driven by a sentinel inside the rendered list, which
+ * never mounts while the section has nothing visible. A page whose entries are
+ * all present locally deduplicates away to nothing, so without this the
+ * section stalls on that page and never reaches the cloud-only conversations
+ * behind it.
+ */
+export function shouldAdvanceCloudPage(state: {
+  hasVisibleConversations: boolean
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  isLoading: boolean
+}): boolean {
+  if (state.hasVisibleConversations) return false
+  if (state.isLoading || state.isFetchingNextPage) return false
+  return state.hasNextPage
+}

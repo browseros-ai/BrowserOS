@@ -6,6 +6,7 @@ import type {
 import {
   excludeLocalConversations,
   hasAnyConversation,
+  shouldAdvanceCloudPage,
 } from './history-union.helpers'
 
 function conversation(id: string): HistoryConversation {
@@ -64,4 +65,45 @@ describe('hasAnyConversation', () => {
       ).toBe(true)
     })
   }
+})
+
+describe('shouldAdvanceCloudPage', () => {
+  const stalled = {
+    hasVisibleConversations: false,
+    hasNextPage: true,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }
+
+  // The page that stalls is the ordinary one right after this ships: the most
+  // recent conversations exist in both stores and sort onto the first page, so
+  // it deduplicates away to nothing and the sentinel never mounts to pull the
+  // cloud-only conversations behind it.
+  it('advances when a page deduplicates away to nothing', () => {
+    expect(shouldAdvanceCloudPage(stalled)).toBe(true)
+  })
+
+  it('stops once something is visible, leaving the sentinel to take over', () => {
+    expect(
+      shouldAdvanceCloudPage({ ...stalled, hasVisibleConversations: true }),
+    ).toBe(false)
+  })
+
+  it('terminates when the pages run out', () => {
+    expect(shouldAdvanceCloudPage({ ...stalled, hasNextPage: false })).toBe(
+      false,
+    )
+  })
+
+  // Without these the effect would queue a second fetch on every render while
+  // the first is still in flight.
+  it('does not stack a fetch on top of one in flight', () => {
+    expect(
+      shouldAdvanceCloudPage({ ...stalled, isFetchingNextPage: true }),
+    ).toBe(false)
+  })
+
+  it('waits for the first page before advancing', () => {
+    expect(shouldAdvanceCloudPage({ ...stalled, isLoading: true })).toBe(false)
+  })
 })

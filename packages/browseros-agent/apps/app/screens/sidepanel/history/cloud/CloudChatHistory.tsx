@@ -1,7 +1,7 @@
 import { keepPreviousData, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
 import type { FC } from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
 import { getQueryKeyFromDocument } from '@/lib/graphql/getQueryKeyFromDocument'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
@@ -18,6 +18,7 @@ import {
 import {
   excludeLocalConversations,
   hasAnyConversation,
+  shouldAdvanceCloudPage,
 } from '../history-union.helpers'
 
 export interface CloudChatHistoryProps {
@@ -115,12 +116,33 @@ export const CloudChatHistory: FC<CloudChatHistoryProps> = ({
       groupConversations(excludeLocalConversations(conversations, localIds)),
     [conversations, localIds],
   )
+  const hasVisibleConversations = hasAnyConversation(groupedConversations)
+
+  // Pagination is normally driven by a sentinel inside the rendered list, so a
+  // page that deduplicates away to nothing would stop it dead: the section
+  // renders null, the sentinel never mounts, and cloud-only conversations on
+  // later pages stay invisible. That is the ordinary case right after this
+  // ships, because the most recent conversations are the ones that exist in
+  // both stores and they sort onto the first page.
+  //
+  // Advancing here is the only way to reach past them; it cannot be lifted
+  // into an event handler because there is no interaction to hang it on, and
+  // it terminates when the pages run out.
+  const advance = shouldAdvanceCloudPage({
+    hasVisibleConversations,
+    hasNextPage: Boolean(hasNextPage),
+    isFetchingNextPage,
+    isLoading: isLoadingConversations,
+  })
+  useEffect(() => {
+    if (advance) fetchNextPage()
+  }, [advance, fetchNextPage])
 
   // Nothing to announce until there is something here. The loading case is
   // silent too: this section sits below the local list, so a spinner would
   // shift content the user is already reading.
   if (!profileId || isLoadingConversations) return null
-  if (!hasAnyConversation(groupedConversations)) return null
+  if (!hasVisibleConversations) return null
 
   return (
     <section className="mt-6 border-border border-t pt-4">
