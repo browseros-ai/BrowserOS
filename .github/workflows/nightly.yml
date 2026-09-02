@@ -182,8 +182,6 @@ jobs:
     name: Build signed BrowserOS nightly
     needs: [transaction, verify-components]
     uses: ./.github/workflows/nightly-macos-product.yml
-    permissions:
-      contents: read
     with:
       product: browseros
       state_ref: ${{ needs.transaction.outputs.state_ref }}
@@ -199,8 +197,6 @@ jobs:
     name: Build signed BrowserOS neo nightly
     needs: [transaction, verify-components]
     uses: ./.github/workflows/nightly-macos-product.yml
-    permissions:
-      contents: read
     with:
       product: browserclaw
       state_ref: ${{ needs.transaction.outputs.state_ref }}
@@ -279,8 +275,7 @@ jobs:
     needs: [transaction, finalize-server]
     uses: ./.github/workflows/publish-server-ota.yml
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     with:
       product: browseros
       version: ${{ needs.transaction.outputs.server_version }}
@@ -294,8 +289,7 @@ jobs:
     needs: [transaction, finalize-claw-server]
     uses: ./.github/workflows/publish-server-ota.yml
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     with:
       product: browserclaw
       version: ${{ needs.transaction.outputs.claw_server_version }}
