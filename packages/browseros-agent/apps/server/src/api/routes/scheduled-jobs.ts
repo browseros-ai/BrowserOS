@@ -33,6 +33,11 @@ const UpsertJobSchema = z.object({
   createdAt: z.number().optional(),
 })
 
+/** Bulk one-time import. Insert-if-absent, for the reason on the provider route. */
+const ImportJobsSchema = z.object({
+  jobs: z.array(UpsertJobSchema.extend({ id: z.string().min(1) })),
+})
+
 export function createScheduledJobRoutes(
   options: { store?: ScheduledJobStore } = {},
 ) {
@@ -40,6 +45,15 @@ export function createScheduledJobRoutes(
 
   return new Hono<Env>()
     .get('/', async (c) => c.json({ jobs: await store.list() }))
+    .post('/import', zValidator('json', ImportJobsSchema), async (c) => {
+      const imported: string[] = []
+      const skipped: string[] = []
+      for (const job of c.req.valid('json').jobs) {
+        const saved = await store.insertIfAbsent(job)
+        ;(saved ? imported : skipped).push(job.id)
+      }
+      return c.json({ imported, skipped })
+    })
     .get('/:jobId', zValidator('param', IdParamSchema), async (c) => {
       const job = await store.get(c.req.valid('param').jobId)
       if (!job) return c.json({ error: 'Unknown scheduled job' }, 404)

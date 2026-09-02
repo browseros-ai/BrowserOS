@@ -210,4 +210,36 @@ describe('createApiRoutes', () => {
 
     expect(response.status).toBe(403)
   })
+
+  // These rows hold provider API keys in the clear. The blanket
+  // requireTrustedOrigin only rejects a request that carries a disallowed
+  // Origin, so a request with none passes it and the prefix guard is the only
+  // thing standing between another local process and the credentials.
+  it('keeps provider credentials behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/llm-providers')).status).toBe(403)
+    expect(
+      (
+        await app.request('/llm-providers', {}, {
+          server: { requestIP: () => ({ address: '192.168.1.20' }) },
+        } as never)
+      ).status,
+    ).toBe(403)
+  })
+
+  it('keeps scheduled jobs behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/scheduled-jobs')).status).toBe(403)
+    expect(
+      (
+        await app.request('/scheduled-jobs/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobs: [] }),
+        })
+      ).status,
+    ).toBe(403)
+  })
 })

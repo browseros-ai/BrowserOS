@@ -136,6 +136,12 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .use('/acpx/probe/*', requireTrustedAppOrigin())
       .use('/agents/*', requireTrustedAppOrigin())
       .use('/conversations/*', requireTrustedAppOrigin())
+      // These carry provider credentials in the clear, so they need the
+      // localhost + extension-origin check. The blanket requireTrustedOrigin
+      // above only rejects a request that carries a disallowed Origin header;
+      // one with no Origin at all passes it.
+      .use('/llm-providers/*', requireTrustedAppOrigin())
+      .use('/scheduled-jobs/*', requireTrustedAppOrigin())
       .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/agents', resolvedAgentRoutes)
       .route('/conversations', createConversationRoutes())
