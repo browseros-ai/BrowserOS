@@ -66,10 +66,6 @@ describe('server build', () => {
     rootDir,
     `dist/prod/server/${target.id}/resources/bin/browseros_server${target.ext}`,
   )
-  const stagedSkillPath = resolve(
-    rootDir,
-    `dist/prod/server/${target.id}/resources/skills/browseros/SKILL.md`,
-  )
   const zipPath = resolve(
     rootDir,
     `dist/prod/server/browseros-server-resources-${target.id}.zip`,
@@ -167,10 +163,6 @@ describe('server build', () => {
     assert.ok(
       existsSync(stagedBinaryPath),
       `Expected staged server binary at ${stagedBinaryPath}`,
-    )
-    assert.ok(
-      existsSync(stagedSkillPath),
-      `Expected staged BrowserOS skill at ${stagedSkillPath}`,
     )
   }, 300_000)
 })

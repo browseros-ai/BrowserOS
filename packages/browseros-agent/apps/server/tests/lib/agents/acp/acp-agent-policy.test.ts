@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import { buildAcpAgentPolicy } from '../../../../src/lib/agents/acp/acp-agent-policy'
+import { BROWSEROS_ACP_INSTRUCTIONS } from '../../../../src/lib/agents/acp/browseros-instructions'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
 import { BROWSEROS_TOOL_LEASE_HEADER } from '../../../../src/lib/browser-tool-lease'
 
@@ -107,7 +108,7 @@ describe('buildAcpAgentPolicy', () => {
     })
     expect(policy.sessionOptions).toEqual({
       model: 'claude-opus-4-1',
-      systemPrompt: { append: SKILL },
+      systemPrompt: { append: BROWSEROS_ACP_INSTRUCTIONS },
     })
     expect(policy.fullAccessModeCandidates).toEqual(['bypassPermissions'])
   })
@@ -166,14 +167,15 @@ describe('buildAcpAgentPolicy', () => {
 
     await store.save(record)
     expect(await store.load(record.acpxRecordId)).toBeDefined()
+    // No workingDirectory set, so cwd defaults to the shared ACP workspace.
+    expect(policy.cwd).toBe('/state/browseros/agents/acp-workspace')
     expect(policy.sessionOptions).toEqual({})
     const renderedArgv = codexArgv.join('\n')
     expect(renderedArgv).not.toContain('CODEX_HOME')
     expect(renderedArgv).toContain('CODEX_CONFIG=')
     expect(renderedArgv).toContain('INITIAL_AGENT_MODE=agent-full-access')
-    expect(renderedArgv).toContain(
-      '"developer_instructions":"---\\nname: browseros',
-    )
+    expect(renderedArgv).toContain('"developer_instructions":"# BrowserOS')
+    expect(renderedArgv).toContain('browseros-neo')
     expect(renderedArgv).toContain('"model":"gpt-5.4"')
     expect(renderedArgv).toContain('"model_reasoning_effort":"high"')
     expect(renderedArgv).toContain('"browser@openai-bundled":{"enabled":false}')
