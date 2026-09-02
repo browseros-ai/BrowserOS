@@ -1,5 +1,4 @@
 import { storage } from '@wxt-dev/storage'
-import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
 import {
@@ -11,7 +10,6 @@ import {
   DEFAULT_PROVIDER_NAME,
 } from './provider-selection'
 import type { LlmProviderConfig, LlmProvidersBackup } from './types'
-import { uploadLlmProvidersToGraphql } from './uploadLlmProvidersToGraphql'
 
 export { DEFAULT_PROVIDER_ID } from './provider-selection'
 
@@ -74,28 +72,6 @@ export function setupLlmProvidersBackupToBrowserOS(): () => void {
       const defaultProviderId = await defaultProviderIdStorage.getValue()
       await backupToBrowserOS({ defaultProviderId, providers })
     }
-  })
-  return unsubscribe
-}
-
-export async function syncLlmProviders(): Promise<void> {
-  const providers = await providersStorage.getValue()
-  if (!providers || providers.length === 0) return
-
-  const session = await sessionStorage.getValue()
-  const userId = session?.user?.id
-  if (!userId) return
-
-  await uploadLlmProvidersToGraphql(providers, userId)
-}
-
-export function setupLlmProvidersSyncToBackend(): () => void {
-  syncLlmProviders().catch(() => {})
-
-  const unsubscribe = providersStorage.watch(async () => {
-    try {
-      await syncLlmProviders()
-    } catch {}
   })
   return unsubscribe
 }

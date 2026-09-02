@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { type FC, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { CloudSyncRetiredNotice } from '@/components/cloud-sync/CloudSyncRetiredNotice'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import {
   AlertDialog,
@@ -412,6 +413,8 @@ export const BrowserOsAiPane: FC = () => {
           Pick what runs your chats, and connect anything else you use.
         </p>
       </div>
+
+      <CloudSyncRetiredNotice />
 
       <BrowserClawPromoBanner />
 
