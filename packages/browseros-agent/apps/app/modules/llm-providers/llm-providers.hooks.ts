@@ -17,7 +17,7 @@ export interface UseLlmProvidersReturn {
   defaultProviderId: string
   selectedProvider: LlmProviderConfig | null
   isLoading: boolean
-  saveProvider: (provider: LlmProviderConfig) => Promise<void>
+  saveProvider: (provider: LlmProviderConfig) => Promise<LlmProviderConfig>
   setDefaultProvider: (providerId: string) => Promise<void>
   deleteProvider: (providerId: string) => Promise<void>
 }
@@ -159,10 +159,20 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     }
   }, [])
 
-  const saveProvider = async (provider: LlmProviderConfig) => {
+  const saveProvider = async (
+    provider: LlmProviderConfig,
+  ): Promise<LlmProviderConfig> => {
     const currentProviders = (await providersStorage.getValue()) || []
     const updatedProviders = upsertProviderConfig(currentProviders, provider)
     await providersStorage.setValue(updatedProviders)
+    // The single-instance upsert can keep an existing row's id, so a reconnect
+    // saves under the existing id, not the fresh one on `provider`. Return the
+    // row that was actually written so callers reference the id that persisted.
+    return (
+      updatedProviders.find((candidate) => candidate.id === provider.id) ??
+      updatedProviders.find((candidate) => candidate.type === provider.type) ??
+      provider
+    )
   }
 
   const setDefaultProviderFn = async (providerId: string) => {

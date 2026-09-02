@@ -117,7 +117,7 @@ interface AddProviderDialogState {
  */
 export function useAddProvider(input: {
   providers: LlmProviderConfig[]
-  saveProvider: (provider: LlmProviderConfig) => Promise<void>
+  saveProvider: (provider: LlmProviderConfig) => Promise<LlmProviderConfig>
   /** Fires once a provider is successfully added on any path, OAuth included. */
   onProviderAdded?: (provider: LlmProviderConfig) => void | Promise<void>
   /** Fires once a coding agent is successfully created. */
@@ -135,8 +135,10 @@ export function useAddProvider(input: {
   // "a provider was added" signal, with no list-watching or baselines.
   const saveProvider = useCallback(
     async (provider: LlmProviderConfig) => {
-      await rawSaveProvider(provider)
-      await onProviderAdded?.(provider)
+      // Report the row that was actually persisted: a single-instance reconnect
+      // keeps the existing id, which is the id the chat-target selection needs.
+      const saved = await rawSaveProvider(provider)
+      await onProviderAdded?.(saved)
     },
     [rawSaveProvider, onProviderAdded],
   )
