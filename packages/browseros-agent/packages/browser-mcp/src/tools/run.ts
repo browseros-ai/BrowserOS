@@ -80,20 +80,28 @@ export const run = defineTool({
       args.timeout ?? DEFAULT_TIMEOUT_MS,
       logs,
     )
+    // The return value, logs, and error are page-derived and untrusted. A
+    // schema-bearing tool's `structuredContent` is model-visible, so fence these
+    // fields too, not just the parallel text content, or hostile page output
+    // reaches the model unmarked through the structured channel.
     if (outcome.ok) {
       const value = jsonSafeValue(outcome.value)
       return textResult(wrapUntrusted(format(outcome), 'run'), {
         ok: true,
-        ...(value !== undefined && { value }),
-        logs: outcome.logs,
+        ...(value !== undefined && {
+          value: wrapUntrusted(safeStringify(value), 'run'),
+        }),
+        logs: outcome.logs.map((line) => wrapUntrusted(line, 'run')),
       })
     }
     return {
       ...errorResult(wrapUntrusted(format(outcome), 'run')),
       structuredContent: {
         ok: false,
-        logs: outcome.logs,
-        error: outcome.error?.message,
+        logs: outcome.logs.map((line) => wrapUntrusted(line, 'run')),
+        error: outcome.error
+          ? wrapUntrusted(outcome.error.message, 'run')
+          : undefined,
       },
     }
   },
