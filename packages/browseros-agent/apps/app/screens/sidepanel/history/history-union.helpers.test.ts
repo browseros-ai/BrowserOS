@@ -73,6 +73,7 @@ describe('shouldAdvanceCloudPage', () => {
     hasNextPage: true,
     isFetchingNextPage: false,
     isLoading: false,
+    hasPageError: false,
   }
 
   // The page that stalls is the ordinary one right after this ships: the most
@@ -105,5 +106,13 @@ describe('shouldAdvanceCloudPage', () => {
 
   it('waits for the first page before advancing', () => {
     expect(shouldAdvanceCloudPage({ ...stalled, isLoading: true })).toBe(false)
+  })
+
+  // A rejected fetch leaves every other input exactly as it was before the
+  // fetch started, so without this the section would retry forever.
+  it('stops after a page fails instead of retrying it forever', () => {
+    expect(shouldAdvanceCloudPage({ ...stalled, hasPageError: true })).toBe(
+      false,
+    )
   })
 })

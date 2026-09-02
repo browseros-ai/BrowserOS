@@ -54,6 +54,7 @@ export const CloudChatHistory: FC<CloudChatHistoryProps> = ({
     isFetching,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     fetchNextPage,
   } = useGraphqlInfiniteQuery(
     GetConversationsForHistoryDocument,
@@ -127,12 +128,13 @@ export const CloudChatHistory: FC<CloudChatHistoryProps> = ({
   //
   // Advancing here is the only way to reach past them; it cannot be lifted
   // into an event handler because there is no interaction to hang it on, and
-  // it terminates when the pages run out.
+  // it terminates when the pages run out or a page fails.
   const advance = shouldAdvanceCloudPage({
     hasVisibleConversations,
     hasNextPage: Boolean(hasNextPage),
     isFetchingNextPage,
     isLoading: isLoadingConversations,
+    hasPageError: isFetchNextPageError,
   })
   useEffect(() => {
     if (advance) fetchNextPage()

@@ -35,14 +35,21 @@ export function hasAnyConversation(grouped: GroupedConversations): boolean {
  * all present locally deduplicates away to nothing, so without this the
  * section stalls on that page and never reaches the cloud-only conversations
  * behind it.
+ *
+ * A failed page has to stop it. `hasNextPage` is derived from the last
+ * successful page, so a rejected fetch leaves it true while the in-flight flag
+ * clears, returning every input to its pre-fetch value. Advancing again on
+ * that state retries a failing request forever with no user interaction.
  */
 export function shouldAdvanceCloudPage(state: {
   hasVisibleConversations: boolean
   hasNextPage: boolean
   isFetchingNextPage: boolean
   isLoading: boolean
+  hasPageError: boolean
 }): boolean {
   if (state.hasVisibleConversations) return false
+  if (state.hasPageError) return false
   if (state.isLoading || state.isFetchingNextPage) return false
   return state.hasNextPage
 }
