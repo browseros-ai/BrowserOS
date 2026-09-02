@@ -22,11 +22,13 @@ import { createConversationRoutes } from './conversations'
 import { createCreditsRoutes } from './credits'
 import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
+import { createLlmProviderRoutes } from './llm-providers'
 import { createMcpRoutes } from './mcp'
 import { createMcpManagerRoutes } from './mcp-manager'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
+import { createScheduledJobRoutes } from './scheduled-jobs'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
 
@@ -137,6 +139,8 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/agents', resolvedAgentRoutes)
       .route('/conversations', createConversationRoutes())
+      .route('/llm-providers', createLlmProviderRoutes())
+      .route('/scheduled-jobs', createScheduledJobRoutes())
   )
 }
 

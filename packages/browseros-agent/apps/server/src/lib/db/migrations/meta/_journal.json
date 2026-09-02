@@ -57,6 +57,13 @@
       "when": 1787580067090,
       "tag": "0007_add_custom_acp_agents",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788319873053,
+      "tag": "0008_add_llm_providers_and_scheduled_jobs",
+      "breakpoints": true
     }
   ]
 }

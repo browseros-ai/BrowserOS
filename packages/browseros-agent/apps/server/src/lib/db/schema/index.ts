@@ -6,4 +6,6 @@
 
 export * from './agents'
 export * from './conversations'
+export * from './llm-providers'
+export * from './scheduled-jobs'
 export * from './oauth'
