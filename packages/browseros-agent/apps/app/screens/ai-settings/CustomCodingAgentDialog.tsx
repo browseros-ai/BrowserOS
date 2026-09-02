@@ -44,8 +44,8 @@ export interface CustomCodingAgentDialogProps {
   onOpenChange: (open: boolean) => void
   /** When set, the dialog edits this agent instead of creating a new one. */
   agent?: AcpAgent | null
-  /** Fires after a new custom agent is successfully created (not on edit). */
-  onSaved?: () => void
+  /** Fires with the new agent's id after a custom agent is created (not on edit). */
+  onSaved?: (agentId: string) => void
 }
 
 export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
@@ -124,6 +124,7 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
       systemPromptAppend,
       icon: logoKey,
     })
+    let createdId: string | undefined
     if (isEdit && agent) {
       await updateAgent.mutateAsync({
         agentId: agent.id,
@@ -136,7 +137,7 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
         },
       })
     } else {
-      await createAgent.mutateAsync({
+      const created = await createAgent.mutateAsync({
         name: name.trim(),
         type: 'custom',
         modelId: modelId || undefined,
@@ -144,9 +145,10 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
         workingDirectory: workingDirectory.trim() || undefined,
         customConfig,
       })
+      createdId = created.id
     }
     onOpenChange(false)
-    if (!agent) onSaved?.()
+    if (createdId) onSaved?.(createdId)
   }
 
   return (

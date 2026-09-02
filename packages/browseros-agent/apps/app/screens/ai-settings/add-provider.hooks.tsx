@@ -99,7 +99,7 @@ interface AddProviderDialogState {
   activeDeviceCode: ReturnType<typeof useOAuthProviderFlow>['pendingDeviceCode']
   clearActiveDeviceCode: () => void
   onSaveProvider: (provider: LlmProviderConfig) => Promise<void>
-  onAgentAdded?: () => void
+  onAgentAdded?: (agentId: string) => void
 }
 
 /**
@@ -121,7 +121,7 @@ export function useAddProvider(input: {
   /** Fires once a provider is successfully added on any path, OAuth included. */
   onProviderAdded?: (provider: LlmProviderConfig) => void | Promise<void>
   /** Fires once a coding agent is successfully created. */
-  onAgentAdded?: () => void
+  onAgentAdded?: (agentId: string) => void
 }): AddProviderController {
   const {
     providers,

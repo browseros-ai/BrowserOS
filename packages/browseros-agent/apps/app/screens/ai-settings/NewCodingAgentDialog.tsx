@@ -29,8 +29,8 @@ export interface NewCodingAgentDialogProps {
   type: AcpAgentType | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Fires after the agent is successfully created. */
-  onSaved?: () => void
+  /** Fires with the new agent's id after it is successfully created. */
+  onSaved?: (agentId: string) => void
 }
 
 export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
@@ -58,14 +58,14 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
 
   const handleCreate = async () => {
     if (!type || !name.trim()) return
-    await createAgent.mutateAsync({
+    const created = await createAgent.mutateAsync({
       name: name.trim(),
       type,
       modelId: modelId || undefined,
       reasoningEffort: reasoningEffort || undefined,
     })
     onOpenChange(false)
-    onSaved?.()
+    onSaved?.(created.id)
   }
 
   return (

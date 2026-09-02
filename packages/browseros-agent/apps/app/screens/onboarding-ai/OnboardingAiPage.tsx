@@ -1,5 +1,6 @@
 import type { FC } from 'react'
 import { useNavigate } from 'react-router'
+import { commitChatTargetSelection } from '@/modules/chat/sidepanel-chat-targets'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { AddProviderSection } from '@/screens/ai-settings/AddProviderSection'
 import {
@@ -26,16 +27,27 @@ export const OnboardingAiPage: FC = () => {
   const goHome = () => navigate('/home', { replace: true })
 
   // Adding a provider or a coding agent both count as connecting something, so
-  // either hands off to the new tab page. A newly added provider also becomes
-  // the default so the user's first chat uses what they just set up.
+  // either makes what was just added the active chat target and then hands off.
+  // commitChatTargetSelection writes the unified selection new chats read (and
+  // updates the default-provider id for an LLM target); await it before the hop
+  // so the new tab page opens on the target the user just set up.
   const addProvider = useAddProvider({
     providers,
     saveProvider,
     onProviderAdded: async (provider) => {
-      await setDefaultProvider(provider.id)
+      await commitChatTargetSelection(
+        { kind: 'llm', id: provider.id },
+        { setDefaultProvider },
+      )
       goHome()
     },
-    onAgentAdded: goHome,
+    onAgentAdded: async (agentId) => {
+      await commitChatTargetSelection(
+        { kind: 'acp', id: agentId },
+        { setDefaultProvider },
+      )
+      goHome()
+    },
   })
 
   return (
