@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..274fa0c0a3d79
+index 0000000000000000000000000000000000000000..68597d68ae413015f8783404d822d8a3f7dacb44
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,133 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -39,6 +39,10 @@ index 0000000000000..274fa0c0a3d79
 +
 +  registry->RegisterBooleanPref(prefs::kNtpFocusContent, false);
 +  registry->RegisterBooleanPref(prefs::kOnboardingCompleted, false);
++  // BrowserClaw is a browser for agents: they work in the background by
++  // default. BrowserOS keeps stock focus behaviour.
++  registry->RegisterBooleanPref(prefs::kAutomationNeverStealsFocus,
++                                IsBrowserClawProduct());
 +}
 +
 +bool ShouldShowLLMChat(PrefService* pref_service) {
@@ -102,6 +106,10 @@ index 0000000000000..274fa0c0a3d79
 +
 +bool IsNtpFocusContentEnabled(PrefService* pref_service) {
 +  return pref_service->GetBoolean(prefs::kNtpFocusContent);
++}
++
++bool AutomationNeverStealsFocus(PrefService* pref_service) {
++  return pref_service->GetBoolean(prefs::kAutomationNeverStealsFocus);
 +}
 +
 +const char* GetVisibilityPrefForAction(actions::ActionId id) {
