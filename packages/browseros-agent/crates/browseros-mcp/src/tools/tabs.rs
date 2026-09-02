@@ -123,3 +123,26 @@ fn format_page_line(page: &browseros_core::pages::PageInfo) -> String {
         format!("[{}] {} ({})", page.page_id.0, page.url, page.title)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TabsAction, TabsArgs};
+    use serde_json::json;
+
+    #[test]
+    fn retired_background_field_is_accepted_and_ignored() -> anyhow::Result<()> {
+        // Clients that cached the old schema still send it; it must not trip
+        // `deny_unknown_fields`, and it must not influence the tab's focus.
+        let args: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "background": false }))?;
+        assert!(matches!(args.action, TabsAction::New));
+        assert_eq!(args._background, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_fields_are_still_rejected() {
+        let result = serde_json::from_value::<TabsArgs>(json!({ "action": "new", "hidden": true }));
+        assert!(result.is_err_and(|error| error.to_string().contains("hidden")));
+    }
+}
