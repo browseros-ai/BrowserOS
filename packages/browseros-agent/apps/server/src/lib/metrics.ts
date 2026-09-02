@@ -43,7 +43,6 @@ function sanitizeToolName(name: string): string {
 }
 
 interface MetricsConfig {
-  client_id?: string
   install_id?: string
   browseros_version?: string
   chromium_version?: string
@@ -167,10 +166,6 @@ class MetricsService {
     return this.client !== null
   }
 
-  getClientId(): string | null {
-    return this.config?.client_id ?? null
-  }
-
   /** Records one metrics event, aggregating noisy events and sampling immediate captures. */
   log(
     eventName: string,
@@ -260,7 +255,6 @@ class MetricsService {
     if (!this.client || !this.config) return
 
     const {
-      client_id,
       install_id,
       browseros_version,
       chromium_version,
@@ -268,22 +262,19 @@ class MetricsService {
       ...defaultProperties
     } = this.config
 
-    // No identity ⇒ no event. The previous `'anonymous'` fallback let
-    // unconfigured instances funnel everything into one
-    // un-attributable bucket and inflate billing dramatically. Treat
-    // "no identity" as a configuration error to be surfaced at boot,
-    // not as a reason to emit useless events.
-    const distinctId = client_id || install_id
-    if (!distinctId) return
+    if (!install_id) return
 
     this.client.capture({
-      distinctId,
+      distinctId: install_id,
       event: EVENT_PREFIX + eventName,
       properties: {
         ...defaultProperties,
         ...properties,
-        ...(client_id && { client_id }),
-        ...(install_id && { install_id }),
+        // These identify the process boundary and must not be replaceable by
+        // caller-supplied event properties.
+        install_id,
+        product: 'browseros',
+        surface: 'server',
         ...(browseros_version && { browseros_version }),
         ...(chromium_version && { chromium_version }),
         ...(server_version && { server_version }),
