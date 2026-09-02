@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 6015a94554c21..43dd32ff0983d 100644
+index 6015a94554c21ff42cabaadecd3a368c9b5f831d..c5dbcc26202e7097443262534f3f06519cbcfcb3 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 @@ -8,6 +8,16 @@
@@ -19,7 +19,7 @@ index 6015a94554c21..43dd32ff0983d 100644
  
    # The state of the browser window.
    experimental type WindowState extends string
-@@ -31,6 +41,224 @@ domain Browser
+@@ -31,6 +41,227 @@ domain Browser
        # The window state. Default to normal.
        optional WindowState windowState
  
@@ -131,6 +131,9 @@ index 6015a94554c21..43dd32ff0983d 100644
 +      optional string url
 +      optional WindowID windowId
 +      optional integer index
++      # Open the tab without selecting it. Defaults to true so an agent never
++      # switches the user's tab; false selects the tab within its window. The
++      # window itself is never raised by this command.
 +      optional boolean background
 +      optional boolean pinned
 +      optional BrowserContextID browserContextId
@@ -244,7 +247,7 @@ index 6015a94554c21..43dd32ff0983d 100644
    experimental type PermissionType extends string
      enum
        ar
-@@ -294,6 +522,28 @@ domain Browser
+@@ -294,6 +525,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  
