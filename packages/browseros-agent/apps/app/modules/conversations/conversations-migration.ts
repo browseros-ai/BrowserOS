@@ -4,6 +4,7 @@ import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import { conversationStorage } from '@/lib/conversations/conversationStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import {
+  fetchServerConversation,
   importServerConversation,
   SERVER_CONVERSATIONS_QUERY_KEY,
 } from './conversations.hooks'
@@ -31,6 +32,7 @@ export function useLegacyConversationMigration(): void {
       const handledIds = await migrateLegacyConversations({
         conversations,
         importToServer: importServerConversation,
+        loadFromServer: fetchServerConversation,
       })
       if (cancelled || handledIds.length === 0) return
 

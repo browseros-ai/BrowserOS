@@ -5,8 +5,16 @@ import {
   migrateLegacyConversations,
 } from './conversations-migration.helpers'
 
-function conversation(id: string): Conversation {
-  return { id, messages: [], lastMessagedAt: 1 } as unknown as Conversation
+function conversation(id: string, messageIds: string[] = ['m1']): Conversation {
+  return {
+    id,
+    messages: messageIds.map((mid) => ({ id: mid })),
+    lastMessagedAt: 1,
+  } as unknown as Conversation
+}
+
+const neverLoaded = async () => {
+  throw new Error('should not read the server row')
 }
 
 describe('migrateLegacyConversations', () => {
@@ -16,6 +24,7 @@ describe('migrateLegacyConversations', () => {
       importToServer: async () => {
         throw new Error('should not be called')
       },
+      loadFromServer: neverLoaded,
     })
     expect(handled).toEqual([])
   })
@@ -26,24 +35,12 @@ describe('migrateLegacyConversations', () => {
       conversations: [conversation('a'), conversation('b')],
       importToServer: async (c) => {
         imported.push(c.id)
+        return { imported: true }
       },
+      loadFromServer: neverLoaded,
     })
     expect(imported).toEqual(['a', 'b'])
     expect(handled).toEqual(['a', 'b'])
-  })
-
-  // A signed-in user used to have their history sent to the cloud instead.
-  // Everyone takes the local path now, which is the direction this work moves
-  // data, and the caller no longer passes identity at all.
-  it('takes the local path regardless of any session', async () => {
-    const imported: string[] = []
-    await migrateLegacyConversations({
-      conversations: [conversation('a')],
-      importToServer: async (c) => {
-        imported.push(c.id)
-      },
-    })
-    expect(imported).toEqual(['a'])
   })
 
   // A conversation that fails is left in storage so the next attempt retries
@@ -53,7 +50,9 @@ describe('migrateLegacyConversations', () => {
       conversations: [conversation('a'), conversation('b'), conversation('c')],
       importToServer: async (c) => {
         if (c.id === 'b') throw new Error('server unavailable')
+        return { imported: true }
       },
+      loadFromServer: neverLoaded,
     })
     expect(handled).toEqual(['a', 'c'])
   })
@@ -62,6 +61,66 @@ describe('migrateLegacyConversations', () => {
     const handled = await migrateLegacyConversations({
       conversations: [conversation('a')],
       importToServer: async () => {
+        throw new Error('server unavailable')
+      },
+      loadFromServer: neverLoaded,
+    })
+    expect(handled).toEqual([])
+  })
+})
+
+// The import is insert-if-absent: an id already on the server answers with a
+// success that wrote nothing. Draining on that alone deletes the legacy copy
+// against a row that may be an older, shorter version of it.
+describe('migrateLegacyConversations when the import is skipped', () => {
+  const skipped = async () => ({ imported: false })
+
+  it('drains when the server row already holds every message', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({
+        messages: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
+      }),
+    })
+    expect(handled).toEqual(['a'])
+  })
+
+  it('keeps the legacy copy when the server row is missing messages', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({ messages: [{ id: 'm1' }] }),
+    })
+    expect(handled).toEqual([])
+  })
+
+  // Same length, different messages: a count comparison would wrongly drain.
+  it('keeps the legacy copy when the server row differs but is the same size', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a', ['m1', 'm2'])],
+      importToServer: skipped,
+      loadFromServer: async () => ({
+        messages: [{ id: 'm1' }, { id: 'other' }],
+      }),
+    })
+    expect(handled).toEqual([])
+  })
+
+  it('keeps the legacy copy when the server row cannot be read', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a')],
+      importToServer: skipped,
+      loadFromServer: async () => null,
+    })
+    expect(handled).toEqual([])
+  })
+
+  it('does not drain when reading the server row throws', async () => {
+    const handled = await migrateLegacyConversations({
+      conversations: [conversation('a')],
+      importToServer: skipped,
+      loadFromServer: async () => {
         throw new Error('server unavailable')
       },
     })
