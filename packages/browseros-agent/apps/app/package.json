@@ -77,6 +77,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hook-form": "^7.85.0",
+    "react-query-kit": "^3.3.4",
     "react-resizable-panels": "^4.12.2",
     "react-router": "^7.18.2",
     "shiki": "^3.23.0",
