@@ -13,6 +13,11 @@ export interface ConversationListProps {
   isFetchingNextPage?: boolean
   onLoadMore?: () => void
   isRefreshing?: boolean
+  /**
+   * Shown when this list has nothing in it. History can render two lists now,
+   * so the wording has to say which store is empty.
+   */
+  emptyMessage?: string
 }
 
 export const ConversationList: FC<ConversationListProps> = ({
@@ -23,6 +28,7 @@ export const ConversationList: FC<ConversationListProps> = ({
   isFetchingNextPage,
   onLoadMore,
   isRefreshing,
+  emptyMessage = 'No conversations yet',
 }) => {
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
@@ -57,64 +63,60 @@ export const ConversationList: FC<ConversationListProps> = ({
     groupedConversations.older.length > 0
 
   return (
-    <main className="mt-4 flex h-full flex-1 flex-col space-y-4 overflow-y-auto">
-      <div className="w-full p-3">
-        {isRefreshing && (
-          <div className="flex items-center justify-center gap-2 pb-3 text-muted-foreground text-xs">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>Fetching latest conversations</span>
-          </div>
-        )}
-        {!hasConversations ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <MessageSquare className="mb-3 h-10 w-10 text-muted-foreground/50" />
-            <p className="text-muted-foreground text-sm">
-              No conversations yet
-            </p>
-            <Link to="/" className="mt-2 text-primary text-sm hover:underline">
-              Start a new chat
-            </Link>
-          </div>
-        ) : (
-          <>
-            <ConversationGroup
-              label={TIME_GROUP_LABELS.today}
-              conversations={groupedConversations.today}
-              onDelete={onDelete}
-              activeConversationId={activeConversationId}
-            />
-            <ConversationGroup
-              label={TIME_GROUP_LABELS.thisWeek}
-              conversations={groupedConversations.thisWeek}
-              onDelete={onDelete}
-              activeConversationId={activeConversationId}
-            />
-            <ConversationGroup
-              label={TIME_GROUP_LABELS.thisMonth}
-              conversations={groupedConversations.thisMonth}
-              onDelete={onDelete}
-              activeConversationId={activeConversationId}
-            />
-            <ConversationGroup
-              label={TIME_GROUP_LABELS.older}
-              conversations={groupedConversations.older}
-              onDelete={onDelete}
-              activeConversationId={activeConversationId}
-            />
+    <div className="w-full p-3">
+      {isRefreshing && (
+        <div className="flex items-center justify-center gap-2 pb-3 text-muted-foreground text-xs">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span>Fetching latest conversations</span>
+        </div>
+      )}
+      {!hasConversations ? (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <MessageSquare className="mb-3 h-10 w-10 text-muted-foreground/50" />
+          <p className="text-muted-foreground text-sm">{emptyMessage}</p>
+          <Link to="/" className="mt-2 text-primary text-sm hover:underline">
+            Start a new chat
+          </Link>
+        </div>
+      ) : (
+        <>
+          <ConversationGroup
+            label={TIME_GROUP_LABELS.today}
+            conversations={groupedConversations.today}
+            onDelete={onDelete}
+            activeConversationId={activeConversationId}
+          />
+          <ConversationGroup
+            label={TIME_GROUP_LABELS.thisWeek}
+            conversations={groupedConversations.thisWeek}
+            onDelete={onDelete}
+            activeConversationId={activeConversationId}
+          />
+          <ConversationGroup
+            label={TIME_GROUP_LABELS.thisMonth}
+            conversations={groupedConversations.thisMonth}
+            onDelete={onDelete}
+            activeConversationId={activeConversationId}
+          />
+          <ConversationGroup
+            label={TIME_GROUP_LABELS.older}
+            conversations={groupedConversations.older}
+            onDelete={onDelete}
+            activeConversationId={activeConversationId}
+          />
 
-            {hasNextPage && (
-              <div
-                ref={loadMoreRef}
-                className="flex items-center justify-center py-4"
-              >
-                {isFetchingNextPage && (
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </main>
+          {hasNextPage && (
+            <div
+              ref={loadMoreRef}
+              className="flex items-center justify-center py-4"
+            >
+              {isFetchingNextPage && (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }

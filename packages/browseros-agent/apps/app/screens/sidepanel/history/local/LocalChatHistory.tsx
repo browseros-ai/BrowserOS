@@ -32,6 +32,7 @@ export const LocalChatHistory: FC = () => {
       groupedConversations={groupedConversations}
       activeConversationId={activeConversationId}
       onDelete={(id) => deleteConversation.mutate(id)}
+      emptyMessage="No conversations on this device yet"
     />
   )
 }
