@@ -1,13 +1,11 @@
 import type { FC } from 'react'
 import { useNavigate } from 'react-router'
-import { useAcpAgents } from '@/modules/agents/agents.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { AddProviderSection } from '@/screens/ai-settings/AddProviderSection'
 import {
   AddProviderDialogs,
   useAddProvider,
 } from '@/screens/ai-settings/add-provider.hooks'
-import { useConnectionHandoff } from './onboarding-ai.hooks'
 
 /**
  * First-run setup, reached from the native onboarding rather than the sidebar.
@@ -16,23 +14,28 @@ import { useConnectionHandoff } from './onboarding-ai.hooks'
  * product, so it carries the catalogue and nothing else, no configured list,
  * promos, default-target control or delete flows. It renders outside every
  * layout route, so there is no sidebar either.
+ *
+ * The handoff to the new tab page is a direct callback from the add itself, not
+ * a reaction to the provider/agent lists changing: every add path already
+ * funnels through one success point, so there is nothing to watch or debounce.
  */
 export const OnboardingAiPage: FC = () => {
   const navigate = useNavigate()
-  const { providers, saveProvider, isLoading } = useLlmProviders()
-  // `settled` rather than `loading`: the agents hook documents that `loading`
-  // reads false for a render while the list is still empty, which would let
-  // the handoff take its baseline before existing agents have arrived.
-  const { agents, settled: agentsSettled } = useAcpAgents()
-  const addProvider = useAddProvider({ providers, saveProvider })
+  const { providers, saveProvider, setDefaultProvider } = useLlmProviders()
 
   const goHome = () => navigate('/home', { replace: true })
 
-  useConnectionHandoff({
+  // Adding a provider or a coding agent both count as connecting something, so
+  // either hands off to the new tab page. A newly added provider also becomes
+  // the default so the user's first chat uses what they just set up.
+  const addProvider = useAddProvider({
     providers,
-    agents,
-    ready: !isLoading && agentsSettled,
-    onConnected: goHome,
+    saveProvider,
+    onProviderAdded: async (provider) => {
+      await setDefaultProvider(provider.id)
+      goHome()
+    },
+    onAgentAdded: goHome,
   })
 
   return (

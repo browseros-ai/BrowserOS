@@ -1,4 +1,4 @@
-import { type FC, useState } from 'react'
+import { type FC, useCallback, useState } from 'react'
 import {
   CHATGPT_PRO_OAUTH_COMPLETED_EVENT,
   CHATGPT_PRO_OAUTH_DISCONNECTED_EVENT,
@@ -99,6 +99,7 @@ interface AddProviderDialogState {
   activeDeviceCode: ReturnType<typeof useOAuthProviderFlow>['pendingDeviceCode']
   clearActiveDeviceCode: () => void
   onSaveProvider: (provider: LlmProviderConfig) => Promise<void>
+  onAgentAdded?: () => void
 }
 
 /**
@@ -117,8 +118,28 @@ interface AddProviderDialogState {
 export function useAddProvider(input: {
   providers: LlmProviderConfig[]
   saveProvider: (provider: LlmProviderConfig) => Promise<void>
+  /** Fires once a provider is successfully added on any path, OAuth included. */
+  onProviderAdded?: (provider: LlmProviderConfig) => void | Promise<void>
+  /** Fires once a coding agent is successfully created. */
+  onAgentAdded?: () => void
 }): AddProviderController {
-  const { providers, saveProvider } = input
+  const {
+    providers,
+    saveProvider: rawSaveProvider,
+    onProviderAdded,
+    onAgentAdded,
+  } = input
+  // Every add path funnels through saveProvider: the dialog form calls it, and
+  // so do all three OAuth flows on token success (they poll in this mounted
+  // page, they do not navigate away). Wrapping it once is the single definitive
+  // "a provider was added" signal, with no list-watching or baselines.
+  const saveProvider = useCallback(
+    async (provider: LlmProviderConfig) => {
+      await rawSaveProvider(provider)
+      await onProviderAdded?.(provider)
+    },
+    [rawSaveProvider, onProviderAdded],
+  )
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
 
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false)
@@ -221,6 +242,7 @@ export function useAddProvider(input: {
         qwenCode.clearDeviceCode()
       },
       onSaveProvider: saveProvider,
+      onAgentAdded,
     },
   }
 }
@@ -244,11 +266,13 @@ export const AddProviderDialogs: FC<{ controller: AddProviderController }> = ({
         onOpenChange={(open) => {
           if (!open) d.setNewAgentType(null)
         }}
+        onSaved={d.onAgentAdded}
       />
       <CustomCodingAgentDialog
         open={d.customAgentDialogOpen}
         onOpenChange={d.setCustomAgentDialogOpen}
         agent={d.editingCustomAgent}
+        onSaved={d.onAgentAdded}
       />
       <DeviceCodeDialog
         deviceCode={d.activeDeviceCode}

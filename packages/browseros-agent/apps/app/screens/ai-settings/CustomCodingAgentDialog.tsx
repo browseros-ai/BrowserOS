@@ -44,12 +44,15 @@ export interface CustomCodingAgentDialogProps {
   onOpenChange: (open: boolean) => void
   /** When set, the dialog edits this agent instead of creating a new one. */
   agent?: AcpAgent | null
+  /** Fires after a new custom agent is successfully created (not on edit). */
+  onSaved?: () => void
 }
 
 export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
   open,
   onOpenChange,
   agent,
+  onSaved,
 }) => {
   const createAgent = useCreateAcpAgent()
   const updateAgent = useUpdateAcpAgent()
@@ -143,6 +146,7 @@ export const CustomCodingAgentDialog: FC<CustomCodingAgentDialogProps> = ({
       })
     }
     onOpenChange(false)
+    if (!agent) onSaved?.()
   }
 
   return (

@@ -29,12 +29,15 @@ export interface NewCodingAgentDialogProps {
   type: AcpAgentType | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Fires after the agent is successfully created. */
+  onSaved?: () => void
 }
 
 export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
   type,
   open,
   onOpenChange,
+  onSaved,
 }) => {
   const createAgent = useCreateAcpAgent()
   const probe = useAcpAgentProbe(type ?? undefined, open)
@@ -62,6 +65,7 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
       reasoningEffort: reasoningEffort || undefined,
     })
     onOpenChange(false)
+    onSaved?.()
   }
 
   return (
