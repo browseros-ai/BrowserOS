@@ -15,9 +15,6 @@ mock.module('@/lib/auth/sessionStorage', () => ({
     sessionInfo: { user: sessionUserId ? { id: sessionUserId } : undefined },
   }),
 }))
-mock.module('@/modules/conversations/conversations-migration', () => ({
-  useLegacyConversationMigration: () => {},
-}))
 mock.module('@/modules/conversations/conversations.hooks', () => ({
   useServerConversations: () => ({ data: localRows }),
   useDeleteServerConversation: () => ({ mutate: () => {} }),

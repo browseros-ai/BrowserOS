@@ -2,7 +2,6 @@ import type { FC } from 'react'
 import { useMemo } from 'react'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import { useServerConversations } from '@/modules/conversations/conversations.hooks'
-import { useLegacyConversationMigration } from '@/modules/conversations/conversations-migration'
 import { CloudChatHistory } from './cloud/CloudChatHistory'
 import { LocalChatHistory } from './local/LocalChatHistory'
 
@@ -17,9 +16,6 @@ import { LocalChatHistory } from './local/LocalChatHistory'
 export const ChatHistory: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const userId = sessionInfo.user?.id
-  // Drain any pre-upgrade local:conversations into the local server.
-  useLegacyConversationMigration()
-
   // Same query key as LocalChatHistory, so this shares its cache rather than
   // fetching a second time. Only the ids are needed, to keep a conversation
   // that exists in both places from being listed twice.

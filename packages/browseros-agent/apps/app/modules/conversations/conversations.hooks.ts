@@ -58,32 +58,6 @@ export async function fetchServerConversation(
   return { id: data.conversation.id, messages }
 }
 
-/**
- * Returns whether the conversation was actually written. The route is
- * insert-if-absent, so an id that already exists is answered with a success
- * and `imported: false`, and the caller must not treat that as stored: the
- * existing row could be an older, shorter copy of the same conversation.
- */
-export async function importServerConversation(conversation: {
-  id: string
-  messages: UIMessage[]
-  lastMessagedAt: number
-}): Promise<{ imported: boolean }> {
-  const client = await conversationsClient()
-  const response = await client[':conversationId'].$put({
-    param: { conversationId: conversation.id },
-    json: {
-      messages: conversation.messages,
-      lastMessagedAt: conversation.lastMessagedAt,
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to import conversation (${response.status})`)
-  }
-  const data = await response.json()
-  return { imported: 'imported' in data ? Boolean(data.imported) : false }
-}
-
 /** Deletes only the server row (tolerating 404); leaves execution history. */
 export async function deleteServerConversationRow(
   conversationId: string,
