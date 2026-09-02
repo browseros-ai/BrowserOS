@@ -180,13 +180,13 @@ impl AnalyticsService {
             if let Some(previous) = previous {
                 previous.client.shutdown().await;
             }
-        } else if self.active_client().is_none() {
-            if let Some(install_id) = self.installation_id.as_deref() {
-                match build_client(&self.config, install_id).await {
-                    Ok(client) => self.replace_active(Some(client)),
-                    Err(error) => {
-                        tracing::error!(%error, "analytics client initialization failed");
-                    }
+        } else if self.active_client().is_none()
+            && let Some(install_id) = self.installation_id.as_deref()
+        {
+            match build_client(&self.config, install_id).await {
+                Ok(client) => self.replace_active(Some(client)),
+                Err(error) => {
+                    tracing::error!(%error, "analytics client initialization failed");
                 }
             }
         }
