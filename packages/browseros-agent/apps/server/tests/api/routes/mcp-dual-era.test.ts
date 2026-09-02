@@ -120,8 +120,11 @@ describe('mcp dual-era serving', () => {
 
     expect(call.status).toBe(200)
     const structured = (
-      call.json.result as { structuredContent?: { value?: number } }
+      call.json.result as { structuredContent?: { value?: unknown } }
     )?.structuredContent
-    expect(structured?.value).toBe(42)
+    // run output is page-derived; the structured value is fenced as untrusted.
+    expect(typeof structured?.value).toBe('string')
+    expect(structured?.value).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured?.value).toContain('42')
   })
 })
