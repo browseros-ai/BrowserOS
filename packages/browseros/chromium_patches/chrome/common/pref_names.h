@@ -1,5 +1,5 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..87ef7f4cd21ca22ace21b13ac05d82f08d0b45f1 100644
+index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe69d287e8 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -482,13 +482,11 @@ inline constexpr char kDeskAPIThirdPartyAllowlist[] =
@@ -87,19 +87,10 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..87ef7f4cd21ca22ace21b13ac05d82f0
  #if !BUILDFLAG(IS_ANDROID)
  // An integer count of how many times the user has seen the memory saver mode
  // page action chip in the expanded size. While the feature was renamed to
-@@ -3262,6 +3249,18 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+@@ -3262,6 +3249,9 @@ inline constexpr char kCpuPerformanceTierOverride[] =
  // Value indicating that the CPU performance tier has not been overridden.
  inline constexpr int kCpuPerformanceTierOverrideNone = -1;
  
-+// BrowserOS: metrics prefs
-+// String containing the stable client ID for BrowserOS metrics
-+inline constexpr char kBrowserOSMetricsClientId[] =
-+    "browseros.metrics_client_id";
-+
-+// String containing the stable install ID for BrowserOS metrics (Local State)
-+inline constexpr char kBrowserOSMetricsInstallId[] =
-+    "browseros.metrics_install_id";
-+
 +// NOTE: Other BrowserOS prefs have been moved to
 +// chrome/browser/browseros/core/browseros_prefs.h
 +
