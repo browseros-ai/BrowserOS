@@ -9,7 +9,7 @@ use serde_json::json;
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
-open a new page (snapshot attached), or close one. \
+open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -29,9 +29,12 @@ struct TabsArgs {
     action: TabsAction,
     /// URL for action="new" (defaults to about:blank).
     url: Option<String>,
-    /// Open without stealing focus for action="new".
-    #[serde(default = "super::default_true")]
-    background: bool,
+    /// Retired: new pages always open in the background so an agent never
+    /// switches the user's tab. Still accepted, and ignored, so clients that
+    /// cached the old schema do not trip `deny_unknown_fields`.
+    #[serde(default, rename = "background")]
+    #[schemars(skip)]
+    _background: Option<bool>,
     /// Page id for action="close".
     page: Option<u32>,
 }
@@ -87,7 +90,9 @@ fn handler<'a>(
                     .new_page(
                         args.url.as_deref().unwrap_or("about:blank"),
                         NewPageOptions {
-                            background: Some(args.background),
+                            // Never foreground: focus decisions belong to the user
+                            // (cockpit Watch), not to the agent.
+                            background: Some(true),
                             window_id: ctx.defaults.default_window_id.clone(),
                             tab_group_id: ctx.defaults.default_tab_group_id.clone(),
                         },
