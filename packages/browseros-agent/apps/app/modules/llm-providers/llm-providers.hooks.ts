@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { createQuery } from 'react-query-kit'
 import {
   resolveDefaultProviderId,
@@ -14,6 +15,7 @@ import {
   putProvider,
 } from './llm-providers.api'
 import { planProviderSave } from './llm-providers.helpers'
+import { watchProviderRevision } from './llm-providers.revision'
 
 export interface UseLlmProvidersReturn {
   providers: LlmProviderConfig[]
@@ -60,11 +62,36 @@ export async function persistDefaultProviderId(
   await putDefaultProvider(providerId)
 }
 
+/**
+ * Keeps this surface current with provider writes made in another one.
+ *
+ * Each extension surface has its own query cache, and the rows live on the
+ * server where nothing can watch them. Writers bump a revision in extension
+ * storage instead, which does broadcast to every context, and each mounted
+ * view refetches. This is what `providersStorage.watch` used to do before the
+ * list moved off extension storage.
+ */
+function useProviderRevision(): void {
+  const queryClient = useQueryClient()
+
+  useEffect(
+    () =>
+      watchProviderRevision(() => {
+        queryClient.invalidateQueries({ queryKey: useProvidersQuery.getKey() })
+        queryClient.invalidateQueries({
+          queryKey: useDefaultProviderIdQuery.getKey(),
+        })
+      }),
+    [queryClient],
+  )
+}
+
 /** Hook for managing LLM provider configurations. */
 export function useLlmProviders(): UseLlmProvidersReturn {
   const queryClient = useQueryClient()
   const providersQuery = useProvidersQuery()
   const defaultQuery = useDefaultProviderIdQuery()
+  useProviderRevision()
   const storedDefaultId = defaultQuery.data ?? DEFAULT_PROVIDER_ID
 
   const providers = providersQuery.data ?? []

@@ -153,8 +153,28 @@ function isProviderTestable(input: {
   accessKeyId?: string
   secretAccessKey?: string
   region?: string
+  /**
+   * Credentials already held by the server for this provider. Reads do not
+   * return the values, so editing one leaves the fields blank; a stored
+   * credential satisfies the requirement exactly as a typed one does, and
+   * leaving it blank keeps what is stored.
+   */
+  stored?: {
+    hasApiKey?: boolean
+    hasAccessKeyId?: boolean
+    hasSecretAccessKey?: boolean
+    hasSessionToken?: boolean
+  }
 }): boolean {
   if (!input.modelId) return false
+
+  const hasApiKey = Boolean(input.apiKey || input.stored?.hasApiKey)
+  const hasAccessKeyId = Boolean(
+    input.accessKeyId || input.stored?.hasAccessKeyId,
+  )
+  const hasSecretAccessKey = Boolean(
+    input.secretAccessKey || input.stored?.hasSecretAccessKey,
+  )
 
   if (
     input.type === 'chatgpt-pro' ||
@@ -165,13 +185,13 @@ function isProviderTestable(input: {
   }
 
   if (input.type === 'azure') {
-    return Boolean((input.resourceName || input.baseUrl) && input.apiKey)
+    return Boolean((input.resourceName || input.baseUrl) && hasApiKey)
   }
   if (input.type === 'bedrock') {
-    return Boolean(input.accessKeyId && input.secretAccessKey && input.region)
+    return Boolean(hasAccessKeyId && hasSecretAccessKey && input.region)
   }
   if (!input.baseUrl) return false
-  if (!['ollama', 'lmstudio'].includes(input.type) && !input.apiKey) {
+  if (!['ollama', 'lmstudio'].includes(input.type) && !hasApiKey) {
     return false
   }
   return true
@@ -437,6 +457,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
+    stored: initialValues,
   })
 
   const handleTest = async () => {

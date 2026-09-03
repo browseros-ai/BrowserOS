@@ -62,7 +62,11 @@ describe('dbProviderStore', () => {
     expect(saved).toBeNull()
     const existing = await dbProviderStore.get(PROVIDER_ID)
     expect(existing?.name).toBe('Edited since')
-    expect(existing?.apiKey).toBe('sk-test')
+    // The credential is checked through the credentialed read: the ordinary
+    // one no longer returns it.
+    expect(
+      (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+    ).toBe('sk-test')
   })
 
   // Integer would floor this to 0 and silently make every model deterministic.
@@ -175,5 +179,147 @@ describe('dbProviderStore', () => {
       PROVIDER_ID,
     ])
     expect(await dbProviderStore.list()).toHaveLength(2)
+  })
+
+  describe('credentials', () => {
+    // Every provider read used to hand back the api key and the aws secret,
+    // on the list, the get and the default alike.
+    test('the ordinary reads return no credentials', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+      await dbProviderStore.setDefault(PROVIDER_ID)
+
+      for (const row of [
+        await dbProviderStore.get(PROVIDER_ID),
+        (await dbProviderStore.list())[0],
+        (await dbProviderStore.listLlm())[0],
+        await dbProviderStore.getDefault(),
+      ]) {
+        for (const field of [
+          'apiKey',
+          'accessKeyId',
+          'secretAccessKey',
+          'sessionToken',
+        ]) {
+          expect(row && field in row).toBe(false)
+        }
+      }
+    })
+
+    // The UI still has to show that a key is set, without being given it.
+    test('the ordinary reads report whether a credential is set', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        id: 'no-key',
+        apiKey: undefined,
+      })
+
+      expect((await dbProviderStore.get(PROVIDER_ID))?.hasApiKey).toBe(true)
+      expect((await dbProviderStore.get('no-key'))?.hasApiKey).toBe(false)
+    })
+
+    test('the credentialed read still returns them', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+
+      expect(
+        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+      ).toBe('sk-test')
+    })
+
+    // Reads no longer return the key, so an edit cannot send it back. Writing
+    // undefined over a working credential on every rename is the failure this
+    // prevents.
+    test('an absent credential keeps its stored value', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+
+      await dbProviderStore.upsert({
+        id: PROVIDER_ID,
+        type: 'openai',
+        name: 'Renamed',
+        modelId: 'gpt-5.5',
+        contextWindow: 200000,
+      })
+
+      const saved = await dbProviderStore.getWithCredentials(PROVIDER_ID)
+      expect(saved?.name).toBe('Renamed')
+      expect(saved?.apiKey).toBe('sk-test')
+    })
+
+    // A form field the user never filled in submits as an empty string, not
+    // as undefined. Treating that as an instruction to clear would wipe the key
+    // on exactly the edit this protects.
+    test('an empty credential is treated as not supplied', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+
+      await dbProviderStore.upsert({ ...baseProvider(), apiKey: '' })
+
+      expect(
+        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+      ).toBe('sk-test')
+    })
+
+    // And an empty value must not read back as a stored credential either.
+    // Every flag, not just the api key: they are one definition and a
+    // divergence would only show on the credential nobody tested.
+    test('an empty credential does not report as set', async () => {
+      useTempDb()
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        apiKey: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+      })
+
+      const row = await dbProviderStore.get(PROVIDER_ID)
+      expect(row?.hasApiKey).toBe(false)
+      expect(row?.hasAccessKeyId).toBe(false)
+      expect(row?.hasSecretAccessKey).toBe(false)
+      expect(row?.hasSessionToken).toBe(false)
+    })
+
+    test('every credential survives a blank edit, not just the api key', async () => {
+      useTempDb()
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'aws-secret',
+        sessionToken: 'token',
+      })
+
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        apiKey: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+      })
+
+      expect(
+        await dbProviderStore.getWithCredentials(PROVIDER_ID),
+      ).toMatchObject({
+        apiKey: 'sk-test',
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'aws-secret',
+        sessionToken: 'token',
+      })
+    })
+
+    test('an explicitly null credential clears it', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+
+      await dbProviderStore.upsert({ ...baseProvider(), apiKey: null })
+
+      expect(
+        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+      ).toBeNull()
+      expect((await dbProviderStore.get(PROVIDER_ID))?.hasApiKey).toBe(false)
+    })
   })
 })

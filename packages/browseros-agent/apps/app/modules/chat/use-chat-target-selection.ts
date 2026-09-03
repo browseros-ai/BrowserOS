@@ -97,11 +97,18 @@ export function useChatTargetSelection() {
       selection: targetSelection,
       resolvedTarget: selectedChatTarget,
       ready,
+      knownIds: new Set(chatTargets.map((target) => target.id)),
     })
     if (!decision.repair) return
     setTargetSelection(decision.selection)
     void persistSidepanelChatTargetSelection(selectedChatTarget)
-  }, [agentsSettled, isLoadingProviders, selectedChatTarget, targetSelection])
+  }, [
+    agentsSettled,
+    chatTargets,
+    isLoadingProviders,
+    selectedChatTarget,
+    targetSelection,
+  ])
 
   const selectedLlmProviderRef = useRef<LlmProviderConfig | null>(
     selectedLlmProvider,

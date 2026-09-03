@@ -4,9 +4,58 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { and, eq, ne } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
+import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { getDb } from '../db'
 import { type NewProviderRow, type ProviderRow, providers } from '../db/schema'
+
+/**
+ * Every column except the four that hold secrets, plus flags saying whether
+ * each is set so the UI can still show that a key exists.
+ *
+ * Drizzle has no view, but naming the columns gives the same guarantee: a
+ * caller of the public reads cannot receive a credential even by accident,
+ * where a `select()` would hand them out on every list, get and default.
+ */
+function isSet(column: AnySQLiteColumn) {
+  return sql<boolean>`${column} IS NOT NULL AND ${column} <> ''`.mapWith(
+    Boolean,
+  )
+}
+
+const publicColumns = {
+  id: providers.id,
+  profileId: providers.profileId,
+  kind: providers.kind,
+  type: providers.type,
+  name: providers.name,
+  modelId: providers.modelId,
+  reasoningEffort: providers.reasoningEffort,
+  isDefault: providers.isDefault,
+  createdAt: providers.createdAt,
+  updatedAt: providers.updatedAt,
+  baseUrl: providers.baseUrl,
+  supportsImages: providers.supportsImages,
+  contextWindow: providers.contextWindow,
+  temperature: providers.temperature,
+  resourceName: providers.resourceName,
+  region: providers.region,
+  reasoningSummary: providers.reasoningSummary,
+  workingDirectory: providers.workingDirectory,
+  customConfig: providers.customConfig,
+  // Empty counts as unset, matching what the upsert treats as not supplied.
+  // Otherwise a blank field would read back as a stored credential.
+  hasApiKey: isSet(providers.apiKey),
+  hasAccessKeyId: isSet(providers.accessKeyId),
+  hasSecretAccessKey: isSet(providers.secretAccessKey),
+  hasSessionToken: isSet(providers.sessionToken),
+}
+
+export type PublicProviderRow = {
+  [K in keyof typeof publicColumns]: K extends `has${string}`
+    ? boolean
+    : ProviderRow[Extract<K, keyof ProviderRow>]
+}
 
 /**
  * The store stamps `updatedAt` and defaults `createdAt`, so callers supply
@@ -21,11 +70,16 @@ export type ProviderUpsert = Omit<
 }
 
 export interface ProviderStore {
-  /** Every provider, whatever its kind. */
-  list(): Promise<ProviderRow[]>
-  /** Only the LLM providers, for the surfaces that still separate them. */
-  listLlm(): Promise<ProviderRow[]>
-  get(id: string): Promise<ProviderRow | null>
+  /** Every provider, whatever its kind, without credentials. */
+  list(): Promise<PublicProviderRow[]>
+  /** Only the LLM providers, without credentials. */
+  listLlm(): Promise<PublicProviderRow[]>
+  get(id: string): Promise<PublicProviderRow | null>
+  /**
+   * The full row, credentials included. Only for callers inside the server
+   * that have to build an outbound request, never for a route response.
+   */
+  getWithCredentials(id: string): Promise<ProviderRow | null>
   /** Insert or replace by id. This is the app's ordinary write path. */
   upsert(row: ProviderUpsert): Promise<ProviderRow>
   /**
@@ -39,7 +93,9 @@ export interface ProviderStore {
   insertIfAbsent(row: ProviderUpsert): Promise<ProviderRow | null>
   remove(id: string): Promise<boolean>
   /** The one selected provider, of any kind, or null when none is set. */
-  getDefault(): Promise<ProviderRow | null>
+  getDefault(): Promise<PublicProviderRow | null>
+  /** The selected provider with its credentials, for the same callers as above. */
+  getDefaultWithCredentials(): Promise<ProviderRow | null>
   /**
    * Points the default at one provider of any kind. Returns false when the id
    * is unknown, so a stale pointer cannot be stored.
@@ -47,21 +103,64 @@ export interface ProviderStore {
   setDefault(id: string): Promise<boolean>
 }
 
-async function list(): Promise<ProviderRow[]> {
-  return getDb().select().from(providers).all()
+async function list(): Promise<PublicProviderRow[]> {
+  return getDb().select(publicColumns).from(providers).all()
 }
 
-async function listLlm(): Promise<ProviderRow[]> {
-  return getDb().select().from(providers).where(eq(providers.kind, 'llm')).all()
+async function listLlm(): Promise<PublicProviderRow[]> {
+  return getDb()
+    .select(publicColumns)
+    .from(providers)
+    .where(eq(providers.kind, 'llm'))
+    .all()
 }
 
-async function get(id: string): Promise<ProviderRow | null> {
+async function get(id: string): Promise<PublicProviderRow | null> {
+  const [row] = await getDb()
+    .select(publicColumns)
+    .from(providers)
+    .where(eq(providers.id, id))
+    .limit(1)
+  return row ?? null
+}
+
+async function getWithCredentials(id: string): Promise<ProviderRow | null> {
   const [row] = await getDb()
     .select()
     .from(providers)
     .where(eq(providers.id, id))
     .limit(1)
   return row ?? null
+}
+
+const CREDENTIAL_FIELDS = [
+  'apiKey',
+  'accessKeyId',
+  'secretAccessKey',
+  'sessionToken',
+] as const
+
+/**
+ * Drops credential fields the caller did not supply, so they keep their stored
+ * value.
+ *
+ * Reads no longer return credentials, so a client editing a provider cannot
+ * send back what it never received. A plain whole-row upsert would then write
+ * over a working key on every rename.
+ *
+ * An empty string counts as not supplied, not as an instruction to clear. A
+ * form field that was never filled in submits as `''` rather than undefined,
+ * so treating the two differently would wipe the key on exactly the edit this
+ * exists to protect. Clearing is deliberate and explicit: send null.
+ */
+function withoutAbsentCredentials<T extends Record<string, unknown>>(
+  row: T,
+): Partial<T> {
+  const next: Record<string, unknown> = { ...row }
+  for (const field of CREDENTIAL_FIELDS) {
+    if (next[field] === undefined || next[field] === '') delete next[field]
+  }
+  return next as Partial<T>
 }
 
 async function upsert(row: ProviderUpsert): Promise<ProviderRow> {
@@ -76,7 +175,7 @@ async function upsert(row: ProviderUpsert): Promise<ProviderRow> {
       // rewrite when the user originally created it. isDefault likewise, so a
       // save does not silently move the selection.
       set: {
-        ...values,
+        ...withoutAbsentCredentials(values),
         createdAt: undefined,
         isDefault: undefined,
         updatedAt: now,
@@ -113,7 +212,16 @@ async function remove(id: string): Promise<boolean> {
   return deleted.length > 0
 }
 
-async function getDefault(): Promise<ProviderRow | null> {
+async function getDefault(): Promise<PublicProviderRow | null> {
+  const [row] = await getDb()
+    .select(publicColumns)
+    .from(providers)
+    .where(eq(providers.isDefault, true))
+    .limit(1)
+  return row ?? null
+}
+
+async function getDefaultWithCredentials(): Promise<ProviderRow | null> {
   const [row] = await getDb()
     .select()
     .from(providers)
@@ -146,9 +254,11 @@ export const dbProviderStore: ProviderStore = {
   list,
   listLlm,
   get,
+  getWithCredentials,
   upsert,
   insertIfAbsent,
   remove,
   getDefault,
+  getDefaultWithCredentials,
   setDefault,
 }

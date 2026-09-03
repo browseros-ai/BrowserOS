@@ -13,15 +13,16 @@ function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
     id: 'provider-1',
     type: 'openai',
     name: 'My OpenAI',
+    kind: 'llm',
     baseUrl: null,
     modelId: 'gpt-5.5',
     supportsImages: true,
     contextWindow: 200000,
     temperature: 0.2,
-    apiKey: null,
-    accessKeyId: null,
-    secretAccessKey: null,
-    sessionToken: null,
+    hasApiKey: false,
+    hasAccessKeyId: false,
+    hasSecretAccessKey: false,
+    hasSessionToken: false,
     resourceName: null,
     region: null,
     reasoningEffort: null,
@@ -54,20 +55,26 @@ describe('toProviderConfig', () => {
     const converted = toProviderConfig(row())
 
     expect(converted?.baseUrl).toBeUndefined()
-    expect(converted?.apiKey).toBeUndefined()
     expect(converted?.reasoningSummary).toBeUndefined()
   })
 
-  it('carries the credentials across', () => {
+  // Credentials never leave the server now, so the row reports only whether
+  // one is set and the config carries that instead.
+  it('carries the credential flags, not the credentials', () => {
     const converted = toProviderConfig(
-      row({ apiKey: 'sk-test', accessKeyId: 'AKIA', region: 'us-east-1' }),
+      row({ hasApiKey: true, region: 'us-east-1' }),
     )
 
-    expect(converted).toMatchObject({
-      apiKey: 'sk-test',
-      accessKeyId: 'AKIA',
-      region: 'us-east-1',
-    })
+    expect(converted).toMatchObject({ hasApiKey: true, region: 'us-east-1' })
+    expect(converted?.apiKey).toBeUndefined()
+  })
+
+  // Coding agents share this table and this endpoint. Filtering on kind is
+  // what excludes them; the unknown-type guard below used to do it by accident.
+  it('rejects a coding agent', () => {
+    expect(
+      toProviderConfig(row({ kind: 'acp', type: 'claude', modelId: null })),
+    ).toBeNull()
   })
 
   // The row survives in the database and comes back on upgrade. Showing it
