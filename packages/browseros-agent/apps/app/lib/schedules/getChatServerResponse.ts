@@ -4,12 +4,12 @@ import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   createDefaultBrowserOSProvider,
   defaultProviderIdStorage,
-  providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
+import { listProvidersOrEmpty } from '@/modules/llm-providers/llm-providers.api'
 import {
   findChatProviderById,
   resolveChatProvider,
@@ -73,23 +73,25 @@ interface StreamParseState {
   receivedFinish: boolean
 }
 
-const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
-  const providers = await providersStorage.getValue()
-  if (!providers?.length) return null
-
-  const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveChatProvider(providers, defaultProviderId)
-}
-
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
+  // One read for both branches: the list is now a request rather than a local
+  // storage lookup, and the explicit-provider path used to fetch it twice.
+  const providers = await listProvidersOrEmpty()
+
   if (providerId) {
-    const providers = await providersStorage.getValue()
-    const match = findChatProviderById(providers ?? [], providerId)
+    const match = findChatProviderById(providers, providerId)
     if (match) return match
   }
-  return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
+
+  if (providers.length > 0) {
+    const defaultProviderId = await defaultProviderIdStorage.getValue()
+    const provider = resolveChatProvider(providers, defaultProviderId)
+    if (provider) return provider
+  }
+
+  return createDefaultBrowserOSProvider()
 }
 
 export async function getChatServerResponse(

@@ -2,9 +2,9 @@ import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   createDefaultBrowserOSProvider,
   defaultProviderIdStorage,
-  providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import { listProvidersOrEmpty } from '@/modules/llm-providers/llm-providers.api'
 import {
   findChatProviderById,
   resolveChatProvider,
@@ -13,8 +13,8 @@ import {
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
-  const providers = await providersStorage.getValue()
-  if (providers?.length) {
+  const providers = await listProvidersOrEmpty()
+  if (providers.length) {
     const explicitProvider = findChatProviderById(providers, providerId)
     if (explicitProvider) return explicitProvider
 

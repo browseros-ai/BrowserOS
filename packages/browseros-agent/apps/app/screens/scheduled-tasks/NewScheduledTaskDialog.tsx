@@ -41,13 +41,10 @@ import {
   resolveChatProvider,
 } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
-import {
-  defaultProviderIdStorage,
-  providersStorage,
-} from '@/lib/llm-providers/storage'
-import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
+import type { ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { refinePrompt } from '@/lib/schedules/refine-prompt'
+import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import type { ScheduledJob } from './types'
 
 const formSchema = z
@@ -99,8 +96,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   onSave,
 }) => {
   const isEditing = !!initialValues
-  const [providers, setProviders] = useState<LlmProviderConfig[]>([])
-  const [defaultProviderId, setDefaultProviderId] = useState<string>('')
+  const { providers, defaultProviderId } = useLlmProviders()
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -122,17 +118,6 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   const originalPromptRef = useRef<string | null>(null)
   const refineRequestIdRef = useRef(0)
   const isProgrammaticChange = useRef(false)
-
-  useEffect(() => {
-    if (!open) return
-    Promise.all([
-      providersStorage.getValue(),
-      defaultProviderIdStorage.getValue(),
-    ]).then(([providerList, defId]) => {
-      setProviders(providerList ?? [])
-      setDefaultProviderId(defId ?? '')
-    })
-  }, [open])
 
   useEffect(() => {
     if (open) {

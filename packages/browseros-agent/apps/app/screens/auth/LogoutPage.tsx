@@ -12,8 +12,6 @@ import {
 } from '@/components/ui/card'
 import { resetIdentity } from '@/lib/analytics/identify'
 import { signOut } from '@/lib/auth/auth-client'
-import { providersStorage } from '@/lib/llm-providers/storage'
-import { scheduledJobStorage } from '@/lib/schedules/scheduleStorage'
 
 export const LogoutPage: FC = () => {
   const navigate = useNavigate()
@@ -22,8 +20,6 @@ export const LogoutPage: FC = () => {
   // biome-ignore lint/correctness/useExhaustiveDependencies: must run only once to ensure the logout process happens successfully
   useEffect(() => {
     const performLogout = async () => {
-      await providersStorage.removeValue()
-      await scheduledJobStorage.removeValue()
       queryClient.clear()
       await clear()
 

@@ -4,6 +4,7 @@ import {
   resolveDefaultProviderId,
   resolveSelectedProvider,
 } from '../../lib/llm-providers/provider-selection'
+import { planProviderSave } from './llm-providers.helpers'
 
 const storageValues = new Map<string, unknown>()
 
@@ -135,12 +136,9 @@ const providers: LlmProviderConfig[] = [
 ]
 
 let persistDefaultProviderId: (providerId: string) => Promise<void>
-let upsertProviderConfig: typeof import('./llm-providers.hooks').upsertProviderConfig
 
 beforeAll(async () => {
-  ;({ persistDefaultProviderId, upsertProviderConfig } = await import(
-    './llm-providers.hooks'
-  ))
+  ;({ persistDefaultProviderId } = await import('./llm-providers.hooks'))
 })
 
 beforeEach(() => {
@@ -165,7 +163,9 @@ describe('persistDefaultProviderId', () => {
   })
 })
 
-describe('upsertProviderConfig', () => {
+describe('planProviderSave', () => {
+  // These are OAuth providers, where the credential is one grant per account,
+  // so a second copy is always a duplicate of the first rather than a choice.
   it('replaces an existing OAuth provider by type while preserving its id', () => {
     const existing = providerConfig({
       id: 'chatgpt-pro-existing',
@@ -183,14 +183,13 @@ describe('upsertProviderConfig', () => {
       contextWindow: 1050000,
     })
 
-    const result = upsertProviderConfig(
+    const { saved, removedIds } = planProviderSave(
       [providers[0], existing],
       incoming,
       2222,
     )
 
-    expect(result).toHaveLength(2)
-    expect(result[1]).toMatchObject({
+    expect(saved).toMatchObject({
       id: 'chatgpt-pro-existing',
       type: 'chatgpt-pro',
       name: 'ChatGPT',
@@ -199,9 +198,12 @@ describe('upsertProviderConfig', () => {
       createdAt: 1111,
       updatedAt: 2222,
     })
+    expect(removedIds).toEqual([])
   })
 
-  it('removes extra same-type OAuth rows on save', () => {
+  // Writing the whole list used to drop these implicitly. Over HTTP each one
+  // needs its own DELETE, so the plan has to name them.
+  it('names the extra same-type OAuth rows for deletion', () => {
     const first = providerConfig({
       id: 'chatgpt-pro-first',
       type: 'chatgpt-pro',
@@ -218,28 +220,49 @@ describe('upsertProviderConfig', () => {
       name: 'Fresh ChatGPT',
     })
 
-    const result = upsertProviderConfig([providers[0], first, second], incoming)
+    const { saved, removedIds } = planProviderSave(
+      [providers[0], first, second],
+      incoming,
+    )
 
-    expect(
-      result.filter((provider) => provider.type === 'chatgpt-pro'),
-    ).toEqual([
-      expect.objectContaining({
-        id: 'chatgpt-pro-first',
-        name: 'Fresh ChatGPT',
-      }),
-    ])
+    expect(saved).toMatchObject({
+      id: 'chatgpt-pro-first',
+      name: 'Fresh ChatGPT',
+    })
+    expect(removedIds).toEqual(['chatgpt-pro-second'])
   })
 
   it('allows multiple non-OAuth providers of the same type', () => {
     const first = providerConfig({ id: 'openai-first', name: 'OpenAI 1' })
     const second = providerConfig({ id: 'openai-second', name: 'OpenAI 2' })
 
-    const result = upsertProviderConfig([first], second, 2222)
+    const { saved, removedIds } = planProviderSave([first], second, 2222)
 
-    expect(result.map((provider) => provider.id)).toEqual([
-      'openai-first',
-      'openai-second',
-    ])
+    expect(saved.id).toBe('openai-second')
+    expect(removedIds).toEqual([])
+  })
+
+  it('stamps a creation time on a provider that is new', () => {
+    const { saved } = planProviderSave(
+      [],
+      providerConfig({ id: 'openai-new' }),
+      3333,
+    )
+
+    expect(saved.createdAt).toBe(3333)
+    expect(saved.updatedAt).toBe(3333)
+  })
+
+  it('keeps the original creation time when updating in place', () => {
+    const existing = providerConfig({ id: 'openai-1', createdAt: 1111 })
+    const { saved } = planProviderSave(
+      [existing],
+      { ...existing, name: 'Renamed' },
+      4444,
+    )
+
+    expect(saved.createdAt).toBe(1111)
+    expect(saved.updatedAt).toBe(4444)
   })
 })
 

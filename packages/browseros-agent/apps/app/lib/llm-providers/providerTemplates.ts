@@ -199,6 +199,19 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
  * Get default base URL for a provider type
  * @public
  */
+/**
+ * Whether a stored type string is one this build understands.
+ *
+ * Keyed off DEFAULT_BASE_URLS because it is a `Record<ProviderType, string>`,
+ * so the compiler keeps it exhaustive as the union changes. Used to filter
+ * rows written by a newer build after a downgrade: icons, templates and base
+ * URLs are all keyed by this union, so an unknown type would read as
+ * undefined through every one of them.
+ */
+export function isProviderType(value: string): value is ProviderType {
+  return Object.hasOwn(DEFAULT_BASE_URLS, value)
+}
+
 export const getDefaultBaseUrlForProviders = (type: ProviderType): string => {
   return DEFAULT_BASE_URLS[type] || ''
 }

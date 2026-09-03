@@ -46,6 +46,13 @@ mock.module('@/lib/llm-providers/storage', () => ({
   },
 }))
 
+// The provider list is a request now, not a storage read. Mocked here so the
+// fetch stub below still sees only the chat call it is asserting on.
+mock.module('@/modules/llm-providers/llm-providers.api', () => ({
+  listProvidersOrEmpty: async () =>
+    (storageValues.get('providers') as LlmProviderConfig[]) ?? [],
+}))
+
 mock.module('@/lib/browseros/helpers', () => ({
   getAgentServerUrl: async () => 'http://127.0.0.1:9105',
   getMcpServerUrl: async () => 'http://127.0.0.1:9106/mcp',
