@@ -30,7 +30,7 @@ import { track } from '@/lib/metrics/track'
 import {
   useScheduledJobRuns,
   useScheduledJobs,
-} from '@/lib/schedules/scheduleStorage'
+} from '@/modules/schedules/schedules.hooks'
 import {
   countRunningRuns,
   type JobRunWithDetails,

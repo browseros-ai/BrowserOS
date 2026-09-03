@@ -4,12 +4,12 @@ import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   createDefaultBrowserOSProvider,
   defaultProviderIdStorage,
-  providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
+import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
 import {
   findChatProviderById,
   resolveChatProvider,
@@ -73,23 +73,42 @@ interface StreamParseState {
   receivedFinish: boolean
 }
 
-const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
-  const providers = await providersStorage.getValue()
-  if (!providers?.length) return null
-
-  const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveChatProvider(providers, defaultProviderId)
-}
-
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
+  // One read for both branches: the list is now a request rather than a local
+  // storage lookup, and the explicit-provider path used to fetch it twice.
+  const loaded = await listProvidersOrNull()
+
+  // Never resolve a provider from a list that failed to load. A job that named
+  // one must not quietly run on a different one, and a job that named none
+  // still has a choice behind it: the configured default, whose id lives in
+  // extension storage but whose credentials and model live in that list. Either
+  // way, substituting the built-in would spend the wrong credentials on the
+  // wrong model and still record the run as completed.
+  //
+  // An empty list is a different answer and keeps the fallback: the server
+  // answered, and it really has no providers.
+  if (loaded === null) {
+    throw new Error(
+      'Cannot reach the BrowserOS server to load the selected provider',
+    )
+  }
+
+  const providers = loaded
+
   if (providerId) {
-    const providers = await providersStorage.getValue()
-    const match = findChatProviderById(providers ?? [], providerId)
+    const match = findChatProviderById(providers, providerId)
     if (match) return match
   }
-  return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
+
+  if (providers.length > 0) {
+    const defaultProviderId = await defaultProviderIdStorage.getValue()
+    const provider = resolveChatProvider(providers, defaultProviderId)
+    if (provider) return provider
+  }
+
+  return createDefaultBrowserOSProvider()
 }
 
 export async function getChatServerResponse(

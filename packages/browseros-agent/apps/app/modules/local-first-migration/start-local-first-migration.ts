@@ -5,9 +5,16 @@ import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
 import { providersStorage } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import { scheduledJobStorage } from '@/lib/schedules/scheduleStorage'
+import {
+  scheduledJobRunStorage,
+  scheduledJobStorage,
+} from '@/lib/schedules/scheduleStorage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
-import { runLocalFirstMigration } from './local-first-migration'
+import { importScheduledJobRuns } from '@/modules/schedules/schedules.api'
+import {
+  runLocalFirstMigration,
+  runScheduledRunsMigration,
+} from './local-first-migration'
 import {
   type ProviderImport,
   parseProviderBackup,
@@ -21,6 +28,19 @@ import {
  */
 export const migrationDoneStorage = storage.defineItem<boolean>(
   'local:local-first-migration-done',
+  { fallback: false },
+)
+
+/**
+ * Runs carry their own marker rather than reusing the one above.
+ *
+ * Reusing it would mean re-running the provider and job import for everyone
+ * who has already migrated, and that import must never run twice: extension
+ * storage is frozen now, so it would insert back anything the user has since
+ * deleted through the new UI.
+ */
+export const runsMigrationDoneStorage = storage.defineItem<boolean>(
+  'local:local-first-runs-migration-done',
   { fallback: false },
 )
 
@@ -62,5 +82,12 @@ export function startLocalFirstMigration(): void {
     loadScheduledJobs: async () => (await scheduledJobStorage.getValue()) ?? [],
     importProviders,
     importScheduledJobs,
+  }).catch(() => null)
+
+  void runScheduledRunsMigration({
+    isDone: () => runsMigrationDoneStorage.getValue(),
+    markDone: () => runsMigrationDoneStorage.setValue(true),
+    loadRuns: async () => (await scheduledJobRunStorage.getValue()) ?? [],
+    importRuns: importScheduledJobRuns,
   }).catch(() => null)
 }

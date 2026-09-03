@@ -12,7 +12,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react'
-import { type FC, useEffect, useMemo, useState } from 'react'
+import { type FC, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -21,9 +21,8 @@ import {
 } from '@/components/ui/collapsible'
 import { Switch } from '@/components/ui/switch'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
-import { providersStorage } from '@/lib/llm-providers/storage'
-import type { ProviderType } from '@/lib/llm-providers/types'
-import { useScheduledJobRuns } from '@/lib/schedules/scheduleStorage'
+import { useProvidersQuery } from '@/modules/llm-providers/llm-providers.hooks'
+import { useScheduledJobRuns } from '@/modules/schedules/schedules.hooks'
 import type { ScheduledJob, ScheduledJobRun } from './types'
 
 dayjs.extend(relativeTime)
@@ -83,24 +82,11 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
   onRetryRun,
 }) => {
   const [isOpen, setIsOpen] = useState(false)
-  const [providerInfo, setProviderInfo] = useState<{
-    name: string
-    type: ProviderType
-  } | null>(null)
-
   const { jobRuns } = useScheduledJobRuns()
-
-  // Load provider info for display
-  useEffect(() => {
-    if (!job.providerId) {
-      setProviderInfo(null)
-      return
-    }
-    providersStorage.getValue().then((providers) => {
-      const match = providers?.find((p) => p.id === job.providerId)
-      setProviderInfo(match ? { name: match.name, type: match.type } : null)
-    })
-  }, [job.providerId])
+  const { data: providers = [] } = useProvidersQuery()
+  const providerInfo = job.providerId
+    ? (providers.find((provider) => provider.id === job.providerId) ?? null)
+    : null
 
   const runs = useMemo(
     () =>

@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { ScheduledJob } from '@/lib/schedules/scheduleTypes'
+import type {
+  ScheduledJob,
+  ScheduledJobRun,
+} from '@/lib/schedules/scheduleTypes'
 import {
   type LocalFirstMigrationDeps,
+  type RunsMigrationDeps,
   runLocalFirstMigration,
+  runScheduledRunsMigration,
 } from './local-first-migration'
 import type {
   ProviderImport,
@@ -218,6 +223,83 @@ describe('runLocalFirstMigration', () => {
       'server not up',
     )
     expect(h.importedProviders).toHaveLength(1)
+    expect(h.done()).toBe(false)
+  })
+})
+
+function runsHarness(overrides: Partial<RunsMigrationDeps> = {}) {
+  let done = false
+  const imported: ScheduledJobRun[][] = []
+  return {
+    done: () => done,
+    imported,
+    deps: {
+      isDone: async () => done,
+      markDone: async () => {
+        done = true
+      },
+      loadRuns: async () => [],
+      importRuns: async (runs: ScheduledJobRun[]) => {
+        imported.push(runs)
+      },
+      ...overrides,
+    } as RunsMigrationDeps,
+  }
+}
+
+function jobRun(overrides: Partial<ScheduledJobRun> = {}): ScheduledJobRun {
+  return {
+    id: 'run-1',
+    jobId: 'job-1',
+    status: 'completed',
+    startedAt: '2026-01-02T03:04:05.000Z',
+    ...overrides,
+  }
+}
+
+describe('runScheduledRunsMigration', () => {
+  it('imports run history and records that it ran', async () => {
+    const h = runsHarness({ loadRuns: async () => [jobRun()] })
+
+    const result = await runScheduledRunsMigration(h.deps)
+
+    expect(result).toEqual({ ranMigration: true, runCount: 1 })
+    expect(h.imported[0][0].id).toBe('run-1')
+    expect(h.done()).toBe(true)
+  })
+
+  it('does nothing once it has already run', async () => {
+    const h = runsHarness({
+      isDone: async () => true,
+      loadRuns: async () => [jobRun()],
+    })
+
+    expect((await runScheduledRunsMigration(h.deps)).ranMigration).toBe(false)
+    expect(h.imported).toHaveLength(0)
+  })
+
+  it('marks itself done with nothing to import so it stops retrying', async () => {
+    const h = runsHarness()
+
+    expect(await runScheduledRunsMigration(h.deps)).toEqual({
+      ranMigration: true,
+      runCount: 0,
+    })
+    expect(h.imported).toHaveLength(0)
+    expect(h.done()).toBe(true)
+  })
+
+  it('leaves itself unmarked when the import fails', async () => {
+    const h = runsHarness({
+      loadRuns: async () => [jobRun()],
+      importRuns: async () => {
+        throw new Error('server not up')
+      },
+    })
+
+    await expect(runScheduledRunsMigration(h.deps)).rejects.toThrow(
+      'server not up',
+    )
     expect(h.done()).toBe(false)
   })
 })

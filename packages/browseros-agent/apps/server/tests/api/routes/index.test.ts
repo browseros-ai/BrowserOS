@@ -228,6 +228,21 @@ describe('createApiRoutes', () => {
     ).toBe(403)
   })
 
+  it('keeps scheduled job runs behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/scheduled-job-runs')).status).toBe(403)
+    expect(
+      (
+        await app.request('/scheduled-job-runs/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runs: [] }),
+        })
+      ).status,
+    ).toBe(403)
+  })
+
   it('keeps scheduled jobs behind app-origin auth', async () => {
     const app = createTestApp()
 
