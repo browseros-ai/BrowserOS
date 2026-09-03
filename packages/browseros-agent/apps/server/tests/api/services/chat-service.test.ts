@@ -97,7 +97,15 @@ mock.module('../../../src/agent/ai-sdk-agent', () => ({
   },
 }))
 
+// A module factory is a total replacement: anything it omits disappears for
+// every file that imports this module afterwards, and bun's registry is
+// process wide, so the failure surfaces somewhere else entirely and only when
+// file ordering puts that file second. Re-export the real module and override
+// the one function under test.
+import * as llmConfigModule from '../../../src/lib/clients/llm/config'
+
 mock.module('../../../src/lib/clients/llm/config', () => ({
+  ...llmConfigModule,
   resolveLLMConfig: resolveLLMConfigSpy,
 }))
 
