@@ -201,10 +201,24 @@ describe('provider resolution when the server is unreachable', () => {
     ).rejects.toThrow('Cannot reach the BrowserOS server')
   })
 
-  // No provider was named, so there is no choice to betray and the built-in
-  // fallback is the behaviour this always had.
-  it('falls back to the built-in provider when none was named', async () => {
+  // A job that named nothing still has a choice behind it: the configured
+  // default. Its id is in extension storage but its model and credentials are
+  // in the list that failed to load, so the built-in is not a safe stand-in.
+  it('fails a scheduled job that relies on the configured default', async () => {
     storageValues.set('unreachable', true)
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await expect(
+      getChatServerResponse({ message: 'Run my schedule' }),
+    ).rejects.toThrow('Cannot reach the BrowserOS server')
+
+    expect(fetchBodies).toHaveLength(0)
+  })
+
+  // An empty list is a different answer from an unreachable one: the server
+  // replied and really has no providers, so the built-in is correct.
+  it('still falls back to the built-in provider when the server has none', async () => {
+    storageValues.set('providers', [])
     const { getChatServerResponse } = await import('./getChatServerResponse')
 
     await getChatServerResponse({ message: 'Run my schedule' })
