@@ -1,4 +1,4 @@
-import { getHealthCheckUrl } from '@/lib/browseros/helpers'
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
 /**
  * Long enough to cover a cold start where the server is booting alongside the
@@ -16,9 +16,23 @@ export interface WaitForAgentServerOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
+/**
+ * Health on the agent server itself, not `getHealthCheckUrl`.
+ *
+ * That helper resolves the proxy port, while the imports address the agent
+ * server on the mcp port. They are separate services that can become ready at
+ * different moments, so probing the proxy would answer a question nobody
+ * asked: a proxy up first would wave the imports through into the same race
+ * this exists to close, and a proxy that is down would defer imports the agent
+ * server was ready to accept.
+ */
+export async function agentServerHealthUrl(): Promise<string> {
+  return `${await getAgentServerUrl()}/system/health`
+}
+
 async function defaultIsHealthy(): Promise<boolean> {
   try {
-    const response = await fetch(await getHealthCheckUrl())
+    const response = await fetch(await agentServerHealthUrl())
     return response.ok
   } catch {
     return false

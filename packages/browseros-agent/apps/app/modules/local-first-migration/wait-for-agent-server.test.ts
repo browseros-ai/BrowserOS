@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'bun:test'
-import { waitForAgentServer } from './wait-for-agent-server'
+import { describe, expect, it, mock } from 'bun:test'
+
+// The agent server and the mcp proxy listen on different ports and can become
+// ready at different moments, so the probe has to ask the one the imports
+// actually address.
+mock.module('@/lib/browseros/helpers', () => ({
+  getAgentServerUrl: async () => 'http://127.0.0.1:9105',
+  getProxyPort: async () => 9106,
+  getMcpPort: async () => 9105,
+  getHealthCheckUrl: async () => 'http://127.0.0.1:9106/system/health',
+  getMcpServerUrl: async () => 'http://127.0.0.1:9106/mcp',
+}))
+
+const { waitForAgentServer, agentServerHealthUrl } = await import(
+  './wait-for-agent-server'
+)
 
 function harness(healthyAfter: number) {
   let calls = 0
@@ -89,5 +103,13 @@ describe('waitForAgentServer', () => {
     expect(result).toBe(true)
     expect(calls).toBe(3)
     expect(clock).toBe(2_000)
+  })
+
+  // Probing the proxy would answer the wrong question: it can be up while the
+  // agent server is still starting, which leaves the original race open.
+  it('probes the agent server, not the proxy', async () => {
+    expect(await agentServerHealthUrl()).toBe(
+      'http://127.0.0.1:9105/system/health',
+    )
   })
 })
