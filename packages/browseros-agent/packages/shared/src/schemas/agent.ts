@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
-export const AcpAgentTypeSchema: z.ZodEnum<['claude', 'codex', 'custom']> =
-  z.enum(['claude', 'codex', 'custom'])
+export const AcpAgentTypeSchema = z.enum(['claude', 'codex', 'custom'])
 
 /**
  * Config for a user-defined ("custom") ACP agent. Only meaningful when the
@@ -9,17 +8,7 @@ export const AcpAgentTypeSchema: z.ZodEnum<['claude', 'codex', 'custom']> =
  * `command` is the full launch command line (args included); it is shell-split
  * into argv at launch and probe time.
  */
-export const CustomAcpAgentConfigSchema: z.ZodObject<
-  {
-    command: z.ZodString
-    env: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>
-    fullAccessModes: z.ZodOptional<z.ZodArray<z.ZodString>>
-    reasoningEffortKey: z.ZodOptional<z.ZodString>
-    systemPromptAppend: z.ZodOptional<z.ZodString>
-    icon: z.ZodOptional<z.ZodString>
-  },
-  'strict'
-> = z
+export const CustomAcpAgentConfigSchema = z
   .object({
     command: z.string().trim().min(1),
     env: z.record(z.string(), z.string()).optional(),
@@ -62,29 +51,14 @@ export const CustomAgentTargetSchema: z.ZodObject<{
   agentId: z.string().uuid(),
 })
 
-export const AgentTargetSchema: z.ZodDiscriminatedUnion<
-  'type',
-  [
-    typeof BrowserOsAgentTargetSchema,
-    typeof ClaudeAgentTargetSchema,
-    typeof CodexAgentTargetSchema,
-    typeof CustomAgentTargetSchema,
-  ]
-> = z.discriminatedUnion('type', [
+export const AgentTargetSchema = z.discriminatedUnion('type', [
   BrowserOsAgentTargetSchema,
   ClaudeAgentTargetSchema,
   CodexAgentTargetSchema,
   CustomAgentTargetSchema,
 ])
 
-export const AcpAgentTargetSchema: z.ZodDiscriminatedUnion<
-  'type',
-  [
-    typeof ClaudeAgentTargetSchema,
-    typeof CodexAgentTargetSchema,
-    typeof CustomAgentTargetSchema,
-  ]
-> = z.discriminatedUnion('type', [
+export const AcpAgentTargetSchema = z.discriminatedUnion('type', [
   ClaudeAgentTargetSchema,
   CodexAgentTargetSchema,
   CustomAgentTargetSchema,

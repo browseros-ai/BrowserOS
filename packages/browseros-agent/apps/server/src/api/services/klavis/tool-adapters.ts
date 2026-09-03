@@ -9,7 +9,6 @@ import type { CallToolResult } from '@modelcontextprotocol/client'
 import { fromJsonSchema, type McpServer } from '@modelcontextprotocol/server'
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod'
-import { zodToJsonSchema } from 'zod-to-json-schema'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
 import { findConnector, getConnectorCatalogDescription } from './catalog'
@@ -240,17 +239,18 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   return toolSet
 }
 
-// Bridge a locally hand-built Zod v3 shape (the connector tool's schema) into a
-// v2 registerTool input schema. v2 derives a tools/list JSON schema only from
-// Zod v4, so convert the v3 shape to JSON Schema first, then wrap it. Remote
-// Strata tools do NOT use this path: their JSON schema goes straight to
-// fromJsonSchema (round-tripping through Zod drops every property under v3).
+// Bridge the locally hand-built Zod shape (the connector tool's schema) into a
+// v2 registerTool input schema. v2 derives a tools/list JSON schema from the
+// JSON Schema, so convert the object first, then wrap it. Remote Strata tools do
+// NOT use this path: their JSON schema goes straight to fromJsonSchema.
 function toV2InputSchema(rawShape: z.ZodRawShape) {
   // The bridged value is a StandardSchemaWithJSON; type it as a raw shape so
   // registerTool's overload and handler typing resolve as before. At runtime
-  // v2 accepts the real object via the Standard Schema path.
+  // v2 accepts the real object via the Standard Schema path. Use Zod's native
+  // JSON Schema converter: the object is a Zod 4 schema, which the external
+  // zod-to-json-schema (v3-only) silently converts to an empty schema.
   return fromJsonSchema(
-    zodToJsonSchema(z.object(rawShape)) as never,
+    z.toJSONSchema(z.object(rawShape)) as never,
   ) as unknown as Record<string, never>
 }
 

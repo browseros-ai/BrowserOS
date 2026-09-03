@@ -38,7 +38,7 @@ const portSchema = z.preprocess(
   normalizePortInput,
   z
     .number({
-      invalid_type_error: 'must be an integer port between 1 and 65535',
+      error: 'must be an integer port between 1 and 65535',
     })
     .int('must be an integer port between 1 and 65535')
     .min(1, 'must be an integer port between 1 and 65535')
