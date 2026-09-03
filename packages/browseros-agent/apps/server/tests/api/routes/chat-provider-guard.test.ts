@@ -84,6 +84,27 @@ describe('chat provider credentials', () => {
     expect(response.status).toBe(403)
   })
 
+  // The provider types the server credentials itself. An unknown id means no
+  // row is read, so the provenance flag alone would wave these through, and
+  // the resolver would then hand over this machine's oauth token or the
+  // gateway credential to a caller that proved nothing.
+  it.each(['chatgpt-pro', 'github-copilot', 'qwen-code', 'browseros'])(
+    'refuses an untrusted caller naming %s with an unknown id',
+    async (provider) => {
+      const response = await routes().request('/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: chatBody({
+          target: { type: 'browseros', providerId: 'not-stored' },
+          provider,
+          model: 'some-model',
+        }),
+      })
+
+      expect(response.status).toBe(403)
+    },
+  )
+
   // Bringing your own configuration is what this path always allowed, and it
   // stays allowed: nothing of the user's is being spent.
   it('does not gate a request that brought its own configuration', async () => {

@@ -5,6 +5,7 @@ import { createUIMessageStreamResponse } from 'ai'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
 import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
+import { SERVER_CREDENTIALED_PROVIDERS } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { dbProviderStore } from '../../lib/providers/provider-store'
@@ -84,12 +85,19 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
       )
       if (!hydrated.ok) return c.json({ error: hydrated.error }, 400)
       // A browseros request is otherwise allowed without the app-origin check,
-      // on the reasoning that it carries its own credentials. That stops being
-      // true the moment the server supplies them: naming an id would let any
-      // local caller spend the user's key. So the check applies exactly when
-      // the configuration came from storage, leaving a request that brought
-      // its own as unrestricted as it was before.
-      if (hydrated.usedStoredProvider && !isTrustedAppRequest(c)) {
+      // on the reasoning that it carries its own credentials and so can only
+      // spend what the caller already held.
+      //
+      // Two things break that reasoning, and both have to be caught. Naming a
+      // stored provider has the server supply the key. So does naming one of
+      // the provider types the server credentials itself: the oauth three take
+      // a token from this machine's store and browseros takes the gateway
+      // credential, none of which the request carries. A caller that genuinely
+      // brought its own key is as unrestricted as it was before.
+      const usesServerCredentials =
+        hydrated.usedStoredProvider ||
+        SERVER_CREDENTIALED_PROVIDERS.has(hydrated.request.provider)
+      if (usesServerCredentials && !isTrustedAppRequest(c)) {
         return c.json({ error: 'Forbidden' }, 403)
       }
       request = hydrated.request

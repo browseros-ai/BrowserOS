@@ -169,6 +169,12 @@ describe('HTTP Server Integration Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            // The browseros provider takes the server's gateway credential
+            // rather than one the request carries, so this path is only open
+            // to the extension. Chrome puts this header on every fetch the app
+            // makes, including the ones the background alarm runner makes to
+            // the already guarded schedule routes.
+            Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
           },
           body: JSON.stringify({
             conversationId,
