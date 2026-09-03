@@ -28,6 +28,7 @@ import { createMcpManagerRoutes } from './mcp-manager'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
 import { createRefinePromptRoutes } from './refine-prompt'
+import { createScheduledJobRunRoutes } from './scheduled-job-runs'
 import { createScheduledJobRoutes } from './scheduled-jobs'
 import { createShutdownRoute } from './shutdown'
 import { createStatusRoute } from './status'
@@ -142,11 +143,13 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       // one with no Origin at all passes it.
       .use('/llm-providers/*', requireTrustedAppOrigin())
       .use('/scheduled-jobs/*', requireTrustedAppOrigin())
+      .use('/scheduled-job-runs/*', requireTrustedAppOrigin())
       .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/agents', resolvedAgentRoutes)
       .route('/conversations', createConversationRoutes())
       .route('/llm-providers', createLlmProviderRoutes())
       .route('/scheduled-jobs', createScheduledJobRoutes())
+      .route('/scheduled-job-runs', createScheduledJobRunRoutes())
   )
 }
 
