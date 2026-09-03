@@ -90,7 +90,7 @@ jobs:
         if: matrix.needs_rust == true
         # Pinned so the clippy lint set is deterministic and matches local dev;
         # a floating `stable` silently changes which lints fire across runs.
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy,rustfmt
 
