@@ -40,7 +40,16 @@ export interface ChatRequestBrowserContext {
 
 export interface ChatRequestBodyParams {
   conversationId: string
-  provider: LlmProviderConfig
+  /**
+   * The provider config, when the caller already holds it. Only the id is sent;
+   * the rest is used to describe what the chosen model can do, which comes from
+   * a catalogue the extension bundles.
+   *
+   * Callers that hold nothing but an id, such as the scheduled runner, pass
+   * `providerId` instead and let the server resolve the rest.
+   */
+  provider?: LlmProviderConfig
+  providerId?: string
   message?: string
   mode?: ChatMode
   browserContext?: ChatRequestBrowserContext
@@ -61,6 +70,7 @@ export interface ChatRequestBodyParams {
 export const buildChatRequestBody = ({
   conversationId,
   provider,
+  providerId,
   message = '',
   mode,
   browserContext,
@@ -74,31 +84,26 @@ export const buildChatRequestBody = ({
   selectedTextSource,
   isScheduledTask,
 }: ChatRequestBodyParams) => ({
-  target: { type: 'browseros' as const, providerId: provider.id },
+  // The provider is named, not described. The server holds the list and which
+  // one is selected, so it resolves the model, endpoint and credentials from
+  // the id. Those used to travel on every message, which meant the api key and
+  // the aws secret crossed the wire each time the user pressed send.
+  target: {
+    type: 'browseros' as const,
+    // Absent when the caller has neither, which tells the server to use the
+    // selected provider.
+    providerId: provider?.id ?? providerId,
+  },
   message,
-  provider: provider.type,
-  providerId: provider.id,
-  providerType: provider.type,
-  providerName: provider.name,
-  apiKey: provider.apiKey,
-  baseUrl: provider.baseUrl,
   conversationId,
-  model: provider.modelId ?? 'default',
   mode,
-  contextWindowSize: provider.contextWindow,
-  temperature: provider.temperature,
-  resourceName: provider.resourceName,
-  accessKeyId: provider.accessKeyId,
-  secretAccessKey: provider.secretAccessKey,
-  region: provider.region,
-  sessionToken: provider.sessionToken,
-  reasoningEffort: provider.reasoningEffort,
-  reasoningSummary: provider.reasoningSummary,
   browserContext,
   userSystemPrompt,
   userWorkingDir,
-  supportsImages: supportsImages ?? provider.supportsImages,
-  supportsReasoning: resolvesSupportsReasoning(provider),
+  // Sent because the caller can override what the provider says, and because
+  // the reasoning answer comes from a model catalogue the extension bundles.
+  supportsImages: supportsImages ?? provider?.supportsImages,
+  supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
   previousConversation,
   historyMode,
   declinedApps: declinedApps?.length ? declinedApps : undefined,

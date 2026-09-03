@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { CustomAcpAgentConfigSchema } from '@browseros/shared/schemas/agent'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { type BrowserOsDatabase, getDb } from '../../db'
-import { type AcpAgentRow, acpAgents } from '../../db/schema'
+import { type ProviderRow, providers } from '../../db/schema'
 import { logger } from '../../logger'
 import type {
   AcpAgentDefinition,
@@ -38,6 +38,17 @@ export interface AcpAgentStore {
   delete(id: string): Promise<boolean>
 }
 
+/**
+ * ACP agents are rows in the unified providers table, distinguished by kind.
+ *
+ * The store keeps its own shape rather than folding into the provider store:
+ * agents are created with a generated id and updated field by field, where
+ * providers are upserted under an id the client already holds. Both are
+ * legitimate ways to reach the same table, and the shipped /agents contract
+ * depends on this one.
+ */
+const isAgent = eq(providers.kind, 'acp')
+
 export class DbAcpAgentStore implements AcpAgentStore {
   private readonly db: BrowserOsDatabase
   private writeQueue: Promise<unknown> = Promise.resolve()
@@ -49,23 +60,30 @@ export class DbAcpAgentStore implements AcpAgentStore {
   async list(): Promise<AcpAgentDefinition[]> {
     return this.db
       .select()
-      .from(acpAgents)
-      .orderBy(desc(acpAgents.updatedAt))
+      .from(providers)
+      .where(isAgent)
+      .orderBy(desc(providers.updatedAt))
       .all()
       .map(toAcpAgentDefinition)
   }
 
   async get(id: string): Promise<AcpAgentDefinition | null> {
     const row =
-      this.db.select().from(acpAgents).where(eq(acpAgents.id, id)).get() ?? null
+      this.db
+        .select()
+        .from(providers)
+        .where(and(isAgent, eq(providers.id, id)))
+        .get() ?? null
     return row ? toAcpAgentDefinition(row) : null
   }
 
   async create(input: CreateAcpAgentInput): Promise<AcpAgentDefinition> {
     return this.withWriteLock(async () => {
       const now = Date.now()
-      const row: AcpAgentRow = {
+      const row = {
         id: randomUUID(),
+        kind: 'acp' as const,
+        profileId: null,
         name: input.name.trim(),
         type: input.type,
         modelId: optionalText(input.modelId),
@@ -77,8 +95,11 @@ export class DbAcpAgentStore implements AcpAgentStore {
         createdAt: now,
         updatedAt: now,
       }
-      this.db.insert(acpAgents).values(row).run()
-      const agent = toAcpAgentDefinition(row)
+      // returning(), not the object built above: the unified table fills the
+      // columns only LLM providers use, so the row that lands is wider than
+      // what was inserted.
+      const saved = this.db.insert(providers).values(row).returning().get()
+      const agent = toAcpAgentDefinition(saved)
       logger.info('ACP agent created', {
         agentId: agent.id,
         type: agent.type,
@@ -93,11 +114,14 @@ export class DbAcpAgentStore implements AcpAgentStore {
   ): Promise<AcpAgentDefinition | null> {
     return this.withWriteLock(async () => {
       const existing =
-        this.db.select().from(acpAgents).where(eq(acpAgents.id, id)).get() ??
-        null
+        this.db
+          .select()
+          .from(providers)
+          .where(and(isAgent, eq(providers.id, id)))
+          .get() ?? null
       if (!existing) return null
 
-      const next: AcpAgentRow = {
+      const next: ProviderRow = {
         ...existing,
         name: input.name === undefined ? existing.name : input.name.trim(),
         modelId:
@@ -118,7 +142,11 @@ export class DbAcpAgentStore implements AcpAgentStore {
             : JSON.stringify(input.customConfig),
         updatedAt: Date.now(),
       }
-      this.db.update(acpAgents).set(next).where(eq(acpAgents.id, id)).run()
+      this.db
+        .update(providers)
+        .set(next)
+        .where(and(isAgent, eq(providers.id, id)))
+        .run()
       logger.info('ACP agent updated', { agentId: id })
       return toAcpAgentDefinition(next)
     })
@@ -127,7 +155,10 @@ export class DbAcpAgentStore implements AcpAgentStore {
   async delete(id: string): Promise<boolean> {
     return this.withWriteLock(async () => {
       if (!(await this.get(id))) return false
-      this.db.delete(acpAgents).where(eq(acpAgents.id, id)).run()
+      this.db
+        .delete(providers)
+        .where(and(isAgent, eq(providers.id, id)))
+        .run()
       logger.info('ACP agent deleted', { agentId: id })
       return true
     })
@@ -150,11 +181,11 @@ export function deriveAcpSessionKey(
   return `acp:${agentId}:${conversationId}`
 }
 
-function toAcpAgentDefinition(row: AcpAgentRow): AcpAgentDefinition {
+function toAcpAgentDefinition(row: ProviderRow): AcpAgentDefinition {
   return {
     id: row.id,
     name: row.name,
-    type: row.type,
+    type: row.type as AcpAgentType,
     modelId: row.modelId ?? undefined,
     reasoningEffort: row.reasoningEffort ?? undefined,
     workingDirectory: row.workingDirectory ?? undefined,

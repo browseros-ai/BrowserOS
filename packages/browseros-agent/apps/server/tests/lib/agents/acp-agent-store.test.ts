@@ -187,11 +187,11 @@ describe('DbAcpAgentStore', () => {
         .get(),
     ).toEqual({ count: 0 })
     expect(
-      handle.sqlite.query('SELECT COUNT(*) AS count FROM acp_agents').get(),
+      handle.sqlite.query('SELECT COUNT(*) AS count FROM providers').get(),
     ).toEqual({ count: 0 })
     expect(
       handle.sqlite
-        .query('PRAGMA table_info(acp_agents)')
+        .query('PRAGMA table_info(providers)')
         .all()
         .some((column) => (column as { name: string }).name === 'pinned'),
     ).toBe(false)

@@ -19,6 +19,22 @@ import type { ResolvedLLMConfig } from './types'
 
 const CHATGPT_PROVIDER_DISPLAY_NAME = 'ChatGPT'
 
+/**
+ * Provider types whose credentials come from the server, not the request.
+ *
+ * The OAuth three take a token from this machine's oauth store and browseros
+ * takes the gateway credential, so a request naming one of these spends
+ * something the caller never had to hold. Callers that gate on trust need to
+ * know that, and this set has to mirror the branches below exactly, which is
+ * why it lives beside them.
+ */
+export const SERVER_CREDENTIALED_PROVIDERS: ReadonlySet<string> = new Set([
+  LLM_PROVIDERS.CHATGPT_PRO,
+  LLM_PROVIDERS.GITHUB_COPILOT,
+  LLM_PROVIDERS.QWEN_CODE,
+  LLM_PROVIDERS.BROWSEROS,
+])
+
 export async function resolveLLMConfig(
   config: LLMConfig,
   browserosId?: string,

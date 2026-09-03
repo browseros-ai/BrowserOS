@@ -187,13 +187,22 @@ export async function saveSidepanelChatTargetSelection(
  * target, also updates the default-provider id so both stores stay consistent.
  * Keeping this in one place is what prevents surfaces from drifting apart.
  */
+/**
+ * Records the chosen chat target.
+ *
+ * One write, for either kind. While llm providers and acp agents were separate
+ * tables the default could only name an llm one, so this wrote the selection
+ * unconditionally and the default only when the kind happened to be llm.
+ * Choosing an agent left the default pointing at whichever provider was
+ * selected before it, a stale shadow of the real choice.
+ */
 export async function commitChatTargetSelection(
   selection: SidepanelChatTargetSelection | null,
   deps: { setDefaultProvider: (providerId: string) => Promise<void> },
   store?: SidepanelChatTargetSelectionWriter,
 ): Promise<void> {
   await saveSidepanelChatTargetSelection(selection, store)
-  if (selection?.kind === 'llm') await deps.setDefaultProvider(selection.id)
+  if (selection) await deps.setDefaultProvider(selection.id)
 }
 
 export async function clearSidepanelChatTargetSelectionForAgent(

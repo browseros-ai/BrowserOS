@@ -78,6 +78,22 @@ mock.module('../personalization/personalizationStorage', () => ({
   },
 }))
 
+// Only the refine path still resolves a provider on this side; the scheduled
+// path names an id and lets the server do it.
+const providers: LlmProviderConfig[] = [
+  {
+    id: 'anthropic-sonnet',
+    type: 'anthropic',
+    name: 'Anthropic Sonnet',
+    modelId: 'claude-sonnet-4-6',
+    supportsImages: true,
+    contextWindow: 200000,
+    temperature: 0.2,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+]
+
 beforeEach(() => {
   storageValues.clear()
   fetchBodies.length = 0
@@ -106,7 +122,12 @@ afterEach(() => {
 })
 
 describe('scheduled provider resolution', () => {
-  it('uses an explicit scheduled provider', async () => {
+  // The runner names the provider and stops there. Its model, endpoint and
+  // credentials are resolved from the id on the server, which is what let the
+  // client-side lookup and its unreachable-versus-empty guard go: the guard
+  // existed because a failed lookup and an empty list looked the same, and a
+  // job risked running on the built-in provider with the wrong credentials.
+  it('names the provider and sends no configuration', async () => {
     const { getChatServerResponse } = await import('./getChatServerResponse')
 
     await getChatServerResponse({
@@ -115,10 +136,24 @@ describe('scheduled provider resolution', () => {
     })
 
     expect(fetchBodies[0]).toMatchObject({
-      provider: 'anthropic',
-      providerName: 'Anthropic Sonnet',
-      model: 'claude-sonnet-4-6',
+      target: { type: 'browseros', providerId: 'anthropic-sonnet' },
+      isScheduledTask: true,
     })
+    for (const field of ['apiKey', 'model', 'provider', 'baseUrl']) {
+      expect(field in fetchBodies[0]).toBe(false)
+    }
+  })
+
+  // A job created without picking a provider names none, and the server uses
+  // whichever is selected.
+  it('leaves the provider unnamed when the job has none', async () => {
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await getChatServerResponse({ message: 'Run my schedule' })
+
+    expect(
+      (fetchBodies[0] as { target: { providerId?: string } }).target.providerId,
+    ).toBeUndefined()
   })
 
   it('uses an explicit refine provider', async () => {
@@ -139,103 +174,5 @@ describe('scheduled provider resolution', () => {
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
     })
-  })
-})
-
-const timestamp = 1000
-
-const providers: LlmProviderConfig[] = [
-  {
-    id: 'browseros',
-    type: 'browseros',
-    name: 'BrowserOS',
-    modelId: 'browseros-auto',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'anthropic-sonnet',
-    type: 'anthropic',
-    name: 'Anthropic Sonnet',
-    modelId: 'claude-sonnet-4-6',
-    apiKey: 'sk-ant',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-]
-
-describe('provider resolution when the server is unreachable', () => {
-  // The list being unreachable says nothing about whether the chosen provider
-  // exists, so running anyway would spend the wrong credentials on the wrong
-  // model. The job runner turns this into a failed run the user can see.
-  it('fails a scheduled job that named a provider', async () => {
-    storageValues.set('unreachable', true)
-    const { getChatServerResponse } = await import('./getChatServerResponse')
-
-    await expect(
-      getChatServerResponse({
-        message: 'Run my schedule',
-        providerId: 'anthropic-sonnet',
-      }),
-    ).rejects.toThrow('Cannot reach the BrowserOS server')
-
-    expect(fetchBodies).toHaveLength(0)
-  })
-
-  it('fails a refine that named a provider', async () => {
-    storageValues.set('unreachable', true)
-    const { refinePrompt } = await import('./refine-prompt')
-
-    await expect(
-      refinePrompt({
-        prompt: 'Check mail',
-        name: 'Morning brief',
-        providerId: 'anthropic-sonnet',
-      }),
-    ).rejects.toThrow('Cannot reach the BrowserOS server')
-  })
-
-  // A job that named nothing still has a choice behind it: the configured
-  // default. Its id is in extension storage but its model and credentials are
-  // in the list that failed to load, so the built-in is not a safe stand-in.
-  it('fails a scheduled job that relies on the configured default', async () => {
-    storageValues.set('unreachable', true)
-    const { getChatServerResponse } = await import('./getChatServerResponse')
-
-    await expect(
-      getChatServerResponse({ message: 'Run my schedule' }),
-    ).rejects.toThrow('Cannot reach the BrowserOS server')
-
-    expect(fetchBodies).toHaveLength(0)
-  })
-
-  // An empty list is a different answer from an unreachable one: the server
-  // replied and really has no providers, so the built-in is correct.
-  it('still falls back to the built-in provider when the server has none', async () => {
-    storageValues.set('providers', [])
-    const { getChatServerResponse } = await import('./getChatServerResponse')
-
-    await getChatServerResponse({ message: 'Run my schedule' })
-
-    expect(fetchBodies[0]).toMatchObject({ provider: 'browseros' })
-  })
-
-  // A provider that was genuinely deleted still falls back, as before. Only
-  // the unreachable case is treated as unsafe.
-  it('falls back when the named provider no longer exists', async () => {
-    const { getChatServerResponse } = await import('./getChatServerResponse')
-
-    await getChatServerResponse({
-      message: 'Run my schedule',
-      providerId: 'deleted-provider',
-    })
-
-    expect(fetchBodies[0]).toMatchObject({ provider: 'anthropic' })
   })
 })

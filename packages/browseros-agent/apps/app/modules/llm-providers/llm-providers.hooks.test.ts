@@ -7,6 +7,17 @@ import {
 import { planProviderSave } from './llm-providers.helpers'
 
 const storageValues = new Map<string, unknown>()
+const putDefaultProviderCalls: string[] = []
+
+mock.module('./llm-providers.api', () => ({
+  fetchProviders: async () => [],
+  fetchDefaultProviderId: async () => null,
+  putProvider: async () => undefined,
+  deleteProvider: async () => undefined,
+  putDefaultProvider: async (providerId: string) => {
+    putDefaultProviderCalls.push(providerId)
+  },
+}))
 
 mock.module('@wxt-dev/storage', () => ({
   storage: {
@@ -154,12 +165,13 @@ describe('resolveSelectedProvider', () => {
 })
 
 describe('persistDefaultProviderId', () => {
-  it('writes a provider id to default-provider storage', async () => {
+  // The selection moved to the server when the two provider tables merged, so
+  // it can name a coding agent as readily as an llm provider. It used to be an
+  // extension storage write, which is why it could only ever name the latter.
+  it('sends the provider id to the server', async () => {
     await persistDefaultProviderId('anthropic-provider')
 
-    expect(storageValues.get('local:default-provider-id')).toBe(
-      'anthropic-provider',
-    )
+    expect(putDefaultProviderCalls).toEqual(['anthropic-provider'])
   })
 })
 

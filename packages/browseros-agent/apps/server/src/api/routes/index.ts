@@ -22,11 +22,11 @@ import { createConversationRoutes } from './conversations'
 import { createCreditsRoutes } from './credits'
 import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
-import { createLlmProviderRoutes } from './llm-providers'
 import { createMcpRoutes } from './mcp'
 import { createMcpManagerRoutes } from './mcp-manager'
 import { createOAuthRoutes } from './oauth'
 import { createProviderRoutes } from './provider'
+import { createProvidersRoutes } from './providers'
 import { createRefinePromptRoutes } from './refine-prompt'
 import { createScheduledJobRunRoutes } from './scheduled-job-runs'
 import { createScheduledJobRoutes } from './scheduled-jobs'
@@ -141,13 +141,13 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       // localhost + extension-origin check. The blanket requireTrustedOrigin
       // above only rejects a request that carries a disallowed Origin header;
       // one with no Origin at all passes it.
-      .use('/llm-providers/*', requireTrustedAppOrigin())
+      .use('/providers/*', requireTrustedAppOrigin())
       .use('/scheduled-jobs/*', requireTrustedAppOrigin())
       .use('/scheduled-job-runs/*', requireTrustedAppOrigin())
       .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/agents', resolvedAgentRoutes)
       .route('/conversations', createConversationRoutes())
-      .route('/llm-providers', createLlmProviderRoutes())
+      .route('/providers', createProvidersRoutes())
       .route('/scheduled-jobs', createScheduledJobRoutes())
       .route('/scheduled-job-runs', createScheduledJobRunRoutes())
   )

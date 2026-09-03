@@ -5,12 +5,13 @@
 
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, initializeDb } from '../../../src/lib/db'
-import { acpAgents } from '../../../src/lib/db/schema'
+import { providers } from '../../../src/lib/db/schema'
 
 describe('database initialization', () => {
   const tempDirs: string[] = []
@@ -28,7 +29,7 @@ describe('database initialization', () => {
     const dbPath = join(dir, 'nested', 'browseros.sqlite')
 
     const handle = initializeDb({ dbPath })
-    const rows = handle.db.select().from(acpAgents).all()
+    const rows = handle.db.select().from(providers).all()
 
     expect(existsSync(dbPath)).toBe(true)
     expect(rows).toEqual([])
@@ -52,7 +53,7 @@ describe('database initialization', () => {
     })
 
     expectCurrentSchema(handle)
-    expect(handle.db.select().from(acpAgents).all()).toEqual([])
+    expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
   it('bootstraps the current schema when a migration directory is empty', () => {
@@ -67,7 +68,7 @@ describe('database initialization', () => {
 
     expect(handle.migrationsDir).toBe(null)
     expectCurrentSchema(handle)
-    expect(handle.db.select().from(acpAgents).all()).toEqual([])
+    expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
   it('skips empty packaged migration resources', () => {
@@ -82,7 +83,7 @@ describe('database initialization', () => {
     })
 
     expect(handle.migrationsDir).not.toBe(packagedMigrationsDir)
-    expect(handle.db.select().from(acpAgents).all()).toEqual([])
+    expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
   it('does not rerun old migrations after fallback schema bootstrap', () => {
@@ -171,7 +172,7 @@ describe('database initialization', () => {
       .get()
 
     expect(legacyTable).toBeNull()
-    expect(handle.db.select().from(acpAgents).all()).toEqual([])
+    expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
   function expectCurrentSchema(handle: ReturnType<typeof initializeDb>): void {
@@ -181,7 +182,9 @@ describe('database initialization', () => {
           SELECT name FROM sqlite_master
           WHERE type = 'table'
             AND name IN (
-              'acp_agents',
+              'providers',
+              'scheduled_jobs',
+              'scheduled_job_runs',
               'oauth_tokens',
               '__drizzle_migrations'
             )
@@ -191,10 +194,16 @@ describe('database initialization', () => {
       .all()
       .map((row) => row.name)
 
+    // The fallback has to produce the schema as it stands after every
+    // migration, so the two split provider tables are absent and the unified
+    // one is present. It drifted behind once already, which is what this list
+    // is here to catch.
     expect(tables).toEqual([
       '__drizzle_migrations',
-      'acp_agents',
       'oauth_tokens',
+      'providers',
+      'scheduled_job_runs',
+      'scheduled_jobs',
     ])
     const migrations = handle.sqlite
       .query<{ hash: string; createdAt: number }, []>(
@@ -216,37 +225,29 @@ describe('database initialization', () => {
   }
 })
 
-const expectedMigrationHistory = [
-  {
-    hash: 'aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61',
-    createdAt: 1777750582590,
-  },
-  {
-    hash: '19e693f7b1adcd1d932fa6cf5638b5b158c66ea5de4f154bc59311f4d6f71261',
-    createdAt: 1777752799806,
-  },
-  {
-    hash: '02b11bf1dc34a5a289efd216233a48f0b7b950cfc33eaa7ebe6dcbb15d07f75c',
-    createdAt: 1777902205667,
-  },
-  {
-    hash: '34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52',
-    createdAt: 1781916712443,
-  },
-  {
-    hash: '76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd',
-    createdAt: 1785893663690,
-  },
-  {
-    hash: '44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154',
-    createdAt: 1785900211901,
-  },
-  {
-    hash: 'e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90',
-    createdAt: 1786538823114,
-  },
-  {
-    hash: '561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b',
-    createdAt: 1787580067090,
-  },
-]
+/**
+ * Derived from the journal rather than transcribed.
+ *
+ * The bootstrap fallback carries its own copy of this history, and a hand
+ * written duplicate here is what let that copy fall four migrations behind
+ * without any test noticing. Reading the journal and hashing the files means
+ * adding a migration and forgetting the fallback now fails.
+ */
+const expectedMigrationHistory = JSON.parse(
+  readFileSync(
+    join(import.meta.dir, '../../../src/lib/db/migrations/meta/_journal.json'),
+    'utf8',
+  ),
+).entries.map((entry: { tag: string; when: number }) => ({
+  hash: createHash('sha256')
+    .update(
+      readFileSync(
+        join(
+          import.meta.dir,
+          `../../../src/lib/db/migrations/${entry.tag}.sql`,
+        ),
+      ),
+    )
+    .digest('hex'),
+  createdAt: entry.when,
+}))

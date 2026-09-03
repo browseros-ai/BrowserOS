@@ -5,19 +5,27 @@ import { createUIMessageStreamResponse } from 'ai'
 import { Hono } from 'hono'
 import { SessionStore } from '../../agent/session-store'
 import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
+import { SERVER_CREDENTIALED_PROVIDERS } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
+import { dbProviderStore } from '../../lib/providers/provider-store'
 import { Sentry } from '../../lib/sentry'
+import {
+  type ChatProviderLookup,
+  hydrateChatProvider,
+} from '../services/chat-provider-config'
 import { ChatService } from '../services/chat-service'
 import type { ConversationRuns } from '../services/conversation-runs'
 import type { KlavisService } from '../services/klavis'
 import type { BrowserMcpModule } from '../services/mcp/browser-mcp-module'
 import type { ServerActivity } from '../services/server-activity'
 import {
+  type AcpChatRequest,
   type BrowserOsChatRequest,
   type ChatRequest,
   ChatRequestSchema,
   type Env,
+  type HydratedChatRequest,
 } from '../types'
 import { isTrustedAppRequest } from '../utils/request-auth'
 import { ConversationIdParamSchema } from '../utils/validation'
@@ -33,6 +41,8 @@ interface ChatRouteDeps {
   activity?: ServerActivity
   acpRuntime?: AcpAgentRuntime
   conversationRuns?: ConversationRuns
+  /** Injectable so the hydration path is testable without a database. */
+  providerStore?: ChatProviderLookup
 }
 
 // /chat deliberately exposes a plain Hono type. Its AI SDK stream payloads are
@@ -58,11 +68,44 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
 
   const app = new Hono<Env>()
   app.post('/', zValidator('json', ChatRequestSchema), async (c) => {
-    const request = c.req.valid('json')
-    const browserRequest = isBrowserOsChatRequest(request) ? request : null
-    if (!browserRequest && !isTrustedAppRequest(c)) {
+    const parsed = c.req.valid('json')
+    const parsedBrowserRequest = isBrowserOsChatRequest(parsed) ? parsed : null
+    if (!parsedBrowserRequest && !isTrustedAppRequest(c)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
+
+    // The provider configuration is filled from the stored row here rather than
+    // shipped on every message. A client from before this change sends it all
+    // inline and simply finds nothing to overlay.
+    let request: HydratedChatRequest
+    if (parsedBrowserRequest) {
+      const hydrated = await hydrateChatProvider(
+        parsedBrowserRequest,
+        deps.providerStore ?? dbProviderStore,
+      )
+      if (!hydrated.ok) return c.json({ error: hydrated.error }, 400)
+      // A browseros request is otherwise allowed without the app-origin check,
+      // on the reasoning that it carries its own credentials and so can only
+      // spend what the caller already held.
+      //
+      // Two things break that reasoning, and both have to be caught. Naming a
+      // stored provider has the server supply the key. So does naming one of
+      // the provider types the server credentials itself: the oauth three take
+      // a token from this machine's store and browseros takes the gateway
+      // credential, none of which the request carries. A caller that genuinely
+      // brought its own key is as unrestricted as it was before.
+      const usesServerCredentials =
+        hydrated.usedStoredProvider ||
+        SERVER_CREDENTIALED_PROVIDERS.has(hydrated.request.provider)
+      if (usesServerCredentials && !isTrustedAppRequest(c)) {
+        return c.json({ error: 'Forbidden' }, 403)
+      }
+      request = hydrated.request
+    } else {
+      request = parsed as AcpChatRequest
+    }
+    const browserRequest = isBrowserOsChatRequest(request) ? request : null
+
     const provider = browserRequest?.provider ?? request.target.type
     const model = browserRequest?.model
     const baseUrl = browserRequest?.baseUrl
