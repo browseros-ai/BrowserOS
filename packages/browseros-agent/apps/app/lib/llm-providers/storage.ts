@@ -9,25 +9,10 @@ import {
   DEFAULT_PROVIDER_ID,
   DEFAULT_PROVIDER_NAME,
 } from './provider-selection'
+import { dropRemovedProviderConfigs } from './removed-provider-types'
 import type { LlmProviderConfig, LlmProvidersBackup } from './types'
 
 export { DEFAULT_PROVIDER_ID } from './provider-selection'
-
-const REMOVED_PROVIDER_TYPES = new Set([
-  'remote-hermes',
-  'claude-code',
-  'codex',
-  'acp-custom',
-])
-
-function dropRemovedProviderConfigs(
-  providers: LlmProviderConfig[] | null,
-): LlmProviderConfig[] | null {
-  if (!providers) return providers
-  return providers.filter(
-    (provider) => !REMOVED_PROVIDER_TYPES.has(String(provider.type)),
-  )
-}
 
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',

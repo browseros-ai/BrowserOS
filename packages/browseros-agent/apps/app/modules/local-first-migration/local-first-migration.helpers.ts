@@ -1,3 +1,4 @@
+import { REMOVED_PROVIDER_TYPES } from '@/lib/llm-providers/removed-provider-types'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ScheduledJob } from '@/lib/schedules/scheduleTypes'
 
@@ -8,9 +9,9 @@ export interface ProviderImport {
   name: string
   baseUrl?: string
   modelId: string
-  supportsImages: boolean
+  supportsImages?: boolean
   contextWindow: number
-  temperature: number
+  temperature?: number
   apiKey?: string
   accessKeyId?: string
   secretAccessKey?: string
@@ -30,7 +31,7 @@ export interface ScheduledJobImport {
   scheduleType: ScheduledJob['scheduleType']
   scheduleTime?: string
   scheduleInterval?: number
-  enabled: boolean
+  enabled?: boolean
   providerId?: string
   lastRunAt?: number
   createdAt?: number
@@ -61,6 +62,64 @@ export function parseProviderBackup(raw: unknown): LlmProviderConfig[] {
   }
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function optionalString(value: unknown): string | undefined {
+  return isNonEmptyString(value) ? value : undefined
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/**
+ * Whether a provider can be sent to the import endpoint.
+ *
+ * The required fields are exactly the ones the server requires, because a
+ * single entry it rejects returns 400 for the whole batch. That would be
+ * permanent rather than transient: the pref backup has no migration path, so
+ * the same bad entry would fail the import, block the scheduled jobs behind
+ * it, and leave the done marker unset to retry forever.
+ *
+ * Removed types are excluded for a related reason. Storage migrations drop
+ * them, the pref backup never gets that treatment, and importing one would
+ * put a provider of a type the app no longer supports into the database.
+ */
+export function isImportableProvider(
+  value: unknown,
+): value is LlmProviderConfig {
+  if (typeof value !== 'object' || value === null) return false
+  const provider = value as Partial<LlmProviderConfig>
+  return (
+    isNonEmptyString(provider.id) &&
+    isNonEmptyString(provider.type) &&
+    !REMOVED_PROVIDER_TYPES.has(provider.type) &&
+    isNonEmptyString(provider.name) &&
+    isNonEmptyString(provider.modelId) &&
+    optionalNumber(provider.contextWindow) !== undefined
+  )
+}
+
+/** Same contract as `isImportableProvider`, for the scheduled jobs batch. */
+export function isImportableJob(value: unknown): value is ScheduledJob {
+  if (typeof value !== 'object' || value === null) return false
+  const job = value as Partial<ScheduledJob>
+  return (
+    isNonEmptyString(job.id) &&
+    isNonEmptyString(job.name) &&
+    isNonEmptyString(job.query) &&
+    (job.scheduleType === 'daily' ||
+      job.scheduleType === 'hourly' ||
+      job.scheduleType === 'minutes')
+  )
+}
+
 /**
  * Unions the two local provider sources, extension storage winning on id.
  *
@@ -83,25 +142,31 @@ export function mergeProviderSources(
   return merged
 }
 
+/**
+ * Optional fields pass through a type check rather than straight across, so a
+ * provider that is well formed where it matters still imports when one of its
+ * optional fields holds junk. Dropping the field lets the server apply its own
+ * default; sending the wrong type would fail the whole batch.
+ */
 export function toProviderImport(config: LlmProviderConfig): ProviderImport {
   return {
     id: config.id,
     type: config.type,
     name: config.name,
-    baseUrl: config.baseUrl,
+    baseUrl: optionalString(config.baseUrl),
     modelId: config.modelId,
-    supportsImages: config.supportsImages,
+    supportsImages: optionalBoolean(config.supportsImages),
     contextWindow: config.contextWindow,
-    temperature: config.temperature,
-    apiKey: config.apiKey,
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    sessionToken: config.sessionToken,
-    resourceName: config.resourceName,
-    region: config.region,
-    reasoningEffort: config.reasoningEffort,
-    reasoningSummary: config.reasoningSummary,
-    createdAt: config.createdAt,
+    temperature: optionalNumber(config.temperature),
+    apiKey: optionalString(config.apiKey),
+    accessKeyId: optionalString(config.accessKeyId),
+    secretAccessKey: optionalString(config.secretAccessKey),
+    sessionToken: optionalString(config.sessionToken),
+    resourceName: optionalString(config.resourceName),
+    region: optionalString(config.region),
+    reasoningEffort: optionalString(config.reasoningEffort),
+    reasoningSummary: optionalString(config.reasoningSummary),
+    createdAt: optionalNumber(config.createdAt),
   }
 }
 
@@ -112,8 +177,8 @@ export function toProviderImport(config: LlmProviderConfig): ProviderImport {
  * fail validation and take the whole batch with it. The server then stamps its
  * own `createdAt`, so the job still lands.
  */
-function toEpoch(value: string | undefined): number | undefined {
-  if (!value) return undefined
+function toEpoch(value: unknown): number | undefined {
+  if (!isNonEmptyString(value)) return undefined
   const parsed = Date.parse(value)
   return Number.isNaN(parsed) ? undefined : parsed
 }
@@ -124,10 +189,10 @@ export function toScheduledJobImport(job: ScheduledJob): ScheduledJobImport {
     name: job.name,
     query: job.query,
     scheduleType: job.scheduleType,
-    scheduleTime: job.scheduleTime,
-    scheduleInterval: job.scheduleInterval,
-    enabled: job.enabled,
-    providerId: job.providerId,
+    scheduleTime: optionalString(job.scheduleTime),
+    scheduleInterval: optionalNumber(job.scheduleInterval),
+    enabled: optionalBoolean(job.enabled),
+    providerId: optionalString(job.providerId),
     lastRunAt: toEpoch(job.lastRunAt),
     createdAt: toEpoch(job.createdAt),
   }

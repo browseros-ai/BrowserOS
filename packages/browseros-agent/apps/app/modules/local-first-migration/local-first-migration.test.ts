@@ -141,6 +141,54 @@ describe('runLocalFirstMigration', () => {
     expect(h.done()).toBe(true)
   })
 
+  // The whole batch is one request, so an entry the server rejects would take
+  // the valid providers down with it, block the jobs queued behind it, and
+  // leave the marker unset to fail again on every startup.
+  it('drops an unusable backup entry instead of failing the batch', async () => {
+    const h = harness({
+      loadStoredProviders: async () => [provider()],
+      loadBackupProviders: async () =>
+        [
+          { id: 'stale', name: 'half a provider' },
+          provider({ id: 'removed-type', type: 'remote-hermes' as never }),
+        ] as never,
+      loadScheduledJobs: async () => [job()],
+    })
+
+    const result = await runLocalFirstMigration(h.deps)
+
+    expect(h.importedProviders[0].map((p) => p.id)).toEqual(['provider-1'])
+    expect(h.importedJobs).toHaveLength(1)
+    expect(result.ranMigration).toBe(true)
+    expect(h.done()).toBe(true)
+  })
+
+  it('drops a job the server would reject without losing the rest', async () => {
+    const h = harness({
+      loadScheduledJobs: async () =>
+        [job(), { id: 'broken', name: '', query: '' }] as never,
+    })
+
+    await runLocalFirstMigration(h.deps)
+
+    expect(h.importedJobs[0].map((j) => j.id)).toEqual(['job-1'])
+    expect(h.done()).toBe(true)
+  })
+
+  // Filtering runs before the merge, so an unusable stored entry cannot win
+  // the id and take a perfectly good backup copy down with it.
+  it('falls back to the backup copy when the stored one is unusable', async () => {
+    const h = harness({
+      loadStoredProviders: async () => [{ id: 'provider-1' }] as never,
+      loadBackupProviders: async () => [provider({ name: 'From backup' })],
+    })
+
+    await runLocalFirstMigration(h.deps)
+
+    expect(h.importedProviders[0]).toHaveLength(1)
+    expect(h.importedProviders[0][0].name).toBe('From backup')
+  })
+
   // A failed run must retry on the next startup, which is only safe because
   // the server inserts what is absent rather than replacing.
   it('leaves itself unmarked when the import fails', async () => {

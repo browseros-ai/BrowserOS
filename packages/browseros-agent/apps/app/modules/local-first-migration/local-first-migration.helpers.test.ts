@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ScheduledJob } from '@/lib/schedules/scheduleTypes'
 import {
+  isImportableJob,
+  isImportableProvider,
   mergeProviderSources,
   parseProviderBackup,
   toProviderImport,
@@ -133,5 +135,105 @@ describe('toScheduledJobImport', () => {
 
   it('leaves an absent lastRunAt absent', () => {
     expect(toScheduledJobImport(job()).lastRunAt).toBeUndefined()
+  })
+})
+
+describe('isImportableProvider', () => {
+  it('accepts a well formed provider', () => {
+    expect(isImportableProvider(provider())).toBe(true)
+  })
+
+  // A single entry the server rejects returns 400 for the whole batch, and
+  // because the pref backup has no migration path that failure would repeat on
+  // every startup with nothing the user could do about it.
+  it.each([
+    ['no id', { id: '' }],
+    ['no type', { type: '' }],
+    ['no name', { name: '' }],
+    ['no model', { modelId: '' }],
+  ])('rejects a provider with %s', (_label, overrides) => {
+    expect(isImportableProvider(provider(overrides as never))).toBe(false)
+  })
+
+  it('rejects a provider whose context window is not a number', () => {
+    expect(
+      isImportableProvider({ ...provider(), contextWindow: '200000' }),
+    ).toBe(false)
+    expect(isImportableProvider({ ...provider(), contextWindow: NaN })).toBe(
+      false,
+    )
+  })
+
+  // Storage migrations drop these; the pref backup never gets that treatment.
+  it('rejects provider types that no longer exist', () => {
+    for (const type of [
+      'remote-hermes',
+      'claude-code',
+      'codex',
+      'acp-custom',
+    ]) {
+      expect(isImportableProvider(provider({ type } as never))).toBe(false)
+    }
+  })
+
+  it('rejects values that are not objects', () => {
+    expect(isImportableProvider(null)).toBe(false)
+    expect(isImportableProvider('provider')).toBe(false)
+  })
+})
+
+describe('isImportableJob', () => {
+  it('accepts a well formed job', () => {
+    expect(isImportableJob(job())).toBe(true)
+  })
+
+  it('rejects a job missing the fields the server requires', () => {
+    expect(isImportableJob(job({ name: '' }))).toBe(false)
+    expect(isImportableJob(job({ query: '' }))).toBe(false)
+  })
+
+  it('rejects an unrecognised schedule type', () => {
+    expect(isImportableJob(job({ scheduleType: 'weekly' } as never))).toBe(
+      false,
+    )
+  })
+})
+
+describe('optional field sanitising', () => {
+  // The provider is valid where it matters, so it should still import; the
+  // junk field is dropped and the server applies its own default.
+  it('drops an optional field holding the wrong type', () => {
+    const imported = toProviderImport({
+      ...provider(),
+      temperature: 'warm',
+      supportsImages: 'yes',
+      baseUrl: 42,
+    } as never)
+
+    expect(imported.temperature).toBeUndefined()
+    expect(imported.supportsImages).toBeUndefined()
+    expect(imported.baseUrl).toBeUndefined()
+    expect(imported.modelId).toBe('gpt-5.5')
+  })
+
+  it('keeps optional fields that are the right type', () => {
+    const imported = toProviderImport(
+      provider({ baseUrl: 'https://api.openai.com/v1' }),
+    )
+    expect(imported.baseUrl).toBe('https://api.openai.com/v1')
+    expect(imported.temperature).toBe(0.2)
+    expect(imported.supportsImages).toBe(true)
+  })
+
+  it('drops a job field holding the wrong type', () => {
+    const imported = toScheduledJobImport({
+      ...job(),
+      scheduleInterval: 'hourly',
+      enabled: 'true',
+    } as never)
+
+    expect(imported.scheduleInterval).toBeUndefined()
+    expect(imported.enabled).toBeUndefined()
+    expect(imported.name).toBe('Morning digest')
   })
 })

@@ -5,6 +5,8 @@ import type {
   ScheduledJobImport,
 } from './local-first-migration.helpers'
 import {
+  isImportableJob,
+  isImportableProvider,
   mergeProviderSources,
   toProviderImport,
   toScheduledJobImport,
@@ -56,8 +58,14 @@ export async function runLocalFirstMigration(
     deps.loadScheduledJobs(),
   ])
 
-  const providers = mergeProviderSources(stored, backup).map(toProviderImport)
-  const scheduledJobs = jobs.map(toScheduledJobImport)
+  // Filtering happens before the merge, not after: an unusable stored entry
+  // would otherwise win the id and then be dropped, losing a provider whose
+  // backup copy was perfectly good.
+  const providers = mergeProviderSources(
+    stored.filter(isImportableProvider),
+    backup.filter(isImportableProvider),
+  ).map(toProviderImport)
+  const scheduledJobs = jobs.filter(isImportableJob).map(toScheduledJobImport)
 
   if (providers.length > 0) await deps.importProviders(providers)
   if (scheduledJobs.length > 0) await deps.importScheduledJobs(scheduledJobs)
