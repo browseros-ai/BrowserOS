@@ -83,6 +83,15 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
         deps.providerStore ?? dbProviderStore,
       )
       if (!hydrated.ok) return c.json({ error: hydrated.error }, 400)
+      // A browseros request is otherwise allowed without the app-origin check,
+      // on the reasoning that it carries its own credentials. That stops being
+      // true the moment the server supplies them: naming an id would let any
+      // local caller spend the user's key. So the check applies exactly when
+      // the configuration came from storage, leaving a request that brought
+      // its own as unrestricted as it was before.
+      if (hydrated.usedStoredProvider && !isTrustedAppRequest(c)) {
+        return c.json({ error: 'Forbidden' }, 403)
+      }
       request = hydrated.request
     } else {
       request = parsed as AcpChatRequest

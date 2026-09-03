@@ -151,4 +151,33 @@ describe('hydrateChatProvider', () => {
     if (result.ok) return
     expect(result.error).toMatch(/coding agent/)
   })
+
+  // The route gates on this: supplying the user's credentials is a privilege
+  // the request does not carry on its own.
+  it('reports when the configuration came from storage', async () => {
+    const result = await hydrateChatProvider(
+      request({ target: { type: 'browseros', providerId: 'anthropic-1' } }),
+      lookup([row()]),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.usedStoredProvider).toBe(true)
+  })
+
+  it('reports when the request brought its own configuration', async () => {
+    const result = await hydrateChatProvider(
+      request({
+        target: { type: 'browseros', providerId: 'unknown-1' },
+        provider: 'openai',
+        model: 'gpt-5.5',
+        apiKey: 'sk-inline',
+      }),
+      lookup([]),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.usedStoredProvider).toBe(false)
+  })
 })

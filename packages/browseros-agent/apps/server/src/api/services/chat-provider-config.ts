@@ -17,7 +17,17 @@ export interface ChatProviderLookup {
 }
 
 export type HydrationResult =
-  | { ok: true; request: HydratedBrowserOsChatRequest }
+  | {
+      ok: true
+      request: HydratedBrowserOsChatRequest
+      /**
+       * Whether the configuration came from a stored row rather than from the
+       * request. The caller has to gate on this: supplying the user's
+       * credentials is a privilege the request itself does not carry, where
+       * sending its own is not.
+       */
+      usedStoredProvider: boolean
+    }
   | { ok: false; error: string }
 
 function toLlmConfig(
@@ -88,6 +98,7 @@ export async function hydrateChatProvider(
 
   return {
     ok: true,
+    usedStoredProvider: row !== null,
     request: {
       ...hydrated,
       provider: hydrated.provider,
