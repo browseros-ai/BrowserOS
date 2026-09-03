@@ -218,10 +218,10 @@ describe('createApiRoutes', () => {
   it('keeps provider credentials behind app-origin auth', async () => {
     const app = createTestApp()
 
-    expect((await app.request('/llm-providers')).status).toBe(403)
+    expect((await app.request('/providers')).status).toBe(403)
     expect(
       (
-        await app.request('/llm-providers', {}, {
+        await app.request('/providers', {}, {
           server: { requestIP: () => ({ address: '192.168.1.20' }) },
         } as never)
       ).status,

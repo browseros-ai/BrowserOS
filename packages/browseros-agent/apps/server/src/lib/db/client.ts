@@ -221,30 +221,120 @@ const currentMigrationHistory = [
     hash: '561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b',
     createdAt: 1787580067090,
   },
+  {
+    tag: '0008_add_llm_providers_and_scheduled_jobs',
+    hash: '1e36c60be880a222ae150858c5248a433556bd974c52164c42d1955e84ba6606',
+    createdAt: 1788319873053,
+  },
+  {
+    tag: '0009_add_scheduled_job_runs',
+    hash: '188a9503d889be46926bd6d4d660a1c016c90fac71447c25eec73e421b90fc96',
+    createdAt: 1788413695569,
+  },
+  {
+    tag: '0010_add_unified_providers_table',
+    hash: '9e5731582228e0de16bb28f5465cfd62ec2662822f43122f84b8039dd2c0cf0b',
+    createdAt: 1788426799725,
+  },
+  {
+    tag: '0011_drop_split_provider_tables',
+    hash: 'eb0fa2687c80caf919248f28cda5cd955e01a671b2104308b4d04ec55d450611',
+    createdAt: 1788426855683,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
 const currentSchemaStatements = [
   `
-    CREATE TABLE IF NOT EXISTS acp_agents (
+    CREATE TABLE IF NOT EXISTS providers (
       id text PRIMARY KEY NOT NULL,
-      name text NOT NULL,
+      profile_id text,
+      kind text NOT NULL,
       type text NOT NULL,
+      name text NOT NULL,
       model_id text,
       reasoning_effort text,
+      is_default integer DEFAULT false NOT NULL,
+      created_at integer NOT NULL,
+      updated_at integer NOT NULL,
+      base_url text,
+      supports_images integer DEFAULT true NOT NULL,
+      context_window integer,
+      temperature real DEFAULT 0.2 NOT NULL,
+      api_key text,
+      access_key_id text,
+      secret_access_key text,
+      session_token text,
+      resource_name text,
+      region text,
+      reasoning_summary text,
       working_directory text,
       custom_config text,
-      created_at integer NOT NULL,
-      updated_at integer NOT NULL
+      CONSTRAINT "providers_llm_requires_model_and_context" CHECK("providers"."kind" <> 'llm' OR ("providers"."model_id" IS NOT NULL AND "providers"."context_window" IS NOT NULL))
     )
   `,
   `
-    CREATE INDEX IF NOT EXISTS acp_agents_updated_at_idx
-    ON acp_agents (updated_at)
+    CREATE INDEX IF NOT EXISTS providers_profile_id_idx
+    ON providers (profile_id)
   `,
   `
-    CREATE INDEX IF NOT EXISTS acp_agents_type_updated_at_idx
-    ON acp_agents (type, updated_at)
+    CREATE INDEX IF NOT EXISTS providers_kind_updated_at_idx
+    ON providers (kind, updated_at)
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS providers_one_default
+    ON providers (is_default) WHERE "providers"."is_default" = 1
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+      id text PRIMARY KEY NOT NULL,
+      profile_id text,
+      name text NOT NULL,
+      query text NOT NULL,
+      schedule_type text NOT NULL,
+      schedule_time text,
+      schedule_interval integer,
+      enabled integer DEFAULT true NOT NULL,
+      provider_id text,
+      last_run_at integer,
+      created_at integer NOT NULL,
+      updated_at integer NOT NULL,
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE no action ON DELETE set null
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS scheduled_jobs_profile_id_idx
+    ON scheduled_jobs (profile_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS scheduled_jobs_enabled_idx
+    ON scheduled_jobs (enabled)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+      id text PRIMARY KEY NOT NULL,
+      profile_id text,
+      job_id text NOT NULL,
+      status text NOT NULL,
+      started_at integer NOT NULL,
+      completed_at integer,
+      result text,
+      final_result text,
+      execution_log text,
+      tool_calls text,
+      error text,
+      created_at integer NOT NULL,
+      updated_at integer NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id) ON UPDATE no action ON DELETE cascade
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS scheduled_job_runs_job_id_idx
+    ON scheduled_job_runs (job_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS scheduled_job_runs_started_at_idx
+    ON scheduled_job_runs (started_at)
   `,
   `
     CREATE TABLE IF NOT EXISTS oauth_tokens (

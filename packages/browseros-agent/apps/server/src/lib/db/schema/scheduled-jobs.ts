@@ -6,14 +6,14 @@
 
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm'
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
-import { llmProviders } from './llm-providers'
+import { providers } from './providers'
 
 /**
  * Scheduled jobs, mirroring the shape the extension holds today.
  *
- * `providerId` keeps the extension's field name rather than the cloud's
- * `llmProviderId`, because the extension copy is the migration source and the
- * one that carries credentials.
+ * `providerId` points at the unified providers table, so a job can target an
+ * ACP agent as readily as an LLM provider. While the two were separate tables
+ * this reference could only ever name an LLM provider.
  *
  * The reference is deliberately not a foreign key with a cascade: a job whose
  * provider was deleted should surface as a job needing attention, not vanish
@@ -35,7 +35,7 @@ export const scheduledJobs = sqliteTable(
     scheduleTime: text('schedule_time'),
     scheduleInterval: integer('schedule_interval'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    providerId: text('provider_id').references(() => llmProviders.id, {
+    providerId: text('provider_id').references(() => providers.id, {
       onDelete: 'set null',
     }),
     lastRunAt: integer('last_run_at'),

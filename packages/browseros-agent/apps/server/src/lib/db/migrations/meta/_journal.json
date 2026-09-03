@@ -71,6 +71,20 @@
       "when": 1788413695569,
       "tag": "0009_add_scheduled_job_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788426799725,
+      "tag": "0010_add_unified_providers_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788426855683,
+      "tag": "0011_drop_split_provider_tables",
+      "breakpoints": true
     }
   ]
 }

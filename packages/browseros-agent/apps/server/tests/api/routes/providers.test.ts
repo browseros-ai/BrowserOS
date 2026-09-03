@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'bun:test'
-import { createLlmProviderRoutes } from '../../../src/api/routes/llm-providers'
-import type { LlmProviderRow } from '../../../src/lib/db/schema'
+import { createProvidersRoutes } from '../../../src/api/routes/providers'
+import type { ProviderRow } from '../../../src/lib/db/schema'
 import type {
-  LlmProviderStore,
-  LlmProviderUpsert,
-} from '../../../src/lib/llm-providers/provider-store'
+  ProviderStore,
+  ProviderUpsert,
+} from '../../../src/lib/providers/provider-store'
 
 const PROVIDER_ID = 'provider-1'
 
-function row(overrides: Partial<LlmProviderRow> = {}): LlmProviderRow {
+function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
   return {
     id: PROVIDER_ID,
     profileId: null,
@@ -33,27 +33,35 @@ function row(overrides: Partial<LlmProviderRow> = {}): LlmProviderRow {
   }
 }
 
-function memoryStore(initial: LlmProviderRow[] = []) {
+function memoryStore(initial: ProviderRow[] = []) {
   const rows = new Map(initial.map((r) => [r.id, r]))
-  const store: LlmProviderStore = {
+  const store: ProviderStore = {
     list: async () => [...rows.values()],
     get: async (id) => rows.get(id) ?? null,
-    upsert: async (input: LlmProviderUpsert) => {
+    upsert: async (input: ProviderUpsert) => {
       const existing = rows.get(input.id)
       const saved = {
         ...row(),
         ...input,
         createdAt: existing?.createdAt ?? input.createdAt ?? 100,
         updatedAt: 200,
-      } as LlmProviderRow
+      } as ProviderRow
       rows.set(saved.id, saved)
       return saved
     },
-    insertIfAbsent: async (input: LlmProviderUpsert) => {
+    insertIfAbsent: async (input: ProviderUpsert) => {
       if (rows.has(input.id)) return null
       return store.upsert(input)
     },
     remove: async (id) => rows.delete(id),
+    listLlm: async () => [...rows.values()].filter((row) => row.kind === 'llm'),
+    getDefault: async () =>
+      [...rows.values()].find((row) => row.isDefault) ?? null,
+    setDefault: async (id) => {
+      if (!rows.has(id)) return false
+      for (const row of rows.values()) row.isDefault = row.id === id
+      return true
+    },
   }
   return { store, rows }
 }
@@ -68,7 +76,7 @@ const body = {
 
 describe('llm provider routes', () => {
   it('lists providers', async () => {
-    const routes = createLlmProviderRoutes(memoryStore([row()]))
+    const routes = createProvidersRoutes(memoryStore([row()]))
     const response = await routes.request('/')
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
@@ -77,7 +85,7 @@ describe('llm provider routes', () => {
   })
 
   it('gets one provider', async () => {
-    const routes = createLlmProviderRoutes(memoryStore([row()]))
+    const routes = createProvidersRoutes(memoryStore([row()]))
     const response = await routes.request(`/${PROVIDER_ID}`)
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
@@ -86,13 +94,13 @@ describe('llm provider routes', () => {
   })
 
   it('returns 404 for an unknown provider', async () => {
-    const routes = createLlmProviderRoutes(memoryStore())
+    const routes = createProvidersRoutes(memoryStore())
     expect((await routes.request(`/${PROVIDER_ID}`)).status).toBe(404)
   })
 
   it('creates a provider under the id from the path', async () => {
     const { store, rows } = memoryStore()
-    const routes = createLlmProviderRoutes({ store })
+    const routes = createProvidersRoutes({ store })
 
     const response = await routes.request(`/${PROVIDER_ID}`, {
       method: 'PUT',
@@ -108,7 +116,7 @@ describe('llm provider routes', () => {
   // repeated PUT has to land on the same row rather than a second one.
   it('is idempotent: putting the same id twice keeps one row', async () => {
     const { store, rows } = memoryStore()
-    const routes = createLlmProviderRoutes({ store })
+    const routes = createProvidersRoutes({ store })
     const put = () =>
       routes.request(`/${PROVIDER_ID}`, {
         method: 'PUT',
@@ -124,7 +132,7 @@ describe('llm provider routes', () => {
 
   it('keeps the original creation time when a provider is re-imported', async () => {
     const { store, rows } = memoryStore([row({ createdAt: 42 })])
-    const routes = createLlmProviderRoutes({ store })
+    const routes = createProvidersRoutes({ store })
 
     await routes.request(`/${PROVIDER_ID}`, {
       method: 'PUT',
@@ -136,7 +144,7 @@ describe('llm provider routes', () => {
   })
 
   it('rejects a body missing required fields', async () => {
-    const routes = createLlmProviderRoutes(memoryStore())
+    const routes = createProvidersRoutes(memoryStore())
     const response = await routes.request(`/${PROVIDER_ID}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -147,7 +155,7 @@ describe('llm provider routes', () => {
 
   it('deletes a provider', async () => {
     const { store, rows } = memoryStore([row()])
-    const routes = createLlmProviderRoutes({ store })
+    const routes = createProvidersRoutes({ store })
 
     const response = await routes.request(`/${PROVIDER_ID}`, {
       method: 'DELETE',
@@ -157,7 +165,7 @@ describe('llm provider routes', () => {
   })
 
   it('returns 404 deleting an unknown provider', async () => {
-    const routes = createLlmProviderRoutes(memoryStore())
+    const routes = createProvidersRoutes(memoryStore())
     expect(
       (await routes.request(`/${PROVIDER_ID}`, { method: 'DELETE' })).status,
     ).toBe(404)
@@ -166,7 +174,7 @@ describe('llm provider routes', () => {
   // Credentials are the reason this table exists rather than staying remote.
   it('round-trips credentials, which the cloud never carried', async () => {
     const { store, rows } = memoryStore()
-    const routes = createLlmProviderRoutes({ store })
+    const routes = createProvidersRoutes({ store })
 
     await routes.request(`/${PROVIDER_ID}`, {
       method: 'PUT',
@@ -189,7 +197,7 @@ describe('llm provider routes', () => {
 
   describe('import', () => {
     async function importProviders(
-      routes: ReturnType<typeof createLlmProviderRoutes>,
+      routes: ReturnType<typeof createProvidersRoutes>,
       providers: unknown[],
     ) {
       return routes.request('/import', {
@@ -201,7 +209,7 @@ describe('llm provider routes', () => {
 
     it('inserts a provider that is not there yet', async () => {
       const { store, rows } = memoryStore()
-      const routes = createLlmProviderRoutes({ store })
+      const routes = createProvidersRoutes({ store })
       const response = await importProviders(routes, [
         { ...body, id: PROVIDER_ID },
       ])
@@ -219,7 +227,7 @@ describe('llm provider routes', () => {
     // still sitting in extension storage.
     it('leaves an existing provider untouched and reports it skipped', async () => {
       const { store, rows } = memoryStore([row({ name: 'Edited since' })])
-      const routes = createLlmProviderRoutes({ store })
+      const routes = createProvidersRoutes({ store })
       const response = await importProviders(routes, [
         { ...body, id: PROVIDER_ID, name: 'Stale copy' },
       ])
@@ -233,7 +241,7 @@ describe('llm provider routes', () => {
 
     it('partitions a mixed batch', async () => {
       const { store } = memoryStore([row()])
-      const routes = createLlmProviderRoutes({ store })
+      const routes = createProvidersRoutes({ store })
       const response = await importProviders(routes, [
         { ...body, id: PROVIDER_ID },
         { ...body, id: 'provider-2' },
@@ -246,8 +254,54 @@ describe('llm provider routes', () => {
     })
 
     it('rejects a provider with no id', async () => {
-      const routes = createLlmProviderRoutes(memoryStore())
+      const routes = createProvidersRoutes(memoryStore())
       expect((await importProviders(routes, [body])).status).toBe(400)
+    })
+  })
+
+  describe('default', () => {
+    it('reports no default when none is set', async () => {
+      const routes = createProvidersRoutes(memoryStore([row()]))
+      const response = await routes.request('/default')
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ provider: null })
+    })
+
+    it('points the default at a provider', async () => {
+      const { store, rows } = memoryStore([row()])
+      const routes = createProvidersRoutes({ store })
+
+      const response = await routes.request('/default', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ providerId: PROVIDER_ID }),
+      })
+
+      expect(response.status).toBe(200)
+      expect(rows.get(PROVIDER_ID)?.isDefault).toBe(true)
+    })
+
+    it('refuses an unknown provider rather than storing a stale pointer', async () => {
+      const routes = createProvidersRoutes(memoryStore())
+      const response = await routes.request('/default', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ providerId: 'nope' }),
+      })
+
+      expect(response.status).toBe(404)
+    })
+
+    // /default is declared before /:providerId, so the literal path is not
+    // swallowed as an id.
+    it('does not read the default path as a provider id', async () => {
+      const { store } = memoryStore([row({ id: 'default' })])
+      const routes = createProvidersRoutes({ store })
+
+      expect(await (await routes.request('/default')).json()).toEqual({
+        provider: null,
+      })
     })
   })
 })
