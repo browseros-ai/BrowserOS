@@ -12,6 +12,7 @@ import {
   scheduledJobRunStorage,
   scheduledJobStorage,
 } from '@/lib/schedules/scheduleStorage'
+import { sentry } from '@/lib/sentry/sentry'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { putDefaultProvider } from '@/modules/llm-providers/llm-providers.api'
 import { importScheduledJobRuns } from '@/modules/schedules/schedules.api'
@@ -25,6 +26,7 @@ import {
   parseProviderBackup,
   type ScheduledJobImport,
 } from './local-first-migration.helpers'
+import { waitForAgentServer } from './wait-for-agent-server'
 
 /**
  * Per profile, because extension storage is per profile. Losing it costs a
@@ -83,35 +85,77 @@ async function importScheduledJobs(jobs: ScheduledJobImport[]): Promise<void> {
   }
 }
 
-/** Fire and forget from the background; a failure retries on next startup. */
+/**
+ * Runs the one-time imports once the server is up.
+ *
+ * Everything here happens when the background starts, which is also when the
+ * server starts, so firing straight away meant importing into a socket nothing
+ * was listening on. Each import then failed, and because a failed run leaves
+ * its marker unset it lost the same race on the next launch too, so a user
+ * upgrading saw their providers and scheduled tasks simply never arrive while
+ * the database migration looked like it had worked.
+ *
+ * Waiting on health first removes the race. A failure past that point is worth
+ * seeing rather than swallowing: it is the difference between a slow start and
+ * data that never came across.
+ */
 export function startLocalFirstMigration(): void {
-  // The default is chained onto the provider import rather than fired
-  // alongside it: the id it names has to exist server side before it can be
-  // made default. The run history is independent and does not wait.
-  void runLocalFirstMigration({
-    isDone: () => migrationDoneStorage.getValue(),
-    markDone: () => migrationDoneStorage.setValue(true),
-    loadStoredProviders: async () => (await providersStorage.getValue()) ?? [],
-    loadBackupProviders,
-    loadScheduledJobs: async () => (await scheduledJobStorage.getValue()) ?? [],
-    importProviders,
-    importScheduledJobs,
-  })
-    .then(() =>
-      runDefaultProviderMigration({
+  void (async () => {
+    if (!(await waitForAgentServer())) {
+      sentry.captureException(
+        new Error('Agent server unreachable before the local-first import'),
+        {
+          extra: {
+            message:
+              'Imports deferred to the next start; markers remain unset so they will run again',
+          },
+        },
+      )
+      return
+    }
+
+    // The default is chained onto the provider import rather than run
+    // alongside it: the id it names has to exist server side before it can be
+    // made default. The run history is independent and does not wait.
+    try {
+      await runLocalFirstMigration({
+        isDone: () => migrationDoneStorage.getValue(),
+        markDone: () => migrationDoneStorage.setValue(true),
+        loadStoredProviders: async () =>
+          (await providersStorage.getValue()) ?? [],
+        loadBackupProviders,
+        loadScheduledJobs: async () =>
+          (await scheduledJobStorage.getValue()) ?? [],
+        importProviders,
+        importScheduledJobs,
+      })
+      await runDefaultProviderMigration({
         isDone: () => defaultMigrationDoneStorage.getValue(),
         markDone: () => defaultMigrationDoneStorage.setValue(true),
         loadStoredDefaultId: async () =>
           (await defaultProviderIdStorage.getValue()) || null,
         setDefault: putDefaultProvider,
-      }),
-    )
-    .catch(() => null)
+      })
+    } catch (error) {
+      // Reported rather than swallowed: a silent failure here is
+      // indistinguishable from the user's data having vanished, which is
+      // exactly how this went unnoticed.
+      sentry.captureException(error, {
+        extra: { message: 'Provider and scheduled job import failed' },
+      })
+    }
 
-  void runScheduledRunsMigration({
-    isDone: () => runsMigrationDoneStorage.getValue(),
-    markDone: () => runsMigrationDoneStorage.setValue(true),
-    loadRuns: async () => (await scheduledJobRunStorage.getValue()) ?? [],
-    importRuns: importScheduledJobRuns,
-  }).catch(() => null)
+    try {
+      await runScheduledRunsMigration({
+        isDone: () => runsMigrationDoneStorage.getValue(),
+        markDone: () => runsMigrationDoneStorage.setValue(true),
+        loadRuns: async () => (await scheduledJobRunStorage.getValue()) ?? [],
+        importRuns: importScheduledJobRuns,
+      })
+    } catch (error) {
+      sentry.captureException(error, {
+        extra: { message: 'Scheduled run history import failed' },
+      })
+    }
+  })()
 }
