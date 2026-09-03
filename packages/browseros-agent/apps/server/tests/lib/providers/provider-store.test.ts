@@ -249,7 +249,68 @@ describe('dbProviderStore', () => {
       expect(saved?.apiKey).toBe('sk-test')
     })
 
-    test('an explicitly empty credential clears it', async () => {
+    // A form field the user never filled in submits as an empty string, not
+    // as undefined. Treating that as an instruction to clear would wipe the key
+    // on exactly the edit this protects.
+    test('an empty credential is treated as not supplied', async () => {
+      useTempDb()
+      await dbProviderStore.upsert(baseProvider())
+
+      await dbProviderStore.upsert({ ...baseProvider(), apiKey: '' })
+
+      expect(
+        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+      ).toBe('sk-test')
+    })
+
+    // And an empty value must not read back as a stored credential either.
+    // Every flag, not just the api key: they are one definition and a
+    // divergence would only show on the credential nobody tested.
+    test('an empty credential does not report as set', async () => {
+      useTempDb()
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        apiKey: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+      })
+
+      const row = await dbProviderStore.get(PROVIDER_ID)
+      expect(row?.hasApiKey).toBe(false)
+      expect(row?.hasAccessKeyId).toBe(false)
+      expect(row?.hasSecretAccessKey).toBe(false)
+      expect(row?.hasSessionToken).toBe(false)
+    })
+
+    test('every credential survives a blank edit, not just the api key', async () => {
+      useTempDb()
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'aws-secret',
+        sessionToken: 'token',
+      })
+
+      await dbProviderStore.upsert({
+        ...baseProvider(),
+        apiKey: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+      })
+
+      expect(
+        await dbProviderStore.getWithCredentials(PROVIDER_ID),
+      ).toMatchObject({
+        apiKey: 'sk-test',
+        accessKeyId: 'AKIA',
+        secretAccessKey: 'aws-secret',
+        sessionToken: 'token',
+      })
+    })
+
+    test('an explicitly null credential clears it', async () => {
       useTempDb()
       await dbProviderStore.upsert(baseProvider())
 
@@ -258,6 +319,7 @@ describe('dbProviderStore', () => {
       expect(
         (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
       ).toBeNull()
+      expect((await dbProviderStore.get(PROVIDER_ID))?.hasApiKey).toBe(false)
     })
   })
 })

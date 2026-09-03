@@ -5,6 +5,7 @@
  */
 
 import { and, eq, ne, sql } from 'drizzle-orm'
+import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { getDb } from '../db'
 import { type NewProviderRow, type ProviderRow, providers } from '../db/schema'
 
@@ -16,6 +17,12 @@ import { type NewProviderRow, type ProviderRow, providers } from '../db/schema'
  * caller of the public reads cannot receive a credential even by accident,
  * where a `select()` would hand them out on every list, get and default.
  */
+function isSet(column: AnySQLiteColumn) {
+  return sql<boolean>`${column} IS NOT NULL AND ${column} <> ''`.mapWith(
+    Boolean,
+  )
+}
+
 const publicColumns = {
   id: providers.id,
   profileId: providers.profileId,
@@ -36,15 +43,12 @@ const publicColumns = {
   reasoningSummary: providers.reasoningSummary,
   workingDirectory: providers.workingDirectory,
   customConfig: providers.customConfig,
-  hasApiKey: sql<boolean>`${providers.apiKey} IS NOT NULL`.mapWith(Boolean),
-  hasAccessKeyId: sql<boolean>`${providers.accessKeyId} IS NOT NULL`.mapWith(
-    Boolean,
-  ),
-  hasSecretAccessKey:
-    sql<boolean>`${providers.secretAccessKey} IS NOT NULL`.mapWith(Boolean),
-  hasSessionToken: sql<boolean>`${providers.sessionToken} IS NOT NULL`.mapWith(
-    Boolean,
-  ),
+  // Empty counts as unset, matching what the upsert treats as not supplied.
+  // Otherwise a blank field would read back as a stored credential.
+  hasApiKey: isSet(providers.apiKey),
+  hasAccessKeyId: isSet(providers.accessKeyId),
+  hasSecretAccessKey: isSet(providers.secretAccessKey),
+  hasSessionToken: isSet(providers.sessionToken),
 }
 
 export type PublicProviderRow = {
@@ -137,19 +141,24 @@ const CREDENTIAL_FIELDS = [
 ] as const
 
 /**
- * Drops credential fields the caller left out, so they keep their stored value.
+ * Drops credential fields the caller did not supply, so they keep their stored
+ * value.
  *
  * Reads no longer return credentials, so a client editing a provider cannot
  * send back what it never received. A plain whole-row upsert would then write
- * undefined over a working key on every rename. Clearing one is still possible
- * by sending it explicitly as an empty string or null.
+ * over a working key on every rename.
+ *
+ * An empty string counts as not supplied, not as an instruction to clear. A
+ * form field that was never filled in submits as `''` rather than undefined,
+ * so treating the two differently would wipe the key on exactly the edit this
+ * exists to protect. Clearing is deliberate and explicit: send null.
  */
 function withoutAbsentCredentials<T extends Record<string, unknown>>(
   row: T,
 ): Partial<T> {
   const next: Record<string, unknown> = { ...row }
   for (const field of CREDENTIAL_FIELDS) {
-    if (next[field] === undefined) delete next[field]
+    if (next[field] === undefined || next[field] === '') delete next[field]
   }
   return next as Partial<T>
 }
