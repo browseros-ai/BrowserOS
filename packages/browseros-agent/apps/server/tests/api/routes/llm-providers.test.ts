@@ -49,6 +49,10 @@ function memoryStore(initial: LlmProviderRow[] = []) {
       rows.set(saved.id, saved)
       return saved
     },
+    insertIfAbsent: async (input: LlmProviderUpsert) => {
+      if (rows.has(input.id)) return null
+      return store.upsert(input)
+    },
     remove: async (id) => rows.delete(id),
   }
   return { store, rows }
@@ -180,6 +184,70 @@ describe('llm provider routes', () => {
       accessKeyId: 'AKIA',
       secretAccessKey: 'secret',
       sessionToken: 'token',
+    })
+  })
+
+  describe('import', () => {
+    async function importProviders(
+      routes: ReturnType<typeof createLlmProviderRoutes>,
+      providers: unknown[],
+    ) {
+      return routes.request('/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ providers }),
+      })
+    }
+
+    it('inserts a provider that is not there yet', async () => {
+      const { store, rows } = memoryStore()
+      const routes = createLlmProviderRoutes({ store })
+      const response = await importProviders(routes, [
+        { ...body, id: PROVIDER_ID },
+      ])
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        imported: [PROVIDER_ID],
+        skipped: [],
+      })
+      expect(rows.get(PROVIDER_ID)).toMatchObject({ apiKey: 'sk-test' })
+    })
+
+    // The whole reason import is insert-if-absent: the app writes here
+    // directly, so a second run must not restore the pre-edit copy that is
+    // still sitting in extension storage.
+    it('leaves an existing provider untouched and reports it skipped', async () => {
+      const { store, rows } = memoryStore([row({ name: 'Edited since' })])
+      const routes = createLlmProviderRoutes({ store })
+      const response = await importProviders(routes, [
+        { ...body, id: PROVIDER_ID, name: 'Stale copy' },
+      ])
+
+      expect(await response.json()).toEqual({
+        imported: [],
+        skipped: [PROVIDER_ID],
+      })
+      expect(rows.get(PROVIDER_ID)?.name).toBe('Edited since')
+    })
+
+    it('partitions a mixed batch', async () => {
+      const { store } = memoryStore([row()])
+      const routes = createLlmProviderRoutes({ store })
+      const response = await importProviders(routes, [
+        { ...body, id: PROVIDER_ID },
+        { ...body, id: 'provider-2' },
+      ])
+
+      expect(await response.json()).toEqual({
+        imported: ['provider-2'],
+        skipped: [PROVIDER_ID],
+      })
+    })
+
+    it('rejects a provider with no id', async () => {
+      const routes = createLlmProviderRoutes(memoryStore())
+      expect((await importProviders(routes, [body])).status).toBe(400)
     })
   })
 })

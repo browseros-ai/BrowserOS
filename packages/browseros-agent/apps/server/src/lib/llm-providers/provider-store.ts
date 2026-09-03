@@ -27,8 +27,17 @@ export type LlmProviderUpsert = Omit<
 export interface LlmProviderStore {
   list(): Promise<LlmProviderRow[]>
   get(id: string): Promise<LlmProviderRow | null>
-  /** Insert or replace by id. The migration relies on this being idempotent. */
+  /** Insert or replace by id. This is the app's ordinary write path. */
   upsert(row: LlmProviderUpsert): Promise<LlmProviderRow>
+  /**
+   * Insert only when the id is absent; returns null when a row already exists.
+   *
+   * The one-time import uses this rather than `upsert` because the app writes
+   * directly to this table as well. A second import run must never replace a
+   * provider the user has edited since with the stale copy still sitting in
+   * extension storage.
+   */
+  insertIfAbsent(row: LlmProviderUpsert): Promise<LlmProviderRow | null>
   remove(id: string): Promise<boolean>
 }
 
@@ -60,6 +69,20 @@ async function upsert(row: LlmProviderUpsert): Promise<LlmProviderRow> {
   return saved
 }
 
+async function insertIfAbsent(
+  row: LlmProviderUpsert,
+): Promise<LlmProviderRow | null> {
+  const now = Date.now()
+  // onConflictDoNothing returns no row on conflict, so the absent/present
+  // decision and the write are one statement rather than a select then insert.
+  const [saved] = await getDb()
+    .insert(llmProviders)
+    .values({ ...row, createdAt: row.createdAt ?? now, updatedAt: now })
+    .onConflictDoNothing({ target: llmProviders.id })
+    .returning()
+  return saved ?? null
+}
+
 async function remove(id: string): Promise<boolean> {
   const deleted = await getDb()
     .delete(llmProviders)
@@ -72,5 +95,6 @@ export const dbLlmProviderStore: LlmProviderStore = {
   list,
   get,
   upsert,
+  insertIfAbsent,
   remove,
 }

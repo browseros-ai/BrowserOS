@@ -27,8 +27,14 @@ export type ScheduledJobUpsert = Omit<
 export interface ScheduledJobStore {
   list(): Promise<ScheduledJobRow[]>
   get(id: string): Promise<ScheduledJobRow | null>
-  /** Insert or replace by id. The migration relies on this being idempotent. */
+  /** Insert or replace by id. This is the app's ordinary write path. */
   upsert(row: ScheduledJobUpsert): Promise<ScheduledJobRow>
+  /**
+   * Insert only when the id is absent; returns null when a row already exists.
+   * See the note on the provider store: the import must never overwrite a job
+   * the user has edited since.
+   */
+  insertIfAbsent(row: ScheduledJobUpsert): Promise<ScheduledJobRow | null>
   remove(id: string): Promise<boolean>
 }
 
@@ -58,6 +64,18 @@ async function upsert(row: ScheduledJobUpsert): Promise<ScheduledJobRow> {
   return saved
 }
 
+async function insertIfAbsent(
+  row: ScheduledJobUpsert,
+): Promise<ScheduledJobRow | null> {
+  const now = Date.now()
+  const [saved] = await getDb()
+    .insert(scheduledJobs)
+    .values({ ...row, createdAt: row.createdAt ?? now, updatedAt: now })
+    .onConflictDoNothing({ target: scheduledJobs.id })
+    .returning()
+  return saved ?? null
+}
+
 async function remove(id: string): Promise<boolean> {
   const deleted = await getDb()
     .delete(scheduledJobs)
@@ -70,5 +88,6 @@ export const dbScheduledJobStore: ScheduledJobStore = {
   list,
   get,
   upsert,
+  insertIfAbsent,
   remove,
 }

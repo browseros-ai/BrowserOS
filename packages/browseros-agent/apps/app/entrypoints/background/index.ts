@@ -23,6 +23,7 @@ import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import { startLocalFirstMigration } from '@/modules/local-first-migration/start-local-first-migration'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
 const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
@@ -50,6 +51,7 @@ export default defineBackground(() => {
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
+  startLocalFirstMigration()
 
   scheduledJobRuns()
 

@@ -40,6 +40,18 @@ const UpsertProviderSchema = z.object({
   createdAt: z.number().optional(),
 })
 
+/**
+ * Bulk one-time import from extension storage.
+ *
+ * Insert-if-absent, not upsert: the app writes to this table directly, so a
+ * second run must fill gaps without replacing a provider edited since. Each id
+ * comes back in exactly one of the two lists so the caller can report what was
+ * already present.
+ */
+const ImportProvidersSchema = z.object({
+  providers: z.array(UpsertProviderSchema.extend({ id: z.string().min(1) })),
+})
+
 export function createLlmProviderRoutes(
   options: { store?: LlmProviderStore } = {},
 ) {
@@ -47,6 +59,15 @@ export function createLlmProviderRoutes(
 
   return new Hono<Env>()
     .get('/', async (c) => c.json({ providers: await store.list() }))
+    .post('/import', zValidator('json', ImportProvidersSchema), async (c) => {
+      const imported: string[] = []
+      const skipped: string[] = []
+      for (const provider of c.req.valid('json').providers) {
+        const saved = await store.insertIfAbsent(provider)
+        ;(saved ? imported : skipped).push(provider.id)
+      }
+      return c.json({ imported, skipped })
+    })
     .get('/:providerId', zValidator('param', IdParamSchema), async (c) => {
       const provider = await store.get(c.req.valid('param').providerId)
       if (!provider) return c.json({ error: 'Unknown provider' }, 404)

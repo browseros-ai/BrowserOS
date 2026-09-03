@@ -42,6 +42,10 @@ function memoryStore(initial: ScheduledJobRow[] = []) {
       rows.set(saved.id, saved)
       return saved
     },
+    insertIfAbsent: async (input: ScheduledJobUpsert) => {
+      if (rows.has(input.id)) return null
+      return store.upsert(input)
+    },
     remove: async (id) => rows.delete(id),
   }
   return { store, rows }
@@ -140,5 +144,44 @@ describe('scheduled job routes', () => {
     expect(
       (await routes.request(`/${JOB_ID}`, { method: 'DELETE' })).status,
     ).toBe(404)
+  })
+
+  describe('import', () => {
+    async function importJobs(
+      routes: ReturnType<typeof createScheduledJobRoutes>,
+      jobs: unknown[],
+    ) {
+      return routes.request('/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jobs }),
+      })
+    }
+
+    it('inserts a job that is not there yet', async () => {
+      const { store, rows } = memoryStore()
+      const routes = createScheduledJobRoutes({ store })
+      const response = await importJobs(routes, [{ ...body, id: JOB_ID }])
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ imported: [JOB_ID], skipped: [] })
+      expect(rows.get(JOB_ID)).toMatchObject({ name: 'Morning digest' })
+    })
+
+    it('leaves an existing job untouched and reports it skipped', async () => {
+      const { store, rows } = memoryStore([row({ name: 'Edited since' })])
+      const routes = createScheduledJobRoutes({ store })
+      const response = await importJobs(routes, [
+        { ...body, id: JOB_ID, name: 'Stale copy' },
+      ])
+
+      expect(await response.json()).toEqual({ imported: [], skipped: [JOB_ID] })
+      expect(rows.get(JOB_ID)?.name).toBe('Edited since')
+    })
+
+    it('rejects a job with no id', async () => {
+      const routes = createScheduledJobRoutes(memoryStore())
+      expect((await importJobs(routes, [body])).status).toBe(400)
+    })
   })
 })
