@@ -489,6 +489,9 @@ fn tab_and_window_schemas_omit_hidden_controls() {
     let tabs = tool_by_name("tabs");
     let tabs_schema = Value::Object(tabs.input_schema.as_ref().clone());
     assert!(tabs_schema.pointer("/properties/hidden").is_none());
+    // Focus is the user's call: agents cannot ask for a foreground tab.
+    assert!(tabs_schema.pointer("/properties/background").is_none());
+    assert!(!tabs.description.contains("foreground"));
 
     let windows = tool_by_name("windows");
     let windows_schema = Value::Object(windows.input_schema.as_ref().clone());

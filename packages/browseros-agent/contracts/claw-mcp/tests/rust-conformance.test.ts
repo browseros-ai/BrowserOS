@@ -117,7 +117,6 @@ function makeContext(run: ServerRun): CaseContext {
       const result = await session.callTool('tabs', {
         action: 'new',
         url,
-        background: false,
       })
       if (result.isError) {
         throw new Error(`tabs new failed: ${textOf(result)}`)

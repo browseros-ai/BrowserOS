@@ -111,7 +111,3 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
         ),
     }
 }
-
-fn default_true() -> bool {
-    true
-}

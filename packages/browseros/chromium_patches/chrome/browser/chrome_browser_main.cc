@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index a32949ed044f1aa5f32919182dc190c641460840..70a117a3f4caaa75e6193f1f04e3415121779ae9 100644
+index a32949ed044f1aa5f32919182dc190c641460840..7c69692afd77891652b46bb605e2299d55d32fac 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -10,6 +10,7 @@
@@ -10,7 +10,23 @@ index a32949ed044f1aa5f32919182dc190c641460840..70a117a3f4caaa75e6193f1f04e34151
  #include "base/base_switches.h"
  #include "base/check.h"
  #include "base/command_line.h"
-@@ -1296,6 +1297,43 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+@@ -34,6 +35,7 @@
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/browser_process_impl.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics_extra_parts.h"
+ #include "chrome/browser/chrome_browser_main_extra_parts.h"
+ #include "chrome/browser/component_updater/registration.h"
+ #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
+@@ -802,6 +804,7 @@ std::unique_ptr<content::BrowserMainParts> ChromeBrowserMainParts::Create(
+   main_parts->AddParts(std::make_unique<ChromeBrowserMainExtraPartsMemory>());
+ 
+   chrome::AddMetricsExtraParts(main_parts.get());
++  browseros_metrics::AddBrowserOSMetricsExtraParts(main_parts.get());
+ 
+   main_parts->AddParts(
+       std::make_unique<
+@@ -1296,6 +1299,43 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
    }
  #endif
  
@@ -54,7 +70,7 @@ index a32949ed044f1aa5f32919182dc190c641460840..70a117a3f4caaa75e6193f1f04e34151
  #if BUILDFLAG(IS_MAC)
  #if defined(ARCH_CPU_X86_64)
    // The use of Rosetta to run the x64 version of Chromium on Arm is neither
-@@ -1894,6 +1932,12 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+@@ -1894,6 +1934,12 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
      g_browser_process->CreateDevToolsAutoOpener();
    }
  
@@ -67,7 +83,7 @@ index a32949ed044f1aa5f32919182dc190c641460840..70a117a3f4caaa75e6193f1f04e34151
    // Needs to be done before PostProfileInit, since the SODA Installer setup is
    // called inside PostProfileInit and depends on it.
    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-@@ -2192,6 +2236,11 @@ void ChromeBrowserMainParts::PostMainMessageLoopRun() {
+@@ -2192,6 +2238,11 @@ void ChromeBrowserMainParts::PostMainMessageLoopRun() {
      chrome_extra_part->PostMainMessageLoopRun();
    }
  

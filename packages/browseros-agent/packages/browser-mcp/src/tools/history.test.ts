@@ -51,6 +51,8 @@ describe('history tool', () => {
 
     expect(result.isError).toBeFalsy()
     expect(result.structuredContent).toEqual({ entries, count: 2 })
+    // History titles/URLs are site-derived; the output is fenced as untrusted.
+    expect(textOf(result)).toContain('UNTRUSTED_PAGE_CONTENT')
     expect(textOf(result)).toContain('First visit')
     expect(textOf(result)).toContain('https://example.test/first')
     expect(textOf(result)).toContain('last visited 2026-07-31T00:00:00Z')

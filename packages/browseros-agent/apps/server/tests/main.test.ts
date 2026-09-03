@@ -15,6 +15,7 @@ const config = {
   mcpAllowRemote: false,
   aiSdkDevtoolsEnabled: false,
   instanceClientId: 'client-test',
+  instanceInstallId: 'config-install-test',
 }
 
 describe('Application.start', () => {
@@ -73,18 +74,26 @@ describe('Application.start', () => {
     }
   })
 
-  it('warns at boot when metrics is enabled but no instance identity is configured', async () => {
-    const { Application, loggerWarn } = await setupApplicationTest()
-    const { instanceClientId: _unused, ...configWithoutIdentity } = config
-    const app = new Application(configWithoutIdentity)
+  it('uses installation.json identity instead of sidecar config identity', async () => {
+    const {
+      Application,
+      identityInitialize,
+      installationId,
+      metricsInitialize,
+      sentrySetUser,
+    } = await setupApplicationTest()
+    const app = new Application(config)
 
     await app.start()
 
-    const warnedAboutIdentity = loggerWarn.mock.calls.some(
-      (args) =>
-        typeof args[0] === 'string' && args[0].includes('no instance identity'),
+    expect(identityInitialize).toHaveBeenCalledWith({
+      installId: installationId,
+    })
+    expect(metricsInitialize).toHaveBeenCalledWith(
+      expect.objectContaining({ install_id: installationId }),
     )
-    expect(warnedAboutIdentity).toBe(true)
+    expect(metricsInitialize.mock.calls[0]?.[0]).not.toHaveProperty('client_id')
+    expect(sentrySetUser).toHaveBeenCalledWith({ id: installationId })
   })
 })
 
@@ -95,6 +104,7 @@ async function setupApplicationTest() {
   const browserosDir = await import('../src/lib/browseros-dir')
   const dbModule = await import('../src/lib/db')
   const identityModule = await import('../src/lib/identity')
+  const installationIdModule = await import('../src/lib/installation-id')
   const loggerModule = await import('../src/lib/logger')
   const metricsModule = await import('../src/lib/metrics')
   const sentryModule = await import('../src/lib/sentry')
@@ -121,7 +131,14 @@ async function setupApplicationTest() {
         db: {},
       }) as never,
   )
-  spyOn(identityModule.identity, 'initialize').mockImplementation(() => {})
+  const installationId = '2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8'
+  spyOn(installationIdModule, 'loadOrCreateInstallationId').mockImplementation(
+    async () => installationId,
+  )
+  const identityInitialize = spyOn(
+    identityModule.identity,
+    'initialize',
+  ).mockImplementation(() => {})
   spyOn(identityModule.identity, 'getBrowserOSId').mockImplementation(
     () => 'browseros-id',
   )
@@ -138,12 +155,18 @@ async function setupApplicationTest() {
   )
   spyOn(loggerModule.logger, 'setLogFile').mockImplementation(() => {})
 
-  spyOn(metricsModule.metrics, 'initialize').mockImplementation(() => {})
+  const metricsInitialize = spyOn(
+    metricsModule.metrics,
+    'initialize',
+  ).mockImplementation(() => {})
   spyOn(metricsModule.metrics, 'isEnabled').mockImplementation(() => true)
   spyOn(metricsModule.metrics, 'log').mockImplementation(() => {})
 
   spyOn(sentryModule.Sentry, 'setContext').mockImplementation(() => {})
-  spyOn(sentryModule.Sentry, 'setUser').mockImplementation(() => {})
+  const sentrySetUser = spyOn(
+    sentryModule.Sentry,
+    'setUser',
+  ).mockImplementation(() => {})
   spyOn(sentryModule.Sentry, 'captureException').mockImplementation(() => {})
 
   const { Application } = await import('../src/main')
@@ -156,5 +179,9 @@ async function setupApplicationTest() {
     loggerInfo,
     loggerWarn,
     initializeDb,
+    identityInitialize,
+    installationId,
+    metricsInitialize,
+    sentrySetUser,
   }
 }

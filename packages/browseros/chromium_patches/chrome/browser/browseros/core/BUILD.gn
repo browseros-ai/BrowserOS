@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/BUILD.gn b/chrome/browser/browseros/core/BUILD.gn
 new file mode 100644
-index 0000000000000..fe42a921e2eef
+index 0000000000000000000000000000000000000000..ab0b5c28624b4347aac2ea370fabd28b62eaea3e
 --- /dev/null
 +++ b/chrome/browser/browseros/core/BUILD.gn
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,83 @@
 +# Copyright 2024 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -25,6 +25,8 @@ index 0000000000000..fe42a921e2eef
 +  sources = [
 +    "browseros_product.cc",
 +    "browseros_product.h",
++    "browseros_product_state.cc",
++    "browseros_product_state.h",
 +  ]
 +
 +  deps = [

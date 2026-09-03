@@ -529,6 +529,7 @@ mod tests {
             AnalyticsService::new_for_test(&config.browserclaw_dir, Some("test-key"), host, true)
                 .await?,
         );
+        let install_id = analytics.get_state().await.distinct_id;
         state.analytics = analytics.clone();
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
             Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?,
@@ -602,6 +603,9 @@ mod tests {
                 "max_concurrent_used_sessions": 1,
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
+                "install_id": install_id.clone(),
+                "product": "browserclaw",
+                "surface": "server",
                 "$process_person_profile": false,
                 "$is_server": true,
             })
@@ -629,6 +633,9 @@ mod tests {
                 "screenshot_tokens_per_dispatch": 3_000,
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
+                "install_id": install_id,
+                "product": "browserclaw",
+                "surface": "server",
                 "$process_person_profile": false,
                 "$is_server": true,
             })

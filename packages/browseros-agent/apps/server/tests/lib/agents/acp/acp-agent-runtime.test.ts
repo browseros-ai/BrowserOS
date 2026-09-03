@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -29,16 +29,8 @@ import {
   AcpAgentRuntime,
   AcpAgentSessionBusyError,
 } from '../../../../src/lib/agents/acp/acp-agent-runtime'
+import { BROWSEROS_ACP_INSTRUCTIONS } from '../../../../src/lib/agents/acp/browseros-instructions'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
-
-const SKILL = [
-  '---',
-  'name: browseros',
-  'description: BrowserOS browser skill',
-  '---',
-  'Use BrowserOS for browser work.',
-  '',
-].join('\n')
 
 const temporaryDirectories: string[] = []
 const BROWSER_TOOL_LEASE_TOKEN = 'runtime-test-lease'
@@ -60,9 +52,6 @@ async function runtimeFixture(options: {
   const root = await mkdtemp(join(tmpdir(), 'acp-agent-runtime-'))
   temporaryDirectories.push(root)
   const resourcesDir = join(root, 'resources')
-  const skillDir = join(resourcesDir, 'skills', 'browseros')
-  await mkdir(skillDir, { recursive: true })
-  await writeFile(join(skillDir, 'SKILL.md'), SKILL)
 
   const adapter = options.adapter ?? 'claude'
   const agent: AcpAgentDefinition = {
@@ -145,7 +134,7 @@ describe('AcpAgentRuntime', () => {
       nonInteractivePermissions: 'deny',
       sessionOptions: {
         model: 'claude-opus-4-1',
-        systemPrompt: { append: SKILL },
+        systemPrompt: { append: BROWSEROS_ACP_INSTRUCTIONS },
       },
       mcpServers: [
         {

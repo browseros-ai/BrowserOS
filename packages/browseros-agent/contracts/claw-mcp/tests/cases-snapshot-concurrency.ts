@@ -452,7 +452,6 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         const result = await ctx.mcp.callTool('tabs', {
           action: 'new',
           url: mixedFrameUrl(ctx),
-          background: false,
         })
         const text = expectOk(result, 'tabs new mixed-frame auto-context')
         page = parsePageId(result)

@@ -1,4 +1,5 @@
 pub mod events;
+mod installation;
 mod service;
 mod state;
 

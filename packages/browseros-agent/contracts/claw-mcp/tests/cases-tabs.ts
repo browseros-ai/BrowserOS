@@ -21,13 +21,12 @@ function parseGroupId(text: string): string {
 
 export const tabsCases: ContractCase[] = [
   {
-    name: 'tabs: new foreground page opens with auto-context',
+    name: 'tabs: new page opens with auto-context',
     smoke: true,
     async run(ctx) {
       const result = await ctx.mcp.callTool('tabs', {
         action: 'new',
         url: ctx.fixture('/links.html'),
-        background: false,
       })
       const text = expectOk(result, 'tabs new')
       const page = parsePageId(result)
@@ -51,35 +50,31 @@ export const tabsCases: ContractCase[] = [
     },
   },
   {
-    name: 'tabs: active reports the focused page',
+    name: 'tabs: active reports the user tab, never an agent-opened page',
     async run(ctx) {
+      // Agents cannot request a foreground tab, so the page opened here must
+      // stay out of `tabs active`; the user's tab keeps that role.
       const page = await ctx.openPage(ctx.fixture('/form.html'))
-      let text = ''
-      await waitUntil(async () => {
-        text = expectOk(
-          await ctx.mcp.callTool('tabs', { action: 'active' }),
-          'tabs active',
-        )
-        return text.includes('/form.html') || text.includes(`${page}`)
-      }, 'active tab to report the focused form page')
+      const text = expectOk(
+        await ctx.mcp.callTool('tabs', { action: 'active' }),
+        'tabs active',
+      )
+      if (!text.startsWith('Active page:')) {
+        throw new Error(`tabs active did not report a page: ${text}`)
+      }
+      if (text.includes(`[${page}]`)) {
+        throw new Error(`agent-opened page became active: ${text}`)
+      }
     },
   },
   {
-    name: 'tabs: background page stays inactive and hidden is rejected',
+    name: 'tabs: new page stays inactive and hidden is rejected',
     async run(ctx) {
-      const focused = await ctx.openPage(ctx.fixture('/form.html'))
-      await waitUntil(async () => {
-        const active = expectOk(
-          await ctx.mcp.callTool('tabs', { action: 'active' }),
-        )
-        return active.includes(`[${focused}]`)
-      }, 'the foreground page to receive focus')
       const result = await ctx.mcp.callTool('tabs', {
         action: 'new',
         url: ctx.fixture('/links.html'),
-        background: true,
       })
-      expectOk(result, 'tabs new background')
+      expectOk(result, 'tabs new')
       const opened = parsePageId(result)
       const active = expectOk(
         await ctx.mcp.callTool('tabs', { action: 'active' }),
@@ -95,9 +90,8 @@ export const tabsCases: ContractCase[] = [
         }),
         'tabs new hidden',
       )
-      // Track for cleanup — openPage was bypassed to control background creation.
+      // Track for cleanup — openPage was bypassed to call the tool directly.
       await ctx.mcp.callTool('tabs', { action: 'close', page: opened })
-      await ctx.mcp.callTool('tabs', { action: 'close', page: focused })
     },
   },
   {
