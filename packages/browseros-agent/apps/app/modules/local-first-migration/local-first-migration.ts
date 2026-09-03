@@ -1,5 +1,8 @@
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { ScheduledJob } from '@/lib/schedules/scheduleTypes'
+import type {
+  ScheduledJob,
+  ScheduledJobRun,
+} from '@/lib/schedules/scheduleTypes'
 import type {
   ProviderImport,
   ScheduledJobImport,
@@ -77,4 +80,32 @@ export async function runLocalFirstMigration(
     providerCount: providers.length,
     jobCount: scheduledJobs.length,
   }
+}
+
+export interface RunsMigrationDeps {
+  isDone: () => Promise<boolean>
+  markDone: () => Promise<void>
+  loadRuns: () => Promise<ScheduledJobRun[]>
+  importRuns: (runs: ScheduledJobRun[]) => Promise<void>
+}
+
+/**
+ * Moves scheduled run history from extension storage into the server, once.
+ *
+ * Separate from the provider and job import, and with its own marker, because
+ * that one must never run a second time. Extension storage is no longer
+ * written, so its provider list is frozen at whatever it held when it stopped;
+ * re-importing it would insert back a provider the user has since deleted,
+ * because absent is exactly what a deliberate delete looks like.
+ */
+export async function runScheduledRunsMigration(
+  deps: RunsMigrationDeps,
+): Promise<{ ranMigration: boolean; runCount: number }> {
+  if (await deps.isDone()) return { ranMigration: false, runCount: 0 }
+
+  const runs = await deps.loadRuns()
+  if (runs.length > 0) await deps.importRuns(runs)
+  await deps.markDone()
+
+  return { ranMigration: true, runCount: runs.length }
 }

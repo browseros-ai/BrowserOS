@@ -21,8 +21,8 @@ import {
 } from '@/components/ui/collapsible'
 import { Switch } from '@/components/ui/switch'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
-import { useScheduledJobRuns } from '@/lib/schedules/scheduleStorage'
 import { useProvidersQuery } from '@/modules/llm-providers/llm-providers.hooks'
+import { useScheduledJobRuns } from '@/modules/schedules/schedules.hooks'
 import type { ScheduledJob, ScheduledJobRun } from './types'
 
 dayjs.extend(relativeTime)

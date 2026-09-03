@@ -1,45 +1,53 @@
 import { onScheduleMessage } from '@/lib/messaging/schedules/scheduleMessages'
 import { createAlarmFromJob } from '@/lib/schedules/createAlarmFromJob'
 import { getChatServerResponse } from '@/lib/schedules/getChatServerResponse'
+import type {
+  ScheduledJob,
+  ScheduledJobRun,
+} from '@/lib/schedules/scheduleTypes'
 import {
-  scheduledJobRunStorage,
-  scheduledJobStorage,
-} from '@/lib/schedules/scheduleStorage'
-import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
+  listScheduledJobRunsOrNull,
+  listScheduledJobsOrNull,
+  putScheduledJob,
+  putScheduledJobRun,
+} from '@/modules/schedules/schedules.api'
 
-const MAX_RUNS_PER_JOB = 15
 const STALE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
 
 const runAbortControllers = new Map<string, AbortController>()
 
 export const scheduledJobRuns = async () => {
+  // Every read below distinguishes an unreachable server from an empty list.
+  // Treating the two alike would look like "nothing is scheduled": alarms would
+  // not be rebuilt on startup and schedules would quietly stop firing, with no
+  // failed run to show for it. Skipping the pass instead leaves the next
+  // startup to retry.
   const cleanupStaleJobRuns = async () => {
-    const current = (await scheduledJobRunStorage.getValue()) ?? []
+    const current = await listScheduledJobRunsOrNull()
+    if (current === null) return
     const now = Date.now()
 
-    const updated = current.map((run) => {
-      if (run.status !== 'running') return run
+    const stale = current.filter(
+      (run) =>
+        run.status === 'running' &&
+        now - new Date(run.startedAt).getTime() > STALE_TIMEOUT_MS,
+    )
 
-      const startedAt = new Date(run.startedAt).getTime()
-      if (now - startedAt > STALE_TIMEOUT_MS) {
-        return {
-          ...run,
-          status: 'failed' as const,
-          completedAt: new Date().toISOString(),
-          result: 'Job timed out!',
-        }
-      }
-      return run
-    })
-
-    await scheduledJobRunStorage.setValue(updated)
+    for (const run of stale) {
+      await putScheduledJobRun({
+        ...run,
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        result: 'Job timed out!',
+      })
+    }
   }
 
   const syncAlarmState = async () => {
-    const jobs = (await scheduledJobStorage.getValue()).filter(
-      (each) => each.enabled,
-    )
+    const loaded = await listScheduledJobsOrNull()
+    if (loaded === null) return
+    const jobs = loaded.filter((each) => each.enabled)
 
     for (let i = 0; i < jobs.length; i++) {
       const job = jobs[i]
@@ -56,6 +64,8 @@ export const scheduledJobRuns = async () => {
     jobId: string,
     status: ScheduledJobRun['status'],
   ): Promise<ScheduledJobRun> => {
+    // Trimming to the per-job cap happens on the server now, so creating a run
+    // no longer has to rewrite the job's whole history to stay bounded.
     const jobRun: ScheduledJobRun = {
       id: crypto.randomUUID(),
       jobId,
@@ -63,48 +73,30 @@ export const scheduledJobRuns = async () => {
       status,
     }
 
-    const current = (await scheduledJobRunStorage.getValue()) ?? []
-    const otherJobRuns = current.filter((r) => r.jobId !== jobId)
-    const thisJobRuns = current
-      .filter((r) => r.jobId === jobId)
-      .sort(
-        (a, b) =>
-          new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-      )
-      .slice(0, MAX_RUNS_PER_JOB - 1)
-
-    await scheduledJobRunStorage.setValue([
-      ...otherJobRuns,
-      ...thisJobRuns,
-      jobRun,
-    ])
+    await putScheduledJobRun(jobRun)
     return jobRun
   }
 
+  // Takes the run rather than its id: the caller already holds it, and merging
+  // locally avoids re-reading a list to update one row.
   const updateJobRun = async (
-    runId: string,
+    run: ScheduledJobRun,
     updates: Partial<Omit<ScheduledJobRun, 'id' | 'jobId' | 'startedAt'>>,
   ) => {
-    const current = (await scheduledJobRunStorage.getValue()) ?? []
-    await scheduledJobRunStorage.setValue(
-      current.map((r) => (r.id === runId ? { ...r, ...updates } : r)),
-    )
+    await putScheduledJobRun({ ...run, ...updates })
   }
 
-  const updateJobLastRunAt = async (jobId: string) => {
-    const current = (await scheduledJobStorage.getValue()) ?? []
-    await scheduledJobStorage.setValue(
-      current.map((j) =>
-        j.id === jobId ? { ...j, lastRunAt: new Date().toISOString() } : j,
-      ),
-    )
+  const updateJobLastRunAt = async (job: ScheduledJob) => {
+    await putScheduledJob({ ...job, lastRunAt: new Date().toISOString() })
   }
 
   const executeScheduledJob = async (jobId: string): Promise<void> => {
-    const job = (await scheduledJobStorage.getValue()).find(
-      (each) => each.id === jobId,
-    )
+    const jobs = await listScheduledJobsOrNull()
+    if (jobs === null) {
+      throw new Error('Cannot reach the BrowserOS server to load the job')
+    }
 
+    const job = jobs.find((each) => each.id === jobId)
     if (!job) {
       throw new Error(`Job not found: ${jobId}`)
     }
@@ -120,7 +112,7 @@ export const scheduledJobRuns = async () => {
         providerId: job.providerId,
       })
 
-      await updateJobRun(jobRun.id, {
+      await updateJobRun(jobRun, {
         status: 'completed',
         completedAt: new Date().toISOString(),
         result: response.text,
@@ -135,7 +127,7 @@ export const scheduledJobRuns = async () => {
         : e instanceof Error
           ? e.message
           : String(e)
-      await updateJobRun(jobRun.id, {
+      await updateJobRun(jobRun, {
         status: 'failed',
         completedAt: new Date().toISOString(),
         result: errorMessage,
@@ -143,7 +135,7 @@ export const scheduledJobRuns = async () => {
       })
     } finally {
       runAbortControllers.delete(jobRun.id)
-      await updateJobLastRunAt(jobId)
+      await updateJobLastRunAt(job)
     }
   }
 
@@ -155,10 +147,11 @@ export const scheduledJobRuns = async () => {
     runningMissedJobs = true
 
     try {
-      const jobs = (await scheduledJobStorage.getValue()).filter(
-        (j) => j.enabled,
-      )
-      const runs = (await scheduledJobRunStorage.getValue()) ?? []
+      const loadedJobs = await listScheduledJobsOrNull()
+      const runs = await listScheduledJobRunsOrNull()
+      if (loadedJobs === null || runs === null) return
+
+      const jobs = loadedJobs.filter((j) => j.enabled)
       const now = Date.now()
       const cutoff = now - TWENTY_FOUR_HOURS_MS
 

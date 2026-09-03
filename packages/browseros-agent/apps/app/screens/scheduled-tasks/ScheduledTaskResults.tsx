@@ -12,14 +12,14 @@ import {
 import type { FC } from 'react'
 import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
-import {
-  useScheduledJobRuns,
-  useScheduledJobs,
-} from '@/lib/schedules/scheduleStorage'
 import type {
   ScheduledJob,
   ScheduledJobRun,
 } from '@/lib/schedules/scheduleTypes'
+import {
+  useScheduledJobRuns,
+  useScheduledJobs,
+} from '@/modules/schedules/schedules.hooks'
 
 dayjs.extend(relativeTime)
 
