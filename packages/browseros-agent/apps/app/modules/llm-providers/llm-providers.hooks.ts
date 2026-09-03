@@ -28,7 +28,12 @@ export interface UseLlmProvidersReturn {
    * offering to set up a first provider and saying the list is unavailable.
    */
   isUnavailable: boolean
-  saveProvider: (provider: LlmProviderConfig) => Promise<void>
+  /**
+   * Resolves with the row that was actually written. A single-instance save
+   * keeps the existing provider's id, so the caller must not assume the id it
+   * passed in is the one that persisted.
+   */
+  saveProvider: (provider: LlmProviderConfig) => Promise<LlmProviderConfig>
   setDefaultProvider: (providerId: string) => Promise<void>
   deleteProvider: (providerId: string) => Promise<void>
 }
@@ -88,6 +93,10 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       const { saved, removedIds } = planProviderSave(providers, provider)
       await putProvider(saved)
       for (const id of removedIds) await deleteProviderRow(id)
+      // The row that persisted, which is not always the one passed in: a
+      // single-instance save keeps the earlier provider's id, and that is the
+      // id chat target selection has to reference.
+      return saved
     },
     onSuccess: invalidate,
   })
@@ -130,9 +139,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
     isLoading: providersQuery.isPending,
     isUnavailable: providersQuery.isError,
-    saveProvider: async (provider) => {
-      await saveMutation.mutateAsync(provider)
-    },
+    saveProvider: (provider) => saveMutation.mutateAsync(provider),
     setDefaultProvider,
     deleteProvider: async (providerId) => {
       await deleteMutation.mutateAsync(providerId)

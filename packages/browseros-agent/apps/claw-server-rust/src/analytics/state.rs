@@ -7,7 +7,6 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio::fs;
-use uuid::Uuid;
 
 const ANALYTICS_FILE: &str = "analytics.json";
 
@@ -22,7 +21,6 @@ pub struct TelemetryState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AnalyticsState {
-    pub(crate) distinct_id: String,
     pub(crate) enabled: bool,
 }
 
@@ -40,10 +38,7 @@ pub(crate) async fn load_or_create_state(path: &Path) -> AnalyticsState {
             }
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let fresh = AnalyticsState {
-                distinct_id: Uuid::new_v4().to_string(),
-                enabled: true,
-            };
+            let fresh = AnalyticsState { enabled: true };
             if let Err(error) = persist_state(path, &fresh).await {
                 tracing::warn!(%error, "analytics state write failed");
             }
@@ -57,23 +52,18 @@ pub(crate) async fn load_or_create_state(path: &Path) -> AnalyticsState {
 }
 
 fn disabled_ephemeral_state() -> AnalyticsState {
-    AnalyticsState {
-        distinct_id: Uuid::new_v4().to_string(),
-        enabled: false,
-    }
+    AnalyticsState { enabled: false }
 }
 
 fn parse_state(raw: &str) -> Option<AnalyticsState> {
     let value: Value = serde_json::from_str(raw).ok()?;
     let object = value.as_object()?;
-    let distinct_id = object.get("distinctId")?.as_str()?.to_string();
-    if distinct_id.is_empty() {
-        return None;
-    }
-    Some(AnalyticsState {
-        distinct_id,
-        enabled: !matches!(object.get("enabled"), Some(Value::Bool(false))),
-    })
+    let enabled = match object.get("enabled") {
+        Some(Value::Bool(enabled)) => *enabled,
+        None => true,
+        Some(_) => return None,
+    };
+    Some(AnalyticsState { enabled })
 }
 
 pub(crate) async fn persist_state(path: &Path, state: &AnalyticsState) -> io::Result<()> {
@@ -102,18 +92,16 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn missing_state_mints_and_persists_the_two_field_format() -> anyhow::Result<()> {
+    async fn missing_state_persists_consent_only() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let path = state_path(directory.path());
         let state = load_or_create_state(&path).await;
-        Uuid::parse_str(&state.distinct_id)?;
         assert!(state.enabled);
 
         let raw = fs::read_to_string(path).await?;
         assert!(raw.ends_with('\n'));
         let value: Value = serde_json::from_str(&raw)?;
-        assert_eq!(value.as_object().map(serde_json::Map::len), Some(2));
-        assert_eq!(value["distinctId"], state.distinct_id);
+        assert_eq!(value.as_object().map(serde_json::Map::len), Some(1));
         assert_eq!(value["enabled"], true);
         Ok(())
     }
@@ -142,29 +130,12 @@ mod tests {
     async fn consent_state_atomically_replaces_an_existing_file() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let path = state_path(directory.path());
-        persist_state(
-            &path,
-            &AnalyticsState {
-                distinct_id: "stable".to_string(),
-                enabled: true,
-            },
-        )
-        .await?;
-        persist_state(
-            &path,
-            &AnalyticsState {
-                distinct_id: "stable".to_string(),
-                enabled: false,
-            },
-        )
-        .await?;
+        persist_state(&path, &AnalyticsState { enabled: true }).await?;
+        persist_state(&path, &AnalyticsState { enabled: false }).await?;
 
         assert_eq!(
             parse_state(&fs::read_to_string(path).await?),
-            Some(AnalyticsState {
-                distinct_id: "stable".to_string(),
-                enabled: false,
-            })
+            Some(AnalyticsState { enabled: false })
         );
         Ok(())
     }
@@ -173,15 +144,16 @@ mod tests {
     fn parser_preserves_the_historical_opt_out_default() {
         assert_eq!(
             parse_state(r#"{"distinctId":"stable"}"#),
-            Some(AnalyticsState {
-                distinct_id: "stable".to_string(),
-                enabled: true,
-            })
+            Some(AnalyticsState { enabled: true })
         );
         assert_eq!(
             parse_state(r#"{"distinctId":"stable","enabled":false}"#).map(|state| state.enabled),
             Some(false)
         );
-        assert_eq!(parse_state(r#"{"enabled":true}"#), None);
+        assert_eq!(
+            parse_state(r#"{"distinctId":"legacy","enabled":true}"#),
+            Some(AnalyticsState { enabled: true })
+        );
+        assert_eq!(parse_state(r#"{"enabled":"yes"}"#), None);
     }
 }

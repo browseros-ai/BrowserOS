@@ -155,11 +155,19 @@ describe('registerBrowserTools', () => {
 
       const result = await fake.handlers.get('run')?.({ code: 'return 42' })
 
-      expect(result?.structuredContent).toEqual({
-        ok: true,
-        value: 42,
-        logs: [],
-      })
+      // Structured content stays present in both modes, but run output is
+      // page-derived and untrusted, so its value/logs are fenced too (a
+      // schema-bearing tool's structuredContent is model-visible).
+      const structured = result?.structuredContent as {
+        ok: boolean
+        value?: string
+        logs: string[]
+      }
+      expect(structured.ok).toBe(true)
+      expect(structured.logs).toEqual([])
+      expect(typeof structured.value).toBe('string')
+      expect(structured.value).toContain('UNTRUSTED_PAGE_CONTENT')
+      expect(structured.value).toContain('42')
     }
   })
 

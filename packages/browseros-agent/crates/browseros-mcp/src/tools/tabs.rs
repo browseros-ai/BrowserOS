@@ -9,7 +9,7 @@ use serde_json::json;
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
-open a new page (snapshot attached), or close one. \
+open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -29,9 +29,12 @@ struct TabsArgs {
     action: TabsAction,
     /// URL for action="new" (defaults to about:blank).
     url: Option<String>,
-    /// Open without stealing focus for action="new".
-    #[serde(default = "super::default_true")]
-    background: bool,
+    /// Retired: new pages always open in the background so an agent never
+    /// switches the user's tab. Still accepted, and ignored, so clients that
+    /// cached the old schema do not trip `deny_unknown_fields`.
+    #[serde(default, rename = "background")]
+    #[schemars(skip)]
+    _background: Option<bool>,
     /// Page id for action="close".
     page: Option<u32>,
 }
@@ -87,7 +90,9 @@ fn handler<'a>(
                     .new_page(
                         args.url.as_deref().unwrap_or("about:blank"),
                         NewPageOptions {
-                            background: Some(args.background),
+                            // Never foreground: focus decisions belong to the user
+                            // (cockpit Watch), not to the agent.
+                            background: Some(true),
                             window_id: ctx.defaults.default_window_id.clone(),
                             tab_group_id: ctx.defaults.default_tab_group_id.clone(),
                         },
@@ -116,5 +121,28 @@ fn format_page_line(page: &browseros_core::pages::PageInfo) -> String {
         format!("[{}] {}", page.page_id.0, page.url)
     } else {
         format!("[{}] {} ({})", page.page_id.0, page.url, page.title)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TabsAction, TabsArgs};
+    use serde_json::json;
+
+    #[test]
+    fn retired_background_field_is_accepted_and_ignored() -> anyhow::Result<()> {
+        // Clients that cached the old schema still send it; it must not trip
+        // `deny_unknown_fields`, and it must not influence the tab's focus.
+        let args: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "background": false }))?;
+        assert!(matches!(args.action, TabsAction::New));
+        assert_eq!(args._background, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_fields_are_still_rejected() {
+        let result = serde_json::from_value::<TabsArgs>(json!({ "action": "new", "hidden": true }));
+        assert!(result.is_err_and(|error| error.to_string().contains("hidden")));
     }
 }

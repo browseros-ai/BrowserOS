@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/metrics/browseros_metrics.h b/chrome/browser/browseros/metrics/browseros_metrics.h
 new file mode 100644
-index 0000000000000..7cac6786da901
+index 0000000000000000000000000000000000000000..7f698a80fed05ded22a535fed8001c9c05b8a3a4
 --- /dev/null
 +++ b/chrome/browser/browseros/metrics/browseros_metrics.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,31 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,30 +11,21 @@ index 0000000000000..7cac6786da901
 +#ifndef CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_H_
 +#define CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_H_
 +
-+#include <string>
-+#include <utility>
++#include <string_view>
 +
 +#include "base/values.h"
 +
 +namespace browseros_metrics {
 +
-+// Simple static API for logging BrowserOS metrics.
-+// Usage: BrowserOSMetrics::Log("event.name");
++// Thread-safe entry point for native product analytics. Process lifecycle,
++// product routing, installation identity, and delivery stay behind this API so
++// callers never need profile or preference access.
 +class BrowserOSMetrics {
 + public:
-+  // Log an event with no properties
-+  // sample_rate: 0.0 to 1.0, defaults to 1.0 (always log)
-+  // For example, sample_rate=0.1 means log only 10% of the time
-+  static void Log(const std::string& event_name, double sample_rate = 1.0);
-+
-+  // Log an event with properties using initializer list
-+  // Example: Log("event", {{"key1", "value1"}, {"key2", 123}})
-+  static void Log(const std::string& event_name,
-+                  std::initializer_list<std::pair<std::string, base::Value>> properties,
-+                  double sample_rate = 1.0);
-+
-+  // Log an event with pre-built properties dict
-+  static void Log(const std::string& event_name, base::DictValue properties,
++  // Safe from any thread. Sampling occurs before the event is handed to the UI
++  // sequence that owns the process-wide reporter.
++  static void Log(std::string_view event_name,
++                  base::DictValue properties = {},
 +                  double sample_rate = 1.0);
 +
 + private:

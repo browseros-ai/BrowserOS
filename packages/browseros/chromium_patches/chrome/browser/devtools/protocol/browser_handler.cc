@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424deb8a0e93 100644
+index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e100bf4bb8 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -8,18 +8,31 @@
+@@ -8,18 +8,32 @@
  #include <vector>
  
  #include "base/functional/bind.h"
@@ -11,6 +11,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +#include "base/strings/utf_string_conversions.h"
 +#include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
@@ -34,7 +35,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -33,6 +46,10 @@ using protocol::Response;
+@@ -33,6 +47,19 @@ using protocol::Response;
  
  namespace {
  
@@ -42,10 +43,19 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +    "Hidden windows are no longer supported.";
 +constexpr char kHiddenTabsRetired[] = "Hidden tabs are no longer supported.";
 +
++// BrowserOS: true when the profile behind |bwi| forbids automation from
++// pulling the user's attention (browseros::prefs::kAutomationNeverStealsFocus).
++// Every command in this handler comes from a CDP client, so the pref alone
++// decides; no per-tab attachment check is needed here.
++bool NeverStealFocus(BrowserWindowInterface* bwi) {
++  Profile* profile = bwi ? bwi->GetProfile() : nullptr;
++  return profile && browseros::AutomationNeverStealsFocus(profile->GetPrefs());
++}
++
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -49,18 +66,22 @@ BrowserWindow* GetBrowserWindow(int window_id) {
+@@ -49,18 +76,22 @@ BrowserWindow* GetBrowserWindow(int window_id) {
  std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
      ui::BaseWindow* window) {
    std::string window_state = "normal";
@@ -73,7 +83,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
    return protocol::Browser::Bounds::Create()
        .SetLeft(bounds.x())
        .SetTop(bounds.y())
-@@ -70,14 +91,406 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -70,14 +101,406 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -482,7 +492,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
  }
  
  BrowserHandler::~BrowserHandler() = default;
-@@ -88,8 +501,9 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -88,8 +511,9 @@ Response BrowserHandler::GetWindowForTarget(
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
    auto host =
        content::DevToolsAgentHost::GetForId(target_id.value_or(target_id_));
@@ -493,7 +503,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
    content::WebContents* web_contents = host->GetWebContents();
    if (!web_contents) {
      return Response::ServerError("No web contents in the target");
-@@ -118,12 +532,74 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -118,12 +542,74 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -569,7 +579,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
  
    *out_bounds = GetBrowserWindowBounds(window);
    return Response::Success();
-@@ -138,8 +614,9 @@ Response BrowserHandler::SetWindowBounds(
+@@ -138,8 +624,9 @@ Response BrowserHandler::SetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds> window_bounds) {
    BrowserWindow* window = GetBrowserWindow(window_id);
@@ -580,7 +590,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
    gfx::Rect bounds = window->GetBounds();
    const bool set_bounds = window_bounds->HasLeft() || window_bounds->HasTop() ||
                            window_bounds->HasWidth() ||
-@@ -295,3 +772,650 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -295,3 +782,668 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -649,7 +659,13 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  chrome::AddTabAt(browser, navigate_url, -1, true);
 +
-+  browser->window()->Show();
++  // Show() activates the window (and on macOS the whole app); when automation
++  // must not steal focus the new window is shown behind the user's work.
++  if (browseros::AutomationNeverStealsFocus(profile->GetPrefs())) {
++    browser->window()->ShowInactive();
++  } else {
++    browser->window()->Show();
++  }
 +
 +  BrowserWindowInterface* bwi =
 +      GetBrowserWindowInterface(browser->session_id().id());
@@ -678,6 +694,11 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
++  // Raising a window is exactly what the never-steal-focus pref forbids.
++  // Report success so callers proceed as if the window had been raised.
++  if (NeverStealFocus(bwi)) {
++    return Response::Success();
++  }
 +  bwi->GetWindow()->Activate();
 +  return Response::Success();
 +}
@@ -697,7 +718,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +    return Response::InvalidParams(kHiddenWindowsRetired);
 +  }
 +
-+  if (activate.value_or(false)) {
++  if (activate.value_or(false) && !NeverStealFocus(bwi)) {
 +    bwi->GetWindow()->Show();
 +    bwi->GetWindow()->Activate();
 +  } else {
@@ -805,7 +826,10 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +  Browser* browser = bwi->GetBrowserForMigrationOnly();
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  int insert_index = index.value_or(-1);
-+  bool foreground = !background.value_or(false);
++  // Default to a background tab: an agent opening pages must not switch the
++  // user's tab. An explicit background=false selects the tab within its
++  // window; nothing in this command ever raises the window.
++  bool foreground = !background.value_or(true);
 +
 +  content::WebContents* new_wc = chrome::AddAndReturnTabAt(
 +      browser, navigate_url, insert_index, foreground);
@@ -847,7 +871,11 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..13cddad401eefb140d81139e59d6424d
 +  }
 +
 +  lookup.bwi->GetTabStripModel()->ActivateTabAt(lookup.tab_index);
-+  lookup.bwi->GetWindow()->Activate();
++  // Under the never-steal-focus pref this selects the tab within its window
++  // but leaves raising the window to the user.
++  if (!NeverStealFocus(lookup.bwi)) {
++    lookup.bwi->GetWindow()->Activate();
++  }
 +  return Response::Success();
 +}
 +

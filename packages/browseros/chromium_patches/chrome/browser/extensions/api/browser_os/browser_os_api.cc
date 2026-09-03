@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..48b91d06d84497e06ad66d191ecd4fa1bb044c41
+index 0000000000000000000000000000000000000000..99a8b9c8df1bdc73113bc78ecf559c454adfa267
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,349 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -152,8 +152,10 @@ index 0000000000000000000000000000000000000000..48b91d06d84497e06ad66d191ecd4fa1
 +    browseros_metrics::BrowserOSMetrics::Log(prefixed_event,
 +                                             std::move(properties));
 +  } else {
-+    browseros_metrics::BrowserOSMetrics::Log(
-+        prefixed_event, {{"extension_id", base::Value(extension_id())}});
++    base::DictValue properties;
++    properties.Set("extension_id", extension_id());
++    browseros_metrics::BrowserOSMetrics::Log(prefixed_event,
++                                             std::move(properties));
 +  }
 +
 +  return RespondNow(NoArguments());

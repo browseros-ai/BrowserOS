@@ -55,8 +55,8 @@ beforeEach(async () => {
   // the client; the initialize calls below re-create it.
   await metrics.shutdown()
   captureCalls.length = 0
-  metrics.initialize({ client_id: '__reset__' })
-  metrics.initialize({ client_id: undefined, install_id: undefined })
+  metrics.initialize({ install_id: '__reset__' })
+  metrics.initialize({ install_id: undefined })
 })
 
 describe('sanitizeToolName', () => {
@@ -139,7 +139,7 @@ describe('RollupBuffer', () => {
 
 describe('MetricsService — log dispatch', () => {
   it('aggregates mcp.request without immediately capturing', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     metrics.log('mcp.request', { scopeId: 'ephemeral' })
     metrics.log('mcp.request')
     metrics.log('mcp.request')
@@ -147,7 +147,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('aggregates tool_executed without immediately capturing', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     metrics.log('tool_executed', {
       tool_name: 'navigate_page',
       source: 'chat',
@@ -162,18 +162,21 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('captures default-sampled non-aggregated events when selected', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0.19, () => {
       metrics.log('chat.request', { mode: 'agent' })
     })
     expect(captureCalls).toHaveLength(1)
     expect(captureCalls[0]?.event).toBe('browseros.server.chat.request')
-    expect(captureCalls[0]?.distinctId).toBe('client-a')
+    expect(captureCalls[0]?.distinctId).toBe('install-a')
+    expect(captureCalls[0]?.properties.install_id).toBe('install-a')
+    expect(captureCalls[0]?.properties.product).toBe('browseros')
+    expect(captureCalls[0]?.properties.surface).toBe('server')
     expect(captureCalls[0]?.properties.sample_rate).toBe(1 / 5)
   })
 
   it('skips default-sampled non-aggregated events when not selected', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0.2, () => {
       metrics.log('chat.request', { mode: 'agent' })
     })
@@ -181,7 +184,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('captures unsampled non-aggregated events when sampling is one', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     metrics.log('chat.request', { mode: 'agent' }, 1)
     expect(captureCalls).toHaveLength(1)
     expect(captureCalls[0]?.properties.mode).toBe('agent')
@@ -189,7 +192,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('captures sampled non-aggregated events when selected', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0.49, () => {
       metrics.log('chat.request', { mode: 'agent' }, 0.5)
     })
@@ -199,7 +202,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('skips sampled non-aggregated events when not selected', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0.5, () => {
       metrics.log('chat.request', { mode: 'agent' }, 0.5)
     })
@@ -207,7 +210,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('skips immediate capture when sampling is zero', () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0, () => {
       metrics.log('chat.request', { mode: 'agent' }, 0)
     })
@@ -231,7 +234,7 @@ describe('MetricsService — log dispatch', () => {
   })
 
   it('does not sample rollup inputs', async () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     withRandom(0.99, () => {
       metrics.log('mcp.request', {}, 0)
     })
@@ -247,7 +250,6 @@ describe('MetricsService — log dispatch', () => {
 describe('MetricsService — flush + shutdown', () => {
   it('emits a single usage_rollup on shutdown drain', async () => {
     metrics.initialize({
-      client_id: 'client-a',
       install_id: 'install-a',
       browseros_version: '0.46.0.0',
       server_version: '0.0.99',
@@ -277,7 +279,10 @@ describe('MetricsService — flush + shutdown', () => {
     const call = captureCalls[0]
     if (!call) throw new Error('expected one capture call')
     expect(call.event).toBe('browseros.server.usage_rollup')
-    expect(call.distinctId).toBe('client-a')
+    expect(call.distinctId).toBe('install-a')
+    expect(call.properties.install_id).toBe('install-a')
+    expect(call.properties.product).toBe('browseros')
+    expect(call.properties.surface).toBe('server')
     expect(call.properties.interval_seconds).toBe(ROLLUP_INTERVAL_MS / 1000)
     expect(call.properties.mcp_requests_count).toBe(2)
     expect(call.properties.tool_executions_count).toBe(3)
@@ -295,13 +300,13 @@ describe('MetricsService — flush + shutdown', () => {
   })
 
   it('emits nothing on shutdown when no activity was recorded', async () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     await metrics.shutdown()
     expect(captureCalls).toHaveLength(0)
   })
 
   it('does not retain the dotted-name shape on aggregated tool names', async () => {
-    metrics.initialize({ client_id: 'client-a' })
+    metrics.initialize({ install_id: 'install-a' })
     metrics.log('tool_executed', { tool_name: 'foo.bar', source: 'chat' })
     await metrics.shutdown()
     const call = captureCalls[0]

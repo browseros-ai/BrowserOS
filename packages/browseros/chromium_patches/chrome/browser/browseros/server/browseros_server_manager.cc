@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..c5b8bd543d33a
+index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760581ed5c4
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1112 @@
+@@ -0,0 +1,1095 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -27,8 +27,6 @@ index 0000000000000..c5b8bd543d33a
 +#include "build/build_config.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
-+#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
-+#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +#include "chrome/browser/browseros/server/browseros_server_proxy.h"
@@ -41,8 +39,6 @@ index 0000000000000..c5b8bd543d33a
 +#include "chrome/browser/browseros/server/server_state_store.h"
 +#include "chrome/browser/browseros/server/server_state_store_impl.h"
 +#include "chrome/browser/browseros/server/server_updater.h"
-+#include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/common/chrome_paths.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/prefs/pref_service.h"
@@ -591,19 +587,6 @@ index 0000000000000..c5b8bd543d33a
 +      std::string(version_info::GetBrowserOSVersionNumber());
 +  config.identity.chromium_version =
 +      std::string(version_info::GetVersionNumber());
-+
-+  ProfileManager* profile_manager = g_browser_process->profile_manager();
-+  if (profile_manager) {
-+    Profile* profile = profile_manager->GetLastUsedProfileIfLoaded();
-+    if (profile && !profile->IsOffTheRecord()) {
-+      browseros_metrics::BrowserOSMetricsService* metrics_service =
-+          browseros_metrics::BrowserOSMetricsServiceFactory::
-+              GetForBrowserContext(profile);
-+      if (metrics_service) {
-+        config.identity.install_id = metrics_service->GetInstallId();
-+      }
-+    }
-+  }
 +
 +  config.allow_remote_in_mcp = allow_remote_in_mcp_;
 +

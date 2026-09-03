@@ -1,6 +1,7 @@
 use super::{
     AnalyticsSink,
     events::{self, EventDefinition},
+    installation::load_or_create_installation_id,
     state::{AnalyticsState, TelemetryState, load_or_create_state, persist_state, state_path},
 };
 use crate::error::{AppError, AppResult};
@@ -25,8 +26,13 @@ const MAX_QUEUE_SIZE: usize = 256;
 
 const SERVER_VERSION: &str = "server_version";
 const OS_PLATFORM: &str = "os_platform";
+const INSTALL_ID: &str = "install_id";
+const PRODUCT: &str = "product";
+const SURFACE: &str = "surface";
 const PROCESS_PERSON_PROFILE: &str = "$process_person_profile";
 const IS_SERVER: &str = "$is_server";
+const PRODUCT_BROWSERCLAW: &str = "browserclaw";
+const SURFACE_SERVER: &str = "server";
 
 #[derive(Debug, Clone)]
 struct AnalyticsConfig {
@@ -80,6 +86,7 @@ struct ActiveClient {
 
 pub struct AnalyticsService {
     path: PathBuf,
+    installation_id: Option<String>,
     config: AnalyticsConfig,
     state: Mutex<AnalyticsState>,
     active: RwLock<Option<ActiveClient>>,
@@ -94,14 +101,21 @@ impl AnalyticsService {
 
     async fn new_with_config(browserclaw_dir: &Path, config: AnalyticsConfig) -> AppResult<Self> {
         let path = state_path(browserclaw_dir);
-        let state = load_or_create_state(&path).await;
+        let (installation_id, state) = tokio::join!(
+            load_or_create_installation_id(browserclaw_dir),
+            load_or_create_state(&path)
+        );
         let active = if state.enabled && config.is_configured() {
-            Some(build_client(&config, &state.distinct_id).await?)
+            match installation_id.as_deref() {
+                Some(install_id) => Some(build_client(&config, install_id).await?),
+                None => None,
+            }
         } else {
             None
         };
         Ok(Self {
             path,
+            installation_id,
             config,
             state: Mutex::new(state),
             active: RwLock::new(active),
@@ -145,10 +159,7 @@ impl AnalyticsService {
      */
     pub async fn set_consent(&self, consent: bool) -> AppResult<TelemetryState> {
         let mut state = self.state.lock().await;
-        let next = AnalyticsState {
-            distinct_id: state.distinct_id.clone(),
-            enabled: consent,
-        };
+        let next = AnalyticsState { enabled: consent };
         let previous = if consent { None } else { self.take_active() };
         if let Err(source) = persist_state(&self.path, &next).await {
             if !consent {
@@ -169,8 +180,10 @@ impl AnalyticsService {
             if let Some(previous) = previous {
                 previous.client.shutdown().await;
             }
-        } else if self.active_client().is_none() {
-            match build_client(&self.config, &state.distinct_id).await {
+        } else if self.active_client().is_none()
+            && let Some(install_id) = self.installation_id.as_deref()
+        {
+            match build_client(&self.config, install_id).await {
                 Ok(client) => self.replace_active(Some(client)),
                 Err(error) => {
                     tracing::error!(%error, "analytics client initialization failed");
@@ -208,6 +221,9 @@ impl AnalyticsService {
                 OS_PLATFORM,
                 Value::String(events::platform_token().to_string()),
             ),
+            (INSTALL_ID, Value::String(active.distinct_id.clone())),
+            (PRODUCT, Value::String(PRODUCT_BROWSERCLAW.to_string())),
+            (SURFACE, Value::String(SURFACE_SERVER.to_string())),
             (PROCESS_PERSON_PROFILE, Value::Bool(false)),
             (IS_SERVER, Value::Bool(true)),
         ] {
@@ -228,7 +244,10 @@ impl AnalyticsService {
 
     fn telemetry_state(&self, state: &AnalyticsState) -> TelemetryState {
         TelemetryState {
-            distinct_id: state.distinct_id.clone(),
+            // The cockpit uses this same ID for its posthog-js client. An
+            // empty value keeps both surfaces disabled when installation
+            // state is corrupt instead of minting a second identity.
+            distinct_id: self.installation_id.clone().unwrap_or_default(),
             enabled: state.enabled && self.config.is_configured() && self.active_client().is_some(),
             consent: state.enabled,
         }
@@ -286,6 +305,13 @@ async fn build_client(config: &AnalyticsConfig, distinct_id: &str) -> AppResult<
 fn final_allowlist(mut event: Event) -> Option<Event> {
     let definition = events::by_wire_name(event.event_name())?;
     if !definition.required_values_are_normalized(event.properties())
+        || event
+            .properties()
+            .get(INSTALL_ID)
+            .and_then(Value::as_str)
+            .is_none()
+        || event.properties().get(PRODUCT).and_then(Value::as_str) != Some(PRODUCT_BROWSERCLAW)
+        || event.properties().get(SURFACE).and_then(Value::as_str) != Some(SURFACE_SERVER)
         || event.properties().get(PROCESS_PERSON_PROFILE) != Some(&Value::Bool(false))
         || event.properties().get(IS_SERVER) != Some(&Value::Bool(true))
     {
@@ -299,7 +325,13 @@ fn final_allowlist(mut event: Event) -> Option<Event> {
             !definition.allows_property(key)
                 && !matches!(
                     key.as_str(),
-                    SERVER_VERSION | OS_PLATFORM | PROCESS_PERSON_PROFILE | IS_SERVER
+                    SERVER_VERSION
+                        | OS_PLATFORM
+                        | INSTALL_ID
+                        | PRODUCT
+                        | SURFACE
+                        | PROCESS_PERSON_PROFILE
+                        | IS_SERVER
                 )
         })
         .cloned()
@@ -316,6 +348,7 @@ mod tests {
     use crate::analytics::events::{
         AGENT_SESSION_STARTED, AGENT_SESSION_TOOL_USAGE, SERVER_STARTED,
     };
+    use crate::analytics::installation::installation_path;
     use axum::{Router, body::Bytes, routing::any};
     use serde_json::json;
     use tempfile::tempdir;
@@ -349,6 +382,15 @@ mod tests {
         }
     }
 
+    async fn seed_installation(directory: &Path, install_id: &str) -> anyhow::Result<()> {
+        tokio::fs::write(
+            installation_path(directory),
+            format!("{{\"install_id\":\"{install_id}\"}}\n"),
+        )
+        .await?;
+        Ok(())
+    }
+
     #[test]
     fn runtime_analytics_config_overrides_compiled_defaults() {
         assert_eq!(
@@ -367,12 +409,10 @@ mod tests {
     {
         let directory = tempdir()?;
         let stable_id = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        seed_installation(directory.path(), stable_id).await?;
         persist_state(
             &state_path(directory.path()),
-            &AnalyticsState {
-                distinct_id: stable_id.to_string(),
-                enabled: true,
-            },
+            &AnalyticsState { enabled: true },
         )
         .await?;
         let (host, mut requests, endpoint) = local_endpoint().await?;
@@ -398,6 +438,9 @@ mod tests {
                 "client_name": "claude-code",
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
+                "install_id": stable_id,
+                "product": "browserclaw",
+                "surface": "server",
                 "$process_person_profile": false,
                 "$is_server": true
             })
@@ -410,12 +453,10 @@ mod tests {
     {
         let directory = tempdir()?;
         let stable_id = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        seed_installation(directory.path(), stable_id).await?;
         persist_state(
             &state_path(directory.path()),
-            &AnalyticsState {
-                distinct_id: stable_id.to_string(),
-                enabled: true,
-            },
+            &AnalyticsState { enabled: true },
         )
         .await?;
         let (host, mut requests, endpoint) = local_endpoint().await?;
@@ -454,6 +495,9 @@ mod tests {
                 "max_duration_ms": 420,
                 "server_version": env!("CARGO_PKG_VERSION"),
                 "os_platform": events::platform_token(),
+                "install_id": stable_id,
+                "product": "browserclaw",
+                "surface": "server",
                 "$process_person_profile": false,
                 "$is_server": true,
             })
@@ -468,6 +512,9 @@ mod tests {
         for (key, value) in [
             (SERVER_VERSION, json!("1")),
             (OS_PLATFORM, json!("linux")),
+            (INSTALL_ID, json!("2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8")),
+            (PRODUCT, json!(PRODUCT_BROWSERCLAW)),
+            (SURFACE, json!(SURFACE_SERVER)),
             (PROCESS_PERSON_PROFILE, json!(false)),
             ("$geoip_disable", json!(true)),
             (IS_SERVER, json!(true)),
@@ -479,7 +526,7 @@ mod tests {
         }
         let filtered = final_allowlist(valid)
             .ok_or_else(|| anyhow::anyhow!("catalog event was unexpectedly dropped"))?;
-        assert_eq!(filtered.properties().len(), 4);
+        assert_eq!(filtered.properties().len(), 7);
         assert!(!filtered.properties().contains_key("$geoip_disable"));
         assert!(!filtered.properties().contains_key("$os_version"));
         assert!(!filtered.properties().contains_key("$lib"));
@@ -544,6 +591,28 @@ mod tests {
         )
         .await?;
         assert!(!env_off.get_state().await.enabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_installation_identity_disables_delivery_without_overwriting()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        tokio::fs::write(installation_path(directory.path()), "{not json").await?;
+        let service = AnalyticsService::new_with_config(
+            directory.path(),
+            test_config(DEFAULT_POSTHOG_HOST.to_string(), true),
+        )
+        .await?;
+
+        let state = service.get_state().await;
+        assert!(state.consent);
+        assert!(!state.enabled);
+        assert!(state.distinct_id.is_empty());
+        assert_eq!(
+            tokio::fs::read_to_string(installation_path(directory.path())).await?,
+            "{not json"
+        );
         Ok(())
     }
 

@@ -552,11 +552,21 @@ return { title: pages[0].title }
     })
 
     expect(result?.isError).toBeFalsy()
-    expect(result?.structuredContent).toEqual({
-      ok: true,
-      value: { title: 'Example' },
-      logs: ['pages 1', 'warn: {\n  "pageId": 7\n}'],
-    })
+    // run output is page-derived and its structuredContent is model-visible, so
+    // value and logs are fenced as untrusted.
+    const structured = result?.structuredContent as {
+      ok: boolean
+      value?: string
+      logs: string[]
+    }
+    expect(structured.ok).toBe(true)
+    expect(typeof structured.value).toBe('string')
+    expect(structured.value).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured.value).toContain('"title": "Example"')
+    expect(structured.logs).toHaveLength(2)
+    expect(structured.logs[0]).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured.logs[0]).toContain('pages 1')
+    expect(structured.logs[1]).toContain('pageId')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -592,11 +602,18 @@ return value
     })
 
     expect(result?.isError).toBeFalsy()
-    expect(result?.structuredContent).toEqual({
-      ok: true,
-      value: { id: '1', self: '[Circular]' },
-      logs: [],
-    })
+    // JSON-safe encoding still applies, then the value is fenced as untrusted.
+    const structured = result?.structuredContent as {
+      ok: boolean
+      value?: string
+      logs: string[]
+    }
+    expect(structured.ok).toBe(true)
+    expect(structured.logs).toEqual([])
+    expect(typeof structured.value).toBe('string')
+    expect(structured.value).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured.value).toContain('"id": "1"')
+    expect(structured.value).toContain('[Circular]')
   })
 
   it('returns run syntax errors without invoking the browser session', async () => {
@@ -642,11 +659,18 @@ throw new Error('boom')
     })
 
     expect(result?.isError).toBe(true)
-    expect(result?.structuredContent).toEqual({
-      ok: false,
-      logs: ['before boom'],
-      error: 'boom',
-    })
+    // The failure path's logs and error are page-derived too, so both are fenced.
+    const structured = result?.structuredContent as {
+      ok: boolean
+      logs: string[]
+      error?: string
+    }
+    expect(structured.ok).toBe(false)
+    expect(structured.logs).toHaveLength(1)
+    expect(structured.logs[0]).toContain('before boom')
+    expect(typeof structured.error).toBe('string')
+    expect(structured.error).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured.error).toContain('boom')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -676,11 +700,18 @@ return 'late'
     })
 
     expect(result?.isError).toBe(true)
-    expect(result?.structuredContent).toEqual({
-      ok: false,
-      logs: [],
-      error: 'run exceeded 1ms',
-    })
+    // A script's thrown error can carry page-controlled text, so the error field
+    // is fenced too (uniformly, including this system timeout message).
+    const structured = result?.structuredContent as {
+      ok: boolean
+      logs: string[]
+      error?: string
+    }
+    expect(structured.ok).toBe(false)
+    expect(structured.logs).toEqual([])
+    expect(typeof structured.error).toBe('string')
+    expect(structured.error).toContain('UNTRUSTED_PAGE_CONTENT')
+    expect(structured.error).toContain('run exceeded 1ms')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/metrics/chrome_metrics_service_client.cc b/chrome/browser/metrics/chrome_metrics_service_client.cc
-index 179faf4a07468333de5a1d243e758458b34316aa..6723e10ee1121c17c4d3dffe26773614d50aa0fc 100644
+index 179faf4a07468333de5a1d243e758458b34316aa..212b4e26afaf79d7494036dc21ffa8ae20e78569 100644
 --- a/chrome/browser/metrics/chrome_metrics_service_client.cc
 +++ b/chrome/browser/metrics/chrome_metrics_service_client.cc
 @@ -28,6 +28,7 @@
@@ -14,7 +14,7 @@ index 179faf4a07468333de5a1d243e758458b34316aa..6723e10ee1121c17c4d3dffe26773614
  }
  
  void ChromeMetricsServiceClient::NotifyApplicationNotIdle() {
-+  browseros_metrics::BrowserOSMetrics::Log("alive", 0.01);
++  browseros_metrics::BrowserOSMetrics::Log("alive", {}, 0.01);
    metrics_service_->OnApplicationNotIdle();
  }
  

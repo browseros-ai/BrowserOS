@@ -1687,7 +1687,14 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             self.assertEqual(job["uses"], "./.github/workflows/publish-server-ota.yml")
             self.assertEqual(job["with"]["product"], product)
             self.assertEqual(job["with"]["state_owner"], "suite")
-            self.assertEqual(job["permissions"], {"contents": "read"})
+            # A called workflow can only narrow the caller's GITHUB_TOKEN, so the
+            # ceiling must cover what publish-server-ota.yml declares. Granting
+            # less rejects the whole run at validation time, before any job is
+            # created — see run 33689075661.
+            self.assertEqual(
+                job["permissions"],
+                {"contents": "write", "pull-requests": "write"},
+            )
 
         reconcile = jobs["reconcile-state"]
         self.assertTrue(set(finalizers).issubset(set(reconcile["needs"])))

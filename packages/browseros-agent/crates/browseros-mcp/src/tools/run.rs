@@ -35,7 +35,7 @@ const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run f
 The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps.
 
 Pages (pageId is a NUMBER):
-  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Opens in the background so it does not steal the user's focus; pass { background: false } only when the user asks to bring the tab to the front.
+  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Always opens in the background; it never switches the user's tab.
   browser.pages.close(pageId)  -> undefined. Closes a page you own.
   browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one.
   browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
@@ -655,12 +655,10 @@ impl BrowserBridge {
                     .race(self.ctx.session.pages.new_page(
                         &url,
                         NewPageOptions {
-                            // Default to a background tab so a working agent does
-                            // not steal the user's focus, matching the granular
-                            // tabs-new default. An explicit background:false opens
-                            // it active, which the agent should do only when the
-                            // user asks to bring a tab to the front.
-                            background: optional_bool_field(opts, "background")?.or(Some(true)),
+                            // Always a background tab: an agent must never switch
+                            // the user's tab. A `background` option is ignored
+                            // rather than rejected so older scripts keep working.
+                            background: Some(true),
                             window_id,
                             tab_group_id,
                         },
@@ -1042,17 +1040,6 @@ fn optional_object_arg(
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(value)) => Ok(Some(value)),
         Some(_) => Err(format!("argument {index} must be an object")),
-    }
-}
-
-fn optional_bool_field(
-    object: Option<&Map<String, Value>>,
-    name: &str,
-) -> Result<Option<bool>, String> {
-    match object.and_then(|object| object.get(name)) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(format!("{name} must be a boolean")),
     }
 }
 
@@ -2159,7 +2146,7 @@ return { pageId: page.pageId, tabId: page.tabId, url: page.url, title: page.titl
         let result = run_tool_with_ctx(
             r#"
 return await browser.pages.newPage('https://new.example', {
-  background: true,
+  background: false,
   windowId: 88,
   tabGroupId: 'group-opts',
 });
@@ -2184,6 +2171,8 @@ return await browser.pages.newPage('https://new.example', {
             create_params.first().and_then(|params| params.get("url")),
             Some(&json!("https://new.example"))
         );
+        // `background: false` is accepted but ignored: agents never get a
+        // foreground tab.
         assert_eq!(
             create_params
                 .first()

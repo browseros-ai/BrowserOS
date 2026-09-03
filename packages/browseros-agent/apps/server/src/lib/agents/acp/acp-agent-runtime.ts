@@ -25,6 +25,7 @@ import { logger } from '../../logger'
 import type { AcpAgentDefinition } from '../agent-types'
 import { deriveAcpSessionKey } from '../storage/acp-agent-store'
 import { type AcpAgentPolicy, buildAcpAgentPolicy } from './acp-agent-policy'
+import { ensureAcpWorkspace } from './browseros-instructions'
 
 export interface AcpAgentRuntimeOptions {
   serverPort: number
@@ -83,6 +84,14 @@ export class AcpAgentRuntime {
   ) => AcpxProvider
   private readonly sessions = new Map<string, ActiveAcpSession>()
   private readonly activeTurns = new Set<string>()
+  private workspaceReady?: Promise<string>
+
+  // Materialize the single shared ACP workspace (CLAUDE.md / AGENTS.md) once and
+  // reuse it for every conversation.
+  private ensureWorkspace(): Promise<string> {
+    this.workspaceReady ??= ensureAcpWorkspace(this.browserosDir)
+    return this.workspaceReady
+  }
 
   constructor(options: AcpAgentRuntimeOptions) {
     this.serverPort = options.serverPort
@@ -107,6 +116,7 @@ export class AcpAgentRuntime {
     let streamStarted = false
 
     try {
+      await this.ensureWorkspace()
       const policy = await buildAcpAgentPolicy({
         agent: input.agent,
         conversationId: input.conversationId,

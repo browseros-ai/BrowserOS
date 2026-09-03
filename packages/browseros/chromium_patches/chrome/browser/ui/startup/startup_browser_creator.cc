@@ -12,7 +12,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
  #include "chrome/browser/extensions/startup_helper.h"
  #include "chrome/browser/first_run/first_run.h"
  #include "chrome/browser/lifetime/browser_shutdown.h"
-@@ -476,6 +479,58 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
+@@ -476,6 +479,62 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
  
@@ -47,12 +47,16 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
 +    ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(true);
 +    // BrowserOS onboarding hands off to the agent extension so the user
 +    // can finish setting up a provider or coding agent; a chrome:// page
-+    // cannot navigate there itself. BrowserOS neo routes itself instead.
++    // cannot navigate there itself. The agent extension only exists on
++    // BrowserOS builds, so other products append nothing here and route
++    // themselves. The target is the first-run setup step, not the settings
++    // page: it drops the user straight into the new tab page once they
++    // connect something.
 +    std::vector<GURL> tabs = first_run_urls;
 +    if (browseros::IsBrowserOSProduct()) {
 +      tabs.emplace_back(std::string("chrome-extension://") +
 +                        browseros::kAgentExtensionId +
-+                        "/app.html#/settings/ai");
++                        "/app.html#/onboarding/ai");
 +    }
 +    ProfilePicker::SetFirstRunTabsInNextProfileOpened(tabs);
 +    return;
@@ -71,7 +75,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -714,6 +769,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -714,6 +773,26 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
  
    if (!IsSilentLaunchEnabled(command_line, profile)) {
