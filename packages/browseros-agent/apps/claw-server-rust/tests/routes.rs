@@ -287,23 +287,14 @@ async fn system_shutdown_preserves_contract_body_and_defers_runtime_teardown() -
 async fn mcp_hygiene_rejects_browser_originated_requests() -> anyhow::Result<()> {
     let app = test_app().await?;
 
+    // `Origin` is the reliable page signal and stays blocked: any webpage that
+    // can make an MCP call (POST application/json) always carries it.
     let (status, _headers, body) = request_json_with_headers(
         &app.router,
         "POST",
         "/mcp",
         Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})),
         &[("origin", "http://evil.example")],
-    )
-    .await?;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "unsupported request" }));
-
-    let (status, _headers, body) = request_json_with_headers(
-        &app.router,
-        "GET",
-        "/mcp",
-        None,
-        &[("sec-fetch-site", "cross-site")],
     )
     .await?;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -331,6 +322,41 @@ async fn mcp_hygiene_rejects_browser_originated_requests() -> anyhow::Result<()>
     )
     .await?;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_hygiene_admits_electron_sec_fetch_clients() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    // Chromium/Electron-based desktop MCP clients (e.g. Cherry Studio) attach
+    // browser-default Fetch Metadata to every request and cannot strip it. With
+    // no `Origin`, such a request is not a page fetch and must reach the service.
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "Cherry Studio", "version": "1.0" }
+        }
+    });
+    let (status, headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(initialize),
+        &[
+            ("sec-fetch-site", "same-site"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-dest", "empty"),
+        ],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
+    assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
+    assert!(headers.contains_key("mcp-session-id"));
     Ok(())
 }
 

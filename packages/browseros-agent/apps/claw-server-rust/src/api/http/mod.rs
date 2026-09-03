@@ -122,8 +122,13 @@ pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalErr
     )
 }
 
-/// Rejects browser-page requests to the loopback MCP endpoint. Browser fetches
-/// carry `origin` or `sec-fetch-site`; native MCP clients do not.
+/// Rejects browser-page requests to the loopback MCP endpoint. `Origin` is the
+/// reliable signal: an MCP call is a POST with `application/json`, which is never
+/// a CORS simple request, so any webpage capable of making one always carries
+/// `Origin`. `Sec-Fetch-*` is not usable here: Chromium/Electron-based desktop
+/// MCP clients attach it to every request and cannot strip it, so its presence
+/// alone does not indicate a page. The content-type gate below covers the
+/// origin-less page vectors (navigations, no-cors simple requests).
 async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
     // The nested /mcp service shadows the router's `/{*path}` preflight route,
     // so answer OPTIONS here to keep loopback preflight behavior consistent.
@@ -131,7 +136,7 @@ async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
         return StatusCode::NO_CONTENT.into_response();
     }
     let headers = req.headers();
-    if headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site") {
+    if headers.contains_key(header::ORIGIN) {
         return AppError::forbidden("unsupported request").into_response();
     }
     let needs_json = match *req.method() {
