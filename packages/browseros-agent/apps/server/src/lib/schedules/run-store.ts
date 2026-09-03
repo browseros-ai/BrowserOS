@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, inArray } from 'drizzle-orm'
 import { getDb } from '../db'
 import {
   type NewScheduledJobRunRow,
@@ -24,6 +24,14 @@ export type ScheduledJobRunUpsert = Omit<
   createdAt?: number
 }
 
+/**
+ * Runs kept per job. The extension applied this cap when it owned the history,
+ * trimming as it created each run; keeping the number here means it holds
+ * however the run was written rather than only on the path that happened to
+ * enforce it.
+ */
+export const MAX_RUNS_PER_JOB = 15
+
 export interface ScheduledJobRunStore {
   list(): Promise<ScheduledJobRunRow[]>
   get(id: string): Promise<ScheduledJobRunRow | null>
@@ -34,6 +42,8 @@ export interface ScheduledJobRunStore {
    * exists. Used by the one-time import for the reason on the provider store. */
   insertIfAbsent(row: ScheduledJobRunUpsert): Promise<ScheduledJobRunRow | null>
   remove(id: string): Promise<boolean>
+  /** Drops all but the newest `keep` runs of a job. Returns how many went. */
+  prune(jobId: string, keep?: number): Promise<number>
 }
 
 async function list(): Promise<ScheduledJobRunRow[]> {
@@ -78,6 +88,26 @@ async function insertIfAbsent(
   return saved ?? null
 }
 
+async function prune(
+  jobId: string,
+  keep: number = MAX_RUNS_PER_JOB,
+): Promise<number> {
+  const rows = await getDb()
+    .select({ id: scheduledJobRuns.id })
+    .from(scheduledJobRuns)
+    .where(eq(scheduledJobRuns.jobId, jobId))
+    .orderBy(desc(scheduledJobRuns.startedAt))
+    .all()
+
+  const stale = rows.slice(keep).map((row) => row.id)
+  if (stale.length === 0) return 0
+
+  await getDb()
+    .delete(scheduledJobRuns)
+    .where(inArray(scheduledJobRuns.id, stale))
+  return stale.length
+}
+
 async function remove(id: string): Promise<boolean> {
   const deleted = await getDb()
     .delete(scheduledJobRuns)
@@ -92,4 +122,5 @@ export const dbScheduledJobRunStore: ScheduledJobRunStore = {
   upsert,
   insertIfAbsent,
   remove,
+  prune,
 }

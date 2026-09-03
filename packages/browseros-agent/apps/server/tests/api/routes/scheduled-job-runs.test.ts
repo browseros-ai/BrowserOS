@@ -48,6 +48,14 @@ function memoryStore(initial: ScheduledJobRunRow[] = []) {
       return store.upsert(input)
     },
     remove: async (id) => rows.delete(id),
+    prune: async (jobId, keep = 15) => {
+      const ofJob = [...rows.values()]
+        .filter((r) => r.jobId === jobId)
+        .sort((a, b) => b.startedAt - a.startedAt)
+      const stale = ofJob.slice(keep)
+      for (const run of stale) rows.delete(run.id)
+      return stale.length
+    },
   }
   return { store, rows }
 }
@@ -101,6 +109,25 @@ describe('scheduled job run routes', () => {
     await put(createScheduledJobRunRoutes({ store }), { ...body, toolCalls })
 
     expect(rows.get(RUN_ID)?.toolCalls).toEqual(toolCalls)
+  })
+
+  // The cap moved here from the extension, so a write has to apply it or the
+  // history grows without bound now that nothing else trims it.
+  it('trims a job past the run cap on write', async () => {
+    const existing = Array.from({ length: 15 }, (_, i) =>
+      row({ id: `run-${i}`, startedAt: 1000 + i }),
+    )
+    const { store, rows } = memoryStore(existing)
+
+    await put(
+      createScheduledJobRunRoutes({ store }),
+      { ...body, startedAt: 9999 },
+      'run-new',
+    )
+
+    expect(rows.size).toBe(15)
+    expect(rows.has('run-0')).toBe(false)
+    expect(rows.has('run-new')).toBe(true)
   })
 
   it('rejects a status the schema does not know', async () => {

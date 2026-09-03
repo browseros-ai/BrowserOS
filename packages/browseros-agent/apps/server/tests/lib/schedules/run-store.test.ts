@@ -4,7 +4,10 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, initializeDb } from '../../../src/lib/db'
-import { dbScheduledJobRunStore } from '../../../src/lib/schedules/run-store'
+import {
+  dbScheduledJobRunStore,
+  MAX_RUNS_PER_JOB,
+} from '../../../src/lib/schedules/run-store'
 import { dbScheduledJobStore } from '../../../src/lib/schedules/schedule-store'
 
 const JOB_ID = 'job-1'
@@ -118,5 +121,50 @@ describe('dbScheduledJobRunStore', () => {
       'new',
       'old',
     ])
+  })
+
+  // The extension applied this cap while it owned the history, so keeping it
+  // is preserving behaviour rather than adding a policy.
+  test('prune keeps the newest runs of a job and drops the rest', async () => {
+    await useTempDbWithJob()
+    for (let i = 0; i < MAX_RUNS_PER_JOB + 5; i += 1) {
+      await dbScheduledJobRunStore.upsert(
+        baseRun({ id: `run-${i}`, startedAt: 1000 + i }),
+      )
+    }
+
+    const dropped = await dbScheduledJobRunStore.prune(JOB_ID)
+
+    expect(dropped).toBe(5)
+    const remaining = await dbScheduledJobRunStore.list()
+    expect(remaining).toHaveLength(MAX_RUNS_PER_JOB)
+    expect(remaining[0].startedAt).toBe(1000 + MAX_RUNS_PER_JOB + 4)
+  })
+
+  test('prune leaves a job under the cap alone', async () => {
+    await useTempDbWithJob()
+    await dbScheduledJobRunStore.upsert(baseRun())
+
+    expect(await dbScheduledJobRunStore.prune(JOB_ID)).toBe(0)
+    expect(await dbScheduledJobRunStore.list()).toHaveLength(1)
+  })
+
+  test('prune only touches the job it was given', async () => {
+    await useTempDbWithJob()
+    await dbScheduledJobStore.upsert({ ...baseJob(), id: 'job-2' })
+    await dbScheduledJobRunStore.upsert(
+      baseRun({ id: 'other', jobId: 'job-2' }),
+    )
+    for (let i = 0; i < MAX_RUNS_PER_JOB + 2; i += 1) {
+      await dbScheduledJobRunStore.upsert(
+        baseRun({ id: `run-${i}`, startedAt: 1000 + i }),
+      )
+    }
+
+    await dbScheduledJobRunStore.prune(JOB_ID)
+
+    const ids = (await dbScheduledJobRunStore.list()).map((r) => r.id)
+    expect(ids).toContain('other')
+    expect(ids).toHaveLength(MAX_RUNS_PER_JOB + 1)
   })
 })

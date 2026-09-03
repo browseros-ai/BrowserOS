@@ -78,6 +78,10 @@ export function createScheduledJobRunRoutes(
           ...c.req.valid('json'),
           id: c.req.valid('param').runId,
         })
+        // Every write, not just the first: a run is written twice, when it
+        // starts and when it finishes, and pruning is bounded and idempotent.
+        // The import path deliberately does not prune, so it stays additive.
+        await store.prune(run.jobId)
         return c.json({ run })
       },
     )
