@@ -49,8 +49,10 @@ mock.module('@/lib/llm-providers/storage', () => ({
 // The provider list is a request now, not a storage read. Mocked here so the
 // fetch stub below still sees only the chat call it is asserting on.
 mock.module('@/modules/llm-providers/llm-providers.api', () => ({
-  listProvidersOrEmpty: async () =>
-    (storageValues.get('providers') as LlmProviderConfig[]) ?? [],
+  listProvidersOrNull: async () =>
+    storageValues.has('unreachable')
+      ? null
+      : ((storageValues.get('providers') as LlmProviderConfig[]) ?? []),
 }))
 
 mock.module('@/lib/browseros/helpers', () => ({
@@ -167,3 +169,59 @@ const providers: LlmProviderConfig[] = [
     updatedAt: timestamp,
   },
 ]
+
+describe('provider resolution when the server is unreachable', () => {
+  // The list being unreachable says nothing about whether the chosen provider
+  // exists, so running anyway would spend the wrong credentials on the wrong
+  // model. The job runner turns this into a failed run the user can see.
+  it('fails a scheduled job that named a provider', async () => {
+    storageValues.set('unreachable', true)
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await expect(
+      getChatServerResponse({
+        message: 'Run my schedule',
+        providerId: 'anthropic-sonnet',
+      }),
+    ).rejects.toThrow('Cannot reach the BrowserOS server')
+
+    expect(fetchBodies).toHaveLength(0)
+  })
+
+  it('fails a refine that named a provider', async () => {
+    storageValues.set('unreachable', true)
+    const { refinePrompt } = await import('./refine-prompt')
+
+    await expect(
+      refinePrompt({
+        prompt: 'Check mail',
+        name: 'Morning brief',
+        providerId: 'anthropic-sonnet',
+      }),
+    ).rejects.toThrow('Cannot reach the BrowserOS server')
+  })
+
+  // No provider was named, so there is no choice to betray and the built-in
+  // fallback is the behaviour this always had.
+  it('falls back to the built-in provider when none was named', async () => {
+    storageValues.set('unreachable', true)
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await getChatServerResponse({ message: 'Run my schedule' })
+
+    expect(fetchBodies[0]).toMatchObject({ provider: 'browseros' })
+  })
+
+  // A provider that was genuinely deleted still falls back, as before. Only
+  // the unreachable case is treated as unsafe.
+  it('falls back when the named provider no longer exists', async () => {
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await getChatServerResponse({
+      message: 'Run my schedule',
+      providerId: 'deleted-provider',
+    })
+
+    expect(fetchBodies[0]).toMatchObject({ provider: 'anthropic' })
+  })
+})

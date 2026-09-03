@@ -9,7 +9,7 @@ import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import { listProvidersOrEmpty } from '@/modules/llm-providers/llm-providers.api'
+import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
 import {
   findChatProviderById,
   resolveChatProvider,
@@ -78,7 +78,19 @@ const resolveProvider = async (
 ): Promise<LlmProviderConfig> => {
   // One read for both branches: the list is now a request rather than a local
   // storage lookup, and the explicit-provider path used to fetch it twice.
-  const providers = await listProvidersOrEmpty()
+  const loaded = await listProvidersOrNull()
+
+  // A job that named a provider must not quietly run on a different one. The
+  // list being unreachable says nothing about whether that provider exists, so
+  // substituting the built-in would spend the wrong credentials on the wrong
+  // model and still record the run as completed.
+  if (providerId && loaded === null) {
+    throw new Error(
+      'Cannot reach the BrowserOS server to load the selected provider',
+    )
+  }
+
+  const providers = loaded ?? []
 
   if (providerId) {
     const match = findChatProviderById(providers, providerId)

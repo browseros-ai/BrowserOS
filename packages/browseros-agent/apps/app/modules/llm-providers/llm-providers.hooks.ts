@@ -98,6 +98,12 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       // would leave nothing to chat with.
       if (providerId === DEFAULT_PROVIDER_ID) return
 
+      // Delete first. Moving the default before the row is gone leaves the
+      // provider configured but no longer default when the delete fails, with
+      // nothing to tell the user it happened. The reverse is harmless: a
+      // default id pointing at a deleted provider is repaired on read.
+      await deleteProviderRow(providerId)
+
       if (storedDefaultId === providerId) {
         const nextDefault =
           providers.find((provider) => provider.id !== providerId)?.id ??
@@ -105,7 +111,6 @@ export function useLlmProviders(): UseLlmProvidersReturn {
         setStoredDefaultId(nextDefault)
         await persistDefaultProviderId(nextDefault)
       }
-      await deleteProviderRow(providerId)
     },
     onSuccess: invalidate,
   })

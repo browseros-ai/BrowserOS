@@ -65,15 +65,24 @@ export async function fetchProviders(): Promise<LlmProviderConfig[]> {
 }
 
 /**
- * The list for callers outside React, which fall back to the built-in provider
- * of their own accord. They must not seed: a background alarm firing while the
- * server is starting would otherwise write the default into an empty database
- * that the migration had not filled yet.
+ * The list for callers outside React, returning null when the server could not
+ * be reached.
+ *
+ * Null rather than an empty array because the two mean different things to a
+ * caller resolving an explicitly chosen provider: absent means the provider
+ * was deleted and falling back is right, unreachable means the choice is
+ * simply unknown and running anyway would use the wrong credentials.
+ *
+ * These callers must not seed either. A background alarm firing while the
+ * server is still starting would otherwise write the default into a database
+ * the migration had not filled yet.
  */
-export async function listProvidersOrEmpty(): Promise<LlmProviderConfig[]> {
+export async function listProvidersOrNull(): Promise<
+  LlmProviderConfig[] | null
+> {
   try {
     return await listProviders()
   } catch {
-    return []
+    return null
   }
 }
