@@ -1,4 +1,4 @@
-import type { LlmProviderRoutes } from '@browseros/server'
+import type { ProviderRoutes } from '@browseros/server'
 import { hc } from 'hono/client'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
@@ -11,7 +11,7 @@ import {
 
 async function providersClient() {
   const baseUrl = await resolveAgentServerUrlWithRetry()
-  return hc<LlmProviderRoutes>(`${baseUrl}/llm-providers`)
+  return hc<ProviderRoutes>(`${baseUrl}/providers`)
 }
 
 export async function putProvider(config: LlmProviderConfig): Promise<void> {
@@ -32,6 +32,31 @@ export async function deleteProvider(providerId: string): Promise<void> {
   })
   if (!response.ok && response.status !== 404) {
     throw new Error(`Failed to delete provider (${response.status})`)
+  }
+}
+
+/**
+ * The selected provider's id, or null when none is set.
+ *
+ * Held on the server beside the providers it points at, so it covers acp
+ * agents as readily as llm ones. It used to sit in extension storage, which
+ * meant selecting an agent left this pointing at the previous llm provider.
+ */
+export async function fetchDefaultProviderId(): Promise<string | null> {
+  const client = await providersClient()
+  const response = await client.default.$get()
+  if (!response.ok) {
+    throw new Error(`Failed to load the default provider (${response.status})`)
+  }
+  const { provider } = await response.json()
+  return provider?.id ?? null
+}
+
+export async function putDefaultProvider(providerId: string): Promise<void> {
+  const client = await providersClient()
+  const response = await client.default.$put({ json: { providerId } })
+  if (!response.ok) {
+    throw new Error(`Failed to set the default provider (${response.status})`)
   }
 }
 

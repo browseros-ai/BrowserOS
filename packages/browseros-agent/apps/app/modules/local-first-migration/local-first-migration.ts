@@ -109,3 +109,31 @@ export async function runScheduledRunsMigration(
 
   return { ranMigration: true, runCount: runs.length }
 }
+
+export interface DefaultProviderMigrationDeps {
+  isDone: () => Promise<boolean>
+  markDone: () => Promise<void>
+  loadStoredDefaultId: () => Promise<string | null>
+  setDefault: (providerId: string) => Promise<void>
+}
+
+/**
+ * Moves the selected provider from extension storage to the server, once.
+ *
+ * Its own marker, like the run history, because the provider and job import
+ * must never run twice and this cannot ride along with it. Skipping when the
+ * stored id is missing matters as much as writing when it is present: a
+ * default that no longer names anything would otherwise be pushed over one the
+ * user has since chosen on another surface.
+ */
+export async function runDefaultProviderMigration(
+  deps: DefaultProviderMigrationDeps,
+): Promise<{ ranMigration: boolean; providerId: string | null }> {
+  if (await deps.isDone()) return { ranMigration: false, providerId: null }
+
+  const storedId = await deps.loadStoredDefaultId()
+  if (storedId) await deps.setDefault(storedId)
+  await deps.markDone()
+
+  return { ranMigration: true, providerId: storedId }
+}

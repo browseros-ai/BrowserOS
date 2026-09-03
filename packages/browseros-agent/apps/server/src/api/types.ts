@@ -78,15 +78,33 @@ const ChatInputSchema = z.object({
     .optional(),
 })
 
-const BrowserOsChatRequestSchema = AgentLLMConfigSchema.merge(ChatInputSchema)
+/**
+ * The provider half of a chat request, now optional.
+ *
+ * The server holds the provider list and which one is selected, so a client
+ * only has to name an id, and need not even do that: with nothing given the
+ * selected provider is used. Every field stays accepted because the extension
+ * updates independently of the browser binary, so a shipped build can be
+ * running a client that still sends the whole configuration inline. The server
+ * can stop requiring these; it cannot stop accepting them.
+ */
+const OptionalAgentLLMConfigSchema = LLMConfigSchema.partial().extend({
+  model: z.string().min(1).optional(),
+  upstreamProvider: z.string().optional(),
+})
+
+const BrowserOsChatRequestSchema = OptionalAgentLLMConfigSchema.merge(
+  ChatInputSchema,
+)
   .extend({
-    target: BrowserOsAgentTargetSchema.optional(),
+    target: BrowserOsAgentTargetSchema.partial({ providerId: true }).optional(),
   })
   .transform((request) => ({
     ...request,
-    target: request.target ?? {
+    target: {
       type: 'browseros' as const,
-      providerId: request.providerId || request.provider,
+      providerId:
+        request.target?.providerId || request.providerId || request.provider,
     },
   }))
 
@@ -101,6 +119,21 @@ export const ChatRequestSchema = z.union([
 
 export type AcpChatRequest = z.infer<typeof AcpChatRequestSchema>
 export type BrowserOsChatRequest = z.infer<typeof BrowserOsChatRequestSchema>
+
+/**
+ * A browseros request after its provider has been filled from the stored row.
+ *
+ * The wire shape leaves the provider optional so a client can send an id alone,
+ * or nothing at all. Everything past the route boundary needs it resolved, and
+ * this type is what says so rather than an assertion at the call site.
+ */
+export type HydratedBrowserOsChatRequest = BrowserOsChatRequest & {
+  provider: NonNullable<BrowserOsChatRequest['provider']>
+  target: { type: 'browseros'; providerId: string }
+}
+
+/** What the chat service works on: every provider already resolved. */
+export type HydratedChatRequest = AcpChatRequest | HydratedBrowserOsChatRequest
 export type ChatRequest = z.infer<typeof ChatRequestSchema>
 
 export type Env = {

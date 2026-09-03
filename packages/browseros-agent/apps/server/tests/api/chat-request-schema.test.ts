@@ -69,7 +69,10 @@ describe('ChatRequestSchema agent targets', () => {
     })
   }
 
-  it('rejects a malformed explicit target', () => {
+  // A browseros target no longer has to name a provider. The server holds the
+  // list and which one is selected, so the id is resolved there; this used to
+  // be rejected because the request had to carry the whole configuration.
+  it('accepts a browseros target with no provider id', () => {
     const parsed = ChatRequestSchema.safeParse({
       target: { type: 'browseros' },
       conversationId: crypto.randomUUID(),
@@ -79,7 +82,18 @@ describe('ChatRequestSchema agent targets', () => {
       model: 'gpt-5',
     })
 
-    expect(parsed.success).toBe(false)
+    expect(parsed.success).toBe(true)
+  })
+
+  // The smallest body the endpoint accepts: what to say and which conversation
+  // it belongs to. Everything about the provider is resolved server side.
+  it('accepts a request carrying only a message and a conversation', () => {
+    const parsed = ChatRequestSchema.safeParse({
+      conversationId: crypto.randomUUID(),
+      message: 'hello',
+    })
+
+    expect(parsed.success).toBe(true)
   })
 
   it('rejects an untargeted legacy ACP provider request', () => {

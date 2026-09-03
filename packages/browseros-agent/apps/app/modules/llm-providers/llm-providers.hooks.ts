@@ -1,18 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
 import { createQuery } from 'react-query-kit'
 import {
   resolveDefaultProviderId,
   resolveSelectedProvider,
 } from '@/lib/llm-providers/provider-selection'
-import {
-  DEFAULT_PROVIDER_ID,
-  defaultProviderIdStorage,
-} from '@/lib/llm-providers/storage'
+import { DEFAULT_PROVIDER_ID } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   deleteProvider as deleteProviderRow,
+  fetchDefaultProviderId,
   fetchProviders,
+  putDefaultProvider,
   putProvider,
 } from './llm-providers.api'
 import { planProviderSave } from './llm-providers.helpers'
@@ -43,50 +41,39 @@ export const useProvidersQuery = createQuery<LlmProviderConfig[]>({
   fetcher: fetchProviders,
 })
 
+/**
+ * The selected provider, held on the server beside the providers it points at.
+ *
+ * It lived in extension storage until the two provider tables were merged,
+ * which meant it could only ever name an llm provider: selecting an acp agent
+ * wrote the other pointer and left this one stale.
+ */
+export const useDefaultProviderIdQuery = createQuery<string | null>({
+  queryKey: ['provider-default'],
+  fetcher: fetchDefaultProviderId,
+})
+
 /** Persists the configured default provider id used by provider selection. */
 export async function persistDefaultProviderId(
   providerId: string,
 ): Promise<void> {
-  await defaultProviderIdStorage.setValue(providerId)
-}
-
-/**
- * The default provider id stays in extension storage rather than the database.
- *
- * It is a per-profile preference, and every profile on a machine shares one
- * database, so a column would make them share a default too. A stale id costs
- * nothing because `resolveDefaultProviderId` repairs it on read.
- */
-function useDefaultProviderId(): [string, (id: string) => void] {
-  const [defaultProviderId, setDefaultProviderId] =
-    useState<string>(DEFAULT_PROVIDER_ID)
-
-  useEffect(() => {
-    let cancelled = false
-    defaultProviderIdStorage.getValue().then((stored) => {
-      if (!cancelled && stored) setDefaultProviderId(stored)
-    })
-    const unwatch = defaultProviderIdStorage.watch((next) => {
-      if (next) setDefaultProviderId(next)
-    })
-    return () => {
-      cancelled = true
-      unwatch()
-    }
-  }, [])
-
-  return [defaultProviderId, setDefaultProviderId]
+  await putDefaultProvider(providerId)
 }
 
 /** Hook for managing LLM provider configurations. */
 export function useLlmProviders(): UseLlmProvidersReturn {
   const queryClient = useQueryClient()
   const providersQuery = useProvidersQuery()
-  const [storedDefaultId, setStoredDefaultId] = useDefaultProviderId()
+  const defaultQuery = useDefaultProviderIdQuery()
+  const storedDefaultId = defaultQuery.data ?? DEFAULT_PROVIDER_ID
 
   const providers = providersQuery.data ?? []
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: useProvidersQuery.getKey() })
+  const invalidateDefault = () =>
+    queryClient.invalidateQueries({
+      queryKey: useDefaultProviderIdQuery.getKey(),
+    })
 
   const saveMutation = useMutation({
     mutationFn: async (provider: LlmProviderConfig) => {
@@ -113,20 +100,22 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       // default id pointing at a deleted provider is repaired on read.
       await deleteProviderRow(providerId)
 
-      if (storedDefaultId === providerId) {
-        const nextDefault =
-          providers.find((provider) => provider.id !== providerId)?.id ??
-          DEFAULT_PROVIDER_ID
-        setStoredDefaultId(nextDefault)
-        await persistDefaultProviderId(nextDefault)
-      }
+      // Nothing to repoint by hand: deleting the row removes the default with
+      // it, and the next provider is chosen on read.
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      invalidateDefault()
+    },
+  })
+
+  const setDefaultMutation = useMutation({
+    mutationFn: persistDefaultProviderId,
+    onSuccess: invalidateDefault,
   })
 
   const setDefaultProvider = async (providerId: string) => {
-    setStoredDefaultId(providerId)
-    await persistDefaultProviderId(providerId)
+    await setDefaultMutation.mutateAsync(providerId)
   }
 
   // Derived on read rather than repaired in storage: the write would be a side
@@ -137,8 +126,8 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     providers,
     defaultProviderId,
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
-    isLoading: providersQuery.isPending,
-    isUnavailable: providersQuery.isError,
+    isLoading: providersQuery.isPending || defaultQuery.isPending,
+    isUnavailable: providersQuery.isError || defaultQuery.isError,
     saveProvider: (provider) => saveMutation.mutateAsync(provider),
     setDefaultProvider,
     deleteProvider: async (providerId) => {

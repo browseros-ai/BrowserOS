@@ -1,19 +1,9 @@
 import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
-import {
-  createDefaultBrowserOSProvider,
-  defaultProviderIdStorage,
-} from '@/lib/llm-providers/storage'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
-import {
-  findChatProviderById,
-  resolveChatProvider,
-} from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
@@ -73,49 +63,15 @@ interface StreamParseState {
   receivedFinish: boolean
 }
 
-const resolveProvider = async (
-  providerId?: string,
-): Promise<LlmProviderConfig> => {
-  // One read for both branches: the list is now a request rather than a local
-  // storage lookup, and the explicit-provider path used to fetch it twice.
-  const loaded = await listProvidersOrNull()
-
-  // Never resolve a provider from a list that failed to load. A job that named
-  // one must not quietly run on a different one, and a job that named none
-  // still has a choice behind it: the configured default, whose id lives in
-  // extension storage but whose credentials and model live in that list. Either
-  // way, substituting the built-in would spend the wrong credentials on the
-  // wrong model and still record the run as completed.
-  //
-  // An empty list is a different answer and keeps the fallback: the server
-  // answered, and it really has no providers.
-  if (loaded === null) {
-    throw new Error(
-      'Cannot reach the BrowserOS server to load the selected provider',
-    )
-  }
-
-  const providers = loaded
-
-  if (providerId) {
-    const match = findChatProviderById(providers, providerId)
-    if (match) return match
-  }
-
-  if (providers.length > 0) {
-    const defaultProviderId = await defaultProviderIdStorage.getValue()
-    const provider = resolveChatProvider(providers, defaultProviderId)
-    if (provider) return provider
-  }
-
-  return createDefaultBrowserOSProvider()
-}
-
 export async function getChatServerResponse(
   request: ChatServerRequest,
 ): Promise<ChatServerResponse> {
   const agentServerUrl = await getAgentServerUrl()
-  const provider = await resolveProvider(request.providerId)
+  // No provider lookup here any more. The server holds the list and the
+  // selection, so a job names an id or names nothing and the server resolves
+  // it. That also removes the guard this path needed when it did the lookup
+  // itself: an unreachable list could not be told apart from an empty one, so
+  // a job risked running on the built-in provider with the wrong credentials.
   const conversationId = request.conversationId ?? crypto.randomUUID()
   const personalization = await personalizationStorage.getValue()
 
@@ -138,9 +94,9 @@ export async function getChatServerResponse(
     body: JSON.stringify({
       messages: [{ role: 'user', content: request.message }],
       ...buildChatRequestBody({
+        providerId: request.providerId,
         message: request.message,
         conversationId,
-        provider,
         mode: request.mode ?? 'agent',
         browserContext:
           request.activeTab ||
@@ -157,7 +113,6 @@ export async function getChatServerResponse(
               }
             : undefined,
         userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-        supportsImages: provider.supportsImages,
         isScheduledTask: true,
       }),
     }),

@@ -50,8 +50,9 @@ import type { ServerActivity } from '../services/server-activity'
 import type {
   AcpChatRequest,
   BrowserContext,
-  BrowserOsChatRequest,
   ChatRequest,
+  HydratedBrowserOsChatRequest,
+  HydratedChatRequest,
 } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 import {
@@ -108,7 +109,7 @@ export class ChatService {
   }
 
   async processMessage(
-    request: ChatRequest,
+    request: HydratedChatRequest,
     _requestAbortSignal: AbortSignal,
   ): Promise<Response> {
     try {
@@ -134,7 +135,7 @@ export class ChatService {
           }
 
           return await this.processBrowserOsMessage(
-            request as BrowserOsChatRequest,
+            request as HydratedBrowserOsChatRequest,
             abortSignal,
             updateMessages,
           )
@@ -179,7 +180,7 @@ export class ChatService {
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: session changes and message persistence must share one ordered transaction
   private async processBrowserOsMessage(
-    request: BrowserOsChatRequest,
+    request: HydratedBrowserOsChatRequest,
     abortSignal: AbortSignal,
     updateMessages: (messages: UIMessage[]) => boolean,
   ): Promise<ReadableStream<UIMessageChunk>> {

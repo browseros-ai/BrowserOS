@@ -21,9 +21,11 @@ describe('chat request preparation', () => {
     expect(request.api).toBe('http://127.0.0.1:5151/chat')
     expect(request.body).toMatchObject({
       target: { type: 'browseros', providerId: 'browseros' },
-      provider: 'browseros',
       message: 'Summarize this page',
     })
+    // The provider is named, not described: its configuration is resolved
+    // from the id on the server.
+    expect('provider' in request.body).toBe(false)
   })
 
   it('sends ACP agents to the same endpoint without provider fields', () => {

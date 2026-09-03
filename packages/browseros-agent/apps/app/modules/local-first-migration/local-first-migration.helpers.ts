@@ -2,7 +2,7 @@ import { REMOVED_PROVIDER_TYPES } from '@/lib/llm-providers/removed-provider-typ
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ScheduledJob } from '@/lib/schedules/scheduleTypes'
 
-/** Payload for `POST /llm-providers/import`. */
+/** Payload for `POST /providers/import`. */
 export interface ProviderImport {
   id: string
   type: string

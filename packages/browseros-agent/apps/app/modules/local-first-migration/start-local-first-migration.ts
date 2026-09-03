@@ -1,17 +1,22 @@
-import type { LlmProviderRoutes, ScheduledJobRoutes } from '@browseros/server'
+import type { ProviderRoutes, ScheduledJobRoutes } from '@browseros/server'
 import { storage } from '@wxt-dev/storage'
 import { hc } from 'hono/client'
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
-import { providersStorage } from '@/lib/llm-providers/storage'
+import {
+  defaultProviderIdStorage,
+  providersStorage,
+} from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   scheduledJobRunStorage,
   scheduledJobStorage,
 } from '@/lib/schedules/scheduleStorage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { putDefaultProvider } from '@/modules/llm-providers/llm-providers.api'
 import { importScheduledJobRuns } from '@/modules/schedules/schedules.api'
 import {
+  runDefaultProviderMigration,
   runLocalFirstMigration,
   runScheduledRunsMigration,
 } from './local-first-migration'
@@ -44,6 +49,12 @@ export const runsMigrationDoneStorage = storage.defineItem<boolean>(
   { fallback: false },
 )
 
+/** Its own marker too, for the reason on the one above. */
+export const defaultMigrationDoneStorage = storage.defineItem<boolean>(
+  'local:local-first-default-migration-done',
+  { fallback: false },
+)
+
 async function loadBackupProviders(): Promise<LlmProviderConfig[]> {
   try {
     const pref = await getBrowserOSAdapter().getPref(BROWSEROS_PREFS.PROVIDERS)
@@ -56,7 +67,7 @@ async function loadBackupProviders(): Promise<LlmProviderConfig[]> {
 
 async function importProviders(providers: ProviderImport[]): Promise<void> {
   const baseUrl = await resolveAgentServerUrlWithRetry()
-  const client = hc<LlmProviderRoutes>(`${baseUrl}/llm-providers`)
+  const client = hc<ProviderRoutes>(`${baseUrl}/providers`)
   const response = await client.import.$post({ json: { providers } })
   if (!response.ok) {
     throw new Error(`Failed to import providers (${response.status})`)
@@ -74,6 +85,9 @@ async function importScheduledJobs(jobs: ScheduledJobImport[]): Promise<void> {
 
 /** Fire and forget from the background; a failure retries on next startup. */
 export function startLocalFirstMigration(): void {
+  // The default is chained onto the provider import rather than fired
+  // alongside it: the id it names has to exist server side before it can be
+  // made default. The run history is independent and does not wait.
   void runLocalFirstMigration({
     isDone: () => migrationDoneStorage.getValue(),
     markDone: () => migrationDoneStorage.setValue(true),
@@ -82,7 +96,17 @@ export function startLocalFirstMigration(): void {
     loadScheduledJobs: async () => (await scheduledJobStorage.getValue()) ?? [],
     importProviders,
     importScheduledJobs,
-  }).catch(() => null)
+  })
+    .then(() =>
+      runDefaultProviderMigration({
+        isDone: () => defaultMigrationDoneStorage.getValue(),
+        markDone: () => defaultMigrationDoneStorage.setValue(true),
+        loadStoredDefaultId: async () =>
+          (await defaultProviderIdStorage.getValue()) || null,
+        setDefault: putDefaultProvider,
+      }),
+    )
+    .catch(() => null)
 
   void runScheduledRunsMigration({
     isDone: () => runsMigrationDoneStorage.getValue(),

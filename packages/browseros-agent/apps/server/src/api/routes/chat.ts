@@ -7,17 +7,24 @@ import { SessionStore } from '../../agent/session-store'
 import type { AcpAgentRuntime } from '../../lib/agents/acp/acp-agent-runtime'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
+import { dbProviderStore } from '../../lib/providers/provider-store'
 import { Sentry } from '../../lib/sentry'
+import {
+  type ChatProviderLookup,
+  hydrateChatProvider,
+} from '../services/chat-provider-config'
 import { ChatService } from '../services/chat-service'
 import type { ConversationRuns } from '../services/conversation-runs'
 import type { KlavisService } from '../services/klavis'
 import type { BrowserMcpModule } from '../services/mcp/browser-mcp-module'
 import type { ServerActivity } from '../services/server-activity'
 import {
+  type AcpChatRequest,
   type BrowserOsChatRequest,
   type ChatRequest,
   ChatRequestSchema,
   type Env,
+  type HydratedChatRequest,
 } from '../types'
 import { isTrustedAppRequest } from '../utils/request-auth'
 import { ConversationIdParamSchema } from '../utils/validation'
@@ -33,6 +40,8 @@ interface ChatRouteDeps {
   activity?: ServerActivity
   acpRuntime?: AcpAgentRuntime
   conversationRuns?: ConversationRuns
+  /** Injectable so the hydration path is testable without a database. */
+  providerStore?: ChatProviderLookup
 }
 
 // /chat deliberately exposes a plain Hono type. Its AI SDK stream payloads are
@@ -58,11 +67,28 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
 
   const app = new Hono<Env>()
   app.post('/', zValidator('json', ChatRequestSchema), async (c) => {
-    const request = c.req.valid('json')
-    const browserRequest = isBrowserOsChatRequest(request) ? request : null
-    if (!browserRequest && !isTrustedAppRequest(c)) {
+    const parsed = c.req.valid('json')
+    const parsedBrowserRequest = isBrowserOsChatRequest(parsed) ? parsed : null
+    if (!parsedBrowserRequest && !isTrustedAppRequest(c)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
+
+    // The provider configuration is filled from the stored row here rather than
+    // shipped on every message. A client from before this change sends it all
+    // inline and simply finds nothing to overlay.
+    let request: HydratedChatRequest
+    if (parsedBrowserRequest) {
+      const hydrated = await hydrateChatProvider(
+        parsedBrowserRequest,
+        deps.providerStore ?? dbProviderStore,
+      )
+      if (!hydrated.ok) return c.json({ error: hydrated.error }, 400)
+      request = hydrated.request
+    } else {
+      request = parsed as AcpChatRequest
+    }
+    const browserRequest = isBrowserOsChatRequest(request) ? request : null
+
     const provider = browserRequest?.provider ?? request.target.type
     const model = browserRequest?.model
     const baseUrl = browserRequest?.baseUrl

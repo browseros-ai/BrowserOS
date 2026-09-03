@@ -204,7 +204,11 @@ describe('commitChatTargetSelection', () => {
     expect(setDefaultProvider).toHaveBeenCalledWith(provider.id)
   })
 
-  it('persists an ACP selection without touching the default provider id', async () => {
+  // Selecting an agent used to leave the default pointing at whichever llm
+  // provider was chosen before it, because the two lived in separate tables and
+  // the default could only name the llm one. They are one table now, so there
+  // is one selection and it records whatever was picked.
+  it('records an ACP selection as the default too', async () => {
     const store = createSelectionStore()
     const setDefaultProvider = mock(async (_id: string) => {})
 
@@ -215,7 +219,7 @@ describe('commitChatTargetSelection', () => {
     )
 
     expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
-    expect(setDefaultProvider).not.toHaveBeenCalled()
+    expect(setDefaultProvider).toHaveBeenCalledWith(agent.id)
   })
 
   it('clears the selection without touching the default provider id', async () => {
