@@ -3,11 +3,8 @@ import { hc } from 'hono/client'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
-import {
-  type ProviderRow,
-  toProviderConfigs,
-  toProviderPayload,
-} from './llm-providers.helpers'
+import { toProviderConfigs, toProviderPayload } from './llm-providers.helpers'
+import { bumpProviderRevision } from './llm-providers.revision'
 
 async function providersClient() {
   const baseUrl = await resolveAgentServerUrlWithRetry()
@@ -23,6 +20,7 @@ export async function putProvider(config: LlmProviderConfig): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to save provider (${response.status})`)
   }
+  await bumpProviderRevision()
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
@@ -33,6 +31,7 @@ export async function deleteProvider(providerId: string): Promise<void> {
   if (!response.ok && response.status !== 404) {
     throw new Error(`Failed to delete provider (${response.status})`)
   }
+  await bumpProviderRevision()
 }
 
 /**
@@ -58,6 +57,7 @@ export async function putDefaultProvider(providerId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to set the default provider (${response.status})`)
   }
+  await bumpProviderRevision()
 }
 
 export async function listProviders(): Promise<LlmProviderConfig[]> {
@@ -67,7 +67,7 @@ export async function listProviders(): Promise<LlmProviderConfig[]> {
     throw new Error(`Failed to load providers (${response.status})`)
   }
   const { providers } = await response.json()
-  return toProviderConfigs(providers as ProviderRow[])
+  return toProviderConfigs(providers)
 }
 
 /**

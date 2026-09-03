@@ -45,6 +45,18 @@ interface ChatRouteDeps {
   providerStore?: ChatProviderLookup
 }
 
+/**
+ * The one place a route reads provider credentials.
+ *
+ * The store's ordinary reads return a projection without them, so building an
+ * outbound model request has to ask for them by name. Anything else that
+ * reaches for this lookup is doing something it should not.
+ */
+const credentialedProviderLookup: ChatProviderLookup = {
+  get: (id) => dbProviderStore.getWithCredentials(id),
+  getDefault: () => dbProviderStore.getDefaultWithCredentials(),
+}
+
 // /chat deliberately exposes a plain Hono type. Its AI SDK stream payloads are
 // not an RPC contract, and carrying every inferred route through the root app
 // exceeds TypeScript's instantiation depth.
@@ -81,7 +93,7 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     if (parsedBrowserRequest) {
       const hydrated = await hydrateChatProvider(
         parsedBrowserRequest,
-        deps.providerStore ?? dbProviderStore,
+        deps.providerStore ?? credentialedProviderLookup,
       )
       if (!hydrated.ok) return c.json({ error: hydrated.error }, 400)
       // A browseros request is otherwise allowed without the app-origin check,

@@ -62,6 +62,15 @@ export interface LlmProviderConfig {
   // so it is stored as a free string validated against the model at selection time.
   reasoningEffort?: string
   reasoningSummary?: 'auto' | 'concise' | 'detailed'
+
+  // Whether a credential is stored on the server, for providers read back from
+  // it. The values themselves never leave the server, so a form editing an
+  // existing provider sees these rather than the secret, and leaving a field
+  // blank keeps what is stored.
+  hasApiKey?: boolean
+  hasAccessKeyId?: boolean
+  hasSecretAccessKey?: boolean
+  hasSessionToken?: boolean
 }
 
 /**

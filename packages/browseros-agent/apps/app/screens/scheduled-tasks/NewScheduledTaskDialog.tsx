@@ -36,14 +36,14 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { SCHEDULED_TASK_PROMPT_REFINED_EVENT } from '@/lib/constants/analyticsEvents'
-import {
-  findChatProviderById,
-  resolveChatProvider,
-} from '@/lib/llm-providers/provider-runtime'
+import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { refinePrompt } from '@/lib/schedules/refine-prompt'
+import { useAcpAgents } from '@/modules/agents/agents.hooks'
+import { toProviderOption } from '@/modules/chat/chat-session-request'
+import { buildSidepanelChatTargets } from '@/modules/chat/sidepanel-chat-targets'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import type { ScheduledJob } from './types'
 
@@ -97,6 +97,12 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
 }) => {
   const isEditing = !!initialValues
   const { providers, defaultProviderId } = useLlmProviders()
+  const { agents } = useAcpAgents()
+  // A scheduled job can target a coding agent as readily as an llm provider
+  // now that both are rows of one table, so the picker offers both. While they
+  // were separate tables the job's provider reference could only ever name an
+  // llm one, which is why this dialog listed those alone.
+  const chatTargets = buildSidepanelChatTargets({ providers, agents })
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -149,9 +155,12 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   }, [open, initialValues, form])
 
   const resolvedProvider: Provider | null = (() => {
-    const found =
-      findChatProviderById(providers, selectedProviderId) ??
-      resolveChatProvider(providers, defaultProviderId)
+    const chosen = chatTargets.find(
+      (target) => target.id === selectedProviderId,
+    )
+    if (chosen) return toProviderOption(chosen)
+
+    const found = resolveChatProvider(providers, defaultProviderId)
     if (found) {
       return {
         kind: 'llm' as const,
@@ -171,12 +180,7 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
     return null
   })()
 
-  const providerOptions: Provider[] = providers.map((provider) => ({
-    kind: 'llm',
-    id: provider.id,
-    name: provider.name,
-    type: provider.type,
-  }))
+  const providerOptions: Provider[] = chatTargets.map(toProviderOption)
 
   // Replace textarea content via execCommand so the browser's native undo
   // stack (Cmd+Z / Ctrl+Z) records the change. Falls back to form.setValue
@@ -233,7 +237,11 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   }
 
   const onSubmit = (values: FormValues) => {
-    const provider = findChatProviderById(providers, values.providerId)
+    // Either kind, so an id that names an agent is stored as readily as one
+    // that names a provider.
+    const provider = chatTargets.find(
+      (target) => target.id === values.providerId,
+    )
     onSave({
       name: values.name.trim(),
       query: values.query.trim(),

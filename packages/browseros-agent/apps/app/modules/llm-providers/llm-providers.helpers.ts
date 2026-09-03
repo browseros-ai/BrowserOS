@@ -1,20 +1,28 @@
 import { isProviderType } from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 
-/** A provider row as the server returns it: absent values are null, not undefined. */
+/**
+ * A provider row as the server returns it.
+ *
+ * Absent values are null rather than undefined, and credentials are not here
+ * at all: the server reports only whether each is set, so a key cannot reach
+ * a surface that has no use for it.
+ */
 export interface ProviderRow {
   id: string
+  kind: 'llm' | 'acp'
   type: string
   name: string
   baseUrl: string | null
-  modelId: string
+  // Nullable since the table holds coding agents too, and those carry neither.
+  modelId: string | null
   supportsImages: boolean
-  contextWindow: number
+  contextWindow: number | null
   temperature: number
-  apiKey: string | null
-  accessKeyId: string | null
-  secretAccessKey: string | null
-  sessionToken: string | null
+  hasApiKey: boolean
+  hasAccessKeyId: boolean
+  hasSecretAccessKey: boolean
+  hasSessionToken: boolean
   resourceName: string | null
   region: string | null
   reasoningEffort: string | null
@@ -45,7 +53,13 @@ function toReasoningSummary(
  * map, the template lookup and the default base URLs, all keyed by the union.
  */
 export function toProviderConfig(row: ProviderRow): LlmProviderConfig | null {
+  // Coding agents share this table and this endpoint, and are served to the
+  // surfaces that want them through their own hook. Filtering on kind says
+  // that; leaning on the unknown-type guard below to drop them happened to
+  // work and said something else entirely.
+  if (row.kind !== 'llm') return null
   if (!isProviderType(row.type)) return null
+  if (row.modelId === null || row.contextWindow === null) return null
 
   return {
     id: row.id,
@@ -56,10 +70,10 @@ export function toProviderConfig(row: ProviderRow): LlmProviderConfig | null {
     supportsImages: row.supportsImages,
     contextWindow: row.contextWindow,
     temperature: row.temperature,
-    apiKey: orUndefined(row.apiKey),
-    accessKeyId: orUndefined(row.accessKeyId),
-    secretAccessKey: orUndefined(row.secretAccessKey),
-    sessionToken: orUndefined(row.sessionToken),
+    hasApiKey: row.hasApiKey,
+    hasAccessKeyId: row.hasAccessKeyId,
+    hasSecretAccessKey: row.hasSecretAccessKey,
+    hasSessionToken: row.hasSessionToken,
     resourceName: orUndefined(row.resourceName),
     region: orUndefined(row.region),
     reasoningEffort: orUndefined(row.reasoningEffort),
