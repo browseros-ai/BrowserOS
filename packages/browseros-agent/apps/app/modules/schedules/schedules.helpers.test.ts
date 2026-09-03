@@ -4,6 +4,7 @@ import type {
   ScheduledJobRun,
 } from '@/lib/schedules/scheduleTypes'
 import {
+  applyLastRunAt,
   type ScheduledJobRow,
   type ScheduledJobRunRow,
   toScheduledJob,
@@ -135,5 +136,38 @@ describe('toScheduledJobRunPayload', () => {
     expect(payload.startedAt).toBe(EPOCH)
     expect(payload.completedAt).toBe(EPOCH)
     expect(payload.jobId).toBe('job-1')
+  })
+})
+
+describe('applyLastRunAt', () => {
+  const AT = '2026-02-03T00:00:00.000Z'
+
+  // A run can last minutes, and the job is editable throughout. Recording that
+  // it finished must not carry back the copy read before it started.
+  it('applies to the current copy, not an earlier one', () => {
+    const before = toScheduledJob(jobRow({ name: 'Old name' }))
+    const current = [toScheduledJob(jobRow({ name: 'Renamed mid-run' }))]
+
+    const updated = applyLastRunAt(current, before.id, AT)
+
+    expect(updated).toMatchObject({ name: 'Renamed mid-run', lastRunAt: AT })
+  })
+
+  it('keeps an edit made to any field while the run was going', () => {
+    const current = [
+      toScheduledJob(
+        jobRow({ enabled: false, query: 'changed', providerId: 'other' }),
+      ),
+    ]
+
+    expect(applyLastRunAt(current, 'job-1', AT)).toMatchObject({
+      enabled: false,
+      query: 'changed',
+      providerId: 'other',
+    })
+  })
+
+  it('returns null when the job was deleted during the run', () => {
+    expect(applyLastRunAt([], 'job-1', AT)).toBeNull()
   })
 })

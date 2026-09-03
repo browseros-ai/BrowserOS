@@ -79,6 +79,25 @@ export function toScheduledJobPayload(job: ScheduledJob) {
   }
 }
 
+/**
+ * The job to write back when recording that a run finished.
+ *
+ * Takes the current list rather than a job captured earlier: a run can last
+ * minutes, and the user can rename, reschedule, disable or repoint the job
+ * while it goes. Writing an earlier copy back would revert all of it.
+ *
+ * Returns null when the job was deleted during the run, so finishing does not
+ * resurrect it.
+ */
+export function applyLastRunAt(
+  jobs: readonly ScheduledJob[],
+  jobId: string,
+  at: string,
+): ScheduledJob | null {
+  const job = jobs.find((each) => each.id === jobId)
+  return job ? { ...job, lastRunAt: at } : null
+}
+
 export function toScheduledJobRun(row: ScheduledJobRunRow): ScheduledJobRun {
   return {
     id: row.id,

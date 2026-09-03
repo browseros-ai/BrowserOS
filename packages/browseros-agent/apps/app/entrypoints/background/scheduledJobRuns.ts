@@ -1,16 +1,14 @@
 import { onScheduleMessage } from '@/lib/messaging/schedules/scheduleMessages'
 import { createAlarmFromJob } from '@/lib/schedules/createAlarmFromJob'
 import { getChatServerResponse } from '@/lib/schedules/getChatServerResponse'
-import type {
-  ScheduledJob,
-  ScheduledJobRun,
-} from '@/lib/schedules/scheduleTypes'
+import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 import {
   listScheduledJobRunsOrNull,
   listScheduledJobsOrNull,
   putScheduledJob,
   putScheduledJobRun,
 } from '@/modules/schedules/schedules.api'
+import { applyLastRunAt } from '@/modules/schedules/schedules.helpers'
 
 const STALE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
@@ -86,8 +84,15 @@ export const scheduledJobRuns = async () => {
     await putScheduledJobRun({ ...run, ...updates })
   }
 
-  const updateJobLastRunAt = async (job: ScheduledJob) => {
-    await putScheduledJob({ ...job, lastRunAt: new Date().toISOString() })
+  // Takes an id, not the job: a snapshot captured before the run would be
+  // minutes stale by the time this writes, and putting it back would revert any
+  // edit made while the run was going.
+  const updateJobLastRunAt = async (jobId: string) => {
+    const jobs = await listScheduledJobsOrNull()
+    if (jobs === null) return
+
+    const updated = applyLastRunAt(jobs, jobId, new Date().toISOString())
+    if (updated) await putScheduledJob(updated)
   }
 
   const executeScheduledJob = async (jobId: string): Promise<void> => {
@@ -135,7 +140,7 @@ export const scheduledJobRuns = async () => {
       })
     } finally {
       runAbortControllers.delete(jobRun.id)
-      await updateJobLastRunAt(job)
+      await updateJobLastRunAt(jobId)
     }
   }
 
