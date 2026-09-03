@@ -23,12 +23,11 @@ import {
   SCHEDULED_TASK_VIEW_RESULTS_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 import {
-  scheduledJobRunStorage,
   useScheduledJobRuns,
   useScheduledJobs,
-} from '@/lib/schedules/scheduleStorage'
-import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
+} from '@/modules/schedules/schedules.hooks'
 import { NewScheduledTaskDialog } from './NewScheduledTaskDialog'
 import { ScheduledTaskResults } from './ScheduledTaskResults'
 import { ScheduledTasksHeader } from './ScheduledTasksHeader'
@@ -44,7 +43,10 @@ export const ScheduledTasksPage: FC = () => {
     useScheduledJobs()
   const { jobRuns, cancelJobRun } = useScheduledJobRuns()
 
-  const [activeTab, setActiveTab] = useState<string | null>(null)
+  const [selectedTab, setSelectedTab] = useState<string | null>(null)
+  // Derived rather than set from an effect, so it settles when the history
+  // arrives instead of on whatever a single mount-time read happened to see.
+  const activeTab = selectedTab ?? (jobRuns.length > 0 ? 'results' : 'tasks')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null)
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null)
@@ -115,7 +117,7 @@ export const ScheduledTasksPage: FC = () => {
       })
     } else {
       await addJob(data)
-      setActiveTab('tasks')
+      setSelectedTab('tasks')
       track(NEW_SCHEDULED_TASK_CREATED_EVENT, {
         scheduleType: data.scheduleType,
         interval: data.scheduleInterval,
@@ -149,12 +151,6 @@ export const ScheduledTasksPage: FC = () => {
     track(SCHEDULED_TASK_VIEW_RESULTS_EVENT)
   }
 
-  useEffect(() => {
-    scheduledJobRunStorage.getValue().then((runs) => {
-      setActiveTab(runs && runs.length > 0 ? 'results' : 'tasks')
-    })
-  }, [])
-
   const jobToDelete = deleteJobId
     ? jobs.find((j) => j.id === deleteJobId)
     : null
@@ -163,35 +159,33 @@ export const ScheduledTasksPage: FC = () => {
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
       <ScheduledTasksHeader onAddClick={handleAdd} />
 
-      {activeTab && (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="results">Results</TabsTrigger>
-            <TabsTrigger value="tasks">Scheduled Tasks</TabsTrigger>
-          </TabsList>
+      <Tabs value={activeTab} onValueChange={setSelectedTab}>
+        <TabsList>
+          <TabsTrigger value="results">Results</TabsTrigger>
+          <TabsTrigger value="tasks">Scheduled Tasks</TabsTrigger>
+        </TabsList>
 
-          <TabsContent value="results">
-            <ScheduledTaskResults
-              onViewRun={handleViewRun}
-              onCancelRun={handleCancelRun}
-              onRetryRun={handleRetryRun}
-            />
-          </TabsContent>
+        <TabsContent value="results">
+          <ScheduledTaskResults
+            onViewRun={handleViewRun}
+            onCancelRun={handleCancelRun}
+            onRetryRun={handleRetryRun}
+          />
+        </TabsContent>
 
-          <TabsContent value="tasks">
-            <ScheduledTasksList
-              jobs={jobs}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onToggle={handleToggle}
-              onRun={handleRun}
-              onViewRun={handleViewRun}
-              onCancelRun={handleCancelRun}
-              onRetryRun={handleRetryRun}
-            />
-          </TabsContent>
-        </Tabs>
-      )}
+        <TabsContent value="tasks">
+          <ScheduledTasksList
+            jobs={jobs}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onToggle={handleToggle}
+            onRun={handleRun}
+            onViewRun={handleViewRun}
+            onCancelRun={handleCancelRun}
+            onRetryRun={handleRetryRun}
+          />
+        </TabsContent>
+      </Tabs>
 
       <NewScheduledTaskDialog
         open={isDialogOpen}

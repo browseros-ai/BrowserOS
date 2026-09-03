@@ -1,6 +1,7 @@
 import type { createAgentRoutes } from './api/routes/agents'
 import type { createConversationRoutes } from './api/routes/conversations'
 import type { createLlmProviderRoutes } from './api/routes/llm-providers'
+import type { createScheduledJobRunRoutes } from './api/routes/scheduled-job-runs'
 import type { createScheduledJobRoutes } from './api/routes/scheduled-jobs'
 
 // Per-route client contracts for `hc`. Each protected route module is mounted at
@@ -16,3 +17,6 @@ export type ConversationRoutes = ReturnType<typeof createConversationRoutes>
 export type AgentRoutes = ReturnType<typeof createAgentRoutes>
 export type LlmProviderRoutes = ReturnType<typeof createLlmProviderRoutes>
 export type ScheduledJobRoutes = ReturnType<typeof createScheduledJobRoutes>
+export type ScheduledJobRunRoutes = ReturnType<
+  typeof createScheduledJobRunRoutes
+>
