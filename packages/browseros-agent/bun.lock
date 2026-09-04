@@ -25,7 +25,7 @@
     },
     "apps/app": {
       "name": "@browseros/app",
-      "version": "0.0.146",
+      "version": "0.0.147",
       "dependencies": {
         "@ai-sdk/react": "^4.0.87",
         "@browseros/server": "workspace:*",
@@ -154,7 +154,7 @@
     },
     "apps/claw-app": {
       "name": "@browseros/claw-app",
-      "version": "0.2.19",
+      "version": "0.2.20",
       "dependencies": {
         "@base-ui/react": "^1.7.0",
         "@browseros/claw-api": "workspace:*",
@@ -249,7 +249,7 @@
     },
     "apps/server": {
       "name": "@browseros/server",
-      "version": "0.0.152",
+      "version": "0.0.153",
       "bin": {
         "browseros-server": "./src/index.ts",
       },
