@@ -1,15 +1,7 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import type { BrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
-import {
-  finishBrowserOSOnboarding,
-  importPhaseFor,
-  OnboardingV2,
-  openBrowserOsMcpPage,
-} from './OnboardingV2'
-
-const originalWindow = globalThis.window
+import { importPhaseFor, OnboardingV2 } from './OnboardingV2'
 
 function renderApp(): string {
   return renderToStaticMarkup(
@@ -18,68 +10,6 @@ function renderApp(): string {
     </MemoryRouter>,
   )
 }
-
-function installAssignableWindow(search: string) {
-  let assignedUrl: string | null = null
-  const storage = new Map<string, string>()
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      location: {
-        search,
-        assign(url: string) {
-          assignedUrl = url
-        },
-      },
-      sessionStorage: {
-        getItem(key: string) {
-          return storage.get(key) ?? null
-        },
-        setItem(key: string, value: string) {
-          storage.set(key, value)
-        },
-      },
-    },
-  })
-  return () => assignedUrl
-}
-
-function stubBridge(isMock: boolean) {
-  let completeCount = 0
-  const bridge: BrowserOSOnboardingBridge = {
-    isMock,
-    complete() {
-      completeCount += 1
-    },
-    pageReady() {
-      throw new Error('unexpected pageReady call')
-    },
-    retrySetup() {
-      throw new Error('unexpected retrySetup call')
-    },
-    refreshSources() {
-      throw new Error('unexpected refreshSources call')
-    },
-    registerReceiver() {
-      throw new Error('unexpected registerReceiver call')
-    },
-    startImport() {
-      throw new Error('unexpected startImport call')
-    },
-  }
-
-  return {
-    bridge,
-    getCompleteCount: () => completeCount,
-  }
-}
-
-afterEach(() => {
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: originalWindow,
-  })
-})
 
 describe('OnboardingV2 shell', () => {
   it('lands on step 0 with the welcome heading and primary CTA', () => {
@@ -120,38 +50,6 @@ describe('OnboardingV2 shell', () => {
     const matches = html.match(/data-step-dot="true"/g) ?? []
     expect(html).toContain('aria-label="Onboarding progress"')
     expect(matches.length).toBe(3)
-  })
-
-  it('opens BrowserClaw MCP page when onboarding completes', () => {
-    const getAssignedUrl = installAssignableWindow(
-      '?apiUrl=http%3A%2F%2F127.0.0.1%3A9234',
-    )
-
-    openBrowserOsMcpPage()
-
-    expect(getAssignedUrl()).toBe('chrome://newtab/#/mcp')
-  })
-
-  // The shipped browser is the only place the CTA matters, and it is the one
-  // place the old `isMock` gate skipped: completing left the button dead.
-  it('navigates after completing through the real Chromium bridge', () => {
-    const getAssignedUrl = installAssignableWindow('')
-    const { bridge, getCompleteCount } = stubBridge(false)
-
-    finishBrowserOSOnboarding(bridge)
-
-    expect(getCompleteCount()).toBe(1)
-    expect(getAssignedUrl()).toBe('chrome://newtab/#/mcp')
-  })
-
-  it('keeps navigating after completion in mock standalone onboarding', () => {
-    const getAssignedUrl = installAssignableWindow('')
-    const { bridge, getCompleteCount } = stubBridge(true)
-
-    finishBrowserOSOnboarding(bridge)
-
-    expect(getCompleteCount()).toBe(1)
-    expect(getAssignedUrl()).toBe('chrome://newtab/#/mcp')
   })
 
   it('does not treat failed or completed Chromium states as import success', () => {

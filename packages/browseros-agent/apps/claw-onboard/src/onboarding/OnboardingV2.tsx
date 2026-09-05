@@ -12,10 +12,7 @@ import {
   type BrowserOSImportStatus,
   type BrowserOSOnboardingState,
 } from './browseros-onboarding-api'
-import {
-  type BrowserOSOnboardingBridge,
-  createBrowserOSOnboardingBridge,
-} from './browseros-onboarding-bridge'
+import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
 import { OnboardingShell } from './components/OnboardingShell'
 import {
   importSourceSelectionChangeFor,
@@ -30,10 +27,10 @@ import {
 import type { ImportPhase, Step } from './onboarding-v2.types'
 import { ImportStep } from './steps/ImportStep'
 import { ReadyStep } from './steps/ReadyStep'
+import { SetupStep } from './steps/SetupStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 
 const TOTAL_STEPS = 3
-const BROWSEROS_MCP_PAGE_URL = 'chrome://newtab/#/mcp'
 
 const initialOnboardingState: BrowserOSOnboardingState = {
   apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
@@ -47,35 +44,6 @@ export function importPhaseFor(status: BrowserOSImportStatus): ImportPhase {
   if (status === 'failed') return 'failed'
   if (status === 'succeeded') return 'imported'
   return 'picker'
-}
-
-/**
- * Leaves onboarding for BrowserClaw's MCP page, which lists every agent on this
- * machine with its connected state.
- *
- * Only a `chrome://` document can make this hop. Chromium drops a
- * renderer-initiated navigation from an `http(s)` page to a WebUI URL without
- * raising anything — verified in BrowserOS neo, where `location.assign` leaves
- * `href` untouched and `window.open` returns null — so this call does nothing
- * under `vite dev`. From `chrome://browseros-onboarding` the same call does
- * navigate, and `chrome://newtab/#/mcp` resolves to the MCP screen with the
- * hash intact.
- */
-export function openBrowserOsMcpPage() {
-  window.location.assign(BROWSEROS_MCP_PAGE_URL)
-}
-
-/**
- * Completes onboarding and heads for the MCP page.
- *
- * The navigation is not gated on the bridge: the CTA promises the MCP page on
- * every build, and gating it on `isMock` is what left the button dead in the
- * shipped browser. `complete()` goes first so the Chromium handler is told
- * regardless of what the navigation does to this document.
- */
-export function finishBrowserOSOnboarding(bridge: BrowserOSOnboardingBridge) {
-  bridge.complete()
-  openBrowserOsMcpPage()
 }
 
 /** Runs the standalone three-step BrowserClaw onboarding flow. */
@@ -92,8 +60,13 @@ export function OnboardingV2() {
     useState<BrowserOSOnboardingState>(initialOnboardingState)
   const didNotifyPageReady = useRef(false)
   const importPhase = importPhaseFor(onboardingState.status)
+  const isFinishing = Boolean(
+    onboardingState.setupState && onboardingState.setupState !== 'idle',
+  )
 
   useEffect(() => {
+    // Install first: pageReady may synchronously restore an in-flight setup
+    // after reload. Receiving it only renders state; it never sends COMPLETE.
     const cleanup = bridge.registerReceiver(setOnboardingState)
     if (!didNotifyPageReady.current) {
       didNotifyPageReady.current = true
@@ -139,27 +112,45 @@ export function OnboardingV2() {
     bridge.startImport(request)
   }
 
+  // The bridge publishes preparing before sending the finish request and
+  // suppresses repeated exits. Chromium alone decides when it is safe to leave.
   function finishOnboarding() {
-    finishBrowserOSOnboarding(bridge)
+    bridge.complete()
   }
 
   return (
     <Form {...form}>
-      <OnboardingShell step={step} totalSteps={TOTAL_STEPS}>
-        {step === 0 && (
-          <WelcomeStep onPrimary={() => setStep(1)} onSkip={finishOnboarding} />
-        )}
-        {step === 1 && (
-          <ImportStep
-            phase={importPhase}
-            state={onboardingState}
-            form={form}
-            onImport={startImport}
-            onRefresh={() => bridge.refreshSources()}
-            onContinue={() => setStep(2)}
+      <OnboardingShell
+        step={step}
+        totalSteps={TOTAL_STEPS}
+        showProgress={!isFinishing}
+      >
+        {isFinishing ? (
+          <SetupStep
+            failed={onboardingState.setupState === 'failed'}
+            onRetry={() => bridge.retrySetup()}
           />
+        ) : (
+          <>
+            {step === 0 && (
+              <WelcomeStep
+                onPrimary={() => setStep(1)}
+                onSkip={finishOnboarding}
+              />
+            )}
+            {step === 1 && (
+              <ImportStep
+                phase={importPhase}
+                state={onboardingState}
+                form={form}
+                onImport={startImport}
+                onRefresh={() => bridge.refreshSources()}
+                onContinue={() => setStep(2)}
+              />
+            )}
+            {step === 2 && <ReadyStep onDone={finishOnboarding} />}
+          </>
         )}
-        {step === 2 && <ReadyStep onDone={finishOnboarding} />}
       </OnboardingShell>
     </Form>
   )

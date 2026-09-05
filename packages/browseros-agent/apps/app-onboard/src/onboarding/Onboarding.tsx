@@ -28,6 +28,7 @@ import {
 import type { ImportPhase, Step } from './onboarding-v2.types'
 import { ImportStep } from './steps/ImportStep'
 import { SetupAgentStep } from './steps/SetupAgentStep'
+import { SetupStep } from './steps/SetupStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 
 const TOTAL_STEPS = 3
@@ -62,6 +63,9 @@ export function Onboarding() {
     useState<BrowserOSOnboardingState>(initialOnboardingState)
   const didNotifyPageReady = useRef(false)
   const importPhase = importPhaseFor(onboardingState.status)
+  const isFinishing = Boolean(
+    onboardingState.setupState && onboardingState.setupState !== 'idle',
+  )
 
   function goTo(next: Step) {
     direction.current = next >= step ? 1 : -1
@@ -69,6 +73,8 @@ export function Onboarding() {
   }
 
   useEffect(() => {
+    // Install first: pageReady may synchronously restore an in-flight setup
+    // after reload. Receiving it only renders state; it never sends COMPLETE.
     const cleanup = bridge.registerReceiver(setOnboardingState)
     if (!didNotifyPageReady.current) {
       didNotifyPageReady.current = true
@@ -117,56 +123,68 @@ export function Onboarding() {
     bridge.startImport(request)
   }
 
-  /**
-   * Signals the native first-run to finish. The landing (the app's #/settings/ai
-   * pane) is injected natively as a first-run tab; the SPA only reports done, so
-   * gating this on the bridge (as an earlier BrowserOS neo build did) is what
-   * left the button dead in the shipped browser.
-   */
+  // The bridge publishes preparing before sending the finish request and
+  // suppresses repeated exits. Chromium alone decides when it is safe to leave.
   function finishOnboarding() {
     bridge.complete()
   }
 
   return (
     <Form {...form}>
-      <OnboardingShell step={step} totalSteps={TOTAL_STEPS}>
-        {/* Re-mounts on each step (keyed) and plays a directional slide-in.
+      <OnboardingShell
+        step={step}
+        totalSteps={TOTAL_STEPS}
+        showProgress={!isFinishing}
+      >
+        {isFinishing ? (
+          <SetupStep
+            failed={onboardingState.setupState === 'failed'}
+            onRetry={() => bridge.retrySetup()}
+          />
+        ) : (
+          <>
+            {/* Re-mounts on each step (keyed) and plays a directional slide-in.
             No exit animation, so the flow can never stall waiting on one. */}
-        <motion.div
-          key={step}
-          initial={
-            reduce
-              ? false
-              : { x: direction.current >= 0 ? 40 : -40, opacity: 0 }
-          }
-          animate={{ x: 0, opacity: 1 }}
-          transition={{
-            type: 'spring',
-            stiffness: 300,
-            damping: 30,
-            opacity: { duration: 0.2 },
-          }}
-        >
-          {step === 0 && (
-            <WelcomeStep onPrimary={() => goTo(1)} onSkip={finishOnboarding} />
-          )}
-          {step === 1 && (
-            <ImportStep
-              phase={importPhase}
-              state={onboardingState}
-              form={form}
-              onImport={startImport}
-              onRefresh={() => bridge.refreshSources()}
-              onContinue={() => goTo(2)}
-            />
-          )}
-          {step === 2 && (
-            <SetupAgentStep
-              onSetup={finishOnboarding}
-              onLater={finishOnboarding}
-            />
-          )}
-        </motion.div>
+            <motion.div
+              key={step}
+              initial={
+                reduce
+                  ? false
+                  : { x: direction.current >= 0 ? 40 : -40, opacity: 0 }
+              }
+              animate={{ x: 0, opacity: 1 }}
+              transition={{
+                type: 'spring',
+                stiffness: 300,
+                damping: 30,
+                opacity: { duration: 0.2 },
+              }}
+            >
+              {step === 0 && (
+                <WelcomeStep
+                  onPrimary={() => goTo(1)}
+                  onSkip={finishOnboarding}
+                />
+              )}
+              {step === 1 && (
+                <ImportStep
+                  phase={importPhase}
+                  state={onboardingState}
+                  form={form}
+                  onImport={startImport}
+                  onRefresh={() => bridge.refreshSources()}
+                  onContinue={() => goTo(2)}
+                />
+              )}
+              {step === 2 && (
+                <SetupAgentStep
+                  onSetup={finishOnboarding}
+                  onLater={finishOnboarding}
+                />
+              )}
+            </motion.div>
+          </>
+        )}
       </OnboardingShell>
     </Form>
   )
