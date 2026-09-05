@@ -17,7 +17,6 @@ func init() {
 		Short:       "Open a new page (tab) and navigate to a URL",
 		Args:        cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			hidden, _ := cmd.Flags().GetBool("hidden")
 			bg, _ := cmd.Flags().GetBool("bg")
 			windowID, _ := cmd.Flags().GetInt("window")
 
@@ -27,13 +26,13 @@ func init() {
 
 			if cmd.Flags().Changed("window") {
 				var result any
-				_, result, err = browserRunValue(c, openInWindowCode(args[0], hidden, bg, windowID))
+				_, result, err = browserRunValue(c, openInWindowCode(args[0], bg, windowID))
 				if err == nil {
 					resultData, _ := valueMap(result)
 					toolResult = textResult("", resultData)
 				}
 			} else {
-				toolResult, err = c.CallTool("tabs", openTabsToolArgs(args[0], hidden, bg))
+				toolResult, err = c.CallTool("tabs", openTabsToolArgs(args[0], bg))
 			}
 
 			if err != nil {
@@ -48,7 +47,6 @@ func init() {
 		},
 	}
 
-	cmd.Flags().Bool("hidden", false, "Open as hidden tab")
 	cmd.Flags().Bool("bg", false, "Open in background")
 	cmd.Flags().Int("window", 0, "Window ID to open in")
 
@@ -88,25 +86,22 @@ func openResult(url string, result *mcp.ToolResult) *mcp.ToolResult {
 	return textResult(strings.Join(lines, "\n"), data)
 }
 
-func openTabsToolArgs(url string, hidden, background bool) map[string]any {
+func openTabsToolArgs(url string, background bool) map[string]any {
 	return map[string]any{
 		"action":     "new",
 		"url":        url,
-		"hidden":     hidden,
 		"background": background,
 	}
 }
 
-func openInWindowCode(url string, hidden, background bool, windowID int) string {
+func openInWindowCode(url string, background bool, windowID int) string {
 	return fmt.Sprintf(
-		`const page = await browser.pages.newPage(%s, { hidden: %t, background: %t, windowId: %d })
-return { page, url: %s, hidden: %t, background: %t, windowId: %d }`,
+		`const page = await browser.pages.newPage(%s, { background: %t, windowId: %d })
+return { page, url: %s, background: %t, windowId: %d }`,
 		jsLiteral(url),
-		hidden,
 		background,
 		windowID,
 		jsLiteral(url),
-		hidden,
 		background,
 		windowID,
 	)
