@@ -1,6 +1,6 @@
 /**
- * Static-markup checks for the task detail stat cards (Tokens saved + Success
- * rate). Stubs the data hook so no backend is needed.
+ * Static-markup checks for the task detail stat cards.
+ * Stubs the data hook so no backend is needed.
  */
 
 import { describe, expect, it, mock } from 'bun:test'
@@ -89,35 +89,7 @@ describe('Task detail stat cards', () => {
     expect(renderApp()).toContain('No measured runs yet')
   })
 
-  it('shows a color-coded Success rate and keeps the without-error line', () => {
-    dataOverride = { ...dataOverride, detail: detail() }
-    const html = renderApp()
-    expect(html).toContain('Success rate')
-    // 4 of 5 clean = 80% -> amber band
-    expect(html).toContain('80%')
-    expect(html).toContain('text-amber')
-    expect(html).toContain('4 of 5 runs finished without a tool error')
-    expect(html).not.toContain('Safe to leave alone')
-  })
-
-  it('greens a perfect success rate and reds a poor one', () => {
-    dataOverride = {
-      ...dataOverride,
-      detail: detail({
-        skill: { ...sampleSkill, runCount: 5, cleanRunCount: 5 },
-      }),
-    }
-    expect(renderApp()).toContain('text-green')
-    dataOverride = {
-      ...dataOverride,
-      detail: detail({
-        skill: { ...sampleSkill, runCount: 5, cleanRunCount: 2 },
-      }),
-    }
-    expect(renderApp()).toContain('text-red')
-  })
-
-  it('shows "not run" for a skill with no runs', () => {
+  it('shows the empty run history for a skill with no runs', () => {
     dataOverride = {
       ...dataOverride,
       detail: detail({
@@ -132,6 +104,5 @@ describe('Task detail stat cards', () => {
     }
     const html = renderApp()
     expect(html).toContain('not run')
-    expect(html).toContain('0 of 0 runs finished without a tool error')
   })
 })

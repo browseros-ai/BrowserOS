@@ -77,14 +77,11 @@ describe('Tasks list screen', () => {
     expect(renderApp()).toContain('Could not load')
   })
 
-  it('renders a row per skill with the command, description, and success rate', () => {
+  it('renders a row per skill with the command and description', () => {
     dataOverride = { ...baseData, skills: [sampleSkill] }
     const html = renderApp()
     expect(html).toContain('/inbox-sweep')
     expect(html).toContain('Check the inbox and draft what is owed')
-    // Clean ratio 4/5 and its color-coded 80% success rate.
-    expect(html).toContain('4/5')
-    expect(html).toContain('80%')
   })
 
   it('renders tokens saved for a measured skill', () => {
@@ -94,7 +91,7 @@ describe('Tasks list screen', () => {
     expect(html).toContain('saved')
   })
 
-  it('renders "not run" and "not measured" for a skill with no runs', () => {
+  it('renders "not measured" for a skill with no runs', () => {
     dataOverride = {
       ...baseData,
       skills: [
@@ -113,7 +110,6 @@ describe('Tasks list screen', () => {
       ],
     }
     const html = renderApp()
-    expect(html).toContain('not run')
     expect(html).toContain('not measured')
   })
 })

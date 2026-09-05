@@ -26,7 +26,6 @@ import {
   formatRelativeTime,
   formatTokens,
   skillCommand,
-  successRate,
 } from './skills.helpers'
 
 const AGENT_LABELS: Record<string, string> = {
@@ -40,8 +39,7 @@ function agentLabel(id: string): string {
   return AGENT_LABELS[id] ?? id
 }
 
-/** Task detail: the SKILL.md, its token savings and success rate, which agents
- *  it is linked into, and its run history. */
+/** Shows the task's SKILL.md, token savings, linked coding agents, and run history. */
 export function SkillDetail() {
   const { detail, isLoading, isError } = useSkillDetailData()
   const navigate = useNavigate()
@@ -120,9 +118,8 @@ function DetailBody({
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <TokensSavedCard tokenSavings={tokenSavings} />
-        <SuccessRateCard skill={skill} />
         <LinkedIntoCard skill={skill} />
       </div>
 
@@ -178,34 +175,6 @@ function TokensSavedCard({
         </span>{' '}
         tokens in other browsers
       </p>
-    </StatCard>
-  )
-}
-
-/** How often the skill runs end to end without a tool error, color-coded. */
-function SuccessRateCard({ skill }: { skill: Skill }) {
-  const { hasRuns, percent, colorClass } = successRate(
-    skill.cleanRunCount,
-    skill.runCount,
-  )
-  return (
-    <StatCard title="Success rate">
-      <div className="flex items-baseline gap-1">
-        <span
-          className={cn('font-extrabold text-3xl tabular-nums', colorClass)}
-        >
-          {hasRuns ? `${percent}%` : 'not run'}
-        </span>
-      </div>
-      <p className="text-ink-2 text-sm">
-        {skill.cleanRunCount} of {skill.runCount} runs finished without a tool
-        error.
-      </p>
-      {skill.lastRunAt !== undefined && (
-        <p className="text-ink-3 text-xs">
-          last run {formatRelativeTime(skill.lastRunAt)}
-        </p>
-      )}
     </StatCard>
   )
 }
@@ -376,8 +345,8 @@ function DetailSkeleton() {
   return (
     <div className="flex flex-col gap-6">
       <div className="h-9 w-48 animate-pulse rounded bg-card-tint" />
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {['c1', 'c2', 'c3'].map((id) => (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {['c1', 'c2'].map((id) => (
           <div
             key={id}
             className="h-32 animate-pulse rounded-9 border border-ledger-border bg-card-tint"

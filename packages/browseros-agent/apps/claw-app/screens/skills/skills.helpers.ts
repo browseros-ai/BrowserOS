@@ -32,27 +32,6 @@ export function formatTokens(tokens: number): string {
 }
 
 /**
- * Success rate for a skill's runs, shared by the list column and the detail
- * card so they always agree. `colorClass` bands: green >= 90, amber >= 70, red
- * below; muted when the skill has never run.
- */
-export function successRate(
-  cleanRunCount: number,
-  runCount: number,
-): { hasRuns: boolean; percent: number; colorClass: string } {
-  const hasRuns = runCount > 0
-  const percent = hasRuns ? Math.round((cleanRunCount / runCount) * 100) : 0
-  const colorClass = !hasRuns
-    ? 'text-ink-3'
-    : percent >= 90
-      ? 'text-green'
-      : percent >= 70
-        ? 'text-amber'
-        : 'text-red'
-  return { hasRuns, percent, colorClass }
-}
-
-/**
  * Percent change from the first run's tokens to the latest run's, so a negative
  * value means the skill got cheaper. `null` when there is nothing to compare.
  */

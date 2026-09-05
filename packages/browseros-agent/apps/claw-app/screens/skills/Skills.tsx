@@ -22,14 +22,14 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import { formatTokens, skillCommand, successRate } from './skills.helpers'
+import { formatTokens, skillCommand } from './skills.helpers'
 
 const CELL_PADDING = 'px-2 py-3 first:pl-4 last:pr-4'
 
 /**
  * Tasks list. A task is a skill BrowserOS neo linked into the connected coding
- * agents; each row shows how often it has run, how clean those runs were, and
- * whether it is getting cheaper. Row click opens the SKILL.md and run history.
+ * agents; each row shows its run count and token savings. Row click opens
+ * the SKILL.md and run history.
  */
 export function Skills() {
   const { skills, isLoading, isError } = useSkillsScreenData()
@@ -105,14 +105,6 @@ export function Skills() {
                 <TableHead
                   className={cn(
                     CELL_PADDING,
-                    'h-auto w-32 text-right font-medium text-[12px] text-ledger-head-ink',
-                  )}
-                >
-                  Success rate
-                </TableHead>
-                <TableHead
-                  className={cn(
-                    CELL_PADDING,
                     'h-auto w-44 font-medium text-[12px] text-ledger-head-ink',
                   )}
                 >
@@ -137,7 +129,6 @@ export function Skills() {
 }
 
 function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
-  const rate = successRate(skill.cleanRunCount, skill.runCount)
   return (
     <TableRow
       data-testid={`skill-row-${skill.name}`}
@@ -173,16 +164,6 @@ function SkillRow({ skill, onOpen }: { skill: Skill; onOpen: () => void }) {
         ) : (
           <span className="text-[13px] text-ink-3">not measured</span>
         )}
-      </TableCell>
-      <TableCell className={cn(CELL_PADDING, 'text-right align-middle')}>
-        <div className="flex flex-col items-end gap-0.5">
-          <span className={cn('font-medium text-[13px]', rate.colorClass)}>
-            {rate.hasRuns ? `${rate.percent}%` : 'not run'}
-          </span>
-          <span className="text-[11px] text-ink-3">
-            {skill.cleanRunCount}/{skill.runCount}
-          </span>
-        </div>
       </TableCell>
       <TableCell
         className={cn(CELL_PADDING, 'align-middle')}
