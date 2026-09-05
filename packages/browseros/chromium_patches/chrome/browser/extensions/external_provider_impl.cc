@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
-index 074cfef37f0b0956dcddcfe4813bee1cdc275467..6bacca205623e11debd535131a15acb8af335edc 100644
+index 074cfef37f0b0956dcddcfe4813bee1cdc275467..4df8d0632c7a427e10bdc66d42b0f8b39c5493fe 100644
 --- a/chrome/browser/extensions/external_provider_impl.cc
 +++ b/chrome/browser/extensions/external_provider_impl.cc
 @@ -30,6 +30,8 @@
@@ -11,7 +11,16 @@ index 074cfef37f0b0956dcddcfe4813bee1cdc275467..6bacca205623e11debd535131a15acb8
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_migrator.h"
  #include "chrome/browser/extensions/external_component_loader.h"
-@@ -922,6 +924,40 @@ void ExternalProviderImpl::CreateExternalProviders(
+@@ -503,7 +505,7 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
+       }
+       external_file_extensions->emplace_back(
+           extension_id, version, path, crx_location_, creation_flags,
+-          auto_acknowledge_, install_immediately_);
++          auto_acknowledge_, install_immediately_, external_install_priority_);
+     } else {                       // if (external_update_url)
+       CHECK(external_update_url);  // Checking of keys above ensures this.
+       if (download_location_ == ManifestLocation::kInvalidLocation) {
+@@ -922,6 +924,44 @@ void ExternalProviderImpl::CreateExternalProviders(
      provider_list->push_back(std::move(initial_external_extensions_provider));
    }
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -47,6 +56,10 @@ index 074cfef37f0b0956dcddcfe4813bee1cdc275467..6bacca205623e11debd535131a15acb8
 +    browseros_provider->set_auto_acknowledge(true);
 +    browseros_provider->set_allow_updates(true);
 +    browseros_provider->set_install_immediately(true);
++    // Bundled files are needed for the first-run handoff. Raise only this local
++    // install's scheduling urgency, keeping default-install provenance intact.
++    browseros_provider->set_external_install_priority(
++        ExternalInstallPriority::kForeground);
 +    provider_list->push_back(std::move(browseros_provider));
 +  }
  }

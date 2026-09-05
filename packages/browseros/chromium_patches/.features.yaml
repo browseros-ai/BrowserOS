@@ -481,3 +481,14 @@ features:
     description: "feat: macOS passkey entitlements"
     files:
       - chrome/app/app-entitlements-browseros.plist
+
+  extension-startup-readiness:
+    description: "feat: bundled extension startup readiness"
+    files:
+      - chrome/browser/chrome_content_browser_client_navigation_throttles.cc
+      - chrome/browser/extensions/external_provider_impl.h
+      - chrome/browser/extensions/external_provider_manager.cc
+      - extensions/browser/crx_installer.cc
+      - extensions/browser/crx_installer.h
+      - extensions/browser/external_install_info.cc
+      - extensions/browser/external_install_info.h
