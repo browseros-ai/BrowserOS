@@ -273,7 +273,30 @@ export function createBrowserOSOnboardingBridge(
     },
     startImport(request) {
       if (request.items && request.items.length === 0) return
+      if (currentState?.status === 'importing') return
       if (!isMock) {
+        const source = currentState?.sources.find(
+          (source) => source.id === request.sourceId,
+        )
+        // Publish before chrome.send: this locks Copy/Skip during the native
+        // handoff and prevents duplicate submissions. Native failures replace
+        // this snapshot and permit retry, including synchronous replies.
+        // Keep send on the click stack: Chromium requires recent interaction.
+        updateState({
+          apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
+          ...currentState,
+          status: 'importing',
+          sources: currentState?.sources ?? [],
+          error: undefined,
+          progress: {
+            currentSourceId: request.sourceId,
+            currentSourceName: source?.displayName,
+            completedItems: [],
+            totalItems:
+              request.items?.length ?? source?.recommendedItems.length ?? 0,
+          },
+          results: [],
+        })
         chromeBridge.send(BrowserOSOnboardingMessage.START_IMPORT, [request])
         return
       }

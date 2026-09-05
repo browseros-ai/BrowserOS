@@ -4,7 +4,7 @@ import { ArrowDownToLine, Cpu, ShieldCheck } from 'lucide-react'
 export function VisualRail() {
   return (
     <div
-      className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9"
+      className="relative hidden w-[280px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9 lg:flex xl:w-[360px]"
       style={{
         background:
           'linear-gradient(165deg, var(--color-accent-tint) 0%, var(--color-bg-sunken) 55%, var(--color-bg-canvas) 100%)',

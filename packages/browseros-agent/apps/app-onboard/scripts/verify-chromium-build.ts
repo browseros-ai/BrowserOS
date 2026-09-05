@@ -3,9 +3,8 @@ import path from 'node:path'
 
 const buildDir = path.resolve(import.meta.dir, '../dist/chromium')
 const textResourceFiles = ['app.css', 'app.js', 'index.html']
-// Everything static lives under icon/ because listResourceFiles rejects any
-// other subdirectory outright; keychain-prompt.png is the import step's macOS
-// dialog screenshot, kept under icon/ to satisfy the directory guard.
+// Keep the legacy screenshot packaged: already-shipped Chromium resource lists
+// still enumerate it, although the UI now renders a CSS illustration.
 const iconResourceFiles = [
   'icon/16.png',
   'icon/32.png',

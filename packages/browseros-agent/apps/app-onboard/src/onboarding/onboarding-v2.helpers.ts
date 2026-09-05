@@ -72,8 +72,8 @@ export const DEFAULT_BROWSEROS_IMPORT_SOURCE_ID =
 const IMPORT_ITEM_LABELS: Record<string, string> = {
   history: 'History',
   bookmarks: 'Bookmarks',
-  cookies: 'Cookies',
-  passwords: 'Passwords',
+  cookies: 'Signed-in sessions (cookies)',
+  passwords: 'Saved passwords',
   searchEngines: 'Search engines',
   autofill: 'Autofill',
   extensions: 'Extensions',
@@ -192,4 +192,27 @@ export function importProgressTotal(
   progress: BrowserOSImportProgress | undefined,
 ): number {
   return progress?.totalItems ?? selectedItemCount
+}
+
+/** The native API omits platform; use browser platform hints, never source IDs. */
+export function isMacOS(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const client = navigator as Navigator & {
+    userAgentData?: { platform?: string }
+  }
+  const platform = client.userAgentData?.platform || client.platform
+  return /^(macOS|MacIntel|MacPPC|Mac68K)$/i.test(platform)
+}
+
+/** Match the Chrome-specific explanation only to supported encrypted data. */
+export function needsMacKeychainPermission(
+  isMac: boolean,
+  source: BrowserOSImportSource | undefined,
+  selectedItems: readonly BrowserOSImportItem[],
+): boolean {
+  if (!isMac || !source || !/^(Google )?Chrome$/i.test(source.browserName))
+    return false
+  return sanitizeImportSelection(source, selectedItems).some(
+    (item) => item === 'cookies' || item === 'passwords',
+  )
 }

@@ -16,7 +16,11 @@ export function ImportingProgressCard({
 }: ImportingProgressCardProps) {
   const percent = total === 0 ? 0 : Math.min(100, (progress / total) * 100)
   return (
-    <div className="rounded-xl border border-border-2 bg-card p-5">
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-xl border border-border-2 bg-card p-5"
+    >
       <div className="mb-3.5 flex items-center gap-2.5">
         <RefreshCw className="size-[18px] animate-spin text-accent" />
         <span className="font-bold text-[14px]">

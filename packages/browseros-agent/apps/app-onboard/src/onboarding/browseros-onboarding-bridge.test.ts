@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import type { BrowserOSOnboardingState } from './browseros-onboarding-api'
+import type {
+  BrowserOSOnboardingState,
+  BrowserOSStartImportRequest,
+} from './browseros-onboarding-api'
 import { BrowserOSOnboardingMessage } from './browseros-onboarding-api'
 import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
 import { MOCK_BROWSEROS_IMPORT_SOURCES } from './onboarding-v2.helpers'
@@ -324,4 +327,62 @@ describe('native setup lifecycle', () => {
       }
     })
   }
+})
+
+describe('native import handoff', () => {
+  it('locks repeated submissions before native acknowledgment and permits retry after failure', () => {
+    installWindow()
+    const sent: string[] = []
+    const states: BrowserOSOnboardingState[] = []
+    const bridge = createBrowserOSOnboardingBridge({
+      chrome: {
+        send(message) {
+          sent.push(message)
+        },
+      },
+    })
+    bridge.registerReceiver((state) => states.push(state))
+    window.browserosOnboarding?.receiveState({
+      apiVersion: 1,
+      status: 'ready',
+      sources: [...MOCK_BROWSEROS_IMPORT_SOURCES],
+    })
+    const request: BrowserOSStartImportRequest = {
+      sourceId: MOCK_BROWSEROS_IMPORT_SOURCES[0].id,
+      items: ['cookies'],
+    }
+    bridge.startImport(request)
+    bridge.startImport(request)
+    expect(sent).toEqual([BrowserOSOnboardingMessage.START_IMPORT])
+    expect(states.at(-1)?.status).toBe('importing')
+    expect(states.at(-1)?.progress?.completedItems).toEqual([])
+    window.browserosOnboarding?.receiveState({
+      apiVersion: 1,
+      status: 'failed',
+      sources: [...MOCK_BROWSEROS_IMPORT_SOURCES],
+    })
+    bridge.startImport(request)
+    expect(sent).toHaveLength(2)
+  })
+
+  it('preserves a synchronous native failure instead of overwriting it with pending state', () => {
+    installWindow()
+    const states: BrowserOSOnboardingState[] = []
+    const bridge = createBrowserOSOnboardingBridge({
+      chrome: {
+        send() {
+          window.browserosOnboarding?.receiveState({
+            apiVersion: 1,
+            status: 'failed',
+            sources: [],
+            error: { code: 'import_failed', message: 'Import denied' },
+          })
+        },
+      },
+    })
+    bridge.registerReceiver((state) => states.push(state))
+    bridge.startImport({ sourceId: 'source-0', items: ['cookies'] })
+    expect(states.map((state) => state.status)).toEqual(['importing', 'failed'])
+    expect(states.at(-1)?.error?.message).toBe('Import denied')
+  })
 })

@@ -1,10 +1,6 @@
 import { CheckCircle2, Circle, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BrowserOSImportSource } from '../browseros-onboarding-api'
-import {
-  defaultImportItemsForSource,
-  importItemListLabel,
-} from '../onboarding-v2.helpers'
 
 interface ImportSourceTileProps {
   source: BrowserOSImportSource
@@ -18,15 +14,10 @@ export function ImportSourceTile({
   selected,
   onSelect,
 }: ImportSourceTileProps) {
-  // Describe the profile by what will actually be copied, not by everything
-  // Chromium could hand over: listing all seven items reads as a browser
-  // migration, which is the opposite of what this step does.
-  const defaultItems = defaultImportItemsForSource(source)
-  const itemCount = defaultItems.length
   return (
     <label
       className={cn(
-        'flex w-full cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors',
+        'flex w-full cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 text-left transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent has-[:focus-visible]:ring-offset-2',
         selected
           ? 'border-accent bg-accent-tint'
           : 'border-border-2 bg-card hover:border-border-strong',
@@ -49,14 +40,11 @@ export function ImportSourceTile({
       </span>
       <div className="min-w-0 flex-1">
         <div className="font-bold text-[13.5px] text-ink">
-          {source.displayName}
+          {source.profileName || source.displayName}
         </div>
         <div className="truncate text-[11.5px] text-ink-3">
-          {importItemListLabel(defaultItems)}
+          {source.browserName}
         </div>
-      </div>
-      <div className="shrink-0 text-right font-mono text-[11.5px] text-ink-2">
-        {itemCount} {itemCount === 1 ? 'item' : 'items'}
       </div>
     </label>
   )

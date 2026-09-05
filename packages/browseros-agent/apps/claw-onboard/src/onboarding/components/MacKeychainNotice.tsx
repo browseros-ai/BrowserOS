@@ -1,40 +1,63 @@
-import { Lock } from 'lucide-react'
+import { Info, Lock } from 'lucide-react'
 
-/**
- * Explains the macOS Keychain prompt shown during Chrome data import, with a
- * shot of the real dialog so the button to press is unmistakable.
- *
- * Says Allow, not Always Allow: the importer reads the Keychain exactly once
- * per run (chrome_importer.cc extracts the Chrome Safe Storage key up front
- * and caches it for both cookies and passwords), so a one-time grant is
- * enough. Always Allow would only save a click across repeated imports, and
- * it writes a permanent ACL entry for a one-off onboarding step.
- */
-export function MacKeychainNotice() {
+/** An inert illustration of the OS-owned prompt; credentials only go to macOS. */
+export function MacKeychainPreview() {
   return (
-    <div className="mb-4 rounded-xl border border-blue/20 bg-accent-tint p-4">
-      <div className="flex items-start gap-3">
-        <Lock className="mt-0.5 size-[18px] shrink-0 text-blue" />
-        <div className="text-[12.5px] text-ink-2 leading-[1.5]">
-          <span className="font-semibold text-ink">
-            macOS will ask for your password
-          </span>{' '}
-          to read Chrome&rsquo;s saved data. That&rsquo;s expected &mdash;
-          it&rsquo;s how your cookies and passwords get copied. Enter it and
-          click <span className="font-semibold text-ink">Allow</span>.
+    <figure className="m-0 min-w-0">
+      <figcaption className="mb-3 text-ink-2 text-xs">
+        Example macOS dialog
+      </figcaption>
+      <div className="keychain-preview" aria-hidden="true">
+        <div className="keychain-preview-content">
+          <div className="keychain-lock">
+            <span />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="m-0 font-bold text-[13px] leading-[17px]">
+              BrowserOS neo Helper wants to use your confidential information
+              stored in &ldquo;Chrome Safe Storage&rdquo; in your keychain.
+            </p>
+            <p className="my-3 text-xs leading-[17px]">
+              To allow this, enter the &ldquo;login&rdquo; keychain password.
+            </p>
+            <div className="flex items-center gap-2 text-xs">
+              <span>Password:</span>
+              <span className="keychain-password">••••••••</span>
+            </div>
+          </div>
+        </div>
+        <div className="keychain-preview-actions">
+          <span className="keychain-help">?</span>
+          <span className="keychain-button">Always Allow</span>
+          <span className="flex-1" />
+          <span className="keychain-button">Deny</span>
+          <span className="keychain-allow">
+            <span className="keychain-button">Allow</span>
+          </span>
         </div>
       </div>
-      {/* Must stay a literal public path: importing the asset or inlining it
-          breaks scripts/verify-chromium-build.ts (allowlist, no data: URLs).
-          Intrinsic size is the native 832x334 at 1:2, so it renders crisp on
-          retina; width/height keep the step column from shifting on load. */}
-      <img
-        alt="The macOS Keychain prompt, with the Allow button highlighted."
-        className="mt-3 w-full max-w-[416px] rounded-lg border border-border-2"
-        height={167}
-        src="/icon/keychain-prompt.png"
-        width={416}
-      />
+    </figure>
+  )
+}
+
+export function MacKeychainPermissionNote() {
+  return (
+    <p className="m-0 flex items-start gap-2 text-[13px] text-ink-2 leading-[19px]">
+      <Info aria-hidden className="mt-0.5 size-4 shrink-0" />
+      Allow gives access for this import.
+    </p>
+  )
+}
+
+/** Native progress does not expose whether a Keychain prompt is currently open. */
+export function MacKeychainReminder() {
+  return (
+    <div className="mt-4 flex items-start gap-3 rounded-xl border border-accent/20 bg-accent-tint p-4 text-[13px] text-ink-2 leading-relaxed">
+      <Lock aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
+      <p>
+        If macOS asks, enter your Mac login password and click{' '}
+        <strong className="font-semibold text-ink">Allow</strong>.
+      </p>
     </div>
   )
 }

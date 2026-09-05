@@ -9,6 +9,7 @@ import {
   importProgressTotal,
   importSourceSelectionChangeFor,
   MOCK_BROWSEROS_IMPORT_SOURCES,
+  needsMacKeychainPermission,
   OPTIONAL_IMPORT_ITEMS,
   STARTER_PROMPTS,
   sanitizeImportSelection,
@@ -207,7 +208,7 @@ describe('default and optional import items', () => {
 describe('import item display helpers', () => {
   it('formats import item labels for source tiles and summaries', () => {
     expect(importItemListLabel(['history', 'bookmarks', 'cookies'])).toBe(
-      'History, Bookmarks, Cookies',
+      'History, Bookmarks, Signed-in sessions (cookies)',
     )
   })
 
@@ -243,5 +244,36 @@ describe('import item display helpers', () => {
 describe('STARTER_PROMPTS', () => {
   it('ships at least two suggestions for the Ready step', () => {
     expect(STARTER_PROMPTS.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('needsMacKeychainPermission', () => {
+  const source = MOCK_BROWSEROS_IMPORT_SOURCES[0]
+  it('gates only macOS Chrome imports containing supported encrypted data', () => {
+    expect(needsMacKeychainPermission(true, source, ['cookies'])).toBe(true)
+    expect(needsMacKeychainPermission(true, source, ['passwords'])).toBe(true)
+    for (const browserName of ['Safari', 'Microsoft Edge', 'Chromium']) {
+      expect(
+        needsMacKeychainPermission(true, { ...source, browserName }, [
+          'cookies',
+          'passwords',
+        ]),
+      ).toBe(false)
+    }
+    expect(
+      needsMacKeychainPermission(false, source, ['cookies', 'passwords']),
+    ).toBe(false)
+    expect(needsMacKeychainPermission(true, undefined, ['cookies'])).toBe(false)
+    expect(needsMacKeychainPermission(true, source, [])).toBe(false)
+    expect(
+      needsMacKeychainPermission(true, source, ['history', 'bookmarks']),
+    ).toBe(false)
+    expect(
+      needsMacKeychainPermission(
+        true,
+        { ...source, supportedItems: ['history'] },
+        ['cookies'],
+      ),
+    ).toBe(false)
   })
 })

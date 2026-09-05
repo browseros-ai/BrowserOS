@@ -19,9 +19,9 @@ export function OnboardingShell({
   return (
     <div className="flex h-screen overflow-hidden bg-bg-canvas">
       <VisualRail />
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-12 pt-11 pb-10">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-5 pt-8 pb-6 sm:px-8 lg:px-12 lg:pt-11">
         {showProgress && (
-          <div className="mb-[30px]">
+          <div className="mb-6">
             <StepDots step={step} total={totalSteps} />
           </div>
         )}

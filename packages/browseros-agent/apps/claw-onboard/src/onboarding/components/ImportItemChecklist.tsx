@@ -38,14 +38,14 @@ export function ImportItemChecklist({
   }
 
   return (
-    <div className="mb-4 rounded-xl border border-border-2 bg-card p-4">
+    <div className="mb-5 border-border-2 border-t pt-5">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="font-bold text-[12.5px] text-ink-2">What to copy</div>
         <div className="font-mono text-[11.5px] text-ink-3">
-          {checkedItems.length} selected
+          {checkedItems.length} categories selected
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+      <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 min-[420px]:grid-cols-2">
         {defaultItems.map(renderRow)}
       </div>
       {optionalItems.length > 0 && (
@@ -57,7 +57,7 @@ export function ImportItemChecklist({
               ({optionalItems.map(importItemLabel).join(', ').toLowerCase()})
             </span>
           </summary>
-          <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
+          <div className="mt-2.5 grid grid-cols-1 gap-x-4 gap-y-2.5 min-[420px]:grid-cols-2">
             {optionalItems.map(renderRow)}
           </div>
         </details>
