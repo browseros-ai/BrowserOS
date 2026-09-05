@@ -24,11 +24,15 @@ export type BrowserOSImportStatus =
   | 'failed'
   | 'completed'
 
+/** Native owns extension preparation independently of the browser-data importer. */
+export type BrowserOSSetupState = 'idle' | 'preparing' | 'failed' | 'ready'
+
 export const BrowserOSOnboardingMessage = {
   PAGE_READY: 'browserosOnboardingPageReady',
   REFRESH_SOURCES: 'browserosOnboardingRefreshSources',
   START_IMPORT: 'browserosOnboardingStartImport',
   COMPLETE: 'browserosOnboardingComplete',
+  RETRY_SETUP: 'browserosOnboardingRetrySetup',
 } as const
 
 export type BrowserOSOnboardingMessage =
@@ -74,6 +78,8 @@ export interface BrowserOSImportSourceResult {
 export interface BrowserOSOnboardingState {
   apiVersion: typeof BROWSEROS_ONBOARDING_API_VERSION
   status: BrowserOSImportStatus
+  /** Optional under API v1 because Chromium and these resources ship separately. */
+  setupState?: BrowserOSSetupState
   sources: BrowserOSImportSource[]
   progress?: BrowserOSImportProgress
   error?: BrowserOSOnboardingError

@@ -54,6 +54,9 @@ function stubBridge(isMock: boolean) {
     pageReady() {
       throw new Error('unexpected pageReady call')
     },
+    retrySetup() {
+      throw new Error('unexpected retrySetup call')
+    },
     refreshSources() {
       throw new Error('unexpected refreshSources call')
     },

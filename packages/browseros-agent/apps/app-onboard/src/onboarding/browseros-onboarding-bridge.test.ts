@@ -156,3 +156,172 @@ describe('createBrowserOSOnboardingBridge', () => {
     ])
   })
 })
+
+describe('native setup lifecycle', () => {
+  function nativeBridge(onSend?: (message: string) => void) {
+    installWindow()
+    const sent: string[] = []
+    const states: BrowserOSOnboardingState[] = []
+    const bridge = createBrowserOSOnboardingBridge({
+      chrome: {
+        send(message) {
+          sent.push(message)
+          onSend?.(message)
+        },
+      },
+    })
+    bridge.registerReceiver((state) => states.push(state))
+    const receive = (state: Partial<BrowserOSOnboardingState>) => {
+      window.browserosOnboarding?.receiveState({
+        apiVersion: 1,
+        status: 'ready',
+        sources: [],
+        ...state,
+      })
+    }
+    return { bridge, sent, states, receive }
+  }
+
+  it('shows preparing before sending COMPLETE and sends completion only once', () => {
+    const { bridge, sent, states } = nativeBridge((message) => {
+      if (message === BrowserOSOnboardingMessage.COMPLETE) {
+        expect(states.at(-1)?.setupState).toBe('preparing')
+      }
+    })
+    bridge.complete()
+    bridge.complete()
+    expect(sent).toEqual([BrowserOSOnboardingMessage.COMPLETE])
+    expect(states.at(-1)?.setupState).toBe('preparing')
+  })
+
+  it('keeps native synchronous failure visible after COMPLETE', () => {
+    const { bridge, states } = nativeBridge((message) => {
+      if (message === BrowserOSOnboardingMessage.COMPLETE) {
+        window.browserosOnboarding?.receiveState({
+          apiVersion: 1,
+          status: 'ready',
+          sources: [],
+          setupState: 'failed',
+        })
+      }
+    })
+    bridge.complete()
+    expect(states.at(-1)?.setupState).toBe('failed')
+  })
+
+  it('allows one Retry per native setup failure and returns to preparing immediately', () => {
+    const { bridge, sent, states, receive } = nativeBridge()
+    bridge.retrySetup()
+    receive({
+      status: 'failed',
+      error: { code: 'import_failed', message: 'Import failed' },
+    })
+    bridge.retrySetup()
+    expect(sent).toEqual([])
+    receive({ setupState: 'failed' })
+    bridge.complete()
+    expect(sent).toEqual([])
+    bridge.retrySetup()
+    bridge.retrySetup()
+    bridge.complete()
+    expect(sent).toEqual([BrowserOSOnboardingMessage.RETRY_SETUP])
+    expect(states.at(-1)?.setupState).toBe('preparing')
+    receive({ setupState: 'failed' })
+    bridge.retrySetup()
+    expect(sent).toEqual([
+      BrowserOSOnboardingMessage.RETRY_SETUP,
+      BrowserOSOnboardingMessage.RETRY_SETUP,
+    ])
+  })
+
+  it('preserves a synchronous retry failure instead of overwriting it with preparing', () => {
+    const { bridge, states, receive } = nativeBridge((message) => {
+      if (message === BrowserOSOnboardingMessage.RETRY_SETUP) {
+        window.browserosOnboarding?.receiveState({
+          apiVersion: 1,
+          status: 'ready',
+          sources: [],
+          setupState: 'failed',
+        })
+      }
+    })
+    receive({ setupState: 'failed' })
+    bridge.retrySetup()
+    expect(states.at(-1)?.setupState).toBe('failed')
+  })
+
+  for (const setupState of ['preparing', 'failed', 'ready'] as const) {
+    it(`restores native ${setupState} on page-ready without completing again`, () => {
+      const { bridge, states, sent } = nativeBridge((message) => {
+        if (message === BrowserOSOnboardingMessage.PAGE_READY) {
+          window.browserosOnboarding?.receiveState({
+            apiVersion: 1,
+            status: 'ready',
+            sources: [],
+            setupState,
+          })
+        }
+      })
+      bridge.pageReady()
+      expect(states.at(-1)?.setupState).toBe(setupState)
+      bridge.complete()
+      expect(sent).toEqual([BrowserOSOnboardingMessage.PAGE_READY])
+    })
+  }
+
+  it('keeps importer snapshots unchanged and tolerates legacy native states', () => {
+    const { bridge, states, receive } = nativeBridge()
+    const error = { code: 'import_failed', message: 'Import failed' }
+    receive({ status: 'failed', error })
+    expect(states.at(-1)?.setupState).toBeUndefined()
+    bridge.complete()
+    expect(states.at(-1)).toMatchObject({
+      status: 'failed',
+      error,
+      setupState: 'preparing',
+    })
+    receive({ status: 'completed' })
+    expect(states.at(-1)).toMatchObject({
+      status: 'completed',
+      setupState: 'preparing',
+    })
+  })
+
+  it('replays the latest snapshot when React reattaches its receiver', () => {
+    const { bridge, receive } = nativeBridge()
+    receive({ setupState: 'failed' })
+    const cleanup = bridge.registerReceiver(() => {})
+    cleanup()
+    const states: BrowserOSOnboardingState[] = []
+    bridge.registerReceiver((state) => states.push(state))
+    expect(states.at(-1)?.setupState).toBe('failed')
+  })
+
+  for (const mockSetupResult of ['preparing', 'failed', 'ready'] as const) {
+    it(`mocks ${mockSetupResult} without readiness timers or navigation`, () => {
+      installWindow()
+      const states: BrowserOSOnboardingState[] = []
+      const bridge = createBrowserOSOnboardingBridge({
+        chrome: null,
+        mockTiming: 'sync',
+        mockSetupResult,
+      })
+      bridge.registerReceiver((state) => states.push(state))
+      bridge.pageReady()
+      states.length = 0
+      bridge.complete()
+      bridge.complete()
+      expect(states[0]?.setupState).toBe('preparing')
+      expect(states.at(-1)?.setupState).toBe(mockSetupResult)
+      expect(states.every((state) => state.status === 'ready')).toBe(true)
+      if (mockSetupResult === 'failed') {
+        states.length = 0
+        bridge.retrySetup()
+        expect(states.map((state) => state.setupState)).toEqual([
+          'preparing',
+          'failed',
+        ])
+      }
+    })
+  }
+})

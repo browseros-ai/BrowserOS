@@ -12,6 +12,7 @@ import {
   type BrowserOSOnboardingChrome,
   BrowserOSOnboardingMessage,
   type BrowserOSOnboardingState,
+  type BrowserOSSetupState,
   type BrowserOSStartImportRequest,
 } from './browseros-onboarding-api'
 import { MOCK_BROWSEROS_IMPORT_SOURCES } from './onboarding-v2.helpers'
@@ -21,6 +22,7 @@ export interface BrowserOSOnboardingBridge {
   complete(): void
   pageReady(): void
   refreshSources(): void
+  retrySetup(): void
   registerReceiver(
     receiveState: (state: BrowserOSOnboardingState) => void,
   ): () => void
@@ -30,6 +32,8 @@ export interface BrowserOSOnboardingBridge {
 interface BrowserOSOnboardingBridgeOptions {
   chrome?: BrowserOSOnboardingChrome | null
   mockTiming?: 'delayed' | 'sync'
+  /** Explicit preview outcome; setup never infers readiness from a timer. */
+  mockSetupResult?: Exclude<BrowserOSSetupState, 'idle'>
 }
 
 const MOCK_READY_DELAY_MS = 250
@@ -176,14 +180,51 @@ export function createBrowserOSOnboardingBridge(
   const isMock = !chromeBridge
   const mockIsSync = options.mockTiming === 'sync'
 
+  let currentState: BrowserOSOnboardingState | undefined
+  let receiver: ((state: BrowserOSOnboardingState) => void) | undefined
+  let completionRequested = false
+
+  function updateState(state: BrowserOSOnboardingState) {
+    // Older native snapshots omit setupState. Keep the local handoff visible
+    // without changing importer status/error or requiring both releases at once.
+    const setupState = state.setupState ?? currentState?.setupState
+    currentState = { ...state, ...(setupState ? { setupState } : {}) }
+    if (currentState.setupState && currentState.setupState !== 'idle') {
+      completionRequested = true
+    }
+    receiver?.(currentState)
+  }
+
+  function requestSetup(message: BrowserOSOnboardingMessage) {
+    const state = currentState ?? {
+      apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
+      status: 'idle',
+      sources: [],
+    }
+    // Latch and notify before chrome.send: native can reply synchronously, and
+    // its failure must win over optimistic preparing. Navigation belongs to
+    // Chromium after extension readiness, even when setupState becomes ready.
+    updateState({ ...state, setupState: 'preparing' })
+    if (chromeBridge) {
+      chromeBridge.send(message)
+      return
+    }
+    if (options.mockSetupResult && options.mockSetupResult !== 'preparing') {
+      updateState({ ...state, setupState: options.mockSetupResult })
+    }
+  }
+
   return {
     isMock,
     complete() {
-      if (!isMock) {
-        chromeBridge.send(BrowserOSOnboardingMessage.COMPLETE)
-        return
-      }
-      emitMockState(createState('completed'))
+      if (completionRequested) return
+      requestSetup(BrowserOSOnboardingMessage.COMPLETE)
+    },
+    retrySetup() {
+      // Import failure cannot enable this action. A pending retry consumes the
+      // setup failure immediately, so rapid repeated clicks send only once.
+      if (currentState?.setupState !== 'failed') return
+      requestSetup(BrowserOSOnboardingMessage.RETRY_SETUP)
     },
     pageReady() {
       if (!isMock) {
@@ -213,10 +254,16 @@ export function createBrowserOSOnboardingBridge(
       const hostWindow = getHostWindow()
       if (!hostWindow) return () => undefined
       const previousClient = hostWindow.browserosOnboarding
-      const client = { receiveState }
+      const previousReceiver = receiver
+      receiver = receiveState
+      const client = { receiveState: updateState }
       hostWindow.browserosOnboarding = client
+      // Effect reattachment (including StrictMode) must not lose a synchronous
+      // pageReady snapshot or issue another completion request.
+      if (currentState) receiveState(currentState)
       return () => {
         if (hostWindow.browserosOnboarding !== client) return
+        receiver = previousReceiver
         if (previousClient) {
           hostWindow.browserosOnboarding = previousClient
           return
