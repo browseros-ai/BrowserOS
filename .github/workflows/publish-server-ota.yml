@@ -288,10 +288,12 @@ jobs:
             --product "$PRODUCT" \
             --platform "$PLATFORM"
 
+      # Both products share a nightly run's artifact namespace. Include the
+      # product so each publisher downloads only its own appcast fragments.
       - name: Upload platform appcast fragment
         uses: actions/upload-artifact@v7
         with:
-          name: server-ota-fragment-${{ matrix.target }}
+          name: server-ota-fragment-${{ inputs.product }}-${{ matrix.target }}
           path: ${{ inputs.snapshot_path }}
           if-no-files-found: error
           retention-days: 1
@@ -318,7 +320,7 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
-          pattern: server-ota-fragment-*
+          pattern: server-ota-fragment-${{ inputs.product }}-*
           path: server-ota-fragments
 
       - name: Setup uv
@@ -336,7 +338,7 @@ jobs:
           fragments=()
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
             platform="${target//-/_}"
-            fragment="server-ota-fragments/server-ota-fragment-${target}/${snapshot_name}"
+            fragment="server-ota-fragments/server-ota-fragment-${PRODUCT}-${target}/${snapshot_name}"
             if [ ! -f "$fragment" ]; then
               echo "::error::Missing OTA fragment for $target"
               exit 1
