@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/onboarding/browseros_onboarding.cc b/chrome/browser/browseros/onboarding/browseros_onboarding.cc
 new file mode 100644
-index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
+index 0000000000000000000000000000000000000000..0809951dcf660ba1f9a3704bdcf5cbf88b3d9646
 --- /dev/null
 +++ b/chrome/browser/browseros/onboarding/browseros_onboarding.cc
-@@ -0,0 +1,605 @@
+@@ -0,0 +1,794 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -21,9 +21,11 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +#include "base/functional/bind.h"
 +#include "base/functional/callback.h"
 +#include "base/location.h"
++#include "base/memory/weak_ptr.h"
 +#include "base/notreached.h"
 +#include "base/strings/stringprintf.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/supports_user_data.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "base/values.h"
 +#include "chrome/browser/browser_process.h"
@@ -36,6 +38,10 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +#include "chrome/grit/browseros_onboarding_resources.h"
 +#include "chrome/grit/browseros_onboarding_resources_map.h"
 +#include "components/user_data_importer/common/importer_data_types.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/navigation_throttle.h"
++#include "content/public/browser/navigation_throttle_registry.h"
 +#include "content/public/browser/visibility.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/browser/web_ui.h"
@@ -47,6 +53,31 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +namespace {
 +
 +constexpr int kBrowserOSOnboardingApiVersion = 1;
++constexpr char kOnboardingBindingsKey[] = "browseros.onboarding.bindings";
++
++// A reload replaces the WebUI controller, but retains its WebContents. Keep
++// the step's weak flow callbacks and shared state here so the new handler can
++// rejoin preparation; none of these bindings keeps the first-run flow alive.
++struct OnboardingBindings : public base::SupportsUserData::Data {
++  base::RepeatingClosure completion_callback;
++  BrowserOSOnboardingEnsureReady ensure_ready;
++  scoped_refptr<BrowserOSOnboardingSetupState> setup_state;
++};
++// Old BrowserClaw resources send COMPLETE and immediately navigate to newtab.
++// Cancel that renderer handoff without showing an error page. Native completion
++// opens a separate browsing window after READY, so the two release orders work.
++class OnboardingNavigationThrottle : public content::NavigationThrottle {
++ public:
++  explicit OnboardingNavigationThrottle(
++      content::NavigationThrottleRegistry& registry)
++      : content::NavigationThrottle(registry) {}
++
++  ThrottleCheckResult WillStartRequest() override { return CANCEL_AND_IGNORE; }
++  const char* GetNameForLogging() override {
++    return "BrowserOSOnboardingNavigationThrottle";
++  }
++};
++
 +constexpr uint16_t kBrowserOSImportableItems =
 +    user_data_importer::HISTORY | user_data_importer::FAVORITES |
 +    user_data_importer::COOKIES | user_data_importer::PASSWORDS |
@@ -132,6 +163,9 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +
 +}  // namespace
 +
++BrowserOSOnboardingSetupState::BrowserOSOnboardingSetupState() = default;
++BrowserOSOnboardingSetupState::~BrowserOSOnboardingSetupState() = default;
++
 +class BrowserOSOnboardingHandler : public content::WebUIMessageHandler,
 +                                   public importer::ImporterProgressObserver {
 + public:
@@ -145,8 +179,16 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    }
 +  }
 +
-+  void SetCompletionCallback(base::RepeatingClosure completion_callback) {
++  void SetCompletionCallback(
++      base::RepeatingClosure completion_callback,
++      BrowserOSOnboardingEnsureReady ensure_ready,
++      scoped_refptr<BrowserOSOnboardingSetupState> setup_state) {
 +    completion_callback_ = std::move(completion_callback);
++    ensure_ready_ = std::move(ensure_ready);
++    setup_state_ = std::move(setup_state);
++    if (IsJavascriptAllowed()) {
++      ResumeSetup();
++    }
 +  }
 +
 + private:
@@ -186,6 +228,10 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +        "browserosOnboardingComplete",
 +        base::BindRepeating(&BrowserOSOnboardingHandler::HandleComplete,
 +                            base::Unretained(this)));
++    web_ui()->RegisterMessageCallback(
++        "browserosOnboardingRetrySetup",
++        base::BindRepeating(&BrowserOSOnboardingHandler::HandleRetrySetup,
++                            base::Unretained(this)));
 +  }
 +
 +  void OnJavascriptDisallowed() override {
@@ -209,6 +255,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    ResetImportState();
 +    SendState("detecting");
 +    DetectSources();
++    ResumeSetup();
 +  }
 +
 +  void HandleRefreshSources(const base::ListValue& args) {
@@ -275,20 +322,82 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    importer_host_->set_observer(this);
 +    Profile* profile = Profile::FromWebUI(web_ui());
 +    SendState("importing");
-+    importer_host_->StartImportSettings(source_profile, profile,
-+                                        imported_items_,
-+                                        new ProfileWriter(profile));
++    importer_host_->StartImportSettings(
++        source_profile, profile, imported_items_, new ProfileWriter(profile));
 +  }
 +
 +  void HandleComplete(const base::ListValue& args) {
-+    if (completion_handled_) {
++    if (!setup_state_ || setup_state_->completion_handled ||
++        setup_state_->status == SetupStatus::kPreparing) {
 +      return;
 +    }
-+    completion_handled_ = true;
++    // COMPLETE remains a request, so old UI resources also remain open until
++    // the target browsing profile's primary extension reaches registry READY.
++    StartSetup();
++  }
 +
++  void HandleRetrySetup(const base::ListValue& args) {
++    if (setup_state_ && setup_state_->status == SetupStatus::kFailed) {
++      StartSetup();
++    }
++  }
++
++  void StartSetup() {
++    ++setup_state_->attempt;
++    setup_state_->status = SetupStatus::kPreparing;
++    SendState(last_import_status_);
++    WaitForPrimaryExtension();
++  }
++
++  void ResumeSetup() {
++    if (!setup_state_ || setup_state_->completion_handled) {
++      return;
++    }
++    SendState(last_import_status_);
++    if (setup_state_->status == SetupStatus::kPreparing ||
++        setup_state_->status == SetupStatus::kReady) {
++      // A replacement WebUI joins the same native operation. Recheck READY
++      // after reload rather than trusting a result delivered to the old page.
++      setup_state_->status = SetupStatus::kPreparing;
++      WaitForPrimaryExtension();
++    }
++  }
++
++  void WaitForPrimaryExtension() {
++    if (!ensure_ready_) {
++      OnPrimaryExtensionReady(false);
++      return;
++    }
++    ensure_ready_.Run(base::BindOnce(
++        [](scoped_refptr<BrowserOSOnboardingSetupState> state,
++           unsigned int attempt,
++           base::WeakPtr<BrowserOSOnboardingHandler> handler, bool ready) {
++          if (state->attempt != attempt || state->completion_handled) {
++            return;
++          }
++          state->status = ready ? SetupStatus::kReady : SetupStatus::kFailed;
++          if (handler) {
++            handler->OnPrimaryExtensionReady(ready);
++          }
++        },
++        setup_state_, setup_state_->attempt, weak_ptr_factory_.GetWeakPtr()));
++  }
++
++  void OnPrimaryExtensionReady(bool ready) {
++    if (!ready) {
++      setup_state_->status = SetupStatus::kFailed;
++      SendState(last_import_status_);
++      return;
++    }
++    if (setup_state_->completion_handled) {
++      return;
++    }
++    setup_state_->status = SetupStatus::kReady;
++    setup_state_->completion_handled = true;
 +    SendState("completed");
-+
 +    if (completion_callback_) {
++      // Navigation can tear down this handler and the picker; never run it
++      // inline while delivering a registry result or a WebUI message.
 +      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
 +          FROM_HERE, completion_callback_);
 +    }
@@ -345,7 +454,8 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    }
 +
 +    selection->source_index = *browser_index;
-+    selection->source_id = SourceIdForIndex(static_cast<size_t>(*browser_index));
++    selection->source_id =
++        SourceIdForIndex(static_cast<size_t>(*browser_index));
 +    selection->selected_items = user_data_importer::NONE;
 +    selection->has_selected_items = false;
 +    return true;
@@ -403,8 +513,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +      std::string browser_name =
 +          base::UTF16ToUTF8(source_profile.importer_name);
 +      std::string profile_name = base::UTF16ToUTF8(source_profile.profile);
-+      std::string account_name =
-+          base::UTF16ToUTF8(source_profile.account_name);
++      std::string account_name = base::UTF16ToUTF8(source_profile.account_name);
 +
 +      base::DictValue source;
 +      source.Set("id", SourceIdForIndex(i));
@@ -464,7 +573,34 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    return progress;
 +  }
 +
++  void AddSetupState(base::DictValue& state) const {
++    if (!setup_state_) {
++      return;
++    }
++    const char* status = "idle";
++    switch (setup_state_->status) {
++      case SetupStatus::kIdle:
++        break;
++      case SetupStatus::kPreparing:
++        status = "preparing";
++        break;
++      case SetupStatus::kFailed: {
++        status = "failed";
++        base::DictValue error;
++        error.Set("code", "setup_failed");
++        error.Set("message", "Setup did not finish. Please retry.");
++        state.Set("error", std::move(error));
++        break;
++      }
++      case SetupStatus::kReady:
++        status = "ready";
++        break;
++    }
++    state.Set("setupState", status);
++  }
++
 +  void SendState(std::string_view status) {
++    last_import_status_ = std::string(status);
 +    if (IsJavascriptAllowed()) {
 +      base::DictValue state;
 +      state.Set("apiVersion", kBrowserOSOnboardingApiVersion);
@@ -476,6 +612,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +      if (imported_items_ || import_result_) {
 +        state.Set("progress", BuildProgress());
 +      }
++      AddSetupState(state);
 +      CallJavascriptFunction("browserosOnboarding.receiveState", state);
 +    }
 +  }
@@ -487,6 +624,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +  void SendFailure(std::string_view status,
 +                   const std::string& code,
 +                   const std::string& message) {
++    last_import_status_ = std::string(status);
 +    if (IsJavascriptAllowed()) {
 +      base::DictValue state;
 +      state.Set("apiVersion", kBrowserOSOnboardingApiVersion);
@@ -502,6 +640,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +      error.Set("code", code);
 +      error.Set("message", message);
 +      state.Set("error", std::move(error));
++      AddSetupState(state);
 +      CallJavascriptFunction("browserosOnboarding.receiveState", state);
 +    }
 +  }
@@ -571,6 +710,10 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +    import_result_.reset();
 +  }
 +
++  using SetupStatus = BrowserOSOnboardingSetupState::Status;
++  BrowserOSOnboardingEnsureReady ensure_ready_;
++  scoped_refptr<BrowserOSOnboardingSetupState> setup_state_;
++  std::string last_import_status_ = "idle";
 +  std::unique_ptr<ImporterList> importer_list_;
 +  raw_ptr<ExternalProcessImporterHost> importer_host_ = nullptr;
 +  base::RepeatingClosure completion_callback_;
@@ -580,7 +723,7 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +  uint16_t imported_items_ = user_data_importer::NONE;
 +  bool importer_list_loaded_ = false;
 +  bool import_did_succeed_ = false;
-+  bool completion_handled_ = false;
++  base::WeakPtrFactory<BrowserOSOnboardingHandler> weak_ptr_factory_{this};
 +};
 +
 +BrowserOSOnboardingUIConfig::BrowserOSOnboardingUIConfig()
@@ -597,15 +740,61 @@ index 0000000000000..372f36bcb4864f440e38a461e9cf4ab982b191dd
 +  auto handler = std::make_unique<BrowserOSOnboardingHandler>();
 +  handler_ = handler.get();
 +  web_ui->AddMessageHandler(std::move(handler));
++  auto* bindings = static_cast<OnboardingBindings*>(
++      web_ui->GetWebContents()->GetUserData(kOnboardingBindingsKey));
++  if (bindings) {
++    handler_->SetCompletionCallback(bindings->completion_callback,
++                                    bindings->ensure_ready,
++                                    bindings->setup_state);
++  }
 +}
 +
 +BrowserOSOnboarding::~BrowserOSOnboarding() = default;
 +
-+void BrowserOSOnboarding::SetCompletionCallback(
-+    base::RepeatingClosure completion_callback) {
-+  if (handler_) {
-+    handler_->SetCompletionCallback(std::move(completion_callback));
++// static
++void BrowserOSOnboarding::MaybeCreateNavigationThrottle(
++    content::NavigationThrottleRegistry& registry) {
++  auto& handle = registry.GetNavigationHandle();
++  const GURL& source = handle.GetWebContents()->GetLastCommittedURL();
++  const GURL& target = handle.GetURL();
++  if (!handle.IsInPrimaryMainFrame() || !handle.IsRendererInitiated() ||
++      !source.SchemeIs(content::kChromeUIScheme) ||
++      source.host() != chrome::kChromeUIBrowserOSOnboardingHost) {
++    return;
 +  }
++  // Newtab may already be rewritten to an extension or the fallback NTP when
++  // no extension is installed. Inspect its virtual URL as well as the target,
++  // without gating unrelated links or reloads of the onboarding document.
++  const auto* entry = handle.GetNavigationEntry();
++  const GURL virtual_target = entry ? entry->GetVirtualURL() : GURL();
++  auto is_new_tab = [](const GURL& url) {
++    return url.SchemeIs(content::kChromeUIScheme) &&
++           (url.host() == chrome::kChromeUINewTabHost ||
++            url.host() == chrome::kChromeUINewTabPageHost ||
++            url.host() == chrome::kChromeUINewTabPageThirdPartyHost);
++  };
++  if (target.SchemeIs("chrome-extension") || is_new_tab(target) ||
++      is_new_tab(virtual_target)) {
++    registry.AddThrottle(
++        std::make_unique<OnboardingNavigationThrottle>(registry));
++  }
++}
++
++void BrowserOSOnboarding::SetCompletionCallback(
++    base::RepeatingClosure completion_callback,
++    BrowserOSOnboardingEnsureReady ensure_ready,
++    scoped_refptr<BrowserOSOnboardingSetupState> setup_state) {
++  auto bindings = std::make_unique<OnboardingBindings>();
++  bindings->completion_callback = std::move(completion_callback);
++  bindings->ensure_ready = std::move(ensure_ready);
++  bindings->setup_state = std::move(setup_state);
++  if (handler_) {
++    handler_->SetCompletionCallback(bindings->completion_callback,
++                                    bindings->ensure_ready,
++                                    bindings->setup_state);
++  }
++  web_ui()->GetWebContents()->SetUserData(kOnboardingBindingsKey,
++                                          std::move(bindings));
 +}
 +
 +WEB_UI_CONTROLLER_TYPE_IMPL(BrowserOSOnboarding)

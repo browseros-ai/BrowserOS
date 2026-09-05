@@ -1,17 +1,18 @@
 diff --git a/chrome/browser/ui/views/profiles/first_run_flow_controller.cc b/chrome/browser/ui/views/profiles/first_run_flow_controller.cc
-index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba9502a0e7 100644
+index 24848513afc0ffa5649fbe690055d0d018c8d367..c8b51bbd69806159c0f1279daa73926bbaaa47c5 100644
 --- a/chrome/browser/ui/views/profiles/first_run_flow_controller.cc
 +++ b/chrome/browser/ui/views/profiles/first_run_flow_controller.cc
-@@ -26,6 +26,8 @@
+@@ -26,6 +26,9 @@
  #include "base/time/time.h"
  #include "base/version_info/channel.h"
  #include "chrome/browser/browser_process.h"
++#include "chrome/browser/browseros/extensions/browseros_extension_loader.h"
 +#include "chrome/browser/browseros/onboarding/browseros_onboarding.h"
 +#include "chrome/browser/browseros/onboarding/browseros_onboarding_prefs.h"
  #include "chrome/browser/enterprise/util/managed_browser_utils.h"
  #include "chrome/browser/policy/cloud/user_policy_signin_service.h"
  #include "chrome/browser/policy/cloud/user_policy_signin_service_factory.h"
-@@ -255,6 +257,60 @@ class IntroStepController : public ProfileManagementStepController {
+@@ -255,6 +258,66 @@ class IntroStepController : public ProfileManagementStepController {
    base::WeakPtrFactory<IntroStepController> weak_ptr_factory_{this};
  };
  
@@ -19,9 +20,11 @@ index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba
 +    : public ProfileManagementStepController {
 + public:
 +  BrowserOSOnboardingStepController(ProfilePickerWebContentsHost* host,
-+                                    base::RepeatingClosure completion_callback)
++                                    base::RepeatingClosure completion_callback,
++                                    BrowserOSOnboardingEnsureReady ensure_ready)
 +      : ProfileManagementStepController(host),
-+        completion_callback_(std::move(completion_callback)) {}
++        completion_callback_(std::move(completion_callback)),
++        ensure_ready_(std::move(ensure_ready)) {}
 +
 +  ~BrowserOSOnboardingStepController() override = default;
 +
@@ -60,10 +63,14 @@ index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba
 +                              ->GetController()
 +                              ->GetAs<BrowserOSOnboarding>();
 +    DCHECK(onboarding_ui);
-+    onboarding_ui->SetCompletionCallback(completion_callback_);
++    onboarding_ui->SetCompletionCallback(completion_callback_, ensure_ready_,
++                                          setup_state_);
 +  }
 +
 +  base::RepeatingClosure completion_callback_;
++  BrowserOSOnboardingEnsureReady ensure_ready_;
++  scoped_refptr<BrowserOSOnboardingSetupState> setup_state_ =
++      base::MakeRefCounted<BrowserOSOnboardingSetupState>();
 +
 +  base::WeakPtrFactory<BrowserOSOnboardingStepController> weak_ptr_factory_{
 +      this};
@@ -72,7 +79,7 @@ index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba
  class DefaultBrowserStepController : public ProfileManagementStepController {
   public:
    explicit DefaultBrowserStepController(
-@@ -965,47 +1021,12 @@ void FirstRunFlowController::StartBrowsing() {
+@@ -965,47 +1028,25 @@ void FirstRunFlowController::StartBrowsing() {
  void FirstRunFlowController::Init() {
    RegisterStep(
        Step::kIntro,
@@ -86,6 +93,19 @@ index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba
 -                              base::Unretained(this))));
 +          base::BindRepeating(
 +              &FirstRunFlowController::HandleBrowserOSOnboardingComplete,
++              weak_ptr_factory_.GetWeakPtr()),
++          base::BindRepeating(
++              [](base::WeakPtr<FirstRunFlowController> flow,
++                 base::OnceCallback<void(bool)> callback) {
++                if (!flow) {
++                  std::move(callback).Run(false);
++                  return;
++                }
++                // Picker contents can belong to a different profile. The
++                // extension handoff must wait for the actual browsing profile.
++                browseros::BrowserOSExtensionLoader::EnsurePrimaryExtensionReady(
++                    flow->profile_, std::move(callback));
++              },
 +              weak_ptr_factory_.GetWeakPtr())));
    SwitchToStep(Step::kIntro, /*reset_state=*/true);
 -
@@ -124,7 +144,7 @@ index 24848513afc0ffa5649fbe690055d0d018c8d367..cec22cfee5f76501ce331030f8ad8cba
  }
  
  void FirstRunFlowController::CancelSigninFlow() {
-@@ -1060,6 +1081,11 @@ void FirstRunFlowController::HandleIntroSigninChoice(IntroChoice choice) {
+@@ -1060,6 +1101,11 @@ void FirstRunFlowController::HandleIntroSigninChoice(IntroChoice choice) {
        kAccessPoint, profile_->GetPath());
  }
  

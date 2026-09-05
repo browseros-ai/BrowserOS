@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/onboarding/browseros_onboarding_api.ts b/chrome/browser/browseros/onboarding/browseros_onboarding_api.ts
 new file mode 100644
-index 0000000000000..2bf836fe76daa
+index 0000000000000000000000000000000000000000..c7d8b69521bef220e2b0c0aaea3c0794c679b252
 --- /dev/null
 +++ b/chrome/browser/browseros/onboarding/browseros_onboarding_api.ts
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,99 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -16,11 +16,15 @@ index 0000000000000..2bf836fe76daa
 +export type BrowserOSImportStatus =
 +    'idle'|'detecting'|'ready'|'importing'|'succeeded'|'failed'|'completed';
 +
++// Optional v1 extension: UI resources and native Chromium ship independently.
++export type BrowserOSSetupState = 'idle'|'preparing'|'failed'|'ready';
++
 +export const BrowserOSOnboardingMessage = {
 +  PAGE_READY: 'browserosOnboardingPageReady',
 +  REFRESH_SOURCES: 'browserosOnboardingRefreshSources',
 +  START_IMPORT: 'browserosOnboardingStartImport',
 +  COMPLETE: 'browserosOnboardingComplete',
++  RETRY_SETUP: 'browserosOnboardingRetrySetup',
 +} as const;
 +
 +export type BrowserOSOnboardingMessage =
@@ -64,6 +68,7 @@ index 0000000000000..2bf836fe76daa
 +export interface BrowserOSOnboardingState {
 +  apiVersion: typeof BROWSEROS_ONBOARDING_API_VERSION;
 +  status: BrowserOSImportStatus;
++  setupState?: BrowserOSSetupState;
 +  sources: BrowserOSImportSource[];
 +  progress?: BrowserOSImportProgress;
 +  error?: BrowserOSOnboardingError;

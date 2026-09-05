@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
-index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1a0a7010b 100644
+index bed74e910df0667b636c5b1e404df913febbc019..1ede5472b8f5666bee2fbeca32eb47ea38f5e85a 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
 @@ -41,6 +41,9 @@
@@ -12,7 +12,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
  #include "chrome/browser/extensions/startup_helper.h"
  #include "chrome/browser/first_run/first_run.h"
  #include "chrome/browser/lifetime/browser_shutdown.h"
-@@ -476,6 +479,62 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
+@@ -476,6 +479,69 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
  
@@ -45,11 +45,14 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
 +
 +  if (status == ProfilePicker::FirstRunExitStatus::kCompleted) {
 +    ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(true);
++    // kCompleted is posted only after the target profile's primary extension
++    // enters ExtensionRegistry::ready_extensions(). Do not move this URL into
++    // the picker launch: supplying provider prefs alone cannot authorize it.
 +    // BrowserOS onboarding hands off to the agent extension so the user
 +    // can finish setting up a provider or coding agent; a chrome:// page
 +    // cannot navigate there itself. The agent extension only exists on
-+    // BrowserOS builds, so other products append nothing here and route
-+    // themselves. The target is the first-run setup step, not the settings
++    // BrowserOS builds. BrowserClaw instead hands off to its MCP page.
++    // The BrowserOS target is the first-run setup step, not the settings
 +    // page: it drops the user straight into the new tab page once they
 +    // connect something.
 +    std::vector<GURL> tabs = first_run_urls;
@@ -57,6 +60,10 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
 +      tabs.emplace_back(std::string("chrome-extension://") +
 +                        browseros::kAgentExtensionId +
 +                        "/app.html#/onboarding/ai");
++    } else if (browseros::IsBrowserClawProduct()) {
++      // The native callback now owns the final MCP CTA as well; UI resources
++      // must not navigate the picker before its primary extension is ready.
++      tabs.emplace_back("chrome://newtab/#/mcp");
 +    }
 +    ProfilePicker::SetFirstRunTabsInNextProfileOpened(tabs);
 +    return;
@@ -75,7 +82,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..95ccc7b99b2f22bb8b6651237aa742d1
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -714,6 +773,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -714,6 +780,26 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
  
    if (!IsSilentLaunchEnabled(command_line, profile)) {
