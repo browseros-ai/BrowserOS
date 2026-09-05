@@ -8,11 +8,10 @@ import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanel
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatTargetSelection } from '@/modules/chat/use-chat-target-selection'
-import { useActiveHint } from '@/screens/newtab/index/active-hint.hooks'
 import { ImportDataHint } from '@/screens/newtab/index/ImportDataHint'
+import { useShowImportHint } from '@/screens/newtab/index/import-hint.hooks'
 import { RecentSites } from '@/screens/newtab/index/RecentSites'
 import { ScheduleResults } from '@/screens/newtab/index/ScheduleResults'
-import { SignInHint } from '@/screens/newtab/index/SignInHint'
 import {
   ConversationInput,
   type ConversationInputSendInput,
@@ -21,7 +20,7 @@ import { resolveHomeLlmRoutingMode } from './home-compose.helpers'
 
 export const AgentCommandHome: FC = () => {
   const navigate = useNavigate()
-  const activeHint = useActiveHint()
+  const showImportHint = useShowImportHint()
   const { supports, isLoading: capabilitiesLoading } = useCapabilities()
   const supportsInlineChat = supports(Feature.NEWTAB_CHAT_SUPPORT)
   const llmRoutingMode = resolveHomeLlmRoutingMode({
@@ -125,8 +124,7 @@ export const AgentCommandHome: FC = () => {
         </div>
       </div>
 
-      {activeHint === 'signin' ? <SignInHint /> : null}
-      {activeHint === 'import' ? <ImportDataHint /> : null}
+      {showImportHint ? <ImportDataHint /> : null}
     </div>
   )
 }
