@@ -8,20 +8,11 @@ import {
   SIDEPANEL_SUGGESTION_CLICKED_EVENT,
   SIDEPANEL_TAB_REMOVED_EVENT,
   SIDEPANEL_TAB_TOGGLED_EVENT,
-  SIDEPANEL_VOICE_ERROR_EVENT,
-  SIDEPANEL_VOICE_RECORDING_STARTED_EVENT,
-  SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT,
-  SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
-import { useVoiceInput } from '@/modules/voice/voice.hooks'
-import {
-  type ChatSessionLike,
-  useVoiceLoop,
-} from '@/modules/voice/voice-loop.hooks'
 import { buildChatErrorProps } from './Chat.helpers'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
@@ -63,11 +54,6 @@ export const Chat = () => {
     onDismiss: onDismissJtbdPopup,
   } = useJtbdPopup()
 
-  const voice = useVoiceInput()
-  const chatSessionRef = useRef<ChatSessionLike | null>(null)
-  chatSessionRef.current = { sendMessage, stop, status, messages }
-  const voiceLoop = useVoiceLoop({ chatSessionRef })
-
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
   const [mounted, setMounted] = useState(false)
@@ -102,26 +88,6 @@ export const Chat = () => {
     }
     previousChatStatus.current = status
   }, [status])
-
-  // Insert transcript into input when transcription completes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only trigger on transcript/transcribing change
-  useEffect(() => {
-    if (voice.transcript && !voice.isTranscribing) {
-      setInput((prev) => {
-        const separator = prev.trim() ? ' ' : ''
-        return prev + separator + voice.transcript
-      })
-      track(SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT)
-      voice.clearTranscript()
-    }
-  }, [voice.transcript, voice.isTranscribing])
-
-  // Track voice errors
-  useEffect(() => {
-    if (voice.error) {
-      track(SIDEPANEL_VOICE_ERROR_EVENT, { error: voice.error })
-    }
-  }, [voice.error])
 
   const handleModeChange = (newMode: ChatMode) => {
     track(SIDEPANEL_MODE_CHANGED_EVENT, { from: mode, to: newMode })
@@ -187,27 +153,6 @@ export const Chat = () => {
     executeMessage(suggestion)
   }
 
-  const handleStartRecording = async () => {
-    const started = await voice.startRecording()
-    if (started) {
-      track(SIDEPANEL_VOICE_RECORDING_STARTED_EVENT)
-    }
-  }
-
-  const handleStopRecording = async () => {
-    await voice.stopRecording()
-    track(SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT)
-  }
-
-  const voiceState = {
-    isRecording: voice.isRecording,
-    isTranscribing: voice.isTranscribing,
-    audioLevels: voice.audioLevels,
-    error: voice.error,
-    onStartRecording: handleStartRecording,
-    onStopRecording: handleStopRecording,
-  }
-
   const chatErrorProps = buildChatErrorProps({
     chatError,
     selectedProvider,
@@ -265,9 +210,6 @@ export const Chat = () => {
         attachedTabs={attachedTabs}
         onToggleTab={toggleTabSelection}
         onRemoveTab={removeTab}
-        voice={voiceState}
-        voiceLoop={voiceLoop}
-        onOpenVoiceMode={voiceLoop.open}
       />
     </>
   )

@@ -7,10 +7,7 @@
     // wxt 0.21's generated base turns on noUncheckedIndexedAccess and verbatimModuleSyntax; opt back out until the codebase adopts them deliberately (verbatim needs codegen's useTypeImports for the generated graphql client).
     "noUncheckedIndexedAccess": false,
     "verbatimModuleSyntax": false,
-    "paths": {
-      "@/*": ["./*"],
-      "@browseros/shared/*": ["../../packages/shared/src/*"]
-    },
+    // WXT owns the app aliases; workspace packages resolve through their exports.
     "plugins": [
       {
         "name": "@0no-co/graphqlsp",
