@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96458f6698
+index 0000000000000000000000000000000000000000..f061377c17fccfdaf687ab5201b4c82f6dea3fcc
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_maintainer.cc
-@@ -0,0 +1,440 @@
+@@ -0,0 +1,292 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,36 +13,34 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +#include <optional>
 +#include <utility>
 +
++#include "base/functional/bind.h"
 +#include "base/json/json_reader.h"
 +#include "base/logging.h"
-+#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics.h"
-+#include "chrome/browser/extensions/extension_service.h"
 +#include "chrome/browser/extensions/external_provider_impl.h"
-+#include "chrome/browser/extensions/updater/extension_updater.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/storage_partition.h"
 +#include "extensions/browser/disable_reason.h"
 +#include "extensions/browser/extension_prefs.h"
 +#include "extensions/browser/extension_registrar.h"
 +#include "extensions/browser/extension_registry.h"
-+#include "extensions/browser/pending_extension_manager.h"
 +#include "extensions/browser/uninstall_reason.h"
 +#include "extensions/common/extension.h"
-+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
-+#include "extensions/common/mojom/manifest.mojom-shared.h"
 +#include "net/base/load_flags.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"
 +#include "services/network/public/cpp/resource_request.h"
 +#include "services/network/public/cpp/simple_url_loader.h"
++#include "url/url_constants.h"
 +
 +namespace browseros {
 +
 +namespace {
 +
-+constexpr base::TimeDelta kMaintenanceInterval = base::Minutes(15);
-+constexpr base::TimeDelta kInitialMaintenanceDelay = base::Seconds(60);
++constexpr size_t kMaxConfigBytes = 1024 * 1024;
++constexpr base::TimeDelta kConfigTimeout = base::Seconds(15);
 +
 +constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 +    net::DefineNetworkTrafficAnnotation("browseros_extension_maintenance", R"(
@@ -50,7 +48,9 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +          sender: "BrowserOS Extension Maintainer"
 +          description:
 +            "Fetches JSON configuration for BrowserOS extension maintenance."
-+          trigger: "Periodic maintenance cycle (every 15 minutes)."
++          trigger:
++            "Background maintenance or recovery when no usable local primary "
++            "extension exists. Never blocks external provider discovery."
 +          data: "No user data. GET request only."
 +          destination: OTHER
 +          destination_other: "BrowserOS configuration server."
@@ -68,48 +68,16 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +
 +BrowserOSExtensionMaintainer::~BrowserOSExtensionMaintainer() = default;
 +
-+void BrowserOSExtensionMaintainer::Start(const GURL& config_url,
-+                                         std::set<std::string> extension_ids,
-+                                         base::DictValue initial_config) {
-+  config_url_ = config_url;
-+  extension_ids_.clear();
-+  for (const std::string& id : extension_ids) {
-+    if (IsActiveBrowserOSExtension(id)) {
-+      extension_ids_.insert(id);
-+    }
-+  }
-+  last_config_ = std::move(initial_config);
-+
-+  LOG(INFO) << "browseros: Maintainer started, " << extension_ids_.size()
-+            << " extensions, scheduling in "
-+            << kInitialMaintenanceDelay.InSeconds() << "s";
-+
-+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-+      FROM_HERE,
-+      base::BindOnce(&BrowserOSExtensionMaintainer::RunMaintenanceCycle,
-+                     weak_ptr_factory_.GetWeakPtr()),
-+      kInitialMaintenanceDelay);
-+}
-+
-+void BrowserOSExtensionMaintainer::UpdateExtensionIds(
-+    std::set<std::string> ids) {
-+  extension_ids_.clear();
-+  for (const std::string& id : ids) {
-+    if (IsActiveBrowserOSExtension(id)) {
-+      extension_ids_.insert(id);
-+    }
-+  }
-+}
-+
-+void BrowserOSExtensionMaintainer::RunMaintenanceCycle() {
-+  if (!profile_) {
-+    ScheduleNextMaintenance();
++void BrowserOSExtensionMaintainer::CheckForUpdates(const GURL& config_url,
++                                                   UpdateCallback callback) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  callbacks_.push_back(std::move(callback));
++  if (url_loader_) {
 +    return;
 +  }
 +
-+  if (!config_url_.is_valid()) {
-+    ExecuteMaintenanceTasks();
-+    ScheduleNextMaintenance();
++  if (!config_url.is_valid() || !config_url.SchemeIs(url::kHttpsScheme)) {
++    Complete(base::DictValue());
 +    return;
 +  }
 +
@@ -119,84 +87,96 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +  }
 +
 +  auto request = std::make_unique<network::ResourceRequest>();
-+  request->url = config_url_;
-+  request->method = "GET";
++  request->url = config_url;
 +  request->load_flags = net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
-+
-+  auto loader =
++  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
++  url_loader_ =
 +      network::SimpleURLLoader::Create(std::move(request), kTrafficAnnotation);
 +
-+  auto* loader_ptr = loader.get();
-+  loader_ptr->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
++  // Remote discovery has its own bound and lifetime. Cancelling the owning
++  // loader drops this request; no network completion can revive a timed-out
++  // startup attempt or keep external-provider readiness pending.
++  url_loader_->SetTimeoutDuration(kConfigTimeout);
++  url_loader_->DownloadToString(
 +      url_loader_factory_.get(),
 +      base::BindOnce(&BrowserOSExtensionMaintainer::OnConfigFetched,
-+                     weak_ptr_factory_.GetWeakPtr(), std::move(loader)));
++                     weak_ptr_factory_.GetWeakPtr()),
++      kMaxConfigBytes);
++}
++
++void BrowserOSExtensionMaintainer::Cancel() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  weak_ptr_factory_.InvalidateWeakPtrs();
++  url_loader_.reset();
++  callbacks_.clear();
 +}
 +
 +void BrowserOSExtensionMaintainer::OnConfigFetched(
-+    std::unique_ptr<network::SimpleURLLoader> loader,
 +    std::optional<std::string> response_body) {
-+  if (response_body.has_value()) {
-+    base::DictValue config = ParseConfigJson(*response_body);
-+    if (!config.empty()) {
-+      last_config_ = std::move(config);
-+
-+      for (const auto [id, _] : last_config_) {
-+        if (IsActiveBrowserOSExtension(id)) {
-+          extension_ids_.insert(id);
-+        }
-+      }
-+
-+      LOG(INFO) << "browseros: Updated config with " << last_config_.size()
-+                << " extensions";
-+    } else {
-+      LOG(WARNING) << "browseros: Fetched config parsed as empty";
-+    }
-+  } else {
-+    LOG(WARNING) << "browseros: Failed to fetch maintenance config";
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!response_body) {
++    LOG(WARNING) << "browseros: Remote extension metadata unavailable";
++    Complete(base::DictValue());
++    return;
 +  }
-+
-+  ExecuteMaintenanceTasks();
-+  ScheduleNextMaintenance();
++  Complete(ParseConfigJson(*response_body));
 +}
 +
++// static
 +base::DictValue BrowserOSExtensionMaintainer::ParseConfigJson(
 +    const std::string& json_content) {
 +  std::optional<base::Value> parsed =
 +      base::JSONReader::Read(json_content, base::JSON_PARSE_RFC);
-+
 +  if (!parsed || !parsed->is_dict()) {
-+    LOG(ERROR) << "browseros: Invalid config JSON";
++    return base::DictValue();
++  }
++  const base::DictValue* configs = parsed->GetDict().FindDict("extensions");
++  if (!configs) {
 +    return base::DictValue();
 +  }
 +
-+  const base::DictValue* extensions = parsed->GetDict().FindDict("extensions");
++  base::DictValue prefs;
++  for (const auto [id, config] : *configs) {
++    if (!IsActiveBrowserOSExtension(id) || !config.is_dict()) {
++      continue;
++    }
++    const std::string* update_url = config.GetDict().FindString(
++        extensions::ExternalProviderImpl::kExternalUpdateUrl);
++    if (!update_url) {
++      continue;
++    }
++    const GURL url(*update_url);
++    if (!url.is_valid() || !url.SchemeIs(url::kHttpsScheme) ||
++        url.has_username() || url.has_password()) {
++      continue;
++    }
 +
-+  if (!extensions) {
-+    LOG(ERROR) << "browseros: No 'extensions' key in config";
-+    return base::DictValue();
++    // Remote metadata can only nominate an update URL. Local file paths and
++    // version claims from this response cannot bypass Chromium's signed updater
++    // or replace the bundle's version floor.
++    base::DictValue entry;
++    entry.Set(extensions::ExternalProviderImpl::kExternalUpdateUrl, url.spec());
++    prefs.Set(id, std::move(entry));
 +  }
-+
-+  return extensions->Clone();
++  return prefs;
 +}
 +
-+void BrowserOSExtensionMaintainer::ExecuteMaintenanceTasks() {
-+  LOG(INFO) << "browseros: Executing maintenance tasks";
++void BrowserOSExtensionMaintainer::Complete(base::DictValue prefs) {
++  url_loader_.reset();
++  // Move replies out before invoking user code: a callback may Retry or destroy
++  // the coordinator and this helper. Joined callers receive the same result.
++  std::vector<UpdateCallback> callbacks = std::move(callbacks_);
++  callbacks_.clear();
++  for (auto& callback : callbacks) {
++    std::move(callback).Run(prefs.Clone());
++  }
++}
 +
++void BrowserOSExtensionMaintainer::MaintainInstalledExtensions() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 +  UninstallInactiveProductExtensions();
-+  UninstallDeprecatedExtensions();
-+  ReinstallMissingExtensions();
 +  ReenableDisabledExtensions();
-+  ForceUpdateCheck();
 +  LogExtensionHealth("maintenance");
-+}
-+
-+void BrowserOSExtensionMaintainer::ScheduleNextMaintenance() {
-+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-+      FROM_HERE,
-+      base::BindOnce(&BrowserOSExtensionMaintainer::RunMaintenanceCycle,
-+                     weak_ptr_factory_.GetWeakPtr()),
-+      kMaintenanceInterval);
 +}
 +
 +void BrowserOSExtensionMaintainer::UninstallInactiveProductExtensions() {
@@ -234,159 +214,31 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +  }
 +}
 +
-+void BrowserOSExtensionMaintainer::UninstallDeprecatedExtensions() {
-+  if (!profile_ || last_config_.empty()) {
-+    return;
-+  }
-+
-+  extensions::ExtensionRegistry* registry =
-+      extensions::ExtensionRegistry::Get(profile_);
-+  extensions::ExtensionRegistrar* registrar =
-+      extensions::ExtensionRegistrar::Get(profile_);
-+
-+  if (!registry || !registrar) {
-+    return;
-+  }
-+
-+  std::set<std::string> server_ids;
-+  for (const auto [id, _] : last_config_) {
-+    server_ids.insert(id);
-+  }
-+
-+  for (const std::string& id : GetActiveBrowserOSExtensionIds()) {
-+    if (server_ids.contains(id)) {
-+      continue;
-+    }
-+
-+    const extensions::Extension* ext = registry->GetInstalledExtension(id);
-+    if (!ext) {
-+      continue;
-+    }
-+
-+    LOG(INFO) << "browseros: Uninstalling deprecated extension " << id;
-+
-+    std::u16string error;
-+    if (!registrar->UninstallExtension(
-+            id, extensions::UNINSTALL_REASON_ORPHANED_EXTERNAL_EXTENSION,
-+            &error)) {
-+      LOG(WARNING) << "browseros: Failed to uninstall " << id << ": " << error;
-+    }
-+  }
-+}
-+
-+void BrowserOSExtensionMaintainer::ReinstallMissingExtensions() {
-+  if (!profile_ || last_config_.empty()) {
-+    return;
-+  }
-+
-+  extensions::ExtensionRegistry* registry =
-+      extensions::ExtensionRegistry::Get(profile_);
-+  extensions::PendingExtensionManager* pending =
-+      extensions::PendingExtensionManager::Get(profile_);
-+
-+  if (!registry || !pending) {
-+    return;
-+  }
-+
-+  for (const std::string& id : extension_ids_) {
-+    if (registry->GetInstalledExtension(id)) {
-+      continue;
-+    }
-+
-+    const base::DictValue* config = last_config_.FindDict(id);
-+    if (!config) {
-+      continue;
-+    }
-+
-+    const std::string* update_url = config->FindString(
-+        extensions::ExternalProviderImpl::kExternalUpdateUrl);
-+    if (!update_url) {
-+      continue;
-+    }
-+
-+    GURL url(*update_url);
-+    if (!url.is_valid()) {
-+      continue;
-+    }
-+
-+    LOG(INFO) << "browseros: Reinstalling missing extension " << id;
-+
-+    pending->AddFromExternalUpdateUrl(
-+        id, std::string(), url,
-+        extensions::mojom::ManifestLocation::kExternalComponent,
-+        extensions::Extension::WAS_INSTALLED_BY_DEFAULT, false);
-+
-+    extensions::ExtensionUpdater* updater =
-+        extensions::ExtensionUpdater::Get(profile_);
-+    if (updater) {
-+      extensions::ExtensionUpdater::CheckParams params;
-+      params.ids = {id};
-+      params.install_immediately = true;
-+      params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
-+      // Use InstallPendingNow - the extension is in PendingExtensionManager,
-+      // CheckNow with specific IDs only checks installed extensions.
-+      updater->InstallPendingNow(std::move(params));
-+    }
-+  }
-+}
-+
 +void BrowserOSExtensionMaintainer::ReenableDisabledExtensions() {
-+  if (!profile_) {
-+    return;
-+  }
-+
-+  extensions::ExtensionRegistry* registry =
-+      extensions::ExtensionRegistry::Get(profile_);
-+  extensions::ExtensionRegistrar* registrar =
-+      extensions::ExtensionRegistrar::Get(profile_);
-+
-+  if (!registry || !registrar) {
-+    return;
-+  }
-+
-+  for (const std::string& id : extension_ids_) {
++  auto* registry = extensions::ExtensionRegistry::Get(profile_);
++  auto* registrar = extensions::ExtensionRegistrar::Get(profile_);
++  for (const auto& id : GetActiveBrowserOSExtensionIds()) {
 +    if (!registry->disabled_extensions().Contains(id)) {
 +      continue;
 +    }
-+
-+    LOG(INFO) << "browseros: Re-enabling disabled extension " << id;
-+    registrar->EnableExtension(id);
-+  }
-+}
-+
-+void BrowserOSExtensionMaintainer::ForceUpdateCheck() {
-+  if (!profile_ || extension_ids_.empty()) {
-+    return;
-+  }
-+
-+  extensions::ExtensionRegistry* registry =
-+      extensions::ExtensionRegistry::Get(profile_);
-+  extensions::ExtensionUpdater* updater =
-+      extensions::ExtensionUpdater::Get(profile_);
-+  if (!updater) {
-+    return;
-+  }
-+
-+  LOG(INFO) << "browseros: Force update check for " << extension_ids_.size()
-+            << " extensions";
-+
-+  for (const std::string& id : extension_ids_) {
-+    const extensions::Extension* ext =
-+        registry ? registry->GetInstalledExtension(id) : nullptr;
-+    if (ext) {
-+      LOG(INFO) << "browseros: ext=" << id << " v"
-+                << ext->version().GetString();
-+    } else {
-+      LOG(INFO) << "browseros: ext=" << id << " not installed";
++    // Keep product extensions usable, but never clear corruption, policy or
++    // other safety disablement just because a maintenance timer fired.
++    const auto reasons =
++        extensions::ExtensionPrefs::Get(profile_)->GetDisableReasons(id);
++    bool can_reenable = true;
++    for (auto reason : reasons) {
++      if (reason != extensions::disable_reason::DISABLE_USER_ACTION &&
++          reason != extensions::disable_reason::DISABLE_EXTERNAL_EXTENSION &&
++          reason != extensions::disable_reason::DISABLE_PERMISSIONS_INCREASE) {
++        can_reenable = false;
++        break;
++      }
++    }
++    if (can_reenable) {
++      LOG(INFO) << "browseros: Re-enabling managed extension " << id;
++      registrar->EnableExtension(id);
 +    }
 +  }
-+
-+  extensions::ExtensionUpdater::CheckParams params;
-+  params.ids = std::list<extensions::ExtensionId>(extension_ids_.begin(),
-+                                                  extension_ids_.end());
-+  params.install_immediately = true;
-+  params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
-+  updater->CheckNow(std::move(params));
 +}
 +
 +void BrowserOSExtensionMaintainer::LogExtensionHealth(
@@ -403,7 +255,7 @@ index 0000000000000000000000000000000000000000..cd6efceea5b413943945375a55c70d96
 +    return;
 +  }
 +
-+  for (const std::string& id : extension_ids_) {
++  for (const std::string& id : GetActiveBrowserOSExtensionIds()) {
 +    if (registry->enabled_extensions().Contains(id)) {
 +      continue;
 +    }
