@@ -159,21 +159,6 @@ export const NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT =
 export const NEWTAB_CHAT_MODE_CHANGED_EVENT = 'newtab.chat.mode_changed'
 
 /** @public */
-export const NEWTAB_VOICE_RECORDING_STARTED_EVENT =
-  'newtab.voice.recording_started'
-
-/** @public */
-export const NEWTAB_VOICE_RECORDING_STOPPED_EVENT =
-  'newtab.voice.recording_stopped'
-
-/** @public */
-export const NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
-  'newtab.voice.transcription_completed'
-
-/** @public */
-export const NEWTAB_VOICE_ERROR_EVENT = 'newtab.voice.error'
-
-/** @public */
 export const SIDEPANEL_AI_TRIGGERED_EVENT = 'sidepanel.ai.triggered'
 
 /** @public */
@@ -246,40 +231,3 @@ export const KIMI_API_KEY_CONFIGURED_EVENT = 'settings.kimi.api_key_configured'
 /** @public */
 export const KIMI_API_KEY_GUIDE_CLICKED_EVENT =
   'settings.kimi.api_key_guide_clicked'
-
-/** @public */
-export const SIDEPANEL_VOICE_RECORDING_STARTED_EVENT =
-  'sidepanel.voice.recording_started'
-
-/** @public */
-export const SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT =
-  'sidepanel.voice.recording_stopped'
-
-/** @public */
-export const SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
-  'sidepanel.voice.transcription_completed'
-
-/** @public */
-export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_OPENED_EVENT = 'sidepanel.voice_mode.opened'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_CLOSED_EVENT = 'sidepanel.voice_mode.closed'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT =
-  'sidepanel.voice_mode.turn_captured'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT =
-  'sidepanel.voice_mode.barge_in'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT =
-  'sidepanel.voice_mode.stop_agent'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT =
-  'sidepanel.voice_mode.transcribe_failed'

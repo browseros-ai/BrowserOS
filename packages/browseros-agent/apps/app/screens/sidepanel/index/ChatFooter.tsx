@@ -4,24 +4,19 @@ import { useEffect, useRef, useState } from 'react'
 import { AppSelector } from '@/components/elements/AppSelector'
 import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
-import { Feature } from '@/lib/browseros/capabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
   selectedTextStorage,
 } from '@/lib/selected-text/selectedTextStorage'
 import { cn } from '@/lib/utils'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
-import type { VoiceInputState } from '@/modules/voice/voice.hooks'
-import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
-import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
   mode: ChatMode
@@ -35,9 +30,6 @@ export interface ChatFooterProps {
   attachedTabs: chrome.tabs.Tab[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
-  voice?: VoiceInputState
-  voiceLoop?: VoiceLoopApi
-  onOpenVoiceMode?: () => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -52,15 +44,10 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   attachedTabs,
   onToggleTab,
   onRemoveTab,
-  voice,
-  voiceLoop,
-  onOpenVoiceMode,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
-  const { supports } = useCapabilities()
-  const supportsVoiceInput = supports(Feature.VOICE_INPUT_SUPPORT)
   const chatInputRef = useRef<ChatInputHandle>(null)
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
@@ -223,27 +210,19 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           </div>
         </div>
 
-        {supportsVoiceInput && voice?.error && (
-          <div className="mt-1 text-destructive text-xs">{voice.error}</div>
-        )}
-
-        <VoiceModeArea voiceLoop={supportsVoiceInput ? voiceLoop : undefined}>
-          <ChatInput
-            input={input}
-            status={status}
-            mode={mode}
-            sendDisabled={sendDisabled}
-            onInputChange={onInputChange}
-            onSubmit={onSubmit}
-            onStop={onStop}
-            selectedTabs={attachedTabs}
-            onToggleTab={onToggleTab}
-            onTabMentionOpenChange={setIsTabMentionOpen}
-            voice={supportsVoiceInput ? voice : undefined}
-            onOpenVoiceMode={supportsVoiceInput ? onOpenVoiceMode : undefined}
-            ref={chatInputRef}
-          />
-        </VoiceModeArea>
+        <ChatInput
+          input={input}
+          status={status}
+          mode={mode}
+          sendDisabled={sendDisabled}
+          onInputChange={onInputChange}
+          onSubmit={onSubmit}
+          onStop={onStop}
+          selectedTabs={attachedTabs}
+          onToggleTab={onToggleTab}
+          onTabMentionOpenChange={setIsTabMentionOpen}
+          ref={chatInputRef}
+        />
       </div>
     </footer>
   )

@@ -13,10 +13,6 @@ import {
   NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT,
   NEWTAB_TAB_REMOVED_EVENT,
   NEWTAB_TAB_TOGGLED_EVENT,
-  NEWTAB_VOICE_ERROR_EVENT,
-  NEWTAB_VOICE_RECORDING_STARTED_EVENT,
-  NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
-  NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { consumePendingHomeMessage } from '@/modules/chat/pending-home-message'
@@ -30,7 +26,6 @@ import { ChatMessages } from '@/screens/sidepanel/index/ChatMessages'
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const hasSentInitialRef = useRef(false)
-  const hasOpenedVoiceRef = useRef(false)
 
   const {
     mode,
@@ -55,8 +50,6 @@ export const NewTabChat: FC = () => {
     setInput,
     attachedTabs,
     mounted,
-    voiceState,
-    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,
@@ -72,10 +65,6 @@ export const NewTabChat: FC = () => {
       tabToggled: NEWTAB_TAB_TOGGLED_EVENT,
       tabRemoved: NEWTAB_TAB_REMOVED_EVENT,
       aiTriggered: NEWTAB_AI_TRIGGERED_EVENT,
-      voiceRecordingStarted: NEWTAB_VOICE_RECORDING_STARTED_EVENT,
-      voiceRecordingStopped: NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
-      voiceTranscriptionCompleted: NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
-      voiceError: NEWTAB_VOICE_ERROR_EVENT,
     },
   })
 
@@ -127,20 +116,6 @@ export const NewTabChat: FC = () => {
     } else {
       sendMessage({ text: query, files: pending?.files })
     }
-  }, [])
-
-  // Honour the `?voice=open` deep link from the home composer's voice-mode
-  // entry button: open the voice loop once after mount and strip the param
-  // so a refresh doesn't reopen it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
-  useEffect(() => {
-    if (hasOpenedVoiceRef.current) return
-    if (searchParams.get('voice') !== 'open') return
-    hasOpenedVoiceRef.current = true
-    const next = new URLSearchParams(searchParams)
-    next.delete('voice')
-    setSearchParams(next, { replace: true })
-    void voiceLoop.open()
   }, [])
 
   const handleNewConversation = () => {
@@ -219,9 +194,6 @@ export const NewTabChat: FC = () => {
           attachedTabs={attachedTabs}
           onToggleTab={toggleTabSelection}
           onRemoveTab={removeTab}
-          voice={voiceState}
-          voiceLoop={voiceLoop}
-          onOpenVoiceMode={voiceLoop.open}
         />
       </div>
     </div>

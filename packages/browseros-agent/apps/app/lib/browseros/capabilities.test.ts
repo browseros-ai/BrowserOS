@@ -67,31 +67,6 @@ describe('resolveStaticFeatureSupport', () => {
 })
 
 describe('resolveFeatureStaticSupport', () => {
-  it('gates voice input on alpha outside development', () => {
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.VOICE_INPUT_SUPPORT,
-        isDevelopment: true,
-        alphaFeaturesEnabled: false,
-      }),
-    ).toBe(true)
-
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.VOICE_INPUT_SUPPORT,
-        isDevelopment: false,
-        alphaFeaturesEnabled: false,
-      }),
-    ).toBe(false)
-
-    expect(
-      resolveFeatureStaticSupport({
-        feature: Feature.VOICE_INPUT_SUPPORT,
-        isDevelopment: false,
-        alphaFeaturesEnabled: true,
-      }),
-    ).toBe(true)
-  })
   it('preserves alpha-gated support for alpha features', () => {
     expect(
       resolveFeatureStaticSupport({

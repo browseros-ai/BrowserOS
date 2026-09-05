@@ -1,11 +1,4 @@
-import {
-  AudioLines,
-  Loader2,
-  Mic,
-  Send,
-  Square,
-  SquareStop,
-} from 'lucide-react'
+import { Send, SquareStop } from 'lucide-react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import {
   forwardRef,
@@ -16,9 +9,7 @@ import {
   useState,
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
-import { cn } from '@/lib/utils'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import type { VoiceInputState } from '@/modules/voice/voice.hooks'
 
 interface MentionState {
   isOpen: boolean
@@ -37,8 +28,6 @@ interface ChatInputProps {
   selectedTabs: chrome.tabs.Tab[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
-  voice?: VoiceInputState
-  onOpenVoiceMode?: () => void
 }
 
 export interface ChatInputHandle {
@@ -61,8 +50,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       selectedTabs,
       onToggleTab,
       onTabMentionOpenChange,
-      voice,
-      onOpenVoiceMode,
     },
     ref,
   ) => {
@@ -274,48 +261,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [mentionState.isOpen, closeMention])
 
-    const renderVoiceButton = () => {
-      if (!voice) return null
-
-      if (voice.isRecording) {
-        return (
-          <button
-            type="button"
-            onClick={voice.onStopRecording}
-            className="cursor-pointer rounded-full bg-red-600 p-2 text-white shadow-sm transition-all duration-200 hover:bg-red-900"
-          >
-            <Square className="h-3.5 w-3.5" />
-            <span className="sr-only">Stop recording</span>
-          </button>
-        )
-      }
-
-      if (voice.isTranscribing) {
-        return (
-          <button
-            type="button"
-            disabled
-            className="rounded-full p-2 text-muted-foreground"
-          >
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span className="sr-only">Transcribing</span>
-          </button>
-        )
-      }
-
-      return (
-        <button
-          type="button"
-          onClick={voice.onStartRecording}
-          disabled={isSubmitDisabled}
-          className="cursor-pointer rounded-full p-2 text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Mic className="h-3.5 w-3.5" />
-          <span className="sr-only">Voice input</span>
-        </button>
-      )
-    }
-
     const renderSendButton = () => {
       if (isBusy) {
         return (
@@ -333,12 +278,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return (
         <button
           type="submit"
-          disabled={
-            isSubmitDisabled ||
-            !input.trim() ||
-            voice?.isRecording ||
-            voice?.isTranscribing
-          }
+          disabled={isSubmitDisabled || !input.trim()}
           className="cursor-pointer rounded-full bg-[var(--accent-orange)] p-2 text-white shadow-sm transition-all duration-200 hover:bg-[var(--accent-orange-bright)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Send className="h-3.5 w-3.5" />
@@ -346,22 +286,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         </button>
       )
     }
-
-    // The floating button cluster (voice mode + dictation + send) sits
-    // absolutely on top of the input, so its width has to be reserved as
-    // padding on the input or text slides under the icons. Derive the
-    // padding from the count of buttons that will actually render — the
-    // cluster grows/shrinks with props and recording state.
-    const showVoiceMode = !!onOpenVoiceMode && !voice?.isRecording
-    const showDictation = !!voice
-    const visibleButtonCount =
-      1 + (showVoiceMode ? 1 : 0) + (showDictation ? 1 : 0)
-    const inputPaddingRight =
-      visibleButtonCount === 3
-        ? 'pr-32'
-        : visibleButtonCount === 2
-          ? 'pr-20'
-          : 'pr-11'
 
     return (
       <form
@@ -377,57 +301,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           onClose={closeMention}
           anchorRef={textareaRef}
         />
-        {voice?.isRecording ? (
-          <div
-            className={cn(
-              'flex min-h-[42px] flex-1 items-center justify-center gap-1 rounded-2xl border border-red-500/50 bg-muted/50 px-4 py-2.5',
-              inputPaddingRight,
-            )}
-          >
-            {voice.audioLevels.map((level, i) => (
-              <div
-                key={i.toString()}
-                className="w-1 rounded-full bg-red-500 transition-all duration-75"
-                style={{
-                  height: `${Math.max(4, Math.min(20, level * 0.6))}px`,
-                }}
-              />
-            ))}
-          </div>
-        ) : (
-          <textarea
-            ref={textareaRef}
-            className={cn(
-              'field-sizing-content max-h-60 min-h-[42px] flex-1 resize-none overflow-hidden rounded-2xl border border-border/50 bg-muted/50 px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 hover:border-border focus:border-[var(--accent-orange)]',
-              inputPaddingRight,
-            )}
-            value={input}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              voice?.isTranscribing
-                ? 'Transcribing...'
-                : mode === 'chat'
-                  ? 'Ask about this page...'
-                  : 'What should I do?'
-            }
-            disabled={voice?.isTranscribing}
-            rows={1}
-          />
-        )}
+        {/* Reserve right padding for the overlaid send/stop button. */}
+        <textarea
+          ref={textareaRef}
+          className="field-sizing-content max-h-60 min-h-[42px] flex-1 resize-none overflow-hidden rounded-2xl border border-border/50 bg-muted/50 py-2.5 pr-11 pl-4 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 hover:border-border focus:border-[var(--accent-orange)]"
+          value={input}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={
+            mode === 'chat' ? 'Ask about this page...' : 'What should I do?'
+          }
+          rows={1}
+        />
         <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
-          {onOpenVoiceMode && !voice?.isRecording && (
-            <button
-              type="button"
-              onClick={onOpenVoiceMode}
-              title="Voice mode"
-              aria-label="Voice mode"
-              className="cursor-pointer rounded-full p-2 text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground"
-            >
-              <AudioLines className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {renderVoiceButton()}
           {renderSendButton()}
         </div>
       </form>

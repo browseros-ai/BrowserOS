@@ -122,7 +122,6 @@
     "hono": "^4.12.27",
     "immutable": "^5.1.8",
     "js-yaml": "^4.3.0",
-    "protobufjs": "^7.6.5",
     "shell-quote": "^1.9.0",
     "tmp": "^0.2.6"
   }

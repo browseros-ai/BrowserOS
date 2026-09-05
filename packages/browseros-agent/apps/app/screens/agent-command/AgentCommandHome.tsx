@@ -114,9 +114,6 @@ export const AgentCommandHome: FC = () => {
                   ? `Ask ${selectedProvider.name} to handle a task...`
                   : 'Loading providers...'
               }
-              onOpenVoiceMode={() => {
-                navigate('/home/chat?voice=open&mode=chat')
-              }}
             />
           </div>
         </div>
