@@ -2,7 +2,7 @@
   "name": "@browseros/app-onboard",
   "type": "module",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Standalone Vite app for the BrowserOS onboarding flow (app theme, base-ui).",
   "scripts": {
     "dev": "vite",
