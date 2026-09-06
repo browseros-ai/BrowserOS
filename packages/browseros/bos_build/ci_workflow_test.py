@@ -1860,6 +1860,10 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
         ):
             self.assertIn(f".github/workflows/{filename}", paths)
 
+        release_checks = self.load_workflow("test.yml")
+        release_paths = release_checks.get("on", release_checks.get(True))["pull_request"]["paths"]
+        self.assertIn(".github/workflows/reusable-build-macos-nightly.yml", release_paths)
+
     def test_internal_builder_uses_reservation_and_frozen_artifact_source(self):
         workflow = self.load_workflow("reusable-build-macos-nightly.yml")
         triggers = workflow.get("on", workflow.get(True))
