@@ -32,29 +32,56 @@ interface GroupState {
 
 /**
  * Maintains one best-effort Chrome tab group per conversation and window.
- * Per-key queues serialize check/create/remember, preventing concurrent tab
+ * Per-conversation queues serialize check/create/remember, preventing concurrent tab
  * opens from creating duplicate groups. State intentionally outlives runs.
  */
 export class ConversationTabGroups {
   private readonly groups = new Map<string, GroupState>()
   private readonly queues = new Map<string, Promise<void>>()
 
-  constructor(private readonly browserSession: BrowserSession) {}
+  constructor(
+    private readonly browserSession: BrowserSession,
+    private readonly deps: { wait?: (ms: number) => Promise<void> } = {},
+  ) {}
 
   /** Starts detached work; the caller's browser-tool result is never delayed. */
   addCreatedPages(
     run: ActiveConversationRun,
     pageIds: readonly number[],
   ): void {
-    void this.resolveWindowsAndQueue(run, pageIds).catch((error) => {
-      logger.warn('Agent tab grouping failed', {
-        conversationId: run.conversationId,
-        error: errorText(error),
+    if (!run.panelsVisible || !run.tabGroup) return
+    const key = run.conversationId
+    const previous = this.queues.get(key) ?? Promise.resolve()
+    const queued = previous
+      .catch(() => undefined)
+      .then(async () => {
+        // These tabs already exist even if the model has finished or failed.
+        // Retry browser effects independently, and re-resolve windows each time:
+        // a user may move/close/reassign a tab while the queue is waiting.
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            await this.groupInCurrentWindows(run, pageIds)
+            return
+          } catch (error) {
+            if (attempt === 3) throw error
+            await (this.deps.wait ?? Bun.sleep)(250 * 2 ** attempt)
+          }
+        }
       })
-    })
+    this.queues.set(key, queued)
+    void queued
+      .catch((error) => {
+        logger.warn('Agent tab grouping failed after retries', {
+          conversationId: run.conversationId,
+          error: errorText(error),
+        })
+      })
+      .finally(() => {
+        if (this.queues.get(key) === queued) this.queues.delete(key)
+      })
   }
 
-  private async resolveWindowsAndQueue(
+  private async groupInCurrentWindows(
     run: ActiveConversationRun,
     pageIds: readonly number[],
   ): Promise<void> {
@@ -62,39 +89,19 @@ export class ConversationTabGroups {
     const byWindow = new Map<number, number[]>()
     for (const pageId of new Set(pageIds)) {
       const page = this.browserSession.pages.getInfo(pageId)
-      if (!page || page.windowId === undefined) continue
+      if (!page || page.windowId === undefined || !run.ownsTab(page.tabId))
+        continue
       const pages = byWindow.get(page.windowId) ?? []
       pages.push(pageId)
       byWindow.set(page.windowId, pages)
     }
-
     for (const [windowId, pages] of byWindow) {
-      this.enqueue(run, windowId, pages)
+      await this.ensureGrouped(
+        groupKey(run.conversationId, windowId),
+        run,
+        pages,
+      )
     }
-  }
-
-  private enqueue(
-    run: ActiveConversationRun,
-    windowId: number,
-    pageIds: readonly number[],
-  ): void {
-    const key = groupKey(run.conversationId, windowId)
-    const previous = this.queues.get(key) ?? Promise.resolve()
-    const queued = previous
-      .catch(() => undefined)
-      .then(() => this.ensureGrouped(key, run, pageIds))
-    this.queues.set(key, queued)
-    void queued
-      .catch((error) => {
-        logger.warn('Agent tab group operation failed', {
-          conversationId: run.conversationId,
-          windowId,
-          error: errorText(error),
-        })
-      })
-      .finally(() => {
-        if (this.queues.get(key) === queued) this.queues.delete(key)
-      })
   }
 
   private async ensureGrouped(

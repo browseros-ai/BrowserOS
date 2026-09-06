@@ -408,6 +408,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversationId: conversationIdRef.current,
           mode: currentMode,
           browserContext: requestBrowserContext,
+          panelTabId: activeTab?.id,
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,

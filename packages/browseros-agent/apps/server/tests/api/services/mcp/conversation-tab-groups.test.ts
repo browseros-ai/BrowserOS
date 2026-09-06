@@ -23,6 +23,27 @@ describe('ConversationTabGroups', () => {
     ])
   })
 
+  it('retries a transient group failure using the current window without another tool call', async () => {
+    const fixture = browserFixture()
+    const original = fixture.session.cdp.bind(fixture.session)
+    let first = true
+    fixture.session.cdp = (async (
+      method: string,
+      params: Record<string, unknown>,
+    ) => {
+      if (method === 'Browser.createTabGroup' && first) {
+        first = false
+        throw new Error('temporarily unavailable')
+      }
+      return original(method as never, params as never)
+    }) as BrowserSession['cdp']
+    const groups = new ConversationTabGroups(fixture.session, {
+      wait: async () => {},
+    })
+    groups.addCreatedPages(activeRun('retry'), [2])
+    await eventually(() => expect(fixture.groups[0]?.tabIds).toEqual([102]))
+  })
+
   it('repairs a retained group after the user deletes it', async () => {
     const fixture = browserFixture()
     const groups = new ConversationTabGroups(fixture.session)
@@ -49,7 +70,8 @@ function activeRun(conversationId: string): ActiveConversationRun {
     panelsVisible: true,
     tabGroup: { title: 'browseros/research', colorKey: 'browseros' },
     signal: new AbortController().signal,
-    associateTabs: () => true,
+    ownsTab: () => true,
+    recordCreatedTabs: () => true,
   }
 }
 

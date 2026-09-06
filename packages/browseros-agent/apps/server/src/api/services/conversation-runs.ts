@@ -59,7 +59,10 @@ export interface ActiveConversationRun {
   readonly tabGroup: ConversationTabGroupPresentation | undefined
   /** Aborts browser work when the user stops this exact run. */
   readonly signal: AbortSignal
-  associateTabs(tabIds: readonly number[]): boolean
+  /** Records tabs actually created by this run, never tabs merely read as context. */
+  recordCreatedTabs(tabIds: readonly number[]): boolean
+  /** Grouping may finish after execution; a later owner still takes precedence. */
+  ownsTab(tabId: number): boolean
 }
 
 export interface ConversationRunActivity {
@@ -258,7 +261,9 @@ export class ConversationRuns {
       panelsVisible: record.panelsVisible,
       tabGroup: record.tabGroup,
       signal: record.abortController.signal,
-      associateTabs: (tabIds) => this.associateTabs(record, tabIds),
+      recordCreatedTabs: (tabIds) => this.associateTabs(record, tabIds),
+      ownsTab: (tabId) =>
+        this.panelByTab.get(tabId)?.conversationId === record.conversationId,
     }
   }
 
@@ -373,7 +378,11 @@ export class ConversationRuns {
     let changed = false
     for (const tabId of tabIds) {
       if (!Number.isInteger(tabId) || tabId < 0) continue
-      if (this.panelByTab.get(tabId) === record) continue
+      // Automatic discovery cannot override an explicit submission in another
+      // panel. Only attachInitialPanels may transfer an existing tab.
+      const owner = this.panelByTab.get(tabId)
+      if (owner && owner.conversationId !== record.conversationId) continue
+      if (owner === record) continue
       this.panelByTab.set(tabId, record)
       changed = true
     }

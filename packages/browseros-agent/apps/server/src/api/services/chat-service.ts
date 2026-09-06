@@ -116,7 +116,8 @@ export class ChatService {
       await this.conversationRuns.start({
         conversationId: request.conversationId,
         messages: [],
-        panelTabIds: browserContextTabIds(request.browserContext),
+        panelTabIds:
+          request.panelTabId === undefined ? [] : [request.panelTabId],
         panelsVisible: !request.isScheduledTask,
         tabGroup: request.isScheduledTask
           ? undefined
@@ -858,15 +859,6 @@ class ChatRequestError extends Error {
     super(`Chat request failed with status ${response.status}`)
     this.name = 'ChatRequestError'
   }
-}
-
-function browserContextTabIds(browserContext?: BrowserContext): number[] {
-  if (!browserContext) return []
-  const tabIds = new Set<number>()
-  if (browserContext.activeTab) tabIds.add(browserContext.activeTab.id)
-  for (const tab of browserContext.selectedTabs ?? []) tabIds.add(tab.id)
-  for (const tab of browserContext.tabs ?? []) tabIds.add(tab.id)
-  return [...tabIds]
 }
 
 function conversationTabGroup(
