@@ -37,12 +37,13 @@ export interface ConversationPanelBrokerDeps {
 export class ConversationPanelBroker {
   private views: ConversationPanelViews = {}
   private loadPromise: Promise<void> | undefined
-  // Panel opening is safe to reassert, but glow activation restarts animation.
-  // Track that non-idempotent effect separately from authoritative assignments.
+  // Glow is a per-run effect. Visibility acknowledgements live in session
+  // storage: a heartbeat must never reverse a user close after a successful open.
   private readonly activatedRunByTab = new Map<number, string>()
   private loopPromise: Promise<void> | undefined
   private connectAbort: AbortController | undefined
   private stopped = true
+  private pending: Promise<void> = Promise.resolve()
 
   constructor(private readonly deps: ConversationPanelBrokerDeps) {}
 
@@ -61,14 +62,27 @@ export class ConversationPanelBroker {
   }
 
   /** Makes local storage and browser effects match one complete assignment set. */
-  async reconcile(assignments: ConversationPanelAssignments): Promise<void> {
+  reconcile(assignments: ConversationPanelAssignments): Promise<void> {
+    const next = this.pending
+      .catch(() => undefined)
+      .then(() => this.reconcileNow(assignments))
+    this.pending = next
+    return next
+  }
+
+  private async reconcileNow(
+    assignments: ConversationPanelAssignments,
+  ): Promise<void> {
     await this.ensureLoaded()
 
     const previous = this.views
     const next = Object.fromEntries(
       assignments.assignments.map((assignment) => [
         String(assignment.tabId),
-        assignment,
+        {
+          ...assignment,
+          openedRunId: previous[String(assignment.tabId)]?.openedRunId,
+        },
       ]),
     )
     const stopped = Object.values(previous).filter((assignment) => {
@@ -76,9 +90,6 @@ export class ConversationPanelBroker {
       const replacement = next[String(assignment.tabId)]
       return !sameRunningAssignment(assignment, replacement)
     })
-    const running = assignments.assignments.filter(
-      (assignment) => assignment.status === 'running',
-    )
 
     // Storage is the handoff to independently mounted React panels. Commit it
     // before opening anything, but do not advance memory if the write fails:
@@ -90,9 +101,11 @@ export class ConversationPanelBroker {
       this.activatedRunByTab.delete(assignment.tabId)
     }
     await this.deactivate(stopped, next)
-    // `open: true` is idempotent. Reassert every running assignment so an SSE
-    // reconnect or heartbeat repairs a transient Chrome-side failure.
-    for (const assignment of running) await this.activate(assignment)
+    // Retry only unacknowledged opens, including runs that completed before the
+    // browser could react. Closing an acknowledged panel is user-owned state.
+    for (const assignment of assignments.assignments)
+      await this.activate(assignment)
+    await this.deps.writeViews(this.views)
   }
 
   private async deactivate(
@@ -193,11 +206,15 @@ export class ConversationPanelBroker {
     assignment: ConversationPanelAssignment,
   ): Promise<void> {
     try {
-      const browserTab = await this.deps.getTab(assignment.tabId)
-      await this.deps.openPanel({
-        tabId: assignment.tabId,
-        windowId: browserTab.windowId,
-      })
+      const view = this.views[String(assignment.tabId)]
+      if (view.openedRunId !== assignment.runId) {
+        const browserTab = await this.deps.getTab(assignment.tabId)
+        await this.deps.openPanel({
+          tabId: assignment.tabId,
+          windowId: browserTab.windowId,
+        })
+        view.openedRunId = assignment.runId
+      }
     } catch (error) {
       // The server may report an effect immediately before a tab closes. The
       // retained mapping is harmless; a heartbeat retries other transient errors.
@@ -208,7 +225,10 @@ export class ConversationPanelBroker {
       return
     }
 
-    if (this.activatedRunByTab.get(assignment.tabId) === assignment.runId) {
+    if (
+      assignment.status !== 'running' ||
+      this.activatedRunByTab.get(assignment.tabId) === assignment.runId
+    ) {
       return
     }
     await this.deps.sendGlow(assignment.tabId, {
@@ -224,6 +244,11 @@ export class ConversationPanelBroker {
         // Session storage carries the last assignment set across MV3 worker
         // suspension, allowing reconciliation to stop glows from a finished run.
         this.views = views
+        for (const view of Object.values(views)) {
+          if (view.status === 'running' && view.openedRunId === view.runId) {
+            this.activatedRunByTab.set(view.tabId, view.runId)
+          }
+        }
       })
       this.loadPromise = loading
       try {

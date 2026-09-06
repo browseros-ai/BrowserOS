@@ -1,7 +1,11 @@
 import type { ConversationPanelAssignment } from '@browseros/shared/schemas/conversation-panels'
 import { storage } from '@wxt-dev/storage'
 
-export type ConversationPanelViews = Record<string, ConversationPanelAssignment>
+/** Successful browser effects survive MV3 suspension independently of run status. */
+export type ConversationPanelView = ConversationPanelAssignment & {
+  openedRunId?: string
+}
+export type ConversationPanelViews = Record<string, ConversationPanelView>
 
 /**
  * Background-owned tab routing table consumed by thin side-panel views.

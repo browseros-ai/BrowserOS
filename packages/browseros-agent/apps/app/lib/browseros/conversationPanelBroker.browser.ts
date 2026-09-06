@@ -11,7 +11,8 @@ export function createConversationPanelBroker(): ConversationPanelBroker {
     fetch: (input, init) => fetch(input, init),
     getTab: (tabId) => chrome.tabs.get(tabId),
     openPanel: async (target) => {
-      await openSidePanel(target)
+      const result = await openSidePanel(target)
+      if (!result.opened) throw new Error('Contextual panel is not ready')
     },
     readViews: () => conversationPanelViewsStorage.getValue(),
     writeViews: (views) => conversationPanelViewsStorage.setValue(views),

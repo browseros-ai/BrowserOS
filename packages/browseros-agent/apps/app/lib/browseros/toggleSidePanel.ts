@@ -4,6 +4,9 @@ import {
 } from './sidePanelOpenStateStorage'
 
 const SIDEPANEL_PATH = 'sidepanel.html'
+// All writers in the worker share this queue, including toolbar and broker.
+const targetOperations = new Map<string, Promise<SidePanelToggleResult>>()
+let scopeOptionsWrite: Promise<void> = Promise.resolve()
 const openWindowSidePanelIds = new Set<number>()
 let sidePanelPerWindow = false
 let sidePanelOpenStateListenersRegistered = false
@@ -35,10 +38,19 @@ async function applySidePanelPerWindowPreference(
   epoch: number,
 ): Promise<void> {
   if (epoch !== sidePanelScopePreferenceEpoch) return
-  await chrome.sidePanel.setOptions(
-    perWindow ? { enabled: true, path: SIDEPANEL_PATH } : { enabled: false },
-  )
-  cacheSidePanelPerWindowPreference(perWindow, epoch)
+  const write = scopeOptionsWrite
+    .catch(() => undefined)
+    .then(async () => {
+      if (epoch !== sidePanelScopePreferenceEpoch) return
+      await chrome.sidePanel.setOptions(
+        perWindow
+          ? { enabled: true, path: SIDEPANEL_PATH }
+          : { enabled: false },
+      )
+      cacheSidePanelPerWindowPreference(perWindow, epoch)
+    })
+  scopeOptionsWrite = write
+  await write
 }
 
 function cacheSidePanelPerWindowPreference(
@@ -68,7 +80,9 @@ export async function initializeSidePanelOptions(): Promise<void> {
 async function loadSidePanelScopePreference(): Promise<void> {
   const epoch = sidePanelScopePreferenceEpoch
   const perWindow = await readSidePanelScopePreference()
-  cacheSidePanelPerWindowPreference(perWindow, epoch)
+  // Updates and worker restarts must also disable the global default in tab
+  // mode. A leftover global panel otherwise leaks into newly opened tabs.
+  await applySidePanelPerWindowPreference(perWindow, epoch)
 }
 
 async function loadWindowSidePanelOpenState(): Promise<void> {
@@ -126,16 +140,42 @@ export async function ensureSidePanelRuntimeStateLoaded(): Promise<void> {
 async function openTabSidePanel({
   tabId,
 }: SidePanelTarget): Promise<SidePanelToggleResult> {
-  // This is an idempotent command, not a check-then-toggle sequence. The
-  // background conversation broker may race with a user click; `open: true`
-  // guarantees that either ordering leaves the touched tab's panel open.
+  // Encode native host identity, never conversation/run identity: changing a
+  // path destroys Chrome's cached panel view and its in-progress draft.
+  await chrome.sidePanel.setOptions({
+    tabId,
+    enabled: true,
+    path: `${SIDEPANEL_PATH}?tabId=${tabId}`,
+  })
   return await chrome.sidePanel.browserosToggle({ tabId, open: true })
 }
 
-async function toggleTabSidePanel({
-  tabId,
-}: SidePanelTarget): Promise<SidePanelToggleResult> {
-  return await chrome.sidePanel.browserosToggle({ tabId })
+async function toggleTabSidePanel(
+  target: SidePanelTarget,
+): Promise<SidePanelToggleResult> {
+  // Native implicit toggle only checks foreground visibility. IsOpen includes
+  // inactive tabs' remembered contextual state; standard close clears it safely.
+  if (await chrome.sidePanel.browserosIsOpen({ tabId: target.tabId })) {
+    await chrome.sidePanel.close({ tabId: target.tabId })
+    return { opened: false }
+  }
+  return await openTabSidePanel(target)
+}
+
+function forTarget(
+  key: string,
+  action: () => Promise<SidePanelToggleResult>,
+): Promise<SidePanelToggleResult> {
+  const next = (targetOperations.get(key) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(action)
+  targetOperations.set(key, next)
+  void next
+    .finally(() => {
+      if (targetOperations.get(key) === next) targetOperations.delete(key)
+    })
+    .catch(() => undefined)
+  return next
 }
 
 async function openWindowSidePanel({
@@ -182,7 +222,7 @@ export async function openSidePanel(
   target: SidePanelTarget,
 ): Promise<SidePanelToggleResult> {
   await ensureSidePanelRuntimeStateLoaded()
-  return await openTabSidePanel(target)
+  return await forTarget(`tab:${target.tabId}`, () => openTabSidePanel(target))
 }
 
 /** Toggles the configured side panel scope from a toolbar/user gesture. */
@@ -191,7 +231,11 @@ export async function toggleSidePanel(
 ): Promise<SidePanelToggleResult> {
   await ensureSidePanelRuntimeStateLoaded()
   if (sidePanelPerWindow) {
-    return await toggleWindowSidePanel(target)
+    return await forTarget(`window:${target.windowId}`, () =>
+      toggleWindowSidePanel(target),
+    )
   }
-  return await toggleTabSidePanel(target)
+  return await forTarget(`tab:${target.tabId}`, () =>
+    toggleTabSidePanel(target),
+  )
 }
