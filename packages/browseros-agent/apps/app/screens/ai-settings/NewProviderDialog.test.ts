@@ -14,6 +14,40 @@ const baseValues = {
 }
 
 describe('provider setup boundary', () => {
+  it('normalizes custom headers and keeps conversation placeholders for the server', () => {
+    const values = providerFormSchema.parse({
+      ...baseValues,
+      type: 'openai-compatible',
+      baseUrl: 'http://localhost:1234',
+      headers: [{ name: 'x-opencode-session', value: '{{conversationId}}' }],
+    })
+    expect(normalizeProviderFormValues(values).headers).toEqual({
+      'x-opencode-session': '{{conversationId}}',
+    })
+    expect(
+      normalizeProviderFormValues({ ...values, headers: [] }).headers,
+    ).toEqual({})
+  })
+
+  it.each([
+    [{ name: '', value: 'a' }],
+    [{ name: 'bad name', value: 'a' }],
+    [{ name: 'x-test', value: 'a\nb' }],
+    [
+      { name: 'X-Test', value: 'a' },
+      { name: 'x-test', value: 'b' },
+    ],
+  ])('rejects invalid header rows %j', (...headers) => {
+    expect(
+      providerFormSchema.safeParse({
+        ...baseValues,
+        type: 'openai-compatible',
+        baseUrl: 'http://localhost:1234',
+        headers,
+      }).success,
+    ).toBe(false)
+  })
+
   for (const type of ['claude-code', 'codex', 'acp-custom']) {
     it(`rejects removed ACP provider type ${type}`, () => {
       expect(

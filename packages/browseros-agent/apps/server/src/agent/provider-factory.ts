@@ -9,6 +9,7 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
+import { resolveProviderHeaders } from '../lib/clients/llm/headers'
 import {
   createMockBrowserOSLanguageModel,
   shouldUseMockBrowserOSLLM,
@@ -28,6 +29,7 @@ function createAnthropicFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
   return createAnthropic({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
@@ -45,6 +47,7 @@ function createOpenAIFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
   return createOpenAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
@@ -55,6 +58,7 @@ function createGoogleFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
   return createGoogleGenerativeAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
@@ -65,6 +69,7 @@ function createOpenRouterFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('OpenRouter provider requires apiKey')
   return createOpenRouter({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
@@ -86,6 +91,7 @@ function createAzureFactory(
     )
   }
   return createAzure({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.resourceName && { resourceName: config.resourceName }),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
@@ -97,6 +103,7 @@ function createLMStudioFactory(
 ): (modelId: string) => unknown {
   if (!config.baseUrl) throw new Error('LMStudio provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -108,6 +115,7 @@ function createOllamaFactory(
 ): (modelId: string) => unknown {
   if (!config.baseUrl) throw new Error('Ollama provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -123,6 +131,7 @@ function createBedrockFactory(
     )
   }
   return createAmazonBedrock({
+    ...(config.headers && { headers: config.headers }),
     region: config.region,
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
@@ -141,6 +150,7 @@ function createBrowserOSFactory(
 
   if (upstreamProvider === LLM_PROVIDERS.OPENROUTER) {
     return createOpenRouter({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -148,6 +158,7 @@ function createBrowserOSFactory(
   }
   if (upstreamProvider === LLM_PROVIDERS.ANTHROPIC) {
     return createAnthropic({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -155,6 +166,7 @@ function createBrowserOSFactory(
   }
   if (upstreamProvider === LLM_PROVIDERS.AZURE) {
     return createAzure({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -162,6 +174,7 @@ function createBrowserOSFactory(
   }
   logger.debug('Creating OpenAI-compatible provider for BrowserOS')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'browseros',
     baseURL: baseUrl,
     ...(apiKey && { apiKey }),
@@ -175,6 +188,7 @@ function createOpenAICompatibleFactory(
   if (!config.baseUrl)
     throw new Error('OpenAI-compatible provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'openai-compatible',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -187,6 +201,7 @@ function createMoonshotFactory(
   if (!config.baseUrl) throw new Error('Moonshot provider requires baseUrl')
   if (!config.apiKey) throw new Error('Moonshot provider requires apiKey')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'moonshot',
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
@@ -198,6 +213,7 @@ function createQwenCodeFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
@@ -210,6 +226,7 @@ function createGitHubCopilotFactory(
   if (!config.apiKey)
     throw new Error('GitHub Copilot requires OAuth authentication')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'github-copilot',
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
@@ -222,6 +239,7 @@ function createChatGPTProFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
   return createOpenAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
   }).responses
@@ -257,5 +275,10 @@ export async function createLanguageModel(
   const provider = config.provider as string
   const factory = PROVIDER_FACTORIES[provider]
   if (!factory) throw new Error(`Unknown provider: ${provider}`)
-  return { model: factory(config)(config.model) as LanguageModel }
+  return {
+    model: factory({
+      ...config,
+      headers: resolveProviderHeaders(config.headers, config.conversationId),
+    })(config.model) as LanguageModel,
+  }
 }

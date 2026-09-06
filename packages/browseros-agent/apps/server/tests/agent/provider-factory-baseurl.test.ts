@@ -94,6 +94,46 @@ beforeEach(() => {
 
 const CUSTOM_URL = 'https://api.minimax.io/anthropic'
 
+describe('provider header forwarding', () => {
+  for (const provider of [
+    'anthropic',
+    'openai',
+    'google',
+    'openrouter',
+    'azure',
+  ] as const) {
+    it(`forwards resolved headers to ${provider} in both provider pipelines`, async () => {
+      const config = {
+        provider,
+        model: 'test-model',
+        apiKey: 'local-test-key',
+        baseUrl: 'http://127.0.0.1:1234',
+        headers: {
+          'x-session': 'chat-{{conversationId}}',
+          'x-static': 'value',
+        },
+      }
+      await createLanguageModel({ ...config, conversationId: 'conversation-1' })
+      expect(lastCallArgs[provider]?.headers).toEqual({
+        'x-session': 'chat-conversation-1',
+        'x-static': 'value',
+      })
+      const { createLLMProvider } = await import(
+        '../../src/lib/clients/llm/provider'
+      )
+      createLLMProvider(config)
+      expect(lastCallArgs[provider]?.headers).toMatchObject({
+        'x-static': 'value',
+      })
+      expect(
+        (
+          lastCallArgs[provider]?.headers as Record<string, string> | undefined
+        )?.['x-session'],
+      ).toMatch(/^chat-[0-9a-f-]{36}$/)
+    })
+  }
+})
+
 describe('createAnthropicFactory baseUrl handling', () => {
   it('forwards a configured baseUrl as the SDK baseURL option', async () => {
     await createLanguageModel({

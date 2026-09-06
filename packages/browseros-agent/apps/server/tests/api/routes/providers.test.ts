@@ -75,6 +75,32 @@ const body = {
 }
 
 describe('llm provider routes', () => {
+  it('round-trips custom headers through provider writes and reads', async () => {
+    const routes = createProvidersRoutes(memoryStore())
+    const headers = { 'x-opencode-session': '{{conversationId}}' }
+    const response = await routes.request(`/${PROVIDER_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, headers }),
+    })
+    expect(response.status).toBe(200)
+    expect(
+      await (await routes.request(`/${PROVIDER_ID}`)).json(),
+    ).toMatchObject({ provider: { headers } })
+  })
+
+  it('rejects malformed custom headers before saving', async () => {
+    const { store, rows } = memoryStore()
+    const routes = createProvidersRoutes({ store })
+    const response = await routes.request(`/${PROVIDER_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, headers: { 'x-test': 'a\r\nb' } }),
+    })
+    expect(response.status).toBe(400)
+    expect(rows.size).toBe(0)
+  })
+
   it('lists providers', async () => {
     const routes = createProvidersRoutes(memoryStore([row()]))
     const response = await routes.request('/')

@@ -51,6 +51,7 @@ export const providers = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
 
     baseUrl: text('base_url'),
+    headers: text('headers', { mode: 'json' }).$type<Record<string, string>>(),
     supportsImages: integer('supports_images', { mode: 'boolean' })
       .notNull()
       .default(true),

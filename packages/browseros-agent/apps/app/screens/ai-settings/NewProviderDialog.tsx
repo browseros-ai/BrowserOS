@@ -79,6 +79,7 @@ import {
   type ModelInfo,
   modelSupportsReasoning,
 } from './models'
+import { ProviderHeadersFields } from './ProviderHeadersFields'
 import {
   isCredentiallessProviderType,
   normalizeProviderFormValues,
@@ -88,6 +89,10 @@ import {
 
 /** Window assumed for any model the bundled catalog cannot size. */
 const DEFAULT_CONTEXT_WINDOW = 128000
+
+function headerEntries(headers: LlmProviderConfig['headers']) {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
+}
 
 function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
@@ -229,6 +234,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         initialValues?.baseUrl || getDefaultBaseUrlForProviders('openai'),
       modelId: initialValues?.modelId || '',
       apiKey: initialValues?.apiKey || '',
+      headers: headerEntries(initialValues?.headers),
       supportsImages: initialValues?.supportsImages ?? false,
       contextWindow: initialValues?.contextWindow || DEFAULT_CONTEXT_WINDOW,
       temperature: initialValues?.temperature ?? 0.2,
@@ -247,6 +253,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedType = form.watch('type')
   const watchedModelId = form.watch('modelId')
 
+  const watchedHeaders = form.watch('headers')
   const watchedApiKey = form.watch('apiKey')
   const watchedBaseUrl = form.watch('baseUrl')
   const watchedResourceName = form.watch('resourceName')
@@ -268,6 +275,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSecretAccessKey,
     watchedRegion,
     watchedSessionToken,
+    watchedHeaders,
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
@@ -376,6 +384,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           getDefaultBaseUrlForProviders(initialValues.type || 'openai'),
         modelId: initialValues.modelId || '',
         apiKey: initialValues.apiKey || '',
+        headers: headerEntries(initialValues.headers),
         supportsImages: initialValues.supportsImages ?? false,
         contextWindow: initialValues.contextWindow || DEFAULT_CONTEXT_WINDOW,
         temperature: initialValues.temperature ?? 0.2,
@@ -401,6 +410,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         baseUrl: getDefaultBaseUrlForProviders(defaultType),
         modelId: '',
         apiKey: '',
+        headers: [],
         supportsImages: false,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         temperature: 0.2,
@@ -461,6 +471,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   })
 
   const handleTest = async () => {
+    if (!(await form.trigger('headers'))) return
     if (!agentServerUrl) {
       setTestResult({
         success: false,
@@ -473,7 +484,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     setTestResult(null)
 
     try {
-      const values = form.getValues()
+      const values = normalizeProviderFormValues(form.getValues())
 
       const result = await testProvider(
         {
@@ -481,6 +492,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
+          headers: values.headers,
           modelId: values.modelId,
           apiKey: values.apiKey,
           supportsImages: values.supportsImages,
@@ -1108,6 +1120,8 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 />
               </div>
             </div>
+
+            <ProviderHeadersFields />
 
             {testResult && (
               <div

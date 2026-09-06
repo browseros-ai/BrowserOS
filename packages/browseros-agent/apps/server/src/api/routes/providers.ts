@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { LLMHeadersSchema } from '@browseros/shared/schemas/llm'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -27,6 +28,7 @@ const UpsertProviderSchema = z.object({
   type: z.string().min(1),
   name: z.string().min(1),
   baseUrl: z.string().nullish(),
+  headers: LLMHeadersSchema.nullish(),
   modelId: z.string().min(1),
   supportsImages: z.boolean().optional(),
   contextWindow: z.number(),
