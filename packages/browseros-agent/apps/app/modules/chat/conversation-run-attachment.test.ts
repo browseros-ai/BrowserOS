@@ -7,6 +7,34 @@ import { attachConversationRun } from './conversation-run-attachment'
 import { conversationReconnectUrl } from './conversation-run-client'
 
 describe('panel run attachment through HTTP and the real SDK reducer', () => {
+  it('recovers the canonical answer if replay fails after the run completes', async () => {
+    const f = await fixture()
+    f.runs.updateMessages(f.conversationId, f.runId, [
+      { id: 'user', role: 'user', parts: [{ type: 'text', text: 'question' }] },
+      {
+        id: 'reply',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'complete answer' }],
+      },
+    ])
+    f.source.close()
+    await eventually(() =>
+      expect(f.runs.getSnapshot(f.conversationId)?.status).toBe('completed'),
+    )
+    const unavailableReplay = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) =>
+      String(input).includes('/stream')
+        ? new Response(null, { status: 503 })
+        : f.fetch(input, init)) as typeof fetch
+    const chat = f.chat(unavailableReplay)
+    await f.attach(chat, new AbortController().signal)
+    expect(answer(chat)).toBe('complete answer')
+    expect(chat.error).toBeUndefined()
+    expect(chat.status).toBe('ready')
+  })
+
   it('multicasts a partial response and replays without duplicate text after a reconnect error', async () => {
     const f = await fixture()
     let failed = false

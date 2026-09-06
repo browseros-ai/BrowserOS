@@ -272,6 +272,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
   } = useExecutionHistoryTracker({ enabled: persistHistory })
+  // An explicit Chat outlives renders and retains its original callbacks.
+  // Forward completion through the latest tracker so async incognito detection
+  // cannot leave the first render's history-writing policy captured forever.
+  const finishExecutionTaskRef = useRef(finishExecutionTask)
+  finishExecutionTaskRef.current = finishExecutionTask
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -498,7 +503,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         }
         const responseMessage =
           nextMessages.find((each) => each.id === message.id) ?? message
-        await finishExecutionTask({
+        await finishExecutionTaskRef.current({
           responseText: getLastMessageText([responseMessage]),
           isAbort,
           isError,
@@ -527,8 +532,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const stop = useCallback(async () => {
     const stoppingConversationId = conversationIdRef.current
-    const stoppingRunId = optionsRef.current?.panelRun ?? postRunRef.current
+    // The submitting view learns the new run from POST before the broker's
+    // assignment arrives. An older panel projection must not override that id.
+    const stoppingRunId = postingRef.current
+      ? postRunRef.current
+      : (optionsRef.current?.panelRun ?? postRunRef.current)
     panelAttachmentRef.current?.abort()
+    // Only an explicit Stop finalizes this view's task as stopped. Unmount and
+    // New Chat also abort the SDK reader but leave shared execution running.
+    // Finish before awaiting HTTP so a late Stop cannot finish the next task.
+    await finishExecutionTaskRef.current({ isAbort: true })
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
     // no longer a lifecycle signal.
