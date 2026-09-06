@@ -41,13 +41,21 @@ describe('publish-server-ota workflow', () => {
     expect(build).toContain('--platform "$PLATFORM"')
     expect(build).toContain('--release-sha "$RELEASE_SHA"')
     expect(build).toContain('actions/upload-artifact@v7')
+    expect(build).toContain(
+      `name: server-ota-fragment-${dollar}{{ inputs.product }}-${dollar}{{ matrix.target }}`,
+    )
   })
 
   it('persists all fragments through a pull request before live publication', () => {
     const publish = section('  publish:')
     expect(publish).toContain('- build-payloads')
     expect(publish).toContain('actions/download-artifact@v7')
-    expect(publish).toContain('pattern: server-ota-fragment-*')
+    expect(publish).toContain(
+      `pattern: server-ota-fragment-${dollar}{{ inputs.product }}-*`,
+    )
+    expect(publish).toContain(
+      `fragment="server-ota-fragments/server-ota-fragment-${dollar}{PRODUCT}-${dollar}{target}/${dollar}{snapshot_name}"`,
+    )
     expect(publish).toContain('ota server assemble-appcast')
     expect(publish).toContain('ota server release-appcast')
     expect(publish).toContain('--channel alpha')
