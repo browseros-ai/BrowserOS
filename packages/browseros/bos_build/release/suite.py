@@ -570,6 +570,13 @@ def inspect_transaction(request: SuiteRequest, backend: SuiteBackend) -> SuiteRe
             f"Suite transaction not found: {transaction_id(request.mode, request.source_sha, request.product)}"
         )
     _validate_record(record, request)
+    # Recovery may skip the merge command entirely after an interrupted run.
+    # Prove the committed tree here too before a caller can publish from it.
+    if record.state == "merged" and (
+        not record.merge_sha
+        or not backend.merge_commit_matches_transaction(record, record.merge_sha)
+    ):
+        raise ValueError("Suite merge commit does not match transaction state")
     return record
 
 

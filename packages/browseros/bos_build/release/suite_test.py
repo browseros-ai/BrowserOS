@@ -1123,6 +1123,17 @@ class ProductSuiteTest(unittest.TestCase):
             SuiteRecord.from_dict(legacy).products, ("browseros", "browserclaw")
         )
 
+    def test_merged_publication_recovery_requires_the_committed_transaction(self):
+        backend = FakeBackend()
+        backend.existing = product_record(
+            "browseros", state="merged", merge_sha=MERGE_SHA
+        )
+        request = SuiteRequest("nightly", SOURCE_SHA, "main", "main", "browseros")
+        self.assertEqual(inspect_transaction(request, backend).state, "merged")
+        backend.merge_matches = False
+        with self.assertRaisesRegex(ValueError, "merge commit does not match"):
+            inspect_transaction(request, backend)
+
     def test_only_selected_product_is_allocated_and_gated(self):
         for product in ("browseros", "browserclaw"):
             with self.subTest(product=product):
