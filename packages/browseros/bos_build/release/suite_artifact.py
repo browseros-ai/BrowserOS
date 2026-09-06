@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 from ..products.resource_sources import source_resources_for_product
-from .suite import SUITE_PRODUCTS, SuiteRecord
+from .suite import SuiteRecord
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -162,7 +162,7 @@ def publish_suite_browser_artifact(
     """Validate and conditionally publish one product's signed DMG and receipt."""
     if record.state != "merged":
         raise ValueError("Suite browser artifacts publish only after the state merge")
-    if product not in SUITE_PRODUCTS:
+    if product not in record.products:
         raise ValueError(f"Unknown suite product: {product}")
     receipt_path = artifact_root / "release.json"
     document = json.loads(receipt_path.read_text(encoding="utf-8"))

@@ -27,6 +27,9 @@ from bos_build.release.suite import (
     suite_record_from_pull_request,
     transaction_branch,
     transaction_id,
+    suite_components,
+    suite_state_paths,
+    suite_record_from_body,
 )
 
 
@@ -105,20 +108,26 @@ class FakeBackend:
     def find_transaction(self, request: SuiteRequest):
         return self.existing
 
-    def discover_allocations(self):
+    def discover_allocations(self, product=""):
         return self.allocations
 
     def discover_browser_allocations(self):
         return self.browser_allocations
 
-    def read_committed_versions(self):
-        return {
+    def read_committed_versions(self, product=""):
+        versions = {
             "server": "0.0.146",
             "agent": "0.0.120.0",
             "claw-server-rust": "0.0.45",
             "browserclaw": "0.0.82.0",
             "app-onboard": "0.0.0",
             "claw-onboard": "0.0.15",
+        }
+
+        return {
+            key: value
+            for key, value in versions.items()
+            if key in suite_components(product)
         }
 
     def read_browser_version(self):
@@ -1074,6 +1083,304 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                 self._git(fresh, "rev-parse", "refs/remotes/origin/release-state"),
                 reconciled.state_sha,
             )
+
+
+def product_record(product: str, **changes) -> SuiteRecord:
+    family = suite_record()
+    return replace(
+        family,
+        product=product,
+        transaction_id=transaction_id(family.mode, family.source_sha, product),
+        branch=transaction_branch(family.mode, family.source_sha, product),
+        component_versions={
+            key: family.component_versions[key] for key in suite_components(product)
+        },
+        state_checksums={
+            key: family.state_checksums[key] for key in suite_state_paths(product)
+        },
+        **changes,
+    )
+
+
+class ProductSuiteTest(unittest.TestCase):
+    def test_same_source_has_three_distinct_retry_identities(self):
+        records = [
+            suite_record(),
+            product_record("browseros"),
+            product_record("browserclaw"),
+        ]
+        self.assertEqual(len({record.transaction_id for record in records}), 3)
+        self.assertEqual(len({record.branch for record in records}), 3)
+        for record in records:
+            self.assertEqual(SuiteRecord.from_dict(record.to_dict()), record)
+            parsed = suite_record_from_body(record.pull_request_body())
+            self.assertEqual(parsed.product, record.product)
+            self.assertEqual(parsed.component_versions, record.component_versions)
+        legacy = suite_record().to_dict()
+        legacy.pop("product")
+        legacy.pop("state_base_sha")
+        self.assertEqual(
+            SuiteRecord.from_dict(legacy).products, ("browseros", "browserclaw")
+        )
+
+    def test_only_selected_product_is_allocated_and_gated(self):
+        for product in ("browseros", "browserclaw"):
+            with self.subTest(product=product):
+                backend = FakeBackend()
+                sibling = "browserclaw" if product == "browseros" else "browseros"
+                backend.browser_allocations = (
+                    BrowserAllocation(
+                        transaction_id("nightly", SOURCE_SHA, sibling), "0.50.1", 401
+                    ),
+                )
+                expected = product_record(
+                    product, browser_version="0.50.2", build_offset=402
+                )
+                backend.create_transaction = mock.Mock(return_value=expected)
+                request = SuiteRequest("nightly", SOURCE_SHA, "main", "main", product)
+                record = reconcile_transaction(request, backend)
+                self.assertEqual(
+                    set(backend.create_transaction.call_args.args[2]),
+                    set(suite_components(product)),
+                )
+                self.assertEqual(
+                    backend.create_transaction.call_args.args[3:], ("0.50.2", 402)
+                )
+                backend.existing = replace(record, draft=False)
+                with self.assertRaisesRegex(ValueError, "complete final state"):
+                    reconcile_transaction(request, backend)
+                backend.pr = replace(backend.pr, head_branch=record.branch)
+                gate = {
+                    "schema": "browseros-release-suite-gate-v1",
+                    "passed": True,
+                    **{
+                        key: record.to_dict()[key]
+                        for key in (
+                            "transaction_id",
+                            "source_sha",
+                            "state_sha",
+                            "browser_version",
+                            "component_versions",
+                            "state_checksums",
+                        )
+                    },
+                    "products": [product],
+                }
+                merged = merge_transaction(record, gate, backend)
+                self.assertEqual(merged.state, "merged")
+                with self.assertRaisesRegex(ValueError, "products"):
+                    merge_transaction(
+                        record,
+                        {**gate, "products": ["browseros", "browserclaw"]},
+                        backend,
+                    )
+
+
+class ProductSuiteGitTest(unittest.TestCase):
+    _git = GitHubSuiteBackendTest._git
+    _repository = GitHubSuiteBackendTest._repository
+
+    def test_products_can_merge_in_either_order_from_the_same_source(self):
+        for order in (("browseros", "browserclaw"), ("browserclaw", "browseros")):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                repo, remote, source = self._repository(root)
+                backend = GitHubSuiteBackend(repo, "browseros-ai/BrowserOS", "main")
+                original_version = backend.read_browser_version()
+                original_offset = backend.read_build_offset()
+                records = {}
+                from bos_build.release.suite import _next_browser_version
+
+                browser_version = original_version
+                for index, product in enumerate(("browseros", "browserclaw"), 1):
+                    browser_version = _next_browser_version(browser_version)
+                    versions = {
+                        component: (
+                            increment_component_version(component, value)
+                            if component in suite_components(product, release_only=True)
+                            else value
+                        )
+                        for component, value in backend.read_committed_versions().items()
+                        if component in suite_components(product)
+                    }
+                    request = SuiteRequest("nightly", source, "main", "main", product)
+                    with mock.patch(
+                        "bos_build.release.suite.create_pull_request",
+                        return_value=f"https://github.com/browseros-ai/BrowserOS/pull/{100 + index}",
+                    ):
+                        records[product] = backend.create_transaction(
+                            request,
+                            transaction_branch("nightly", source, product),
+                            versions,
+                            browser_version,
+                            original_offset + index,
+                        )
+                discovered = backend.discover_branch_reservations()
+                self.assertEqual(
+                    {record.product for record in discovered},
+                    {"browseros", "browserclaw"},
+                )
+                self.assertEqual(len({item.transaction_id for item in discovered}), 2)
+
+                for product in order:
+                    record = records[product]
+                    base = self._git(repo, "rev-parse", "main")
+                    snapshots = root / ("snapshots-" + product)
+                    for relative in record.state_paths:
+                        path = snapshots / relative
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        content = self._git(repo, "show", f"{base}:{relative}")
+                        path.write_text(content + f"\n<!-- {product} complete -->\n")
+                    state = backend.reconcile_product_state(record, snapshots, base)
+                    self.assertFalse(backend.default_branch_contains_transaction(state))
+                    self.assertEqual(
+                        backend.reconcile_product_state(
+                            state, snapshots, base
+                        ).state_sha,
+                        state.state_sha,
+                    )
+                    backend._validate_state_history(state, state.state_sha)
+                    # A squash merge advances main while preserving reservation
+                    # ancestry only through the product PR, just like GitHub.
+                    self._git(repo, "read-tree", "--reset", "-u", state.state_sha)
+                    self._git(repo, "commit", "-m", f"merge {product}")
+                    self._git(repo, "push", "origin", "main")
+                    merged = self._git(repo, "rev-parse", "main")
+                    self.assertTrue(
+                        backend.merge_commit_matches_transaction(state, merged)
+                    )
+                    self.assertEqual(
+                        backend._component_version_at_ref(
+                            "server" if product == "browseros" else "claw-server-rust",
+                            "main",
+                        ),
+                        record.component_versions[
+                            "server" if product == "browseros" else "claw-server-rust"
+                        ],
+                    )
+                for record in records.values():
+                    for component in record.release_components:
+                        self.assertEqual(
+                            backend._component_version_at_ref(component, "main"),
+                            record.component_versions[component],
+                        )
+                self.assertEqual(
+                    backend.read_browser_version(),
+                    records["browserclaw"].browser_version,
+                )
+                self.assertEqual(backend.read_build_offset(), original_offset + 2)
+                bundled = (repo / SUITE_STATE_PATHS[0]).read_text()
+                self.assertIn("browseros complete", bundled)
+                self.assertIn("browserclaw complete", bundled)
+
+                # A later sibling merge must not invalidate an already-merged
+                # product's immutable state/history on a fresh allocator.
+                self.assertEqual(len(backend.discover_branch_reservations()), 2)
+
+    def test_interrupted_ready_state_can_be_recomposed_without_losing_main(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo, remote, source = self._repository(root)
+            backend = GitHubSuiteBackend(repo, "browseros-ai/BrowserOS", "main")
+            from bos_build.release.suite import _next_browser_version
+
+            product = "browseros"
+            versions = {
+                component: (
+                    increment_component_version(component, value)
+                    if component in suite_components(product, release_only=True)
+                    else value
+                )
+                for component, value in backend.read_committed_versions(product).items()
+            }
+            request = SuiteRequest("nightly", source, "main", "main", product)
+            with mock.patch(
+                "bos_build.release.suite.create_pull_request",
+                return_value="https://github.com/browseros-ai/BrowserOS/pull/100",
+            ):
+                record = backend.create_transaction(
+                    request,
+                    transaction_branch("nightly", source, product),
+                    versions,
+                    _next_browser_version(backend.read_browser_version()),
+                    backend.read_build_offset() + 1,
+                )
+            snapshots = root / "snapshots"
+            for relative in record.state_paths:
+                path = snapshots / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((repo / relative).read_bytes())
+            first = backend.reconcile_product_state(record, snapshots, source)
+            # Interrupted exact-head merge left a ready PR. Independent main
+            # progress must be retained by a subsequent gated state attempt.
+            ready = replace(first, draft=False)
+            readme = repo / "README.md"
+            readme.write_text("New main code must survive the release.")
+            sibling = repo / "updates/server/appcast-claw-server.alpha.xml"
+            sibling.write_text(sibling.read_text() + "\n<!-- sibling publication -->\n")
+            bundled = repo / SUITE_STATE_PATHS[0]
+            bundled.write_text(bundled.read_text() + "\n<!-- sibling extension -->\n")
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "independent main progress")
+            self._git(repo, "push", "origin", "main")
+            latest = self._git(repo, "rev-parse", "main")
+            with self.assertRaisesRegex(ValueError, "baseline changed"):
+                backend.reconcile_product_state(ready, snapshots, source)
+            (snapshots / SUITE_STATE_PATHS[0]).write_bytes(bundled.read_bytes())
+            with mock.patch.object(backend, "_mark_pull_request_draft") as mark_draft:
+                second = backend.reconcile_product_state(ready, snapshots, latest)
+            mark_draft.assert_called_once_with(record.pull_request_number)
+            self.assertTrue(second.draft)
+            self.assertNotEqual(second.state_sha, first.state_sha)
+            self.assertEqual(
+                self._git(repo, "show", f"{second.state_sha}:README.md"),
+                readme.read_text(),
+            )
+            self.assertIn(
+                "sibling publication",
+                self._git(
+                    repo,
+                    "show",
+                    f"{second.state_sha}:updates/server/appcast-claw-server.alpha.xml",
+                ),
+            )
+            self.assertFalse(backend.default_branch_contains_transaction(second))
+
+            server_path = repo / "updates/server/appcast-server.alpha.xml"
+            original_snapshot = server_path.read_text()
+            from bos_build.release.feeds.render import extract_appcast_version
+
+            committed_version = extract_appcast_version(original_snapshot)
+            server_path.write_text(
+                original_snapshot.replace(committed_version, "9.0.0")
+            )
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "standalone snapshot ahead of manifest")
+            self._git(repo, "push", "origin", "main")
+            ahead = self._git(repo, "rev-parse", "main")
+            with self.assertRaisesRegex(ValueError, "regress committed state"):
+                backend.reconcile_product_state(second, snapshots, ahead)
+
+            # A superficially allowed lockfile path cannot smuggle payload
+            # changes into the reservation or its final state.
+            self._git(repo, "checkout", "--detach", second.state_sha)
+            lock = repo / "packages/browseros-agent/bun.lock"
+            lock.write_text(lock.read_text() + "\n// unowned payload change\n")
+            self._git(repo, "add", ".")
+            tree = self._git(repo, "write-tree")
+            corrupted = self._git(
+                repo,
+                "commit-tree",
+                tree,
+                "-p",
+                second.state_sha,
+                "-p",
+                latest,
+                "-m",
+                "corrupt state",
+            )
+            with self.assertRaisesRegex(ValueError, "approved overlay"):
+                backend._validate_state_history(second, corrupted)
 
 
 if __name__ == "__main__":
