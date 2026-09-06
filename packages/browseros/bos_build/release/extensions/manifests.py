@@ -181,6 +181,20 @@ class ExtensionsFeedModule(Step):
         previous_channel = self._with_baseline(
             live_channel, update_manifest_feed(self.channel).key, bundled=False
         )
+        if self.baseline_root is not None and not self.allow_downgrade:
+            # Live-only preflight cannot protect a merged snapshot whose R2
+            # upload failed. Check explicit pins before they replace that durable
+            # channel state; bundled may legitimately be newer than prod.
+            for name, version in self.set_versions.items():
+                previous = previous_channel.get(name)
+                if previous is not None and (
+                    parse_dotted_version(version) < parse_dotted_version(previous)
+                ):
+                    raise RuntimeError(
+                        f"Explicit {name}={version} would downgrade the {self.channel} "
+                        f"channel baseline from {previous}; "
+                        "pass --allow-downgrade to override"
+                    )
         versions = {**previous_bundled, **previous_channel, **self.set_versions}
 
         missing = [ext.name for ext in EXTENSIONS if ext.name not in versions]
