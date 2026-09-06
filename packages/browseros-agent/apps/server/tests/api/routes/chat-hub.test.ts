@@ -70,6 +70,71 @@ describe('/chat server-owned run routes', () => {
     expect(await response.text()).toContain('"type":"text-start"')
   })
 
+  it('rejects replay from a different turn than the hydrated snapshot', async () => {
+    const runs = new ConversationRuns()
+    const conversationId = crypto.randomUUID()
+    const old = await runs.start({
+      conversationId,
+      messages: [],
+      createStream: () => new ReadableStream<UIMessageChunk>(),
+    })
+    await runs.stop(conversationId)
+    await runs.start({
+      conversationId,
+      messages: [],
+      createStream: () => new ReadableStream<UIMessageChunk>(),
+    })
+    const app = route(runs)
+    expect(
+      (await app.request(`/${conversationId}/state?runId=${old.runId}`)).status,
+    ).toBe(409)
+    expect(
+      (await app.request(`/${conversationId}/stream?runId=${old.runId}`))
+        .status,
+    ).toBe(409)
+    const stoppingOld = await app.request(
+      `/${conversationId}/stop?runId=${old.runId}`,
+      { method: 'POST' },
+    )
+    expect(await stoppingOld.json()).toEqual({ stopped: false })
+    expect(runs.getSnapshot(conversationId)?.status).toBe('running')
+    await runs.stop(conversationId)
+  })
+
+  it('keeps the immutable replay seed separate from final display messages', async () => {
+    const runs = new ConversationRuns()
+    const conversationId = crypto.randomUUID()
+    const seed = [
+      {
+        id: 'user',
+        role: 'user' as const,
+        parts: [{ type: 'text' as const, text: 'hello' }],
+      },
+    ]
+    const run = await runs.start({
+      conversationId,
+      messages: [],
+      createStream: (_signal, _id, update) => {
+        update(seed)
+        return new ReadableStream<UIMessageChunk>()
+      },
+    })
+    runs.updateMessages(conversationId, run.runId, [
+      ...seed,
+      {
+        id: 'assistant',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'reply' }],
+      },
+    ])
+    const state = await (
+      await route(runs).request(`/${conversationId}/state?runId=${run.runId}`)
+    ).json()
+    expect(state.replayMessages).toEqual(seed)
+    expect(state.messages).toHaveLength(2)
+    await runs.stop(conversationId)
+  })
+
   it('streams complete panel assignments to the extension over SSE', async () => {
     const runs = new ConversationRuns()
     await runs.start({

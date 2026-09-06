@@ -49,6 +49,7 @@ describe('chat request preparation', () => {
       conversationId,
       message: 'Inspect the current tab',
       mode: 'agent',
+      panelTabId: 42,
       browserContext: commonRequestInput().browserContext,
       userSystemPrompt: 'Be concise',
       userWorkingDir: '/tmp/work',
@@ -91,6 +92,7 @@ describe('chat request preparation', () => {
 
 function commonRequestInput() {
   return {
+    panelTabId: 42,
     conversationId,
     mode: 'agent' as const,
     browserContext: {

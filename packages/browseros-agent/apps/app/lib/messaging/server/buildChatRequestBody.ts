@@ -52,6 +52,8 @@ export interface ChatRequestBodyParams {
   providerId?: string
   message?: string
   mode?: ChatMode
+  /** Explicit submitting surface; context tabs never grant panel ownership. */
+  panelTabId?: number
   browserContext?: ChatRequestBrowserContext
   userSystemPrompt?: string
   userWorkingDir?: string
@@ -74,6 +76,7 @@ export const buildChatRequestBody = ({
   message = '',
   mode,
   browserContext,
+  panelTabId,
   userSystemPrompt,
   userWorkingDir,
   supportsImages,
@@ -98,6 +101,7 @@ export const buildChatRequestBody = ({
   conversationId,
   mode,
   browserContext,
+  panelTabId,
   userSystemPrompt,
   userWorkingDir,
   // Sent because the caller can override what the provider says, and because

@@ -1,7 +1,10 @@
 import { defineExtensionMessaging } from '@webext-core/messaging'
+import type { SearchActionStorage } from '@/lib/search-actions/searchActionsStorage'
 
 export const RuntimeMessageType = {
   getTabId: 'runtime.getTabId',
+  selectPanelConversation: 'runtime.selectPanelConversation',
+  takePanelSearch: 'runtime.takePanelSearch',
   authSuccess: 'runtime.authSuccess',
   stopAgent: 'runtime.stopAgent',
   sidePanelScopeChanged: 'runtime.sidePanelScopeChanged',
@@ -20,6 +23,13 @@ export interface RuntimeSidePanelScopeChangedData {
 }
 
 type RuntimeMessagesProtocol = {
+  [RuntimeMessageType.takePanelSearch](data: {
+    tabId: number
+  }): SearchActionStorage | null
+  [RuntimeMessageType.selectPanelConversation](data: {
+    tabId: number
+    conversationId: string
+  }): void
   [RuntimeMessageType.getTabId](): RuntimeTabIdResponse
   [RuntimeMessageType.authSuccess](): void
   [RuntimeMessageType.stopAgent](data: RuntimeStopAgentData): void

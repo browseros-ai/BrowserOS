@@ -984,6 +984,32 @@ describe('ChatService single-rebuild reconciliation', () => {
       'The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: /ws',
     )
   })
+  it('uses the explicit submitting tab without claiming browser context tabs', async () => {
+    agentToReturn = createFakeAgent()
+    const service = makeService(() => ({ state: 'connecting' }))
+    const conversationId = crypto.randomUUID()
+    await service.processMessage(
+      {
+        target: BROWSEROS_TARGET,
+        conversationId,
+        message: 'hello',
+        mode: 'agent',
+        origin: 'sidepanel',
+        panelTabId: 1,
+        isScheduledTask: false,
+        browserContext: {
+          activeTab: { id: 2 },
+          selectedTabs: [{ id: 3 }],
+          tabs: [{ id: 4 }],
+        },
+      } as never,
+      new AbortController().signal,
+    )
+    const reader = service.subscribePanelAssignments().getReader()
+    const snapshot = (await reader.read()).value
+    await reader.cancel()
+    expect(snapshot?.assignments.map((entry) => entry.tabId)).toEqual([1])
+  })
 })
 
 describe('ChatService history persistence', () => {

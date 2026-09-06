@@ -19,6 +19,8 @@ export interface ConversationRunSnapshot {
   runId: string
   status: ConversationRunStatus
   messages: UIMessage[]
+  /** Prepared history before any chunks; replay must never seed a partial answer. */
+  replayMessages: UIMessage[]
   chunkCount: number
 }
 
@@ -59,7 +61,10 @@ export interface ActiveConversationRun {
   readonly tabGroup: ConversationTabGroupPresentation | undefined
   /** Aborts browser work when the user stops this exact run. */
   readonly signal: AbortSignal
-  associateTabs(tabIds: readonly number[]): boolean
+  /** Records tabs actually created by this run, never tabs merely read as context. */
+  recordCreatedTabs(tabIds: readonly number[]): boolean
+  /** Grouping may finish after execution; a later owner still takes precedence. */
+  ownsTab(tabId: number): boolean
 }
 
 export interface ConversationRunActivity {
@@ -72,6 +77,7 @@ interface ConversationRunRecord {
   runId: string
   status: ConversationRunStatus
   messages: UIMessage[]
+  replayMessages: UIMessage[]
   chunks: UIMessageChunk[]
   panelsVisible: boolean
   tabGroup?: ConversationTabGroupPresentation
@@ -147,6 +153,7 @@ export class ConversationRuns {
       runId: crypto.randomUUID(),
       status: 'running',
       messages: [...input.messages],
+      replayMessages: structuredClone(input.messages),
       chunks: [],
       panelsVisible: input.panelsVisible ?? true,
       // Keep the first useful presentation across turns. If no tab was opened
@@ -201,9 +208,13 @@ export class ConversationRuns {
   }
 
   /** Replays buffered chunks, then attaches to the same live ordered stream. */
-  subscribe(conversationId: string): ReadableStream<UIMessageChunk> {
+  subscribe(
+    conversationId: string,
+    runId?: string,
+  ): ReadableStream<UIMessageChunk> {
     const record = this.runs.get(conversationId)
-    if (!record) throw new ConversationRunNotFoundError()
+    if (!record || (runId && record.runId !== runId))
+      throw new ConversationRunNotFoundError()
     let subscriber: ReadableStreamDefaultController<UIMessageChunk> | undefined
 
     return new ReadableStream<UIMessageChunk>({
@@ -258,12 +269,24 @@ export class ConversationRuns {
       panelsVisible: record.panelsVisible,
       tabGroup: record.tabGroup,
       signal: record.abortController.signal,
-      associateTabs: (tabIds) => this.associateTabs(record, tabIds),
+      recordCreatedTabs: (tabIds) => this.associateTabs(record, tabIds),
+      ownsTab: (tabId) =>
+        this.panelByTab.get(tabId)?.conversationId === record.conversationId,
     }
   }
 
-  async stop(conversationId: string): Promise<boolean> {
+  /** Local panel navigation releases only the owner it observed, never a successor. */
+  releasePanel(tabId: number, conversationId: string): boolean {
+    if (this.panelByTab.get(tabId)?.conversationId !== conversationId)
+      return false
+    this.panelByTab.delete(tabId)
+    this.publishPanelAssignments()
+    return true
+  }
+
+  async stop(conversationId: string, runId?: string): Promise<boolean> {
     const record = this.runs.get(conversationId)
+    if (runId && record?.runId !== runId) return false
     if (record?.status !== 'running') return false
 
     const reason = new DOMException('Conversation stopped', 'AbortError')
@@ -310,10 +333,11 @@ export class ConversationRuns {
    */
   async getPreparedSnapshot(
     conversationId: string,
+    runId?: string,
   ): Promise<ConversationRunSnapshot | undefined> {
     while (true) {
       const record = this.runs.get(conversationId)
-      if (!record) return undefined
+      if (!record || (runId && record.runId !== runId)) return undefined
       await record.prepared
       if (this.runs.get(conversationId) === record) {
         return this.snapshot(record)
@@ -327,6 +351,7 @@ export class ConversationRuns {
       runId: record.runId,
       status: record.status,
       messages: [...record.messages],
+      replayMessages: structuredClone(record.replayMessages),
       chunkCount: record.chunks.length,
     }
   }
@@ -339,6 +364,8 @@ export class ConversationRuns {
     const record = this.runs.get(conversationId)
     if (!record || record.runId !== runId) return false
     record.messages = [...messages]
+    if (!record.preparedResolved)
+      record.replayMessages = structuredClone(messages)
     return true
   }
 
@@ -373,7 +400,11 @@ export class ConversationRuns {
     let changed = false
     for (const tabId of tabIds) {
       if (!Number.isInteger(tabId) || tabId < 0) continue
-      if (this.panelByTab.get(tabId) === record) continue
+      // Automatic discovery cannot override an explicit submission in another
+      // panel. Only attachInitialPanels may transfer an existing tab.
+      const owner = this.panelByTab.get(tabId)
+      if (owner && owner.conversationId !== record.conversationId) continue
+      if (owner === record) continue
       this.panelByTab.set(tabId, record)
       changed = true
     }

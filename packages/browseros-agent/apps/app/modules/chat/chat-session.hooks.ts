@@ -1,4 +1,4 @@
-import { useChat } from '@ai-sdk/react'
+import { Chat, useChat } from '@ai-sdk/react'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -6,16 +6,7 @@ import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
-import {
-  conversationForTab,
-  conversationPanelViewsStorage,
-} from '@/lib/browseros/conversationPanelStorage'
 import { isIncognitoWindow } from '@/lib/browseros/incognito'
-import {
-  getWindowConversation,
-  setWindowConversation,
-} from '@/lib/browseros/perWindowConversationStorage'
-import { sidePanelPerWindowStorage } from '@/lib/browseros/sidePanelOpenStateStorage'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import {
   CONVERSATION_RESET_EVENT,
@@ -29,9 +20,13 @@ import { formatConversationHistory } from '@/lib/conversations/formatConversatio
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
+import {
+  RuntimeMessageType,
+  sendRuntimeMessage,
+} from '@/lib/messaging/runtime/runtimeMessages'
 import type { ChatRequestBrowserContext } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
-import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
+import { panelSearchCommandsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
@@ -55,11 +50,10 @@ import {
 import { restoreServerConversation } from './chat-session-restore'
 import type { ChatMode } from './chat-types'
 import { addContentFilterNotice } from './content-filter-notice'
-import {
-  conversationReconnectUrl,
-  fetchConversationRunState,
-} from './conversation-run-client'
+import { attachConversationRun } from './conversation-run-attachment'
+import { conversationReconnectUrl } from './conversation-run-client'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
+import { getSubmittingPanelTabId } from './panel-host'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
 
@@ -117,6 +111,10 @@ export type ChatOrigin = 'sidepanel' | 'newtab'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
+  initialConversationId?: string
+  panelTabId?: number
+  panelRun?: string
+  onSelectConversation?: (conversationId: string) => void
   /** When false, messages are queued until integrations finish syncing. */
   isIntegrationsSynced?: boolean
 }
@@ -219,7 +217,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const userId = sessionInfo.user?.id
   const isLoggedIn = !!userId
   const [searchParams, setSearchParams] = useSearchParams()
-  const conversationIdParam = searchParams.get('conversationId')
+  const conversationIdParam = options?.initialConversationId
+    ? options.panelRun
+      ? null
+      : options.initialConversationId
+    : searchParams.get('conversationId')
 
   // 'local': the local server owns history, persisting it to SQLite during
   // /chat. Every signed-in user now takes this path too, where the client used
@@ -248,11 +250,28 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   )
   const [liked, setLiked] = useState<Record<string, boolean>>({})
   const [disliked, setDisliked] = useState<Record<string, boolean>>({})
-  const [conversationId, setConversationId] = useState(crypto.randomUUID())
+  const [conversationId, setConversationId] = useState<string>(
+    () => options?.initialConversationId ?? crypto.randomUUID(),
+  )
   const conversationIdRef = useRef(conversationId)
   const optionsRef = useRef(options)
-  // The window this panel belongs to, resolved on mount in per-window scope.
-  const windowIdRef = useRef<number | null>(null)
+  const panelAttachmentRef = useRef<AbortController | null>(null)
+  const postingRef = useRef(false)
+  const postRunRef = useRef<string | undefined>(undefined)
+  const [settledPost, setSettledPost] = useState<{ runId?: string } | null>(
+    null,
+  )
+  const mountedRef = useRef(true)
+
+  const settlePost = () => {
+    const wasPosting = postingRef.current
+    postingRef.current = false
+    // An assignment may arrive before POST returns its run id. Reconcile once
+    // that uncertainty resolves, including a 409 when a sibling won the turn.
+    // Replay callbacks must not restart their own attachment effect.
+    if (wasPosting && mountedRef.current)
+      setSettledPost({ runId: postRunRef.current })
+  }
 
   useEffect(() => {
     optionsRef.current = options
@@ -267,6 +286,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
   } = useExecutionHistoryTracker({ enabled: persistHistory })
+  // An explicit Chat outlives renders and retains its original callbacks.
+  // Forward completion through the latest tracker so async incognito detection
+  // cannot leave the first render's history-writing policy captured forever.
+  const finishExecutionTaskRef = useRef(finishExecutionTask)
+  finishExecutionTaskRef.current = finishExecutionTask
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -355,13 +379,27 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
   if (!transportRef.current) {
     transportRef.current = new DefaultChatTransport<UIMessage>({
-      prepareReconnectToStreamRequest: async () => {
+      prepareReconnectToStreamRequest: async ({ body }) => {
+        const id = conversationIdRef.current
+        const runId = typeof body?.runId === 'string' ? body.runId : undefined
         const serverUrl = await resolveAgentServerUrlWithRetry()
         return {
-          api: conversationReconnectUrl(serverUrl, conversationIdRef.current),
+          api: conversationReconnectUrl(serverUrl, id, runId),
         }
       },
+      fetch: (async (input, init) => {
+        const response = await fetch(input, init)
+        if (init?.method === 'POST')
+          postRunRef.current =
+            response.headers.get('X-BrowserOS-Run-Id') ?? undefined
+        return response
+      }) as typeof fetch,
       prepareSendMessagesRequest: async ({ messages }) => {
+        // Capture ownership before any await; a later view selection must not
+        // retarget a prepared request or its browser context.
+        const sendingConversationId = conversationIdRef.current
+        postingRef.current = true
+        postRunRef.current = undefined
         const target = selectedChatTargetRef.current
         const fallbackProvider =
           resolveChatProvider(
@@ -369,11 +407,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
               ? [selectedLlmProviderRef.current]
               : [],
           ) ?? createDefaultBrowserOSProvider()
-        const activeTabsList = await chrome.tabs.query({
-          active: true,
-          currentWindow: true,
-        })
-        const activeTab = activeTabsList?.[0] ?? undefined
+        const hostTabId = optionsRef.current?.panelTabId
+        const activeTab =
+          hostTabId !== undefined
+            ? await chrome.tabs.get(hostTabId)
+            : optionsRef.current?.origin === 'newtab'
+              ? await chrome.tabs.getCurrent()
+              : (
+                  await chrome.tabs.query({ active: true, currentWindow: true })
+                )[0]
         const activeTabSelection = activeTab?.id
           ? (selectionMapRef.current[String(activeTab.id)] ?? null)
           : null
@@ -405,9 +447,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           personalizationRef.current,
         )
         const commonRequest = {
-          conversationId: conversationIdRef.current,
+          conversationId: sendingConversationId,
           mode: currentMode,
           browserContext: requestBrowserContext,
+          // A window panel has browser context but no contextual tab owner.
+          // Only this immutable host (or the new-tab document itself) may join.
+          panelTabId: getSubmittingPanelTabId(
+            optionsRef.current?.origin,
+            hostTabId,
+            activeTab?.id,
+          ),
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
@@ -447,42 +496,75 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const chatTransport = transportRef.current
 
+  const chatRef = useRef<Chat<UIMessage> | null>(null)
+  if (!chatRef.current) {
+    chatRef.current = new Chat<UIMessage>({
+      id: conversationId,
+      transport: chatTransport,
+      onError: () => {
+        // A failed POST reader releases this view to exact-run replay, even if
+        // the server accepted its request before the transport failed.
+        if (postingRef.current) postRunRef.current = undefined
+        settlePost()
+      },
+      onFinish: async ({
+        message,
+        messages,
+        isAbort,
+        isError,
+        finishReason,
+      }) => {
+        settlePost()
+        if (!mountedRef.current || isAbort) return
+        const nextMessages = addContentFilterNotice(
+          messages,
+          message,
+          finishReason,
+        )
+        if (nextMessages !== messages) {
+          setMessages(nextMessages)
+        }
+        const responseMessage =
+          nextMessages.find((each) => each.id === message.id) ?? message
+        await finishExecutionTaskRef.current({
+          responseText: getLastMessageText([responseMessage]),
+          isAbort,
+          isError,
+        })
+      },
+    })
+  }
+  const chat = chatRef.current
   const {
     messages,
     sendMessage: baseSendMessage,
     setMessages,
     status,
     stop: detachStream,
-    resumeStream,
     error: chatError,
     regenerate,
-  } = useChat({
-    transport: chatTransport,
-    onFinish: async ({ message, messages, isAbort, isError, finishReason }) => {
-      const nextMessages = addContentFilterNotice(
-        messages,
-        message,
-        finishReason,
-      )
-      if (nextMessages !== messages) {
-        setMessages(nextMessages)
-      }
-      const responseMessage =
-        nextMessages.find((each) => each.id === message.id) ?? message
-      await finishExecutionTask({
-        responseText: getLastMessageText([responseMessage]),
-        isAbort,
-        isError,
-      })
-    },
-  })
+  } = useChat({ chat })
 
-  const statusRef = useRef(status)
   useEffect(() => {
-    statusRef.current = status
-  }, [status])
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      void chat.stop()
+    }
+  }, [chat])
 
   const stop = useCallback(async () => {
+    const stoppingConversationId = conversationIdRef.current
+    // The submitting view learns the new run from POST before the broker's
+    // assignment arrives. An older panel projection must not override that id.
+    const stoppingRunId = postingRef.current
+      ? postRunRef.current
+      : (optionsRef.current?.panelRun ?? postRunRef.current)
+    panelAttachmentRef.current?.abort()
+    // Only an explicit Stop finalizes this view's task as stopped. Unmount and
+    // New Chat also abort the SDK reader but leave shared execution running.
+    // Finish before awaiting HTTP so a late Stop cannot finish the next task.
+    await finishExecutionTaskRef.current({ isAbort: true })
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
     // no longer a lifecycle signal.
@@ -491,7 +573,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       const serverUrl =
         agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
       const response = await fetch(
-        `${serverUrl}/chat/${encodeURIComponent(conversationIdRef.current)}/stop`,
+        `${serverUrl}/chat/${encodeURIComponent(stoppingConversationId)}/stop${stoppingRunId ? `?runId=${encodeURIComponent(stoppingRunId)}` : ''}`,
         { method: 'POST' },
       )
       if (!response.ok) {
@@ -507,103 +589,50 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [detachStream])
 
-  const attachedPanelRunRef = useRef('')
-  // The background broker owns routing; this view only hydrates the broker's
-  // selected conversation and reconnects to its server stream. Switching tabs
-  // detaches the old subscriber without stopping either server-owned run.
+  const panelRun = options?.panelRun
+  const [isPanelAttaching, setIsPanelAttaching] = useState(!!panelRun)
   useEffect(() => {
-    if (optionsRef.current?.origin === 'newtab') return
-
-    let cancelled = false
-    let attachEpoch = 0
-    let panelTabId: number | undefined
-    let panelWindowId: number | undefined
-    const attachForViews = async (
-      views: Awaited<ReturnType<typeof conversationPanelViewsStorage.getValue>>,
-    ) => {
-      const view = conversationForTab(views, panelTabId)
-      if (!view) return
-      const runKey = `${view.conversationId}:${view.runId}`
-      if (attachedPanelRunRef.current === runKey) return
-
-      // The panel that submitted this turn already owns the POST stream. The
-      // presence event only teaches it the server run id for future deduping.
-      if (
-        view.conversationId === conversationIdRef.current &&
-        (statusRef.current === 'submitted' || statusRef.current === 'streaming')
-      ) {
-        attachedPanelRunRef.current = runKey
-        return
-      }
-
-      attachedPanelRunRef.current = runKey
-      const epoch = ++attachEpoch
-      try {
-        const serverUrl =
-          agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
-        const state = await fetchConversationRunState(
-          serverUrl,
-          view.conversationId,
-        )
-        if (cancelled || epoch !== attachEpoch) return
-
-        await detachStream()
-        conversationIdRef.current = view.conversationId as ReturnType<
-          typeof crypto.randomUUID
-        >
-        messagesRef.current = state.messages
-        setConversationId(
-          view.conversationId as ReturnType<typeof crypto.randomUUID>,
-        )
-        setMessages(state.messages)
-        setSearchParams({}, { replace: true })
-        if (state.status === 'running') await resumeStream()
-      } catch (error) {
-        if (cancelled || epoch !== attachEpoch) return
-        attachedPanelRunRef.current = ''
-        sentry.captureException(error, {
-          extra: {
-            conversationId: view.conversationId,
-            operation: 'attach-panel-conversation',
-          },
-        })
-      }
+    if (!panelRun) {
+      setIsPanelAttaching(false)
+      return
     }
-
-    const refreshForActiveTab = async () => {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
+    // POST owns the SDK until it settles. Retain its verified run id afterward
+    // to avoid replaying our own successful answer; a rejected POST instead
+    // updates settledPost and attaches to the sibling's winning assignment.
+    if (postingRef.current || settledPost?.runId === panelRun) {
+      setIsPanelAttaching(false)
+      return
+    }
+    const controller = new AbortController()
+    panelAttachmentRef.current = controller
+    setIsPanelAttaching(true)
+    void (async () => {
+      const serverUrl =
+        agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
+      if (controller.signal.aborted) return
+      await attachConversationRun({
+        chat,
+        conversationId,
+        runId: panelRun,
+        serverUrl,
+        signal: controller.signal,
+        onHydrated: () => {
+          if (!controller.signal.aborted) setIsPanelAttaching(false)
+        },
+        onError: (error) =>
+          sentry.captureException(error, {
+            extra: { conversationId, operation: 'attach-panel-conversation' },
+          }),
       })
-      if (cancelled || tab?.id === undefined) return
-      panelTabId = tab.id
-      panelWindowId = tab.windowId
-      await attachForViews(await conversationPanelViewsStorage.getValue())
-    }
-
-    const unwatch = conversationPanelViewsStorage.watch((views) => {
-      void attachForViews(views)
+    })().catch((error) => {
+      if (!controller.signal.aborted) sentry.captureException(error)
     })
-    const onActivated = (activeInfo: { tabId: number; windowId: number }) => {
-      if (
-        panelWindowId !== undefined &&
-        activeInfo.windowId !== panelWindowId
-      ) {
-        return
-      }
-      panelTabId = activeInfo.tabId
-      void conversationPanelViewsStorage.getValue().then(attachForViews)
-    }
-    chrome.tabs.onActivated.addListener(onActivated)
-    void refreshForActiveTab()
-
     return () => {
-      cancelled = true
-      attachEpoch += 1
-      unwatch()
-      chrome.tabs.onActivated.removeListener(onActivated)
+      controller.abort()
+      if (panelAttachmentRef.current === controller)
+        panelAttachmentRef.current = null
     }
-  }, [detachStream, resumeStream, setMessages, setSearchParams])
+  }, [panelRun, chat, conversationId, settledPost])
 
   // Two cleanups once a turn is no longer streaming: drop messages with
   // empty parts (interrupted responses trip AI SDK validation on the next
@@ -627,7 +656,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     GetConversationWithMessagesDocument,
     { conversationId: conversationIdParam ?? '' },
     {
-      enabled: !!conversationIdParam && isLoggedIn,
+      enabled:
+        !!conversationIdParam && isLoggedIn && !options?.initialConversationId,
     },
   )
 
@@ -640,7 +670,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (!conversationIdParam) return
     if (restoredConversationId === conversationIdParam) return
 
-    if (isLoggedIn) {
+    if (isLoggedIn && !options?.initialConversationId) {
       if (!isRemoteConversationFetched) return
 
       if (remoteConversationData?.conversation) {
@@ -683,49 +713,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       cancelled = true
     }
   }, [conversationIdParam, remoteConversationData, isLoggedIn])
-
-  // Per-window scope: resume this window's conversation when the panel
-  // (re)mounts (e.g. closed + reopened) instead of starting a blank chat.
-  // No-op in per-tab scope. Tab switches keep the same panel instance, so this
-  // only matters for a fresh mount.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; reads refs
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!(await sidePanelPerWindowStorage.getValue())) return
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      })
-      const windowId = tab?.windowId
-      if (windowId == null || cancelled) return
-      windowIdRef.current = windowId
-      // A live server presence mapping is newer than the window's last manual
-      // conversation. The broker attachment effect above will restore it.
-      const panelViews = await conversationPanelViewsStorage.getValue()
-      if (conversationForTab(panelViews, tab.id)) return
-      const stored = await getWindowConversation(windowId)
-      if (cancelled) return
-      if (stored && stored !== conversationIdRef.current) {
-        setSearchParams({ conversationId: stored })
-      } else if (!stored) {
-        await setWindowConversation(windowId, conversationIdRef.current)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  // Remember the conversation this window is on so a remount can resume it.
-  useEffect(() => {
-    const windowId = windowIdRef.current
-    if (windowId == null) return
-    ;(async () => {
-      if (!(await sidePanelPerWindowStorage.getValue())) return
-      await setWindowConversation(windowId, conversationId)
-    })()
-  }, [conversationId])
 
   // Keep messagesRef in sync on every change (cheap ref assignment)
   useEffect(() => {
@@ -807,6 +794,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const dispatchMessage = useCallback(
     (text: string, files?: FileUIPart[]) => {
+      // Transfer the SDK to POST before it can install a new active request.
+      // A late replay/state callback must not stop or reseed this new turn.
+      panelAttachmentRef.current?.abort()
       trackMessageSent()
       startExecutionTask({
         conversationId: conversationIdRef.current,
@@ -860,13 +850,31 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
   useEffect(() => {
-    const unwatch = searchActionsStorage.watch((storageAction) => {
-      if (storageAction) {
+    const tabId = optionsRef.current?.panelTabId
+    if (tabId === undefined) return
+    let cancelled = false
+    const consume = async () => {
+      if (cancelled) return
+      const storageAction = await sendRuntimeMessage(
+        RuntimeMessageType.takePanelSearch,
+        { tabId },
+      )
+      if (!cancelled && storageAction) {
         setMode(storageAction.mode)
+        modeRef.current = storageAction.mode
         sendMessage({ text: storageAction.query, action: storageAction.action })
       }
+    }
+    const unwatch = panelSearchCommandsStorage.watch((commands) => {
+      if (commands[String(tabId)]) void consume()
     })
-    return () => unwatch()
+    queueMicrotask(() => {
+      void consume()
+    })
+    return () => {
+      cancelled = true
+      unwatch()
+    }
   }, [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -881,31 +889,18 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     return () => unwatch()
   }, [])
 
-  const discardServerSession = useCallback((conversationId: string) => {
-    const serverUrl = agentUrlRef.current
-    if (!serverUrl) return
-    void fetch(`${serverUrl}/chat/${encodeURIComponent(conversationId)}`, {
-      method: 'DELETE',
-      keepalive: true,
-    })
-      .then((response) => {
-        if (!response.ok && response.status !== 404) {
-          throw new Error(`Session cleanup failed (${response.status})`)
-        }
-      })
-      .catch((error) => {
-        sentry.captureException(error, {
-          extra: { conversationId },
-        })
-      })
-  }, [])
-
   const resetConversationState = () => {
-    const previousConversationId = conversationIdRef.current
-    stop()
-    void finishExecutionTask({ isAbort: true })
-    discardServerSession(previousConversationId)
-    setConversationId(crypto.randomUUID())
+    // Navigation detaches this view only. Stop and Delete are explicit shared
+    // execution/history operations, never lifecycle cleanup for a renderer.
+    panelAttachmentRef.current?.abort()
+    void detachStream()
+    const nextId = crypto.randomUUID()
+    if (optionsRef.current?.onSelectConversation) {
+      optionsRef.current.onSelectConversation(nextId)
+      return
+    }
+    conversationIdRef.current = nextId
+    setConversationId(nextId)
     setMessages([])
     setTextToAction(new Map())
     setLiked({})
@@ -981,13 +976,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     providers,
     selectedProvider,
     isLoading: isLoadingProviders || isLoadingAgentUrl,
-    canSend,
+    canSend: canSend && !isPanelAttaching && !isRestoringConversation,
     isSyncing: !isIntegrationsSynced,
     isIncognito,
-    isRestoringConversation,
+    isRestoringConversation: isRestoringConversation || isPanelAttaching,
     agentUrlError,
     chatError,
-    retryLastTurn: regenerate,
+    retryLastTurn: () => {
+      panelAttachmentRef.current?.abort()
+      return regenerate()
+    },
     handleSelectProvider,
     getActionForMessage,
     resetConversation,

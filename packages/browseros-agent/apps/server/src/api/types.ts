@@ -47,6 +47,8 @@ const ChatInputSchema = z.object({
   message: z.string().optional().default(''),
   contextWindowSize: z.number().optional(),
   browserContext: BrowserContextSchema.optional(),
+  // UI ownership is explicit; model context may include unrelated conversations.
+  panelTabId: z.number().int().nonnegative().optional(),
   userSystemPrompt: z.string().optional(),
   isScheduledTask: z.boolean().optional().default(false),
   userWorkingDir: z.string().min(1).optional(),

@@ -159,16 +159,31 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     }
     return panelAssignmentsResponse(service.subscribePanelAssignments())
   })
+  app.delete('/panels/:tabId', (c) => {
+    if (!isTrustedAppRequest(c)) return c.json({ error: 'Forbidden' }, 403)
+    const tabId = Number(c.req.param('tabId'))
+    const conversationId = c.req.query('conversationId')
+    if (!Number.isInteger(tabId) || tabId < 0 || !conversationId)
+      return c.json({ error: 'Invalid panel owner' }, 400)
+    return c.json({ released: service.releasePanel(tabId, conversationId) })
+  })
   app.get('/:conversationId/state', async (c) => {
     // Keep this handler's type shallow: combining an awaited response with the
     // Zod middleware overload exceeds TypeScript's depth in the composed API.
     const parsed = ConversationIdParamSchema.safeParse(c.req.param())
     if (!parsed.success)
       return c.json({ error: 'Invalid conversation id' }, 400)
-    const snapshot = await service.getRunSnapshot(parsed.data.conversationId)
+    const runId = c.req.query('runId')
+    const snapshot = await service.getRunSnapshot(
+      parsed.data.conversationId,
+      runId,
+    )
+    if (!snapshot && runId)
+      return c.json({ error: 'Conversation run changed' }, 409)
     if (!snapshot) return c.json({ error: 'Conversation not found' }, 404)
     c.header('Cache-Control', 'no-store')
-    return c.json(snapshot)
+    // UIMessage is a recursive union; do not expand it through Hono route inference.
+    return Response.json(snapshot, { headers: { 'Cache-Control': 'no-store' } })
   })
   app.get(
     '/:conversationId/stream',
@@ -178,7 +193,10 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
       // The run may finish after a panel hydrates `state` but before this GET.
       // Completed records still replay their buffered chunks, closing that race
       // without making the panel reconstruct an assistant message itself.
-      const stream = service.subscribe(conversationId)
+      const runId = c.req.query('runId')
+      const stream = service.subscribe(conversationId, runId)
+      if (!stream && runId)
+        return c.json({ error: 'Conversation run changed' }, 409)
       return stream
         ? createUIMessageStreamResponse({ stream })
         : new Response(null, { status: 204 })
@@ -189,7 +207,8 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     zValidator('param', ConversationIdParamSchema),
     async (c) => {
       const { conversationId } = c.req.valid('param')
-      return c.json({ stopped: await service.stop(conversationId) })
+      const stopped = await service.stop(conversationId, c.req.query('runId'))
+      return Response.json({ stopped })
     },
   )
   app.delete(
