@@ -56,12 +56,12 @@ export async function attachConversationRun(input: {
           { runId, signal },
         )
         if (signal.aborted) return
-        if (after.status === 'completed' && chat.status === 'error') {
-          // Completion makes the server's final messages authoritative. A
-          // failed replay fetch must not leave a finished turn stuck at its
-          // prepared history, nor show a transport error as a model failure.
+        if (after.status !== 'running' && chat.status === 'error') {
+          // Terminal state owns the final (possibly partial) messages. A failed
+          // replay fetch must not erase output from a completed or stopped run.
+          // Keep failed-run errors visible; success/Stop clear transport errors.
           chat.messages = after.messages
-          chat.clearError()
+          if (after.status !== 'failed') chat.clearError()
         }
         if (after.status !== 'running') return
         if (chat.status === 'error') throw chat.error

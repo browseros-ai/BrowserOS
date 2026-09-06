@@ -5,3 +5,13 @@ export function panelTabIdFromUrl(url: string): number | undefined {
   const tabId = Number(value)
   return Number.isSafeInteger(tabId) ? tabId : undefined
 }
+
+/** Window-panel context is readable, but never authorizes taking over that tab. */
+export function getSubmittingPanelTabId(
+  origin: 'sidepanel' | 'newtab' | undefined,
+  contextualHost: number | undefined,
+  contextTab: number | undefined,
+): number | undefined {
+  if (contextualHost !== undefined) return contextualHost
+  return origin === 'newtab' ? contextTab : undefined
+}

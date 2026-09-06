@@ -53,6 +53,7 @@ import { addContentFilterNotice } from './content-filter-notice'
 import { attachConversationRun } from './conversation-run-attachment'
 import { conversationReconnectUrl } from './conversation-run-client'
 import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
+import { getSubmittingPanelTabId } from './panel-host'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
 
@@ -257,7 +258,20 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const panelAttachmentRef = useRef<AbortController | null>(null)
   const postingRef = useRef(false)
   const postRunRef = useRef<string | undefined>(undefined)
+  const [settledPost, setSettledPost] = useState<{ runId?: string } | null>(
+    null,
+  )
   const mountedRef = useRef(true)
+
+  const settlePost = () => {
+    const wasPosting = postingRef.current
+    postingRef.current = false
+    // An assignment may arrive before POST returns its run id. Reconcile once
+    // that uncertainty resolves, including a 409 when a sibling won the turn.
+    // Replay callbacks must not restart their own attachment effect.
+    if (wasPosting && mountedRef.current)
+      setSettledPost({ runId: postRunRef.current })
+  }
 
   useEffect(() => {
     optionsRef.current = options
@@ -436,7 +450,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversationId: sendingConversationId,
           mode: currentMode,
           browserContext: requestBrowserContext,
-          panelTabId: activeTab?.id,
+          // A window panel has browser context but no contextual tab owner.
+          // Only this immutable host (or the new-tab document itself) may join.
+          panelTabId: getSubmittingPanelTabId(
+            optionsRef.current?.origin,
+            hostTabId,
+            activeTab?.id,
+          ),
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
@@ -482,7 +502,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       id: conversationId,
       transport: chatTransport,
       onError: () => {
-        postingRef.current = false
+        // A failed POST reader releases this view to exact-run replay, even if
+        // the server accepted its request before the transport failed.
+        if (postingRef.current) postRunRef.current = undefined
+        settlePost()
       },
       onFinish: async ({
         message,
@@ -491,7 +514,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         isError,
         finishReason,
       }) => {
-        postingRef.current = false
+        settlePost()
         if (!mountedRef.current || isAbort) return
         const nextMessages = addContentFilterNotice(
           messages,
@@ -573,12 +596,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       setIsPanelAttaching(false)
       return
     }
-    // The submitting panel consumes POST; siblings consume replay. Only the
-    // exact initiating run may skip attachment, not any streaming conversation.
-    if (
-      postingRef.current &&
-      (!postRunRef.current || postRunRef.current === panelRun)
-    ) {
+    // POST owns the SDK until it settles. Retain its verified run id afterward
+    // to avoid replaying our own successful answer; a rejected POST instead
+    // updates settledPost and attaches to the sibling's winning assignment.
+    if (postingRef.current || settledPost?.runId === panelRun) {
       setIsPanelAttaching(false)
       return
     }
@@ -611,7 +632,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       if (panelAttachmentRef.current === controller)
         panelAttachmentRef.current = null
     }
-  }, [panelRun, chat, conversationId])
+  }, [panelRun, chat, conversationId, settledPost])
 
   // Two cleanups once a turn is no longer streaming: drop messages with
   // empty parts (interrupted responses trip AI SDK validation on the next
