@@ -5,17 +5,18 @@ component release workflows before building the browser. Component workflows
 own component versions and publication. Native browser lanes consume the
 normal published-resource manifests and `latest` aliases.
 
-Signed nightlies use the newer family transaction path in `nightly.yml`: one
-frozen source SHA, one shared browser version, both products, and one tracked
-state squash commit. The suite CLI accepts `nightly` and `full` identities, but
-this first production slice migrates the nightly entrypoint only. The existing
-`release-browseros.yml` and `release-browserclaw.yml` full-release entrypoints
-remain per-product until their native lane orchestration moves behind the same
-suite boundary. See `nightly-macos-ci.md` for that transaction and retry model.
-Both signed browser jobs build the exact reservation commit (the frozen source
-plus its deterministic version overlay); later feed/appcast state commits and
-the squash merge commit are never browser build inputs. Versioned browser R2
-objects are conditionally published only after both builds and the suite merge.
+Signed nightlies use independent product transactions through
+`nightly-macos-browseros.yml` and `nightly-macos-browserclaw.yml`. Each freezes its
+source and resource pins, builds one signed browser, and merges only its product
+state before publishing its immutable browser artifacts and rolling prerelease.
+The shared allocation and publication locks protect versions and sibling feed
+entries. Historical family transactions remain recoverable; see
+[nightly-macos-ci.md](nightly-macos-ci.md) for ownership and cutover details.
+
+The existing `release-browseros.yml` and `release-browserclaw.yml` full-release
+entrypoints retain their native lane orchestration. Nightly browser jobs build
+the exact reservation commit (the frozen source plus its deterministic version
+overlay); later state commits and squash merges are never browser build inputs.
 
 ## Full-release graph
 
@@ -197,7 +198,8 @@ browser appcast. Inspect the browser draft before promotion.
 | `release-claw-onboard.yml` | onboarding release and resources |
 | `release-extensions.yml` | extension CRX release, versioned object, alpha/bundled manifests, version reflection |
 | `release-extension-feeds.yml` | explicit extension manifest preview or publication |
-| `nightly.yml` | combined BrowserOS family nightly transaction, five tracked alpha snapshots, two rolling signed prereleases |
+| `nightly-macos-browseros.yml` | BrowserOS nightly transaction, product alpha snapshots, and `nightly-browseros` |
+| `nightly-macos-browserclaw.yml` | BrowserOS neo nightly transaction, product alpha snapshots, and `nightly-browserclaw` |
 | `release-browseros.yml` | ordered BrowserOS component releases, native builds, browser draft |
 | `release-browserclaw.yml` | ordered BrowserOS neo component releases, native builds, browser draft |
 

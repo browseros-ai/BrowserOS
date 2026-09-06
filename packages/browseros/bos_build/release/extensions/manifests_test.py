@@ -2,6 +2,8 @@
 """Tests for coherent extension-manifest generation."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import cast
 
@@ -136,6 +138,154 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
                 BROWSERCLAW_ID: "0.0.0.2",
             },
         )
+
+    def test_independent_product_pin_preserves_newer_live_sibling(self):
+        live_versions = {
+            "agent": "0.0.120.0",
+            "bugreporter": "54.0.0.0",
+            "browserclaw": "0.0.0.4",
+        }
+        for name, version, sibling in (
+            ("agent", "0.0.121.0", BROWSERCLAW_ID),
+            ("browserclaw", "0.0.0.5", AGENT_ID),
+        ):
+            with self.subTest(product=name):
+                live = render_update_manifest(live_versions)
+                publisher = FakePublisher(live={
+                    "extensions/update-manifest.alpha.xml": live,
+                    "extensions/bundled-manifest.xml": live,
+                })
+                self._run(set_versions={name: version}, publisher=publisher)
+                expected = extract_manifest_versions(live)[sibling]
+                for index in (0, 2):
+                    self.assertEqual(
+                        extract_manifest_versions(publisher.calls[index].content)[sibling],
+                        expected,
+                    )
+
+    def test_committed_ahead_sibling_survives_failed_r2_publication(self):
+        # Product A's snapshot merge is durable even if its R2 upload failed.
+        # Product B must publish those committed pins along with its own bump.
+        committed = render_update_manifest({
+            "agent": "0.0.120.0",
+            "bugreporter": "54.0.0.0",
+            "browserclaw": "0.0.0.4",
+        })
+        with TemporaryDirectory() as directory:
+            baseline = Path(directory)
+            (baseline / "extensions").mkdir()
+            for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
+                (baseline / "extensions" / name).write_text(committed)
+            for product, version, sibling in (
+                ("agent", "0.0.121.0", BROWSERCLAW_ID),
+                ("browserclaw", "0.0.0.5", AGENT_ID),
+            ):
+                with self.subTest(product=product):
+                    self._run(
+                        set_versions={product: version}, baseline_root=baseline
+                    )
+                    for index in (0, 2):
+                        pins = extract_manifest_versions(self.publisher.calls[index].content)
+                        self.assertEqual(
+                            pins[sibling], extract_manifest_versions(committed)[sibling]
+                        )
+
+    def test_committed_baseline_preserves_live_advances_and_channel_policy(self):
+        with TemporaryDirectory() as directory:
+            baseline = Path(directory)
+            (baseline / "extensions").mkdir()
+            (baseline / "extensions/update-manifest.xml").write_text(
+                render_update_manifest({
+                    "agent": "0.0.116.0",
+                    "bugreporter": "53.0.0.0",
+                    "browserclaw": "0.0.0.2",
+                })
+            )
+            (baseline / "extensions/bundled-manifest.xml").write_text(
+                render_update_manifest({
+                    "agent": "0.0.119.0",
+                    "bugreporter": "54.0.0.0",
+                    "browserclaw": "0.0.0.3",
+                })
+            )
+            publisher = FakePublisher(live={
+                "extensions/update-manifest.xml": LIVE_ALPHA_MANIFEST,
+                "extensions/bundled-manifest.xml": LIVE_BUNDLED_MANIFEST,
+            })
+            self._run(
+                channel="prod",
+                set_versions={"agent": "0.0.117.0"},
+                publisher=publisher,
+                baseline_root=baseline,
+            )
+            manifest = extract_manifest_versions(publisher.calls[0].content)
+            bundled = extract_manifest_versions(publisher.calls[2].content)
+            self.assertEqual(manifest[AGENT_ID], "0.0.117.0")
+            self.assertEqual(manifest[BROWSERCLAW_ID], "0.0.0.2")
+            self.assertEqual(bundled[AGENT_ID], "0.0.119.0")
+            self.assertEqual(bundled[BROWSERCLAW_ID], "0.0.0.3")
+
+    def test_explicit_pin_cannot_regress_committed_channel_ahead_of_live(self):
+        # A failed R2 upload does not make a merged channel version expendable,
+        # even when the next publisher explicitly selects this same extension.
+        committed = render_update_manifest({
+            "agent": "0.0.120.0",
+            "bugreporter": "54.0.0.0",
+            "browserclaw": "0.0.0.2",
+        })
+        with TemporaryDirectory() as directory:
+            baseline = Path(directory)
+            (baseline / "extensions").mkdir()
+            for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
+                (baseline / "extensions" / name).write_text(committed)
+            for publish in (False, True):
+                with self.subTest(publish=publish):
+                    with self.assertRaisesRegex(RuntimeError, "agent.*0.0.120.0"):
+                        self._run(
+                            set_versions={"agent": "0.0.118.0"},
+                            baseline_root=baseline,
+                            publish=publish,
+                        )
+                    self.assertEqual(self.publisher.calls, [])
+                    self.assertEqual(self.publisher.stage_calls, [])
+                    self.assertEqual(self.publisher.head_calls, [])
+                    for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
+                        self.assertEqual(
+                            (baseline / "extensions" / name).read_text(), committed
+                        )
+
+    def test_allow_downgrade_explicitly_overrides_committed_channel_pin(self):
+        committed = render_update_manifest({
+            "agent": "0.0.120.0",
+            "bugreporter": "54.0.0.0",
+            "browserclaw": "0.0.0.2",
+        })
+        with TemporaryDirectory() as directory:
+            baseline = Path(directory)
+            (baseline / "extensions").mkdir()
+            for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
+                (baseline / "extensions" / name).write_text(committed)
+            self._run(
+                set_versions={"agent": "0.0.118.0"},
+                baseline_root=baseline,
+                allow_downgrade=True,
+                publish=True,
+            )
+            for index in (0, 2):
+                self.assertEqual(
+                    extract_manifest_versions(self.publisher.calls[index].content)[AGENT_ID],
+                    "0.0.118.0",
+                )
+            self.assertTrue(all(call.allow_downgrade for call in self.publisher.calls))
+
+    def test_invalid_committed_baseline_refuses_before_writes(self):
+        with TemporaryDirectory() as directory:
+            baseline = Path(directory)
+            (baseline / "extensions").mkdir()
+            (baseline / "extensions/bundled-manifest.xml").write_text("<invalid/>")
+            with self.assertRaisesRegex(RuntimeError, "Invalid committed"):
+                self._run(baseline_root=baseline)
+            self.assertEqual(self.publisher.calls, [])
 
     def test_bundled_never_regresses_below_live_on_channel_run(self):
         # Alpha runs push bundled ahead; a prod run must neither downgrade

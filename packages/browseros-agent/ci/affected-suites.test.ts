@@ -76,11 +76,12 @@ describe('computeAffectedSuites', () => {
         ['packages/browseros-agent/scripts/release/commit-update-snapshot.sh'],
       ),
     ).toEqual(['release'])
-    for (const familyWorkflow of [
-      '.github/workflows/nightly.yml',
-      '.github/workflows/nightly-macos-product.yml',
+    for (const nightlyWorkflow of [
+      '.github/workflows/nightly-macos-browseros.yml',
+      '.github/workflows/nightly-macos-browserclaw.yml',
+      '.github/workflows/reusable-build-macos-nightly.yml',
     ]) {
-      expect(suiteNames([], [familyWorkflow])).toEqual(['release'])
+      expect(suiteNames([], [nightlyWorkflow])).toEqual(['release'])
     }
   })
 

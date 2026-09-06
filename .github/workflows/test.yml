@@ -15,6 +15,7 @@ on:
       - .github/workflows/test.yml
       - .github/workflows/build-browseros.yml
       - .github/workflows/nightly*.yml
+      - .github/workflows/reusable-build-macos-nightly.yml
       - .github/workflows/publish-server-ota.yml
       - .github/workflows/release-*.yml
       - packages/browseros-agent/**

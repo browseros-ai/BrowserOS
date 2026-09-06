@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Family-wide release transaction identity, reconciliation, and merge policy.
+"""Product release transactions, with recovery for saved family reservations.
 
 The suite is the persistence owner above the BrowserOS and BrowserOS neo
-products. It reserves every version in one pull request, lets asynchronous
-release jobs add only the approved snapshots, and derives the live state head
+products. New nightlies own one product; legacy records own both. Async jobs
+add only approved snapshots, and the suite derives the live state head
 from GitHub so an interrupted push never requires an atomic PR-body update.
 """
 
@@ -30,6 +30,11 @@ from .components import (
     resolve_candidate_versions,
     stamp_component,
 )
+from .feeds.render import (
+    extract_appcast_version,
+    extract_manifest_versions,
+    parse_dotted_version,
+)
 from .github import (
     create_pull_request,
     list_pull_requests,
@@ -43,7 +48,9 @@ _SCHEMA = "browseros-release-suite-v1"
 _GATE_SCHEMA = "browseros-release-suite-gate-v1"
 _MARKER_RE = re.compile(r"<!-- browseros-release-suite-v1\n(.*?)\n-->", re.DOTALL)
 _SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
-_TRANSACTION_BRANCH_RE = re.compile(r"^bot/release-(nightly|full)-([0-9a-f]{12})$")
+_TRANSACTION_BRANCH_RE = re.compile(
+    r"^bot/release-(nightly|full)-(?:(browseros|browserclaw)-)?([0-9a-f]{12})$"
+)
 _BROWSER_VERSION_RE = re.compile(
     r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?"
 )
@@ -69,6 +76,37 @@ SUITE_STATE_PATHS = (
 )
 
 
+def suite_products(product: str = "") -> tuple[str, ...]:
+    """An absent scope means a saved family transaction, never a guessed product."""
+    if not product:
+        return SUITE_PRODUCTS
+    if product not in SUITE_PRODUCTS:
+        raise ValueError(f"Unknown suite product: {product}")
+    return (product,)
+
+
+def suite_components(
+    product: str = "", *, release_only: bool = False
+) -> tuple[str, ...]:
+    from ..products.resource_sources import source_resources_for_product
+
+    components = []
+    for selected in suite_products(product):
+        resources = source_resources_for_product(selected)
+        components.extend((resources.server_component, resources.extension_component))
+        if not release_only:
+            components.append(resources.onboarding_component)
+    return tuple(components)
+
+
+def suite_state_paths(product: str = "") -> tuple[str, ...]:
+    if not product:
+        return SUITE_STATE_PATHS
+    suite_products(product)
+    server = "appcast-server" if product == "browseros" else "appcast-claw-server"
+    return (*SUITE_STATE_PATHS[:3], f"updates/server/{server}.alpha.xml")
+
+
 @dataclass(frozen=True)
 class BrowserAllocation:
     """One browser version and build-offset reservation held by a suite PR."""
@@ -80,12 +118,13 @@ class BrowserAllocation:
 
 @dataclass(frozen=True)
 class SuiteRequest:
-    """The small caller-facing identity for one family release."""
+    """Frozen source and explicit product scope; empty scope recovers legacy families."""
 
     mode: SuiteMode
     source_sha: str
     default_branch: str
     dispatch_ref: str
+    product: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,7 +144,7 @@ class SuitePullRequest:
 
 @dataclass(frozen=True)
 class SuiteRecord:
-    """Portable family transaction record with immutable and live Git identity."""
+    """Product ownership plus immutable build and live persistence identities."""
 
     transaction_id: str
     mode: str
@@ -124,6 +163,22 @@ class SuiteRecord:
     merge_sha: str = ""
     state_checksums: Mapping[str, str] = field(default_factory=dict)
     schema: str = _SCHEMA
+    product: str = ""
+    # Derived from the final state's second parent, not stored in the PR marker.
+    # Builds always use reservation_sha; this base only owns tracked state.
+    state_base_sha: str = ""
+
+    @property
+    def products(self) -> tuple[str, ...]:
+        return suite_products(self.product)
+
+    @property
+    def release_components(self) -> tuple[str, ...]:
+        return suite_components(self.product, release_only=True)
+
+    @property
+    def state_paths(self) -> tuple[str, ...]:
+        return suite_state_paths(self.product)
 
     def to_dict(self) -> dict[str, object]:
         return dict(asdict(self))
@@ -137,6 +192,7 @@ class SuiteRecord:
         # and a second body edit while preserving one immutable reservation marker.
         return {
             "schema": self.schema,
+            **({"product": self.product} if self.product else {}),
             "transaction_id": self.transaction_id,
             "mode": self.mode,
             "source_sha": self.source_sha,
@@ -154,7 +210,7 @@ class SuiteRecord:
             for name, version in sorted(self.component_versions.items())
         )
         return (
-            "## BrowserOS family release transaction\n\n"
+            f"## BrowserOS {self.product or 'family'} release transaction\n\n"
             f"- Transaction: `{self.transaction_id}`\n"
             f"- Mode: `{self.mode}`\n"
             f"- Frozen artifact source: `{self.source_sha}`\n"
@@ -177,7 +233,7 @@ class SuiteRecord:
         )
         merge = f"\n- Merge commit: `{self.merge_sha}`" if self.merge_sha else ""
         return (
-            "## BrowserOS family release transaction\n\n"
+            f"## BrowserOS {self.product or 'family'} release transaction\n\n"
             f"- Transaction: `{self.transaction_id}`\n"
             f"- Source SHA: `{self.source_sha}`\n"
             f"- State SHA: `{self.state_sha}`\n"
@@ -215,6 +271,8 @@ class SuiteRecord:
                 "pull_request_url",
                 "state",
                 "merge_sha",
+                "product",
+                "state_base_sha",
             )
         }
         if not all(isinstance(value, str) for value in string_fields.values()):
@@ -252,11 +310,11 @@ class SuiteBackend(Protocol):
 
     def find_transaction(self, request: SuiteRequest) -> SuiteRecord | None: ...
 
-    def discover_allocations(self) -> Sequence[AllocationRecord]: ...
+    def discover_allocations(self, product: str = "") -> Sequence[AllocationRecord]: ...
 
     def discover_browser_allocations(self) -> Sequence[BrowserAllocation]: ...
 
-    def read_committed_versions(self) -> Mapping[str, str]: ...
+    def read_committed_versions(self, product: str = "") -> Mapping[str, str]: ...
 
     def read_browser_version(self) -> str: ...
 
@@ -272,6 +330,10 @@ class SuiteBackend(Protocol):
     ) -> SuiteRecord: ...
 
     def reconcile_state(self, record: SuiteRecord, state_root: Path) -> SuiteRecord: ...
+
+    def reconcile_product_state(
+        self, record: SuiteRecord, state_root: Path, state_base_sha: str
+    ) -> SuiteRecord: ...
 
     def inspect_pull_request(self, number: int) -> SuitePullRequest: ...
 
@@ -299,19 +361,20 @@ def _validate_sha(value: str, name: str) -> None:
         raise ValueError(f"{name} must be a full commit SHA")
 
 
-def transaction_id(mode: str, source_sha: str) -> str:
+def transaction_id(mode: str, source_sha: str, product: str = "") -> str:
     """Return the stable retry identity; Actions attempts never participate."""
     if mode not in ("nightly", "full"):
         raise ValueError("mode must be nightly or full")
     _validate_sha(source_sha, "source SHA")
-    return f"{mode}-{source_sha.lower()}"
+    suite_products(product)
+    scope = f"-{product}" if product else ""
+    return f"{mode}{scope}-{source_sha.lower()}"
 
 
-def transaction_branch(mode: str, source_sha: str) -> str:
+def transaction_branch(mode: str, source_sha: str, product: str = "") -> str:
     """Return the deterministic, transaction-scoped short-lived branch."""
-    return (
-        f"bot/release-{mode}-{transaction_id(mode, source_sha).rsplit('-', 1)[1][:12]}"
-    )
+    identity, source = transaction_id(mode, source_sha, product).rsplit("-", 1)
+    return f"bot/release-{identity}-{source[:12]}"
 
 
 def _normalize_browser_version(version: str) -> str:
@@ -339,21 +402,25 @@ def _validate_record(record: SuiteRecord, request: SuiteRequest | None = None) -
     _validate_sha(record.source_sha, "source_sha")
     _validate_sha(record.reservation_sha, "reservation_sha")
     _validate_sha(record.state_sha, "state_sha")
+    if record.state_base_sha:
+        _validate_sha(record.state_base_sha, "state_base_sha")
     if record.merge_sha:
         _validate_sha(record.merge_sha, "merge_sha")
-    expected_id = transaction_id(record.mode, record.source_sha)
+    expected_id = transaction_id(record.mode, record.source_sha, record.product)
     if record.transaction_id != expected_id:
         raise ValueError("Suite transaction_id does not match mode and source")
-    if record.branch != transaction_branch(record.mode, record.source_sha):
+    if record.branch != transaction_branch(
+        record.mode, record.source_sha, record.product
+    ):
         raise ValueError("Suite branch does not match transaction identity")
-    if set(record.component_versions) != set(SUITE_COMPONENTS):
+    if set(record.component_versions) != set(suite_components(record.product)):
         raise ValueError("Suite component reservation is incomplete")
     for component, version in record.component_versions.items():
         normalize_component_version(component, version)
     _normalize_browser_version(record.browser_version)
     if record.build_offset < 0:
         raise ValueError("Suite build_offset must be non-negative")
-    if set(record.state_checksums) - set(SUITE_STATE_PATHS):
+    if set(record.state_checksums) - set(record.state_paths):
         raise ValueError("Suite record contains unexpected state checksums")
     if any(
         not re.fullmatch(r"[0-9a-f]{64}", value)
@@ -362,7 +429,8 @@ def _validate_record(record: SuiteRecord, request: SuiteRequest | None = None) -
         raise ValueError("Suite state checksum must be lowercase sha256")
     if request is not None:
         if (
-            record.mode != request.mode
+            record.product != request.product
+            or record.mode != request.mode
             or record.source_sha.lower() != request.source_sha.lower()
             or record.default_branch != request.default_branch
         ):
@@ -370,7 +438,7 @@ def _validate_record(record: SuiteRecord, request: SuiteRequest | None = None) -
 
 
 def _validate_request(request: SuiteRequest) -> None:
-    transaction_id(request.mode, request.source_sha)
+    transaction_id(request.mode, request.source_sha, request.product)
     if not request.default_branch:
         raise ValueError("default_branch is required")
     if request.dispatch_ref != request.default_branch:
@@ -499,9 +567,16 @@ def inspect_transaction(request: SuiteRequest, backend: SuiteBackend) -> SuiteRe
     record = backend.find_transaction(request)
     if record is None:
         raise ValueError(
-            f"Suite transaction not found: {transaction_id(request.mode, request.source_sha)}"
+            f"Suite transaction not found: {transaction_id(request.mode, request.source_sha, request.product)}"
         )
     _validate_record(record, request)
+    # Recovery may skip the merge command entirely after an interrupted run.
+    # Prove the committed tree here too before a caller can publish from it.
+    if record.state == "merged" and (
+        not record.merge_sha
+        or not backend.merge_commit_matches_transaction(record, record.merge_sha)
+    ):
+        raise ValueError("Suite merge commit does not match transaction state")
     return record
 
 
@@ -510,6 +585,7 @@ def reconcile_transaction(
     backend: SuiteBackend,
     *,
     state_root: Path | None = None,
+    state_base_sha: str = "",
 ) -> SuiteRecord:
     """Create/recover a reservation and optionally reconcile its final snapshots."""
     _validate_request(request)
@@ -517,7 +593,7 @@ def reconcile_transaction(
         raise ValueError("Checkout does not match the frozen source SHA")
 
     changed = set(backend.changed_paths())
-    unexpected = changed - set(SUITE_STATE_PATHS)
+    unexpected = changed - set(suite_state_paths(request.product))
     if unexpected:
         raise ValueError(
             "Suite reconcile found unexpected changes: " + ", ".join(sorted(unexpected))
@@ -526,7 +602,9 @@ def reconcile_transaction(
         raise ValueError("Initial suite reservation requires a clean checkout")
     if state_root is not None:
         missing = [
-            path for path in SUITE_STATE_PATHS if not (state_root / path).is_file()
+            path
+            for path in suite_state_paths(request.product)
+            if not (state_root / path).is_file()
         ]
         if missing:
             raise ValueError(
@@ -536,16 +614,22 @@ def reconcile_transaction(
 
     existing = backend.find_transaction(request)
     if existing is None:
-        committed = dict(backend.read_committed_versions())
-        if set(committed) != set(SUITE_COMPONENTS):
+        committed = dict(
+            backend.read_committed_versions(request.product)
+            if request.product
+            else backend.read_committed_versions()
+        )
+        if set(committed) != set(suite_components(request.product)):
             raise ValueError("Committed suite component set is incomplete")
-        allocations = tuple(backend.discover_allocations())
-        branch = transaction_branch(request.mode, request.source_sha)
+        allocations = tuple(
+            backend.discover_allocations(request.product)
+            if request.product
+            else backend.discover_allocations()
+        )
+        branch = transaction_branch(request.mode, request.source_sha, request.product)
         versions: dict[str, str] = {}
-        for product, component_ids in (
-            ("browseros", {"server", "agent"}),
-            ("browserclaw", {"claw-server-rust", "browserclaw"}),
-        ):
+        for product in suite_products(request.product):
+            component_ids = set(suite_components(product, release_only=True))
             product_allocations = tuple(
                 item for item in allocations if item.component in component_ids
             )
@@ -557,12 +641,14 @@ def reconcile_transaction(
                     candidate_id=branch,
                 )
             )
-        for component in SUITE_ONBOARDING_COMPONENTS:
+        for component in set(suite_components(request.product)) - set(
+            suite_components(request.product, release_only=True)
+        ):
             versions[component] = normalize_component_version(
                 component, committed[component]
             )
         browser_version, build_offset = _allocate_browser(
-            transaction_id(request.mode, request.source_sha),
+            transaction_id(request.mode, request.source_sha, request.product),
             backend.read_browser_version(),
             backend.read_build_offset(),
             backend.discover_browser_allocations(),
@@ -586,14 +672,14 @@ def reconcile_transaction(
         raise ValueError(
             f"Final suite reconciliation requires an open or merged pull request, got {existing.state}"
         )
-    if existing.state == "open" and not existing.draft:
-        if state_root is None:
-            raise ValueError(
-                "Ready suite pull request can only be recovered with complete final state"
-            )
+    if existing.state == "open" and not existing.draft and state_root is None:
+        raise ValueError(
+            "Ready suite pull request can only be recovered with complete final state"
+        )
+    if existing.state == "open" and not existing.draft and not existing.product:
         desired = {
             path: hashlib.sha256((state_root / path).read_bytes()).hexdigest()
-            for path in SUITE_STATE_PATHS
+            for path in existing.state_paths
         }
         if dict(existing.state_checksums) != desired:
             raise ValueError(
@@ -604,7 +690,12 @@ def reconcile_transaction(
         return existing
     if state_root is None:
         return existing
-    reconciled = backend.reconcile_state(existing, state_root)
+    if request.product:
+        reconciled = backend.reconcile_product_state(
+            existing, state_root, state_base_sha
+        )
+    else:
+        reconciled = backend.reconcile_state(existing, state_root)
     _validate_record(reconciled, request)
     return reconciled
 
@@ -619,7 +710,7 @@ def _validate_gate(record: SuiteRecord, gate: Mapping[str, object]) -> None:
         "browser_version": record.browser_version,
         "component_versions": dict(record.component_versions),
         "state_checksums": dict(record.state_checksums),
-        "products": list(SUITE_PRODUCTS),
+        "products": list(record.products),
     }
     for name, value in expected.items():
         if gate.get(name) != value:
@@ -634,7 +725,7 @@ def merge_transaction(
     """Squash-merge one unchanged family state PR after its complete gate."""
     _validate_record(record)
     _validate_gate(record, gate)
-    if set(record.state_checksums) != set(SUITE_STATE_PATHS):
+    if set(record.state_checksums) != set(record.state_paths):
         raise ValueError("Suite merge requires the complete final state checksum set")
     pull_request = backend.inspect_pull_request(record.pull_request_number)
     if (
@@ -838,14 +929,14 @@ class GitHubSuiteBackend:
         )
         self._git("fetch", "--force", self.remote, "--tags", "--prune")
 
-    def _state_checksums(self, ref: str) -> dict[str, str]:
+    def _state_checksums(self, ref: str, product: str = "") -> dict[str, str]:
         return {
             path: hashlib.sha256(self._git_bytes("show", f"{ref}:{path}")).hexdigest()
-            for path in SUITE_STATE_PATHS
+            for path in suite_state_paths(product)
         }
 
     def find_transaction(self, request: SuiteRequest) -> SuiteRecord | None:
-        branch = transaction_branch(request.mode, request.source_sha)
+        branch = transaction_branch(request.mode, request.source_sha, request.product)
         matches = list_pull_requests(self.repo, state="all", head=branch)
         if not matches:
             return None
@@ -861,6 +952,15 @@ class GitHubSuiteBackend:
             )
         record = records[0]
         _validate_record(record, request)
+        if record.product:
+            # Inspection may run from an old source checkout after a state
+            # merge; refresh main before proving the state's second parent.
+            self._git(
+                "fetch",
+                "--no-tags",
+                self.remote,
+                f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
+            )
         if record.state == "merged":
             # GitHub retains this synthetic ref after deleting the suite branch.
             # It is the original frozen-source overlay; the squash tree may also
@@ -891,9 +991,13 @@ class GitHubSuiteBackend:
         # arbitrary code commit as the frozen source.
         self._validate_reservation_history(record)
         self._validate_state_history(record, record.state_sha)
-        return replace(record, state_checksums=self._state_checksums(record.state_sha))
+        return replace(
+            record,
+            state_checksums=self._state_checksums(record.state_sha, record.product),
+            state_base_sha=self._product_state_base(record) if record.product else "",
+        )
 
-    def discover_allocations(self) -> Sequence[AllocationRecord]:
+    def discover_allocations(self, product: str = "") -> Sequence[AllocationRecord]:
         # Legacy candidates, tags, releases, and suite reservations all share
         # component namespaces, so every allocator must see the union.
         from .candidate import GitHubCandidateBackend
@@ -902,8 +1006,8 @@ class GitHubSuiteBackend:
         legacy = GitHubCandidateBackend(
             self.repo_root, self.repo, self.default_branch, self.remote
         )
-        for product in SUITE_PRODUCTS:
-            allocations.extend(legacy.discover_allocations(product))
+        for selected in suite_products(product):
+            allocations.extend(legacy.discover_allocations(selected))
         return tuple(allocations)
 
     def discover_branch_reservations(self) -> Sequence[SuiteRecord]:
@@ -982,6 +1086,7 @@ class GitHubSuiteBackend:
         if match is None:
             raise ValueError(f"Non-canonical suite branch: {branch}")
         mode = match.group(1)
+        product = match.group(2) or ""
 
         # Reconciled branches advance beyond the reservation. Walk their
         # first-parent history until the branch identity and the commit parent
@@ -997,7 +1102,7 @@ class GitHubSuiteBackend:
             if len(parents) != 2:
                 continue
             candidate_source = parents[1]
-            if transaction_branch(mode, candidate_source) == branch:
+            if transaction_branch(mode, candidate_source, product) == branch:
                 reservation_sha = candidate_sha
                 source_sha = candidate_source
                 break
@@ -1013,7 +1118,8 @@ class GitHubSuiteBackend:
         if not offset_text.isdigit():
             raise ValueError("Suite reservation build offset is invalid")
         record = SuiteRecord(
-            transaction_id=transaction_id(mode, source_sha),
+            transaction_id=transaction_id(mode, source_sha, product),
+            product=product,
             mode=mode,
             source_sha=source_sha,
             reservation_sha=reservation_sha,
@@ -1024,11 +1130,11 @@ class GitHubSuiteBackend:
             build_offset=int(offset_text),
             component_versions={
                 component: self._component_version_at_ref(component, reservation_sha)
-                for component in SUITE_COMPONENTS
+                for component in suite_components(product)
             },
             pull_request_number=0,
             pull_request_url="",
-            state_checksums=self._state_checksums(head_sha),
+            state_checksums=self._state_checksums(head_sha, product),
         )
         _validate_record(record)
         self._validate_reservation_history(record)
@@ -1065,10 +1171,10 @@ class GitHubSuiteBackend:
                 allocations[record.transaction_id] = allocation
         return tuple(allocations.values())
 
-    def read_committed_versions(self) -> Mapping[str, str]:
+    def read_committed_versions(self, product: str = "") -> Mapping[str, str]:
         return {
             component: read_component_version(self.repo_root, component)
-            for component in SUITE_COMPONENTS
+            for component in suite_components(product)
         }
 
     def read_browser_version(self) -> str:
@@ -1145,6 +1251,8 @@ class GitHubSuiteBackend:
             Path("packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"),
         }
         for component in SUITE_RELEASE_COMPONENTS:
+            if component not in component_versions:
+                continue
             changed.update(
                 path.relative_to(worktree)
                 for path in stamp_component(
@@ -1168,7 +1276,7 @@ class GitHubSuiteBackend:
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
             *(
                 path.as_posix()
-                for component in SUITE_RELEASE_COMPONENTS
+                for component in record.release_components
                 for path in (
                     component_by_id(component).manifest_path,
                     component_by_id(component).lockfile_path,
@@ -1238,7 +1346,7 @@ class GitHubSuiteBackend:
                     "user.email=ci@browseros.com",
                     "commit",
                     "-m",
-                    f"chore(release): reserve {request.mode} family transaction",
+                    f"chore(release): reserve {request.mode} {request.product or 'family'} transaction",
                     cwd=worktree,
                 )
                 local_sha = self._git("rev-parse", "HEAD", cwd=worktree)
@@ -1249,8 +1357,11 @@ class GitHubSuiteBackend:
                 self._git("worktree", "remove", "--force", str(worktree))
 
         provisional = SuiteRecord(
-            transaction_id=transaction_id(request.mode, request.source_sha),
+            transaction_id=transaction_id(
+                request.mode, request.source_sha, request.product
+            ),
             mode=request.mode,
+            product=request.product,
             source_sha=request.source_sha,
             reservation_sha=reservation_sha,
             state_sha=reservation_sha,
@@ -1261,13 +1372,13 @@ class GitHubSuiteBackend:
             component_versions=dict(component_versions),
             pull_request_number=0,
             pull_request_url="",
-            state_checksums=self._state_checksums(reservation_sha),
+            state_checksums=self._state_checksums(reservation_sha, request.product),
         )
         url = create_pull_request(
             repo=self.repo,
             head=branch,
             base=request.default_branch,
-            title=f"chore(release): {request.mode} BrowserOS family transaction",
+            title=f"chore(release): {request.mode} {request.product or 'BrowserOS family'} transaction",
             body=provisional.pull_request_body(),
             draft=True,
         )
@@ -1282,6 +1393,9 @@ class GitHubSuiteBackend:
         return record
 
     def _validate_state_history(self, record: SuiteRecord, state_sha: str) -> None:
+        if record.product:
+            self._validate_product_state(record, state_sha)
+            return
         ancestor = subprocess.run(
             ["git", "merge-base", "--is-ancestor", record.reservation_sha, state_sha],
             cwd=self.repo_root,
@@ -1299,6 +1413,236 @@ class GitHubSuiteBackend:
                 "Suite state branch contains unexpected files: "
                 + ", ".join(sorted(unexpected))
             )
+
+    def _product_state_paths(self, record: SuiteRecord) -> tuple[str, ...]:
+        """The only files a product overlay may change relative to current main."""
+        return tuple(
+            sorted(
+                {
+                    *record.state_paths,
+                    "packages/browseros/resources/BROWSEROS_VERSION",
+                    "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
+                    *(
+                        path.as_posix()
+                        for component in record.release_components
+                        for path in (
+                            component_by_id(component).manifest_path,
+                            component_by_id(component).lockfile_path,
+                        )
+                    ),
+                }
+            )
+        )
+
+    def _product_state_base(self, record: SuiteRecord) -> str:
+        if record.state_sha == record.reservation_sha:
+            return ""
+        parents = self._git(
+            "rev-list", "--parents", "-n", "1", record.state_sha
+        ).split()
+        if len(parents) != 3:
+            raise ValueError(
+                "Product state must retain its reservation and main ancestry"
+            )
+        return parents[2]
+
+    def _stage_product_state(
+        self, worktree: Path, record: SuiteRecord, state_root: Path
+    ) -> None:
+        """Compose selected state on main, retaining sibling code and reservations."""
+        for component in record.release_components:
+            current = read_component_version(worktree, component)
+            reserved = record.component_versions[component]
+            if tuple(map(int, current.split("."))) > tuple(
+                map(int, reserved.split("."))
+            ):
+                raise ValueError(
+                    f"Product component {component} was superseded on main"
+                )
+            stamp_component(worktree, component, reserved)
+
+        # Both products share Chromium's version/offset files. A slower product
+        # can finish with an older reservation; publishing it must not rewind the
+        # allocation watermark left by the faster sibling.
+        package_root = worktree / "packages/browseros"
+        current = load_semantic_version(package_root)
+        offset = int(load_build_offset(package_root))
+        if _browser_version_key(current) < _browser_version_key(record.browser_version):
+            while _browser_version_key(current) < _browser_version_key(
+                record.browser_version
+            ):
+                current = bump_version(package_root, "offset+build")
+                offset += 1
+            if offset != record.build_offset:
+                raise ValueError(
+                    "Product browser version and offset allocation disagree"
+                )
+        elif offset < record.build_offset or (
+            current == record.browser_version and offset != record.build_offset
+        ):
+            raise ValueError("Main browser version and offset allocation disagree")
+
+        for relative in record.state_paths:
+            destination = worktree / relative
+            incoming = (state_root / relative).read_bytes()
+            # A standalone publisher can commit a newer snapshot before its
+            # component manifest reflects that version. Guard committed state
+            # here as well as live R2, before the PR can overwrite the snapshot.
+            if relative.endswith(".xml"):
+                current_text = destination.read_text()
+                incoming_text = incoming.decode("utf-8")
+                if relative.startswith("updates/extensions/"):
+                    before = extract_manifest_versions(current_text)
+                    after = extract_manifest_versions(incoming_text)
+                else:
+                    old_version = extract_appcast_version(current_text)
+                    new_version = extract_appcast_version(incoming_text)
+                    before = {"server": old_version} if old_version else {}
+                    after = {"server": new_version} if new_version else {}
+                if any(
+                    key not in after
+                    or parse_dotted_version(after[key]) < parse_dotted_version(version)
+                    for key, version in before.items()
+                ):
+                    raise ValueError(
+                        f"Snapshot would regress committed state: {relative}"
+                    )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(incoming)
+
+    def _validate_product_state(self, record: SuiteRecord, state_sha: str) -> None:
+        """Prove each state handoff is an approved overlay of an actual main commit.
+
+        First parents retain the immutable reservation (and earlier retries);
+        second parents supply current main without rebasing or force-pushing.
+        Reconstructing the entire tree catches hidden changes in shared lockfiles.
+        """
+        if state_sha == record.reservation_sha:
+            return
+        parents = self._git("rev-list", "--parents", "-n", "1", state_sha).split()
+        if len(parents) != 3:
+            raise ValueError("Product state has unexpected parentage")
+        previous, base = parents[1:]
+        self._validate_product_state(record, previous)
+        default_ref = f"{self.remote}/{record.default_branch}"
+        for older, newer in ((record.source_sha, base), (base, default_ref)):
+            if subprocess.run(
+                ["git", "merge-base", "--is-ancestor", older, newer],
+                cwd=self.repo_root,
+                capture_output=True,
+            ).returncode:
+                raise ValueError("Product state base must descend from source on main")
+        with tempfile.TemporaryDirectory(prefix="browseros-product-proof-") as temp_dir:
+            worktree = Path(temp_dir) / "repo"
+            snapshots = Path(temp_dir) / "snapshots"
+            for relative in record.state_paths:
+                path = snapshots / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(self._git_bytes("show", f"{state_sha}:{relative}"))
+            self._git("worktree", "add", "--detach", str(worktree), base)
+            try:
+                self._stage_product_state(worktree, record, snapshots)
+                self._git("add", "--", *self._product_state_paths(record), cwd=worktree)
+                expected = self._git("write-tree", cwd=worktree)
+            finally:
+                self._git("worktree", "remove", "--force", str(worktree))
+        if self._git("rev-parse", f"{state_sha}^{{tree}}") != expected:
+            raise ValueError(
+                "Product state contains changes outside its approved overlay"
+            )
+
+    def _mark_pull_request_draft(self, number: int) -> None:
+        subprocess.run(
+            ["gh", "pr", "ready", str(number), "--undo", "--repo", self.repo],
+            cwd=self.repo_root,
+            check=True,
+        )
+
+    def reconcile_product_state(
+        self, record: SuiteRecord, state_root: Path, state_base_sha: str
+    ) -> SuiteRecord:
+        """Persist product state after rendering under the shared publication lock."""
+        _validate_sha(state_base_sha, "state_base_sha")
+        self._validate_state_history(record, record.state_sha)
+        if record.state == "merged":
+            return record
+        self._git(
+            "fetch",
+            "--no-tags",
+            self.remote,
+            f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
+        )
+        latest = self._git("rev-parse", f"{self.remote}/{record.default_branch}")
+        # Code-only main advances are fine; changed owned files mean the caller's
+        # baseline is stale and must be re-rendered before any durable write.
+        paths = self._product_state_paths(record)
+        if any(
+            self._git_bytes("show", f"{latest}:{path}")
+            != self._git_bytes("show", f"{state_base_sha}:{path}")
+            for path in paths
+        ):
+            raise ValueError("Product state baseline changed; retry publication")
+        with tempfile.TemporaryDirectory(prefix="browseros-product-state-") as temp_dir:
+            worktree = Path(temp_dir) / "repo"
+            self._git("worktree", "add", "--detach", str(worktree), latest)
+            try:
+                self._stage_product_state(worktree, record, state_root)
+                self._git("add", "--", *paths, cwd=worktree)
+                tree = self._git("write-tree", cwd=worktree)
+                if (
+                    record.state_sha != record.reservation_sha
+                    and self._product_state_base(record) == latest
+                    and self._git("rev-parse", f"{record.state_sha}^{{tree}}") == tree
+                ):
+                    return record
+                if not record.draft:
+                    # An interrupted helper may have enabled auto-merge. Return
+                    # to draft before changing the head so only a new exact-head
+                    # gate can make the recomposed state mergeable.
+                    self._mark_pull_request_draft(record.pull_request_number)
+                    record = replace(record, draft=True)
+                # A merge-shaped state commit keeps both histories reachable.
+                # It is a fresh additive commit even after interrupted publication.
+                state_sha = self._git(
+                    "-c",
+                    "user.name=BrowserOS CI",
+                    "-c",
+                    "user.email=ci@browseros.com",
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    record.state_sha,
+                    "-p",
+                    latest,
+                    "-m",
+                    f"chore(release): reconcile {record.product} nightly state",
+                    cwd=worktree,
+                )
+                staged = replace(record, state_sha=state_sha, state_base_sha=latest)
+                self._validate_product_state(staged, state_sha)
+                try:
+                    self._git(
+                        "push", self.remote, f"{state_sha}:refs/heads/{record.branch}"
+                    )
+                except subprocess.CalledProcessError:
+                    self._git(
+                        "fetch", "--no-tags", self.remote, f"refs/heads/{record.branch}"
+                    )
+                    recovered = self._git("rev-parse", "FETCH_HEAD")
+                    self._validate_product_state(record, recovered)
+                    if self._git("rev-parse", f"{recovered}^{{tree}}") != tree:
+                        raise ValueError(
+                            "Remote product state conflicts after push race"
+                        )
+                    state_sha = recovered
+            finally:
+                self._git("worktree", "remove", "--force", str(worktree))
+        return replace(
+            record,
+            state_sha=state_sha,
+            state_base_sha=latest,
+            state_checksums=self._state_checksums(state_sha, record.product),
+        )
 
     @staticmethod
     def _filesystem_checksums(root: Path) -> dict[str, str]:
@@ -1438,6 +1782,18 @@ class GitHubSuiteBackend:
             f"refs/heads/{record.default_branch}:refs/remotes/{self.remote}/{record.default_branch}",
         )
         default_ref = f"{self.remote}/{record.default_branch}"
+        if record.product:
+            # The state tree was composed from current main under the feed lock.
+            # Sibling completion before that base is expected; later changes to
+            # any owned file require recomposition, never a blind squash.
+            base = self._product_state_base(record)
+            if not base:
+                return True
+            return any(
+                self._git_bytes("show", f"{default_ref}:{path}")
+                != self._git_bytes("show", f"{base}:{path}")
+                for path in self._product_state_paths(record)
+            )
         if self._browser_version_at_ref(default_ref) != self._browser_version_at_ref(
             record.source_sha
         ):
@@ -1466,8 +1822,8 @@ class GitHubSuiteBackend:
                 str(script),
                 str(number),
                 expected_head_sha,
-                "chore(release): reconcile BrowserOS family state",
-                "One release transaction for BrowserOS and BrowserOS neo.",
+                "chore(release): reconcile nightly release state",
+                "Persist the exact gated release transaction.",
             ],
             cwd=self.repo_root,
             env=environment,
@@ -1500,6 +1856,13 @@ class GitHubSuiteBackend:
         )
         if ancestor.returncode != 0:
             return False
+        if record.product:
+            self._validate_product_state(record, record.state_sha)
+            return all(
+                self._git_bytes("show", f"{merge_sha}:{path}")
+                == self._git_bytes("show", f"{record.state_sha}:{path}")
+                for path in self._product_state_paths(record)
+            )
         return (
             self._browser_version_at_ref(merge_sha) == record.browser_version
             and all(

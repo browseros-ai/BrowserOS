@@ -473,6 +473,8 @@ jobs:
           retention-days: 30
 
   preflight_alpha:
+    # Validate before making the release public, but discard these rendered
+    # bytes: another product may advance shared feeds before publish_alpha.
     needs:
       - prepare
       - build
@@ -480,7 +482,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      base_sha: ${{ steps.base.outputs.sha }}
       should_publish: ${{ steps.render.outputs.should_publish }}
     env:
       NAMES: ${{ needs.prepare.outputs.names }}
@@ -492,10 +493,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch || 'main' }}
-
-      - name: Record feed snapshot base
-        id: base
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
@@ -532,34 +529,6 @@ jobs:
           fi
           uv run browseros release extensions "${args[@]}"
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
-
-      - name: Stage exact alpha feed snapshot
-        if: ${{ steps.render.outputs.should_publish == 'true' }}
-        run: |
-          set -euo pipefail
-          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
-          paths=(
-            updates/extensions/update-manifest.alpha.xml
-            updates/extensions/extensions.alpha.json
-            updates/extensions/bundled-manifest.xml
-          )
-          mkdir -p "$artifact_root/updates/extensions"
-          for path in "${paths[@]}"; do
-            cp "$path" "$artifact_root/$path"
-          done
-          (
-            cd "$artifact_root"
-            sha256sum "${paths[@]}" > SHA256SUMS
-          )
-
-      - name: Upload exact alpha feed snapshot
-        if: ${{ steps.render.outputs.should_publish == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: staged-alpha-feeds
-          if-no-files-found: error
-          retention-days: 1
 
   finalize:
     needs:
@@ -692,44 +661,41 @@ jobs:
     if: ${{ always() && needs.prepare.result == 'success' && needs.preflight_alpha.result == 'success' && needs.preflight_alpha.outputs.should_publish == 'true' && needs.finalize.result == 'success' }}
     runs-on: ubuntu-latest
     concurrency:
+      # The lock covers authoritative resolution as well as persistence and
+      # publication; a preflight snapshot cannot preserve a later sibling bump.
       group: release-feed-snapshots
       cancel-in-progress: false
       queue: max
     timeout-minutes: 15
     env:
+      NAMES: ${{ needs.prepare.outputs.names }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.preflight_alpha.outputs.base_sha }}
-
-      - name: Download exact alpha feed snapshot
-        uses: actions/download-artifact@v7
-        with:
-          name: extension-alpha-feed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: staged-alpha-feeds
-
-      - name: Restore exact alpha feed snapshot
-        run: |
-          set -euo pipefail
-          artifact_root="$GITHUB_WORKSPACE/staged-alpha-feeds"
-          paths=(
-            updates/extensions/update-manifest.alpha.xml
-            updates/extensions/extensions.alpha.json
-            updates/extensions/bundled-manifest.xml
-          )
-          (
-            cd "$artifact_root"
-            sha256sum --check SHA256SUMS
-          )
-          for path in "${paths[@]}"; do
-            cp "$artifact_root/$path" "$GITHUB_WORKSPACE/$path"
-          done
+          ref: ${{ github.event.repository.default_branch || 'main' }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Render alpha feeds from current committed and live state
+        working-directory: packages/browseros
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          args=(--channel alpha --baseline-root "$GITHUB_WORKSPACE/updates")
+          for NAME in $NAMES; do
+            case "$NAME" in
+              agent|bugreporter|browserclaw) args+=(--set "$NAME=$VERSION") ;;
+            esac
+          done
+          uv run browseros release extensions "${args[@]}"
 
       - name: Persist exact alpha feed snapshots
         env:

@@ -10,7 +10,7 @@
     "build": "bun run codegen && wxt build",
     "build:dev": "bun --env-file=../../.env.development wxt build --mode development",
     "zip": "wxt zip",
-    "test": "bun run ../../scripts/run-bun-test.ts ./apps/app",
+    "test": "wxt prepare && bun run ../../scripts/run-bun-test.ts ./apps/app",
     "compile": "bun --env-file=../../.env.development wxt prepare && tsc --noEmit",
     "lint": "bunx @biomejs/biome check",
     "typecheck": "bun --env-file=../../.env.development wxt prepare && tsc --noEmit",

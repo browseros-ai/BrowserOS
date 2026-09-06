@@ -143,9 +143,8 @@ describe('release-extensions workflow', () => {
     expect(preflight).toContain(
       `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
     )
-    expect(preflight).toContain('sha256sum "$' + '{paths[@]}" > SHA256SUMS')
-    expect(preflight).toContain('uses: actions/upload-artifact@v7')
-    expect(preflight).toContain(`base_sha: ${'$'}{{ steps.base.outputs.sha }}`)
+    expect(preflight).not.toContain('uses: actions/upload-artifact@v7')
+    expect(preflight).not.toContain('base_sha:')
     expect(preflight).toContain(
       `should_publish: ${'$'}{{ steps.render.outputs.should_publish }}`,
     )
@@ -187,13 +186,14 @@ describe('release-extensions workflow', () => {
     ]) {
       expect(publish).toContain(file)
     }
-    expect(publish).not.toContain('browseros release extensions')
+    expect(publish).toContain('browseros release extensions')
     expect(publish).toContain('browseros release feeds publish-local')
     expect(publish).toContain(
-      `ref: ${'$'}{{ needs.preflight_alpha.outputs.base_sha }}`,
+      `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
     )
-    expect(publish).toContain('uses: actions/download-artifact@v7')
-    expect(publish).toContain('sha256sum --check SHA256SUMS')
+    expect(publish).not.toContain('uses: actions/download-artifact@v7')
+    expect(publish).toContain('--baseline-root "$GITHUB_WORKSPACE/updates"')
+    expect(publish).toContain('args+=(--set "$NAME=$VERSION")')
     expect(publish).toContain(
       "needs.preflight_alpha.outputs.should_publish == 'true'",
     )
@@ -202,16 +202,12 @@ describe('release-extensions workflow', () => {
     expect(publish).toContain('"$' + '{paths[@]}"')
     expect(publish).not.toContain('git push origin "HEAD:$DEFAULT_BRANCH"')
     expect(publish).not.toContain('--force')
+    expect(publish.indexOf('browseros release extensions')).toBeLessThan(
+      publish.indexOf('commit-update-snapshot.sh'),
+    )
     expect(publish.indexOf('commit-update-snapshot.sh')).toBeLessThan(
       publish.indexOf('browseros release feeds publish-local'),
     )
-
-    const feedArtifact = section(
-      '- name: Upload exact alpha feed snapshot',
-      '  finalize:',
-    )
-    expect(feedArtifact).not.toContain('R2_SECRET_ACCESS_KEY')
-    expect(feedArtifact).not.toContain('BROWSERCLAW_KEY')
   })
 
   it('serializes releases and manual feed publication in one concurrency group', () => {
@@ -221,6 +217,17 @@ describe('release-extensions workflow', () => {
     expect(feedWorkflow).toMatch(
       /concurrency:\n\s+group: release-extensions-and-feeds\n\s+cancel-in-progress: false/,
     )
+    for (const job of [
+      section('  publish_alpha:', '  reflect-version:'),
+      section('  feeds:', undefined, feedWorkflow),
+    ]) {
+      expect(job).toMatch(
+        /group: release-feed-snapshots\n\s+cancel-in-progress: false\n\s+queue: max/,
+      )
+      expect(job.indexOf('group: release-feed-snapshots')).toBeLessThan(
+        job.indexOf('actions/checkout@'),
+      )
+    }
     expect(section('on:', '\npermissions:')).not.toMatch(/\n {2}push:/)
   })
 
@@ -267,6 +274,7 @@ describe('release-extensions workflow', () => {
       `ref: ${'$'}{{ github.event.repository.default_branch || 'main' }}`,
     )
     expect(transaction).toContain('both) channels=(alpha prod)')
+    expect(transaction).toContain('--baseline-root "$GITHUB_WORKSPACE/updates"')
     expect(transaction).toContain('extensions/update-manifest.alpha.xml')
     expect(transaction).toContain('extensions/extensions.alpha.json')
     expect(transaction).toContain('extensions/update-manifest.xml')
