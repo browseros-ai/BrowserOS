@@ -23,7 +23,7 @@
     "motion": "^12.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-hook-form": "^7.86.0",
+    "react-hook-form": "^7.87.0",
     "react-router": "^7.18.3",
     "tailwind-merge": "^3.6.0",
     "tailwind-scrollbar-hide": "^4.0.0",
