@@ -23,6 +23,8 @@ import { panelTabIdFromUrl } from './panel-host'
 export function usePanelConversation() {
   const [tabId] = useState(() => panelTabIdFromUrl(window.location.href))
   const [view, setView] = useState<ConversationPanelView | null>(null)
+  const viewRef = useRef(view)
+  viewRef.current = view
   const windowId = useRef<number | undefined>(undefined)
   const revision = useRef(0)
   const pendingSelection = useRef<string | undefined>(undefined)
@@ -31,6 +33,7 @@ export function usePanelConversation() {
 
   const select = useCallback(
     (conversationId: string) => {
+      if (viewRef.current?.conversationId === conversationId) return
       revision.current += 1
       pendingSelection.current = conversationId
       setView({ tabId: tabId ?? -1, conversationId, manual: true })

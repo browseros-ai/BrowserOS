@@ -19,8 +19,11 @@ export async function attachConversationRun(input: {
   onError?: (error: unknown) => void
 }): Promise<void> {
   const { chat, conversationId, runId, serverUrl, signal } = input
+  let consumingReplay = false
   const detach = () => {
-    void chat.stop()
+    // After replay ends the SDK is available for another POST, even while our
+    // final state read is pending. Cleanup owns only this replay's consumption.
+    if (consumingReplay) void chat.stop()
   }
   signal.addEventListener('abort', detach, { once: true })
   try {
@@ -37,11 +40,15 @@ export async function attachConversationRun(input: {
         if (signal.aborted) return
         chat.messages = state.replayMessages ?? state.messages
         input.onHydrated?.()
-        await chat.resumeStream({ body: { runId } })
+        consumingReplay = true
+        try {
+          await chat.resumeStream({ body: { runId } })
+        } finally {
+          consumingReplay = false
+        }
         if (signal.aborted) return
         // SDK reconnect errors normally resolve and set chat.error. A broken
         // stream must remain retryable even when the assignment never changes.
-        if (chat.status === 'error') throw chat.error
         const after = await fetchConversationRunState(
           serverUrl,
           conversationId,
@@ -50,6 +57,7 @@ export async function attachConversationRun(input: {
         )
         if (signal.aborted) return
         if (after.status !== 'running') return
+        if (chat.status === 'error') throw chat.error
       } catch (error) {
         if (signal.aborted) return
         input.onError?.(error)

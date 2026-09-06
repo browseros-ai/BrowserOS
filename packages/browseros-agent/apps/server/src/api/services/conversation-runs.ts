@@ -284,8 +284,9 @@ export class ConversationRuns {
     return true
   }
 
-  async stop(conversationId: string): Promise<boolean> {
+  async stop(conversationId: string, runId?: string): Promise<boolean> {
     const record = this.runs.get(conversationId)
+    if (runId && record?.runId !== runId) return false
     if (record?.status !== 'running') return false
 
     const reason = new DOMException('Conversation stopped', 'AbortError')

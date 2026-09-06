@@ -207,7 +207,8 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     zValidator('param', ConversationIdParamSchema),
     async (c) => {
       const { conversationId } = c.req.valid('param')
-      return c.json({ stopped: await service.stop(conversationId) })
+      const stopped = await service.stop(conversationId, c.req.query('runId'))
+      return Response.json({ stopped })
     },
   )
   app.delete(

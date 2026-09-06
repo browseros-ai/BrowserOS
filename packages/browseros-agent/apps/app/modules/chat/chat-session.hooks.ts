@@ -254,6 +254,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   )
   const conversationIdRef = useRef(conversationId)
   const optionsRef = useRef(options)
+  const panelAttachmentRef = useRef<AbortController | null>(null)
   const postingRef = useRef(false)
   const postRunRef = useRef<string | undefined>(undefined)
   const mountedRef = useRef(true)
@@ -526,6 +527,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const stop = useCallback(async () => {
     const stoppingConversationId = conversationIdRef.current
+    const stoppingRunId = optionsRef.current?.panelRun ?? postRunRef.current
+    panelAttachmentRef.current?.abort()
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
     // no longer a lifecycle signal.
@@ -534,7 +537,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       const serverUrl =
         agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
       const response = await fetch(
-        `${serverUrl}/chat/${encodeURIComponent(stoppingConversationId)}/stop`,
+        `${serverUrl}/chat/${encodeURIComponent(stoppingConversationId)}/stop${stoppingRunId ? `?runId=${encodeURIComponent(stoppingRunId)}` : ''}`,
         { method: 'POST' },
       )
       if (!response.ok) {
@@ -567,6 +570,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       return
     }
     const controller = new AbortController()
+    panelAttachmentRef.current = controller
     setIsPanelAttaching(true)
     void (async () => {
       const serverUrl =
@@ -589,7 +593,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     })().catch((error) => {
       if (!controller.signal.aborted) sentry.captureException(error)
     })
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+      if (panelAttachmentRef.current === controller)
+        panelAttachmentRef.current = null
+    }
   }, [panelRun, chat, conversationId])
 
   // Two cleanups once a turn is no longer streaming: drop messages with
@@ -752,6 +760,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const dispatchMessage = useCallback(
     (text: string, files?: FileUIPart[]) => {
+      // Transfer the SDK to POST before it can install a new active request.
+      // A late replay/state callback must not stop or reseed this new turn.
+      panelAttachmentRef.current?.abort()
       trackMessageSent()
       startExecutionTask({
         conversationId: conversationIdRef.current,
@@ -847,6 +858,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversationState = () => {
     // Navigation detaches this view only. Stop and Delete are explicit shared
     // execution/history operations, never lifecycle cleanup for a renderer.
+    panelAttachmentRef.current?.abort()
     void detachStream()
     const nextId = crypto.randomUUID()
     if (optionsRef.current?.onSelectConversation) {
@@ -936,7 +948,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isRestoringConversation: isRestoringConversation || isPanelAttaching,
     agentUrlError,
     chatError,
-    retryLastTurn: regenerate,
+    retryLastTurn: () => {
+      panelAttachmentRef.current?.abort()
+      return regenerate()
+    },
     handleSelectProvider,
     getActionForMessage,
     resetConversation,

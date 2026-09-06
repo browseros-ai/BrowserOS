@@ -187,8 +187,8 @@ export class ChatService {
     return this.conversationRuns.releasePanel(tabId, conversationId)
   }
 
-  async stop(conversationId: string): Promise<boolean> {
-    return await this.conversationRuns.stop(conversationId)
+  async stop(conversationId: string, runId?: string): Promise<boolean> {
+    return await this.conversationRuns.stop(conversationId, runId)
   }
 
   subscribePanelAssignments() {

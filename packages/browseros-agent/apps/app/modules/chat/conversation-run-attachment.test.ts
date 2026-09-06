@@ -42,6 +42,84 @@ describe('panel run attachment through HTTP and the real SDK reducer', () => {
     expect(failed).toBe(true)
   })
 
+  it('retains a terminal error without replaying it on every retry', async () => {
+    const f = await fixture()
+    f.source.enqueue({
+      type: 'error',
+      errorText: 'provider rejected the request',
+    })
+    f.source.close()
+    await eventually(() =>
+      expect(f.runs.getSnapshot(f.conversationId)?.status).toBe('failed'),
+    )
+    let streams = 0
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/stream')) streams += 1
+      return f.fetch(input, init)
+    }) as typeof fetch
+    const chat = f.chat(counted)
+    const controller = new AbortController()
+    const attaching = f.attach(chat, controller.signal)
+    const settled = await Promise.race([
+      attaching.then(() => true),
+      Bun.sleep(40).then(() => false),
+    ])
+    controller.abort()
+    await attaching
+    expect(settled).toBe(true)
+    expect(streams).toBe(1)
+    expect(chat.error?.message).toContain('provider rejected')
+  })
+
+  it('does not cancel a successor POST while an old replay checks final state', async () => {
+    const f = await fixture()
+    f.source.enqueue({ type: 'finish', finishReason: 'stop' })
+    f.source.close()
+    let release!: () => void
+    let checking!: () => void
+    const checked = new Promise<void>((resolve) => {
+      checking = resolve
+    })
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let states = 0
+    const delayed = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await f.fetch(input, init)
+      if (++states === 2) {
+        checking()
+        await blocked
+      }
+      return response
+    }) as typeof fetch
+    let postSignal: AbortSignal | undefined
+    const chat = new Chat<UIMessage>({
+      transport: {
+        reconnectToStream: async () =>
+          f.runs.subscribe(f.conversationId, f.runId),
+        sendMessages: async ({ abortSignal }) => {
+          postSignal = abortSignal
+          return new ReadableStream<UIMessageChunk>()
+        },
+      },
+    })
+    const controller = new AbortController()
+    const attaching = f.attach(chat, controller.signal, delayed)
+    await checked
+    expect(chat.status).toBe('ready')
+    const posting = chat.sendMessage({ text: 'next turn' })
+    await eventually(() => expect(postSignal).toBeDefined())
+    controller.abort()
+    try {
+      expect(postSignal?.aborted).toBe(false)
+    } finally {
+      release()
+      await chat.stop()
+      await posting
+      await attaching
+    }
+  })
+
   it('ignores delayed hydration after its view is replaced without stopping the shared run', async () => {
     const f = await fixture()
     let release!: () => void

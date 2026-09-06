@@ -92,6 +92,12 @@ describe('/chat server-owned run routes', () => {
       (await app.request(`/${conversationId}/stream?runId=${old.runId}`))
         .status,
     ).toBe(409)
+    const stoppingOld = await app.request(
+      `/${conversationId}/stop?runId=${old.runId}`,
+      { method: 'POST' },
+    )
+    expect(await stoppingOld.json()).toEqual({ stopped: false })
+    expect(runs.getSnapshot(conversationId)?.status).toBe('running')
     await runs.stop(conversationId)
   })
 
