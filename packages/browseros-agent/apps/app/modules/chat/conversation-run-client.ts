@@ -5,16 +5,18 @@ export interface ConversationRunState {
   runId: string
   status: 'running' | 'completed' | 'aborted' | 'failed'
   messages: UIMessage[]
+  replayMessages?: UIMessage[]
 }
 
 export async function fetchConversationRunState(
   serverUrl: string,
   conversationId: string,
   fetchImpl: typeof fetch = fetch,
+  options?: { runId: string; signal?: AbortSignal },
 ): Promise<ConversationRunState> {
   const response = await fetchImpl(
-    `${serverUrl}/chat/${encodeURIComponent(conversationId)}/state`,
-    { cache: 'no-store' },
+    `${serverUrl}/chat/${encodeURIComponent(conversationId)}/state${options ? `?runId=${encodeURIComponent(options.runId)}` : ''}`,
+    { cache: 'no-store', ...(options?.signal && { signal: options.signal }) },
   )
   if (!response.ok) {
     throw new Error(`Failed to load active conversation (${response.status})`)
@@ -23,14 +25,21 @@ export async function fetchConversationRunState(
   if (!isConversationRunState(value)) {
     throw new Error('Invalid active conversation state')
   }
+  if (
+    value.conversationId !== conversationId ||
+    (options && value.runId !== options.runId)
+  ) {
+    throw new Error('Conversation run changed')
+  }
   return value
 }
 
 export function conversationReconnectUrl(
   serverUrl: string,
   conversationId: string,
+  runId?: string,
 ): string {
-  return `${serverUrl}/chat/${encodeURIComponent(conversationId)}/stream`
+  return `${serverUrl}/chat/${encodeURIComponent(conversationId)}/stream${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`
 }
 
 function isConversationRunState(value: unknown): value is ConversationRunState {

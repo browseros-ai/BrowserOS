@@ -14,6 +14,15 @@ export function createConversationPanelBroker(): ConversationPanelBroker {
       const result = await openSidePanel(target)
       if (!result.opened) throw new Error('Contextual panel is not ready')
     },
+    releasePanel: async (tabId, conversationId) => {
+      const serverUrl = await getAgentServerUrl()
+      const response = await fetch(
+        `${serverUrl}/chat/panels/${tabId}?conversationId=${encodeURIComponent(conversationId)}`,
+        { method: 'DELETE' },
+      )
+      if (!response.ok)
+        throw new Error(`Panel release failed (${response.status})`)
+    },
     readViews: () => conversationPanelViewsStorage.getValue(),
     writeViews: (views) => conversationPanelViewsStorage.setValue(views),
     sendGlow: (tabId, message) => {

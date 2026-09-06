@@ -2,9 +2,15 @@ import type { ConversationPanelAssignment } from '@browseros/shared/schemas/conv
 import { storage } from '@wxt-dev/storage'
 
 /** Successful browser effects survive MV3 suspension independently of run status. */
-export type ConversationPanelView = ConversationPanelAssignment & {
-  openedRunId?: string
-}
+export type ConversationPanelView = Pick<
+  ConversationPanelAssignment,
+  'tabId' | 'conversationId'
+> &
+  Partial<Pick<ConversationPanelAssignment, 'runId' | 'status'>> & {
+    openedRunId?: string
+    /** A manual draft/history selection wins over an old server binding. */
+    manual?: boolean
+  }
 export type ConversationPanelViews = Record<string, ConversationPanelView>
 
 /**
@@ -21,6 +27,6 @@ export const conversationPanelViewsStorage =
 export function conversationForTab(
   views: ConversationPanelViews,
   tabId: number | undefined,
-): ConversationPanelAssignment | undefined {
+): ConversationPanelView | undefined {
   return tabId === undefined ? undefined : views[String(tabId)]
 }

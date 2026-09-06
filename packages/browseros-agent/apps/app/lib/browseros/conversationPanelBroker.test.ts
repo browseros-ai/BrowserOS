@@ -70,7 +70,8 @@ describe('ConversationPanelBroker', () => {
       ]),
     )
 
-    expect(fixture.views['99']).toBeUndefined()
+    expect(fixture.views['99']).toMatchObject({ conversationId: 'stale' })
+    expect(fixture.views['99'].runId).toBeUndefined()
     expect(fixture.opened).toEqual([
       { tabId: 30, windowId: 1 },
       { tabId: 31, windowId: 1 },
@@ -177,6 +178,28 @@ describe('ConversationPanelBroker', () => {
     )
     expect(fixture.opened).toEqual([{ tabId: 80, windowId: 1 }])
     expect(fixture.glow).toEqual([])
+  })
+
+  it('keeps a manual draft through old heartbeats and worker restart while siblings continue', async () => {
+    const fixture = createFixture()
+    const current = assignments([
+      assignment(80, 'shared', 'run-shared', 'running'),
+      assignment(81, 'shared', 'run-shared', 'running'),
+    ])
+    await fixture.broker.reconcile(current)
+    await fixture.broker.selectConversation(80, 'draft')
+    await fixture.broker.reconcile(current)
+    await new ConversationPanelBroker(fixture.deps).reconcile(current)
+    expect(fixture.views['80']).toMatchObject({
+      conversationId: 'draft',
+      manual: true,
+    })
+    expect(fixture.views['80'].runId).toBeUndefined()
+    expect(fixture.views['81']).toMatchObject({
+      conversationId: 'shared',
+      runId: 'run-shared',
+    })
+    expect(fixture.opened).toHaveLength(2)
   })
 
   it('heals a transient panel-open failure on the next heartbeat', async () => {

@@ -19,6 +19,8 @@ export interface ConversationRunSnapshot {
   runId: string
   status: ConversationRunStatus
   messages: UIMessage[]
+  /** Prepared history before any chunks; replay must never seed a partial answer. */
+  replayMessages: UIMessage[]
   chunkCount: number
 }
 
@@ -75,6 +77,7 @@ interface ConversationRunRecord {
   runId: string
   status: ConversationRunStatus
   messages: UIMessage[]
+  replayMessages: UIMessage[]
   chunks: UIMessageChunk[]
   panelsVisible: boolean
   tabGroup?: ConversationTabGroupPresentation
@@ -150,6 +153,7 @@ export class ConversationRuns {
       runId: crypto.randomUUID(),
       status: 'running',
       messages: [...input.messages],
+      replayMessages: structuredClone(input.messages),
       chunks: [],
       panelsVisible: input.panelsVisible ?? true,
       // Keep the first useful presentation across turns. If no tab was opened
@@ -204,9 +208,13 @@ export class ConversationRuns {
   }
 
   /** Replays buffered chunks, then attaches to the same live ordered stream. */
-  subscribe(conversationId: string): ReadableStream<UIMessageChunk> {
+  subscribe(
+    conversationId: string,
+    runId?: string,
+  ): ReadableStream<UIMessageChunk> {
     const record = this.runs.get(conversationId)
-    if (!record) throw new ConversationRunNotFoundError()
+    if (!record || (runId && record.runId !== runId))
+      throw new ConversationRunNotFoundError()
     let subscriber: ReadableStreamDefaultController<UIMessageChunk> | undefined
 
     return new ReadableStream<UIMessageChunk>({
@@ -267,6 +275,15 @@ export class ConversationRuns {
     }
   }
 
+  /** Local panel navigation releases only the owner it observed, never a successor. */
+  releasePanel(tabId: number, conversationId: string): boolean {
+    if (this.panelByTab.get(tabId)?.conversationId !== conversationId)
+      return false
+    this.panelByTab.delete(tabId)
+    this.publishPanelAssignments()
+    return true
+  }
+
   async stop(conversationId: string): Promise<boolean> {
     const record = this.runs.get(conversationId)
     if (record?.status !== 'running') return false
@@ -315,10 +332,11 @@ export class ConversationRuns {
    */
   async getPreparedSnapshot(
     conversationId: string,
+    runId?: string,
   ): Promise<ConversationRunSnapshot | undefined> {
     while (true) {
       const record = this.runs.get(conversationId)
-      if (!record) return undefined
+      if (!record || (runId && record.runId !== runId)) return undefined
       await record.prepared
       if (this.runs.get(conversationId) === record) {
         return this.snapshot(record)
@@ -332,6 +350,7 @@ export class ConversationRuns {
       runId: record.runId,
       status: record.status,
       messages: [...record.messages],
+      replayMessages: structuredClone(record.replayMessages),
       chunkCount: record.chunks.length,
     }
   }
@@ -344,6 +363,8 @@ export class ConversationRuns {
     const record = this.runs.get(conversationId)
     if (!record || record.runId !== runId) return false
     record.messages = [...messages]
+    if (!record.preparedResolved)
+      record.replayMessages = structuredClone(messages)
     return true
   }
 

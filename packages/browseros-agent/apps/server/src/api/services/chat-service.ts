@@ -112,8 +112,9 @@ export class ChatService {
     request: HydratedChatRequest,
     _requestAbortSignal: AbortSignal,
   ): Promise<Response> {
+    let startedRunId: string
     try {
-      await this.conversationRuns.start({
+      const started = await this.conversationRuns.start({
         conversationId: request.conversationId,
         messages: [],
         panelTabIds:
@@ -142,6 +143,7 @@ export class ChatService {
           )
         },
       })
+      startedRunId = started.runId
     } catch (error) {
       if (error instanceof ConversationRunAlreadyActiveError) {
         return Response.json(
@@ -154,21 +156,35 @@ export class ChatService {
     }
 
     return createUIMessageStreamResponse({
-      stream: this.conversationRuns.subscribe(request.conversationId),
+      stream: this.conversationRuns.subscribe(
+        request.conversationId,
+        startedRunId,
+      ),
+      headers: { 'X-BrowserOS-Run-Id': startedRunId },
     })
   }
 
   async getRunSnapshot(
     conversationId: string,
+    runId?: string,
   ): Promise<ConversationRunSnapshot | undefined> {
-    return await this.conversationRuns.getPreparedSnapshot(conversationId)
+    return await this.conversationRuns.getPreparedSnapshot(
+      conversationId,
+      runId,
+    )
   }
 
   subscribe(
     conversationId: string,
+    runId?: string,
   ): ReadableStream<UIMessageChunk> | undefined {
-    if (!this.conversationRuns.getSnapshot(conversationId)) return undefined
-    return this.conversationRuns.subscribe(conversationId)
+    const snapshot = this.conversationRuns.getSnapshot(conversationId)
+    if (!snapshot || (runId && snapshot.runId !== runId)) return undefined
+    return this.conversationRuns.subscribe(conversationId, runId)
+  }
+
+  releasePanel(tabId: number, conversationId: string): boolean {
+    return this.conversationRuns.releasePanel(tabId, conversationId)
   }
 
   async stop(conversationId: string): Promise<boolean> {

@@ -5,10 +5,13 @@ import {
 } from '@browseros/shared/schemas/conversation-panels'
 import { EventSourceParserStream } from 'eventsource-parser/stream'
 import type { GlowMessage } from '@/entrypoints/glow.content/GlowMessage'
-import type { ConversationPanelViews } from './conversationPanelStorage'
+import type {
+  ConversationPanelView,
+  ConversationPanelViews,
+} from './conversationPanelStorage'
 
 export interface ConversationPanelBrokerErrorContext {
-  phase: 'stream' | 'open-panel' | 'completion-effect'
+  phase: 'stream' | 'open-panel' | 'completion-effect' | 'selection'
   tabId?: number
 }
 
@@ -19,6 +22,7 @@ export interface ConversationPanelBrokerDeps {
   openPanel(target: { tabId: number; windowId: number }): Promise<void>
   readViews(): Promise<ConversationPanelViews>
   writeViews(views: ConversationPanelViews): Promise<void>
+  releasePanel?(tabId: number, conversationId: string): Promise<void>
   sendGlow(tabId: number, message: GlowMessage): Promise<void> | void
   hasShownConfetti(): Promise<boolean>
   markConfettiShown(): Promise<void>
@@ -70,26 +74,97 @@ export class ConversationPanelBroker {
     return next
   }
 
+  /** Manual navigation changes one view. It never stops the shared execution. */
+  selectConversation(tabId: number, conversationId: string): Promise<void> {
+    const next = this.pending
+      .catch(() => undefined)
+      .then(async () => {
+        await this.ensureLoaded()
+        const previous = this.views[String(tabId)]
+        if (previous?.conversationId === conversationId) return
+        const views = {
+          ...this.views,
+          [String(tabId)]: { tabId, conversationId, manual: true },
+        }
+        await this.deps.writeViews(views)
+        this.views = views
+        if (previous) {
+          await this.deps.sendGlow(tabId, {
+            conversationId: previous.conversationId,
+            isActive: false,
+          })
+          this.activatedRunByTab.delete(tabId)
+          // Storage is already authoritative for this view even if the server is
+          // temporarily offline. Conditional release cannot evict a later owner.
+          await this.deps
+            .releasePanel?.(tabId, previous.conversationId)
+            .catch((error) =>
+              this.reportError(error, { phase: 'selection', tabId }),
+            )
+        }
+      })
+    this.pending = next
+    return next
+  }
+
+  forgetTab(tabId: number): Promise<void> {
+    const next = this.pending
+      .catch(() => undefined)
+      .then(async () => {
+        await this.ensureLoaded()
+        const previous = this.views[String(tabId)]
+        if (!previous) return
+        const views = { ...this.views }
+        delete views[String(tabId)]
+        await this.deps.writeViews(views)
+        this.views = views
+        this.activatedRunByTab.delete(tabId)
+        await this.deps.releasePanel?.(tabId, previous.conversationId)
+      })
+    this.pending = next
+    return next
+  }
+
   private async reconcileNow(
     assignments: ConversationPanelAssignments,
   ): Promise<void> {
     await this.ensureLoaded()
 
     const previous = this.views
-    const next = Object.fromEntries(
-      assignments.assignments.map((assignment) => [
-        String(assignment.tabId),
+    // Retain the last selected conversation when the server restarts or releases
+    // membership. History/drafts belong to the browser view, not the SSE socket.
+    const next: ConversationPanelViews = Object.fromEntries(
+      Object.entries(previous).map(([key, view]) => [
+        key,
         {
-          ...assignment,
-          openedRunId: previous[String(assignment.tabId)]?.openedRunId,
+          tabId: view.tabId,
+          conversationId: view.conversationId,
+          manual: view.manual,
+          openedRunId: view.openedRunId,
         },
       ]),
     )
-    const stopped = Object.values(previous).filter((assignment) => {
-      if (assignment.status !== 'running') return false
-      const replacement = next[String(assignment.tabId)]
-      return !sameRunningAssignment(assignment, replacement)
+    const visibleAssignments = assignments.assignments.filter((assignment) => {
+      const prior = previous[String(assignment.tabId)]
+      return (
+        !prior?.manual || prior.conversationId === assignment.conversationId
+      )
     })
+    for (const assignment of visibleAssignments) {
+      const prior = previous[String(assignment.tabId)]
+      next[String(assignment.tabId)] = {
+        ...assignment,
+        manual: prior?.manual,
+        openedRunId: prior?.openedRunId,
+      }
+    }
+    const stopped = Object.values(previous).filter(
+      (assignment): assignment is ConversationPanelAssignment => {
+        if (assignment.status !== 'running' || !assignment.runId) return false
+        const replacement = next[String(assignment.tabId)]
+        return !sameRunningAssignment(assignment, replacement)
+      },
+    )
 
     // Storage is the handoff to independently mounted React panels. Commit it
     // before opening anything, but do not advance memory if the write fails:
@@ -103,8 +178,7 @@ export class ConversationPanelBroker {
     await this.deactivate(stopped, next)
     // Retry only unacknowledged opens, including runs that completed before the
     // browser could react. Closing an acknowledged panel is user-owned state.
-    for (const assignment of assignments.assignments)
-      await this.activate(assignment)
+    for (const assignment of visibleAssignments) await this.activate(assignment)
     await this.deps.writeViews(this.views)
   }
 
@@ -245,7 +319,11 @@ export class ConversationPanelBroker {
         // suspension, allowing reconciliation to stop glows from a finished run.
         this.views = views
         for (const view of Object.values(views)) {
-          if (view.status === 'running' && view.openedRunId === view.runId) {
+          if (
+            view.status === 'running' &&
+            view.runId &&
+            view.openedRunId === view.runId
+          ) {
             this.activatedRunByTab.set(view.tabId, view.runId)
           }
         }
@@ -277,8 +355,8 @@ export class ConversationPanelBroker {
 }
 
 function sameRunningAssignment(
-  left: ConversationPanelAssignment | undefined,
-  right: ConversationPanelAssignment | undefined,
+  left: ConversationPanelView | undefined,
+  right: ConversationPanelView | undefined,
 ): boolean {
   return (
     left?.status === 'running' &&
