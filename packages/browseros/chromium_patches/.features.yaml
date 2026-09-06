@@ -165,7 +165,6 @@ features:
     files:
       - chrome/browser/browseros/metrics/
       - chrome/browser/metrics/chrome_metrics_service_client.cc
-      - chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
       - chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
       - chrome/browser/ui/webui/settings/browseros_metrics_handler.h
       - chrome/browser/ui/webui/settings/settings_ui.cc
