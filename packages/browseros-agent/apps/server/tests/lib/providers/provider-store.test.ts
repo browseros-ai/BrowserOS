@@ -37,6 +37,27 @@ describe('dbProviderStore', () => {
     initializeDb({ dbPath: join(dir, 'db', 'browseros.sqlite') })
   }
 
+  test('persists header templates across reopen, edits, and explicit removal', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'browseros-providers-test-'))
+    tempDirs.push(dir)
+    const options = { dbPath: join(dir, 'browseros.sqlite') }
+    initializeDb(options)
+    const headers = {
+      'x-opencode-session': '{{conversationId}}',
+      'x-test': 'value',
+    }
+    await dbProviderStore.upsert({ ...baseProvider(), headers })
+    closeDb()
+    initializeDb(options)
+    expect((await dbProviderStore.get(PROVIDER_ID))?.headers).toEqual(headers)
+    await dbProviderStore.upsert({ ...baseProvider(), name: 'Renamed' })
+    expect(
+      (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.headers,
+    ).toEqual(headers)
+    await dbProviderStore.upsert({ ...baseProvider(), headers: {} })
+    expect((await dbProviderStore.get(PROVIDER_ID))?.headers).toEqual({})
+  })
+
   test('insertIfAbsent writes a provider that is not there yet', async () => {
     useTempDb()
 

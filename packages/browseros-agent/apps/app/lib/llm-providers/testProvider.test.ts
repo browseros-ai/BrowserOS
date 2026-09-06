@@ -43,6 +43,12 @@ function baseProvider(
 }
 
 describe('testProvider — request body', () => {
+  it('passes custom header templates to the local test endpoint', async () => {
+    const headers = { 'x-opencode-session': '{{conversationId}}' }
+    await testProvider(baseProvider({ headers }), 'http://127.0.0.1:9000')
+    expect(lastCall?.body.headers).toEqual(headers)
+  })
+
   it('forwards model-backed fields for non-ACP providers', async () => {
     await testProvider(baseProvider(), 'http://127.0.0.1:9000')
     expect(lastCall?.url).toBe('http://127.0.0.1:9000/test-provider')

@@ -1,3 +1,4 @@
+import { resolveProviderHeaders } from './headers'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -37,6 +38,7 @@ type ProviderFactory = (config: ResolvedLLMConfig) => LanguageModel
 function createAnthropicModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
   return createAnthropic({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
@@ -45,6 +47,7 @@ function createAnthropicModel(config: ResolvedLLMConfig): LanguageModel {
 function createOpenAIModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('OpenAI provider requires apiKey')
   return createOpenAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
@@ -53,6 +56,7 @@ function createOpenAIModel(config: ResolvedLLMConfig): LanguageModel {
 function createGoogleModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
   return createGoogleGenerativeAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
@@ -61,6 +65,7 @@ function createGoogleModel(config: ResolvedLLMConfig): LanguageModel {
 function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('OpenRouter provider requires apiKey')
   return createOpenRouter({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
     fetch: createOpenRouterCompatibleFetch(),
@@ -78,6 +83,7 @@ function createAzureModel(config: ResolvedLLMConfig): LanguageModel {
     )
   }
   return createAzure({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.resourceName && { resourceName: config.resourceName }),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
@@ -87,6 +93,7 @@ function createAzureModel(config: ResolvedLLMConfig): LanguageModel {
 function createOllamaModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.baseUrl) throw new Error('Ollama provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -96,6 +103,7 @@ function createOllamaModel(config: ResolvedLLMConfig): LanguageModel {
 function createLMStudioModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.baseUrl) throw new Error('LMStudio provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -109,6 +117,7 @@ function createBedrockModel(config: ResolvedLLMConfig): LanguageModel {
     )
   }
   return createAmazonBedrock({
+    ...(config.headers && { headers: config.headers }),
     region: config.region,
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
@@ -125,6 +134,7 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
 
   if (upstreamProvider === LLM_PROVIDERS.OPENROUTER) {
     return createOpenRouter({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -132,6 +142,7 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
   }
   if (upstreamProvider === LLM_PROVIDERS.ANTHROPIC) {
     return createAnthropic({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -139,6 +150,7 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
   }
   if (upstreamProvider === LLM_PROVIDERS.AZURE) {
     return createAzure({
+      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -146,6 +158,7 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
   }
   logger.debug('Creating OpenAI-compatible provider for BrowserOS')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'browseros',
     baseURL: baseUrl,
     ...(apiKey && { apiKey }),
@@ -157,6 +170,7 @@ function createOpenAICompatibleModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.baseUrl)
     throw new Error('OpenAI-compatible provider requires baseUrl')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'openai-compatible',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
@@ -167,6 +181,7 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.baseUrl) throw new Error('Moonshot provider requires baseUrl')
   if (!config.apiKey) throw new Error('Moonshot provider requires apiKey')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'moonshot',
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
@@ -176,6 +191,7 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
@@ -186,6 +202,7 @@ function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey)
     throw new Error('GitHub Copilot requires OAuth authentication')
   return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
     name: 'github-copilot',
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
@@ -196,6 +213,7 @@ function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
 function createChatGPTProModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
   return createOpenAI({
+    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
   }).responses(config.model)
@@ -224,5 +242,5 @@ export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {
   }
   const factory = PROVIDER_FACTORIES[config.provider]
   if (!factory) throw new Error(`Unknown provider: ${config.provider}`)
-  return factory(config)
+  return factory({ ...config, headers: resolveProviderHeaders(config.headers) })
 }

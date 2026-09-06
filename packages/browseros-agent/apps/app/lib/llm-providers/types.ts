@@ -28,6 +28,7 @@ export interface LlmProviderConfig {
   name: string
   /** Base API URL (optional for Azure with resourceName, not used for Bedrock) */
   baseUrl?: string
+  headers?: Record<string, string>
   /** Model identifier */
   modelId: string
   /** API key (encrypted and stored locally) */

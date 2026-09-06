@@ -29,6 +29,7 @@ export async function testProvider(
         model: provider.modelId,
         apiKey: provider.apiKey,
         baseUrl: provider.baseUrl,
+        headers: provider.headers,
         // Azure
         resourceName: provider.resourceName,
         // Bedrock

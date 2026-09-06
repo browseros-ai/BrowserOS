@@ -14,6 +14,7 @@ export interface ProviderRow {
   type: string
   name: string
   baseUrl: string | null
+  headers?: Record<string, string> | null
   // Nullable since the table holds coding agents too, and those carry neither.
   modelId: string | null
   supportsImages: boolean
@@ -66,6 +67,7 @@ export function toProviderConfig(row: ProviderRow): LlmProviderConfig | null {
     type: row.type,
     name: row.name,
     baseUrl: orUndefined(row.baseUrl),
+    headers: orUndefined(row.headers),
     modelId: row.modelId,
     supportsImages: row.supportsImages,
     contextWindow: row.contextWindow,
@@ -95,6 +97,7 @@ export function toProviderPayload(config: LlmProviderConfig) {
     type: config.type,
     name: config.name,
     baseUrl: config.baseUrl,
+    headers: config.headers,
     modelId: config.modelId,
     supportsImages: config.supportsImages,
     contextWindow: config.contextWindow,

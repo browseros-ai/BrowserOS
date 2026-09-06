@@ -39,6 +39,7 @@ function toLlmConfig(
     model: row.modelId ?? undefined,
     apiKey: row.apiKey ?? undefined,
     baseUrl: row.baseUrl ?? undefined,
+    headers: row.headers ?? undefined,
     resourceName: row.resourceName ?? undefined,
     region: row.region ?? undefined,
     accessKeyId: row.accessKeyId ?? undefined,
