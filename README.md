@@ -13,23 +13,20 @@
 <a href="https://trendshift.io/repositories/16468?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16468" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16468/daily?language=TypeScript" alt="browseros-ai%2FBrowserOS | Trendshift" width="250" height="55"/></a>
 <br></br>
 
-<b>Enterprise?</b> Rolling BrowserOS neo out across a team: <a href="mailto:enterprise@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment">enterprise@browseros.com</a>
-
-<br></br>
+<h1>BrowserOS neo</h1>
 
 <h3>Give your agents their own browser.</h3>
 
 Free · Open source · Everything runs on your machine
 
+<a href="https://cdn.browseros.com/download/BrowserOS_neo.dmg"><img src="https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
+<a href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
+
+**[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/neo)** · **[Enterprise](mailto:enterprise@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment)**
+
 </div>
 
-# <img src="packages/browseros/resources/browserclaw/icons/product_logo_192.png" alt="" width="28" /> BrowserOS neo
-
 A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
-
-[![Download for macOS](https://img.shields.io/badge/Download-macOS-black?style=flat&logo=apple&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo.dmg)
-[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=flat&logo=windows&logoColor=white)](https://cdn.browseros.com/download/BrowserOS_neo_installer.exe)
-&nbsp; **[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/neo)**
 
 BrowserOS neo is not a Chrome replacement. It is a secondary browser that sits next to Chrome, made friendly to agents.
 
