@@ -35,7 +35,7 @@ describe('AuditHoverPreview', () => {
   // pass even if the dot came back.
   it('renders the agent label without a per-agent colour dot', () => {
     const html = render(task)
-    expect(html).toContain('Claude Code')
+    expect(html).toContain('claude-code')
     expect(html).not.toContain('style="background:')
   })
 

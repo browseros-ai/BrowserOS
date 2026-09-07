@@ -117,7 +117,7 @@ describe('TaskDetailPage', () => {
     }
     const html = render()
     expect(html).toContain('Browsed example.com')
-    expect(html).toContain('Claude Code')
+    expect(html).toContain('claude-code')
     expect(html).toContain('Timeline')
     expect(html).toContain('Screenshots')
     expect(html).toContain('Open final URL')

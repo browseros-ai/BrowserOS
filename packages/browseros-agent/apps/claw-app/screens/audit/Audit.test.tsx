@@ -117,7 +117,7 @@ describe('Audit screen', () => {
     }
     const html = renderApp()
     // The row cell renders the session label; the agent filter chip renders the slug.
-    expect(html).toContain('Claude Code')
+    expect(html).toContain('claude-code')
     expect(html).toContain('Browsed example.com')
     // DONE is the silent default; only the exceptional states
     // (LIVE / FAILED / STOPPED) render a chip in the agent cell.
