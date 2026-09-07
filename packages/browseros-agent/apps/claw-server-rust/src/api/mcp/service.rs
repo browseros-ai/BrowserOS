@@ -47,7 +47,7 @@ use uuid::Uuid;
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
-const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
+const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <agentName>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
@@ -56,7 +56,9 @@ const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 /// convention (namespaced by owner). Clients read it from a tool result and echo it
 /// as the `session` argument on subsequent calls.
 const SESSION_META_KEY: &str = "com.browseros.neo/session";
+const AGENT_NAME_ARG: &str = "agentName";
 const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session.";
+const AGENT_NAME_ARG_DESCRIPTION: &str = "Your own agent name, e.g. \"claude-code\", \"codex\", \"cursor\". Send it on every call. It names this browser session, titles and colours the tab group your tabs live in, and is how the operator filters your runs in the audit log. 2026-07-28 removed the initialize handshake, so this argument is the only way the server can learn who you are.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
@@ -109,16 +111,27 @@ impl ClawMcpService {
         self.catalog.iter().position(|tool| tool.name == name)
     }
 
-    fn listed_tools(&self) -> Vec<Tool> {
+    /// `declare_agent_name` gates the mandatory `agentName` argument to clients on
+    /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
+    /// identity in the handshake, and must keep receiving the schema unchanged.
+    fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
+        let decorate = |tool: Tool| {
+            let tool = with_session_arg(tool);
+            if declare_agent_name {
+                with_agent_name_arg(tool)
+            } else {
+                tool
+            }
+        };
         let mut tools = self
             .catalog
             .iter()
             .map(ToolDef::to_mcp_tool)
-            .map(with_session_arg)
+            .map(&decorate)
             .collect::<Vec<_>>();
-        tools.push(with_session_arg(self.name_session_tool.clone()));
-        tools.push(with_session_arg(self.save_skill_tool.clone()));
-        tools.push(with_session_arg(self.mark_skill_run_tool.clone()));
+        tools.push(decorate(self.name_session_tool.clone()));
+        tools.push(decorate(self.save_skill_tool.clone()));
+        tools.push(decorate(self.mark_skill_run_tool.clone()));
         tools
     }
 
@@ -413,12 +426,17 @@ impl ClawMcpService {
     async fn resolve_modern_session(
         &self,
         provided: Option<SessionId>,
+        declared: Option<ClientInfo>,
         client: Option<ClientInfo>,
     ) -> Result<(StartedSession, SessionId), McpError> {
         // 2026-07-28 removed `initialize`, so a stateless call carries no handshake
-        // clientInfo. Use the per-request inline `_meta` clientInfo when the client
-        // sends it; otherwise fall back to the anonymous "agent" identity.
-        let client = client.unwrap_or_else(default_agent_client_info);
+        // clientInfo. The agent's own `agentName` argument wins because it is required
+        // of every agent; inline `_meta` clientInfo is only a fallback because SEP-2575
+        // leaves that key optional and most clients omit it. "agent" remains the last
+        // resort so a missing name never fails the call.
+        let client = declared
+            .or(client)
+            .unwrap_or_else(default_agent_client_info);
         if let Some(handle) = provided
             && let Some(session) = self.state.sessions.lookup(&handle).await
         {
@@ -542,15 +560,18 @@ impl ServerHandler for ClawMcpService {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        // SEP-2549: 2026-07-28 clients require ttlMs + cacheScope on list results;
-        // emit them only for that revision so legacy peers keep the old wire shape
-        // (mirrors rmcp's #[tool_handler] macro). ttl 0 = do-not-cache; the tool
-        // catalog is identical across users, so the scope is public.
-        let supports_cache_hints = context
+        // Two things hang off this one revision check. SEP-2549: 2026-07-28 clients
+        // require ttlMs + cacheScope on list results, emitted only for that revision so
+        // legacy peers keep the old wire shape (mirrors rmcp's #[tool_handler] macro);
+        // ttl 0 = do-not-cache, and the tool catalog is identical across users so the
+        // scope is public. Separately, 2026-07-28 dropped `initialize`, so only those
+        // clients have to declare `agentName` per call; legacy peers still carry their
+        // identity in the handshake and must see the schema unchanged.
+        let is_modern_revision = context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
-        let mut result = ListToolsResult::with_all_items(self.listed_tools());
-        if supports_cache_hints {
+        let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
+        if is_modern_revision {
             result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
         }
         std::future::ready(Ok(result))
@@ -604,8 +625,17 @@ impl ServerHandler for ClawMcpService {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(SessionId::new);
+        // Stripped on every path, including legacy, so no tool ever receives it as an
+        // argument even if an agent sends it against a schema that never offered it.
+        let declared_agent_name = raw_args
+            .get(AGENT_NAME_ARG)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         if let Value::Object(map) = &mut raw_args {
             map.remove("session");
+            map.remove(AGENT_NAME_ARG);
         }
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
@@ -617,8 +647,11 @@ impl ServerHandler for ClawMcpService {
                 .and_then(|meta| meta.client_info())
                 .as_ref()
                 .map(client_info_from_implementation);
+            let declared = declared_agent_name
+                .as_deref()
+                .map(client_info_from_declared_name);
             let (started, handle) = self
-                .resolve_modern_session(provided_handle, modern_client)
+                .resolve_modern_session(provided_handle, declared, modern_client)
                 .await?;
             (started, Some(handle))
         } else {
@@ -952,6 +985,16 @@ fn client_info_from_implementation(source: &Implementation) -> ClientInfo {
     }
 }
 
+/// Builds the session identity from an agent's self-declared `agentName`. Version is
+/// unknown by construction: the agent states who it is, not which build it is.
+fn client_info_from_declared_name(name: &str) -> ClientInfo {
+    ClientInfo {
+        name: clean_client_field(name, "agent"),
+        version: "unknown".to_string(),
+        title: None,
+    }
+}
+
 /// The anonymous fallback identity for a stateless client that sends no clientInfo.
 fn default_agent_client_info() -> ClientInfo {
     ClientInfo {
@@ -997,6 +1040,31 @@ fn with_session_arg(mut tool: Tool) -> Tool {
             "session".to_string(),
             json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION }),
         );
+    }
+    tool.input_schema = Arc::new(schema);
+    tool
+}
+
+/// Adds the mandatory `agentName` argument. Only reaches clients on 2026-07-28 or
+/// later; `required` here is advisory, since the server never rejects a call that
+/// omits it and falls back through `_meta` clientInfo to the anonymous identity.
+fn with_agent_name_arg(mut tool: Tool) -> Tool {
+    let mut schema = tool.input_schema.as_ref().clone();
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        properties.insert(
+            AGENT_NAME_ARG.to_string(),
+            json!({ "type": "string", "description": AGENT_NAME_ARG_DESCRIPTION }),
+        );
+    }
+    let required = schema
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(required) = required
+        && !required
+            .iter()
+            .any(|value| value.as_str() == Some(AGENT_NAME_ARG))
+    {
+        required.push(Value::String(AGENT_NAME_ARG.to_string()));
     }
     tool.input_schema = Arc::new(schema);
     tool
@@ -1108,7 +1176,7 @@ mod tests {
                 .is_some_and(|required| required.contains(&json!("session")))
         );
 
-        for tool in service.listed_tools() {
+        for tool in service.listed_tools(false) {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
             assert_eq!(
                 schema["properties"]["session"]["type"],
@@ -1127,12 +1195,12 @@ mod tests {
         let service = ClawMcpService::new(call.state);
 
         let (first, minted) = service
-            .resolve_modern_session(None, None)
+            .resolve_modern_session(None, None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
 
         let (again, reused) = service
-            .resolve_modern_session(Some(minted.clone()), None)
+            .resolve_modern_session(Some(minted.clone()), None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(reused.to_string(), minted.to_string());
@@ -1143,7 +1211,7 @@ mod tests {
 
         let client_chosen = SessionId::new("client-picked-id");
         let (other, other_handle) = service
-            .resolve_modern_session(Some(client_chosen.clone()), None)
+            .resolve_modern_session(Some(client_chosen.clone()), None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_ne!(other_handle.to_string(), client_chosen.to_string());
@@ -1167,7 +1235,7 @@ mod tests {
             title: None,
         };
         let (named, handle) = service
-            .resolve_modern_session(None, Some(client))
+            .resolve_modern_session(None, None, Some(client))
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(named.session.agent().slug(), "test-harness-client");
@@ -1176,7 +1244,7 @@ mod tests {
         // Reusing that handle without clientInfo keeps the minted identity and label,
         // so a session's audit attribution never flips to "agent" mid-conversation.
         let (reused, _) = service
-            .resolve_modern_session(Some(handle), None)
+            .resolve_modern_session(Some(handle), None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(reused.session.agent().slug(), "test-harness-client");
@@ -1184,7 +1252,7 @@ mod tests {
 
         // A stateless client that sends no clientInfo falls back to "agent".
         let (anon, _) = service
-            .resolve_modern_session(None, None)
+            .resolve_modern_session(None, None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(anon.session.agent().slug(), "agent");
@@ -1357,7 +1425,10 @@ mod tests {
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
-            "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <client>/<name>."
+            "- Say who you are: send agentName on every call (e.g. \"claude-code\", \"codex\").\n  It names this session, titles and colours your tab group, and is how the user\n  filters your runs in the audit log."
+        ));
+        assert!(instructions.contains(
+            "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <agentName>/<name>."
         ));
         assert!(instructions.contains(
             "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
@@ -1370,11 +1441,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_name_is_required_only_for_modern_clients() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+
+        // Legacy peers negotiated `initialize` and still carry identity in the
+        // handshake, so their schema must not gain a required argument.
+        for tool in service.listed_tools(false) {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(schema["properties"][AGENT_NAME_ARG], Value::Null);
+            assert!(
+                !schema["required"]
+                    .as_array()
+                    .is_some_and(|required| required.contains(&json!(AGENT_NAME_ARG)))
+            );
+        }
+
+        for tool in service.listed_tools(true) {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(
+                schema["properties"][AGENT_NAME_ARG]["type"],
+                json!("string")
+            );
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .is_some_and(|required| required.contains(&json!(AGENT_NAME_ARG))),
+                "{} must be required for {}",
+                AGENT_NAME_ARG,
+                tool.name
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn declared_agent_name_outranks_meta_client_info() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+
+        let (declared, _) = service
+            .resolve_modern_session(
+                None,
+                Some(client_info_from_declared_name("claude-code")),
+                Some(ClientInfo {
+                    name: "Codex".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                }),
+            )
+            .await?;
+        assert_eq!(declared.session.agent().slug(), "claude-code");
+
+        // Falls back to inline clientInfo when the agent declares nothing, and to the
+        // anonymous identity when neither is present. A missing name never errors.
+        let (from_meta, _) = service
+            .resolve_modern_session(
+                None,
+                None,
+                Some(ClientInfo {
+                    name: "Codex".to_string(),
+                    version: "1".to_string(),
+                    title: None,
+                }),
+            )
+            .await?;
+        assert_eq!(from_meta.session.agent().slug(), "codex");
+
+        let (anonymous, _) = service.resolve_modern_session(None, None, None).await?;
+        assert_eq!(anonymous.session.agent().slug(), "agent");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tool_surface_exposes_full_catalog_including_run() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let names: Vec<String> = service
-            .listed_tools()
+            .listed_tools(false)
             .iter()
             .map(|tool| tool.name.to_string())
             .collect();
@@ -1399,7 +1543,7 @@ mod tests {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let listed = service
-            .listed_tools()
+            .listed_tools(false)
             .into_iter()
             .find(|tool| tool.name == NAME_SESSION_TOOL_NAME)
             .ok_or_else(|| anyhow::anyhow!("name_session missing from list"))?;
@@ -1484,7 +1628,7 @@ mod tests {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let listed = service
-            .listed_tools()
+            .listed_tools(false)
             .into_iter()
             .find(|tool| tool.name == SAVE_SKILL_TOOL_NAME)
             .ok_or_else(|| anyhow::anyhow!("save_skill missing from list"))?;
@@ -1511,7 +1655,7 @@ mod tests {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let listed = service
-            .listed_tools()
+            .listed_tools(false)
             .into_iter()
             .find(|tool| tool.name == MARK_SKILL_RUN_TOOL_NAME)
             .ok_or_else(|| anyhow::anyhow!("mark_skill_run missing from list"))?;

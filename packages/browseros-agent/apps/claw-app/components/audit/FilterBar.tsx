@@ -77,7 +77,7 @@ export function FilterBar({
           {selectedAgent ? (
             <>
               <AgentDot slug={selectedAgent.slug} />
-              {selectedAgent.agentLabel}
+              {selectedAgent.slug}
             </>
           ) : (
             'Agent'
@@ -98,7 +98,7 @@ export function FilterBar({
               onClick={() => onAgentChange(opt.slug)}
             >
               <AgentDot slug={opt.slug} className="mr-1.5" />
-              <span className="flex-1">{opt.agentLabel}</span>
+              <span className="flex-1">{opt.slug}</span>
               <span className="ml-2 text-[11.5px] text-ink-3">{opt.count}</span>
               {selectedAgentSlug === opt.slug && (
                 <Check className="ml-2 size-3.5" />

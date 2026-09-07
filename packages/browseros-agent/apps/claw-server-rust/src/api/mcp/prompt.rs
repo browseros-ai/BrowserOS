@@ -22,9 +22,12 @@ Shared with other agents:
   tabs action="new" and work on that copy; leave the original untouched.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
+- Say who you are: send agentName on every call (e.g. "claude-code", "codex").
+  It names this session, titles and colours your tab group, and is how the user
+  filters your runs in the audit log.
 - Name your session early with name_session: a 2-3 word task label, the category
   that best fits the task, and a short PII-free summary you can search for later;
-  tabs group as <client>/<name>.
+  tabs group as <agentName>/<name>.
 - The user oversees this browser from the BrowserOS neo cockpit (live view,
   audit, replay).
 
