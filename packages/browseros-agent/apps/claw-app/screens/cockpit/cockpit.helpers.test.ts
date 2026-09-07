@@ -4,7 +4,6 @@ import {
   colorForSlug,
   formatRelative,
   formatToolTrail,
-  harnessForRow,
   sessionsToLiveCards,
   siteOf,
 } from './cockpit.helpers'
@@ -67,13 +66,6 @@ describe('display fallbacks', () => {
   it('keeps slug colors deterministic', () => {
     expect(colorForSlug('finance')).toBe(colorForSlug('finance'))
     expect(colorForSlug('travel')).toMatch(/^#[0-9A-F]{6}$/i)
-  })
-
-  it('keeps known harnesses and uses the existing fallback', () => {
-    expect(harnessForRow('Cursor')).toBe('Cursor')
-    expect(harnessForRow('Codex')).toBe('Codex')
-    expect(harnessForRow(undefined)).toBe('Claude Code')
-    expect(harnessForRow('Atlas-9000')).toBe('Claude Code')
   })
 })
 
@@ -258,7 +250,6 @@ describe('sessionsToLiveCards', () => {
     expect(card).toMatchObject({
       profileId: 'profile-parent',
       label: 'parent-slug',
-      harness: 'Claude Code',
       color: colorForSlug('parent-slug'),
     })
   })

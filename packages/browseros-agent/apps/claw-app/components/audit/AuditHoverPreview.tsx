@@ -57,7 +57,7 @@ export function AuditHoverPreview({ task }: AuditHoverPreviewProps) {
           data-caption-tone="blue"
         >
           <div className="flex items-center gap-2 font-mono text-[10px] text-white/75 uppercase tracking-[0.08em]">
-            <span className="truncate text-white/95">{task.label}</span>
+            <span className="truncate text-white/95">{task.slug}</span>
             {task.status === 'live' && <LiveChip />}
           </div>
           <p className="truncate font-semibold text-[13px] text-white leading-tight">

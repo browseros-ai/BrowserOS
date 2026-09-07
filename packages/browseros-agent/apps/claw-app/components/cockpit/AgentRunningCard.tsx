@@ -94,7 +94,6 @@ export function AgentRunningCard({
               style={{ background: session.color }}
             />
             <span className="truncate text-white">{session.label}</span>
-            <span className="shrink-0 text-white/45">{session.harness}</span>
           </span>
           {showingLive ? (
             <span className="inline-flex shrink-0 items-center gap-1.5 text-[#8fb4ff]">
