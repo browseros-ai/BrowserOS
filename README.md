@@ -1,5 +1,5 @@
 <div align="center">
-<img width="693" height="415" alt="github-banner" src="https://github.com/user-attachments/assets/8129f9c8-e8f4-4afe-834a-91397121d833" />
+<img width="693" height="415" alt="BrowserOS neo: the missing browser for your AI agents" src="https://github.com/user-attachments/assets/8129f9c8-e8f4-4afe-834a-91397121d833" />
 
 <br></br>
 <a href="https://discord.gg/YKwjt5vuKr"><img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord" /></a>
@@ -13,16 +13,12 @@
 <a href="https://trendshift.io/repositories/16468?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16468" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16468/daily?language=TypeScript" alt="browseros-ai%2FBrowserOS | Trendshift" width="250" height="55"/></a>
 <br></br>
 
-<h1>BrowserOS neo</h1>
-
-<h3>Give your agents their own browser.</h3>
-
-Free · Open source · Everything runs on your machine
-
 <a href="https://cdn.browseros.com/download/BrowserOS_neo.dmg"><img src="https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
 <a href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
 
 **[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/neo)** · **[Enterprise](mailto:enterprise@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment)**
+
+Free · Open source · Everything runs on your machine
 
 </div>
 
@@ -117,11 +113,11 @@ BrowserOS neo runs on macOS and Windows. BrowserOS runs on macOS, Windows, and L
 - [BrowserOS neo docs](https://docs.browseros.com/neo) · [BrowserOS docs](https://docs.browseros.com)
 - Enterprise deployment: [enterprise@browseros.com](mailto:enterprise@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment)
 
-# For developers
+## For developers
 
 Both browsers ship from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript, Rust and Go).
 
-## Architecture
+### Architecture
 
 ```
 BrowserOS/
@@ -171,7 +167,7 @@ BrowserOS/
 | [`apps/app-onboard`](packages/browseros-agent/apps/app-onboard/) | BrowserOS first-run onboarding |
 | [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI: control BrowserOS from the terminal or AI coding agents |
 
-## Contributing
+### Contributing
 
 We'd love your help making BrowserOS neo and BrowserOS better. See the [Contributing Guide](CONTRIBUTING.md) for details.
 
