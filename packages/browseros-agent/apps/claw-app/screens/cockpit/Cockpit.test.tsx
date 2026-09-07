@@ -156,7 +156,6 @@ function setConnectionsState(state: ConnectionsState) {
               state === 'installed'
                 ? [
                     {
-                      harness: 'Codex',
                       installed: true,
                       message: 'Configured in Codex.',
                     },
@@ -355,7 +354,6 @@ function liveSession(sessionId: string): LiveSessionCardRecord {
     slug: 'codex',
     label: 'Codex',
     name: 'Connected session',
-    harness: 'Codex',
     color: '#7A5AF8',
     startedAt: 100,
     state: 'idle',
