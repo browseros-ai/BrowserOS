@@ -6,6 +6,9 @@ contact_links:
   - name: 💼 Slack
     url: https://dub.sh/browserOS-slack
     about: Join our Slack for help and queries!
+  - name: 🏢 Enterprise deployment
+    url: mailto:enterprise@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment
+    about: Rolling BrowserOS neo out across a team? Talk to the founders.
   - name: 💡 Feature Requests
     url: https://github.com/browseros-ai/BrowserOS/issues/99
     about: Have an idea? Share it here and vote on others
