@@ -34,7 +34,7 @@ The Agent is a monorepo with 3 components:
 |-----------|------|--------------|
 | **Agent UI** | `apps/app` | Chrome extension — chat interface, settings, side panel |
 | **Server** | `apps/server` | Bun server — agent loop, MCP tools, API endpoints |
-| **Controller** | `apps/controller-ext` | Chrome extension — bridges `chrome.*` APIs to the server |
+| **CLI** | `apps/cli` | Go CLI — drive BrowserOS from the terminal or an AI coding agent |
 
 ### Architecture
 
@@ -50,9 +50,8 @@ cd BrowserOS/packages/browseros-agent
 # Install dependencies
 bun install
 
-# Copy environment files
-cp apps/server/.env.example apps/server/.env.development
-cp apps/app/.env.example apps/app/.env.development
+# Copy the development environment file
+cp .env.development.example .env.development
 ```
 
 ### Running Locally
@@ -68,7 +67,7 @@ bun run start:agent
 Then load the extension in BrowserOS:
 1. Go to `chrome://extensions/`
 2. Enable **Developer mode**
-3. Click **Load unpacked** and select the `apps/app/dist/` folder
+3. Click **Load unpacked** and select the `apps/app/dist/chrome-mv3-dev` folder
 
 ### Commands
 
@@ -78,7 +77,6 @@ Then load the extension in BrowserOS:
 | `bun run start:agent` | Start agent extension (dev mode) |
 | `bun run build:server` | Build server for production |
 | `bun run build:agent` | Build agent extension |
-| `bun run build:ext` | Build controller extension |
 | `bun run test` | Run tests |
 | `bun run lint` | Check with Biome |
 | `bun run typecheck` | TypeScript check |
@@ -138,6 +136,9 @@ cd packages/browseros
 
 # Install dependencies
 uv sync
+
+# Set up the build environment file, then fill in what you need
+cp .env.example .env
 ```
 
 **3. Build debug version**
@@ -247,7 +248,7 @@ I have read the CLA Document and I hereby sign the CLA
 **React:**
 - Tailwind CSS only (no SCSS or CSS modules)
 - Hooks at top level only
-- Test with Vitest
+- Test with `bun test`
 
 **General:**
 - Keep functions short (under 20 lines)
