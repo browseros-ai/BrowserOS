@@ -1,7 +1,7 @@
 use crate::{
     constants::INLINE_PAGE_CONTENT_MAX_CHARS,
     framework::{
-        ToolCtx, ToolExecResult, ToolResult, clamp_timeout, error_result, parse_args,
+        ToolCtx, ToolError, ToolExecResult, ToolResult, clamp_timeout, error_result, parse_args,
         pending_dialog_result, text_result,
     },
     output_file::write_temp_tool_output_file,
@@ -12,9 +12,14 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
+/// Grace period added to the caller's timeout before the request-side guard fires, so a
+/// synchronous overrun is still reported by CDP itself and this guard is left to catch
+/// only the waits CDP cannot preempt.
+const TIMEOUT_GRACE_MS: u64 = 250;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
@@ -86,19 +91,29 @@ fn handler<'a>(
         }
         let page = ctx.session.pages.get_session(PageId(args.page)).await?;
         let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-        let result: EvaluateResult = page
-            .session
-            .send(
-                "Runtime.evaluate",
-                json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                    "timeout": timeout,
-                    "userGesture": true
-                }),
-            )
-            .await?;
+        let evaluation = page.session.send::<_, EvaluateResult>(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": true,
+                "timeout": timeout,
+                "userGesture": true
+            }),
+        );
+        // CDP's own `timeout` only terminates synchronous execution, so an awaited promise
+        // runs past the deadline unless the request is bounded too. Dropping it ends the
+        // wait; the late reply is discarded on arrival, so the session stays usable.
+        let settled = tokio::select! {
+            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            settled = tokio::time::timeout(request_deadline(timeout), evaluation) => settled,
+        };
+        let Ok(result) = settled else {
+            return Ok(Some(error_result(format!(
+                "evaluate: timed out after {timeout}ms"
+            ))));
+        };
+        let result = result?;
         if let Some(exception) = result.exception_details {
             return Ok(Some(error_result(format!(
                 "evaluate: {}",
@@ -190,6 +205,13 @@ fn resolve_expression(code: Option<&str>, func: Option<&str>) -> Option<String> 
     }
 }
 
+/// The request-side deadline for one evaluation: the caller's timeout plus a short grace
+/// period, so CDP reports a synchronous overrun first and this guard only fires for the
+/// waits CDP cannot preempt.
+fn request_deadline(timeout_ms: u64) -> Duration {
+    Duration::from_millis(timeout_ms.saturating_add(TIMEOUT_GRACE_MS))
+}
+
 fn wrap_as_async_iife(code: &str) -> String {
     format!("(async () => {{\n{code}\n}})()")
 }
@@ -242,5 +264,17 @@ mod tests {
         assert!(!both.contains("() => 4"));
         // Neither is an error at the call site.
         assert!(resolve_expression(None, None).is_none());
+    }
+
+    #[test]
+    fn request_deadline_outlasts_the_caller_timeout() {
+        // The guard trails CDP's own timeout, so a synchronous overrun keeps reporting
+        // CDP's error and only an awaited promise reaches this one.
+        assert_eq!(
+            request_deadline(1_500),
+            Duration::from_millis(1_500 + TIMEOUT_GRACE_MS)
+        );
+        // Timeouts are clamped well below this, but the math stays total regardless.
+        assert_eq!(request_deadline(u64::MAX), Duration::from_millis(u64::MAX));
     }
 }

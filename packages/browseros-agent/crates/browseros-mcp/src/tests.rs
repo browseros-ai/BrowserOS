@@ -19,7 +19,7 @@ use rmcp::handler::server::ServerHandler;
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -125,6 +125,7 @@ struct HarnessConnection {
     sender: broadcast::Sender<CdpEvent>,
     calls: Mutex<Vec<HarnessCall>>,
     emit_console_on_input: AtomicBool,
+    evaluate_delay_ms: AtomicU64,
 }
 
 impl HarnessConnection {
@@ -134,6 +135,7 @@ impl HarnessConnection {
             sender,
             calls: Mutex::new(Vec::new()),
             emit_console_on_input: AtomicBool::new(false),
+            evaluate_delay_ms: AtomicU64::new(0),
         })
     }
 
@@ -154,6 +156,15 @@ impl HarnessConnection {
 
     fn enable_console_on_input(&self) {
         self.emit_console_on_input.store(true, Ordering::SeqCst);
+    }
+
+    /// Stands in for a page-context wait: `Runtime.evaluate` withholds its reply for
+    /// `delay`, the way an awaited promise does, instead of answering immediately.
+    fn stall_evaluate(&self, delay: Duration) {
+        self.evaluate_delay_ms.store(
+            u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            Ordering::SeqCst,
+        );
     }
 }
 
@@ -244,7 +255,13 @@ impl CdpConnection for HarnessConnection {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
                 }
-                "Runtime.evaluate" => Ok(json!({ "result": { "value": 0 } })),
+                "Runtime.evaluate" => {
+                    let delay = self.evaluate_delay_ms.load(Ordering::SeqCst);
+                    if delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    Ok(json!({ "result": { "value": 0 } }))
+                }
                 "Input.dispatchKeyEvent" => {
                     if self.emit_console_on_input.swap(false, Ordering::SeqCst) {
                         self.emit(
@@ -1323,4 +1340,40 @@ fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<
         }
         _ => {}
     }
+}
+
+#[tokio::test]
+async fn evaluate_times_out_instead_of_waiting_out_the_page() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let evaluate = tool_by_name("evaluate");
+
+    // A page-context wait far longer than the caller is willing to spend.
+    connection.stall_evaluate(Duration::from_secs(30));
+    let result = execute_tool(
+        &evaluate,
+        json!({ "page": page, "code": "return 'slow'", "timeout": 50 }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+    let text = result_text(&result);
+    assert!(
+        result.is_error,
+        "timed-out evaluate should be an error: {text}"
+    );
+    assert!(
+        text.contains("timed out after 50ms"),
+        "timeout should name the caller's deadline: {text}"
+    );
+
+    // The session survives it: the next evaluation still answers normally.
+    connection.stall_evaluate(Duration::ZERO);
+    let after = execute_tool(&evaluate, json!({ "page": page, "code": "return 0" }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+    assert!(
+        !after.is_error,
+        "session should stay usable after a timeout: {}",
+        result_text(&after)
+    );
 }
