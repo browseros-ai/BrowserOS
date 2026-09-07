@@ -23,7 +23,7 @@
     "lucide-react": "^0.577.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-hook-form": "~7.86.0",
+    "react-hook-form": "~7.87.0",
     "react-router": "^7.18.3",
     "tailwind-merge": "^3.4.0"
   },
@@ -32,7 +32,7 @@
     "@types/bun": "^1.4.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^5.0.0",
     "tailwindcss": "^4.1.17",
     "vite": "^7.3.6"
