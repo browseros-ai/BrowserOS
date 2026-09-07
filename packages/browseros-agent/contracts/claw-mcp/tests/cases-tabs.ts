@@ -129,7 +129,7 @@ export const tabsCases: ContractCase[] = [
         groups = expectOk(
           await ctx.mcp.callTool('tab_groups', { action: 'list' }),
         )
-        return groups.includes('claw/')
+        return groups.includes('claw-contract/')
       }, 'the convo tab group to appear')
     },
   },

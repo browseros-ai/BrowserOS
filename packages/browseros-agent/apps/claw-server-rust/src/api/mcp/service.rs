@@ -1425,7 +1425,7 @@ mod tests {
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains(
-            "- Say who you are: send agentName on every call (e.g. \"claude-code\", \"codex\").\n  It names this session, titles and colours your tab group, and is how the user\n  filters your runs in the audit log."
+            "- Say who you are (e.g. \"claude-code\", \"codex\"): send it as the agentName\n  argument on every call if your tools take one, otherwise it comes from the\n  initialize handshake. It names this session, titles and colours your tab\n  group, and is how the user filters your runs in the audit log."
         ));
         assert!(instructions.contains(
             "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <agentName>/<name>."
