@@ -29,9 +29,10 @@
     <script>
       // Read-only Paper exports: this switcher only changes the study being viewed.
       const variants = [
-        { key: 'A', label: 'Edit all three in place' },
-        { key: 'B', label: 'Edit one prompt at a time' },
-        { key: 'C', label: 'Dedicated customization pane' },
+        { key: 'Final', label: 'Customize on hover, edit inline', height: 1119 },
+        { key: 'A', label: 'Edit all three in place', height: 1000 },
+        { key: 'B', label: 'Edit one prompt at a time', height: 1000 },
+        { key: 'C', label: 'Dedicated customization pane', height: 1000 },
       ];
       const frame = document.querySelector('iframe');
       const viewport = document.querySelector('#viewport');
@@ -40,19 +41,22 @@
       function show() {
         const variant = variants[current];
         frame.src = variant.key + '.html';
+        frame.style.height = variant.height + 'px';
         document.querySelector('#state').textContent = variant.key + ' · ' + variant.label;
         const url = new URL(location.href);
         url.searchParams.set('variant', variant.key);
         history.replaceState(null, '', url);
+        fit();
       }
       function cycle(direction) {
         current = (current + direction + variants.length) % variants.length;
         show();
       }
       function fit() {
-        const scale = Math.min((innerWidth - 24) / 1440, (innerHeight - 100) / 1000);
+        const height = variants[current].height;
+        const scale = Math.min((innerWidth - 24) / 1440, (innerHeight - 100) / height);
         viewport.style.width = 1440 * scale + 'px';
-        viewport.style.height = 1000 * scale + 'px';
+        viewport.style.height = height * scale + 'px';
         frame.style.transform = 'scale(' + scale + ')';
       }
       document.querySelector('#previous').onclick = () => cycle(-1);
