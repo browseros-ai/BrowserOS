@@ -447,6 +447,8 @@ fn normalize_schema_value(value: &mut Value) {
                 object.remove("default");
             }
 
+            collapse_nullable_enum(object);
+
             for key in [
                 "additionalItems",
                 "additionalProperties",
@@ -490,6 +492,48 @@ fn normalize_schema_value(value: &mut Value) {
         }
         _ => {}
     }
+}
+
+/// Rewrites a nullable enum — `{"type": ["string", "null"], "enum": [..., null]}`, which is
+/// what schemars emits for an `Option<SomeEnum>` field — into the plain single-type form.
+///
+/// An optional argument is already optional by being absent from `required`, and the extra
+/// `null` is what strict MCP clients reject: a Pydantic-backed client decodes every `enum`
+/// entry as the declared type and fails the tool list outright on the trailing `None`.
+/// Arguments are deserialized with serde rather than validated against this schema, so
+/// dropping it changes what clients are told, not what the server accepts.
+fn collapse_nullable_enum(object: &mut JsonObject) {
+    let Some(Value::Array(values)) = object.get("enum") else {
+        return;
+    };
+    if !values.iter().any(Value::is_null) {
+        return;
+    }
+    let kept_values: Vec<Value> = values
+        .iter()
+        .filter(|value| !value.is_null())
+        .cloned()
+        .collect();
+    // An enum of nothing but `null` carries no variants to keep; leave it untouched.
+    if kept_values.is_empty() {
+        return;
+    }
+    object.insert("enum".to_string(), Value::Array(kept_values));
+
+    let Some(Value::Array(types)) = object.get("type") else {
+        return;
+    };
+    let mut kept_types: Vec<Value> = types
+        .iter()
+        .filter(|entry| entry.as_str() != Some("null"))
+        .cloned()
+        .collect();
+    let replacement = match kept_types.len() {
+        0 => return,
+        1 => kept_types.remove(0),
+        _ => Value::Array(kept_types),
+    };
+    object.insert("type".to_string(), replacement);
 }
 
 fn first_boolean_path(value: &Value) -> Option<String> {

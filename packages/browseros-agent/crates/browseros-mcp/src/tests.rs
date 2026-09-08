@@ -1324,3 +1324,67 @@ fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<
         _ => {}
     }
 }
+
+/// Collects every `enum` entry in a schema that is not a string, as `path = value`.
+fn non_string_enum_entries(schema: &Value, path: &str, found: &mut Vec<String>) {
+    match schema {
+        Value::Object(object) => {
+            if let Some(Value::Array(values)) = object.get("enum") {
+                for (index, value) in values.iter().enumerate() {
+                    if !value.is_string() {
+                        found.push(format!("{path}/enum/{index} = {value}"));
+                    }
+                }
+            }
+            for (key, child) in object {
+                non_string_enum_entries(child, &format!("{path}/{key}"), found);
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                non_string_enum_entries(child, &format!("{path}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn tool_schemas_never_put_null_inside_an_enum() {
+    // A Pydantic-backed MCP client decodes each `enum` entry as the declared type and
+    // rejects the whole tool list on a `null`, so an `Option<SomeEnum>` argument must not
+    // leak one. Optionality rides on `required` instead.
+    let mut found = Vec::new();
+    for tool in catalog() {
+        let input = Value::Object((*tool.input_schema).clone());
+        non_string_enum_entries(&input, &format!("{}/inputSchema", tool.name), &mut found);
+        if let Some(output) = tool.output_schema {
+            let output = Value::Object((*output).clone());
+            non_string_enum_entries(&output, &format!("{}/outputSchema", tool.name), &mut found);
+        }
+    }
+    assert!(found.is_empty(), "non-string enum entries: {found:#?}");
+}
+
+#[test]
+fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
+    let act = tool_by_name("act");
+    let schema = Value::Object((*act.input_schema).clone());
+
+    // `button` is Option<Button> in the tool args: three variants, no null, plain string type.
+    assert_eq!(
+        schema.pointer("/properties/button/enum"),
+        Some(&json!(["left", "middle", "right"]))
+    );
+    assert_eq!(
+        schema.pointer("/properties/button/type"),
+        Some(&json!("string"))
+    );
+
+    // Optionality is carried by `required`, which is why dropping the null is safe.
+    let required = schema
+        .pointer("/required")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("act should declare required arguments"));
+    assert!(!required.iter().any(|entry| entry == "button"));
+}
