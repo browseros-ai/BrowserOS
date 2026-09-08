@@ -92,7 +92,7 @@ describe('buildAcpAgentPolicy', () => {
     expect(policy.cwd).toBe('/work/project')
     expect(policy.sessionKey).toBe('acp:claude-agent-id:conversation-1')
     expect(agentArgv(policy, 'claude')).toContain(
-      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^0.75.1',
     )
     expect(policy.mcpServers.map((server) => server.name)).toEqual([
       'browseros',
