@@ -8,7 +8,8 @@ use crate::{
 };
 use geometry::{
     call_on_element, click_blocker_at_point, focus_element, get_element_center, get_input_value,
-    js_click, scroll_into_view,
+    js_click, js_click_at, press_active_element, scroll_into_view, set_active_element_text,
+    set_element_text, type_active_element,
 };
 use mouse::{MouseButton, dispatch_click, dispatch_drag, dispatch_hover, dispatch_scroll};
 use serde_json::{Value, json};
@@ -17,6 +18,7 @@ use std::sync::Arc;
 pub use keyboard::{
     KeyInfo, clear_field, get_key_info, modifier_bitmask, normalize_key, press_combo, type_text,
 };
+use keyboard::{get_char_text, parse_key_combo, validate_key};
 pub use mouse::MouseButton as PublicMouseButton;
 
 #[derive(Debug, Clone, Default)]
@@ -125,6 +127,11 @@ impl Input {
     }
 
     pub async fn click_at(&self, x: f64, y: f64, opts: ClickOptions) -> Result<(), CoreError> {
+        if self.should_use_inactive_page_fallback(&opts).await {
+            return self
+                .with_page_session_retry(|session| async move { js_click_at(&session, x, y).await })
+                .await;
+        }
         self.with_page_session_retry(|session| {
             let button = opts.button.unwrap_or(MouseButton::Left);
             let click_count = opts.click_count.unwrap_or(1);
@@ -139,6 +146,20 @@ impl Input {
     }
 
     pub async fn type_at(&self, x: f64, y: f64, text: &str, clear: bool) -> Result<(), CoreError> {
+        if self.is_inactive_page().await {
+            return self
+                .with_page_session_retry(|session| {
+                    let text = text.to_string();
+                    async move {
+                        js_click_at(&session, x, y).await?;
+                        if clear {
+                            set_active_element_text(&session, "", true).await?;
+                        }
+                        type_active_element(&session, &text).await
+                    }
+                })
+                .await;
+        }
         self.with_page_session_retry(|session| {
             let text = text.to_string();
             async move {
@@ -169,6 +190,10 @@ impl Input {
         match get_element_center(session, target.backend_node_id).await {
             Ok(point) => {
                 self.check_click_point(session, &target, point).await?;
+                if self.should_use_inactive_page_fallback(&opts).await {
+                    js_click(session, target.backend_node_id).await?;
+                    return Ok(Some(point));
+                }
                 dispatch_click(
                     session,
                     point.x,
@@ -236,6 +261,10 @@ impl Input {
     ) -> Result<Option<Point>, CoreError> {
         scroll_into_view(session, backend_node_id).await;
         let mut coords = None;
+        if self.is_inactive_page().await {
+            set_element_text(session, backend_node_id, value, clear).await?;
+            return Ok(coords);
+        }
         if let Ok(point) = get_element_center(session, backend_node_id).await {
             dispatch_click(session, point.x, point.y, MouseButton::Left, 1, 0).await?;
             coords = Some(point);
@@ -264,6 +293,14 @@ impl Input {
     }
 
     pub async fn type_text(&self, text: &str) -> Result<(), CoreError> {
+        if self.is_inactive_page().await {
+            return self
+                .with_page_session_retry(|session| {
+                    let text = text.to_string();
+                    async move { type_active_element(&session, &text).await }
+                })
+                .await;
+        }
         self.with_page_session_retry(|session| {
             let text = text.to_string();
             async move { type_text(&session, &text).await }
@@ -272,6 +309,15 @@ impl Input {
     }
 
     pub async fn press(&self, key: &str) -> Result<(), CoreError> {
+        if self.is_inactive_page().await {
+            let semantic_key = inactive_page_press_key(key)?;
+            return self
+                .with_page_session_retry(|session| {
+                    let semantic_key = semantic_key.clone();
+                    async move { press_active_element(&session, &semantic_key).await }
+                })
+                .await;
+        }
         self.with_page_session_retry(|session| {
             let key = key.to_string();
             async move { press_combo(&session, &key).await }
@@ -461,6 +507,19 @@ impl Input {
         Ok(self.pages.get_session(self.page_id.clone()).await?.session)
     }
 
+    async fn is_inactive_page(&self) -> bool {
+        self.pages
+            .get_info(self.page_id.clone())
+            .await
+            .is_some_and(|page| !page.is_active)
+    }
+
+    async fn should_use_inactive_page_fallback(&self, opts: &ClickOptions) -> bool {
+        opts.button.unwrap_or(MouseButton::Left) == MouseButton::Left
+            && opts.click_count.unwrap_or(1) == 1
+            && self.is_inactive_page().await
+    }
+
     async fn check_click_point(
         &self,
         session: &ProtocolSession,
@@ -507,6 +566,35 @@ const SELECT_OPTION_FN: &str = "function(val){\
   return null;\
 }";
 
+fn inactive_page_press_key(key: &str) -> Result<String, CoreError> {
+    let parsed = parse_key_combo(key)?;
+    let main_key = normalize_key(&parsed.key);
+    let modifiers = parsed
+        .modifiers
+        .iter()
+        .map(|modifier| normalize_key(modifier))
+        .collect::<Vec<_>>();
+    validate_key(&main_key)?;
+    for modifier in &modifiers {
+        validate_key(modifier)?;
+    }
+    if modifiers
+        .iter()
+        .any(|modifier| matches!(modifier.as_str(), "Control" | "Alt" | "Meta"))
+    {
+        return Ok(main_key);
+    }
+    if modifiers.iter().any(|modifier| modifier == "Shift") && main_key.chars().count() == 1 {
+        return Ok(main_key.to_ascii_uppercase());
+    }
+    Ok(match get_char_text(&main_key).as_str() {
+        "\r" => "Enter".to_string(),
+        "\t" => "Tab".to_string(),
+        text if !text.is_empty() => text.to_string(),
+        _ => main_key,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ClickOptions, Input, ScrollDirection};
@@ -533,9 +621,12 @@ mod tests {
         hit_test_calls: usize,
         mouse_events: usize,
         page_scrolls: usize,
+        semantic_clicks: usize,
+        semantic_text_calls: usize,
         select_calls: usize,
         select_result: Option<&'static str>,
         select_semantics_preserved: bool,
+        is_active: bool,
     }
 
     struct HarnessConnection {
@@ -566,6 +657,20 @@ mod tests {
             }
         }
 
+        fn semantic_clicks(&self) -> usize {
+            match self.state.lock() {
+                Ok(state) => state.semantic_clicks,
+                Err(_err) => 0,
+            }
+        }
+
+        fn semantic_text_calls(&self) -> usize {
+            match self.state.lock() {
+                Ok(state) => state.semantic_text_calls,
+                Err(_err) => 0,
+            }
+        }
+
         fn hit_test_calls(&self) -> usize {
             match self.state.lock() {
                 Ok(state) => state.hit_test_calls,
@@ -590,8 +695,8 @@ mod tests {
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
                 match method {
-                    "Browser.getTabs" => Ok(json!({ "tabs": [tab_value()] })),
-                    "Browser.getTabInfo" => Ok(json!({ "tab": tab_value() })),
+                    "Browser.getTabs" => Ok(json!({ "tabs": [self.tab_value()] })),
+                    "Browser.getTabInfo" => Ok(json!({ "tab": self.tab_value() })),
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -691,6 +796,18 @@ mod tests {
             if function.contains("return this.checked") {
                 return Ok(json!({ "result": { "value": false } }));
             }
+            if function.contains(".click()")
+                && let Ok(mut state) = self.state.lock()
+            {
+                state.semantic_clicks += 1;
+                return Ok(json!({ "result": { "value": true } }));
+            }
+            if function.contains("InputEvent(\"input\"")
+                && let Ok(mut state) = self.state.lock()
+            {
+                state.semantic_text_calls += 1;
+                return Ok(json!({ "result": { "value": true } }));
+            }
             if function.contains("this.options")
                 && let Ok(mut state) = self.state.lock()
             {
@@ -703,19 +820,45 @@ mod tests {
             }
             Ok(json!({ "result": { "value": null } }))
         }
+
+        fn tab_value(&self) -> Value {
+            let is_active = self
+                .state
+                .lock()
+                .map(|state| state.is_active)
+                .unwrap_or(true);
+            json!({
+                "tabId": 101,
+                "targetId": "target-1",
+                "url": "https://example.com/",
+                "title": "Test",
+                "isActive": is_active,
+                "isLoading": false,
+                "loadProgress": 1,
+                "isPinned": false,
+                "isHidden": false,
+                "windowId": 1
+            })
+        }
     }
 
     async fn input_harness(
         hit_test: HitTestResponse,
     ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
-        input_harness_for_target(hit_test, "button", "Submit", Some("Choice")).await
+        input_harness_for_target(hit_test, "button", "Submit", Some("Choice"), true).await
+    }
+
+    async fn inactive_input_harness(
+        hit_test: HitTestResponse,
+    ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
+        input_harness_for_target(hit_test, "button", "Submit", Some("Choice"), false).await
     }
 
     async fn select_input_harness(
         hit_test: HitTestResponse,
         select_result: Option<&'static str>,
     ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
-        input_harness_for_target(hit_test, "combobox", "Sort by:", select_result).await
+        input_harness_for_target(hit_test, "combobox", "Sort by:", select_result, true).await
     }
 
     async fn input_harness_for_target(
@@ -723,6 +866,7 @@ mod tests {
         target_role: &'static str,
         target_name: &'static str,
         select_result: Option<&'static str>,
+        is_active: bool,
     ) -> Result<(Arc<HarnessConnection>, Input, Ref), CoreError> {
         let connection = Arc::new(HarnessConnection {
             state: Mutex::new(HarnessState {
@@ -730,9 +874,12 @@ mod tests {
                 hit_test_calls: 0,
                 mouse_events: 0,
                 page_scrolls: 0,
+                semantic_clicks: 0,
+                semantic_text_calls: 0,
                 select_calls: 0,
                 select_result,
                 select_semantics_preserved: false,
+                is_active,
             }),
             target_role,
             target_name,
@@ -747,21 +894,6 @@ mod tests {
         let _snapshot = observer.snapshot().await?;
         let input = session.input(page_id).await;
         Ok((connection, input, Ref("e1".to_string())))
-    }
-
-    fn tab_value() -> Value {
-        json!({
-            "tabId": 101,
-            "targetId": "target-1",
-            "url": "https://example.com/",
-            "title": "Test",
-            "isActive": true,
-            "isLoading": false,
-            "loadProgress": 1,
-            "isPinned": false,
-            "isHidden": false,
-            "windowId": 1
-        })
     }
 
     fn ax_tree(target_role: &str, target_name: &str) -> Vec<AxNode> {
@@ -827,6 +959,48 @@ mod tests {
 
         assert_eq!(point.map(|point| (point.x, point.y)), Some((50.0, 25.0)));
         assert_eq!(connection.mouse_events(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_page_click_uses_semantic_fallback_after_hit_test() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = inactive_input_harness(HitTestResponse::Clear).await?;
+
+        let point = input.click(&ref_id, ClickOptions::default()).await?;
+
+        assert_eq!(point.map(|point| (point.x, point.y)), Some((50.0, 25.0)));
+        assert_eq!(connection.hit_test_calls(), 1);
+        assert_eq!(connection.mouse_events(), 0);
+        assert_eq!(connection.semantic_clicks(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_page_fill_uses_semantic_text_fallback() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = inactive_input_harness(HitTestResponse::Clear).await?;
+
+        let point = input.fill(&ref_id, "background text", false).await?;
+
+        assert_eq!(point, None);
+        assert_eq!(connection.mouse_events(), 0);
+        assert_eq!(connection.semantic_text_calls(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_page_press_preserves_key_validation() -> Result<(), CoreError> {
+        let (_connection, input, _ref_id) = inactive_input_harness(HitTestResponse::Clear).await?;
+
+        let err = match input.press("NotARealKey").await {
+            Err(err) => err,
+            Ok(()) => {
+                return Err(CoreError::Message(
+                    "invalid key unexpectedly succeeded".to_string(),
+                ));
+            }
+        };
+
+        assert!(err.to_string().contains("Unknown key"));
         Ok(())
     }
 

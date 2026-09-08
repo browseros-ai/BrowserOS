@@ -58,6 +58,76 @@ function(x, y) {
     return blockerAt(rootDocument(), target, x, y);
 }
 "#;
+const JS_CLICK_AT_JS: &str = r#"
+(() => {
+    const el = document.elementFromPoint(%X%, %Y%);
+    if (!el) return false;
+    if (typeof el.focus === "function") el.focus();
+    el.click();
+    return true;
+})()
+"#;
+const SET_ELEMENT_TEXT_JS: &str = r#"
+function(text, clear) {
+    const value = String(text ?? "");
+    const isEditable = this.isContentEditable;
+    if (typeof this.focus === "function") this.focus();
+    if ("value" in this) {
+        const current = String(this.value ?? "");
+        let next = value;
+        let cursor = value.length;
+        if (!clear) {
+            const start = typeof this.selectionStart === "number" ? this.selectionStart : current.length;
+            const end = typeof this.selectionEnd === "number" ? this.selectionEnd : start;
+            next = current.slice(0, start) + value + current.slice(end);
+            cursor = start + value.length;
+        }
+        this.value = next;
+        if (typeof this.setSelectionRange === "function") this.setSelectionRange(cursor, cursor);
+        this.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        this.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+    }
+    if (isEditable) {
+        if (clear) this.textContent = "";
+        const selection = this.ownerDocument.getSelection();
+        const range = this.ownerDocument.createRange();
+        range.selectNodeContents(this);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        this.ownerDocument.execCommand("insertText", false, value);
+        this.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        return true;
+    }
+    return false;
+}
+"#;
+const TYPE_ACTIVE_ELEMENT_JS: &str = r#"
+(() => {
+    const el = document.activeElement;
+    if (!el || el === document.body || el === document.documentElement) return false;
+    return (%s).call(el, %VALUE%, %CLEAR%);
+})()
+"#;
+const PRESS_ACTIVE_ELEMENT_JS: &str = r#"
+(() => {
+    const key = String(%KEY% ?? "");
+    const el = document.activeElement;
+    if (!el || el === document.body || el === document.documentElement) return false;
+    const init = { key, bubbles: true, cancelable: true };
+    const proceed = el.dispatchEvent(new KeyboardEvent("keydown", init));
+    if (proceed) {
+        if (key === "Enter" && el.form && typeof el.form.requestSubmit === "function") {
+            el.form.requestSubmit();
+        } else if (key.length === 1) {
+            (%s).call(el, key, false);
+        }
+    }
+    el.dispatchEvent(new KeyboardEvent("keyup", init));
+    return true;
+})()
+"#;
 
 #[derive(Debug, Deserialize)]
 struct QuadsResult {
@@ -221,10 +291,142 @@ pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result
     let _: Value = session
         .send(
             "Runtime.callFunctionOn",
-            json!({ "functionDeclaration": "function(){this.click()}", "objectId": object_id }),
+            json!({ "functionDeclaration": "function(){if(typeof this.focus==='function')this.focus();this.click();return true}", "objectId": object_id }),
         )
         .await?;
     Ok(())
+}
+
+pub async fn js_click_at(session: &ProtocolSession, x: f64, y: f64) -> Result<(), CoreError> {
+    let expression = JS_CLICK_AT_JS
+        .replace("%X%", &json!(x).to_string())
+        .replace("%Y%", &json!(y).to_string());
+    let clicked: Value = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    if clicked
+        .pointer("/result/value")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "No element found at click coordinates.".to_string(),
+        ))
+    }
+}
+
+pub async fn set_element_text(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+    value: &str,
+    clear: bool,
+) -> Result<(), CoreError> {
+    let updated = call_on_element(
+        session,
+        backend_node_id,
+        SET_ELEMENT_TEXT_JS,
+        Some(vec![json!(value), json!(clear)]),
+    )
+    .await?;
+    if updated.as_bool() == Some(true) {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "Target element does not accept text input.".to_string(),
+        ))
+    }
+}
+
+pub async fn type_active_element(session: &ProtocolSession, value: &str) -> Result<(), CoreError> {
+    let expression = TYPE_ACTIVE_ELEMENT_JS
+        .replace("%s", SET_ELEMENT_TEXT_JS)
+        .replace("%VALUE%", &json!(value).to_string())
+        .replace("%CLEAR%", "false");
+    let updated: Value = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    if updated
+        .pointer("/result/value")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "No focused editable element for text input.".to_string(),
+        ))
+    }
+}
+
+pub async fn set_active_element_text(
+    session: &ProtocolSession,
+    value: &str,
+    clear: bool,
+) -> Result<(), CoreError> {
+    let expression = TYPE_ACTIVE_ELEMENT_JS
+        .replace("%s", SET_ELEMENT_TEXT_JS)
+        .replace("%VALUE%", &json!(value).to_string())
+        .replace("%CLEAR%", if clear { "true" } else { "false" });
+    let updated: Value = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    if updated
+        .pointer("/result/value")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "No focused editable element for text input.".to_string(),
+        ))
+    }
+}
+
+pub async fn press_active_element(session: &ProtocolSession, key: &str) -> Result<(), CoreError> {
+    let expression = PRESS_ACTIVE_ELEMENT_JS
+        .replace("%s", SET_ELEMENT_TEXT_JS)
+        .replace("%KEY%", &json!(key).to_string());
+    let pressed: Value = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    if pressed
+        .pointer("/result/value")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "No focused element for key press.".to_string(),
+        ))
+    }
 }
 
 pub async fn get_input_value(session: &ProtocolSession, backend_node_id: i64) -> String {
