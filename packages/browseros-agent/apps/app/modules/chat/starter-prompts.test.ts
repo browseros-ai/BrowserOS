@@ -50,7 +50,7 @@ describe('starter prompt preferences', () => {
     const prompts = getDefaultStarterPrompts('agent')
     prompts[0].display = 'My draft'
     expect(getDefaultStarterPrompts('agent')[0].display).toBe(
-      'Summarize this page',
+      'Read about our vision and upvote',
     )
     expect(getDefaultStarterPrompts('chat')[1].display).toBe(
       'What topics does this page talk about?',
