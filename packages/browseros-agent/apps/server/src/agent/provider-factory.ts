@@ -148,9 +148,11 @@ function createBrowserOSFactory(
     ? createBrowserOSFetch(browserosId)
     : createOpenRouterCompatibleFetch()
 
+  // BrowserOS-hosted provider: user custom headers are deliberately not
+  // forwarded. Its credential is X-BrowserOS-ID (injected by browserosFetch)
+  // and there is no user-facing custom-header path for it.
   if (upstreamProvider === LLM_PROVIDERS.OPENROUTER) {
     return createOpenRouter({
-      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -158,7 +160,6 @@ function createBrowserOSFactory(
   }
   if (upstreamProvider === LLM_PROVIDERS.ANTHROPIC) {
     return createAnthropic({
-      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -166,7 +167,6 @@ function createBrowserOSFactory(
   }
   if (upstreamProvider === LLM_PROVIDERS.AZURE) {
     return createAzure({
-      ...(config.headers && { headers: config.headers }),
       baseURL: baseUrl,
       ...(apiKey && { apiKey }),
       fetch: browserosFetch,
@@ -174,7 +174,6 @@ function createBrowserOSFactory(
   }
   logger.debug('Creating OpenAI-compatible provider for BrowserOS')
   return createOpenAICompatible({
-    ...(config.headers && { headers: config.headers }),
     name: 'browseros',
     baseURL: baseUrl,
     ...(apiKey && { apiKey }),
@@ -212,8 +211,8 @@ function createQwenCodeFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
+  // Managed OAuth provider: user custom headers are deliberately not forwarded.
   return createOpenAICompatible({
-    ...(config.headers && { headers: config.headers }),
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
@@ -225,8 +224,8 @@ function createGitHubCopilotFactory(
 ): (modelId: string) => unknown {
   if (!config.apiKey)
     throw new Error('GitHub Copilot requires OAuth authentication')
+  // Managed OAuth provider: user custom headers are deliberately not forwarded.
   return createOpenAICompatible({
-    ...(config.headers && { headers: config.headers }),
     name: 'github-copilot',
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
@@ -238,8 +237,8 @@ function createChatGPTProFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('ChatGPT requires OAuth authentication')
+  // Managed OAuth provider: user custom headers are deliberately not forwarded.
   return createOpenAI({
-    ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
   }).responses
