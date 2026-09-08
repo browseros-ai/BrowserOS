@@ -251,6 +251,14 @@ impl CdpConnection for HarnessConnection {
                         }
                     }
                 })),
+                "DOM.pushNodesByBackendIdsToFrontend" => {
+                    assert_eq!(params, json!({ "backendNodeIds": [10] }));
+                    Ok(json!({ "nodeIds": [10] }))
+                }
+                "DOM.focus" => {
+                    assert_eq!(params, json!({ "nodeId": 10 }));
+                    Ok(json!({}))
+                }
                 "Accessibility.getFullAXTree" => {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
@@ -1147,6 +1155,39 @@ async fn act_appends_console_error_summary_for_action_window() {
     let text = result_text(&result);
     assert!(text.contains("[page 1 console] 1 error during action, e.g.: TypeError: act failed"));
     assert!(!result.is_error);
+}
+
+#[tokio::test]
+async fn act_press_focuses_ref_before_dispatching_key() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let snapshot = tool_by_name("snapshot");
+    execute_tool(&snapshot, json!({ "page": page }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("snapshot should return a tool result: {err}"));
+
+    let act = tool_by_name("act");
+    let result = execute_tool(
+        &act,
+        json!({ "page": page, "kind": "press", "ref": "e1", "key": "Cmd+c" }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("act should return a tool result: {err}"));
+
+    assert!(!result.is_error);
+    let calls = connection.calls();
+    let focus_index = calls
+        .iter()
+        .position(|call| call.method == "DOM.focus")
+        .unwrap_or_else(|| panic!("press(ref) should focus the referenced element"));
+    let key_index = calls
+        .iter()
+        .position(|call| call.method == "Input.dispatchKeyEvent")
+        .unwrap_or_else(|| panic!("press should dispatch a key event"));
+    assert!(
+        focus_index < key_index,
+        "press(ref) should focus before dispatching keys"
+    );
 }
 
 #[tokio::test]

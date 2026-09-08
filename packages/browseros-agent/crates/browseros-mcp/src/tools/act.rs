@@ -237,6 +237,9 @@ async fn run_kind(
             let Some(key) = args.key.as_deref() else {
                 return Ok(Some(error_result("act press: key is required.")));
             };
+            if let Some(ref_id) = args.r#ref.as_deref() {
+                input.focus(&Ref(ref_id.to_string())).await?;
+            }
             input.press(key).await?;
         }
         ActKind::Hover => {
