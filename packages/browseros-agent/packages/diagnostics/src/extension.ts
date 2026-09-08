@@ -196,7 +196,15 @@ export async function requestDiagnostics(
 ): Promise<DiagnosticsResult> {
   try {
     const response = await within(
-      () => chrome.runtime.sendMessage({ type: DIAGNOSTICS_REQUEST, maxAgeMs }),
+      () =>
+        chrome.runtime.sendMessage({
+          type: DIAGNOSTICS_REQUEST,
+          maxAgeMs,
+          // The app's @webext-core listeners share this runtime channel and
+          // validate the envelope before checking the type. Without a timestamp
+          // they reject our request before the diagnostics handler can answer.
+          timestamp: Date.now(),
+        }),
       DIAGNOSTICS_TIMEOUT_MS,
     )
     const snapshot = parseDiagnostics(response?.snapshot)
