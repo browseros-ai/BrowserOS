@@ -90,6 +90,17 @@ import {
 /** Window assumed for any model the bundled catalog cannot size. */
 const DEFAULT_CONTEXT_WINDOW = 128000
 
+// Managed-auth providers (OAuth + BrowserOS-hosted) drop custom headers
+// server-side, so the editor is hidden for them rather than letting users save
+// headers that would be silently ignored. Keep in sync with the provider
+// factories that omit config.headers.
+const HEADERLESS_PROVIDER_TYPES = new Set<string>([
+  'browseros',
+  'chatgpt-pro',
+  'github-copilot',
+  'qwen-code',
+])
+
 function headerEntries(headers: LlmProviderConfig['headers']) {
   return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
 }
@@ -1129,7 +1140,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               </div>
             </div>
 
-            <ProviderHeadersFields />
+            {!HEADERLESS_PROVIDER_TYPES.has(watchedType) && (
+              <ProviderHeadersFields />
+            )}
 
             {testResult && (
               <div
