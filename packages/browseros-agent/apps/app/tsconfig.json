@@ -7,7 +7,14 @@
     // wxt 0.21's generated base turns on noUncheckedIndexedAccess and verbatimModuleSyntax; opt back out until the codebase adopts them deliberately (verbatim needs codegen's useTypeImports for the generated graphql client).
     "noUncheckedIndexedAccess": false,
     "verbatimModuleSyntax": false,
-    // WXT owns the app aliases; workspace packages resolve through their exports.
+    // WXT owns these aliases for the build, but `bun test` resolves imports from
+    // tsconfig paths directly (it does not go through WXT/Vite). Without them,
+    // test files fail with "Cannot find module '@/...'" whenever the generated
+    // .wxt/tsconfig.json is absent (e.g. a clean CI checkout).
+    "paths": {
+      "@/*": ["./*"],
+      "@browseros/shared/*": ["../../packages/shared/src/*"]
+    },
     "plugins": [
       {
         "name": "@0no-co/graphqlsp",
