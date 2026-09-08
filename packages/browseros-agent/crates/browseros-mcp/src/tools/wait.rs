@@ -43,7 +43,8 @@ struct WaitArgs {
     wait_for: WaitFor,
     /// Optional. For for="time", ms to pause (default 2000). For "text"/"selector", the substring or CSS selector to wait for.
     value: Option<WaitValue>,
-    /// Max wait in ms before giving up (default 2000).
+    /// Max wait in ms before giving up on "text"/"selector" (default 2000). For for="time"
+    /// it caps the pause only when you set it; otherwise the requested pause governs.
     timeout: Option<f64>,
 }
 
@@ -76,7 +77,7 @@ fn handler<'a>(
         let timeout = clamp_timeout(args.timeout, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
         let value = args.value.as_ref().map(wait_value_to_string);
         if matches!(args.wait_for, WaitFor::Time) {
-            let wait_ms = parse_wait_ms(value.as_deref(), DEFAULT_PAUSE_MS).min(timeout);
+            let wait_ms = pause_duration_ms(value.as_deref(), args.timeout);
             abortable_delay(ctx, Duration::from_millis(wait_ms)).await?;
             return Ok(Some(text_result(
                 format!("waited {wait_ms}ms"),
@@ -131,6 +132,22 @@ fn handler<'a>(
             Some(json!({ "matched": false })),
         )))
     })
+}
+
+/// How long a `for="time"` pause actually lasts.
+///
+/// The requested pause governs. `timeout` caps it only when the caller set one themselves:
+/// capping by the default would silently shorten every explicit pause longer than
+/// [`DEFAULT_WAIT_TIMEOUT_MS`], which is the same 2s as the default pause, so asking for
+/// 10s quietly produced 2s. Either way the tool's own [`MAX_WAIT_TIMEOUT_MS`] is the ceiling.
+pub fn pause_duration_ms(value: Option<&str>, timeout: Option<f64>) -> u64 {
+    let requested = parse_wait_ms(value, DEFAULT_PAUSE_MS);
+    let ceiling = if timeout.is_some() {
+        clamp_timeout(timeout, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS)
+    } else {
+        MAX_WAIT_TIMEOUT_MS
+    };
+    requested.min(ceiling)
 }
 
 pub fn parse_wait_ms(value: Option<&str>, fallback: u64) -> u64 {

@@ -1230,6 +1230,25 @@ fn wait_parse_ms_matches_ts_fallback_rules() {
     assert_eq!(wait::parse_wait_ms(Some("1500.6"), 2_000), 1_501);
 }
 
+#[test]
+fn wait_time_pause_is_not_shortened_by_the_default_timeout() {
+    // An explicit pause is honoured: the default timeout is the same 2s as the default
+    // pause, so capping by it silently turned every longer request into 2s.
+    assert_eq!(wait::pause_duration_ms(Some("10000"), None), 10_000);
+    // No pause given still means the documented default.
+    assert_eq!(wait::pause_duration_ms(None, None), wait::DEFAULT_PAUSE_MS);
+    // A caller-supplied timeout is their own ceiling and still applies.
+    assert_eq!(wait::pause_duration_ms(Some("10000"), Some(5_000.0)), 5_000);
+    // A pause under a supplied timeout is untouched.
+    assert_eq!(wait::pause_duration_ms(Some("800"), Some(5_000.0)), 800);
+    // The tool's own maximum remains the hard ceiling either way.
+    assert_eq!(wait::pause_duration_ms(Some("120000"), None), 30_000);
+    assert_eq!(
+        wait::pause_duration_ms(Some("120000"), Some(120_000.0)),
+        30_000
+    );
+}
+
 fn assert_no_boolean_schema_nodes(tool_name: &str, schema_kind: &str, schema: &Value) {
     let mut paths = Vec::new();
     collect_boolean_paths(schema, "$".to_string(), &mut paths);
@@ -1323,4 +1342,30 @@ fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<
         }
         _ => {}
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_time_honours_a_pause_longer_than_the_default_timeout() {
+    // The clock is paused, so the pause resolves instantly while the tool still reports
+    // the duration it decided on.
+    let (ctx, _connection, page) = harness_ctx().await;
+    let wait = tool_by_name("wait");
+
+    let result = execute_tool(
+        &wait,
+        json!({ "page": page, "for": "time", "value": 10_000 }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
+
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.pointer("/waitedMs")),
+        Some(&json!(10_000)),
+        "an explicit pause should not be cut down to the default timeout: {}",
+        result_text(&result)
+    );
 }
