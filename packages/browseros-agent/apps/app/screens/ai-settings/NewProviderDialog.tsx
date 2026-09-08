@@ -788,6 +788,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   OpenAI Compatible provider template instead.
                 </FormDescription>
               )}
+              {watchedType === 'openai-compatible' && (
+                <FormDescription>
+                  <code>/chat/completions</code> is appended automatically, so
+                  enter only the base URL (e.g.{' '}
+                  <code>https://opencode.ai/zen/go/v1</code>), not the full
+                  endpoint.
+                </FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}
