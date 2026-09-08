@@ -197,6 +197,7 @@ export class ChatService {
       model: llmConfig.model,
       apiKey: llmConfig.apiKey,
       baseUrl: llmConfig.baseUrl,
+      headers: llmConfig.headers,
       upstreamProvider: llmConfig.upstreamProvider,
       resourceName: llmConfig.resourceName,
       region: llmConfig.region,

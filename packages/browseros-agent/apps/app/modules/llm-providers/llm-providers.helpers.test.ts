@@ -49,6 +49,15 @@ function config(overrides: Partial<LlmProviderConfig> = {}) {
 }
 
 describe('toProviderConfig', () => {
+  it('preserves headers through the settings read and write payloads', () => {
+    const headers = { 'x-opencode-session': '{{conversationId}}' }
+    const converted = toProviderConfig(row({ headers }))
+    expect(converted?.headers).toEqual(headers)
+    expect(toProviderPayload(converted as LlmProviderConfig).headers).toEqual(
+      headers,
+    )
+  })
+
   // The column is nullable but the config type uses undefined, and the two are
   // not interchangeable to anything doing `'apiKey' in provider`.
   it('turns absent columns into undefined rather than null', () => {

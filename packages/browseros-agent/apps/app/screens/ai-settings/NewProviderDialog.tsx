@@ -79,6 +79,7 @@ import {
   type ModelInfo,
   modelSupportsReasoning,
 } from './models'
+import { ProviderHeadersFields } from './ProviderHeadersFields'
 import {
   isCredentiallessProviderType,
   normalizeProviderFormValues,
@@ -88,6 +89,28 @@ import {
 
 /** Window assumed for any model the bundled catalog cannot size. */
 const DEFAULT_CONTEXT_WINDOW = 128000
+
+/**
+ * Shown on a credential field when editing a provider that already has one
+ * stored. Reads never return the secret, and the server keeps the stored value
+ * when the field is submitted blank, so editing does not require re-entering it.
+ */
+const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
+
+// Managed-auth providers (OAuth + BrowserOS-hosted) drop custom headers
+// server-side, so the editor is hidden for them rather than letting users save
+// headers that would be silently ignored. Keep in sync with the provider
+// factories that omit config.headers.
+const HEADERLESS_PROVIDER_TYPES = new Set<string>([
+  'browseros',
+  'chatgpt-pro',
+  'github-copilot',
+  'qwen-code',
+])
+
+function headerEntries(headers: LlmProviderConfig['headers']) {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
+}
 
 function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
@@ -229,6 +252,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         initialValues?.baseUrl || getDefaultBaseUrlForProviders('openai'),
       modelId: initialValues?.modelId || '',
       apiKey: initialValues?.apiKey || '',
+      headers: headerEntries(initialValues?.headers),
       supportsImages: initialValues?.supportsImages ?? false,
       contextWindow: initialValues?.contextWindow || DEFAULT_CONTEXT_WINDOW,
       temperature: initialValues?.temperature ?? 0.2,
@@ -237,6 +261,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       secretAccessKey: initialValues?.secretAccessKey || '',
       region: initialValues?.region || '',
       sessionToken: initialValues?.sessionToken || '',
+      hasApiKey: initialValues?.hasApiKey ?? false,
+      hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
+      hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
+      originalType: initialValues?.type,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -247,6 +275,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedType = form.watch('type')
   const watchedModelId = form.watch('modelId')
 
+  const watchedHeaders = form.watch('headers')
   const watchedApiKey = form.watch('apiKey')
   const watchedBaseUrl = form.watch('baseUrl')
   const watchedResourceName = form.watch('resourceName')
@@ -254,6 +283,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedSecretAccessKey = form.watch('secretAccessKey')
   const watchedRegion = form.watch('region')
   const watchedSessionToken = form.watch('sessionToken')
+
+  // Editing a provider that already has a credential stored: the field is
+  // optional (blank keeps the saved value), so drop the required marker and the
+  // "enter a key" placeholder that make a saved credential read as missing. The
+  // stored credential only applies while the type is unchanged; switching the
+  // provider type re-requires the new type's own credential.
+  const typeUnchanged = watchedType === initialValues?.type
+  const savedApiKey = Boolean(initialValues?.hasApiKey) && typeUnchanged
+  const savedAccessKeyId =
+    Boolean(initialValues?.hasAccessKeyId) && typeUnchanged
+  const savedSecretAccessKey =
+    Boolean(initialValues?.hasSecretAccessKey) && typeUnchanged
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -268,6 +309,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSecretAccessKey,
     watchedRegion,
     watchedSessionToken,
+    watchedHeaders,
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
@@ -376,6 +418,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           getDefaultBaseUrlForProviders(initialValues.type || 'openai'),
         modelId: initialValues.modelId || '',
         apiKey: initialValues.apiKey || '',
+        headers: headerEntries(initialValues.headers),
         supportsImages: initialValues.supportsImages ?? false,
         contextWindow: initialValues.contextWindow || DEFAULT_CONTEXT_WINDOW,
         temperature: initialValues.temperature ?? 0.2,
@@ -384,6 +427,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: initialValues.secretAccessKey || '',
         region: initialValues.region || '',
         sessionToken: initialValues.sessionToken || '',
+        hasApiKey: initialValues.hasApiKey ?? false,
+        hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
+        hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
+        originalType: initialValues.type,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -401,6 +448,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         baseUrl: getDefaultBaseUrlForProviders(defaultType),
         modelId: '',
         apiKey: '',
+        headers: [],
         supportsImages: false,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         temperature: 0.2,
@@ -409,6 +457,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: '',
         region: '',
         sessionToken: '',
+        hasApiKey: false,
+        hasAccessKeyId: false,
+        hasSecretAccessKey: false,
+        originalType: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
@@ -457,10 +509,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
-    stored: initialValues,
+    // A saved credential only counts while the type is unchanged; after a type
+    // switch the Test needs the new type's own credential entered.
+    stored: typeUnchanged ? initialValues : undefined,
   })
 
   const handleTest = async () => {
+    if (!(await form.trigger('headers'))) return
     if (!agentServerUrl) {
       setTestResult({
         success: false,
@@ -473,14 +528,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     setTestResult(null)
 
     try {
-      const values = form.getValues()
+      const values = normalizeProviderFormValues(form.getValues())
 
       const result = await testProvider(
         {
-          id: 'test',
+          // The real id (when editing) lets the server fill a blank key from
+          // the saved credential; a new provider has no saved row to reuse.
+          id: initialValues?.id ?? 'test',
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
+          headers: values.headers,
           modelId: values.modelId,
           apiKey: values.apiKey,
           supportsImages: values.supportsImages,
@@ -669,11 +727,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             name="apiKey"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>API Key *</FormLabel>
+                <FormLabel>API Key{savedApiKey ? '' : ' *'}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
-                    placeholder="Enter your Azure API key"
+                    placeholder={
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : 'Enter your Azure API key'
+                    }
                     {...field}
                   />
                 </FormControl>
@@ -694,9 +756,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="accessKeyId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Access Key ID *</FormLabel>
+                  <FormLabel>
+                    Access Key ID{savedAccessKeyId ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
-                    <Input placeholder="AKIA..." {...field} />
+                    <Input
+                      placeholder={
+                        savedAccessKeyId ? KEEP_SAVED_PLACEHOLDER : 'AKIA...'
+                      }
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -707,11 +776,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="secretAccessKey"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Secret Access Key *</FormLabel>
+                  <FormLabel>
+                    Secret Access Key{savedSecretAccessKey ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type="password"
-                      placeholder="Enter your secret access key"
+                      placeholder={
+                        savedSecretAccessKey
+                          ? KEEP_SAVED_PLACEHOLDER
+                          : 'Enter your secret access key'
+                      }
                       {...field}
                     />
                   </FormControl>
@@ -776,6 +851,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   OpenAI Compatible provider template instead.
                 </FormDescription>
               )}
+              {watchedType === 'openai-compatible' && (
+                <FormDescription>
+                  <code>/chat/completions</code> is appended automatically, so
+                  enter only the base URL (e.g.{' '}
+                  <code>https://opencode.ai/zen/go/v1</code>), not the full
+                  endpoint.
+                </FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}
@@ -789,14 +872,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             )
             return (
               <FormItem>
-                <FormLabel>API Key{isApiKeyOptional ? '' : ' *'}</FormLabel>
+                <FormLabel>
+                  API Key{isApiKeyOptional || savedApiKey ? '' : ' *'}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     placeholder={
-                      isApiKeyOptional
-                        ? 'Enter your API key (optional)'
-                        : 'Enter your API key'
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : isApiKeyOptional
+                          ? 'Enter your API key (optional)'
+                          : 'Enter your API key'
                     }
                     {...field}
                   />
@@ -1108,6 +1195,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 />
               </div>
             </div>
+
+            {!HEADERLESS_PROVIDER_TYPES.has(watchedType) && (
+              <ProviderHeadersFields />
+            )}
 
             {testResult && (
               <div

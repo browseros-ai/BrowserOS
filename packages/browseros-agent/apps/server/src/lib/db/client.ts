@@ -158,6 +158,12 @@ function bootstrapCurrentSchema(sqlite: BunDatabase): void {
     for (const statement of currentSchemaStatements) {
       sqlite.exec(statement)
     }
+    const providerColumns = sqlite
+      .query<{ name: string }, []>('PRAGMA table_info(providers)')
+      .all()
+    if (!providerColumns.some((column) => column.name === 'headers')) {
+      sqlite.exec('ALTER TABLE providers ADD COLUMN headers text')
+    }
     const insertMigration = sqlite.prepare(`
       INSERT INTO __drizzle_migrations ("hash", "created_at")
       SELECT ?, ?
@@ -241,6 +247,11 @@ const currentMigrationHistory = [
     hash: 'eb0fa2687c80caf919248f28cda5cd955e01a671b2104308b4d04ec55d450611',
     createdAt: 1788426855683,
   },
+  {
+    tag: '0012_add_provider_headers',
+    hash: '5e1894d0aebf4a5b708425f565795b01e4efdb997a1e1e6fc6479f229bd022da',
+    createdAt: 1788724664440,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
@@ -258,6 +269,7 @@ const currentSchemaStatements = [
       created_at integer NOT NULL,
       updated_at integer NOT NULL,
       base_url text,
+      headers text,
       supports_images integer DEFAULT true NOT NULL,
       context_window integer,
       temperature real DEFAULT 0.2 NOT NULL,
