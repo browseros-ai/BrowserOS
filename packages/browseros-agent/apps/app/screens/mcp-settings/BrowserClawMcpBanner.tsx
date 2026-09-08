@@ -15,9 +15,8 @@ const BROWSERCLAW_URL = 'https://browserclaw.ai'
  * does. That key is global: honouring it would hide this banner from everyone who
  * dismissed the new-tab promo, which is the opposite of what it is for.
  *
- * Copy stays MCP-specific on purpose. `ai-settings/McpPromoBanner` links straight
- * to this page, so a user can arrive having just read the generic BrowserOS neo
- * promo; repeating it here would waste the one line this banner gets.
+ * Copy stays MCP-specific so it explains why BrowserOS neo is relevant to users
+ * configuring BrowserOS as an MCP server.
  */
 export const BrowserClawMcpBanner: FC = () => {
   const handleClick = async () => {
