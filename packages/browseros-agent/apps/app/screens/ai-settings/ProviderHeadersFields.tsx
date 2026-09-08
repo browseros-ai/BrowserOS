@@ -37,7 +37,7 @@ export function ProviderHeadersFields() {
                 <FormItem className="min-w-0 flex-1">
                   <FormLabel>Header name</FormLabel>
                   <FormControl>
-                    <Input placeholder="x-opencode-session" {...field} />
+                    <Input placeholder="X-Custom-Header" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -50,11 +50,7 @@ export function ProviderHeadersFields() {
                 <FormItem className="min-w-0 flex-1">
                   <FormLabel>Header value</FormLabel>
                   <FormControl>
-                    <Input
-                      autoComplete="off"
-                      placeholder={CONVERSATION_ID_PLACEHOLDER}
-                      {...field}
-                    />
+                    <Input autoComplete="off" placeholder="value" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
