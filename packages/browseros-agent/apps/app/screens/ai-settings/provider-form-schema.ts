@@ -69,6 +69,12 @@ export const providerFormSchema = z
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),
     sessionToken: z.string().optional(),
+    // Set when editing a provider that already has the credential stored, so a
+    // blank field means "keep the saved value" rather than a missing
+    // credential. Populated from the server's has* flags, never user-entered.
+    hasApiKey: z.boolean().optional(),
+    hasAccessKeyId: z.boolean().optional(),
+    hasSecretAccessKey: z.boolean().optional(),
     reasoningEffort: z.string().optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   })
@@ -81,7 +87,7 @@ export const providerFormSchema = z
           path: ['resourceName'],
         })
       }
-      if (!data.apiKey) {
+      if (!data.apiKey && !data.hasApiKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'API Key is required for Azure',
@@ -89,14 +95,14 @@ export const providerFormSchema = z
         })
       }
     } else if (data.type === 'bedrock') {
-      if (!data.accessKeyId) {
+      if (!data.accessKeyId && !data.hasAccessKeyId) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Access Key ID is required',
           path: ['accessKeyId'],
         })
       }
-      if (!data.secretAccessKey) {
+      if (!data.secretAccessKey && !data.hasSecretAccessKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Secret Access Key is required',
