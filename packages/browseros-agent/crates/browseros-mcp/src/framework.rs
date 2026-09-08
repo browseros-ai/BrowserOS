@@ -509,13 +509,6 @@ fn collapse_nullable_enum(object: &mut JsonObject) {
     if !values.iter().any(Value::is_null) {
         return;
     }
-    let Some(Value::Array(types)) = object.get("type") else {
-        return;
-    };
-    if !types.iter().any(|entry| entry.as_str() == Some("null")) {
-        return;
-    }
-
     let kept_values: Vec<Value> = values
         .iter()
         .filter(|value| !value.is_null())
@@ -526,18 +519,30 @@ fn collapse_nullable_enum(object: &mut JsonObject) {
         return;
     }
 
-    let mut kept_types: Vec<Value> = types
-        .iter()
-        .filter(|entry| entry.as_str() != Some("null"))
-        .cloned()
-        .collect();
-    let replacement = match kept_types.len() {
-        0 => return,
-        1 => kept_types.remove(0),
-        _ => Value::Array(kept_types),
+    // A strict client rejects a `null` enum entry whatever the `type` says, so the
+    // `null` is dropped from any enum that has one. When `type` is the
+    // `["<type>", "null"]` array schemars emits for an Option, collapse it in the
+    // same pass; a scalar or missing type is left as-is.
+    let type_replacement = match object.get("type") {
+        Some(Value::Array(types)) => {
+            let kept_types: Vec<Value> = types
+                .iter()
+                .filter(|entry| entry.as_str() != Some("null"))
+                .cloned()
+                .collect();
+            match kept_types.as_slice() {
+                [] => None,
+                [single] => Some(single.clone()),
+                _ => Some(Value::Array(kept_types)),
+            }
+        }
+        _ => None,
     };
+
     object.insert("enum".to_string(), Value::Array(kept_values));
-    object.insert("type".to_string(), replacement);
+    if let Some(replacement) = type_replacement {
+        object.insert("type".to_string(), replacement);
+    }
 }
 
 fn first_boolean_path(value: &Value) -> Option<String> {
@@ -690,7 +695,10 @@ mod tests {
     }
 
     #[test]
-    fn nullable_enum_normalization_preserves_non_nullable_enum_schemas() {
+    fn nullable_enum_normalization_strips_null_even_without_the_nullable_type_array() {
+        // A strict client rejects a `null` enum entry whatever `type` says, so the
+        // `null` is dropped whether `type` is a scalar string or absent; only the
+        // `["<type>", "null"]` array is additionally collapsed.
         let schema = normalized(json!({
             "type": "object",
             "properties": {
@@ -706,11 +714,15 @@ mod tests {
 
         assert_eq!(
             schema.pointer("/properties/state/enum"),
-            Some(&json!(["ready", null]))
+            Some(&json!(["ready"]))
+        );
+        assert_eq!(
+            schema.pointer("/properties/state/type"),
+            Some(&json!("string"))
         );
         assert_eq!(
             schema.pointer("/properties/implicit/enum"),
-            Some(&json!(["ready", null]))
+            Some(&json!(["ready"]))
         );
     }
 }
