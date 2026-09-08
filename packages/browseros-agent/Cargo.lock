@@ -498,6 +498,7 @@ dependencies = [
  "claw-api",
  "futures-util",
  "harness-integrations",
+ "os_info",
  "posthog-rs",
  "pulldown-cmark",
  "rand 0.9.4",

@@ -1,3 +1,4 @@
+import { REPORTER_EXTENSION_ID } from '@browseros/diagnostics/contract'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
 
@@ -12,12 +13,15 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'BrowserOS neo',
+    externally_connectable: { ids: [REPORTER_EXTENSION_ID] },
     description: 'BrowserOS neo — the browser for AI agents.',
     key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyXbY2XVCs1/yJqGd53ei1rHdoUGIvZ8uq+x9YKmUc+jnb6NogIrq0USPeRNb6uzszio45GR8BW0O0pgbFKmhlhrCwgs9gEW8mufksE29E1g8Q2ug1sowzj38X6jmitO4I9cBbQMx7+gJZJS8pS5DZ+V7Bl8Uka2LWHMTP/Pf10YjbeNNCA0wj6kQkkTb8lg80r5Vm+gFqyo2xDFaxj8lN2kE73yFBjCt6B4ycntXvnnUTPX4IJqH+eQuwsFWPuqdYEwdvaaIOQ+lCxcYyZusX58zhxr0pkMxQjnEoJqAk6Av5O/JiNIOZYzbwUjm6aA+p9j9/6xzvmG+Lvp74Dk9pwIDAQAB',
     update_url: 'https://cdn.browseros.com/extensions/update-manifest.xml',
     // Keep shared permissions in sync with apps/app/wxt.config.ts; additions
     // re-prompt or disable existing installs on update.
     permissions: [
+      'system.cpu',
+      'system.memory',
       'topSites',
       'storage',
       'unlimitedStorage',

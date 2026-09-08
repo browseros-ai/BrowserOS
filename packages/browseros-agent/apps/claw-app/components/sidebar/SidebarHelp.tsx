@@ -1,5 +1,6 @@
-import { BookOpen, RotateCcw } from 'lucide-react'
+import { Activity, BookOpen, RotateCcw } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 import {
   Tooltip,
   TooltipContent,
@@ -14,6 +15,7 @@ export interface SidebarHelpProps {
 interface HelpItem {
   name: string
   url: string
+  internal?: boolean
   icon: ComponentType<SVGProps<SVGSVGElement>>
 }
 
@@ -28,6 +30,7 @@ export const helpItems: HelpItem[] = [
     url: 'chrome://browseros-onboarding',
     icon: RotateCcw,
   },
+  { name: 'Diagnostics', url: '/diagnostics', icon: Activity, internal: true },
 ]
 
 /**
@@ -41,6 +44,8 @@ export function openHelpTarget(url: string): void {
 }
 
 export function SidebarHelp({ expanded = false }: SidebarHelpProps) {
+  const navigate = useNavigate()
+  const location = useLocation()
   return (
     <div className="overflow-hidden border-border border-t p-2">
       <div
@@ -58,8 +63,20 @@ export function SidebarHelp({ expanded = false }: SidebarHelpProps) {
           const button = (
             <button
               type="button"
-              onClick={() => openHelpTarget(item.url)}
-              className="flex h-9 w-full items-center gap-3 overflow-hidden whitespace-nowrap rounded-md px-2.5 font-medium text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              onClick={() =>
+                item.internal ? navigate(item.url) : openHelpTarget(item.url)
+              }
+              aria-current={
+                item.internal && location.pathname === item.url
+                  ? 'page'
+                  : undefined
+              }
+              className={cn(
+                item.internal &&
+                  location.pathname === item.url &&
+                  'bg-sidebar-accent text-sidebar-accent-foreground',
+                'flex h-9 w-full items-center gap-3 overflow-hidden whitespace-nowrap rounded-md px-2.5 font-medium text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              )}
             >
               <Icon className="size-5 shrink-0" />
               <span

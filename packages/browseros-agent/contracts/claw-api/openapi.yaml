@@ -6,6 +6,8 @@ info:
 servers:
   - url: http://127.0.0.1:9200
 paths:
+  /system/diagnostics:
+    $ref: ./paths/system.yaml#/diagnostics
   /system/health:
     $ref: ./paths/system.yaml#/health
   /system/shutdown:
@@ -94,6 +96,8 @@ components:
       $ref: ./schemas/system.yaml#/HealthResponse
     ShutdownResponse:
       $ref: ./schemas/system.yaml#/ShutdownResponse
+    SystemDiagnostics:
+      $ref: ./schemas/system.yaml#/SystemDiagnostics
     SystemInfo:
       $ref: ./schemas/system.yaml#/SystemInfo
     SystemCapabilities:

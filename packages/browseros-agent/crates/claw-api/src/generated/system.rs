@@ -124,6 +124,27 @@ pub mod system_capabilities {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemDiagnostics {
+    #[serde(rename = "version")]
+    pub version: String,
+    #[serde(rename = "os")]
+    pub os: String,
+    /// User-facing OS release; unavailable when it cannot be determined.
+    #[serde(rename = "osVersion", deserialize_with = "Option::deserialize")]
+    pub os_version: Option<String>,
+}
+
+impl SystemDiagnostics {
+    pub fn new(version: String, os: String, os_version: Option<String>) -> SystemDiagnostics {
+        SystemDiagnostics {
+            version,
+            os,
+            os_version,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SystemInfo {
     #[serde(rename = "product")]
     pub product: String,

@@ -1,0 +1,23 @@
+{
+  "name": "@browseros/diagnostics",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./tests"
+  },
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./extension": "./src/extension.ts",
+    "./view": "./src/DiagnosticsPage.tsx",
+    "./styles.css": "./src/styles.css"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.7",
+    "@types/react": "^19.2.18"
+  }
+}
