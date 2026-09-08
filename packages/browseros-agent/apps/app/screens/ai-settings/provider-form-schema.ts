@@ -1,3 +1,7 @@
+import {
+  HEADER_NAME_PATTERN,
+  HEADER_VALUE_PATTERN,
+} from '@browseros/shared/schemas/llm'
 import { z } from 'zod/v3'
 
 const providerTypeEnum = z.enum([
@@ -26,6 +30,35 @@ export const providerFormSchema = z
     type: providerTypeEnum,
     name: z.string().min(1, 'Provider name is required').max(50),
     baseUrl: z.string().optional(),
+    headers: z
+      .array(
+        z.object({
+          name: z
+            .string()
+            .regex(HEADER_NAME_PATTERN, 'Enter a valid HTTP header name'),
+          value: z
+            .string()
+            .regex(
+              HEADER_VALUE_PATTERN,
+              'Header values cannot contain newlines or unsupported characters',
+            ),
+        }),
+      )
+      .superRefine((headers, ctx) => {
+        const names = new Set<string>()
+        headers.forEach(({ name }, index) => {
+          const normalized = name.toLowerCase()
+          if (names.has(normalized)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Duplicate header name',
+              path: [index, 'name'],
+            })
+          }
+          names.add(normalized)
+        })
+      })
+      .optional(),
     modelId: z.string().min(1, 'Model ID is required'),
     apiKey: z.string().optional(),
     supportsImages: z.boolean(),
@@ -105,6 +138,14 @@ export function isCredentiallessProviderType(
 
 export function normalizeProviderFormValues(
   values: ProviderFormValues,
-): ProviderFormValues {
-  return values
+): Omit<ProviderFormValues, 'headers'> & { headers?: Record<string, string> } {
+  const { headers, ...rest } = values
+  return {
+    ...rest,
+    ...(headers && {
+      headers: Object.fromEntries(
+        headers.map(({ name, value }) => [name, value]),
+      ),
+    }),
+  }
 }

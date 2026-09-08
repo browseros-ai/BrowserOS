@@ -45,6 +45,35 @@ describe('database initialization', () => {
     expect(second).toBe(first)
   })
 
+  it.each([false, true])(
+    'upgrades an existing provider without changing credentials or selection (missing migrations: %s)',
+    (missingMigrations) => {
+      const dbPath = join(mkTempDir(), 'browseros.sqlite')
+      const old = initializeDb({ dbPath })
+      old.sqlite.exec('ALTER TABLE providers DROP COLUMN headers')
+      old.sqlite
+        .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
+        .run(expectedMigrationHistory.at(-1).createdAt)
+      old.sqlite.exec(
+        "INSERT INTO providers (id, kind, type, name, model_id, context_window, api_key, is_default, created_at, updated_at) VALUES ('existing', 'llm', 'openai', 'Existing', 'model', 128000, 'local-key', 1, 1, 1)",
+      )
+      closeDb()
+
+      const upgraded = initializeDb({
+        dbPath,
+        ...(missingMigrations && {
+          migrationsDir: join(mkTempDir(), 'missing'),
+        }),
+      })
+      expect(upgraded.db.select().from(providers).get()).toMatchObject({
+        id: 'existing',
+        headers: null,
+        apiKey: 'local-key',
+        isDefault: true,
+      })
+    },
+  )
+
   it('bootstraps the current schema when migration files are unavailable', () => {
     const dir = mkTempDir()
     const handle = initializeDb({
