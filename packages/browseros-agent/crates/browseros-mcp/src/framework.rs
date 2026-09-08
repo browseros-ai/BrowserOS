@@ -509,6 +509,13 @@ fn collapse_nullable_enum(object: &mut JsonObject) {
     if !values.iter().any(Value::is_null) {
         return;
     }
+    let Some(Value::Array(types)) = object.get("type") else {
+        return;
+    };
+    if !types.iter().any(|entry| entry.as_str() == Some("null")) {
+        return;
+    }
+
     let kept_values: Vec<Value> = values
         .iter()
         .filter(|value| !value.is_null())
@@ -518,11 +525,7 @@ fn collapse_nullable_enum(object: &mut JsonObject) {
     if kept_values.is_empty() {
         return;
     }
-    object.insert("enum".to_string(), Value::Array(kept_values));
 
-    let Some(Value::Array(types)) = object.get("type") else {
-        return;
-    };
     let mut kept_types: Vec<Value> = types
         .iter()
         .filter(|entry| entry.as_str() != Some("null"))
@@ -533,6 +536,7 @@ fn collapse_nullable_enum(object: &mut JsonObject) {
         1 => kept_types.remove(0),
         _ => Value::Array(kept_types),
     };
+    object.insert("enum".to_string(), Value::Array(kept_values));
     object.insert("type".to_string(), replacement);
 }
 
