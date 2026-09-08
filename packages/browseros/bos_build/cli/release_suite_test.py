@@ -12,7 +12,12 @@ from typer.testing import CliRunner
 
 from bos_build.browseros import app
 from bos_build.release.suite import SuiteRecord
-from bos_build.release.suite_test import SOURCE_SHA, STATE_SHA, suite_record
+from bos_build.release.suite_test import (
+    SOURCE_SHA,
+    STATE_SHA,
+    suite_record,
+    product_record,
+)
 
 
 runner = CliRunner()
@@ -194,6 +199,60 @@ class SuiteCliTest(unittest.TestCase):
             self.assertEqual(outputs["merge_sha"], merged.merge_sha)
             self.assertEqual(outputs["state_sha"], STATE_SHA)
             self.assertEqual(outputs["state_ref"], "refs/pull/77/head")
+
+    @patch("bos_build.cli.release_suite.GitHubSuiteBackend")
+    @patch("bos_build.cli.release_suite.reconcile_transaction")
+    def test_product_scope_and_current_state_base_reach_reconciler(
+        self, reconcile, backend
+    ):
+        for product in ("browseros", "browserclaw"):
+            reconcile.return_value = product_record(product)
+            with (
+                self.subTest(product=product),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                result = runner.invoke(
+                    app,
+                    [
+                        "release",
+                        "suite",
+                        "reconcile",
+                        "--mode",
+                        "nightly",
+                        "--product",
+                        product,
+                        "--source-sha",
+                        SOURCE_SHA,
+                        "--default-branch",
+                        "main",
+                        "--dispatch-ref",
+                        "main",
+                        "--repo",
+                        "browseros-ai/BrowserOS",
+                        "--repo-root",
+                        str(root),
+                        "--state-root",
+                        str(root),
+                        "--state-base-sha",
+                        STATE_SHA,
+                        "--output",
+                        str(root / "record.json"),
+                        "--github-output",
+                        str(root / "outputs"),
+                    ],
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                request = reconcile.call_args.args[0]
+                self.assertEqual(request.product, product)
+                self.assertEqual(
+                    reconcile.call_args.kwargs["state_base_sha"], STATE_SHA
+                )
+                self.assertEqual(
+                    SuiteRecord.from_path(root / "record.json").products, (product,)
+                )
+                outputs = (root / "outputs").read_text()
+                self.assertIn(f"product={product}\n", outputs)
 
 
 if __name__ == "__main__":

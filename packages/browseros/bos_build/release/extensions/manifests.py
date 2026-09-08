@@ -7,6 +7,7 @@ fell behind prod under hand-editing). CRX building is out of scope — the
 crx objects must already exist in R2 (HEAD-checked before any write).
 """
 
+from pathlib import Path
 from typing import Dict, List
 
 from ...core.context import Context
@@ -19,6 +20,7 @@ from ..feeds.render import (
     parse_dotted_version,
     render_extensions_json,
     render_update_manifest,
+    strict_extension_manifest_versions,
 )
 from ..feeds.spec import (
     EXTENSIONS,
@@ -56,12 +58,14 @@ class ExtensionsFeedModule(Step):
         publish: bool = False,
         allow_downgrade: bool = False,
         publisher=None,
+        baseline_root: Path | None = None,
     ):
         self.channel = channel
         self.set_versions = set_versions
         self.publish = publish
         self.allow_downgrade = allow_downgrade
         self._publisher = publisher
+        self.baseline_root = baseline_root
 
     def validate(self, ctx: Context) -> None:
         if not BOTO3_AVAILABLE:
@@ -88,8 +92,8 @@ class ExtensionsFeedModule(Step):
     def execute(self, ctx: Context) -> None:
         publisher = self._publisher or FeedPublisher(env=ctx.env)
 
-        versions, live_bundled = self._resolve_versions(publisher)
-        bundled_versions = self._bundled_versions(versions, live_bundled)
+        versions, previous_bundled = self._resolve_versions(publisher)
+        bundled_versions = self._bundled_versions(versions, previous_bundled)
         log_info(
             "Extension versions: "
             + ", ".join(f"{n}={v}" for n, v in sorted(versions.items()))
@@ -159,17 +163,39 @@ class ExtensionsFeedModule(Step):
         }
 
     def _resolve_versions(self, publisher: FeedPublisher):
-        """Final name→version map: live bundled < live channel manifest < --set.
+        """Final pins: bundled fallback < channel manifest < explicit --set.
 
-        Extensions not being bumped carry over from the live objects so one
-        --set can never drop or silently regress the others. Also returns
-        the live bundled versions for the bundled no-regress rule.
+        Each feed retains its newest live or committed entry. A sibling may
+        have merged its snapshot and then failed to publish R2; using only live
+        bytes would silently erase that durable progress on the next merge.
+        Callers supplying a baseline must hold the publication lock from this
+        read through snapshot persistence and R2 publication.
         """
         live_bundled = self._live_versions(publisher, bundled_manifest_feed().key)
         live_channel = self._live_versions(
             publisher, update_manifest_feed(self.channel).key
         )
-        versions = {**live_bundled, **live_channel, **self.set_versions}
+        previous_bundled = self._with_baseline(
+            live_bundled, bundled_manifest_feed().key, bundled=True
+        )
+        previous_channel = self._with_baseline(
+            live_channel, update_manifest_feed(self.channel).key, bundled=False
+        )
+        if self.baseline_root is not None and not self.allow_downgrade:
+            # Live-only preflight cannot protect a merged snapshot whose R2
+            # upload failed. Check explicit pins before they replace that durable
+            # channel state; bundled may legitimately be newer than prod.
+            for name, version in self.set_versions.items():
+                previous = previous_channel.get(name)
+                if previous is not None and (
+                    parse_dotted_version(version) < parse_dotted_version(previous)
+                ):
+                    raise RuntimeError(
+                        f"Explicit {name}={version} would downgrade the {self.channel} "
+                        f"channel baseline from {previous}; "
+                        "pass --allow-downgrade to override"
+                    )
+        versions = {**previous_bundled, **previous_channel, **self.set_versions}
 
         missing = [ext.name for ext in EXTENSIONS if ext.name not in versions]
         if missing:
@@ -178,12 +204,35 @@ class ExtensionsFeedModule(Step):
                 + ", ".join(sorted(missing))
                 + f" (channel {self.channel})"
             )
-        return versions, live_bundled
+        return versions, previous_bundled
+
+    def _with_baseline(
+        self, versions: Dict[str, str], key: str, *, bundled: bool
+    ) -> Dict[str, str]:
+        """Carry newer committed pins forward without crossing channel policy."""
+        if self.baseline_root is None:
+            return versions
+        path = self.baseline_root / key
+        committed = strict_extension_manifest_versions(
+            path.read_text(encoding="utf-8"), include_all_extensions=bundled
+        )
+        if committed is None:
+            raise RuntimeError(f"Invalid committed extension snapshot: {path}")
+        resolved = dict(versions)
+        for extension in EXTENSIONS:
+            version = committed.get(extension.extension_id)
+            current = resolved.get(extension.name)
+            if version is not None and (
+                current is None
+                or parse_dotted_version(version) > parse_dotted_version(current)
+            ):
+                resolved[extension.name] = version
+        return resolved
 
     def _bundled_versions(
-        self, versions: Dict[str, str], live_bundled: Dict[str, str]
+        self, versions: Dict[str, str], previous_bundled: Dict[str, str]
     ) -> Dict[str, str]:
-        """Bundled keeps its live version when newer than this run's.
+        """Bundled keeps its live/committed version when newer than this run's.
 
         An alpha run legitimately pushes bundled past prod's versions; a
         later prod run must not need --allow-downgrade (which would disable
@@ -195,11 +244,11 @@ class ExtensionsFeedModule(Step):
 
         merged = {}
         for name, version in versions.items():
-            live = live_bundled.get(name)
-            keep_live = live and parse_dotted_version(live) > parse_dotted_version(
-                version
+            previous = previous_bundled.get(name)
+            keep_previous = previous and (
+                parse_dotted_version(previous) > parse_dotted_version(version)
             )
-            merged[name] = live if keep_live else version
+            merged[name] = previous if keep_previous else version
         return merged
 
     def _check_crx_objects(self, publisher: FeedPublisher, targets) -> None:

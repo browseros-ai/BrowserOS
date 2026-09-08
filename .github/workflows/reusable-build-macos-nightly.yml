@@ -1,4 +1,4 @@
-name: Build one signed family nightly
+name: "Reusable: Build macOS nightly"
 
 on:
   workflow_call:

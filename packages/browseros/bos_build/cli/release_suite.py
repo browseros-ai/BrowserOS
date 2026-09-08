@@ -44,13 +44,18 @@ def _repo_root(path: Optional[Path]) -> Path:
 
 
 def _request(
-    mode: str, source_sha: str, default_branch: str, dispatch_ref: str
+    mode: str,
+    source_sha: str,
+    default_branch: str,
+    dispatch_ref: str,
+    product: str = "",
 ) -> SuiteRequest:
     return SuiteRequest(
         mode=mode,  # type: ignore[arg-type]
         source_sha=source_sha,
         default_branch=default_branch,
         dispatch_ref=dispatch_ref,
+        product=product,
     )
 
 
@@ -71,6 +76,8 @@ def _write_outputs(path: Optional[Path], record: SuiteRecord) -> None:
     values = {
         "transaction_id": record.transaction_id,
         "mode": record.mode,
+        "product": record.product,
+        "state_base_sha": record.state_base_sha,
         "source_sha": record.source_sha,
         "reservation_sha": record.reservation_sha,
         "state_sha": record.state_sha,
@@ -78,14 +85,14 @@ def _write_outputs(path: Optional[Path], record: SuiteRecord) -> None:
         "branch": record.branch,
         "browser_version": record.browser_version,
         "build_offset": str(record.build_offset),
-        "server_version": versions["server"],
-        "agent_version": versions["agent"],
-        "claw_server_version": versions["claw-server-rust"],
-        "browserclaw_version": versions["browserclaw"],
+        "server_version": versions.get("server", ""),
+        "agent_version": versions.get("agent", ""),
+        "claw_server_version": versions.get("claw-server-rust", ""),
+        "browserclaw_version": versions.get("browserclaw", ""),
         # The historical output name belongs to BrowserOS neo. BrowserOS has a
         # separate onboarding app and therefore needs its own workflow output.
-        "onboarding_version": versions["claw-onboard"],
-        "app_onboarding_version": versions["app-onboard"],
+        "onboarding_version": versions.get("claw-onboard", ""),
+        "app_onboarding_version": versions.get("app-onboard", ""),
         "component_versions": json.dumps(dict(versions), sort_keys=True),
         "pull_request_number": str(record.pull_request_number),
         "pull_request_url": record.pull_request_url,
@@ -199,6 +206,9 @@ def reconcile_rolling_release_command(
 
 @app.command("inspect")
 def inspect(
+    product: str = typer.Option(
+        "", "--product", help="Product scope; omit only for legacy family recovery"
+    ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),
     default_branch: str = typer.Option(..., "--default-branch"),
@@ -211,7 +221,7 @@ def inspect(
 ) -> None:
     """Read the canonical transaction without allocating or changing it."""
     try:
-        request = _request(mode, source_sha, default_branch, dispatch_ref)
+        request = _request(mode, source_sha, default_branch, dispatch_ref, product)
         record = inspect_transaction(request, _backend(repo_root, repo, default_branch))
         _emit(
             record,
@@ -225,6 +235,9 @@ def inspect(
 
 @app.command("reconcile")
 def reconcile(
+    product: str = typer.Option(
+        "", "--product", help="Product scope; omit only for legacy family recovery"
+    ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),
     default_branch: str = typer.Option(..., "--default-branch"),
@@ -232,6 +245,7 @@ def reconcile(
     repo: str = typer.Option(..., "--repo"),
     output: Path = typer.Option(..., "--output"),
     repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
+    state_base_sha: str = typer.Option("", "--state-base-sha"),
     state_root: Optional[Path] = typer.Option(
         None,
         "--state-root",
@@ -242,11 +256,12 @@ def reconcile(
 ) -> None:
     """Create/recover the reservation and optionally reconcile final snapshots."""
     try:
-        request = _request(mode, source_sha, default_branch, dispatch_ref)
+        request = _request(mode, source_sha, default_branch, dispatch_ref, product)
         record = reconcile_transaction(
             request,
             _backend(repo_root, repo, default_branch),
             state_root=state_root.resolve() if state_root is not None else None,
+            **({"state_base_sha": state_base_sha} if product else {}),
         )
         _emit(
             record,

@@ -67,6 +67,12 @@ concurrency:
 jobs:
   feeds:
     runs-on: ubuntu-latest
+    # Shared extension manifests are read-modify-write state. Hold the same
+    # lock as product nightlies through render, snapshot merge, and R2 writes.
+    concurrency:
+      group: release-feed-snapshots
+      cancel-in-progress: false
+      queue: max
     # `both` can consume two independent 15-minute snapshot-PR retry budgets.
     timeout-minutes: 40
     permissions:
@@ -128,7 +134,7 @@ jobs:
           fi
 
           for feed_channel in "${channels[@]}"; do
-            args=(--channel "$feed_channel" "${base_args[@]}")
+            args=(--channel "$feed_channel" --baseline-root "$GITHUB_WORKSPACE/updates" "${base_args[@]}")
             {
               echo "### Extension feed command ($feed_channel)"
               echo '```bash'

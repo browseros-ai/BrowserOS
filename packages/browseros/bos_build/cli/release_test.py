@@ -135,6 +135,19 @@ class ReleaseVersionRequiredTest(unittest.TestCase):
 
 
 class FeedPublisherCliTest(unittest.TestCase):
+    def test_extension_baseline_option_reaches_renderer(self):
+        with mock.patch.object(release_feeds, "_execute") as execute:
+            result = invoke(
+                "extensions", "--channel", "alpha", "--set", "agent=0.0.121",
+                "--baseline-root", "/committed/updates",
+            )
+
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        module = execute.call_args.args[1]
+        self.assertEqual(module.baseline_root, Path("/committed/updates"))
+        self.assertEqual(module.set_versions, {"agent": "0.0.121"})
+        self.assertFalse(module.publish)
+
     def test_publish_local_defaults_to_dry_run(self):
         with (
             _configured_r2_env(),
