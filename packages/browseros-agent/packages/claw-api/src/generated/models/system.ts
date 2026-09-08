@@ -90,6 +90,32 @@ export type SystemCapabilitiesRecordingIngestVersionEnum = typeof SystemCapabili
 /**
  *
  * @export
+ * @interface SystemDiagnostics
+ */
+export interface SystemDiagnostics {
+    /**
+     *
+     * @type {string}
+     * @memberof SystemDiagnostics
+     */
+    version: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SystemDiagnostics
+     */
+    os: string;
+    /**
+     * User-facing OS release; unavailable when it cannot be determined.
+     * @type {string}
+     * @memberof SystemDiagnostics
+     */
+    osVersion: string | null;
+}
+
+/**
+ *
+ * @export
  * @interface SystemInfo
  */
 export interface SystemInfo {

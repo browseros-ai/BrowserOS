@@ -34,3 +34,16 @@ shutdown:
               $ref: ../schemas/system.yaml#/ShutdownResponse
       '500':
         $ref: ../responses.yaml#/InternalError
+
+diagnostics:
+  get:
+    operationId: getSystemDiagnostics
+    responses:
+      '200':
+        description: Public server version and operating-system release for support diagnostics.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/SystemDiagnostics
+      '500':
+        $ref: ../responses.yaml#/InternalError

@@ -1,3 +1,4 @@
+import { REPORTER_EXTENSION_ID } from '@browseros/diagnostics/contract'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
@@ -30,6 +31,7 @@ export default defineConfig({
     update_url: 'https://cdn.browseros.com/extensions/update-manifest.xml',
     // update_url: 'https://cdn.browseros.com/extensions/update-manifest.alpha.xml',
     externally_connectable: {
+      ids: [REPORTER_EXTENSION_ID],
       matches: [`https://${apiPattern}/*`, `https://*.${apiPattern}/*`],
     },
     web_accessible_resources: [
@@ -59,6 +61,8 @@ export default defineConfig({
       default_title: 'Ask BrowserOS',
     },
     permissions: [
+      'system.cpu',
+      'system.memory',
       'topSites',
       'storage',
       'unlimitedStorage',

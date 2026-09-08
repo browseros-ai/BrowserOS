@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "product": "browseros",
+  "collectedAt": "2026-09-08T17:18:00.000Z",
+  "versions": {
+    "browseros": "0.50.4",
+    "chromium": "145.0.7632.0",
+    "server": "0.54.0",
+    "appExtension": "0.54.0",
+    "reporterExtension": "54.0.0.0"
+  },
+  "system": {
+    "os": "macOS",
+    "osVersion": "15.6",
+    "architecture": "arm64",
+    "processor": "Apple M3 Pro",
+    "logicalCores": 12
+  },
+  "memory": { "totalBytes": 38654705664, "availableBytes": 10522669875 }
+}

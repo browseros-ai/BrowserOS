@@ -1,3 +1,4 @@
+import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { AuthLayout } from '@/components/layout/AuthLayout'
@@ -78,6 +79,7 @@ export const App: FC = () => {
             <Route path="chat" element={<LlmHubPage />} />
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
+            <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route
               path="search"
               element={<Navigate to="/settings/ai" replace />}

@@ -1,3 +1,4 @@
+import { createDiagnosticsRoute } from './diagnostics'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -84,6 +85,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
       .route('/system/health', createHealthRoute({ browser }))
+      .route('/system/diagnostics', createDiagnosticsRoute(version))
       .route('/system/shutdown', createShutdownRoute({ onShutdown }))
       // Compatibility aliases for shipped browsers that still probe root paths
       // while the server binary can update independently during OTA.
