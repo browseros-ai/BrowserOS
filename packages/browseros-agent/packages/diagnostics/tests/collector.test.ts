@@ -30,6 +30,24 @@ describe('diagnostics collection ownership', () => {
     expect(saved).toEqual(snapshot)
   })
 
+  it('honors Refresh when it overlaps a cache-accepting Reporter request', async () => {
+    let reads = 0
+    const current = { ...snapshot, collectedAt: new Date().toISOString() }
+    const collector = createDiagnosticsCollector({
+      read: async () => {
+        reads++
+        return current
+      },
+      load: async () => current,
+      save: async () => {},
+    })
+    const reporter = collector.get(60_000)
+    const refresh = collector.get(0)
+    await Promise.all([reporter, refresh])
+    expect(reads).toBe(1)
+    expect((await refresh).cached).toBe(false)
+  })
+
   it('preserves the timestamp and labels a fallback after refresh failure', async () => {
     const collector = createDiagnosticsCollector({
       read: async () => {

@@ -34,12 +34,14 @@ export function createDiagnosticsCollector(deps: {
 }) {
   let pending: Promise<DiagnosticsResult> | undefined
   let latest: DiagnosticsSnapshot | null = null
-  async function refresh(maxAgeMs: number): Promise<DiagnosticsResult> {
+  let requestedMaxAge = 0
+  async function refresh(): Promise<DiagnosticsResult> {
     const stored = await within(deps.load, 200).catch(() => null)
     latest ??= parseDiagnostics(stored)
-    if (latest && maxAgeMs > 0) {
+    if (latest && requestedMaxAge > 0) {
       const age = Date.now() - Date.parse(latest.collectedAt)
-      if (age >= 0 && age < maxAgeMs) return { snapshot: latest, cached: true }
+      if (age >= 0 && age < requestedMaxAge)
+        return { snapshot: latest, cached: true }
     }
     try {
       const snapshot = await within(deps.read, 2300)
@@ -53,7 +55,10 @@ export function createDiagnosticsCollector(deps: {
   }
   return {
     get(maxAgeMs: number): Promise<DiagnosticsResult> {
-      pending ??= refresh(maxAgeMs).finally(() => {
+      // A manual Refresh upgrades a concurrent cache-accepting request before
+      // cache selection; all callers then share the fresh sample.
+      requestedMaxAge = pending ? Math.min(requestedMaxAge, maxAgeMs) : maxAgeMs
+      pending ??= refresh().finally(() => {
         pending = undefined
       })
       return pending
