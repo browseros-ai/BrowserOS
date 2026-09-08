@@ -7,9 +7,9 @@ use crate::{
     pages::PageManager, snapshot::RefEntry,
 };
 use geometry::{
-    call_on_element, click_blocker_at_point, focus_element, get_element_center, get_input_value,
-    js_click, js_click_at, press_active_element, scroll_into_view, set_active_element_text,
-    set_element_text, type_active_element,
+    call_on_element, click_blocker_at_point, focus_element, focus_element_js, get_element_center,
+    get_input_value, js_click, js_click_at, press_active_element, scroll_into_view,
+    set_active_element_text, set_element_text, type_active_element,
 };
 use mouse::{MouseButton, dispatch_click, dispatch_drag, dispatch_hover, dispatch_scroll};
 use serde_json::{Value, json};
@@ -323,6 +323,13 @@ impl Input {
             async move { press_combo(&session, &key).await }
         })
         .await
+    }
+
+    pub async fn press_ref(&self, ref_id: &Ref, key: &str) -> Result<(), CoreError> {
+        let resolved = self.observer.resolve_ref(ref_id).await?;
+        scroll_into_view(&resolved.session, resolved.backend_node_id).await;
+        focus_element_js(&resolved.session, resolved.backend_node_id).await?;
+        self.press(key).await
     }
 
     pub async fn select_option(

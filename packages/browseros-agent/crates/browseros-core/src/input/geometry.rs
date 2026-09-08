@@ -286,6 +286,26 @@ pub async fn focus_element(
     Ok(())
 }
 
+pub async fn focus_element_js(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<(), CoreError> {
+    let focused = call_on_element(
+        session,
+        backend_node_id,
+        "function(){if(typeof this.focus==='function'){this.focus();return true}return false}",
+        None,
+    )
+    .await?;
+    if focused.as_bool().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "Element cannot receive focus.".to_string(),
+        ))
+    }
+}
+
 pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result<(), CoreError> {
     let object_id = resolve_object_id(session, backend_node_id, None).await?;
     let _: Value = session

@@ -251,17 +251,17 @@ impl CdpConnection for HarnessConnection {
                         }
                     }
                 })),
-                "DOM.pushNodesByBackendIdsToFrontend" => {
-                    assert_eq!(params, json!({ "backendNodeIds": [10] }));
-                    Ok(json!({ "nodeIds": [10] }))
-                }
-                "DOM.focus" => {
-                    assert_eq!(params, json!({ "nodeId": 10 }));
-                    Ok(json!({}))
-                }
                 "Accessibility.getFullAXTree" => {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
+                }
+                "DOM.resolveNode" => {
+                    assert_eq!(params, json!({ "backendNodeId": 10 }));
+                    Ok(json!({ "object": { "objectId": "node-10" } }))
+                }
+                "Runtime.callFunctionOn" => {
+                    assert_eq!(params.get("objectId"), Some(&json!("node-10")));
+                    Ok(json!({ "result": { "value": true } }))
                 }
                 "Runtime.evaluate" => {
                     let delay = self.evaluate_delay_ms.load(Ordering::SeqCst);
@@ -1178,7 +1178,7 @@ async fn act_press_focuses_ref_before_dispatching_key() {
     let calls = connection.calls();
     let focus_index = calls
         .iter()
-        .position(|call| call.method == "DOM.focus")
+        .position(|call| call.method == "Runtime.callFunctionOn")
         .unwrap_or_else(|| panic!("press(ref) should focus the referenced element"));
     let key_index = calls
         .iter()
