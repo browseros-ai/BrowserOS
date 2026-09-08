@@ -26,22 +26,41 @@ const CREDENTIAL_FIELDS = [
   'sessionToken',
 ] as const
 
-type StoredCredentials = {
+type StoredProvider = {
   type: string
+  baseUrl?: string | null
+  resourceName?: string | null
+  region?: string | null
 } & Partial<Record<(typeof CREDENTIAL_FIELDS)[number], string | null>>
 
 /**
  * Fills blank credential fields from the saved provider row so testing an
- * existing provider works even though reads redact its secrets. Only reuses a
- * stored secret when the provider type is unchanged, so a form switched to a
- * different type must supply that type's own credential rather than silently
- * reusing the previous one.
+ * existing provider works even though reads redact its secrets.
+ *
+ * The stored secret is bound to the stored destination: it is reused only when
+ * the request targets the same provider type AND the same connection settings
+ * (base URL / resource name / region). Otherwise a caller who knows a saved
+ * provider id could pair its key with an arbitrary base URL and exfiltrate it
+ * to another endpoint. A changed destination must supply its own credential.
  */
-export function mergeStoredCredentials<T extends { provider: string }>(
-  config: T,
-  stored: StoredCredentials | null,
-): T {
-  if (!stored || stored.type !== config.provider) return config
+export function mergeStoredCredentials<
+  T extends {
+    provider: string
+    baseUrl?: string
+    resourceName?: string
+    region?: string
+  },
+>(config: T, stored: StoredProvider | null): T {
+  const same = (a?: string | null, b?: string | null) => (a ?? '') === (b ?? '')
+  if (
+    !stored ||
+    stored.type !== config.provider ||
+    !same(config.baseUrl, stored.baseUrl) ||
+    !same(config.resourceName, stored.resourceName) ||
+    !same(config.region, stored.region)
+  ) {
+    return config
+  }
   const merged = { ...config } as Record<string, unknown>
   for (const field of CREDENTIAL_FIELDS) {
     if (!merged[field]) merged[field] = stored[field] ?? undefined
