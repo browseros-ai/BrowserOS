@@ -81,7 +81,8 @@ export function SidebarHistory({
   return (
     <div>
       {/* Keep the trigger mounted while expanding; replacing it on focus can swallow the first click. */}
-      <Tooltip>
+      {/* Content is absent while expanded; close from the trigger rather than the content's hover region. */}
+      <Tooltip disableHoverableContent>
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
         {!expanded && <TooltipContent side="right">History</TooltipContent>}
       </Tooltip>

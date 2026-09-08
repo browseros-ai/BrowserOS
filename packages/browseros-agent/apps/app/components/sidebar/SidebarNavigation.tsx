@@ -82,7 +82,8 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
 
             return (
               <div key={item.to}>
-                <Tooltip>
+                {/* Expansion unmounts the content, so the trigger must own closing on pointer leave. */}
+                <Tooltip disableHoverableContent>
                   <TooltipTrigger asChild>{navItem}</TooltipTrigger>
                   {!expanded && (
                     <TooltipContent side="right">{item.name}</TooltipContent>
