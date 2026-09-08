@@ -26,10 +26,6 @@ export interface DiagnosticsSnapshot {
 
 export const DIAGNOSTICS_REQUEST = 'browseros:diagnostics:get'
 export const REPORTER_VERSION_REQUEST = 'browseros:diagnostics:reporter-version'
-export const APP_EXTENSION_IDS = [
-  'bflpfmnmnokmjhmgnolecpppdbdophmk',
-  'pjimfkbpehlcllblajnpfamdfjhhlgkc',
-] as const
 export const REPORTER_EXTENSION_ID = 'adlpneommgkgeanpaekgoaolcpncohkf'
 export const DIAGNOSTICS_MAX_AGE_MS = 60_000
 export const DIAGNOSTICS_TIMEOUT_MS = 3_000
