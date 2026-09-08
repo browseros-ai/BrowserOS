@@ -216,6 +216,19 @@ export const captureIoCases: ContractCase[] = [
       if (elapsed < 700) {
         throw new Error(`wait time returned too early: ${elapsed}ms`)
       }
+
+      // A pause longer than the default timeout is still the requested pause.
+      const longStarted = Date.now()
+      expectOk(
+        await ctx.mcp.callTool('wait', { page, for: 'time', value: 3_000 }),
+        'wait time beyond the default timeout',
+      )
+      const longElapsed = Date.now() - longStarted
+      if (longElapsed < 2_700) {
+        throw new Error(
+          `wait time was cut short by the default timeout: ${longElapsed}ms`,
+        )
+      }
     },
   },
   {
