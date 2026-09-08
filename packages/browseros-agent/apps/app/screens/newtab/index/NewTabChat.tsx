@@ -17,6 +17,8 @@ import {
 import { track } from '@/lib/metrics/track'
 import { consumePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatActions } from '@/modules/chat-actions/chat-actions.hooks'
+import { useActiveConversation } from '@/modules/conversations/active-conversation-context'
+import { conversationTitle } from '@/modules/conversations/history-list'
 import { ChatEmptyState } from '@/screens/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/screens/sidepanel/index/ChatError'
 import { ChatFooter } from '@/screens/sidepanel/index/ChatFooter'
@@ -26,6 +28,7 @@ import { ChatMessages } from '@/screens/sidepanel/index/ChatMessages'
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const hasSentInitialRef = useRef(false)
+  const { setId: setActiveConversationId } = useActiveConversation()
 
   const {
     mode,
@@ -42,6 +45,9 @@ export const NewTabChat: FC = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    restoreError,
+    retryRestoreConversation,
+    conversationId,
     providers,
     selectedProvider,
     handleSelectProvider,
@@ -68,11 +74,17 @@ export const NewTabChat: FC = () => {
     },
   })
 
+  useEffect(() => {
+    setActiveConversationId(isRestoringConversation ? null : conversationId)
+    return () => setActiveConversationId(null)
+  }, [conversationId, isRestoringConversation, setActiveConversationId])
+
   // Send the initial message from URL query params (from /home search bar).
   // Guarded by ref to prevent double-fire in React Strict Mode.
   // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
   useEffect(() => {
     if (hasSentInitialRef.current) return
+    if (searchParams.has('conversationId')) return
     const pending = consumePendingHomeMessage(searchParams.get('handoff'))
     const query = pending?.text ?? searchParams.get('q') ?? ''
     const chatMode = searchParams.get('mode')
@@ -143,26 +155,60 @@ export const NewTabChat: FC = () => {
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && !restoreError ? (
           <ChatEmptyState
             mode={mode}
             mounted={mounted}
             onSuggestionClick={handleSuggestionClick}
           />
         ) : (
-          <ChatMessages
-            messages={messages}
-            status={status}
-            getActionForMessage={getActionForMessage}
-            liked={liked}
-            onClickLike={onClickLike}
-            disliked={disliked}
-            onClickDislike={onClickDislike}
-            showJtbdPopup={false}
-            showDontShowAgain={false}
-            onTakeSurvey={() => {}}
-            onDismissJtbdPopup={() => {}}
-          />
+          <>
+            {searchParams.has('conversationId') && messages.length > 0 && (
+              <h1 className="mb-2 line-clamp-2 font-semibold text-lg">
+                {conversationTitle(
+                  messages
+                    .findLast((message) => message.role === 'user')
+                    ?.parts.filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join(' ') ?? '',
+                )}
+              </h1>
+            )}
+            <ChatMessages
+              messages={messages}
+              status={status}
+              getActionForMessage={getActionForMessage}
+              liked={liked}
+              onClickLike={onClickLike}
+              disliked={disliked}
+              onClickDislike={onClickDislike}
+              showJtbdPopup={false}
+              showDontShowAgain={false}
+              onTakeSurvey={() => {}}
+              onDismissJtbdPopup={() => {}}
+            />
+          </>
+        )}
+        {restoreError && (
+          <div role="alert" className="rounded-lg border p-4 text-sm">
+            <p>{restoreError}</p>
+            <div className="mt-3 flex gap-4">
+              <button
+                type="button"
+                onClick={retryRestoreConversation}
+                className="underline underline-offset-2"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={handleNewConversation}
+                className="underline underline-offset-2"
+              >
+                New conversation
+              </button>
+            </div>
+          </div>
         )}
         {agentUrlError && (
           <ChatError

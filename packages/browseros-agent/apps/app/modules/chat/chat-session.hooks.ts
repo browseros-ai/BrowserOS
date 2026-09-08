@@ -1,4 +1,5 @@
 import { useChat } from '@ai-sdk/react'
+import { useQueryClient } from '@tanstack/react-query'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -34,7 +35,10 @@ import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
-import { fetchServerConversation } from '@/modules/conversations/conversations.hooks'
+import {
+  fetchServerConversation,
+  SERVER_CONVERSATIONS_QUERY_KEY,
+} from '@/modules/conversations/conversations.hooks'
 import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
@@ -48,7 +52,10 @@ import {
   prepareSidepanelSendMessagesRequest,
   toProviderOption,
 } from './chat-session-request'
-import { restoreServerConversation } from './chat-session-restore'
+import {
+  resolveRestoredChatTarget,
+  restoreServerConversation,
+} from './chat-session-restore'
 import type { ChatMode } from './chat-types'
 import { addContentFilterNotice } from './content-filter-notice'
 import {
@@ -187,6 +194,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoadingProviders,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
+  const queryClient = useQueryClient()
 
   // Incognito chats are never written to history or the cloud (#1189). Resolved
   // from the hosting window on mount (chrome.extension.inIncognitoContext is
@@ -219,6 +227,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const setSearchParamsRef = useRef(setSearchParams)
   setSearchParamsRef.current = setSearchParams
   const conversationIdParam = searchParams.get('conversationId')
+  const restoreLocally = options?.origin === 'newtab' || !isLoggedIn
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [restoreAttempt, setRestoreAttempt] = useState(0)
+  const [restoredConversationId, setRestoredConversationId] = useState<
+    string | null
+  >(null)
+  const isRestoringConversation =
+    !!conversationIdParam && restoredConversationId !== conversationIdParam
 
   // 'local': the local server owns history, persisting it to SQLite during
   // /chat. Every signed-in user now takes this path too, where the client used
@@ -237,7 +253,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
 
-  const canSend = !isLoadingAgentUrl && !agentUrlError && !!agentServerUrl
+  const canSend =
+    !isLoadingAgentUrl &&
+    !agentUrlError &&
+    !!agentServerUrl &&
+    !isRestoringConversation &&
+    !restoreError
 
   const providers: Provider[] = chatTargets.map(toProviderOption)
 
@@ -512,6 +533,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     await streamRequestRef.current?.catch(() => undefined)
   }, [detachStream])
 
+  useEffect(() => {
+    if (options?.origin !== 'newtab') return
+    // Leaving a routed chat detaches its view; the server still owns the run.
+    return () => {
+      void detachView()
+    }
+  }, [detachView, options?.origin])
+
   const stop = useCallback(async () => {
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
@@ -639,20 +668,18 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     GetConversationWithMessagesDocument,
     { conversationId: conversationIdParam ?? '' },
     {
-      enabled: !!conversationIdParam && isLoggedIn,
+      enabled: !!conversationIdParam && !restoreLocally,
     },
   )
 
-  const [restoredConversationId, setRestoredConversationId] = useState<
-    string | null
-  >(null)
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: restore should only run when query data arrives or conversationIdParam changes
+  // The URL is retained in new tabs for refresh/back navigation. Its keyed
+  // provider isolates each selection; sidepanel keeps its existing transient URL.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: target selection changes during restore; only restart for route/load/retry changes
   useEffect(() => {
     if (!conversationIdParam) return
     if (restoredConversationId === conversationIdParam) return
 
-    if (isLoggedIn) {
+    if (!restoreLocally) {
       if (!isRemoteConversationFetched) return
 
       if (remoteConversationData?.conversation) {
@@ -671,30 +698,73 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       return
     }
 
+    if (isLoadingProviders || isLoadingAgentUrl) return
     let cancelled = false
+    setRestoreError(null)
     void restoreServerConversation({
       conversationId: conversationIdParam,
-      fetchConversation: fetchServerConversation,
-      isCancelled: () => cancelled,
-      onRestore: (conversation) => {
-        setConversationId(
-          conversation.id as ReturnType<typeof crypto.randomUUID>,
-        )
-        setMessages(conversation.messages)
+      fetchConversation: async (id) => {
+        await detachView()
+        return fetchServerConversation(id)
       },
-      onError: (error) =>
+      isCancelled: () => cancelled,
+      onRestore: async (conversation) => {
+        // Select before enabling the composer. ACP sessions are keyed by both
+        // conversation and agent, so a different agent would lose their context.
+        const target = resolveRestoredChatTarget(
+          conversation,
+          chatTargets,
+          selectedChatTargetRef.current,
+        )
+        if (
+          options?.origin === 'newtab' &&
+          target &&
+          (target.id !== selectedChatTargetRef.current?.id ||
+            target.kind !== selectedChatTargetRef.current?.kind)
+        ) {
+          await selectChatTarget(target)
+        }
+        if (cancelled) return
+        const id = conversation.id as ReturnType<typeof crypto.randomUUID>
+        conversationIdRef.current = id
+        messagesRef.current = conversation.messages
+        setConversationId(id)
+        setMessages(conversation.messages)
+        if (options?.origin === 'newtab' && !target)
+          setRestoreError(
+            'The agent used for this conversation is no longer available. Restore it in Settings to continue.',
+          )
+      },
+      onMissing: () => {
+        if (options?.origin === 'newtab')
+          setRestoreError(
+            'This conversation is no longer available. Choose another conversation or start a new one.',
+          )
+      },
+      onError: (error) => {
+        if (options?.origin === 'newtab')
+          setRestoreError('Couldn’t open this conversation. Please try again.')
         sentry.captureException(error, {
           extra: { conversationId: conversationIdParam },
-        }),
+        })
+      },
       onSettled: () => {
         setRestoredConversationId(conversationIdParam)
-        setSearchParams({}, { replace: true })
+        if (options?.origin !== 'newtab') setSearchParams({}, { replace: true })
       },
     })
     return () => {
       cancelled = true
     }
-  }, [conversationIdParam, remoteConversationData, isLoggedIn])
+  }, [
+    conversationIdParam,
+    remoteConversationData,
+    isRemoteConversationFetched,
+    restoreLocally,
+    isLoadingProviders,
+    isLoadingAgentUrl,
+    restoreAttempt,
+  ])
 
   // Keep messagesRef in sync on every change (cheap ref assignment)
   useEffect(() => {
@@ -732,6 +802,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
     // The local server persists every turn during /chat, so the client has no
     // history write of its own left. Incognito still writes nowhere (#1189).
+    if (persistHistory)
+      void queryClient.invalidateQueries({
+        queryKey: [SERVER_CONVERSATIONS_QUERY_KEY],
+      })
 
     invalidateCredits()
   }, [status])
@@ -833,6 +907,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     action?: ChatAction
     files?: FileUIPart[]
   }) => {
+    if (isRestoringConversation || restoreError) return
     if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
       pendingMessageRef.current = params
       return
@@ -909,6 +984,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     setLiked({})
     setDisliked({})
     setRestoredConversationId(null)
+    setRestoreError(null)
     // Clearing the restore param also cancels any in-flight logged-out restore
     // (via the restore effect's cleanup), so a stale response can't revive the
     // old conversation over this new blank session.
@@ -966,9 +1042,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     resetConversationState()
   }
 
-  const isRestoringConversation =
-    !!conversationIdParam && restoredConversationId !== conversationIdParam
-
   return {
     mode,
     setMode,
@@ -983,6 +1056,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isSyncing: !isIntegrationsSynced,
     isIncognito,
     isRestoringConversation,
+    restoreError,
+    retryRestoreConversation: () => {
+      setRestoredConversationId(null)
+      setRestoreAttempt((value) => value + 1)
+    },
     agentUrlError,
     chatError,
     retryLastTurn: () => runLocalRequest(() => regenerate()),

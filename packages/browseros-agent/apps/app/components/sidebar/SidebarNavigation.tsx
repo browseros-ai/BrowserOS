@@ -8,9 +8,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { SidebarHistory } from './SidebarHistory'
 
 export interface SidebarNavigationProps {
   expanded?: boolean
+  onNavigate?: () => void
 }
 
 type NavItem = {
@@ -44,6 +46,7 @@ function isNavItemActive(item: NavItem, pathname: string): boolean {
 
 export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
+  onNavigate,
 }) => {
   const location = useLocation()
 
@@ -58,6 +61,7 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
             const navItem = (
               <NavLink
                 to={item.to}
+                onClick={onNavigate}
                 className={cn(
                   'flex h-9 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md px-3 font-medium text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
                   isActive &&
@@ -76,16 +80,19 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
               </NavLink>
             )
 
-            if (!expanded) {
-              return (
-                <Tooltip key={item.to}>
+            return (
+              <div key={item.to}>
+                <Tooltip>
                   <TooltipTrigger asChild>{navItem}</TooltipTrigger>
-                  <TooltipContent side="right">{item.name}</TooltipContent>
+                  {!expanded && (
+                    <TooltipContent side="right">{item.name}</TooltipContent>
+                  )}
                 </Tooltip>
-              )
-            }
-
-            return <div key={item.to}>{navItem}</div>
+                {item.to === '/home' && (
+                  <SidebarHistory expanded={expanded} onNavigate={onNavigate} />
+                )}
+              </div>
+            )
           })}
         </nav>
       </div>
