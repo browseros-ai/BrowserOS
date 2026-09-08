@@ -1325,24 +1325,26 @@ fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<
     }
 }
 
-/// Collects every `enum` entry in a schema that is not a string, as `path = value`.
-fn non_string_enum_entries(schema: &Value, path: &str, found: &mut Vec<String>) {
+/// Collects every `null` entry inside an `enum` array, as `path = value`. The
+/// compatibility problem is specific to `null` (from `Option<SomeEnum>`);
+/// numeric or boolean enums are valid JSON Schema and must not be flagged.
+fn null_enum_entries(schema: &Value, path: &str, found: &mut Vec<String>) {
     match schema {
         Value::Object(object) => {
             if let Some(Value::Array(values)) = object.get("enum") {
                 for (index, value) in values.iter().enumerate() {
-                    if !value.is_string() {
+                    if value.is_null() {
                         found.push(format!("{path}/enum/{index} = {value}"));
                     }
                 }
             }
             for (key, child) in object {
-                non_string_enum_entries(child, &format!("{path}/{key}"), found);
+                null_enum_entries(child, &format!("{path}/{key}"), found);
             }
         }
         Value::Array(items) => {
             for (index, child) in items.iter().enumerate() {
-                non_string_enum_entries(child, &format!("{path}/{index}"), found);
+                null_enum_entries(child, &format!("{path}/{index}"), found);
             }
         }
         _ => {}
@@ -1357,13 +1359,13 @@ fn tool_schemas_never_put_null_inside_an_enum() {
     let mut found = Vec::new();
     for tool in catalog() {
         let input = Value::Object((*tool.input_schema).clone());
-        non_string_enum_entries(&input, &format!("{}/inputSchema", tool.name), &mut found);
+        null_enum_entries(&input, &format!("{}/inputSchema", tool.name), &mut found);
         if let Some(output) = tool.output_schema {
             let output = Value::Object((*output).clone());
-            non_string_enum_entries(&output, &format!("{}/outputSchema", tool.name), &mut found);
+            null_enum_entries(&output, &format!("{}/outputSchema", tool.name), &mut found);
         }
     }
-    assert!(found.is_empty(), "non-string enum entries: {found:#?}");
+    assert!(found.is_empty(), "null enum entries: {found:#?}");
 }
 
 #[test]
