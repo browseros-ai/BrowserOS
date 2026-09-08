@@ -509,7 +509,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
-    stored: initialValues,
+    // A saved credential only counts while the type is unchanged; after a type
+    // switch the Test needs the new type's own credential entered.
+    stored: typeUnchanged ? initialValues : undefined,
   })
 
   const handleTest = async () => {
@@ -530,7 +532,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
       const result = await testProvider(
         {
-          id: 'test',
+          // The real id (when editing) lets the server fill a blank key from
+          // the saved credential; a new provider has no saved row to reuse.
+          id: initialValues?.id ?? 'test',
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,

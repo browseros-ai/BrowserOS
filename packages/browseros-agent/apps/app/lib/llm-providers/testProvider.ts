@@ -25,6 +25,9 @@ export async function testProvider(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        // Lets the server fill a blank key from this provider's saved,
+        // redacted credential when testing an existing provider.
+        providerId: provider.id,
         provider: provider.type,
         model: provider.modelId,
         apiKey: provider.apiKey,
