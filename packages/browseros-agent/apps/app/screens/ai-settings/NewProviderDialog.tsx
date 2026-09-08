@@ -90,6 +90,13 @@ import {
 /** Window assumed for any model the bundled catalog cannot size. */
 const DEFAULT_CONTEXT_WINDOW = 128000
 
+/**
+ * Shown on a credential field when editing a provider that already has one
+ * stored. Reads never return the secret, and the server keeps the stored value
+ * when the field is submitted blank, so editing does not require re-entering it.
+ */
+const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
+
 // Managed-auth providers (OAuth + BrowserOS-hosted) drop custom headers
 // server-side, so the editor is hidden for them rather than letting users save
 // headers that would be silently ignored. Keep in sync with the provider
@@ -254,6 +261,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       secretAccessKey: initialValues?.secretAccessKey || '',
       region: initialValues?.region || '',
       sessionToken: initialValues?.sessionToken || '',
+      hasApiKey: initialValues?.hasApiKey ?? false,
+      hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
+      hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
+      originalType: initialValues?.type,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -272,6 +283,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedSecretAccessKey = form.watch('secretAccessKey')
   const watchedRegion = form.watch('region')
   const watchedSessionToken = form.watch('sessionToken')
+
+  // Editing a provider that already has a credential stored: the field is
+  // optional (blank keeps the saved value), so drop the required marker and the
+  // "enter a key" placeholder that make a saved credential read as missing. The
+  // stored credential only applies while the type is unchanged; switching the
+  // provider type re-requires the new type's own credential.
+  const typeUnchanged = watchedType === initialValues?.type
+  const savedApiKey = Boolean(initialValues?.hasApiKey) && typeUnchanged
+  const savedAccessKeyId =
+    Boolean(initialValues?.hasAccessKeyId) && typeUnchanged
+  const savedSecretAccessKey =
+    Boolean(initialValues?.hasSecretAccessKey) && typeUnchanged
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -404,6 +427,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: initialValues.secretAccessKey || '',
         region: initialValues.region || '',
         sessionToken: initialValues.sessionToken || '',
+        hasApiKey: initialValues.hasApiKey ?? false,
+        hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
+        hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
+        originalType: initialValues.type,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -430,6 +457,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: '',
         region: '',
         sessionToken: '',
+        hasApiKey: false,
+        hasAccessKeyId: false,
+        hasSecretAccessKey: false,
+        originalType: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
@@ -478,7 +509,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
-    stored: initialValues,
+    // A saved credential only counts while the type is unchanged; after a type
+    // switch the Test needs the new type's own credential entered.
+    stored: typeUnchanged ? initialValues : undefined,
   })
 
   const handleTest = async () => {
@@ -499,7 +532,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
       const result = await testProvider(
         {
-          id: 'test',
+          // The real id (when editing) lets the server fill a blank key from
+          // the saved credential; a new provider has no saved row to reuse.
+          id: initialValues?.id ?? 'test',
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
@@ -692,11 +727,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             name="apiKey"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>API Key *</FormLabel>
+                <FormLabel>API Key{savedApiKey ? '' : ' *'}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
-                    placeholder="Enter your Azure API key"
+                    placeholder={
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : 'Enter your Azure API key'
+                    }
                     {...field}
                   />
                 </FormControl>
@@ -717,9 +756,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="accessKeyId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Access Key ID *</FormLabel>
+                  <FormLabel>
+                    Access Key ID{savedAccessKeyId ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
-                    <Input placeholder="AKIA..." {...field} />
+                    <Input
+                      placeholder={
+                        savedAccessKeyId ? KEEP_SAVED_PLACEHOLDER : 'AKIA...'
+                      }
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -730,11 +776,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="secretAccessKey"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Secret Access Key *</FormLabel>
+                  <FormLabel>
+                    Secret Access Key{savedSecretAccessKey ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type="password"
-                      placeholder="Enter your secret access key"
+                      placeholder={
+                        savedSecretAccessKey
+                          ? KEEP_SAVED_PLACEHOLDER
+                          : 'Enter your secret access key'
+                      }
                       {...field}
                     />
                   </FormControl>
@@ -820,14 +872,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             )
             return (
               <FormItem>
-                <FormLabel>API Key{isApiKeyOptional ? '' : ' *'}</FormLabel>
+                <FormLabel>
+                  API Key{isApiKeyOptional || savedApiKey ? '' : ' *'}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     placeholder={
-                      isApiKeyOptional
-                        ? 'Enter your API key (optional)'
-                        : 'Enter your API key'
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : isApiKeyOptional
+                          ? 'Enter your API key (optional)'
+                          : 'Enter your API key'
                     }
                     {...field}
                   />

@@ -69,10 +69,26 @@ export const providerFormSchema = z
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),
     sessionToken: z.string().optional(),
+    // Set when editing a provider that already has the credential stored, so a
+    // blank field means "keep the saved value" rather than a missing
+    // credential. Populated from the server's has* flags, never user-entered.
+    hasApiKey: z.boolean().optional(),
+    hasAccessKeyId: z.boolean().optional(),
+    hasSecretAccessKey: z.boolean().optional(),
+    // The provider type when the edit started. A stored-credential flag only
+    // applies while the type is unchanged; switching type must require the new
+    // type's own credential rather than reusing the previous provider's.
+    originalType: providerTypeEnum.optional(),
     reasoningEffort: z.string().optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   })
   .superRefine((data, ctx) => {
+    // Stored-credential flags only count while the provider type is unchanged.
+    const typeUnchanged = data.type === data.originalType
+    const hasStoredApiKey = Boolean(data.hasApiKey) && typeUnchanged
+    const hasStoredAccessKeyId = Boolean(data.hasAccessKeyId) && typeUnchanged
+    const hasStoredSecretAccessKey =
+      Boolean(data.hasSecretAccessKey) && typeUnchanged
     if (data.type === 'azure') {
       if (!data.resourceName && !data.baseUrl) {
         ctx.addIssue({
@@ -81,7 +97,7 @@ export const providerFormSchema = z
           path: ['resourceName'],
         })
       }
-      if (!data.apiKey) {
+      if (!data.apiKey && !hasStoredApiKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'API Key is required for Azure',
@@ -89,14 +105,14 @@ export const providerFormSchema = z
         })
       }
     } else if (data.type === 'bedrock') {
-      if (!data.accessKeyId) {
+      if (!data.accessKeyId && !hasStoredAccessKeyId) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Access Key ID is required',
           path: ['accessKeyId'],
         })
       }
-      if (!data.secretAccessKey) {
+      if (!data.secretAccessKey && !hasStoredSecretAccessKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Secret Access Key is required',
