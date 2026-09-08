@@ -64,9 +64,18 @@ func TestSnapCommandShape(t *testing.T) {
 	if err := cmd.Args(cmd, []string{"extra"}); err == nil {
 		t.Fatal("snap Args accepted a positional argument")
 	}
-	for _, flag := range []string{"enhanced", "interactive", "compact", "depth"} {
+	// `interactive` and `depth` are thin pass-throughs to the snapshot tool's own
+	// mode/depth arguments, added to the server after this command was simplified.
+	// `enhanced` and `compact` stay out: the tool has no such modes, and the CLI is
+	// not to filter the tree itself again.
+	for _, flag := range []string{"enhanced", "compact"} {
 		if cmd.Flags().Lookup(flag) != nil {
 			t.Fatalf("snap command exposes unsupported %s flag", flag)
+		}
+	}
+	for _, flag := range []string{"interactive", "depth"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Fatalf("snap command is missing the %s flag", flag)
 		}
 	}
 }
