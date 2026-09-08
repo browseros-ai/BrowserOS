@@ -8,7 +8,7 @@ import {
 import type { ConversationPanelViews } from './conversationPanelStorage'
 
 describe('ConversationPanelBroker', () => {
-  it('opens every touched tab and retains its conversation mapping', async () => {
+  it('opens each newly created tab and retains its conversation mapping', async () => {
     const fixture = createFixture()
 
     await fixture.broker.reconcile(
@@ -31,6 +31,60 @@ describe('ConversationPanelBroker', () => {
       { tabId: 10, isActive: true, conversationId: 'conversation-1' },
       { tabId: 11, isActive: true, conversationId: 'conversation-1' },
     ])
+  })
+
+  it('never opens a source/context assignment without a creation event', async () => {
+    const fixture = createFixture()
+    await fixture.broker.reconcile(
+      assignments([
+        {
+          tabId: 10,
+          conversationId: 'manual',
+          runId: 'run',
+          status: 'running',
+        },
+      ]),
+    )
+    expect(fixture.views['10']?.conversationId).toBe('manual')
+    expect(fixture.opened).toEqual([])
+  })
+
+  it('keeps a close across worker restarts, completion, and subsequent turns', async () => {
+    const fixture = createFixture()
+    await fixture.broker.reconcile(
+      assignments([assignment(10, 'chat', 'r1', 'running')]),
+    )
+    const restarted = fixture.restart()
+    await restarted.reconcile(
+      assignments([assignment(10, 'chat', 'r1', 'running')]),
+    )
+    await restarted.reconcile(
+      assignments([assignment(10, 'chat', 'r1', 'completed')]),
+    )
+    await restarted.reconcile(
+      assignments([assignment(10, 'chat', 'r2', 'running')]),
+    )
+    expect(fixture.opened).toHaveLength(1)
+    expect(fixture.views['10']?.runId).toBe('r2')
+  })
+
+  it('preserves other tabs and open receipts when tab removal wakes a cold worker', async () => {
+    const retained = {
+      ...assignment(10, 'chat', 'r1', 'running'),
+      autoOpenAttempted: 'created-10',
+    }
+    const removed = {
+      ...assignment(11, 'chat', 'r1', 'running'),
+      autoOpenAttempted: 'created-11',
+    }
+    const fixture = createFixture({
+      readViews: async () => ({ '10': retained, '11': removed }),
+    })
+    await fixture.broker.removeTab(11)
+    expect(fixture.views['11']).toBeUndefined()
+    expect(fixture.views['10']).toEqual(retained)
+    await fixture.broker.reconcile(assignments([retained]))
+    expect(fixture.opened).toEqual([])
   })
 
   it('does not let an older run overwrite a tab claimed by a newer run', async () => {
@@ -151,7 +205,7 @@ describe('ConversationPanelBroker', () => {
     expect(fixture.opened).toEqual([{ tabId: 55, windowId: 1 }])
   })
 
-  it('reasserts open panels on a heartbeat without restarting their glow', async () => {
+  it("preserves a user's close across heartbeats without restarting glow", async () => {
     const fixture = createFixture()
     const current = assignments([
       assignment(60, 'conversation-6', 'run-6', 'running'),
@@ -160,16 +214,13 @@ describe('ConversationPanelBroker', () => {
     await fixture.broker.reconcile(current)
     await fixture.broker.reconcile(current)
 
-    expect(fixture.opened).toEqual([
-      { tabId: 60, windowId: 1 },
-      { tabId: 60, windowId: 1 },
-    ])
+    expect(fixture.opened).toEqual([{ tabId: 60, windowId: 1 }])
     expect(fixture.glow).toEqual([
       { tabId: 60, isActive: true, conversationId: 'conversation-6' },
     ])
   })
 
-  it('heals a transient panel-open failure on the next heartbeat', async () => {
+  it('does not replay an ambiguous open failure over later user actions', async () => {
     const fixture = createFixture({
       openPanel: async (_target, call) => {
         if (call === 1) throw new Error('side panel temporarily unavailable')
@@ -182,7 +233,7 @@ describe('ConversationPanelBroker', () => {
     await fixture.broker.reconcile(current)
     await fixture.broker.reconcile(current)
 
-    expect(fixture.opened).toEqual([{ tabId: 70, windowId: 1 }])
+    expect(fixture.opened).toEqual([])
     expect(fixture.errors).toEqual([
       expect.objectContaining({
         context: { phase: 'open-panel', tabId: 70 },
@@ -245,6 +296,7 @@ function createFixture(options: FixtureOptions = {}) {
   }
   return {
     broker: new ConversationPanelBroker(deps),
+    restart: () => new ConversationPanelBroker(deps),
     errors,
     glow,
     markConfettiShown,
@@ -259,7 +311,13 @@ function assignment(
   runId: string,
   status: 'running' | 'completed',
 ) {
-  return { tabId, conversationId, runId, status }
+  return {
+    tabId,
+    conversationId,
+    runId,
+    status,
+    autoOpenId: `created-${tabId}`,
+  }
 }
 
 function assignments(

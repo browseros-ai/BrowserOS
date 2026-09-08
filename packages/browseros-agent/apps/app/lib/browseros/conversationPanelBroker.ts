@@ -37,12 +37,13 @@ export interface ConversationPanelBrokerDeps {
 export class ConversationPanelBroker {
   private views: ConversationPanelViews = {}
   private loadPromise: Promise<void> | undefined
-  // Panel opening is safe to reassert, but glow activation restarts animation.
-  // Track that non-idempotent effect separately from authoritative assignments.
+  // Glow follows execution; visibility is a one-time creation effect.
   private readonly activatedRunByTab = new Map<number, string>()
   private loopPromise: Promise<void> | undefined
   private connectAbort: AbortController | undefined
   private stopped = true
+  private reconciliation: Promise<void> = Promise.resolve()
+  private readonly closedTabs = new Set<number>()
 
   constructor(private readonly deps: ConversationPanelBrokerDeps) {}
 
@@ -61,24 +62,74 @@ export class ConversationPanelBroker {
   }
 
   /** Makes local storage and browser effects match one complete assignment set. */
-  async reconcile(assignments: ConversationPanelAssignments): Promise<void> {
+  reconcile(assignments: ConversationPanelAssignments): Promise<void> {
+    const next = this.reconciliation
+      .catch(() => undefined)
+      .then(() => this.applyAssignments(assignments))
+    this.reconciliation = next
+    return next
+  }
+
+  /** Remove closed tabs locally and on the server, without stopping their agent. */
+  async removeTab(tabId: number): Promise<void> {
+    this.closedTabs.add(tabId)
+    const cleaned = this.reconciliation
+      .catch(() => undefined)
+      .then(async () => {
+        // A tab-close event can wake a cold worker before the SSE connection.
+        // Load retained open receipts before constructing the remaining table.
+        await this.ensureLoaded()
+        await this.applyAssignments({ assignments: Object.values(this.views) })
+      })
+    this.reconciliation = cleaned
+    await cleaned
+    const serverUrl = await this.deps.resolveServerUrl()
+    const response = await this.deps.fetch(
+      `${serverUrl}/chat/panels/${tabId}`,
+      { method: 'DELETE' },
+    )
+    if (!response.ok)
+      throw new Error(`Panel cleanup failed (${response.status})`)
+  }
+
+  private async applyAssignments(
+    assignments: ConversationPanelAssignments,
+  ): Promise<void> {
     await this.ensureLoaded()
 
     const previous = this.views
     const next = Object.fromEntries(
-      assignments.assignments.map((assignment) => [
-        String(assignment.tabId),
-        assignment,
-      ]),
+      assignments.assignments
+        .filter((assignment) => !this.closedTabs.has(assignment.tabId))
+        .map((assignment) => [
+          String(assignment.tabId),
+          {
+            ...assignment,
+            autoOpenAttempted:
+              previous[String(assignment.tabId)]?.autoOpenAttempted,
+          },
+        ]),
     )
     const stopped = Object.values(previous).filter((assignment) => {
       if (assignment.status !== 'running') return false
       const replacement = next[String(assignment.tabId)]
       return !sameRunningAssignment(assignment, replacement)
     })
-    const running = assignments.assignments.filter(
+    const running = Object.values(next).filter(
       (assignment) => assignment.status === 'running',
     )
+
+    const toOpen = Object.values(next).filter(
+      (assignment) =>
+        assignment.status === 'running' &&
+        assignment.autoOpenId &&
+        assignment.autoOpenId !== assignment.autoOpenAttempted,
+    )
+    // Persist consumption BEFORE the native call. Replaying after an ambiguous
+    // failure or worker restart could override a user's close. Heartbeats repair
+    // routing only; a new turn keeps the same creation id and cannot reopen it.
+    for (const assignment of toOpen)
+      assignment.autoOpenAttempted = assignment.autoOpenId
 
     // Storage is the handoff to independently mounted React panels. Commit it
     // before opening anything, but do not advance memory if the write fails:
@@ -89,9 +140,8 @@ export class ConversationPanelBroker {
     for (const assignment of stopped) {
       this.activatedRunByTab.delete(assignment.tabId)
     }
+    await Promise.all(toOpen.map((assignment) => this.open(assignment)))
     await this.deactivate(stopped, next)
-    // `open: true` is idempotent. Reassert every running assignment so an SSE
-    // reconnect or heartbeat repairs a transient Chrome-side failure.
     for (const assignment of running) await this.activate(assignment)
   }
 
@@ -189,9 +239,7 @@ export class ConversationPanelBroker {
     }
   }
 
-  private async activate(
-    assignment: ConversationPanelAssignment,
-  ): Promise<void> {
+  private async open(assignment: ConversationPanelAssignment): Promise<void> {
     try {
       const browserTab = await this.deps.getTab(assignment.tabId)
       await this.deps.openPanel({
@@ -199,15 +247,18 @@ export class ConversationPanelBroker {
         windowId: browserTab.windowId,
       })
     } catch (error) {
-      // The server may report an effect immediately before a tab closes. The
-      // retained mapping is harmless; a heartbeat retries other transient errors.
+      // The tab may have closed or native registration may have failed. Never
+      // convert an uncertain result into a recurring instruction to reopen.
       this.reportError(error, {
         phase: 'open-panel',
         tabId: assignment.tabId,
       })
-      return
     }
+  }
 
+  private async activate(
+    assignment: ConversationPanelAssignment,
+  ): Promise<void> {
     if (this.activatedRunByTab.get(assignment.tabId) === assignment.runId) {
       return
     }

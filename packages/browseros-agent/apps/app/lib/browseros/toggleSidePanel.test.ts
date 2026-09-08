@@ -1,299 +1,103 @@
-import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
 
-let storedOpenWindowIds: number[] = []
-let storedSidePanelPerWindow: boolean | undefined
-let browserosToggleCalls: unknown[] = []
-let browserosIsOpenCalls: unknown[] = []
-let openCalls: unknown[] = []
-let closeCalls: unknown[] = []
-let setOptionsCalls: unknown[] = []
-let browserosIsOpenResult = false
-let getSidePanelPerWindowOverride: (() => Promise<boolean>) | null = null
-const onOpenedListeners: Array<
-  (info: chrome.sidePanel.PanelOpenedInfo) => void
-> = []
-const onClosedListeners: Array<
-  (info: chrome.sidePanel.PanelClosedInfo) => void
-> = []
-
-// Total replacement is intentional here: sidePanelOpenStateStorage
-// pulls in wxt/storage which touches `browser.runtime` on load, and
-// no other test file imports it. Adding the `...realModule` spread
-// pattern (see the 2026-07-17 test reliability audit) would eagerly
-// load the environment-coupled module for no cross-file benefit.
-// Per-file worker isolation (Level 3 of that audit) covers the
-// pollution class regardless.
 mock.module('./sidePanelOpenStateStorage', () => ({
-  sidePanelPerWindowStorage: {
-    getValue: async () => {
-      if (getSidePanelPerWindowOverride) {
-        return await getSidePanelPerWindowOverride()
-      }
-      return storedSidePanelPerWindow ?? false
-    },
-    setValue: async (perWindow: boolean) => {
-      storedSidePanelPerWindow = perWindow
-    },
-  },
-  openWindowSidePanelIdsStorage: {
-    getValue: async () => storedOpenWindowIds,
-    setValue: async (windowIds: number[]) => {
-      storedOpenWindowIds = windowIds
-    },
-  },
+  sidePanelPerWindowStorage: { getValue: async () => false },
 }))
-
-let openSidePanel: typeof import('./toggleSidePanel').openSidePanel
-let toggleSidePanel: typeof import('./toggleSidePanel').toggleSidePanel
-let initializeSidePanelOptions: typeof import('./toggleSidePanel').initializeSidePanelOptions
-let registerSidePanelOpenStateListeners: typeof import('./toggleSidePanel').registerSidePanelOpenStateListeners
-let refreshSidePanelRuntimeState: typeof import('./toggleSidePanel').refreshSidePanelRuntimeState
-let setSidePanelPerWindowPreference: typeof import('./toggleSidePanel').setSidePanelPerWindowPreference
-
-beforeAll(async () => {
-  const module = await import('./toggleSidePanel')
-  openSidePanel = module.openSidePanel
-  toggleSidePanel = module.toggleSidePanel
-  initializeSidePanelOptions = module.initializeSidePanelOptions
-  registerSidePanelOpenStateListeners =
-    module.registerSidePanelOpenStateListeners
-  refreshSidePanelRuntimeState = module.refreshSidePanelRuntimeState
-  setSidePanelPerWindowPreference = module.setSidePanelPerWindowPreference
-})
-
-beforeEach(async () => {
-  storedOpenWindowIds = []
-  storedSidePanelPerWindow = undefined
-  browserosToggleCalls = []
-  browserosIsOpenCalls = []
-  openCalls = []
-  closeCalls = []
-  setOptionsCalls = []
-  browserosIsOpenResult = false
-  getSidePanelPerWindowOverride = null
-
+const { openSidePanel, closeSidePanel, toggleSidePanel, prepareTabSidePanel } =
+  await import('./toggleSidePanel')
+let opened: Set<number>
+let activeTabId = 7
+let options: Map<number | undefined, chrome.sidePanel.PanelOptions>
+let calls: Array<{ action: string; tabId?: number }>
+beforeEach(() => {
+  activeTabId = 7
+  opened = new Set()
+  options = new Map()
+  calls = []
   globalThis.chrome = {
     sidePanel: {
-      browserosToggle: async (options: unknown) => {
-        browserosToggleCalls.push(options)
+      getOptions: async ({ tabId }: { tabId: number }) =>
+        options.get(tabId) ?? {},
+      setOptions: async (value: chrome.sidePanel.PanelOptions) => {
+        options.set(value.tabId, value)
+      },
+      browserosIsOpen: async ({ tabId }: { tabId: number }) =>
+        opened.has(tabId),
+      browserosToggle: async ({
+        tabId,
+        open,
+      }: {
+        tabId: number
+        open?: boolean
+      }) => {
+        // Custom close works for the active tab and is a no-op for background
+        // tabs. Standard close below models its deferred active-tab animation.
+        if (open === false) {
+          calls.push({ action: 'native-close', tabId })
+          if (tabId === activeTabId) opened.delete(tabId)
+          return { opened: false }
+        }
+        expect(open).toBe(true)
+        calls.push({ action: 'open', tabId })
+        opened.add(tabId)
         return { opened: true }
       },
-      browserosIsOpen: async (options: unknown) => {
-        browserosIsOpenCalls.push(options)
-        return browserosIsOpenResult
-      },
-      open: async (options: unknown) => {
-        openCalls.push(options)
-      },
-      close: async (options: unknown) => {
-        closeCalls.push(options)
-      },
-      setOptions: async (options: unknown) => {
-        setOptionsCalls.push(options)
-      },
-      onOpened: {
-        addListener: (
-          listener: (info: chrome.sidePanel.PanelOpenedInfo) => void,
-        ) => {
-          onOpenedListeners.push(listener)
-        },
-      },
-      onClosed: {
-        addListener: (
-          listener: (info: chrome.sidePanel.PanelClosedInfo) => void,
-        ) => {
-          onClosedListeners.push(listener)
-        },
+      close: async ({ tabId }: { tabId: number }) => {
+        calls.push({ action: 'close', tabId })
+        if (tabId !== activeTabId) opened.delete(tabId)
       },
     },
-  } as typeof chrome
-
-  fireWindowClosed(3)
-  await setSidePanelPerWindowPreference(false)
-  setOptionsCalls = []
+  } as unknown as typeof chrome
 })
 
-function fireWindowOpened(windowId: number) {
-  for (const listener of onOpenedListeners) {
-    listener({ windowId, path: 'sidepanel.html' })
-  }
-}
-
-function fireWindowClosed(windowId: number) {
-  for (const listener of onClosedListeners) {
-    listener({ windowId, path: 'sidepanel.html' })
-  }
-}
-
-describe('side panel scope routing', () => {
-  it('hydrates window open state before routing a cold-started toggle', async () => {
-    storedSidePanelPerWindow = true
-    storedOpenWindowIds = [3]
-
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: false })
-    expect(setOptionsCalls).toEqual([])
-    expect(closeCalls).toEqual([{ windowId: 3 }])
-    expect(openCalls).toEqual([])
+describe('tab-specific side panel controls', () => {
+  it('registers a user-created tab without opening or inheriting a panel', async () => {
+    await prepareTabSidePanel(7)
+    expect(options.get(undefined)).toEqual({ enabled: false })
+    expect(options.get(7)).toEqual({
+      tabId: 7,
+      path: 'sidepanel.html?tabId=7',
+      enabled: true,
+    })
+    expect(calls).toEqual([])
   })
 
-  it('keeps toolbar toggles on the BrowserOS tab-specific API when scope storage is absent', async () => {
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
-    expect(openCalls).toEqual([])
-    expect(closeCalls).toEqual([])
+  it('closes background B without closing foreground A or disabling registration', async () => {
+    await openSidePanel({ tabId: 7, windowId: 3 })
+    await openSidePanel({ tabId: 8, windowId: 3 })
+    expect(await toggleSidePanel({ tabId: 8, windowId: 3 })).toEqual({
+      opened: false,
+    })
+    expect(opened).toEqual(new Set([7]))
+    expect(options.get(8)?.enabled).toBe(true)
+    await toggleSidePanel({ tabId: 8, windowId: 3 })
+    expect(opened).toEqual(new Set([7, 8]))
   })
 
-  it('keeps toolbar toggles on the BrowserOS tab-specific API when scope storage is false', async () => {
-    storedSidePanelPerWindow = false
-
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
-    expect(openCalls).toEqual([])
-    expect(closeCalls).toEqual([])
-  })
-
-  it('uses Chromium window APIs when the window-level preference is enabled', async () => {
-    registerSidePanelOpenStateListeners()
-    await setSidePanelPerWindowPreference(true)
-
-    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
-    setOptionsCalls = []
-
-    const opened = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(opened).toEqual({ opened: true })
-    expect(setOptionsCalls).toEqual([])
-    expect(openCalls).toEqual([{ windowId: 3 }])
-    expect(browserosToggleCalls).toEqual([])
-
-    fireWindowOpened(3)
-    const closed = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(closed).toEqual({ opened: false })
-    expect(closeCalls).toEqual([{ windowId: 3 }])
-  })
-
-  it('keeps programmatic opens on the BrowserOS API in window mode', async () => {
-    await setSidePanelPerWindowPreference(true)
-
-    const result = await openSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(browserosIsOpenCalls).toEqual([])
-    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
-    expect(openCalls).toEqual([])
-    expect(closeCalls).toEqual([])
-  })
-
-  it('opens without closing when programmatic opens target an already-open tab panel', async () => {
-    await setSidePanelPerWindowPreference(true)
-    browserosIsOpenResult = true
-
-    const result = await openSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(browserosIsOpenCalls).toEqual([])
-    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
-    expect(openCalls).toEqual([])
-    expect(closeCalls).toEqual([])
-  })
-
-  it('refreshes the cached scope from extension storage outside the click path', async () => {
-    storedSidePanelPerWindow = true
-
-    await refreshSidePanelRuntimeState()
-    expect(setOptionsCalls).toEqual([])
-
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(openCalls).toEqual([{ windowId: 3 }])
-    expect(browserosToggleCalls).toEqual([])
-  })
-
-  it('falls back to tab scope without changing Chrome options when storage fails', async () => {
-    getSidePanelPerWindowOverride = async () => {
-      throw new Error('storage unavailable')
-    }
-
-    await refreshSidePanelRuntimeState()
-    expect(setOptionsCalls).toEqual([])
-
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
-    expect(openCalls).toEqual([])
-  })
-
-  it('applies Chrome options for explicit scope changes', async () => {
-    await setSidePanelPerWindowPreference(true)
-    await setSidePanelPerWindowPreference(false)
-
-    expect(setOptionsCalls).toEqual([
-      { enabled: true, path: 'sidepanel.html' },
-      { enabled: false },
+  it('keeps the originally captured target and serializes rapid toggles', async () => {
+    const target = { tabId: 9, windowId: 4 }
+    await Promise.all([toggleSidePanel(target), toggleSidePanel(target)])
+    expect(calls).toEqual([
+      { action: 'open', tabId: 9 },
+      { action: 'native-close', tabId: 9 },
+      { action: 'close', tabId: 9 },
     ])
+    expect(opened.size).toBe(0)
   })
 
-  it('initializes Chrome options from the stored scope during installation', async () => {
-    storedSidePanelPerWindow = true
-
-    await initializeSidePanelOptions()
-
-    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
+  it('clears the active tab before a tab switch can interrupt the close animation', async () => {
+    opened.add(7)
+    await closeSidePanel({ tabId: 7, windowId: 3 })
+    activeTabId = 8
+    expect(opened.has(7)).toBe(false)
   })
 
-  it('initializes Chrome options with tab scope when storage fails', async () => {
-    getSidePanelPerWindowOverride = async () => {
-      throw new Error('storage unavailable')
-    }
-
-    await initializeSidePanelOptions()
-
-    expect(setOptionsCalls).toEqual([{ enabled: false }])
-  })
-
-  it('keeps a newer explicit setting over stale installation state', async () => {
-    let resolveStoredValue: (perWindow: boolean) => void = () => {}
-    getSidePanelPerWindowOverride = async () =>
-      new Promise<boolean>((resolve) => {
-        resolveStoredValue = resolve
-      })
-
-    const initializePromise = initializeSidePanelOptions()
-    await Promise.resolve()
-    await setSidePanelPerWindowPreference(true)
-    resolveStoredValue(false)
-    await initializePromise
-
-    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
-  })
-
-  it('keeps a newer explicit setting change over a stale refresh result', async () => {
-    let resolveStoredValue: (perWindow: boolean) => void = () => {}
-    getSidePanelPerWindowOverride = async () =>
-      new Promise<boolean>((resolve) => {
-        resolveStoredValue = resolve
-      })
-
-    const refreshPromise = refreshSidePanelRuntimeState()
-    await Promise.resolve()
-    await setSidePanelPerWindowPreference(true)
-    resolveStoredValue(false)
-    await refreshPromise
-
-    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
-    const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
-
-    expect(result).toEqual({ opened: true })
-    expect(openCalls).toEqual([{ windowId: 3 }])
-    expect(browserosToggleCalls).toEqual([])
+  it('explicit close uses the standard tab API', async () => {
+    opened.add(42)
+    await closeSidePanel({ tabId: 42, windowId: 4 })
+    expect(calls).toEqual([
+      { action: 'native-close', tabId: 42 },
+      { action: 'close', tabId: 42 },
+    ])
   })
 })

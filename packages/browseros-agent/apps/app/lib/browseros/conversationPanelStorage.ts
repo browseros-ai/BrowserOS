@@ -1,7 +1,10 @@
 import type { ConversationPanelAssignment } from '@browseros/shared/schemas/conversation-panels'
 import { storage } from '@wxt-dev/storage'
 
-export type ConversationPanelViews = Record<string, ConversationPanelAssignment>
+export type ConversationPanelViews = Record<
+  string,
+  ConversationPanelAssignment & { autoOpenAttempted?: string }
+>
 
 /**
  * Background-owned tab routing table consumed by thin side-panel views.
