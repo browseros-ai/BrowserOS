@@ -75,10 +75,20 @@ export const providerFormSchema = z
     hasApiKey: z.boolean().optional(),
     hasAccessKeyId: z.boolean().optional(),
     hasSecretAccessKey: z.boolean().optional(),
+    // The provider type when the edit started. A stored-credential flag only
+    // applies while the type is unchanged; switching type must require the new
+    // type's own credential rather than reusing the previous provider's.
+    originalType: providerTypeEnum.optional(),
     reasoningEffort: z.string().optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   })
   .superRefine((data, ctx) => {
+    // Stored-credential flags only count while the provider type is unchanged.
+    const typeUnchanged = data.type === data.originalType
+    const hasStoredApiKey = Boolean(data.hasApiKey) && typeUnchanged
+    const hasStoredAccessKeyId = Boolean(data.hasAccessKeyId) && typeUnchanged
+    const hasStoredSecretAccessKey =
+      Boolean(data.hasSecretAccessKey) && typeUnchanged
     if (data.type === 'azure') {
       if (!data.resourceName && !data.baseUrl) {
         ctx.addIssue({
@@ -87,7 +97,7 @@ export const providerFormSchema = z
           path: ['resourceName'],
         })
       }
-      if (!data.apiKey && !data.hasApiKey) {
+      if (!data.apiKey && !hasStoredApiKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'API Key is required for Azure',
@@ -95,14 +105,14 @@ export const providerFormSchema = z
         })
       }
     } else if (data.type === 'bedrock') {
-      if (!data.accessKeyId && !data.hasAccessKeyId) {
+      if (!data.accessKeyId && !hasStoredAccessKeyId) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Access Key ID is required',
           path: ['accessKeyId'],
         })
       }
-      if (!data.secretAccessKey && !data.hasSecretAccessKey) {
+      if (!data.secretAccessKey && !hasStoredSecretAccessKey) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'Secret Access Key is required',

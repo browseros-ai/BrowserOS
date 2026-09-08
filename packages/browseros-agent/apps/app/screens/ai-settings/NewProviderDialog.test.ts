@@ -92,8 +92,21 @@ describe('provider setup boundary', () => {
       baseUrl: 'https://example.openai.azure.com',
       apiKey: '',
       hasApiKey: true,
+      originalType: 'azure' as const,
     })
     expect(result.success).toBe(true)
+  })
+
+  it('re-requires the credential when an edited provider switches type', () => {
+    const result = providerFormSchema.safeParse({
+      ...baseValues,
+      type: 'azure' as const,
+      baseUrl: 'https://example.openai.azure.com',
+      apiKey: '',
+      hasApiKey: true,
+      originalType: 'openai-compatible' as const,
+    })
+    expect(result.success).toBe(false)
   })
 
   it('requires AWS credentials for a new Bedrock provider', () => {
@@ -116,6 +129,7 @@ describe('provider setup boundary', () => {
       secretAccessKey: '',
       hasAccessKeyId: true,
       hasSecretAccessKey: true,
+      originalType: 'bedrock' as const,
     })
     expect(result.success).toBe(true)
   })

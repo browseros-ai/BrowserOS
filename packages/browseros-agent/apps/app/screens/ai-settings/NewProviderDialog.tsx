@@ -264,6 +264,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       hasApiKey: initialValues?.hasApiKey ?? false,
       hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
       hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
+      originalType: initialValues?.type,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -285,10 +286,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   // Editing a provider that already has a credential stored: the field is
   // optional (blank keeps the saved value), so drop the required marker and the
-  // "enter a key" placeholder that make a saved credential read as missing.
-  const savedApiKey = Boolean(initialValues?.hasApiKey)
-  const savedAccessKeyId = Boolean(initialValues?.hasAccessKeyId)
-  const savedSecretAccessKey = Boolean(initialValues?.hasSecretAccessKey)
+  // "enter a key" placeholder that make a saved credential read as missing. The
+  // stored credential only applies while the type is unchanged; switching the
+  // provider type re-requires the new type's own credential.
+  const typeUnchanged = watchedType === initialValues?.type
+  const savedApiKey = Boolean(initialValues?.hasApiKey) && typeUnchanged
+  const savedAccessKeyId =
+    Boolean(initialValues?.hasAccessKeyId) && typeUnchanged
+  const savedSecretAccessKey =
+    Boolean(initialValues?.hasSecretAccessKey) && typeUnchanged
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -424,6 +430,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         hasApiKey: initialValues.hasApiKey ?? false,
         hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
         hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
+        originalType: initialValues.type,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -453,6 +460,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         hasApiKey: false,
         hasAccessKeyId: false,
         hasSecretAccessKey: false,
+        originalType: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
